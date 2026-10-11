@@ -1,13 +1,21 @@
-"""Fail only when Rust ast-grep rule counts exceed the checked-in baseline."""
+"""Fail unless Rust ast-grep rule counts equal the checked-in baseline.
+
+The baseline may not rise over origin/main unless PP_AST_GREP_ALLOW_BASELINE_RAISE=1.
+"""
 
 from collections import Counter
 import json
+import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+
+
+BASE_REF = "origin/main"
+RAISE_OVERRIDE = "PP_AST_GREP_ALLOW_BASELINE_RAISE"
 
 
 # Keywords have no ordinary identifier spelling. Replacing their raw prefix
@@ -84,11 +92,43 @@ def command_hits_with_canonical_names(root, original_hits):
         return hits
 
 
-def main():
-    root = Path(__file__).resolve().parents[1]
-    baseline = json.loads((root / "ast-grep-baseline.json").read_text())
+def parse_baseline(text):
+    baseline = json.loads(text)
     if not isinstance(baseline, dict) or not baseline or any(type(value) is not int or value < 0 for value in baseline.values()):
         raise ValueError("ast-grep baseline must contain nonnegative integer counts")
+    return baseline
+
+
+def main_baseline(root):
+    """Return the baseline at BASE_REF, or None before it first lands there.
+
+    A missing BASE_REF is an error, so an unfetched checkout cannot skip the rise check.
+    """
+    if subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", BASE_REF + "^{commit}"],
+        cwd=root, capture_output=True,
+    ).returncode:
+        raise ValueError(f"{BASE_REF} is unavailable; fetch it so baseline raises can be checked")
+    spec = f"{BASE_REF}:./ast-grep-baseline.json"
+    if subprocess.run(["git", "cat-file", "-e", spec], cwd=root, capture_output=True).returncode:
+        return None
+    shown = subprocess.run(["git", "show", spec], cwd=root, text=True, capture_output=True, check=True)
+    return parse_baseline(shown.stdout)
+
+
+def raised_over_main(baseline, main):
+    """Map each rule whose baseline rose to (main, local). Rules absent from main count as zero."""
+    return {
+        rule: (main.get(rule, 0), allowed)
+        for rule, allowed in baseline.items()
+        if allowed > main.get(rule, 0)
+    }
+
+
+def main():
+    root = Path(__file__).resolve().parents[1]
+    baseline = parse_baseline((root / "ast-grep-baseline.json").read_text())
+    main = main_baseline(root)
     scan = subprocess.run(
         ["ast-grep", "scan", "--config", "sgconfig.yml", "--json=compact", "--inspect=entity", "crates"],
         cwd=root,
@@ -114,18 +154,33 @@ def main():
     unknown = counts.keys() - baseline.keys()
     if unknown:
         raise ValueError(f"rules missing from ast-grep baseline: {sorted(unknown)}")
-    increased = {rule for rule, allowed in baseline.items() if counts[rule] > allowed}
+    exceeded = {rule for rule, allowed in baseline.items() if counts[rule] > allowed}
+    lowered = {rule for rule, allowed in baseline.items() if counts[rule] < allowed}
+    raised = {} if main is None else raised_over_main(baseline, main)
+    allow_raise = os.environ.get(RAISE_OVERRIDE) == "1"
     for rule, allowed in baseline.items():
         print(f"{rule}: {counts[rule]} hits (baseline {allowed})")
     for hit in hits:
-        if hit["ruleId"] in increased:
+        if hit["ruleId"] in exceeded:
             line = hit["range"]["start"]["line"] + 1
             print(f'{hit["file"]}:{line}: {hit["ruleId"]}: {hit["text"]}')
-    if increased:
+    if main is None:
+        print(f"ast-grep baseline raise check skipped: {BASE_REF} has no ast-grep-baseline.json yet (first landing).")
+    for rule, (before, after) in raised.items():
+        print(f"{rule}: baseline raised {before} -> {after} over {BASE_REF}")
+    status = 0
+    if exceeded:
         print("ast-grep ratchet FAILED: hits exceed the baseline.")
-        return 1
-    print("ast-grep ratchet passed: no hits beyond the baseline.")
-    return 0
+        status = 1
+    if lowered:
+        print(f"ast-grep ratchet FAILED: baseline must equal hit counts; lower ast-grep-baseline.json for {sorted(lowered)}.")
+        status = 1
+    if raised and not allow_raise:
+        print(f"ast-grep ratchet FAILED: baseline raised over {BASE_REF}; set {RAISE_OVERRIDE}=1 only for an intentional raise.")
+        status = 1
+    if status == 0:
+        print("ast-grep ratchet passed: counts match the baseline.")
+    return status
 
 
 if __name__ == "__main__":

@@ -73,6 +73,7 @@ jobs:
       - name: Check Rust ast-grep ratchet
         if: steps.workspace.outputs.manifest != '' && env.PARTITION == '1'
         run: |
+          git fetch --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main
           ast-grep test --config rust/sgconfig.yml --skip-snapshot-tests
           python3 -m unittest discover -s rust/scripts -p 'test_ast_grep.py' -v
           python3 rust/scripts/check-ast-grep.py

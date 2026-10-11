@@ -1,6 +1,7 @@
 """Exercise the real ast-grep ratchet, including file and crate exemptions."""
 
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -9,6 +10,7 @@ import unittest
 
 
 RUST = Path(__file__).resolve().parents[1]
+RAISE_OVERRIDE = "PP_AST_GREP_ALLOW_BASELINE_RAISE"
 
 
 class RatchetTests(unittest.TestCase):
@@ -22,7 +24,8 @@ class RatchetTests(unittest.TestCase):
         script.parent.mkdir()
         shutil.copy(RUST / "scripts" / "check-ast-grep.py", script)
         self.source("pp-source/src/lib.rs", "fn production() { value.unwrap(); }")
-        self.baseline(unwrap=1)
+        self.git("init", "-q", "-b", "main")
+        self.publish_main(unwrap=1)
 
     def source(self, path, text):
         file = self.root / "crates" / path
@@ -35,19 +38,87 @@ class RatchetTests(unittest.TestCase):
             "runtime-process-command": command,
         }))
 
-    def check(self):
+    def git(self, *args):
+        subprocess.run(
+            ["git", "-c", "user.name=test", "-c", "user.email=test@example.invalid",
+             "-c", "commit.gpgsign=false", *args],
+            cwd=self.root, check=True, capture_output=True, text=True,
+        )
+
+    def publish_main(self, unwrap=0, command=0):
+        """Commit the current tree as origin/main, the reference for the baseline rise check."""
+        self.baseline(unwrap=unwrap, command=command)
+        self.commit_main()
+
+    def commit_main(self):
+        self.git("add", "-A")
+        self.git("commit", "-q", "--allow-empty", "-m", "main")
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+
+    def check(self, allow_raise=False):
+        environment = {key: value for key, value in os.environ.items() if key != RAISE_OVERRIDE}
+        if allow_raise:
+            environment[RAISE_OVERRIDE] = "1"
         return subprocess.run(
             ["python3", str(self.root / "scripts" / "check-ast-grep.py")],
             text=True,
             capture_output=True,
+            env=environment,
         )
 
-    def test_existing_hits_and_decreases_pass(self):
-        self.assertEqual(self.check().returncode, 0)
-        self.source("pp-source/src/lib.rs", "fn production() {}")
+    def test_matching_baseline_passes(self):
         result = self.check()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("no-unwrap-expect: 1 hits (baseline 1)", result.stdout)
+
+    def test_counts_below_baseline_fail_until_baseline_is_lowered(self):
+        self.source("pp-source/src/lib.rs", "fn production() {}")
+        result = self.check()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("no-unwrap-expect: 0 hits (baseline 1)", result.stdout)
+        self.assertIn("baseline must equal hit counts", result.stdout)
+        self.baseline(unwrap=0)
+        result = self.check()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_baseline_raise_over_main_fails_without_override(self):
+        self.publish_main(unwrap=0)
+        self.baseline(unwrap=1)
+        result = self.check()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("no-unwrap-expect: baseline raised 0 -> 1 over origin/main", result.stdout)
+        self.assertIn(f"{RAISE_OVERRIDE}=1", result.stdout)
+
+    def test_baseline_raise_over_main_passes_with_override(self):
+        self.publish_main(unwrap=0)
+        self.baseline(unwrap=1)
+        result = self.check(allow_raise=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("no-unwrap-expect: baseline raised 0 -> 1 over origin/main", result.stdout)
+        self.assertIn("ast-grep ratchet passed", result.stdout)
+
+    def test_rule_absent_from_main_counts_as_zero_for_raise_check(self):
+        (self.root / "ast-grep-baseline.json").write_text(json.dumps({"no-unwrap-expect": 1}))
+        self.commit_main()
+        self.baseline(unwrap=1, command=1)
+        self.source("pp-source/tests/case.rs", 'use std::process::Command;')
+        result = self.check()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("runtime-process-command: baseline raised 0 -> 1 over origin/main", result.stdout)
+
+    def test_first_landing_without_main_baseline_skips_raise_check(self):
+        (self.root / "ast-grep-baseline.json").unlink()
+        self.commit_main()
+        self.baseline(unwrap=1)
+        result = self.check()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("baseline raise check skipped", result.stdout)
+
+    def test_unavailable_main_ref_fails_closed(self):
+        self.git("update-ref", "-d", "refs/remotes/origin/main")
+        result = self.check()
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("origin/main is unavailable", result.stderr)
 
     def test_new_unwrap_fails(self):
         self.source("pp-source/src/lib.rs", "fn production() { value.unwrap(); value.unwrap(); }")
@@ -90,7 +161,8 @@ class RatchetTests(unittest.TestCase):
         self.source("pp-source/tests/case.rs", 'use std::process::Command;')
         self.assertEqual(self.check().returncode, 1)
         self.baseline(unwrap=1, command=1)
-        self.assertEqual(self.check().returncode, 0)
+        self.assertEqual(self.check().returncode, 1)
+        self.assertEqual(self.check(allow_raise=True).returncode, 0)
 
     def test_raw_and_ordinary_aliases_share_provenance(self):
         for code in (

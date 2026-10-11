@@ -8,6 +8,10 @@ python3 rust/scripts/test_ast_grep.py
 python3 rust/scripts/check-ast-grep.py
 ```
 
+The ratchet fails unless every rule's hit count equals its entry in `rust/ast-grep-baseline.json`. Fewer hits also fail until the baseline is lowered in the same change. Deleted, disabled, unbaselined, or unloaded rules and scanner errors fail closed.
+
+The baseline may not rise over `origin/main`'s `rust/ast-grep-baseline.json`. A rule absent from main's baseline counts as zero. To raise a baseline intentionally, set `PP_AST_GREP_ALLOW_BASELINE_RAISE=1` for that check and document the reason in the change. The override relaxes only the rise check; counts must still equal the baseline. If `origin/main` has no baseline file yet (the first landing), the rise check is skipped and the gate prints that it was skipped. A missing `origin/main` ref is an error, so fetch it first (`git fetch origin main`).
+
 Use the Python gate for production counts. It canonicalizes non-keyword raw
 identifier AST nodes in temporary copies before checking process aliases, so
 `r#p` and `p` share provenance and shadowing. Strings, comments, source files,
