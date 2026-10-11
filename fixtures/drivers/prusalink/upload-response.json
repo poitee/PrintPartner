@@ -1,0 +1,12 @@
+{
+  "status": 201,
+  "headers": {
+    "content-type": "application/json",
+    "location": "/api/v1/files/usb/benchy.gcode"
+  },
+  "body": {
+    "name": "benchy.gcode",
+    "path": "/usb/benchy.gcode",
+    "type": "PRINT_FILE"
+  }
+}
