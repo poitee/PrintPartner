@@ -1,3 +1,5 @@
+pub mod gcode_objects;
+
 use serde::{Deserialize, Deserializer, Serialize, de};
 use std::fmt;
 
