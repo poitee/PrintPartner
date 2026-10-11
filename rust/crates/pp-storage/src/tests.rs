@@ -443,6 +443,34 @@ fn backup_survives_missing_runtime_without_relaxing_destination_checks() {
 }
 
 #[test]
+fn shutdown_with_held_reader_fails_bounded_and_retains_ownership() {
+    let (path, owner, client) = fixture("held-reader");
+    let marker = std::fs::read(path.join(".desktop-owner.json")).unwrap();
+    let read = client.reader(Duration::ZERO).unwrap();
+    let started = Instant::now();
+    let error = owner.shutdown().unwrap_err().to_string();
+    assert!(error.contains("Reader checkouts still active"));
+    assert!(started.elapsed() < READER_DRAIN + Duration::from_secs(5));
+    assert!(
+        set(&client, "after-stop", "no")
+            .unwrap_err()
+            .to_string()
+            .contains("stopped")
+    );
+    assert_eq!(
+        read.snapshot("test", "after-stop").unwrap(),
+        SettingSnapshot::Missing
+    );
+    drop(read);
+    assert_eq!(
+        std::fs::read(path.join(".desktop-owner.json")).unwrap(),
+        marker
+    );
+    assert!(lease::StorageLease::acquire(&path).is_err());
+    assert!(lease::StorageLease::retry_failed_release(&path).is_err());
+}
+
+#[test]
 fn failed_cleanup_retains_marker_and_lock_until_explicit_retry() {
     use fs2::FileExt;
     let (path, owner, _) = fixture("retained-release");
