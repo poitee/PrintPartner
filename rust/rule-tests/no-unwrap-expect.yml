@@ -1,0 +1,18 @@
+id: no-unwrap-expect
+valid:
+  - 'fn production() -> Option<()> { value()?; Some(()) }'
+  - 'fn production() { let text = "value.unwrap()"; /* value.expect("reason") */ }'
+  - '#[cfg(test)] mod arbitrary_name { fn helper() { value.unwrap(); } }'
+  - '#[cfg(test)] #[allow(dead_code)] mod tests { fn helper() { value.expect("fixture"); } }'
+  - '#[cfg(test)] /* fixture helpers */ fn helper() { value.unwrap(); }'
+  - '#[test] fn case() { value.unwrap(); }'
+  - '#[tokio::test(flavor = "current_thread")] async fn case() { value.expect("fixture"); }'
+invalid:
+  - 'fn production() { value.unwrap(); }'
+  - 'fn production() { value.expect("reason"); }'
+  - 'fn production() { value.unwrap().expect("reason"); }'
+  - 'mod tests { fn production() { value.unwrap(); } }'
+  - '#[cfg(test)] mod tests {} fn production() { value.unwrap(); }'
+  - '#[test] fn case() {} fn production() { value.expect("reason"); }'
+  - '#[cfg(any(test, feature = "runtime"))] fn production() { value.unwrap(); }'
+  - '#[cfg(not(test))] fn production() { value.unwrap(); }'

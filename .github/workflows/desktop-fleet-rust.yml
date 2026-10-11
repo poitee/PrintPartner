@@ -61,6 +61,16 @@ jobs:
         if: steps.workspace.outputs.manifest != ''
         with:
           tool: nextest
+      - uses: taiki-e/install-action@v2
+        if: steps.workspace.outputs.manifest != '' && env.PARTITION == '1'
+        with:
+          tool: ast-grep@0.50.0
+      - name: Check Rust ast-grep ratchet
+        if: steps.workspace.outputs.manifest != '' && env.PARTITION == '1'
+        run: |
+          ast-grep test --config rust/sgconfig.yml --skip-snapshot-tests
+          python3 -m unittest discover -s rust/scripts -p 'test_ast_grep.py' -v
+          python3 rust/scripts/check-ast-grep.py
       - name: Install Linux desktop dependencies
         if: steps.workspace.outputs.manifest != ''
         shell: bash

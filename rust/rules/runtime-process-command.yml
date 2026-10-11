@@ -1,0 +1,45 @@
+id: runtime-process-command
+language: Rust
+severity: warning
+message: std::process::Command belongs in pp-compat, pp-core, or pp-desktop.
+files:
+  - crates/**/*.rs
+ignores:
+  - crates/pp-compat/**
+  - crates/pp-core/**
+  - crates/pp-desktop/**
+rule:
+  any:
+    - all:
+        - any:
+            - kind: scoped_identifier
+            - kind: scoped_type_identifier
+        - regex: '^(::)?std\s*::\s*process\s*::\s*Command$'
+    # Grouped and renamed imports still introduce the same runtime capability.
+    - all:
+        - kind: identifier
+        - regex: '^Command$'
+        - inside:
+            kind: scoped_use_list
+            has:
+              field: path
+              regex: '^(::)?std\s*::\s*process$'
+            stopBy: end
+    - all:
+        - any:
+            - pattern: process::Command
+            - all:
+                - kind: identifier
+                - regex: '^Command$'
+                - inside:
+                    kind: scoped_use_list
+                    has:
+                      field: path
+                      regex: '^process$'
+                    stopBy: end
+        - inside:
+            kind: scoped_use_list
+            has:
+              field: path
+              regex: '^(::)?std$'
+            stopBy: end

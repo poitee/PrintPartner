@@ -1,0 +1,27 @@
+id: no-unwrap-expect
+language: Rust
+severity: warning
+message: Propagate or handle errors instead of unwrap()/expect() outside tests.
+files:
+  - crates/**/*.rs
+ignores:
+  - crates/*/tests/**
+rule:
+  all:
+    - any:
+        - pattern: $VALUE.unwrap()
+        - pattern: $VALUE.expect($$$ARGS)
+    - not:
+        inside:
+          stopBy: end
+          follows:
+            kind: attribute_item
+            regex: '^#\s*\[\s*(cfg\s*\(\s*test\s*\)|([A-Za-z_][A-Za-z_0-9]*::)*test(\s*\([^]]*\))?)\s*\]$'
+            # Attributes apply only to the next item, including other attributes
+            # and comments between them; never exempt subsequent production code.
+            stopBy:
+              not:
+                any:
+                  - kind: attribute_item
+                  - kind: line_comment
+                  - kind: block_comment
