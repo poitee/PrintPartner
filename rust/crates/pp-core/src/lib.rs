@@ -1,16 +1,14 @@
-mod storage_lease;
 use anyhow::{Context, Result, bail};
-use fs2::FileExt;
 use pp_compat::{Bundle, CompatHandle, SpawnSpec, Supervisor};
 use pp_gateway::{Gateway, LaunchTarget};
+use pp_storage::lease::StorageLease;
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 use std::{
     fs::{File, OpenOptions},
     io::Write,
     net::{Ipv4Addr, SocketAddrV4},
-    os::unix::fs::{OpenOptionsExt, PermissionsExt},
-    path::{Path, PathBuf},
+    os::unix::fs::OpenOptionsExt,
+    path::PathBuf,
     time::Duration,
 };
 use tokio::net::TcpListener;
@@ -25,99 +23,8 @@ pub use pp_compat::SupervisorConfig;
 pub use pp_compat::{Bundle as VerifiedBundle, Status as CoreStatus};
 pub use pp_gateway::LaunchTarget as DesktopLaunchTarget;
 
-struct StorageOwner {
-    lock: File,
-    _lease_guard: storage_lease::StorageLease,
-    data_dir: PathBuf,
-    runtime_dir: PathBuf,
-    lease: String,
-    release_allowed: bool,
-}
-
-impl StorageOwner {
-    fn acquire(path: &Path) -> Result<Self> {
-        std::fs::create_dir_all(path)?;
-        let data_dir = path.canonicalize()?;
-        let lock = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .mode(0o600)
-            .open(data_dir.join(".desktop.lock"))?;
-        lock.try_lock_exclusive()
-            .context("Data directory already owned")?;
-        let lease_guard = storage_lease::StorageLease::acquire(&data_dir)?;
-        let marker_path = data_dir.join(".desktop-owner.json");
-        if marker_path.exists() {
-            // The OS lock serializes inspection and replacement with every cooperating writer.
-            // A free lock alone is insufficient for older standalone writers using only markers.
-            let marker: serde_json::Value = serde_json::from_slice(&std::fs::read(&marker_path)?)?;
-            let pid = marker["pid"]
-                .as_u64()
-                .filter(|pid| *pid > 0 && *pid <= i32::MAX as u64)
-                .context("Invalid prior writer PID")? as i32;
-            anyhow::ensure!(
-                storage_lease::owner_is_stale(pid as u32, marker["process_identity"].as_str())
-                    && (marker["kind"] == "standalone"
-                        // Version 1 guarantees recording the child before setup opens storage.
-                        || (marker["storage_protocol_version"].as_u64() == Some(1)
-                            && marker.get("child_pid").is_none()
-                            && marker.get("child_process_identity").is_none())
-                        || storage_lease::child_is_stale(&marker)),
-                "A prior writer may still be alive"
-            );
-            std::fs::rename(
-                &marker_path,
-                data_dir.join(".desktop-lease/previous-marker.json"),
-            )?;
-        }
-        let lease = hex::encode(rand::random::<[u8; 32]>());
-        let runtime_dir = std::env::temp_dir().join(format!(
-            "pp-{}-{}",
-            std::process::id(),
-            hex::encode(rand::random::<[u8; 8]>())
-        ));
-        std::fs::create_dir(&runtime_dir)?;
-        std::fs::set_permissions(&runtime_dir, std::fs::Permissions::from_mode(0o700))?;
-        let marker = serde_json::json!({"storage_protocol_version":1,"pid":std::process::id(),"process_identity":lease_guard.identity,"lease_hash":hex::encode(Sha256::digest(lease.as_bytes())),"runtime_dir":runtime_dir});
-        let result = (|| -> Result<()> {
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&marker_path)?;
-            file.write_all(marker.to_string().as_bytes())?;
-            file.sync_all()?;
-            Ok(())
-        })();
-        if let Err(error) = result {
-            let _ = std::fs::remove_dir(&runtime_dir);
-            return Err(error);
-        }
-        Ok(Self {
-            lock,
-            _lease_guard: lease_guard,
-            data_dir,
-            runtime_dir,
-            lease,
-            release_allowed: true,
-        })
-    }
-}
-
-impl Drop for StorageOwner {
-    fn drop(&mut self) {
-        if !self.release_allowed {
-            return;
-        }
-        let _ = std::fs::remove_file(self.data_dir.join(".desktop-owner.json"));
-        let _ = std::fs::remove_dir(&self.runtime_dir);
-    }
-}
-
-async fn bind_origin(owner: &StorageOwner) -> Result<TcpListener> {
-    let path = owner.data_dir.join("desktop.toml");
+async fn bind_origin(owner: &StorageLease) -> Result<TcpListener> {
+    let path = owner.data_dir().join("desktop.toml");
     let port = if path.exists() {
         let config = std::fs::read_to_string(&path)?;
         let value = config
@@ -134,7 +41,7 @@ async fn bind_origin(owner: &StorageOwner) -> Result<TcpListener> {
         .await
         .context("Persisted desktop origin is unavailable")?;
     if port == 0 {
-        let temporary = owner.data_dir.join(format!(
+        let temporary = owner.data_dir().join(format!(
             "desktop-{}.toml.new",
             hex::encode(rand::random::<[u8; 8]>())
         ));
@@ -146,7 +53,7 @@ async fn bind_origin(owner: &StorageOwner) -> Result<TcpListener> {
         writeln!(file, "port = {}", listener.local_addr()?.port())?;
         file.sync_all()?;
         std::fs::rename(temporary, path)?;
-        File::open(&owner.data_dir)?.sync_all()?;
+        File::open(owner.data_dir())?.sync_all()?;
     }
     Ok(listener)
 }
@@ -182,7 +89,7 @@ pub struct CoreRuntime {
 struct Resources {
     gateway: Gateway,
     supervisor: Supervisor,
-    owner: StorageOwner,
+    owner: StorageLease,
 }
 
 #[derive(Serialize, Debug)]
@@ -225,21 +132,31 @@ async fn start_resources(
         .canonicalize()
         .context("React assets unavailable")?;
     pp_compat::verify_bundle(&input.bundle, &assets)?;
-    let mut owner = StorageOwner::acquire(&input.data_dir)?;
+    std::fs::create_dir_all(&input.data_dir)?;
+    if let Some(released) = StorageLease::retry_failed_release_if_present(&input.data_dir)? {
+        anyhow::ensure!(
+            released.marker_removed
+                && released.runtime_removed
+                && released.lock_released
+                && !released.ownership_retained,
+            "Storage cleanup still incomplete; ownership retained"
+        );
+    }
+    let mut owner = StorageLease::acquire(&input.data_dir)?;
     let listener = bind_origin(&owner).await?;
     let supervisor = Supervisor::start_with_config(
         SpawnSpec {
             bundle: input.bundle,
-            data_dir: owner.data_dir.clone(),
-            runtime_dir: owner.runtime_dir.clone(),
-            lease: owner.lease.clone(),
-            lease_file: owner.lock.try_clone()?,
+            data_dir: owner.data_dir().to_owned(),
+            runtime_dir: owner.runtime_dir().to_owned(),
+            lease: owner.secret().to_owned(),
+            lease_file: owner.clone_file()?,
             port: listener.local_addr()?.port(),
-            record_child: storage_lease::record_child,
+            record_child: pp_storage::lease::record_child,
         },
         compat_config,
     )?;
-    owner.release_allowed = false;
+    owner.retain_on_drop();
     let mut status = supervisor.handle.status.clone();
     let ready = tokio::time::timeout(Duration::from_secs(32), async {
         loop {
@@ -259,9 +176,9 @@ async fn start_resources(
     .await;
     if !matches!(ready, Ok(Ok(()))) {
         if supervisor.shutdown().await.is_ok() {
-            owner.release_allowed = true;
+            owner.allow_drop_cleanup();
         } else {
-            std::mem::forget(owner);
+            owner.retain_until_process_exit();
         }
         bail!("Compatibility readiness/release verification failed");
     }
@@ -269,9 +186,9 @@ async fn start_resources(
         Ok(gateway) => gateway,
         Err(error) => {
             if supervisor.shutdown().await.is_ok() {
-                owner.release_allowed = true;
+                owner.allow_drop_cleanup();
             } else {
-                std::mem::forget(owner);
+                owner.retain_until_process_exit();
             }
             return Err(error);
         }
@@ -387,7 +304,7 @@ impl CoreRuntime {
     }
 }
 
-async fn stop_resources(mut resources: Resources) -> ShutdownReceipt {
+async fn stop_resources(resources: Resources) -> ShutdownReceipt {
     resources.gateway.drain().await;
     let compat_reaped = resources.supervisor.shutdown().await.is_ok();
     let gateway_stopped = resources.gateway.stop().await.is_ok();
@@ -405,37 +322,26 @@ async fn stop_resources(mut resources: Resources) -> ShutdownReceipt {
     }
     if !compat_reaped {
         receipt.errors.push("compat_cleanup_unproved");
-        std::mem::forget(resources.owner);
+        resources.owner.retain_until_process_exit();
         return receipt;
     }
-    resources.owner.release_allowed = false;
-    let marker = resources.owner.data_dir.join(".desktop-owner.json");
-    let marker_result = std::fs::remove_file(&marker);
-    receipt.marker_removed = marker_result.is_ok() && !marker.exists();
-    if !receipt.marker_removed {
+    let released = resources.owner.release();
+    receipt.marker_removed = released.marker_removed;
+    receipt.runtime_removed = released.runtime_removed;
+    if !released.marker_removed {
         receipt.errors.push("owner_marker_cleanup_failed");
     }
-    receipt.runtime_removed = std::fs::remove_dir(&resources.owner.runtime_dir).is_ok()
-        && !resources.owner.runtime_dir.exists();
-    if !receipt.runtime_removed {
+    if !released.runtime_removed {
         receipt.errors.push("runtime_directory_cleanup_failed");
     }
-    let lease_released = resources.owner._lease_guard.release().is_ok();
-    if !lease_released {
-        receipt.errors.push("storage_lease_cleanup_failed");
+    if released.ownership_retained {
+        receipt.errors.push("storage_ownership_retained");
     }
-    let unlocked = FileExt::unlock(&resources.owner.lock).is_ok();
-    let reacquired = unlocked
-        && OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(resources.owner.data_dir.join(".desktop.lock"))
-            .is_ok_and(|probe| probe.try_lock_exclusive().is_ok());
-    if !reacquired {
+    if !released.lock_released {
         receipt.errors.push("storage_unlock_unproved");
     }
     receipt.storage_released =
-        receipt.marker_removed && receipt.runtime_removed && lease_released && reacquired;
+        released.marker_removed && released.runtime_removed && released.lock_released;
     receipt
 }
 

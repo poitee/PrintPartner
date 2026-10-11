@@ -1,0 +1,1738 @@
+{
+  "server": {
+    "name": "print-partner-assistant",
+    "version": "1.0.0"
+  },
+  "toolCount": 86,
+  "tools": [
+    {
+      "name": "add_addon",
+      "inputSchema": {
+        "properties": {
+          "plan_id": {
+            "type": "number"
+          },
+          "source_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan_id",
+          "source_name"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "analyze_build_request",
+      "inputSchema": {
+        "properties": {
+          "request": {
+            "type": "string"
+          },
+          "urls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "request",
+          "urls"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "analyze_stl_mesh",
+      "inputSchema": {
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "apply_build_recipe",
+      "inputSchema": {
+        "properties": {
+          "plan_id": {
+            "description": "Target plan to apply onto",
+            "type": "number"
+          },
+          "source_plan_id": {
+            "description": "Plan to copy recipe from",
+            "type": "number"
+          }
+        },
+        "required": [
+          "plan_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "apply_stack_preset",
+      "inputSchema": {
+        "properties": {
+          "plan_id": {
+            "type": "number"
+          },
+          "preset_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan_id",
+          "preset_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "archive_plan",
+      "inputSchema": {
+        "properties": {
+          "plan_id": {
+            "type": "number"
+          },
+          "rationale": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "audit_build_coverage",
+      "inputSchema": {
+        "properties": {
+          "draft_id": {
+            "type": "number"
+          },
+          "plan_id": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "plan_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "audit_source_provenance",
+      "inputSchema": {
+        "properties": {
+          "source_id": {
+            "type": "number"
+          },
+          "source_name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "check_hardware_interfaces",
+      "inputSchema": {
+        "properties": {
+          "interfaces": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "interfaces"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "check_stack_compatibility",
+      "inputSchema": {
+        "properties": {
+          "adding": {
+            "description": "Optional addon being considered; runs replacementsWhenAdding against the stack",
+            "type": "string"
+          },
+          "layers": {
+            "description": "Optional proposed source names; defaults to current plan layers",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "plan_id": {
+            "type": "number"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "compare_plans",
+      "inputSchema": {
+        "properties": {
+          "plan_a_id": {
+            "type": "number"
+          },
+          "plan_b_id": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "plan_a_id",
+          "plan_b_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "compare_source_revisions",
+      "inputSchema": {
+        "properties": {
+          "revision_a_id": {
+            "type": "number"
+          },
+          "revision_b_id": {
+            "type": "number"
+          },
+          "source_id": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "source_id",
+          "revision_a_id",
+          "revision_b_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "confirm_apply",
+      "inputSchema": {
+        "properties": {
+          "action_id": {
+            "description": "Id from a prior propose tool result",
+            "type": "string"
+          },
+          "suggested_excludes": {
+            "description": "Optional override of kit-manifest exclude tags to merge on Apply",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "action_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "create_plan_snapshot",
+      "inputSchema": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "plan_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "detect_build_decisions",
+      "inputSchema": {
+        "properties": {
+          "plan_id": {
+            "type": "number"
+          },
+          "source_name": {
+            "description": "Known source name (list_sources)",
+            "type": "string"
+          },
+          "url": {
+            "description": "GitHub URL when the source is not added yet",
+            "type": "string"
+          },
+          "user_constraints": {
+            "description": "User kit constraints (lane count, EBB36/EBB42/SLB, Trianglelabs kit, etc.) used to set suggested_selection",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "dismiss_proposed_action",
+      "inputSchema": {
+        "properties": {
+          "action_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "action_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "duplicate_plan",
+      "inputSchema": {
+        "properties": {
+          "clear_checkoff": {
+            "description": "When true, reset print progress on the duplicate",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "Name for the new plan",
+            "type": "string"
+          },
+          "plan_id": {
+            "description": "Source plan id",
+            "type": "number"
+          },
+          "rationale": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan_id",
+          "name"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "fetch_web_page",
+      "inputSchema": {
+        "properties": {
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "find_filament_matches",
+      "inputSchema": {
+        "properties": {
+          "brand": {
+            "type": "string"
+          },
+          "color_hex": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_build_planning_state",
+      "inputSchema": {
+        "properties": {
+          "plan_id": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "plan_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_build_recipe",
+      "inputSchema": {
+        "properties": {
+          "plan_id": {
+            "type": "number"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_build_workflow",
+      "inputSchema": {
+        "properties": {
+          "plan_id": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "plan_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_farm_status",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_interaction_graph",
+      "inputSchema": {
+        "properties": {
+          "source_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_name"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_job_status",
+      "inputSchema": {
+        "properties": {
+          "job_id": {
+            "type": "string"
+          },
+          "profile_id": {
+            "type": "number"
+          },
+          "since": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "running",
+              "done",
+              "error",
+              "cancelled"
+            ],
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_kit_catalog",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_plan_checkoff",
+      "inputSchema": {
+        "properties": {
+          "plan_id": {
+            "description": "Plan / profile id",
+            "type": "number"
+          }
+        },
+        "required": [
+          "plan_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_plan_decisions",
+      "inputSchema": {
+        "properties": {
+          "limit": {
+            "type": "number"
+          },
+          "plan_id": {
+            "type": "number"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_plan_draft",
+      "inputSchema": {
+        "properties": {
+          "plan_id": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "plan_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_plan_option_groups",
+      "inputSchema": {
+        "properties": {
+          "plan_id": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "plan_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_plan_review",
+      "inputSchema": {
+        "properties": {
+          "plan_id": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "plan_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_plan_snapshot",
+      "inputSchema": {
+        "properties": {
+          "plan_id": {
+            "description": "Plan / profile id",
+            "type": "number"
+          }
+        },
+        "required": [
+          "plan_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_print_stats",
+      "inputSchema": {
+        "properties": {
+          "hours": {
+            "description": "Lookback window in hours for 'overnight' activity. Default 8.",
+            "type": "number"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_printer_checkoff",
+      "inputSchema": {
+        "properties": {
+          "integration_id": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "number"
+          },
+          "state": {
+            "enum": [
+              "watching",
+              "awaiting_verify",
+              "host_failed",
+              "dismissed",
+              "verified"
+            ],
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_remaining",
+      "inputSchema": {
+        "properties": {
+          "plan_id": {
+            "description": "Plan / profile id",
+            "type": "number"
+          }
+        },
+        "required": [
+          "plan_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_source_docs",
+      "inputSchema": {
+        "properties": {
+          "query": {
+            "description": "Optional keyword filter",
+            "type": "string"
+          },
+          "source_id": {
+            "type": "number"
+          },
+          "source_name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_source_inventory",
+      "inputSchema": {
+        "properties": {
+          "source_id": {
+            "type": "number"
+          },
+          "source_name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_workflow_help",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      }
+    },
+    {
+      "name": "import_guide_notes",
+      "inputSchema": {
+        "properties": {
+          "body_markdown": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "number"
+          },
+          "source_name": {
+            "type": "string"
+          },
+          "title": {
+            "description": "Defaults to Guide: <host or title>",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_name",
+          "body_markdown"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "ingest_guide_text",
+      "inputSchema": {
+        "properties": {
+          "plan_id": {
+            "type": "number"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "ingest_guide_url",
+      "inputSchema": {
+        "properties": {
+          "plan_id": {
+            "type": "number"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "inspect_repo_tree",
+      "inputSchema": {
+        "properties": {
+          "ref": {
+            "description": "Optional branch/tag; defaults to the repo default",
+            "type": "string"
+          },
+          "source_name": {
+            "description": "Known source name (list_sources)",
+            "type": "string"
+          },
+          "url": {
+            "description": "GitHub repository URL",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_build_differences",
+      "inputSchema": {
+        "properties": {
+          "cursor": {
+            "type": "string"
+          },
+          "limit": {
+            "maximum": 100,
+            "minimum": 1,
+            "type": "number"
+          },
+          "plan_id": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "plan_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_example_builds",
+      "inputSchema": {
+        "properties": {
+          "exclude_plan_id": {
+            "description": "Active plan to omit",
+            "type": "number"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_pending_actions",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_plan_snapshots",
+      "inputSchema": {
+        "properties": {
+          "plan_id": {
+            "type": "number"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_plans",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_source_categories",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_sources",
+      "inputSchema": {
+        "properties": {
+          "category": {
+            "description": "Only list Sources filed under this category path, e.g. \"Printers\" or \"Printers/Frame\". Use \"__uncategorized__\" for unfiled Sources.",
+            "type": "string"
+          },
+          "include_subcategories": {
+            "description": "Include Sources in subcategories of `category` (default true).",
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "preview_source_naming",
+      "inputSchema": {
+        "properties": {
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "profile": {
+            "type": "object"
+          },
+          "source_id": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "paths"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "propose_add_build_checklist_items",
+      "inputSchema": {
+        "properties": {
+          "items": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "plan_id": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "plan_id",
+          "items"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "propose_add_custom_filament",
+      "inputSchema": {
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "hex": {
+            "type": "string"
+          },
+          "product_line": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "display_name",
+          "hex"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "propose_add_source",
+      "inputSchema": {
+        "properties": {
+          "branch": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "number"
+          },
+          "rationale": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "source_kind": {
+            "enum": [
+              "github",
+              "printables",
+              "makerworld",
+              "local"
+            ],
+            "type": "string"
+          },
+          "tag": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "propose_apply_plan_draft",
+      "inputSchema": {
+        "properties": {
+          "draft_id": {
+            "type": "number"
+          },
+          "plan_id": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "plan_id",
+          "draft_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "propose_assign_role_filament",
+      "inputSchema": {
+        "properties": {
+          "assignment": {
+            "type": "object"
+          },
+          "plan_id": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "plan_id",
+          "assignment"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "propose_create_build",
+      "inputSchema": {
+        "properties": {
+          "idempotency_key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "request": {
+            "type": "string"
+          },
+          "urls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "request"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "propose_create_source_category",
+      "inputSchema": {
+        "properties": {
+          "name": {
+            "description": "Leaf name, used with `parent`",
+            "type": "string"
+          },
+          "parent": {
+            "description": "Parent path; omit for a top-level category",
+            "type": "string"
+          },
+          "path": {
+            "description": "Full path, e.g. \"Printers/Frame\"",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "propose_delete_source_category",
+      "inputSchema": {
+        "properties": {
+          "path": {
+            "description": "Category path to delete",
+            "type": "string"
+          },
+          "reassign_to": {
+            "description": "Category path that keeps the Sources; omit to fall back to the parent",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "propose_edit_plan_draft_parts",
+      "inputSchema": {
+        "properties": {
+          "draft_id": {
+            "type": "number"
+          },
+          "expected_snapshot_digest": {
+            "type": "string"
+          },
+          "parts": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "plan_id": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "plan_id",
+          "draft_id",
+          "parts"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "propose_exclude_replaced_parts",
+      "inputSchema": {
+        "properties": {
+          "excludes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "plan_id": {
+            "type": "number"
+          },
+          "rationale": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan_id",
+          "excludes"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "propose_import_3mf_checkoff",
+      "inputSchema": {
+        "properties": {
+          "content_base64": {
+            "description": "Base64-encoded 3MF bytes",
+            "type": "string"
+          },
+          "filename": {
+            "description": "Original .3mf filename",
+            "type": "string"
+          },
+          "host_name": {
+            "description": "Optional display name",
+            "type": "string"
+          },
+          "integration_id": {
+            "description": "Optional label for the incompatible slicer",
+            "type": "string"
+          },
+          "path": {
+            "description": "3MF path inside source_id",
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "number"
+          },
+          "printer_id": {
+            "description": "Optional printer label",
+            "type": "string"
+          },
+          "source_id": {
+            "description": "Alternative to content_base64: synchronized Source containing the 3MF",
+            "type": "number"
+          }
+        },
+        "required": [
+          "plan_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "propose_import_build_inputs",
+      "inputSchema": {
+        "properties": {
+          "inputs": {
+            "items": {
+              "properties": {
+                "branch": {
+                  "type": "string"
+                },
+                "derived_from_evidence_id": {
+                  "type": "string"
+                },
+                "extract": {
+                  "type": "string"
+                },
+                "filenames": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "source_id": {
+                  "type": "number"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "plan_id": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "plan_id",
+          "inputs"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "propose_import_source_files",
+      "inputSchema": {
+        "properties": {
+          "archive_base64": {
+            "description": "A ZIP archive encoded as base64.",
+            "type": "string"
+          },
+          "files": {
+            "items": {
+              "properties": {
+                "content_base64": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "content_base64"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "source_id": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "source_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "propose_rebuild_plan",
+      "inputSchema": {
+        "properties": {
+          "idempotency_key": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "plan_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "propose_rename_source_category",
+      "inputSchema": {
+        "properties": {
+          "new_name": {
+            "description": "New leaf name (keeps its place in the tree)",
+            "type": "string"
+          },
+          "new_parent": {
+            "description": "New parent path; empty string moves it to the top level",
+            "type": "string"
+          },
+          "path": {
+            "description": "Existing category path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "propose_resolve_build_differences",
+      "inputSchema": {
+        "properties": {
+          "custom_resolution": {
+            "type": "string"
+          },
+          "group_id": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "number"
+          },
+          "rationale": {
+            "type": "string"
+          },
+          "resolution": {
+            "enum": [
+              "choose_source_a",
+              "choose_source_b",
+              "include_both",
+              "not_applicable",
+              "custom"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan_id",
+          "group_id",
+          "resolution",
+          "rationale"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "propose_restore_snapshot",
+      "inputSchema": {
+        "properties": {
+          "plan_id": {
+            "type": "number"
+          },
+          "snapshot_id": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "plan_id",
+          "snapshot_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "propose_set_build_source_roles",
+      "inputSchema": {
+        "properties": {
+          "plan_id": {
+            "type": "number"
+          },
+          "roles": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "plan_id",
+          "roles"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "propose_set_plan_assembly",
+      "inputSchema": {
+        "properties": {
+          "assembled": {
+            "type": "boolean"
+          },
+          "part_id": {
+            "type": "number"
+          },
+          "plan_id": {
+            "type": "number"
+          },
+          "unit_index": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "plan_id",
+          "part_id",
+          "unit_index",
+          "assembled"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "propose_set_plan_progress",
+      "inputSchema": {
+        "properties": {
+          "plan_id": {
+            "type": "number"
+          },
+          "rows": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "plan_id",
+          "rows"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "propose_set_source_category",
+      "inputSchema": {
+        "properties": {
+          "category": {
+            "description": "Full path such as \"Printers/Frame\". Empty string clears the category (Uncategorised).",
+            "type": "string"
+          },
+          "source_id": {
+            "type": "number"
+          },
+          "source_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "category"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "propose_source_mapping",
+      "inputSchema": {
+        "properties": {
+          "category": {
+            "description": "Addon category id or role label",
+            "type": "string"
+          },
+          "option_groups": {
+            "additionalProperties": {
+              "oneOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "items": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "type": "array",
+                  "uniqueItems": true
+                }
+              ]
+            },
+            "description": "Optional kit selections to propose. Use arrays for pick_any and pick_n groups. An empty array explicitly selects none; groups with a positive minimum remain incomplete.",
+            "type": "object"
+          },
+          "plan_id": {
+            "type": "number"
+          },
+          "rationale": {
+            "type": "string"
+          },
+          "source_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_name",
+          "category"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "propose_update_build_brief",
+      "inputSchema": {
+        "properties": {
+          "compatibility_findings": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "contributions": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "plan_id": {
+            "type": "number"
+          },
+          "requirements": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "plan_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "propose_update_source",
+      "inputSchema": {
+        "properties": {
+          "patch": {
+            "type": "object"
+          },
+          "source_id": {
+            "type": "number"
+          },
+          "source_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "patch"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "propose_update_source_naming",
+      "inputSchema": {
+        "properties": {
+          "profile": {
+            "type": "object"
+          },
+          "source_id": {
+            "type": "number"
+          },
+          "source_name": {
+            "type": "string"
+          },
+          "use_defaults": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "propose_verify_printer_checkoff",
+      "inputSchema": {
+        "properties": {
+          "decisions": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "link_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "link_id",
+          "decisions"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "read_source_file",
+      "inputSchema": {
+        "properties": {
+          "path": {
+            "description": "Relative path inside the synced source (e.g. README.md, docs/BOM.md)",
+            "type": "string"
+          },
+          "source": {
+            "description": "Source name or numeric id (from list_sources)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "path"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "remove_layer",
+      "inputSchema": {
+        "properties": {
+          "layer_id": {
+            "type": "number"
+          },
+          "plan_id": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "plan_id",
+          "layer_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "search_plan_parts",
+      "inputSchema": {
+        "properties": {
+          "limit": {
+            "type": "number"
+          },
+          "plan_id": {
+            "type": "number"
+          },
+          "query": {
+            "description": "Substring match on filename or path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "search_source_files",
+      "inputSchema": {
+        "properties": {
+          "limit": {
+            "maximum": 200,
+            "minimum": 1,
+            "type": "number"
+          },
+          "query": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "number"
+          },
+          "source_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "set_base",
+      "inputSchema": {
+        "properties": {
+          "branch": {
+            "description": "Optional GitHub branch to set on the source.",
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "number"
+          },
+          "source_name": {
+            "type": "string"
+          },
+          "tag": {
+            "description": "Optional GitHub tag to set on the source, when a kit revision is published as a tag.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan_id",
+          "source_name"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "set_source_git_ref",
+      "inputSchema": {
+        "properties": {
+          "branch": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "number"
+          },
+          "source_name": {
+            "type": "string"
+          },
+          "tag": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_name"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "start_sync",
+      "inputSchema": {
+        "properties": {
+          "plan_id": {
+            "description": "Optional active plan context",
+            "type": "number"
+          },
+          "project_ids": {
+            "description": "Optional list of source ids to sync",
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "source_id": {
+            "type": "number"
+          },
+          "source_name": {
+            "description": "Sync a single source by exact name",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "suggest_source_contributions",
+      "inputSchema": {
+        "properties": {
+          "evidence_id": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "number"
+          },
+          "source_id": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "plan_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "update_kit_selections",
+      "inputSchema": {
+        "properties": {
+          "plan_id": {
+            "type": "number"
+          },
+          "selections": {
+            "additionalProperties": {
+              "oneOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "items": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "type": "array",
+                  "uniqueItems": true
+                }
+              ]
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "plan_id",
+          "selections"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "web_search",
+      "inputSchema": {
+        "properties": {
+          "query": {
+            "description": "Search query",
+            "type": "string"
+          },
+          "site": {
+            "description": "Optional site: filter host (e.g. github.com, a vendor documentation domain)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      }
+    }
+  ]
+}
