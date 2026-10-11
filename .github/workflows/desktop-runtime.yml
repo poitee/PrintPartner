@@ -141,6 +141,7 @@ jobs:
             --binary rust/target/debug/pp-source
       - name: Replay SourcePath corpus through Node
         run: |
+          node --test rust/tests/source-artifacts/source-path-replay.test.mjs
           cargo run --manifest-path rust/Cargo.toml --locked -q -p pp-source --example source_path_corpus \
             > "$RUNNER_TEMP/source-artifacts-evidence/source-path-corpus.json"
           node rust/tests/source-artifacts/source-path-replay.mjs \
@@ -154,6 +155,7 @@ jobs:
           path: |
             ${{ runner.temp }}/source-artifacts-evidence/checks.json
             ${{ runner.temp }}/source-artifacts-evidence/source-path-replay.json
+            ${{ runner.temp }}/source-artifacts-evidence/source-path-corpus.json
             ${{ runner.temp }}/source-artifacts-evidence/*.strace
             ${{ runner.temp }}/source-artifacts-evidence/*.stderr
           if-no-files-found: warn

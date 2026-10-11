@@ -1,6 +1,4 @@
 // Shared by tests/source_path_props.rs and examples/source_path_corpus.rs.
-#![allow(dead_code)]
-
 use pp_source::{MANIFEST, SourcePath};
 use proptest::prelude::*;
 use unicode_normalization::is_nfc;
@@ -134,12 +132,28 @@ fn bound_path() -> impl Strategy<Value = String> {
     ]
 }
 
+// U+1ADD acquired a combining class in Unicode 17. Rust's pinned Unicode 16
+// normalizer and Node 24.21.0 disagree on the first spelling (GRE-555).
+fn unicode_version_path() -> impl Strategy<Value = String> {
+    (
+        valid_path(),
+        prop::sample::select(&["a\u{1add}\u{300}", "\u{e0}\u{1add}", "a:\u{1add}\u{300}"][..]),
+        any::<bool>(),
+    )
+        .prop_map(|(prefix, spelling, colon)| {
+            format!("{prefix}/{spelling}{}.stl", if colon { ":" } else { "" })
+        })
+}
+
 /// Mixed corpus: mostly hostile paths, with valid and boundary paths in the mix.
+/// Rust char/String strategies produce Unicode scalar values, excluding lone
+/// UTF-16 surrogates. Those Node-only strings are outside this shared corpus.
 pub fn any_path() -> impl Strategy<Value = String> {
     prop_oneof![
         6 => mixed_path(),
         2 => valid_path(),
         1 => bound_path(),
         1 => any::<String>(),
+        1 => unicode_version_path(),
     ]
 }

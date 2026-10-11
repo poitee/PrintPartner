@@ -7,6 +7,7 @@ use serde::Deserialize;
 use source_path::{
     MAX_COMPONENTS, MAX_PATH_BYTES, any_path, reference_accepts, rust_accepts, valid_path,
 };
+use unicode_normalization::UnicodeNormalization;
 
 #[derive(Deserialize)]
 struct Case {
@@ -56,6 +57,9 @@ proptest! {
     fn valid_paths_round_trip(path in valid_path()) {
         let parsed = SourcePath::try_from(path.clone()).unwrap();
         prop_assert_eq!(parsed.as_str(), path.as_str());
+        let nfc: String = parsed.as_str().nfc().collect();
+        prop_assert_eq!(&nfc, &path);
+        prop_assert_eq!(nfc.nfc().collect::<String>(), nfc.clone());
         let json = serde_json::to_string(&parsed).unwrap();
         prop_assert_eq!(&json, &serde_json::to_string(&path).unwrap());
         prop_assert_eq!(serde_json::from_str::<SourcePath>(&json).unwrap(), parsed.clone());

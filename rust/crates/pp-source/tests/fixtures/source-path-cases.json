@@ -233,5 +233,40 @@
   "path": "a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a",
   "accept": false,
   "note": "65 components (Rust-only rule)"
+ },
+ {
+  "path": "a᫝̀.stl",
+  "accept": true,
+  "note": "GRE-555: Unicode 16 accepts, Node Unicode 17 rejects after NFC reordering"
+ },
+ {
+  "path": "à᫝.stl",
+  "accept": true,
+  "note": "GRE-555: reordered spelling is accepted by both"
+ },
+ {
+  "path": "a᫝̀:.stl",
+  "accept": false,
+  "note": "GRE-555: NFC divergence plus Rust-only colon; both decisions reject, NFC evidence must survive"
+ },
+ {
+  "path": "á:.stl",
+  "accept": false,
+  "note": "shared NFC rejection must not be hidden by a colon exception"
+ },
+ {
+  "path": "../outside.stl",
+  "accept": false,
+  "note": "read-only export: local-source-snapshot.test.ts unsafe path table"
+ },
+ {
+  "path": "parts\\outside.stl",
+  "accept": false,
+  "note": "read-only export: local-source-snapshot.test.ts unsafe path table"
+ },
+ {
+  "path": "café.stl",
+  "accept": false,
+  "note": "read-only export: local-source-snapshot.test.ts unsafe path table"
  }
 ]
