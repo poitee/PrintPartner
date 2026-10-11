@@ -169,7 +169,8 @@ function stripHiddenMarkdown(text, { inlineMultiline = true, includeRawHtml = fa
       const prefix = containerPrefix(raw);
       const content = raw.slice(prefix.end);
       const rawTag = content.match(/^<(pre|script|style|textarea)(?:[ \t>]|$)/i);
-      if (!includeRawHtml && (rawTag || HTML_BLOCK_START.test(content))) {
+      if (!includeRawHtml && (rawTag || HTML_BLOCK_START.test(content)
+        || (!paragraphOpen && isCompleteHtmlTag(content)))) {
         const quoteLine = quoteContent(raw, prefix.quote);
         const hasList = /^[ \t]*(?:[-+*]|\d{1,9}[.)])[ \t]/.test(quoteLine);
         htmlBlock = { tag: rawTag?.[1], quote: prefix.quote,
@@ -298,7 +299,7 @@ function evidenceSectionEnd(text) {
 export function extractEvidenceSection(body, options) {
   if (typeof body !== "string" || !body.trim()) return null;
   const visible = stripHiddenMarkdown(body, options);
-  const match = [...visible.matchAll(EVIDENCE_HEADING)][0];
+  const match = [...referenceHeadingView(visible).matchAll(EVIDENCE_HEADING)][0];
   if (!match || match.index == null) return null;
   const start = match.index + match[0].length;
   const rest = visible.slice(start);
@@ -661,7 +662,7 @@ const REFERENCE_DEFINITION = /^[ \t]*\[((?:[^\]\\\n]|\\.){1,999})\]:[ \t]*(<(?:[
 
 /** Validate a complete destination and optional title, including continuation
  * lines. A prefix followed by unquoted garbage is not a Markdown definition. */
-function referenceDestination(lines, index) {
+function referenceDestination(lines, index, withEnd = false) {
   const opening = lines[index].match(REFERENCE_DEFINITION);
   if (!opening) return null;
   let tail = lines[index].slice(opening[0].length - (opening[2]?.length ?? 0));
@@ -693,7 +694,34 @@ function referenceDestination(lines, index) {
   }
   const wrapped = `(${destination}${title ? " " + title : ""})`;
   const parsed = parseLinkTail(wrapped, 0);
-  return parsed?.end === wrapped.length ? parsed.destination : null;
+  return parsed?.end === wrapped.length
+    ? (withEnd ? { destination: parsed.destination, end: index } : parsed.destination)
+    : null;
+}
+
+/** Mask complete definitions without moving offsets in the section view. */
+function referenceHeadingView(value) {
+  const lines = value.split("\n");
+  const normalized = referenceContainerLines(value);
+  for (let index = 0; index < lines.length; index += 1) {
+    const definition = referenceDestination(normalized, index, true);
+    if (!definition) continue;
+    for (; index <= definition.end; index += 1) lines[index] = " ".repeat(lines[index].length);
+    index -= 1;
+  }
+  return lines.join("\n");
+}
+
+function isEscaped(text, index) {
+  let slashes = 0;
+  while (text[index - 1 - slashes] === "\\") slashes += 1;
+  return slashes % 2 === 1;
+}
+
+/** Type-7 HTML blocks require a complete tag alone on a boundary line. */
+function isCompleteHtmlTag(value) {
+  return /^[ \t]*<\/[A-Za-z][A-Za-z0-9-]*[ \t]*>[ \t]*$/.test(value)
+    || /^[ \t]*<[A-Za-z][A-Za-z0-9-]*(?:[ \t]+[A-Za-z_:][A-Za-z0-9_.:-]*(?:[ \t]*=[ \t]*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?)*[ \t]*\/?[ \t]*>[ \t]*$/.test(value);
 }
 
 function referenceContainerLines(value) {
@@ -774,7 +802,7 @@ function stripLinks(value, references) {
     if (open === -1) return { rest, concrete };
     const tail = parseLinkTail(text, at + 1);
     if (!tail) return { rest, concrete };
-    const image = open > 0 && text[open - 1] === "!";
+    const image = open > 0 && text[open - 1] === "!" && !isEscaped(text, open - 1);
     if (isConcreteTarget(tail.destination)
       && (image || visibleFieldText(text.slice(open + 1, at)).replace(/[\p{Default_Ignorable_Code_Point}\p{Mark}]/gu, "").trim())) concrete = true;
     cursor = tail.end;
@@ -868,7 +896,7 @@ function referenceUses(value, { requireVisible = false } = {}) {
     let escapes = 0;
     for (let at = match.index - 1; at >= 0 && text[at] === "\\"; at -= 1) escapes += 1;
     if (escapes % 2) continue;
-    if (requireVisible && text[match.index - 1] !== "!"
+    if (requireVisible && !(text[match.index - 1] === "!" && !isEscaped(text, match.index - 1))
       && !visibleFieldText(match[1]).replace(/[\p{Default_Ignorable_Code_Point}\p{Mark}]/gu, "").trim()) continue;
     references.add(normalizeReferenceLabel(match[2] || match[1]));
   }
@@ -957,8 +985,8 @@ function targetsBannedLan(sectionText, definitions) {
   const bannedTarget = (value) => {
     if (BANNED_LAN_IP.test(value)) return true;
     const decoded = decodeCharacterReferences(value).replace(/\\(.)/g, "$1");
-    return [...decoded.matchAll(HTTP_URL)].some((match) => {
-      try { return BANNED_LAN_IP.test(new URL(trimToken(match[0])).hostname); }
+    return [...decoded.matchAll(/(?:https?:)?\/\/[^\s<>()"'`]+/gi)].some((match) => {
+      try { return BANNED_LAN_IP.test(new URL(trimToken(match[0]), "https://example.test/").hostname); }
       catch { return false; }
     });
   };
@@ -1011,7 +1039,7 @@ export function lintPrEvidence(body) {
   const reason = extractExemptionReason(section);
   const hasEvidence = hasEvidenceContent(section);
 
-  if ([...stripHiddenMarkdown(body).matchAll(EVIDENCE_HEADING)].length > 1) {
+  if ([...referenceHeadingView(stripHiddenMarkdown(body)).matchAll(EVIDENCE_HEADING)].length > 1) {
     errors.push("PR body must contain exactly one visible Evidence section.");
   }
 

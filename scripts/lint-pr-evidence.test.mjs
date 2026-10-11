@@ -1358,3 +1358,46 @@ for (const definition of ['> [proof]: https://example.test/shot.png', '- [proof]
     assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} [proof]\n\n${definition}`)).ok, true);
   });
 }
+
+for (const artifact of [String.raw`\![](https://example.test/shot.png)`, String.raw`\\\![](https://example.test/shot.png)`]) {
+  test(`escaped image marker cannot credit invisible link ${artifact}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} ${artifact}`)).ok, false);
+  });
+}
+for (const host of ['3232235856', '0xc0a80151', '192.168.1.%38%30']) {
+  for (const target of [`[preview](//${host}/)`, `//${host}/`]) {
+    test(`rejects normalized protocol-relative target ${target}`, () => {
+      assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: docs-only\n- Exemption reason: Updated docs.\n- Journey exercised: ${target}`)).ok, false);
+    });
+  }
+  test(`rejects protocol-relative reference ${host}`, () => {
+    assert.equal(lintPrEvidence(`[target]: //${host}/\n\n` + bodyWithEvidence('Exemption: docs-only\n- Exemption reason: Updated docs.\n- Journey exercised: [target]')).ok, false);
+  });
+}
+for (const tag of ['<span>', '</span>', '<custom-tag data-proof="yes">', '<span data-proof="a > b">']) {
+  test(`type-7 raw HTML hides fake Evidence ${tag}`, () => {
+    assert.equal(lintPrEvidence(`${tag}\n## Evidence\nExemption: docs-only\n- Exemption reason: Updated docs.\n</span>`).ok, false);
+  });
+}
+for (const definition of ['[foo]: /target "title\n  ## Evidence\n  "', '[foo]:\n  /target\n  "title\n  ## Evidence\n  "', '> [foo]: /target "title\n> ## Evidence\n> "']) {
+  test(`reference title cannot supply Evidence ${JSON.stringify(definition)}`, () => {
+    assert.equal(lintPrEvidence(definition + '\nExemption: docs-only\n- Exemption reason: Updated docs.').ok, false);
+  });
+  test(`reference title heading does not duplicate real Evidence ${JSON.stringify(definition)}`, () => {
+    assert.equal(lintPrEvidence(definition + '\n\n' + bodyWithEvidence('Exemption: docs-only\n- Exemption reason: Updated docs.')).ok, true);
+  });
+}
+test('type-7 inline tag cannot interrupt an ordinary paragraph', () => {
+  assert.equal(lintPrEvidence('Intro\n<span>\n' + bodyWithEvidence('Exemption: docs-only\n- Exemption reason: Updated docs.')).ok, true);
+});
+test('even escaped backslashes leave the image marker active', () => {
+  assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} ${String.raw`\\![](https://example.test/shot.png)`}`)).ok, true);
+});
+for (const tag of ['<span>', '<custom-tag title="proof">']) {
+  test(`type-7 HTML content cannot supply missing artifact ${tag}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} screenshot\n\n${tag}\nhttps://example.test/shot.png\n</span>`)).ok, false);
+  });
+}
+test('safe protocol-relative verification remains allowed', () => {
+  assert.equal(lintPrEvidence(bodyWithEvidence('Exemption: docs-only\n- Exemption reason: Updated docs.\n- Journey exercised: [preview](//example.test/)')).ok, true);
+});
