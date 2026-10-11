@@ -200,14 +200,7 @@ pub(crate) fn initialize(
     configure(&conn, false)?;
     let data: SchemaData = serde_json::from_str(include_str!("../data/schema.json"))?;
     for sql in &data.migrations {
-        if let Err(error) = conn.execute_batch(sql)
-            && !error
-                .to_string()
-                .to_ascii_lowercase()
-                .contains("duplicate column name")
-        {
-            return Err(error.into());
-        }
+        execute_migration(&conn, sql)?;
     }
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     for sql in &data.repair {
@@ -278,6 +271,19 @@ pub(crate) fn initialize(
     ))
 }
 
+fn execute_migration(conn: &Connection, sql: &str) -> Result<()> {
+    match conn.execute_batch(sql) {
+        Ok(()) => Ok(()),
+        Err(rusqlite::Error::SqliteFailure(_, Some(message)))
+            if sql.starts_with("ALTER TABLE ")
+                && message.starts_with("duplicate column name: ") =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
 fn add_column(conn: &Connection, table: &str, column: &str, sql: &str) -> Result<()> {
     let columns = conn
         .prepare(&format!("PRAGMA table_info({table})"))?
@@ -287,4 +293,25 @@ fn add_column(conn: &Connection, table: &str, column: &str, sql: &str) -> Result
         conn.execute_batch(sql)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migration_ignores_only_sqlite_duplicate_column_errors() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE existing (id INTEGER)")
+            .unwrap();
+        let sql = "ALTER TABLE existing ADD COLUMN added TEXT";
+        execute_migration(&conn, sql).unwrap();
+        execute_migration(&conn, sql).unwrap();
+        let error = execute_migration(
+            &conn,
+            "ALTER TABLE \"duplicate column name\" ADD COLUMN added TEXT",
+        )
+        .unwrap_err();
+        assert!(error.to_string().starts_with("no such table: "));
+    }
 }

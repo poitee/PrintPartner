@@ -169,13 +169,19 @@ impl StorageLease {
             );
     }
     pub fn retry_failed_release(directory: &Path) -> Result<LeaseRelease> {
+        Self::retry_failed_release_if_present(directory)?
+            .context("No retained failed release for this directory")
+    }
+    /// Retry a failed release before restarting, only if closure was proved.
+    /// Missing registry entries leave active leases and other processes untouched.
+    pub fn retry_failed_release_if_present(directory: &Path) -> Result<Option<LeaseRelease>> {
         let directory = directory.canonicalize()?;
         let mut retained = failed_releases()
             .lock()
             .expect("failed release registry poisoned");
-        let entry = retained
-            .get(&directory)
-            .context("No retained failed release for this directory")?;
+        let Some(entry) = retained.get(&directory) else {
+            return Ok(None);
+        };
         ensure!(
             entry.retry_allowed,
             "Closure was not proved; ownership retained until process exit"
@@ -185,7 +191,7 @@ impl StorageLease {
             .expect("retained lease exists")
             .lease;
         drop(retained);
-        Ok(lease.finish_release())
+        Ok(Some(lease.finish_release()))
     }
     fn finish_release(&mut self) -> LeaseRelease {
         let runtime_removed =
@@ -321,5 +327,41 @@ mod tests {
         assert!(guard::StorageLease::acquire(&path).is_err());
         std::fs::remove_dir(&marker).unwrap();
         assert_released(StorageLease::retry_failed_release(&path).unwrap(), &path);
+    }
+
+    #[test]
+    fn stale_takeover_preserves_retired_previous_marker() {
+        let path = directory();
+        let mut prior_process = std::process::Command::new("/bin/sh")
+            .args(["-c", "exit 0"])
+            .spawn()
+            .unwrap();
+        let pid = prior_process.id();
+        prior_process.wait().unwrap();
+        let instance = "ab".repeat(16);
+        let prior = serde_json::json!({
+            "pid": pid, "process_identity": "prior", "instance": instance,
+            "storage_protocol_version": 1
+        });
+        let lease = path.join(".desktop-lease");
+        std::fs::create_dir(&lease).unwrap();
+        std::fs::write(lease.join("owner.json"), prior.to_string()).unwrap();
+        std::fs::write(lease.join("previous-marker.json"), b"older crash").unwrap();
+        std::fs::write(path.join(".desktop-owner.json"), prior.to_string()).unwrap();
+
+        let owner = StorageLease::acquire(&path).unwrap();
+        assert_eq!(
+            std::fs::read(lease.join("previous-marker.json")).unwrap(),
+            prior.to_string().as_bytes()
+        );
+        assert_eq!(
+            std::fs::read(path.join(format!(
+                ".desktop-lease-retired-{instance}/previous-marker.json"
+            )))
+            .unwrap(),
+            b"older crash"
+        );
+        assert!(StorageLease::acquire(&path).is_err());
+        assert_released(owner.release(), &path);
     }
 }

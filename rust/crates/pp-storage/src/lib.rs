@@ -376,7 +376,7 @@ impl WriterOwner {
             queue.closed = true;
             self.client.shared.changed.notify_all();
         }
-        let drained = {
+        let remaining_readers = {
             let mut readers = self
                 .client
                 .readers
@@ -396,14 +396,15 @@ impl WriterOwner {
                     .map_err(|_| anyhow!("Reader pool poisoned"))?
                     .0;
             }
-            readers.active == 0
+            readers.active
         };
         if let Some(join) = self.join.take() {
             join.join().map_err(|_| anyhow!("Writer join failed"))?;
         }
         ensure!(
-            drained,
-            "Reader checkouts still active; ownership retained until process exit"
+            remaining_readers == 0,
+            "Reader checkouts still active after {}s: {remaining_readers}; ownership retained until process exit",
+            READER_DRAIN.as_secs()
         );
         if let Some(lease) = self.lease.take() {
             let released = lease.release();

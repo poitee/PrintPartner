@@ -449,7 +449,7 @@ fn shutdown_with_held_reader_fails_bounded_and_retains_ownership() {
     let read = client.reader(Duration::ZERO).unwrap();
     let started = Instant::now();
     let error = owner.shutdown().unwrap_err().to_string();
-    assert!(error.contains("Reader checkouts still active"));
+    assert!(error.contains("Reader checkouts still active after 5s: 1"));
     assert!(started.elapsed() < READER_DRAIN + Duration::from_secs(5));
     assert!(
         set(&client, "after-stop", "no")
