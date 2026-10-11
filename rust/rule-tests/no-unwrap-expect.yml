@@ -1,5 +1,8 @@
 id: no-unwrap-expect
 valid:
+  - '#![cfg(test)] fn fixture() { Some(1).unwrap(); }'
+  - 'mod fixture { #![cfg(test)] fn helper() { value.unwrap(); } fn case() { value.expect("fixture"); } }'
+  - 'fn production() { let function = (Option::unwrap); }'
   - 'fn production() -> Option<()> { value()?; Some(()) }'
   - 'fn production() { let text = "value.unwrap()"; /* value.expect("reason") */ }'
   - '#[cfg(test)] mod arbitrary_name { fn helper() { value.unwrap(); } }'
@@ -20,6 +23,12 @@ valid:
   - '#[cfg(all(test, any(unix, windows)))] fn helper() { println!("{}", value.unwrap()); }'
   - '#[cfg(all /* platform */ (test, unix))] fn helper() { value.unwrap(); }'
 invalid:
+  - 'fn production() { (Option::unwrap)(Some(1)); }'
+  - 'fn production() { (Result::expect)(value, "reason"); }'
+  - 'fn production() { (Option::r#unwrap)(Some(1)); }'
+  - 'fn production() { (Result::r#expect)(value, "reason"); }'
+  - 'mod fixture { #![cfg(test)] fn helper() { value.unwrap(); } } fn production() { value.unwrap(); }'
+  - '#![cfg(any(test, feature = "runtime"))] fn production() { value.unwrap(); }'
   - 'fn production() { value.unwrap(); }'
   - 'fn production() { value.expect("reason"); }'
   - 'fn production() { value.unwrap().expect("reason"); }'

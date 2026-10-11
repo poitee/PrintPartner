@@ -26,6 +26,10 @@ rule:
         - pattern: $VALUE.r#expect($$$ARGS)
         - pattern: $TYPE::r#unwrap($$$ARGS)
         - pattern: $TYPE::r#expect($$$ARGS)
+        - pattern: ($TYPE::unwrap)($$$ARGS)
+        - pattern: ($TYPE::expect)($$$ARGS)
+        - pattern: ($TYPE::r#unwrap)($$$ARGS)
+        - pattern: ($TYPE::r#expect)($$$ARGS)
         # Macro arguments are token trees, not parsed call expressions. Match
         # the method-name token between a dot and its argument list instead.
         - all:
@@ -72,6 +76,17 @@ rule:
                         follows:
                           kind: identifier
                           regex: '^(std|core)$'
+          stopBy: end
+    # Inner cfg attributes apply to the containing file, module, or block.
+    - not:
+        inside:
+          any:
+            - kind: source_file
+            - kind: declaration_list
+            - kind: block
+          has:
+            kind: inner_attribute_item
+            regex: '^#!\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]$'
           stopBy: end
     - not:
         inside:
