@@ -1,5 +1,10 @@
 id: no-unwrap-expect
 valid:
+  - '#[cfg(/* test-only */ test)] fn fixture() { value.unwrap(); }'
+  - '#[/* attribute */ cfg /* predicate */ (test /* fixture */)] fn fixture() { value.expect("fixture"); }'
+  - '#![cfg(/* test-only */ test)] fn fixture() { value.unwrap(); }'
+  - 'mod fixture { #![cfg(test /* fixture */)] fn helper() { value.unwrap(); } }'
+  - '#[r#cfg(/* fixture */ r#test)] fn fixture() { value.unwrap(); }'
   - '#[r#cfg(r#test)] fn fixture() { value.unwrap(); }'
   - '#[r#test] fn fixture() { value.expect("fixture"); }'
   - '#[r#cfg(r#all(r#test, unix))] fn fixture() { value.unwrap(); }'
@@ -34,6 +39,10 @@ valid:
   - '#[cfg(all(test, any(unix, windows)))] fn helper() { println!("{}", value.unwrap()); }'
   - '#[cfg(all /* platform */ (test, unix))] fn helper() { value.unwrap(); }'
 invalid:
+  - '#[cfg(test /* feature */ = "fixture")] fn production() { value.unwrap(); }'
+  - '#![cfg(test /* feature */ = "fixture")] fn production() { value.unwrap(); }'
+  - '#[cfg(/* fixture */ test)] fn fixture() {} fn production() { value.unwrap(); }'
+  - 'mod fixture { #![cfg(/* fixture */ test)] fn helper() { value.unwrap(); } } fn production() { value.unwrap(); }'
   - '#[r#cfg(r#all(r#test = "fixture", unix))] fn production() { value.unwrap(); }'
   - 'fn production() { outer!(custom::r#std::r#stringify!(value.unwrap())); }'
   - '#![cfg(all(not(test), unix))] fn production() { value.unwrap(); }'

@@ -10,6 +10,23 @@ ignores:
   - crates/*/src/**/tests.rs
   - crates/*/src/**/tests/**
 utils:
+  test-cfg-direct:
+    has:
+      kind: attribute
+      has:
+        kind: identifier
+        regex: '^(r#)?cfg$'
+      all:
+        - has:
+            field: arguments
+            has:
+              kind: identifier
+              regex: '^(r#)?test$'
+              not:
+                precedes:
+                  regex: '^=$'
+                  stopBy:
+                    matches: non-comment
   test-cfg-all:
     has:
       kind: attribute
@@ -126,7 +143,7 @@ rule:
           has:
             kind: inner_attribute_item
             any:
-              - regex: '^#!\s*\[\s*(r#)?cfg\s*\(\s*(r#)?test\s*\)\s*\]$'
+              - matches: test-cfg-direct
               - matches: test-cfg-all
           stopBy: end
     - not:
@@ -135,7 +152,8 @@ rule:
           follows:
             kind: attribute_item
             any:
-              - regex: '^#\s*\[\s*((r#)?cfg\s*\(\s*(r#)?test\s*\)|((r#)?[A-Za-z_][A-Za-z_0-9]*::)*(r#)?test(\s*\([^]]*\))?)\s*\]$'
+              - regex: '^#\s*\[\s*((r#)?[A-Za-z_][A-Za-z_0-9]*::)*(r#)?test(\s*\([^]]*\))?\s*\]$'
+              - matches: test-cfg-direct
               # A direct test term in all(...) makes every build test-only.
               - matches: test-cfg-all
             # Attributes apply only to the next item, including other attributes
