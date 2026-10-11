@@ -24,6 +24,46 @@ defaults:
     shell: bash
 
 jobs:
+  server-smoke:
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      VITE_PRINT_PARTNER_DESKTOP: '1'
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24.21.0'
+          architecture: arm64
+      - name: Build desktop assets and pp-server
+        run: |
+          export PP_EVIDENCE="$RUNNER_TEMP/server-smoke-evidence"
+          echo "PP_EVIDENCE=$PP_EVIDENCE" >> "$GITHUB_ENV"
+          mkdir -p "$PP_EVIDENCE"
+          sw_vers > "$PP_EVIDENCE/runner.txt"
+          uname -a >> "$PP_EVIDENCE/runner.txt"
+          test "$(uname -m)" = arm64
+          rustup toolchain install 1.99.0 --profile minimal
+          rustc --version --verbose > "$PP_EVIDENCE/rust-version.txt"
+          test "$(node -p process.version)" = v24.21.0
+          npm --prefix web ci 2>&1 | tee "$PP_EVIDENCE/npm-ci.log"
+          npm --prefix web run build 2>&1 | tee "$PP_EVIDENCE/desktop-build.log"
+          python3 rust/scripts/build-desktop-manifest.py --web web --node "$(command -v node)" --output rust/bundle-manifest.json --commit "$GITHUB_SHA" 2>&1 | tee "$PP_EVIDENCE/manifest.log"
+          cargo build --manifest-path rust/Cargo.toml --locked -p pp-server 2>&1 | tee "$PP_EVIDENCE/server-build.log"
+          git diff --exit-code -- rust/Cargo.lock web/package-lock.json
+      - name: Smoke pp-server on loopback
+        run: |
+          bash rust/scripts/workflow-smoke.sh rust/target/debug/pp-server "$(command -v node)" 2>&1 | tee "$PP_EVIDENCE/workflow-smoke.log"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: native-macos-server-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/server-smoke-evidence/
+          if-no-files-found: ignore
+          retention-days: 14
   bundle:
     strategy:
       fail-fast: false
