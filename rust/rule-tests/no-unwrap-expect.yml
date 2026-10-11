@@ -3,7 +3,7 @@ valid:
   - 'fn production() -> Option<()> { value()?; Some(()) }'
   - 'fn production() { let text = "value.unwrap()"; /* value.expect("reason") */ }'
   - '#[cfg(test)] mod arbitrary_name { fn helper() { value.unwrap(); } }'
-  - '#[cfg(test)] #[allow(dead_code)] mod tests { fn helper() { value.expect("fixture"); } }'
+  - '#[cfg(test)] #[inline] fn helper() { value.expect("fixture"); }'
   - '#[cfg(test)] /* fixture helpers */ fn helper() { value.unwrap(); }'
   - '#[test] fn case() { value.unwrap(); }'
   - '#[tokio::test(flavor = "current_thread")] async fn case() { value.expect("fixture"); }'

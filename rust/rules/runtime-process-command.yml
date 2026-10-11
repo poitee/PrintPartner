@@ -43,3 +43,66 @@ rule:
               field: path
               regex: '^(::)?std$'
             stopBy: end
+    # Resolve a module import in the same file before matching its Command path.
+    - all:
+        - any:
+            - kind: scoped_identifier
+            - kind: scoped_type_identifier
+        - has:
+            field: name
+            regex: '^Command$'
+        - has:
+            field: path
+            pattern: $MODULE
+        - inside:
+            kind: source_file
+            has:
+              any:
+                - all:
+                    - any:
+                        - pattern: use std::process;
+                        - pattern: use ::std::process;
+                    - has:
+                        stopBy: end
+                        kind: identifier
+                        pattern: $MODULE
+                        regex: '^process$'
+                - pattern: use std::process as $MODULE;
+                - pattern: use ::std::process as $MODULE;
+                - all:
+                    - any:
+                        - all:
+                            - kind: identifier
+                            - pattern: $MODULE
+                            - regex: '^process$'
+                            - inside:
+                                kind: use_list
+                        - all:
+                            - kind: use_as_clause
+                            - has:
+                                field: path
+                                regex: '^process$'
+                            - has:
+                                field: alias
+                                pattern: $MODULE
+                    - inside:
+                        kind: scoped_use_list
+                        has:
+                          field: path
+                          regex: '^(::)?std$'
+                        stopBy: end
+              stopBy: end
+            stopBy: end
+    # A wildcard import includes Command, even if referenced through an alias.
+    - all:
+        - kind: use_wildcard
+        - any:
+            - regex: '^(::)?std\s*::\s*process\s*::\s*\*$'
+            - all:
+                - regex: '^process\s*::\s*\*$'
+                - inside:
+                    kind: scoped_use_list
+                    has:
+                      field: path
+                      regex: '^(::)?std$'
+                    stopBy: end
