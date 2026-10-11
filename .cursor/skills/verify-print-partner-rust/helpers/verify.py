@@ -155,12 +155,21 @@ def run(root, *args, env=None, stdout=None):
     finally:
         # Even successful/nonzero leaders can leave background workers behind. Finish each
         # group before another build starts, and defer launch signals during this teardown.
-        held["active"] = True
+        cleanup_stop = None
+        try:
+            held["active"] = True
+        except Stop as stop:
+            # A stop at cleanup entry must not skip the group; its handler already ignores
+            # further signals, so it is re-raised once the group is gone.
+            cleanup_stop = stop
+            held["active"] = True
         try:
             if process is not None:
                 stop_group(process)
         finally:
             held["active"] = was_held
+        if cleanup_stop is not None:
+            raise cleanup_stop
         if not was_held:
             release_signals()
     if process.returncode:
@@ -217,11 +226,14 @@ def read_origin(process, errors):
     deadline = time.monotonic() + 60
     data = bytearray()
     while b"\n" not in data:
-        if held["active"] and held["pending"] is not None:
-            release_signals()
         remaining = deadline - time.monotonic()
         check(remaining > 0, "Rust startup timed out")
-        if not select.select([process.stdout], [], [], min(0.1, remaining))[0]:
+        # With a stop pending, drain what is already queued first: an origin printed before
+        # the stop means pp-server is ready, and its shutdown must still be checked.
+        stopping = held["active"] and held["pending"] is not None
+        if not select.select([process.stdout], [], [], 0 if stopping else min(0.1, remaining))[0]:
+            if stopping:
+                release_signals()
             continue
         chunk = os.read(process.stdout.fileno(), 4096)
         if not chunk:

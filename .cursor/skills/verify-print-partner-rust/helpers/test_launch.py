@@ -252,9 +252,17 @@ class StopAfterOriginTest(unittest.TestCase):
     def test_stop_after_origin_reports_a_bad_shutdown(self):
         self.assertIn("Rust exited 3", self.launch_stopped_after_origin(exit_status=3, expect_failure=True))
 
-    def launch_stopped_after_origin(self, exit_status, expect_failure=False):
+    def test_stop_pending_with_origin_queued_runs_shutdown_checks(self):
+        self.assertIn("data lock reacquired", self.launch_stopped_after_origin(exit_status=0, queued=True))
+
+    def test_stop_pending_with_origin_queued_reports_a_bad_shutdown(self):
+        self.assertIn("Rust exited 3", self.launch_stopped_after_origin(exit_status=3, expect_failure=True,
+                                                                        queued=True))
+
+    def launch_stopped_after_origin(self, exit_status, expect_failure=False, queued=False):
         # The stop arrives as soon as the chunk holding the origin line has been read, before
-        # read_origin() returns, so it must be honoured with the real shutdown checks.
+        # read_origin() returns, or (queued) once the origin is printed but before read_origin()
+        # reads it. Either way pp-server was ready, so the real shutdown checks must run.
         with tempfile.TemporaryDirectory(prefix="pp-origin-stop-test-") as temporary:
             temp = Path(temporary)
             root = make_fixture_repo(temp / "repo")
@@ -280,13 +288,17 @@ print('http://127.0.0.1:43210', flush=True)
 time.sleep(600)
 """)
             driver = f"""
-import os, signal, sys
+import os, select, signal, sys
 from pathlib import Path
 sys.path.insert(0, {str(HELPER.parent)!r})
 import verify
 verify.build = lambda *args: Path({str(binary)!r})
 real_read, real_read_origin = os.read, verify.read_origin
 def read_origin(process, errors):
+    if {queued!r}:
+        select.select([process.stdout], [], [], 10)
+        os.kill(os.getpid(), signal.SIGTERM)
+        return real_read_origin(process, errors)
     def read(fd, size):
         chunk = real_read(fd, size)
         if fd == process.stdout.fileno() and b'\\n' in chunk:
@@ -314,7 +326,8 @@ verify.main()
                 else:
                     self.assertEqual(result.returncode, 0, output)
                 self.assertFalse(process_alive(child_pid))
-                print(f"stop after origin, server exit {exit_status} -> launch exit {result.returncode}")
+                when = "pending with origin queued" if queued else "after origin read"
+                print(f"stop {when}, server exit {exit_status} -> launch exit {result.returncode}")
                 return output
             finally:
                 if child_pid is None and pidfile.exists():
@@ -570,6 +583,36 @@ os.waitpid(pid, 0)
                     else:
                         verify.run(root, "sh", "-c", command)
                     self.assertFalse(process_alive(int(pidfile.read_text())))
+
+    def test_stop_at_build_cleanup_entry_still_reaps_group(self):
+        verify = load_verify()
+
+        class StopOnCleanupEntry(dict):
+            # Deliver the stop exactly where run() starts holding signals for cleanup.
+            holds = 0
+
+            def __setitem__(self, key, value):
+                if key == "active" and value is True:
+                    self.holds += 1
+                    if self.holds == 2:
+                        raise verify.begin_stop("SIGTERM")
+                super().__setitem__(key, value)
+
+        verify.held = StopOnCleanupEntry(active=False, pending=None)
+        previous = {signum: signal.getsignal(signum) for signum in verify.STOP_SIGNALS}
+        with tempfile.TemporaryDirectory(prefix="pp-build-group-test-") as temporary:
+            root = Path(temporary)
+            pidfile = root / "child.pid"
+            try:
+                with self.assertRaisesRegex(verify.Stop, "SIGTERM"), contextlib.redirect_stdout(io.StringIO()):
+                    verify.run(root, "sh", "-c", f'sleep 600 & echo $! > "{pidfile}"; exit 0')
+                self.assertFalse(process_alive(int(pidfile.read_text())))
+                self.assertIs(verify.held["active"], False)
+            finally:
+                for signum, handler in previous.items():
+                    signal.signal(signum, handler)  # begin_stop() ignored them in this test process
+                if pidfile.exists() and process_alive(int(pidfile.read_text())):
+                    os.kill(int(pidfile.read_text()), signal.SIGKILL)
 
     def test_repeated_sigint_cannot_interrupt_group_cleanup(self):
         with tempfile.TemporaryDirectory(prefix="pp-build-group-test-") as temporary:
