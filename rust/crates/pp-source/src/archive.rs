@@ -1,5 +1,6 @@
-use crate::{Directory, LocalFiles, PathCollisions, SourcePath, SourceRoot, compare_paths};
-use fs2::FileExt;
+use crate::{
+    Directory, LocalFiles, PathCollisions, SourceLockGuard, SourcePath, SourceRoot, compare_paths,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -7,10 +8,7 @@ use std::{
     fmt,
     fs::File,
     io::{self, Read, Seek, SeekFrom, Write},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 const CANDIDATE: &str = ".candidate";
@@ -127,24 +125,14 @@ pub struct ArchiveReceipt {
     pub directories: Vec<SourcePath>,
 }
 
-/// The per-Source revisions lock, shared with snapshot materialization so a
-/// live archive stage and a peer's snapshot candidate never coexist.
-struct SourceLock {
-    revisions: File,
-    held: Arc<AtomicBool>,
-}
-impl Drop for SourceLock {
-    fn drop(&mut self) {
-        let _ = FileExt::unlock(&self.revisions);
-        self.held.store(false, Ordering::Release);
-    }
-}
 struct Stage {
     parent: Directory,
     root: Directory,
     cleaned: bool,
+    // The per-Source revisions lock shared with snapshot materialization, so
+    // a live archive stage and a peer's snapshot candidate never coexist.
     // Dropped after `Drop::drop` removes the stage, so the lock outlives it.
-    _lock: SourceLock,
+    _lock: SourceLockGuard,
 }
 impl Stage {
     fn cleanup(&mut self) -> Result<()> {
@@ -197,27 +185,19 @@ impl SourceRoot {
             return Err(ArchiveError::Limit);
         }
         check_cancel(cancelled)?;
-        if self.archive_lock.load(Ordering::Acquire) {
-            return Err(ArchiveError::Busy);
-        }
-        // Share the handle's open file description so its own materialize
-        // runs under this lock instead of waiting on it.
-        let revisions = self.revisions.0.try_clone()?;
-        match revisions.try_lock_exclusive() {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                return Err(ArchiveError::Busy);
-            }
-            Err(error) => return Err(error.into()),
-        }
-        self.archive_lock.store(true, Ordering::Release);
-        let lock = SourceLock {
-            revisions,
-            held: self.archive_lock.clone(),
-        };
+        // This handle's own materialize joins the hold instead of waiting.
+        let lock = self.lock.try_acquire_alone()?.ok_or(ArchiveError::Busy)?;
         let parent = self.revisions.child(".pp-source-archives", true)?;
         parent.remove_tree(CANDIDATE)?;
-        let root = parent.child(CANDIDATE, true)?;
+        let root = match parent.child(CANDIDATE, true) {
+            Ok(root) => root,
+            Err(error) => {
+                // Creation can fail after mkdir (e.g. parent fsync); never
+                // leave the candidate behind.
+                let _ = parent.remove_tree(CANDIDATE);
+                return Err(error.into());
+            }
+        };
         let mut stage = Stage {
             parent,
             root,
@@ -285,7 +265,12 @@ impl SourceRoot {
         for (index, entry) in entries.iter().enumerate() {
             check_cancel(cancelled)?;
             let mut member = archive.by_index(index)?;
-            if member.name_raw() != entry.raw_name.as_bytes() {
+            // The reader may resolve sizes from ZIP64 extra fields; the ratio
+            // cap and limits are only sound for the sizes checked in preflight.
+            if member.name_raw() != entry.raw_name.as_bytes()
+                || member.compressed_size() != entry.compressed_bytes
+                || member.size() != entry.inflated_bytes
+            {
                 return Err(ArchiveError::InvalidArchive);
             }
             let path = entry.path.as_str();
@@ -385,6 +370,7 @@ struct Entry {
     path: SourcePath,
     directory: bool,
     compressed_bytes: u64,
+    inflated_bytes: u64,
 }
 fn ratio_limit(compressed_bytes: u64) -> u64 {
     compressed_bytes
@@ -487,7 +473,8 @@ fn inspect_index(
         // Reject advertised bombs before inflating; transfer enforces the same
         // cap on actual bytes because these sizes are untrusted.
         let compressed_bytes = u32_at(&header, 20) as u64;
-        if u32_at(&header, 24) as u64 > ratio_limit(compressed_bytes) {
+        let inflated_bytes = u32_at(&header, 24) as u64;
+        if inflated_bytes > ratio_limit(compressed_bytes) {
             return Err(ArchiveError::CompressionRatio);
         }
         validate_local_header(file, &header, &raw_name, central_offset)?;
@@ -501,6 +488,7 @@ fn inspect_index(
             path,
             directory,
             compressed_bytes,
+            inflated_bytes,
         });
     }
     if file.stream_position()? != central_offset + central_size {

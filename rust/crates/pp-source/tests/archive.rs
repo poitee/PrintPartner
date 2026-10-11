@@ -738,3 +738,123 @@ fn central_directory_metadata_is_bounded_at_eight_mebibytes() {
     assert!(matches!(extract(&fixture), Err(ArchiveError::Limit)));
     assert!(!fixture.candidate().exists());
 }
+
+#[test]
+fn zip64_extra_sizes_cannot_override_the_checked_central_sizes() {
+    let fixture = Fixture::new();
+    // Take a real ~1000:1 deflate stream for 8 MiB of zeros.
+    deflated_zip(&fixture, &vec![0; 8 * 1024 * 1024]);
+    let original = fs::read(fixture.0.join("input/upload.zip")).unwrap();
+    let u16_at = |at: usize| u16::from_le_bytes([original[at], original[at + 1]]) as usize;
+    let central = original
+        .windows(4)
+        .position(|w| w == b"PK\x01\x02")
+        .unwrap();
+    let crc = &original[central + 16..central + 20];
+    let start = 30 + u16_at(26) + u16_at(28);
+    let compressed = &original[start
+        ..start
+            + u32::from_le_bytes(original[central + 20..central + 24].try_into().unwrap())
+                as usize];
+    // Ordinary sizes claim a harmless 10:1 entry padded to 100,000 bytes,
+    // while a ZIP64 extra field carries the real 8 MiB / ~8 KiB sizes.
+    let (claimed_compressed, claimed_inflated) = (100_000u32, 1024 * 1024u32);
+    let name = b"part.stl";
+    let mut data = vec![];
+    data.extend_from_slice(b"PK\x03\x04");
+    data.extend_from_slice(&20u16.to_le_bytes());
+    data.extend_from_slice(&0u16.to_le_bytes());
+    data.extend_from_slice(&8u16.to_le_bytes());
+    data.extend_from_slice(&[0; 4]);
+    data.extend_from_slice(crc);
+    data.extend_from_slice(&claimed_compressed.to_le_bytes());
+    data.extend_from_slice(&claimed_inflated.to_le_bytes());
+    data.extend_from_slice(&(name.len() as u16).to_le_bytes());
+    data.extend_from_slice(&0u16.to_le_bytes());
+    data.extend_from_slice(name);
+    data.extend_from_slice(compressed);
+    data.resize(30 + name.len() + claimed_compressed as usize, 0);
+    let central_offset = data.len() as u32;
+    data.extend_from_slice(b"PK\x01\x02");
+    data.extend_from_slice(&45u16.to_le_bytes());
+    data.extend_from_slice(&45u16.to_le_bytes());
+    data.extend_from_slice(&0u16.to_le_bytes());
+    data.extend_from_slice(&8u16.to_le_bytes());
+    data.extend_from_slice(&[0; 4]);
+    data.extend_from_slice(crc);
+    data.extend_from_slice(&claimed_compressed.to_le_bytes());
+    data.extend_from_slice(&claimed_inflated.to_le_bytes());
+    data.extend_from_slice(&(name.len() as u16).to_le_bytes());
+    data.extend_from_slice(&28u16.to_le_bytes());
+    data.extend_from_slice(&[0; 10]);
+    data.extend_from_slice(&0u32.to_le_bytes());
+    data.extend_from_slice(name);
+    data.extend_from_slice(&1u16.to_le_bytes());
+    data.extend_from_slice(&24u16.to_le_bytes());
+    data.extend_from_slice(&(8u64 * 1024 * 1024).to_le_bytes());
+    data.extend_from_slice(&(compressed.len() as u64).to_le_bytes());
+    data.extend_from_slice(&0u64.to_le_bytes());
+    let central_size = data.len() as u32 - central_offset;
+    data.extend_from_slice(b"PK\x05\x06");
+    data.extend_from_slice(&[0; 4]);
+    data.extend_from_slice(&1u16.to_le_bytes());
+    data.extend_from_slice(&1u16.to_le_bytes());
+    data.extend_from_slice(&central_size.to_le_bytes());
+    data.extend_from_slice(&central_offset.to_le_bytes());
+    data.extend_from_slice(&0u16.to_le_bytes());
+    fs::write(fixture.0.join("input/upload.zip"), data).unwrap();
+    let error = extract(&fixture).unwrap_err();
+    assert!(matches!(error, ArchiveError::InvalidArchive), "{error:?}");
+    assert!(!fixture.candidate().exists());
+}
+
+#[test]
+fn discarding_readiness_keeps_the_lock_for_a_running_owner_materialization() {
+    use fs2::FileExt;
+
+    let fixture = Fixture::new();
+    fixture.zip(1);
+    // Large enough that copying and syncing outlasts the discard below.
+    let mut big = File::create(fixture.0.join("input/part.stl")).unwrap();
+    for _ in 0..256 {
+        big.write_all(&[3; 1024 * 1024]).unwrap();
+    }
+    drop(big);
+    let mut owner = fixture.tenant().source(42).unwrap();
+    let extracted = owner
+        .extract_zip(
+            fixture.input(),
+            ArchiveLimits::default(),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    let revisions = fixture.0.join("repos/42/revisions");
+    let finished = Arc::new(AtomicBool::new(false));
+    let worker = {
+        let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+        let finished = finished.clone();
+        thread::spawn(move || {
+            let result = owner.materialize(
+                local_request("owner-local"),
+                &input,
+                ArtifactBudget::new(1 << 30, 1 << 30).unwrap(),
+            );
+            finished.store(true, Ordering::Release);
+            result
+        })
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !revisions.join(".pp-source-candidate").exists() {
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_micros(200));
+    }
+    extracted.discard().unwrap();
+    let peer = File::open(&revisions).unwrap();
+    let acquired = peer.try_lock_exclusive().is_ok();
+    let running = !finished.load(Ordering::Acquire);
+    assert!(running, "materialization finished before the check");
+    assert!(!acquired, "a peer took the lock during the owner's copy");
+    let snapshot = worker.join().unwrap().unwrap();
+    assert_eq!(snapshot.files[0].size_bytes, 256 * 1024 * 1024);
+    peer.try_lock_exclusive().unwrap();
+}
