@@ -245,6 +245,85 @@ class StartupStopTest(unittest.TestCase):
                                     os.kill(child_pid, signal.SIGKILL)
 
 
+class StopAfterOriginTest(unittest.TestCase):
+    def test_stop_after_origin_runs_shutdown_checks(self):
+        self.assertIn("data lock reacquired", self.launch_stopped_after_origin(exit_status=0))
+
+    def test_stop_after_origin_reports_a_bad_shutdown(self):
+        self.assertIn("Rust exited 3", self.launch_stopped_after_origin(exit_status=3, expect_failure=True))
+
+    def launch_stopped_after_origin(self, exit_status, expect_failure=False):
+        # The stop arrives as soon as the chunk holding the origin line has been read, before
+        # read_origin() returns, so it must be honoured with the real shutdown checks.
+        with tempfile.TemporaryDirectory(prefix="pp-origin-stop-test-") as temporary:
+            temp = Path(temporary)
+            root = make_fixture_repo(temp / "repo")
+            binary = temp / "server"
+            pidfile = temp / "server.pid"
+            write_executable(binary, f"#!{sys.executable}\n" + f"""
+import json, os, signal, sys, time
+from pathlib import Path
+data = Path(sys.argv[sys.argv.index('--data') + 1])
+runtime = data / 'runtime'
+runtime.mkdir(parents=True)
+(data / '.desktop.lock').touch()
+marker = data / '.desktop-owner.json'
+marker.write_text(json.dumps({{'runtime_dir': str(runtime)}}))
+def stop(*_):
+    if {exit_status} == 0:
+        marker.unlink()
+        runtime.rmdir()
+    sys.exit({exit_status})
+signal.signal(signal.SIGTERM, stop)
+Path({str(pidfile)!r}).write_text(str(os.getpid()))
+print('http://127.0.0.1:43210', flush=True)
+time.sleep(600)
+""")
+            driver = f"""
+import os, signal, sys
+from pathlib import Path
+sys.path.insert(0, {str(HELPER.parent)!r})
+import verify
+verify.build = lambda *args: Path({str(binary)!r})
+real_read, real_read_origin = os.read, verify.read_origin
+def read_origin(process, errors):
+    def read(fd, size):
+        chunk = real_read(fd, size)
+        if fd == process.stdout.fileno() and b'\\n' in chunk:
+            os.kill(os.getpid(), signal.SIGTERM)
+        return chunk
+    os.read = read
+    try:
+        return real_read_origin(process, errors)
+    finally:
+        os.read = real_read
+verify.read_origin = read_origin
+verify.main()
+"""
+            child_pid = None
+            try:
+                result = subprocess.run([sys.executable, "-c", driver, "launch", "--repo", str(root)],
+                                        capture_output=True, text=True, timeout=60)
+                child_pid = int(pidfile.read_text())
+                output = result.stdout + result.stderr
+                self.assertNotIn("stopped before readiness", output)
+                self.assertNotIn("PP_SERVER_URL=", output)
+                self.assertIn("STOP: SIGTERM received; stopping pp-server", output)
+                if expect_failure:
+                    self.assertNotEqual(result.returncode, 0, output)
+                else:
+                    self.assertEqual(result.returncode, 0, output)
+                self.assertFalse(process_alive(child_pid))
+                print(f"stop after origin, server exit {exit_status} -> launch exit {result.returncode}")
+                return output
+            finally:
+                if child_pid is None and pidfile.exists():
+                    child_pid = int(pidfile.read_text())
+                if child_pid is not None:
+                    with contextlib.suppress(ProcessLookupError):
+                        os.kill(child_pid, signal.SIGKILL)
+
+
 class VerifyServerStopTest(unittest.TestCase):
     def test_cancelled_successful_verify_cleans_up_then_exits_nonzero(self):
         verify = load_verify()

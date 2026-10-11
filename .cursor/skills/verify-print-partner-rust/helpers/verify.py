@@ -227,8 +227,8 @@ def read_origin(process, errors):
         if not chunk:
             break
         data.extend(chunk)
-    if held["active"] and held["pending"] is not None:
-        release_signals()
+    # A stop arriving with the origin line stays pending: the caller has a running server
+    # to stop and must still check its shutdown, so it honours the stop after this returns.
     origin = bytes(data).split(b"\n", 1)[0].decode().strip()
     if not origin:
         process.wait(timeout=5)
@@ -439,6 +439,9 @@ def serve(binary, root, node, commit, credentials):
                 origin = read_origin(process, errors)
                 marker = fixture / "data/.desktop-owner.json"
                 runtime_dir = Path(json.loads(marker.read_text())["runtime_dir"])
+                if held["pending"] is not None:
+                    # Stopped once ready: skip publishing and stop below with full shutdown checks.
+                    release_signals()
                 if credentials is not None:
                     published = publish_credential(internal, credentials)
                 port = urllib.parse.urlsplit(origin).port
