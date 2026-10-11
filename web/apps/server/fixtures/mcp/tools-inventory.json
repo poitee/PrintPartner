@@ -427,7 +427,7 @@
       "inputSchema": {
         "properties": {
           "job_id": {
-            "type": "string"
+            "type": "number"
           },
           "profile_id": {
             "type": "number"
