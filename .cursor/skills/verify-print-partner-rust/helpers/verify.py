@@ -6,6 +6,7 @@ on loopback, prints `PP_SERVER_URL=...` and stays up until SIGTERM, SIGINT or SI
 then stops it cleanly.
 """
 import argparse
+import ctypes
 import fcntl
 import json
 import os
@@ -189,6 +190,51 @@ def _stop_group(process, grace):
         process.stdout.close()
 
 
+PR_SET_PDEATHSIG = 1
+GUARD_SOURCE = ("import os, signal, sys\n"
+                "fd, group = int(sys.argv[1]), int(sys.argv[2])\n"
+                "while os.read(fd, 1):\n"
+                "    pass\n"
+                "try:\n"
+                "    os.killpg(group, signal.SIGKILL)\n"
+                "except ProcessLookupError:\n"
+                "    pass\n")
+
+
+def parent_death_signal(launcher):
+    # Linux only, runs in the child before exec: the kernel SIGKILLs the child when the launcher
+    # dies. Checking the parent afterwards covers a launcher that died before prctl ran.
+    if not sys.platform.startswith("linux"):
+        return None
+    libc = ctypes.CDLL(None, use_errno=True)
+
+    def arm():
+        libc.prctl(PR_SET_PDEATHSIG, signal.SIGKILL)
+        if os.getppid() != launcher:
+            os._exit(1)
+    return arm
+
+
+def guard_group(group):
+    # Covers every platform and every descendant (e.g. Node under pp-server), which PDEATHSIG alone
+    # would miss. The watcher holds the read end; once the launcher dies, its write end closes and
+    # the watcher SIGKILLs the child's session group. A normal exit closes it through release_guard().
+    read_fd, write_fd = os.pipe()
+    try:
+        watcher = subprocess.Popen([sys.executable, "-I", "-c", GUARD_SOURCE, str(read_fd), str(group)],
+                                   pass_fds=(read_fd,), start_new_session=True,
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    finally:
+        os.close(read_fd)
+    return watcher, write_fd
+
+
+def release_guard(guard):
+    watcher, write_fd = guard
+    os.close(write_fd)
+    watcher.wait()
+
+
 def run(root, *args, env=None, stdout=None, timeout=600):
     print("BUILD:", " ".join(args), flush=True)
     # Signals stay held for the whole build: a stop is only recorded, so it can never escape
@@ -197,8 +243,11 @@ def run(root, *args, env=None, stdout=None, timeout=600):
     was_held = held["active"]
     held["active"] = True
     process = None
+    guard = None
     try:
-        process = subprocess.Popen(args, cwd=root, env=env, stdout=stdout, text=True, start_new_session=True)
+        process = subprocess.Popen(args, cwd=root, env=env, stdout=stdout, text=True, start_new_session=True,
+                                   preexec_fn=parent_death_signal(os.getpid()))
+        guard = guard_group(process.pid)
         deadline = time.monotonic() + timeout
         while True:
             try:
@@ -217,6 +266,8 @@ def run(root, *args, env=None, stdout=None, timeout=600):
             if process is not None:
                 stop_group(process)
         finally:
+            if guard is not None:
+                release_guard(guard)
             held["active"] = was_held
     if not was_held:
         release_signals()
@@ -265,7 +316,8 @@ def start_server(binary, root, node, commit, fixture, errors, credentials=None, 
         args += ["--test-credential-file", str(credentials)]
     # A new session keeps terminal Ctrl-C from reaching pp-server before its signal handlers exist.
     return subprocess.Popen(args, cwd=root, stdout=subprocess.PIPE, stderr=errors, text=True,
-                            start_new_session=isolated)
+                            start_new_session=isolated,
+                            preexec_fn=parent_death_signal(os.getpid()) if isolated else None)
 
 
 def read_origin(process, errors):
@@ -518,6 +570,7 @@ def serve(binary, root, node, commit, credentials):
             internal = fixture / "bootstrap.json" if credentials is not None else None
             held["active"] = True
             process = start_server(binary, root, node, commit, fixture, errors, internal, isolated=True)
+            guard = guard_group(process.pid)
             try:
                 origin = read_origin(process, errors)
                 marker = fixture / "data/.desktop-owner.json"
@@ -559,7 +612,10 @@ def serve(binary, root, node, commit, credentials):
                         if runtime_dir is None and marker.exists():
                             runtime_dir = Path(json.loads(marker.read_text())["runtime_dir"])
                     finally:
-                        terminate(process)
+                        try:
+                            terminate(process)
+                        finally:
+                            release_guard(guard)
                 finally:
                     if credentials is not None:
                         unpublish_credential(credentials, published)

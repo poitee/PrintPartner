@@ -902,5 +902,77 @@ class StopDuringBuildTest(unittest.TestCase):
                         os.kill(child_pid, signal.SIGKILL)
 
 
+class ForceKillTest(unittest.TestCase):
+    # Background children stand in for Node (under pp-server) and for npm workers (during build).
+    # SIGKILL runs no cleanup, so only the launcher's own parent-death guard can reap them.
+    def test_sigkill_while_serving_leaves_no_server_or_node_children(self):
+        server = ('sleep 600 &\necho $! > "$PP_TEST_PIDFILE.tmp"\nmv "$PP_TEST_PIDFILE.tmp" "$PP_TEST_PIDFILE"\n'
+                  'mkdir -p "$2"\n'
+                  'printf "{\\"runtime_dir\\": \\"%s\\"}" "$PP_TEST_RUNTIME" > "$2/.desktop-owner.json"\n'
+                  'echo "http://127.0.0.1:49152"\nwait\n')
+        self.assert_sigkill_leaves_no_children(npm_body="exit 0\n", server_body=server, wait_for="PP_SERVER_URL=")
+
+    def test_sigkill_during_build_leaves_no_build_children(self):
+        npm = 'sleep 600 &\necho $! > "$PP_TEST_PIDFILE.tmp"\nmv "$PP_TEST_PIDFILE.tmp" "$PP_TEST_PIDFILE"\nwait\n'
+        self.assert_sigkill_leaves_no_children(npm_body=npm, server_body=None, wait_for=None)
+
+    def assert_sigkill_leaves_no_children(self, npm_body, server_body, wait_for):
+        with tempfile.TemporaryDirectory(prefix="pp-launch-sigkill-test-") as temporary:
+            temp = Path(temporary)
+            root = make_fixture_repo(temp / "repo")
+            bin_dir = temp / "bin"
+            bin_dir.mkdir()
+            runtime = temp / "runtime"
+            runtime.mkdir()
+            server = bin_dir / "pp-server"
+            write_executable(bin_dir / "node", "#!/bin/sh\nexit 0\n")
+            write_executable(bin_dir / "npm", "#!/bin/sh\n" + npm_body)
+            write_executable(server, "#!/bin/sh\n" + (server_body or "exit 0\n"))
+            # Cargo reports the fake pp-server as the built executable.
+            write_executable(bin_dir / "cargo", "#!/bin/sh\necho '{\"reason\":\"compiler-artifact\","
+                                                 "\"target\":{\"name\":\"pp-server\"},"
+                                                 f"\"executable\":\"{server}\"}}'\n")
+            (root / "rust/scripts").mkdir(parents=True)
+            (root / "rust/scripts/build-desktop-manifest.py").write_text("")
+            pidfile = temp / "child.pid"
+            env = dict(os.environ, PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                       PP_TEST_PIDFILE=str(pidfile), PP_TEST_RUNTIME=str(runtime))
+            log = temp / "launch.log"
+            with log.open("w") as stdout:
+                process = subprocess.Popen([sys.executable, str(HELPER), "launch", "--repo", str(root)],
+                                           env=env, stdout=stdout, stderr=subprocess.STDOUT, text=True)
+            child_pid = server_pid = None
+            try:
+                deadline = time.monotonic() + 60
+                while not pidfile.exists() and time.monotonic() < deadline:
+                    time.sleep(0.05)
+                self.assertTrue(pidfile.exists(), "background child never started")
+                child_pid = int(pidfile.read_text())
+                self.assertTrue(process_alive(child_pid), "background child should be running before SIGKILL")
+                if wait_for is not None:
+                    deadline = time.monotonic() + BUILD_TIMEOUT
+                    while wait_for not in log.read_text() and time.monotonic() < deadline:
+                        time.sleep(0.05)
+                    line = next(line for line in log.read_text().splitlines() if line.startswith(wait_for))
+                    server_pid = int(dict(token.split("=", 1) for token in line.split())["PP_SERVER_PID"])
+
+                process.kill()  # SIGKILL: the launcher runs no cleanup at all
+                process.wait(timeout=10)
+
+                self.assertTrue(wait_until_gone(child_pid, 10), "background child outlived the force-killed launcher")
+                if server_pid is not None:
+                    self.assertTrue(wait_until_gone(server_pid, 10), "pp-server outlived the force-killed launcher")
+                print(f"SIGKILL -> launcher gone; background child pid {child_pid} gone"
+                      + (f"; pp-server pid {server_pid} gone" if server_pid is not None else ""))
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=10)
+                for pid in (child_pid, server_pid):
+                    if pid is not None and process_alive(pid):
+                        with contextlib.suppress(ProcessLookupError):
+                            os.kill(pid, signal.SIGKILL)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
