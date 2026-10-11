@@ -11,4 +11,4 @@ anyhow.workspace = true
 axum.workspace = true
 
 [dev-dependencies]
-proptest = "=1.9.0"
+proptest = "=1.12.0"
