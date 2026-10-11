@@ -8,6 +8,7 @@ on:
     paths:
       - "web/**"
       - "fixtures/drivers/bambu/**"
+      - "fixtures/integrations/home-assistant/**"
       - "scripts/**"
       - "manifests/**"
       - "docs/**"
@@ -31,6 +32,7 @@ on:
     paths:
       - "web/**"
       - "fixtures/drivers/bambu/**"
+      - "fixtures/integrations/home-assistant/**"
       - "scripts/**"
       - "manifests/**"
       - "docs/**"
