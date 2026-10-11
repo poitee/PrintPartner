@@ -539,6 +539,7 @@ class VerifyServerStopTest(unittest.TestCase):
                 mock.patch.object(verify, "build", return_value=Path("pp-server")), \
                 mock.patch.object(verify, "start_server", return_value=process), \
                 mock.patch.object(verify, "read_origin", side_effect=origin), \
+                mock.patch.object(verify, "check_shape"), \
                 mock.patch.object(verify.urllib.request, "build_opener", return_value=opener), \
                 mock.patch.object(verify, "ignore_signals", side_effect=verify.Stop("SIGTERM")), \
                 mock.patch.object(verify, "terminate") as terminate, \

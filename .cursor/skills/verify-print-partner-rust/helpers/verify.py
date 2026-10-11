@@ -40,6 +40,41 @@ def check(condition, message):
         raise RuntimeError(message)
 
 
+SHAPE_FIXTURE = Path(__file__).with_name("health-runtime-shape.json")
+SCALAR_TYPES = {str: "string", bool: "boolean", int: "number", float: "number", type(None): "null"}
+
+
+def type_name(value):
+    if isinstance(value, dict):
+        return "object"
+    if isinstance(value, list):
+        return "array"
+    return SCALAR_TYPES[type(value)]
+
+
+def shape_diff(expected, actual, path):
+    if isinstance(expected, list):
+        if not isinstance(actual, list):
+            return [f"{path}: expected array, got {type_name(actual)}"]
+        return [problem for index, item in enumerate(actual)
+                for problem in shape_diff(expected[0], item, f"{path}[{index}]")]
+    if not isinstance(expected, dict):
+        return [] if type_name(actual) == expected else [f"{path}: expected {expected}, got {type_name(actual)}"]
+    if not isinstance(actual, dict):
+        return [f"{path}: expected object, got {type_name(actual)}"]
+    problems = [f"{path}.{key}: missing key" for key in sorted(expected.keys() - actual.keys())]
+    problems += [f"{path}.{key}: unexpected key" for key in sorted(actual.keys() - expected.keys())]
+    for key in sorted(expected.keys() & actual.keys()):
+        problems += shape_diff(expected[key], actual[key], f"{path}.{key}")
+    return problems
+
+
+def check_shape(name, actual, shapes):
+    problems = shape_diff(shapes[name], actual, name)
+    check(not problems, f"{name} shape drifted from {SHAPE_FIXTURE.name}: " + "; ".join(problems))
+    print(f"SHAPE: {name} keys and types match {SHAPE_FIXTURE.name}", flush=True)
+
+
 def ignore_signals():
     # Once cleanup starts, further signals must not interrupt it.
     previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)
@@ -333,7 +368,9 @@ def verify(root):
                         check(response.status == expected, "Unexpected HTTP status")
                         return data, response.headers
 
-                request("/health", expected=401)
+                shapes = json.loads(SHAPE_FIXTURE.read_text())
+                unauthorized, _ = request("/health", expected=401)
+                check_shape("GET /health 401", unauthorized, shapes)
                 check(credentials.stat().st_mode & 0o777 == 0o600, "Credential file must be private")
                 launch = json.loads(credentials.read_text())["bootstrap_url"]
                 check(launch.startswith(origin + "/__desktop/bootstrap?"), "Unexpected bootstrap origin")
@@ -341,8 +378,10 @@ def verify(root):
                 cookie = headers["Set-Cookie"].split(";", 1)[0]
                 credentials.unlink()
                 health, _ = request("/health")
+                check_shape("GET /health", health, shapes)
                 check(health["ok"] is True, "Health not OK")
                 state, _ = request("/__runtime")
+                check_shape("GET /__runtime", state, shapes)
                 check(state["compat"]["state"] == "ready", "Compatibility server not ready")
                 html, _ = request("/builds", headers={"Accept": "text/html"})
                 check(b'<div id="root">' in html, "React document missing")
