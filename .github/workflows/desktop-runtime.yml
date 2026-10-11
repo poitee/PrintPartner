@@ -128,6 +128,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends strace time
       - name: Build Node and Rust snapshot implementations
+        id: source_artifacts_build
         run: |
           npm --prefix web ci
           npm --prefix web run build -w @print-partner/contracts
@@ -142,7 +143,9 @@ jobs:
             --node-snapshot web/apps/server/dist/current/services/local-source-snapshot.js \
             --binary rust/target/debug/pp-source
       - name: Replay SourcePath corpus through Node
+        if: ${{ !cancelled() && steps.source_artifacts_build.outcome == 'success' }}
         run: |
+          mkdir -p "$RUNNER_TEMP/source-artifacts-evidence"
           cargo run --manifest-path rust/Cargo.toml --locked -q -p pp-source --example source_path_corpus \
             > "$RUNNER_TEMP/source-artifacts-evidence/source-path-corpus.json"
           node rust/tests/source-artifacts/source-path-replay.mjs \
