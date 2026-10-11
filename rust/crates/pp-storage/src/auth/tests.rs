@@ -17,17 +17,20 @@ fn bounded_auth_workers_and_cancelled_queue_do_not_write() {
     )
     .unwrap();
     let client = owner.auth(FirstUserTenant::NewUser);
+    // Capacity assertions must not compete with other tests using the global pool.
+    let pool = Pool::new();
     let storage = owner.client();
     let held = storage.shared.queue.lock().unwrap();
     let cancelled = Arc::new(AtomicBool::new(false));
     let mut replies = Vec::new();
     for _ in 0..35 {
-        match client.submit(
+        match client.submit_to_pool(
             Request::RequestReset {
                 email: "queue@example.com".into(),
             },
             cancelled.clone(),
             Duration::ZERO,
+            &pool,
         ) {
             Ok(reply) => replies.push(reply),
             Err(error) => {

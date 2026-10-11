@@ -1,9 +1,9 @@
 use anyhow::{Context, Result, ensure};
 use axum::http::Uri;
 
-pub(crate) struct CanonicalTarget {
-    pub(crate) uri: Uri,
-    pub(crate) path: String,
+pub struct CanonicalTarget {
+    pub uri: Uri,
+    pub path: String,
 }
 
 fn hex(byte: u8) -> Option<u8> {
@@ -16,7 +16,7 @@ fn hex(byte: u8) -> Option<u8> {
 }
 
 impl CanonicalTarget {
-    pub(crate) fn parse(uri: &Uri) -> Result<Self> {
+    pub fn parse(uri: &Uri) -> Result<Self> {
         ensure!(
             uri.scheme().is_none() && uri.authority().is_none(),
             "Origin-form target required"

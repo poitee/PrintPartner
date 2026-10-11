@@ -2533,6 +2533,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
 
 [[package]]
+name = "pp-api-types"
+version = "0.1.0"
+dependencies = [
+ "pp-domain",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+]
+
+[[package]]
 name = "pp-compat"
 version = "0.1.0"
 dependencies = [
@@ -2556,9 +2566,9 @@ dependencies = [
 name = "pp-contracts"
 version = "0.1.0"
 dependencies = [
+ "pp-api-types",
  "serde",
  "serde_json",
- "serde_path_to_error",
 ]
 
 [[package]]
@@ -2600,6 +2610,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "pp-domain"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "pp-drivers"
+version = "0.1.0"
+
+[[package]]
 name = "pp-gateway"
 version = "0.1.0"
 dependencies = [
@@ -2610,6 +2631,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "pp-compat",
+ "pp-net",
  "rand",
  "serde",
  "serde_json",
@@ -2617,6 +2639,14 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tower-http",
+]
+
+[[package]]
+name = "pp-net"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
 ]
 
 [[package]]
@@ -2628,6 +2658,10 @@ dependencies = [
  "serde_json",
  "tokio",
 ]
+
+[[package]]
+name = "pp-services"
+version = "0.1.0"
 
 [[package]]
 name = "pp-source"

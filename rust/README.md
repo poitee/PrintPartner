@@ -13,6 +13,7 @@ cargo test --manifest-path rust/Cargo.toml --locked -p pp-core --test runtime_m0
 python3 rust/tests/workflow_m0.py
 python3 rust/tests/lifecycle_m0.py
 python3 rust/scripts/check-boundaries.py --self-test
+python3 rust/scripts/check-domain-deps.py --self-test
 cargo fmt --manifest-path rust/Cargo.toml --all --check
 cargo clippy --manifest-path rust/Cargo.toml --locked --workspace --all-targets -- -D warnings
 ```
