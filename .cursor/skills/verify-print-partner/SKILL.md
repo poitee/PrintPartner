@@ -6,16 +6,19 @@ description: >
   Production ↔ Checkoff) the way a user does. Use after implementing
   user-visible behavior, for end-to-end proof, or when asked to verify Print
   Partner — not for "CI green alone." Prefer the isolated Docker instance on
-  :8080; never aim verification at Chad's LAN 192.168.200.80. Use focused
-  tests alone for changes with no observable app behavior.
+  :8080; never aim verification at Chad's LAN 192.168.200.80 or 192.168.200.81.
+  Any change to the UI, routes, printer actions, or the desktop shell is
+  user-visible and needs real-app evidence. The only exemptions are docs-only,
+  CI-only, dependency-only, and internal refactor with no user-visible change.
 ---
 
 # Verify Print Partner
 
-Prove changed behavior through the desk-loop surface a user reaches. Keep every
-verification run isolated from developer and LAN data.
+This skill follows [gate-evidence.md](../../../docs/contributing/gate-evidence.md).
+That doc governs: read it first, and where this skill is less strict, follow it.
+Nothing here may loosen it.
 
-Prove the changed behavior through the same boundary a user reaches. Keep every verification run isolated from the developer's data.
+Prove the changed behavior through the desk-loop surface a user reaches, and keep every verification run isolated from developer and LAN data (never 192.168.200.80 or 192.168.200.81).
 
 Control helper (machine-readable JSON on stdout):
 
@@ -39,7 +42,7 @@ Prefer direct observation of the changed behavior over a broad test suite that o
 ## Launch
 
 Start an isolated Print Partner on **127.0.0.1:8080** with a disposable data directory
-(never the default `print-partner-data` volume, never `192.168.200.80`).
+(never the default `print-partner-data` volume, never `192.168.200.80` or `192.168.200.81`).
 
 ```bash
 $CONTROL launch --mode docker
@@ -156,6 +159,58 @@ $CONTROL snapshot --path /library --out "$EVIDENCE/library.aria.txt"
 
 Doc screenshot helper (optional, same Playwright pattern):
 `node docs/scripts/capture-screenshots.mjs --url http://127.0.0.1:8080 --theme dark`
+
+## Desktop
+
+For desktop-shell changes (Tauri tray, windows, native UI), follow the
+[Desktop and tray capture](../../../docs/contributing/gate-evidence.md#desktop-and-tray-capture)
+section of the gate doc. Its lifecycle, publishing, and public-repo rules apply here.
+
+1. **Build at the PR head SHA.** Confirm `git rev-parse HEAD` matches the PR head.
+   Prepare the stage and runtime resources as in
+   [rust/crates/pp-desktop/README.md](../../../rust/crates/pp-desktop/README.md),
+   and export `PP_DESKTOP_RELEASE_MANIFEST` for the stage. Set `STAGE` to that stage path.
+2. **Get the executable from cargo's JSON output**, not a guessed `target/` path.
+   The executable is the `executable` field of the `pp-desktop` `compiler-artifact` message:
+
+   ```bash
+   set -o pipefail
+   APP=$(cargo build --manifest-path rust/Cargo.toml --locked -p pp-desktop --message-format=json \
+     | python3 -c 'import json, sys
+   found = [m["executable"] for m in map(json.loads, filter(str.strip, sys.stdin))
+            if m.get("reason") == "compiler-artifact" and m.get("target", {}).get("name") == "pp-desktop" and m.get("executable")]
+   print(found[-1])')
+   ```
+
+3. **Run one instance on `DISPLAY=:99`** with isolated temporary data, and verify
+   the tray lifecycle the gate doc requires. Trigger tray menu items through the
+   app's own `dbusmenu` over D-Bus. The PR's Evidence section must state
+   **no literal click was done** and name the items triggered this way. The
+   `evidence tray-click` command keeps its name, but never describe these
+   activations as literal mouse clicks.
+4. **Clean up without masking the original result.** The trap saves the exit
+   status first, removes only what this run created, and re-exits with that status:
+
+   ```bash
+   app_pid=""
+   data_dir=$(mktemp -d)
+   cleanup() {
+     status=$?
+     if [ -n "$app_pid" ]; then
+       kill "$app_pid" 2>/dev/null || true
+       wait "$app_pid" 2>/dev/null || true
+     fi
+     rm -rf -- "$data_dir" || echo "cleanup: could not remove $data_dir" >&2
+     exit "$status"
+   }
+   trap cleanup EXIT
+
+   DISPLAY=:99 "$APP" --dev-stage "$STAGE" --data "$data_dir" &
+   app_pid=$!
+   ```
+
+   Stop only the PID this run started; never kill by name. Keep `evidence/`
+   artifacts out of the code branch.
 
 ## Cleanup
 
