@@ -1185,3 +1185,26 @@ for (const use of ['[preview][target]', '[target]', '[target][]']) {
 test('unused banned document-wide definition is not a verification target', () => {
   assert.equal(lintPrEvidence('[target]: http://192.168.1.80:8080\n\n' + bodyWithEvidence('Exemption: docs-only\n- Exemption reason: Documentation update.')).ok, true);
 });
+
+
+for (const placeholder of ['**TODO**', '[TODO](#)', '<em>TODO</em>', '[not provided](https://example.test/info)', '[**TBD**](# "details")', '<span title="explained">none</span>', 'T&#79;DO', 'T&#x4f;DO', '&nbsp;', '[TODO][details]']) {
+  for (const field of ['Steps followed to produce the evidence', 'Result observed', 'Exemption reason']) {
+    test(`rejects visible placeholder ${placeholder} in ${field}`, () => {
+      const body = field === 'Exemption reason'
+        ? bodyWithEvidence(`Exemption: docs-only\n- Exemption reason: ${placeholder}`)
+        : bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} trace.json`).replace(`${field}: ${field.startsWith('Steps') ? 'ran locally' : 'passed'}`, `${field}: ${placeholder}`);
+      assert.equal(lintPrEvidence(body).ok, false);
+    });
+  }
+}
+for (const reason of ['[Updated the guide](https://example.test/docs)', '<em>Adjusted workflow paths</em>', '`pnpm test` passed', 'CI only: updated action pins']) {
+  test(`accepts substantive formatted exemption reason ${reason}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: ci-only\n- Exemption reason: ${reason}`)).ok, true);
+  });
+}
+
+test('bounds malformed link-tail scanning in required fields', () => {
+  const start = performance.now();
+  lintPrEvidence(bodyWithEvidence('Exemption: docs-only\n- Exemption reason: ' + '[a]('.repeat(15000)));
+  assert.ok(performance.now() - start < 1000);
+});

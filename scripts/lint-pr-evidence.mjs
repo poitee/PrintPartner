@@ -709,16 +709,53 @@ function referenceUses(value) {
   return references;
 }
 
+/** Visible inline text for required fields: destinations and HTML attributes
+ * cannot turn a placeholder label into a substantive explanation. */
+function visibleFieldText(value) {
+  let text = "";
+  let cursor = 0;
+  for (let at = value.indexOf("]("); at !== -1; at = value.indexOf("](", cursor)) {
+    const open = linkTextStart(value, at, cursor);
+    const tail = open === -1 ? null : parseLinkTail(value, at + 1);
+    if (open === -1) {
+      text += value.slice(cursor, at + 2);
+      cursor = at + 2;
+      continue;
+    }
+    if (!tail) {
+      // Stop after a malformed tail rather than scanning overlapping tails.
+      // Its destination/title cannot supply substantive visible field text.
+      text += value.slice(cursor, open) + value.slice(open + 1, at);
+      cursor = value.length;
+      break;
+    }
+    text += value.slice(cursor, open) + value.slice(open + 1, at);
+    cursor = tail.end;
+  }
+  text += value.slice(cursor);
+  text = text.replace(/<\/?[a-z][^<>\n]*>/gi, "")
+    .replace(/\[([^\]\n]*)\](?:\[[^\]\n]*\])?/g, "$1")
+    .replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\]\\^_`{|}~])/g, "$1");
+  const entities = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", Tab: "\t", NewLine: "\n" };
+  text = text.replace(/&(#x[\da-f]+|#\d+|amp|lt|gt|quot|apos|nbsp|Tab|NewLine);/gi, (match, entity) => {
+    if (entity[0] !== "#") return entities[entity] ?? match;
+    const code = entity[1].toLowerCase() === "x" ? Number.parseInt(entity.slice(2), 16) : Number(entity.slice(1));
+    return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "\ufffd";
+  });
+  return text.replace(/[*_`~]/g, "").trim();
+}
+
+function isPlaceholderField(value) {
+  const plain = visibleFieldText(value);
+  return !plain || /^(?:todo|tbd|fixme|placeholder)\b/i.test(plain)
+    || /^(?:n\/?a|none|pending|not provided)[.!?]*$/i.test(plain);
+}
+
 export function hasEvidenceContent(sectionText) {
   const steps = readField(sectionText, FIELD_LABELS.steps);
   const result = readField(sectionText, FIELD_LABELS.result);
   const artifact = findField(sectionText, FIELD_LABELS.artifact)?.text ?? "";
-  const placeholder = (text) => {
-    const plain = text.replace(/[*_`~<>]/g, "").trim();
-    return !plain || /^(?:todo|tbd|fixme|placeholder)\b/i.test(plain)
-      || /^(?:n\/?a|none|pending|not provided)[.!?]*$/i.test(plain);
-  };
-  if (placeholder(steps) || placeholder(result)) return false;
+  if (isPlaceholderField(steps) || isPlaceholderField(result)) return false;
   // Count reference destinations only for visible reference uses in verification
   // content, never for definitions or labels inside the exemption reason.
   const verification = withoutFields(sectionText, [FIELD_LABELS.reason]);
@@ -817,7 +854,7 @@ export function lintPrEvidence(body) {
       );
     }
   } else if (VALID_EXEMPTIONS.includes(value)) {
-    if (!reason || /^(?:todo|tbd|n\/?a|none|fixme|placeholder)[.!?]*$/i.test(reason.trim())) {
+    if (isPlaceholderField(reason)) {
       errors.push(
         `Exemption "${value}" requires a non-empty Exemption reason (for docs/CI-only and other exempt PRs).`,
       );
