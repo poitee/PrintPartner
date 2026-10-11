@@ -118,7 +118,7 @@ describe("7 PrusaLink fixtures parsed through the TS adapter", () => {
     });
   });
 
-  it("upload-response: accepts HTTP 201 and discards the response body", async () => {
+  it("upload-response: accepts HTTP 201 for an authenticated PUT", async () => {
     const fetchMock = stubResponses({
       "/api/v1/files/usb/benchy.gcode": "upload-response",
     });
@@ -128,6 +128,9 @@ describe("7 PrusaLink fixtures parsed through the TS adapter", () => {
       ok: true, remote_path: "usb/benchy.gcode", started: false,
       message: "Uploaded benchy.gcode",
     });
-    expect(fetchMock.mock.calls[1]![1]?.method).toBe("PUT");
+    const uploadRequest = fetchMock.mock.calls[1]![1];
+    expect(uploadRequest?.method).toBe("PUT");
+    expect(new Headers(uploadRequest?.headers).get("Authorization"))
+      .toContain('uri="/api/v1/files/usb/benchy.gcode"');
   });
 });
