@@ -1,10 +1,12 @@
 /**
  * The golden Node HTTP route inventory must record /api/v1/mcp auth per mode:
- * open on single-user loopback, 401/403 once multi-user, SaaS or an API key is
+ * open on single-user-auth loopback, 401/403 once multi-user, SaaS or an API key is
  * in play, and 503 fail-closed when exposed on a non-loopback host without a key.
- * CI re-generates the inventory from the live app and diffs it against this file;
+ * CI re-generates the inventory from the live app and diffs it against
+ * fixtures/http/routes-inventory.json;
  * this test pins the MCP expectations so a golden regeneration cannot quietly
- * change them.
+ * change them. The desktop shell (socket-authenticated, no auth store) is not
+ * probed by the inventory, so these modes say nothing about desktop auth.
  */
 
 import { readFileSync } from "node:fs";
@@ -34,7 +36,7 @@ const gated = (status: number) => ({ status, authRequired: true });
 const open = (status: number) => ({ status, authRequired: false });
 
 const expectedByMode = {
-  "self-host/single-user": open(404),
+  "self-host/single-user-auth": open(404),
   "self-host/multi-user": gated(401),
   "saas/multi-user": gated(403),
   "self-host/api-key": gated(401),
@@ -55,7 +57,7 @@ describe("golden route inventory: /api/v1/mcp auth per mode", () => {
     expect(route.authRequired).toBe("mode-dependent");
     expect(route.authByMode).toEqual({
       ...expectedByMode,
-      "self-host/single-user": open(400),
+      "self-host/single-user-auth": open(400),
     });
   });
 

@@ -20,8 +20,12 @@ const { buildApp, createPorts } = await import(pathToFileURL(join(root, 'web/app
 // Static asset filenames belong to the web build, not the Node API inventory.
 // Probe every auth mode separately: a route's auth can differ per mode (e.g. MCP
 // is open on loopback, 401 with an API key configured, 503 when exposed unkeyed).
+// Single-user modes run with SINGLE_USER_AUTH (singleUserAuth: true), hence "-auth".
+// The desktop shell (src/desktop.ts) is deliberately not probed: it runs without an auth
+// store and authenticates through the 0600 Unix socket (desktopPrincipal), so an
+// uncredentialed HTTP inject would reach handlers rather than any auth hook.
 const modes = [
-  { name: 'self-host/single-user', deployMode: 'self-host', multiUser: false, host: '127.0.0.1', integrationApiKey: null },
+  { name: 'self-host/single-user-auth', deployMode: 'self-host', multiUser: false, host: '127.0.0.1', integrationApiKey: null },
   { name: 'self-host/multi-user', deployMode: 'self-host', multiUser: true, host: '127.0.0.1', integrationApiKey: null },
   { name: 'saas/multi-user', deployMode: 'saas', multiUser: true, host: '127.0.0.1', integrationApiKey: null },
   { name: 'self-host/api-key', deployMode: 'self-host', multiUser: false, host: '127.0.0.1', integrationApiKey: 'route-inventory-probe-key' },
