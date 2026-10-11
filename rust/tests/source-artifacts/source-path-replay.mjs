@@ -5,6 +5,15 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 const FOLLOW_UP = 'https://linear.app/greetz/issue/GRE-555/sourcepath-parity-align-rust-and-node-nfc-versions-and-colon';
+const unicodeFixtures = JSON.parse(readFileSync(new URL(
+  '../../crates/pp-source/tests/fixtures/source-path-unicode-16-17.json', import.meta.url,
+), 'utf8'));
+const unicodeFragments = new Map(unicodeFixtures.map((c) => [c.path.slice(0, -4), {
+  rustNfc: c.rustNfc.slice(0, -4), nodeNfc: c.nodeNfc.slice(0, -4),
+}]));
+// Fixture fragments consist solely of "a" and combining marks (including
+// astral marks). Every entry is an exact probe, not a wildcard character rule.
+const unicodePattern = new RegExp([...unicodeFragments.keys()].join('|'), 'gu');
 const rustOnlyRules = [
   {
     id: 'utf8-byte-bound',
@@ -33,12 +42,17 @@ function sharedStructureAccepts(path, manifest) {
 }
 
 function knownUnicodeDifference(path, rustNfc, nodeNfc, rustVersion) {
-  // This exact reordering is demonstrated by the GRE-555 fixture. A new
-  // Unicode character or different normalization effect is never excused just
-  // because U+1ADD or a colon appears somewhere in the path.
-  return rustVersion.join('.') === '16.0.0' && process.versions.unicode === '17.0'
-    && rustNfc === path && path.includes('a\u1add\u0300')
-    && nodeNfc === path.replaceAll('a\u1add\u0300', '\u00e0\u1add');
+  if (rustNfc === nodeNfc) return false;
+  if (rustVersion.join('.') !== '16.0.0' || process.versions.unicode !== '17.0') return false;
+  let matched = false;
+  const expectedRust = path.replace(unicodePattern, (fragment) => {
+    matched = true;
+    return unicodeFragments.get(fragment).rustNfc;
+  });
+  const expectedNode = path.replace(unicodePattern, (fragment) => unicodeFragments.get(fragment).nodeNfc);
+  // Require the complete normalized strings to match confirmed transformations.
+  // Unknown effects elsewhere in the path, including with a colon, still fail.
+  return matched && rustNfc === expectedRust && nodeNfc === expectedNode;
 }
 
 export function replayCorpus(corpus, sourceRelativePath, manifest) {
@@ -58,8 +72,11 @@ export function replayCorpus(corpus, sourceRelativePath, manifest) {
   let knownRustStricter = 0;
   let knownUnicodeMismatches = 0;
 
-  for (const [index, { path, origin, rustAccepts, rustNfc }] of corpus.cases.entries()) {
+  for (const [index, {
+    path, origin, rustAccepts, rustReferenceAccepts, rustNfc, rustFixtureAccepts, rustFixtureNfc,
+  }] of corpus.cases.entries()) {
     if (typeof path !== 'string' || typeof rustNfc !== 'string' || typeof rustAccepts !== 'boolean'
+        || typeof rustReferenceAccepts !== 'boolean'
         || !['fixture', 'generated'].includes(origin)) {
       throw new Error('Invalid SourcePath case ' + index);
     }
@@ -81,7 +98,10 @@ export function replayCorpus(corpus, sourceRelativePath, manifest) {
     const expectedRust = rustSharedAccepts && rules.length === 0;
     const knownUnicode = knownUnicodeDifference(path, rustNfc, nodeNfc, corpus.rust_unicode_version);
     const errors = [];
-    if (rustAccepts !== expectedRust) errors.push('Rust decision differs from its contract model');
+    if (rustAccepts !== rustReferenceAccepts) errors.push('Rust decision differs from its reference model');
+    if (rustReferenceAccepts !== expectedRust) errors.push('Rust reference differs from its contract model');
+    if (rustFixtureAccepts !== undefined && rustAccepts !== rustFixtureAccepts) errors.push('Rust decision differs from fixture');
+    if (rustFixtureNfc !== undefined && rustNfc !== rustFixtureNfc) errors.push('Rust NFC differs from fixture');
     if (nodeAccepts !== nodeSharedAccepts) errors.push('Node decision differs from its shared contract model');
     if (rustNfc !== nodeNfc && !knownUnicode) errors.push('Unclassified NFC difference');
 
@@ -100,7 +120,8 @@ export function replayCorpus(corpus, sourceRelativePath, manifest) {
     }
     if (errors.length > 0) classification = 'unexpected';
     const record = {
-      index, path, origin, rustAccepts, nodeAccepts, rustSharedAccepts, nodeSharedAccepts,
+      index, path, origin, rustAccepts, rustReferenceAccepts, nodeAccepts, rustSharedAccepts, nodeSharedAccepts,
+      rustFixtureAccepts, rustFixtureNfc,
       rustNfc, nodeNfc, rustOnlyRules: rules, classification, errors,
       normalizationClassification: rustNfc === nodeNfc ? 'agree'
         : knownUnicode ? 'known-unicode-version' : 'unexpected',

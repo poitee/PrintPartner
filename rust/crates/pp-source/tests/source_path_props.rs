@@ -5,7 +5,8 @@ use pp_source::{MANIFEST, SourcePath};
 use proptest::prelude::*;
 use serde::Deserialize;
 use source_path::{
-    MAX_COMPONENTS, MAX_PATH_BYTES, any_path, reference_accepts, rust_accepts, valid_path,
+    MAX_COMPONENTS, MAX_PATH_BYTES, any_path, reference_accepts, rust_accepts,
+    unicode_version_fixtures, valid_path,
 };
 use unicode_normalization::UnicodeNormalization;
 
@@ -31,6 +32,16 @@ fn fixture_cases_match_expected_decisions() {
             "{:?}",
             case.path
         );
+    }
+    for case in unicode_version_fixtures() {
+        assert_eq!(rust_accepts(&case.path), case.accept, "{:?}", case.path);
+        assert_eq!(
+            reference_accepts(&case.path),
+            case.accept,
+            "{:?}",
+            case.path
+        );
+        assert_eq!(case.path.nfc().collect::<String>(), case.rust_nfc);
     }
 }
 

@@ -11,7 +11,7 @@ import { replayCorpus } from './source-path-replay.mjs';
 
 const corpusOf = (...cases) => ({
   seed: 'regression', generated: 0, rust_unicode_version: [16, 0, 0],
-  cases: cases.map((c) => ({ origin: 'fixture', ...c })),
+  cases: cases.map((c) => ({ origin: 'fixture', rustReferenceAccepts: c.rustAccepts, ...c })),
 });
 const run = (corpus, validator = sourceRelativePath) => replayCorpus(corpus, validator, manifest);
 
@@ -50,7 +50,7 @@ test('Unicode drift is recorded even when a colon makes both parsers reject', ()
 });
 
 test('a different Unicode reordering is not excused by U+1ADD or a colon', () => {
-  const path = 'a\u1add\u0301:.stl';
+  const path = 'a\u1add\u0303:.stl';
   const report = run(corpusOf({ path, rustNfc: path, rustAccepts: false }));
   assert.equal(report.mismatches, 0);
   assert.equal(report.normalizationDifferences, 1);
@@ -73,6 +73,51 @@ test('all bound mismatches retain exact inputs and classifications', () => {
   assert.deepEqual(report.mismatchCases.map((c) => c.path), paths);
   assert.ok(report.mismatchCases.every((c) => c.origin === 'fixture'
     && c.classification === 'known-rust-stricter' && !c.rustAccepts && c.nodeAccepts));
+});
+
+test('all confirmed Unicode 16-to-17 probes retain their expected outcomes', () => {
+  const fixtures = JSON.parse(readFileSync(new URL(
+    '../../crates/pp-source/tests/fixtures/source-path-unicode-16-17.json', import.meta.url,
+  ), 'utf8'));
+  assert.equal(fixtures.length, 408);
+  const report = run(corpusOf(...fixtures.map((c) => ({ ...c, rustAccepts: c.accept }))));
+  assert.equal(report.mismatches, 113);
+  assert.equal(report.knownUnicodeMismatches, 113);
+  assert.equal(report.unexpectedMismatches, 0);
+  for (const fixture of fixtures) {
+    assert.equal(fixture.path.normalize('NFC'), fixture.nodeNfc, fixture.path);
+  }
+});
+
+test('producer-to-replay preserves evidence for a Rust verdict/reference disagreement', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'source-path-producer-'));
+  try {
+    const binary = process.env.PP_SOURCE_PATH_CORPUS_BINARY
+      ?? fileURLToPath(new URL('../../target/debug/examples/source_path_corpus', import.meta.url));
+    const produced = spawnSync(binary, ['--cases', '0', '--test-reject', 'part.stl'], { encoding: 'utf8' });
+    assert.equal(produced.status, 0, produced.stderr);
+    const corpus = JSON.parse(produced.stdout);
+    assert.equal(corpus.regression_reject, 'part.stl');
+    const entry = corpus.cases.find((c) => c.path === 'part.stl');
+    assert.equal(entry.rustAccepts, false);
+    assert.equal(entry.rustReferenceAccepts, true);
+    const corpusPath = join(directory, 'corpus.json');
+    const reportPath = join(directory, 'report.json');
+    writeFileSync(corpusPath, produced.stdout);
+    const result = spawnSync(process.execPath, [
+      fileURLToPath(new URL('./source-path-replay.mjs', import.meta.url)),
+      fileURLToPath(new URL('../../../web/apps/server/dist/current/services/local-source-snapshot.js', import.meta.url)),
+      corpusPath, reportPath,
+    ], { encoding: 'utf8' });
+    assert.equal(result.status, 1, result.stderr);
+    const report = JSON.parse(readFileSync(reportPath, 'utf8'));
+    assert.equal(report.unexpectedMismatches, 1);
+    assert.equal(report.unexpectedCases[0].path, 'part.stl');
+    assert.equal(report.unexpectedCases[0].nodeAccepts, true);
+    assert.equal(report.unexpectedCases[0].rustReferenceAccepts, true);
+  } finally {
+    rmSync(directory, { recursive: true });
+  }
 });
 
 test('the CLI writes evidence and exits 1 for the masked NFC regression', () => {

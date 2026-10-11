@@ -10,7 +10,7 @@ pub fn rust_accepts(path: &str) -> bool {
     SourcePath::try_from(path.to_owned()).is_ok()
 }
 
-/// The documented SourcePath contract, written independently of `TryFrom`.
+/// The SourcePath validation contract, written independently of `TryFrom`.
 pub fn reference_accepts(path: &str) -> bool {
     let segments: Vec<&str> = path.split('/').collect();
     !path.is_empty()
@@ -132,16 +132,34 @@ fn bound_path() -> impl Strategy<Value = String> {
     ]
 }
 
-// U+1ADD acquired a combining class in Unicode 17. Rust's pinned Unicode 16
-// normalizer and Node 24.21.0 disagree on the first spelling (GRE-555).
+#[derive(Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnicodeVersionFixture {
+    pub path: String,
+    pub accept: bool,
+    pub rust_nfc: String,
+}
+
+pub fn unicode_version_fixtures() -> Vec<UnicodeVersionFixture> {
+    serde_json::from_str(include_str!("../fixtures/source-path-unicode-16-17.json")).unwrap()
+}
+
+// All 34 Unicode 17 nonzero-combining-class additions, each paired with six
+// older marks in both orders. The golden spellings were checked against the
+// actual Rust and Node normalizers; see source-path-replay.md and GRE-555.
 fn unicode_version_path() -> impl Strategy<Value = String> {
     (
         valid_path(),
-        prop::sample::select(&["a\u{1add}\u{300}", "\u{e0}\u{1add}", "a:\u{1add}\u{300}"][..]),
+        prop::sample::select(
+            unicode_version_fixtures()
+                .into_iter()
+                .map(|f| f.path)
+                .collect::<Vec<_>>(),
+        ),
         any::<bool>(),
     )
         .prop_map(|(prefix, spelling, colon)| {
-            format!("{prefix}/{spelling}{}.stl", if colon { ":" } else { "" })
+            format!("{prefix}/{spelling}{}", if colon { ":" } else { "" })
         })
 }
 
