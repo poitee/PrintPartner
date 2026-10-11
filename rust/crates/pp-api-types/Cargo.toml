@@ -25,3 +25,6 @@ codegen = ["dep:typify", "dep:schemars", "dep:syn", "dep:prettyplease"]
 [[bin]]
 name = "generate-wire-dtos"
 required-features = ["codegen"]
+
+[dev-dependencies]
+insta = { version = "=1.43.2", features = ["json", "redactions"] }

@@ -1,0 +1,35 @@
+{
+  "case": "empty-slot",
+  "context": {
+    "configured": true,
+    "physically_empty": true
+  },
+  "input": {
+    "machine": {
+      "loaded_filaments": [
+        {
+          "slot": 1,
+          "filament_color_id": null,
+          "label": ""
+        }
+      ]
+    },
+    "spools_by_color_id": {}
+  },
+  "expected": {
+    "slots": [
+      {
+        "slot": 1,
+        "label": "",
+        "filament_color_id": null,
+        "remaining_g": null,
+        "spool_ids": [],
+        "empty": true,
+        "low": false
+      }
+    ],
+    "needs_filament_swap": true,
+    "filament_swap_reason": "no filament loaded in slot 1",
+    "filament_remaining_g": null
+  }
+}
