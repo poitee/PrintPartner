@@ -1,22 +1,25 @@
 import { z } from "zod";
+import { boundaryRefinement } from "./wire-schema.js";
 import { acceptedPlanBasisSchema } from "./accepted-plates.js";
 
 const positiveId = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 const nonnegativeVersion = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
-const scalarText = z.string().refine((value) => !/[\uD800-\uDFFF]/u.test(value), { message: "invalid_unicode_scalar_text" });
+const scalarText = z.string().check(boundaryRefinement<string>("unicode-scalars", (value, context) => {
+  if (/[\uD800-\uDFFF]/u.test(value)) context.addIssue({ code: "custom", message: "invalid_unicode_scalar_text" });
+}));
 const digest = z.string().regex(/^[0-9a-f]{64}$/);
 
 export const planDraftBasisSchema = z.strictObject({
   revision_id: positiveId.nullable(),
   plan_version: nonnegativeVersion,
-}).superRefine((value, context) => {
+}).check(boundaryRefinement("autosave-basis", (value, context) => {
   if (
     (value.revision_id == null && value.plan_version !== 0) ||
     (value.revision_id != null && value.plan_version === 0)
   ) {
     context.addIssue({ code: "custom", message: "Accepted Plan base is inconsistent" });
   }
-});
+}));
 
 export type PlanDraftBasis = z.infer<typeof planDraftBasisSchema>;
 
@@ -225,7 +228,7 @@ export const savePlanChoicesRequestSchema = z.strictObject({
   expected_draft: planDraftIdentitySchema.nullable(),
   remap_checkoff_links: z.boolean(),
   decisions: z.array(planChoiceSchema).min(1).max(10_000),
-}).superRefine((value, context) => {
+}).check(boundaryRefinement("autosave-save", (value, context) => {
   if (value.expected_draft && (value.expected_draft.state !== "open" ||
     value.expected_draft.base.revision_id !== value.expected_base.revision_id ||
     value.expected_draft.base.plan_version !== value.expected_base.plan_version)) {
@@ -240,7 +243,7 @@ export const savePlanChoicesRequestSchema = z.strictObject({
     }
     targets.add(key);
   }
-});
+}));
 
 export type SavePlanChoicesRequest = z.infer<typeof savePlanChoicesRequestSchema>;
 
