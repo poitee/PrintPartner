@@ -1,0 +1,125 @@
+name: Chain tip gate
+
+# Manual gate: runs the desktop Rust and contracts checks against any ref
+# (branch, tag or SHA) and writes one summary table. Reads only; no secrets.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or SHA to gate
+        required: false
+        default: main
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chain-tip-gate-${{ inputs.ref }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      VITE_PRINT_PARTNER_DESKTOP: '1'
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust -> target
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      - name: Install Linux desktop dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev \
+            libayatana-appindicator3-dev librsvg2-dev pkg-config
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24.21.0'
+      - name: Build desktop assets and generate measured manifest
+        run: |
+          set -euo pipefail
+          sudo ln -sf "$(command -v node)" /usr/bin/node
+          test "$(/usr/bin/node --version)" = v24.21.0
+          npm --prefix web ci
+          npm --prefix web rebuild better-sqlite3
+          npm --prefix web run build
+          python3 rust/scripts/build-desktop-manifest.py --web web --node /usr/bin/node --output rust/bundle-manifest.json --commit "$GITHUB_SHA"
+      - name: cargo fmt --check
+        id: fmt
+        continue-on-error: true
+        run: cargo fmt --manifest-path rust/Cargo.toml --all --check
+      - name: clippy (-D warnings)
+        id: clippy
+        continue-on-error: true
+        run: cargo clippy --manifest-path rust/Cargo.toml --locked --workspace --all-targets -- -D warnings
+      - name: cargo nextest (full workspace)
+        id: nextest
+        continue-on-error: true
+        run: cargo nextest run --manifest-path rust/Cargo.toml --locked --workspace
+      - name: check-boundaries
+        id: boundaries
+        continue-on-error: true
+        run: python3 rust/scripts/check-boundaries.py --self-test
+      - name: pp-domain dependency guard
+        id: domain_deps
+        continue-on-error: true
+        run: python3 rust/scripts/check-domain-deps.py --self-test
+      - name: Contracts parity
+        id: contracts
+        continue-on-error: true
+        working-directory: web
+        run: |
+          set -euo pipefail
+          npm run build -w @print-partner/contracts
+          npm run build -w @print-partner/domain
+          npm run contracts:verify -- "${RUNNER_TEMP}/contract-receipts"
+          npm run test:desktop-parity
+      - name: Write gate summary
+        if: always()
+        shell: bash
+        env:
+          REF_INPUT: ${{ inputs.ref }}
+          FMT: ${{ steps.fmt.outcome }}
+          CLIPPY: ${{ steps.clippy.outcome }}
+          NEXTEST: ${{ steps.nextest.outcome }}
+          BOUNDARIES: ${{ steps.boundaries.outcome }}
+          DOMAIN_DEPS: ${{ steps.domain_deps.outcome }}
+          CONTRACTS: ${{ steps.contracts.outcome }}
+        run: |
+          set -uo pipefail
+          row() {
+            case "$2" in
+              success) result='✅ pass' ;;
+              failure) result='❌ fail' ;;
+              *) result="⚪ not run ($2)" ;;
+            esac
+            echo "| $1 | $result |" >> "$GITHUB_STEP_SUMMARY"
+          }
+          {
+            echo '## Chain tip gate'
+            echo
+            echo "- Ref: \`$REF_INPUT\`"
+            echo "- Resolved SHA: \`$(git rev-parse HEAD)\`"
+            echo
+            echo '| Gate | Result |'
+            echo '| --- | --- |'
+          } >> "$GITHUB_STEP_SUMMARY"
+          row 'cargo fmt --check' "$FMT"
+          row 'clippy (-D warnings)' "$CLIPPY"
+          row 'cargo nextest (workspace)' "$NEXTEST"
+          row 'check-boundaries' "$BOUNDARIES"
+          row 'pp-domain dependency guard' "$DOMAIN_DEPS"
+          row 'contracts parity' "$CONTRACTS"
+          for outcome in "$FMT" "$CLIPPY" "$NEXTEST" "$BOUNDARIES" "$DOMAIN_DEPS" "$CONTRACTS"; do
+            test "$outcome" = success || exit 1
+          done
