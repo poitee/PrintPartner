@@ -118,7 +118,7 @@ def main():
                 cookie = headers["Set-Cookie"].split(";", 1)[0]
                 credentials.unlink()
                 health, _ = request("/health")
-                check(health["ok"] is True, "Health not OK")
+                check(health["ok"] is False, "GRE-543 deliberate failure: Health not OK")
                 state, _ = request("/__runtime")
                 check(state["compat"]["state"] == "ready", "Compatibility server not ready")
                 html, _ = request("/builds", headers={"Accept": "text/html"})
