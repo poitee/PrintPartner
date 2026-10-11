@@ -202,7 +202,7 @@ jobs:
           sudo iptables -N PP_LAN_GUARD
           sudo iptables -A PP_LAN_GUARD -j REJECT
           sudo iptables -I OUTPUT -d 192.168.0.0/16 -m conntrack --ctstate NEW -j PP_LAN_GUARD
-          sudo iptables -L OUTPUT -n -v > "$PP_EVIDENCE/egress-guard-before.txt"
+          sudo iptables -L OUTPUT -n -v | tee "$PP_EVIDENCE/egress-guard-before.txt"
       - name: Run Rust gateway verify.py end to end
         run: |
           python3 .cursor/skills/verify-print-partner-rust/helpers/verify.py 2>&1 | tee "$PP_EVIDENCE/verify.log"
@@ -211,7 +211,7 @@ jobs:
       - name: Assert no LAN egress was attempted
         if: always()
         run: |
-          sudo iptables -L OUTPUT -n -v -x > "$PP_EVIDENCE/egress-guard-after.txt"
+          sudo iptables -L OUTPUT -n -v -x | tee "$PP_EVIDENCE/egress-guard-after.txt"
           blocked="$(sudo iptables -L PP_LAN_GUARD -n -v -x | awk 'NR>2 {sum+=$1} END {print sum+0}')"
           echo "blocked_lan_packets=$blocked" | tee "$PP_EVIDENCE/egress-guard-result.txt"
           test "$blocked" -eq 0

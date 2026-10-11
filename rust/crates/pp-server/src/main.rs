@@ -62,11 +62,14 @@ async fn main() -> Result<()> {
             return Err(error);
         }
     }
+    // Register signal streams before announcing the origin: a signal sent right after
+    // the origin line is queued here instead of taking the default action.
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
     println!("{}", runtime.origin());
     let shutdown_requested = runtime.shutdown_requested();
-    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     tokio::select! {
-        _ = tokio::signal::ctrl_c() => {}
+        _ = interrupt.recv() => {}
         _ = terminate.recv() => {}
         _ = shutdown_requested => {}
     }
