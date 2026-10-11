@@ -45,16 +45,22 @@ utils:
         has:
           field: name
           pattern: $MODULE
-        # Terminal imports can occur directly or inside bare brace groups.
-        # A path nested in another scoped path imports that child, not process.
+        # Terminal standard-library imports belong to the root use declaration,
+        # possibly through bare braces, rather than another scoped import.
         inside:
-          any:
-            - kind: use_declaration
-            - kind: use_list
+          kind: use_declaration
+          stopBy:
+            not:
+              kind: use_list
       - kind: use_as_clause
         has:
           field: path
           matches: std-process-path
+        inside:
+          kind: use_declaration
+          stopBy:
+            not:
+              kind: use_list
         all:
           - has:
               field: alias
@@ -350,6 +356,15 @@ rule:
                   stopBy:
                     matches: non-comment
                   regex: '^(r#)?std$'
+                  not:
+                    follows:
+                      regex: '^::$'
+                      stopBy:
+                        matches: non-comment
+                      follows:
+                        regex: '^(r#)?[A-Za-z_][A-Za-z_0-9]*$'
+                        stopBy:
+                          matches: non-comment
         # A wildcard import includes Command, even if referenced through an alias.
         - kind: use_wildcard
           any:
@@ -368,7 +383,7 @@ rule:
             - kind: macro_invocation
               has:
                 field: macro
-                regex: '^(::)?((std|core)\s*::\s*)?stringify$'
+                regex: '^(::)?((r#)?(std|core)\s*::\s*)?(r#)?stringify$'
             # Nested invocations in another macro are token trees too.
             - kind: token_tree
               follows:
@@ -377,7 +392,7 @@ rule:
                   kind: identifier
                   stopBy:
                     matches: non-comment
-                  regex: '^stringify$'
+                  regex: '^(r#)?stringify$'
                   any:
                     - not:
                         follows:
@@ -392,7 +407,7 @@ rule:
                           kind: identifier
                           stopBy:
                             matches: non-comment
-                          regex: '^(std|core)$'
+                          regex: '^(r#)?(std|core)$'
                           not:
                             follows:
                               regex: '^::$'

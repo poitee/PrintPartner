@@ -1,5 +1,10 @@
 id: runtime-process-command
 valid:
+  - 'fn production() { outer!(foo::std::process::Command); }'
+  - 'use foo::{std::process}; fn production(_: process::Command) {}'
+  - 'use foo::{std::process as p}; fn production(_: p::Command) {}'
+  - 'fn production() { r#stringify!(std::process::Command); }'
+  - 'fn production() { outer!(r#std::r#stringify!(std::process::Command)); }'
   - 'use foo::{std as standard}; fn production(_: standard::process::Command) {}'
   - 'fn production() { outer!(::std::stringify!(std::process::Command)); }'
   - 'fn production() { outer!(::core::stringify!(std::process::Command)); }'
@@ -31,6 +36,9 @@ valid:
   - 'use std::{os::unix::{process::*}};'
   - 'use std::os::unix::process::*;'
 invalid:
+  - 'fn production() { outer!(::std::process::Command); }'
+  - 'use {{std::process}}; fn production(_: process::Command) {}'
+  - 'fn production() { outer!(custom::r#std::r#stringify!(std::process::Command)); }'
   - 'use {std as standard}; fn production(_: standard::process::Command) {}'
   - 'fn production() { outer!(custom::std::stringify!(std::process::Command)); }'
   - 'fn production() { outer!(custom::core::stringify!(std::process::Command)); }'

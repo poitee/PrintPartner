@@ -15,7 +15,7 @@ utils:
       kind: attribute
       has:
         kind: identifier
-        regex: '^cfg$'
+        regex: '^(r#)?cfg$'
       all:
         - has:
             field: arguments
@@ -23,12 +23,12 @@ utils:
               kind: token_tree
               follows:
                 kind: identifier
-                regex: '^all$'
+                regex: '^(r#)?all$'
                 stopBy:
                   matches: non-comment
               has:
                 kind: identifier
-                regex: '^test$'
+                regex: '^(r#)?test$'
                 not:
                   precedes:
                     regex: '^=$'
@@ -83,14 +83,14 @@ rule:
             - kind: macro_invocation
               has:
                 field: macro
-                regex: '^(::)?((std|core)\s*::\s*)?stringify$'
+                regex: '^(::)?((r#)?(std|core)\s*::\s*)?(r#)?stringify$'
             # Nested invocations in another macro are token trees too.
             - kind: token_tree
               follows:
                 regex: '^!$'
                 follows:
                   kind: identifier
-                  regex: '^stringify$'
+                  regex: '^(r#)?stringify$'
                   any:
                     - not:
                         follows:
@@ -105,7 +105,7 @@ rule:
                           kind: identifier
                           stopBy:
                             matches: non-comment
-                          regex: '^(std|core)$'
+                          regex: '^(r#)?(std|core)$'
                           not:
                             follows:
                               regex: '^::$'
@@ -126,7 +126,7 @@ rule:
           has:
             kind: inner_attribute_item
             any:
-              - regex: '^#!\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]$'
+              - regex: '^#!\s*\[\s*(r#)?cfg\s*\(\s*(r#)?test\s*\)\s*\]$'
               - matches: test-cfg-all
           stopBy: end
     - not:
@@ -135,7 +135,7 @@ rule:
           follows:
             kind: attribute_item
             any:
-              - regex: '^#\s*\[\s*(cfg\s*\(\s*test\s*\)|([A-Za-z_][A-Za-z_0-9]*::)*test(\s*\([^]]*\))?)\s*\]$'
+              - regex: '^#\s*\[\s*((r#)?cfg\s*\(\s*(r#)?test\s*\)|((r#)?[A-Za-z_][A-Za-z_0-9]*::)*(r#)?test(\s*\([^]]*\))?)\s*\]$'
               # A direct test term in all(...) makes every build test-only.
               - matches: test-cfg-all
             # Attributes apply only to the next item, including other attributes
