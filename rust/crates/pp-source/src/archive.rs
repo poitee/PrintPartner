@@ -236,8 +236,10 @@ impl SourceRoot {
             cancelled,
         )?;
         compressed.sync_all()?;
-        let mut archive_file = stage.root.file("archive.zip", false)?;
-        let entries = inspect_index(&mut archive_file, compressed_bytes, limits, cancelled)?;
+        let mut archive_file = stage.root.file_read_write("archive.zip")?;
+        let (entries, eocd_offset) =
+            inspect_index(&mut archive_file, compressed_bytes, limits, cancelled)?;
+        bind_zip_reader_to_validated_eocd(&mut archive_file, eocd_offset)?;
         let mut archive = zip::ZipArchive::with_config(
             zip::read::Config {
                 archive_offset: zip::read::ArchiveOffset::Known(0),
@@ -391,23 +393,75 @@ fn u32_at(bytes: &[u8], offset: usize) -> u32 {
             .expect("fixed header field"),
     )
 }
+const ZIP32_EOCD_SIGNATURE: &[u8] = b"PK\x05\x06";
+const ZIP64_EOCD_SIGNATURE: &[u8] = b"PK\x06\x06";
+const ZIP64_EOCD_LOCATOR_SIGNATURE: &[u8] = b"PK\x06\x07";
+
+fn comment_contains_zip_end_record(comment: &[u8]) -> bool {
+    for signature in [
+        ZIP32_EOCD_SIGNATURE,
+        ZIP64_EOCD_SIGNATURE,
+        ZIP64_EOCD_LOCATOR_SIGNATURE,
+    ] {
+        if comment
+            .windows(signature.len())
+            .any(|window| window == signature)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Truncate the staged copy at the validated EOCD and clear its comment length so
+/// the ZIP crate cannot index a decoy end record embedded in the archive comment.
+fn bind_zip_reader_to_validated_eocd(file: &mut File, eocd_offset: u64) -> Result<()> {
+    file.seek(SeekFrom::Start(eocd_offset + 20))?;
+    file.write_all(&[0u8; 2])?;
+    file.set_len(eocd_offset + 22)?;
+    file.seek(SeekFrom::Start(0))?;
+    Ok(())
+}
+
 fn inspect_index(
     file: &mut File,
     length: u64,
     limits: ArchiveLimits,
     cancelled: &AtomicBool,
-) -> Result<Vec<Entry>> {
+) -> Result<(Vec<Entry>, u64)> {
     let tail_size = length.min(65_557) as usize;
     file.seek(SeekFrom::End(-(tail_size as i64)))?;
     let mut tail = vec![0u8; tail_size];
     file.read_exact(&mut tail)?;
-    let end = (0..tail_size.saturating_sub(21))
-        .rev()
-        .find(|&i| {
-            tail[i..i + 4] == *b"PK\x05\x06" && i + 22 + u16_at(&tail, i + 20) as usize == tail_size
-        })
-        .ok_or(ArchiveError::InvalidArchive)?;
-    let footer = &tail[end..];
+    let tail_start = length - tail_size as u64;
+    let mut chosen = None;
+    for i in (0..tail_size.saturating_sub(21)).rev() {
+        if tail[i..i + 4] != *ZIP32_EOCD_SIGNATURE {
+            continue;
+        }
+        let comment_len = u16_at(&tail, i + 20) as usize;
+        if i + 22 + comment_len != tail_size {
+            continue;
+        }
+        let footer = &tail[i..];
+        let central_size = u32_at(footer, 12) as u64;
+        let central_offset = u32_at(footer, 16) as u64;
+        let eocd_offset = tail_start + i as u64;
+        if central_offset + central_size != eocd_offset {
+            continue;
+        }
+        let comment = &footer[22..22 + comment_len];
+        if comment_contains_zip_end_record(comment) {
+            return Err(ArchiveError::InvalidArchive);
+        }
+        if chosen.is_some() {
+            return Err(ArchiveError::InvalidArchive);
+        }
+        chosen = Some((footer, eocd_offset));
+    }
+    let Some((footer, eocd_offset)) = chosen else {
+        return Err(ArchiveError::InvalidArchive);
+    };
     let count = u16_at(footer, 10) as usize;
     let central_size = u32_at(footer, 12) as u64;
     let central_offset = u32_at(footer, 16) as u64;
@@ -422,9 +476,6 @@ fn inspect_index(
     }
     if count > limits.max_entries || central_size > MAX_METADATA_BYTES {
         return Err(ArchiveError::Limit);
-    }
-    if central_offset + central_size != length - tail_size as u64 + end as u64 {
-        return Err(ArchiveError::InvalidArchive);
     }
     file.seek(SeekFrom::Start(central_offset))?;
     let mut entries = Vec::with_capacity(count);
@@ -495,7 +546,7 @@ fn inspect_index(
         return Err(ArchiveError::InvalidArchive);
     }
     file.seek(SeekFrom::Start(0))?;
-    Ok(entries)
+    Ok((entries, eocd_offset))
 }
 
 fn validate_local_header(

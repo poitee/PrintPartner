@@ -808,6 +808,84 @@ fn zip64_extra_sizes_cannot_override_the_checked_central_sizes() {
     assert!(!fixture.candidate().exists());
 }
 
+fn find_validated_eocd_offset(data: &[u8]) -> usize {
+    let tail_size = data.len().min(65_557);
+    let tail_start = data.len() - tail_size;
+    let tail = &data[tail_start..];
+    for i in (0..tail_size.saturating_sub(21)).rev() {
+        if tail[i..i + 4] != *b"PK\x05\x06" {
+            continue;
+        }
+        let comment_len = u16::from_le_bytes([tail[i + 20], tail[i + 21]]) as usize;
+        if i + 22 + comment_len != tail_size {
+            continue;
+        }
+        let footer = &tail[i..];
+        let central_size = u32::from_le_bytes(footer[12..16].try_into().unwrap()) as u64;
+        let central_offset = u32::from_le_bytes(footer[16..20].try_into().unwrap()) as u64;
+        let eocd_offset = tail_start + i;
+        if central_offset + central_size == eocd_offset as u64 {
+            return eocd_offset;
+        }
+    }
+    panic!("validated EOCD");
+}
+
+fn set_archive_comment(data: &mut Vec<u8>, comment: &[u8]) {
+    let o = find_validated_eocd_offset(data);
+    data.truncate(o + 22);
+    data.extend_from_slice(comment);
+    data[o + 20..o + 22].copy_from_slice(&(comment.len() as u16).to_le_bytes());
+}
+
+fn fake_eocd_comment(decoy_offset: u32, decoy_size: u32, entries: u16) -> Vec<u8> {
+    let mut comment = vec![b' '; 4096];
+    let mut fake = Vec::from(*b"PK\x05\x06");
+    fake.extend_from_slice(&0u16.to_le_bytes());
+    fake.extend_from_slice(&0u16.to_le_bytes());
+    fake.extend_from_slice(&entries.to_le_bytes());
+    fake.extend_from_slice(&entries.to_le_bytes());
+    fake.extend_from_slice(&decoy_size.to_le_bytes());
+    fake.extend_from_slice(&decoy_offset.to_le_bytes());
+    fake.extend_from_slice(&0u16.to_le_bytes());
+    assert_eq!(fake.len(), 22);
+    comment.extend(fake);
+    comment
+}
+
+#[test]
+fn archive_comment_cannot_embed_a_second_end_record() {
+    let fixture = Fixture::new();
+    fixture.zip(1);
+    let path = fixture.0.join("input/upload.zip");
+    let mut data = fs::read(&path).unwrap();
+    // A decoy central directory large enough that the ZIP crate would over-allocate
+    // if it indexed the fake EOCD placed at the end of the archive comment.
+    let o = find_validated_eocd_offset(&data);
+    set_archive_comment(
+        &mut data,
+        &fake_eocd_comment(o as u32, 56 * 1024 * 1024, 10_000),
+    );
+    fs::write(&path, data).unwrap();
+    assert!(matches!(
+        extract(&fixture),
+        Err(ArchiveError::InvalidArchive)
+    ));
+    assert!(!fixture.candidate().exists());
+}
+
+#[test]
+fn ordinary_archive_comment_is_accepted() {
+    let fixture = Fixture::new();
+    fixture.zip(1);
+    let path = fixture.0.join("input/upload.zip");
+    let mut data = fs::read(&path).unwrap();
+    set_archive_comment(&mut data, b"fixture note");
+    fs::write(&path, data).unwrap();
+    extract(&fixture).unwrap();
+    assert!(!fixture.candidate().exists());
+}
+
 #[test]
 fn discarding_readiness_keeps_the_lock_for_a_running_owner_materialization() {
     use fs2::FileExt;
