@@ -1693,14 +1693,22 @@ async fn gre_335_shared_status_route_keeps_node_path_for_other_printers() {
     println!(
         "gre_335 trace: failing snapshot, prusalink status={status} via Node in {elapsed:?}; moonraker still cached"
     );
-    // Past the grace period Moonraker fails closed, other printers still reach Node.
+    // Past the grace period plain-HTTP Moonraker fails closed; other printers and the
+    // HTTPS Moonraker host still reach Node.
     tokio::time::sleep(Duration::from_secs(11)).await;
     let (status, _, _) = get(&origin, &cookie, &moonraker_id).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     let (status, body, elapsed) = get(&origin, &cookie, &prusa_id).await;
     assert_eq!(status, StatusCode::OK, "{body}");
+    let handshakes = tls_handshakes.load(Ordering::SeqCst);
+    let (tls_status, tls_body, tls_elapsed) = get(&origin, &cookie, &tls_id).await;
+    assert_eq!(tls_status, StatusCode::OK, "{tls_body}");
+    assert!(
+        tls_handshakes.load(Ordering::SeqCst) > handshakes,
+        "Node attempted TLS after grace"
+    );
     println!(
-        "gre_335 trace: after grace, moonraker=503, prusalink status={status} via Node in {elapsed:?}"
+        "gre_335 trace: after grace, moonraker=503, prusalink status={status} via Node in {elapsed:?}, https moonraker status={tls_status} via Node in {tls_elapsed:?}"
     );
 
     let receipt = runtime.shutdown().await;

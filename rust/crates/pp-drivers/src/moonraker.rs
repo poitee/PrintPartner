@@ -108,12 +108,27 @@ impl Watchers {
         }
     }
     /// Node was slow/unavailable: keep last-known-good pollers for `grace`, then stop
-    /// them. The id set is kept so non-Moonraker ids still route straight to Node.
+    /// the plain-HTTP pollers. HTTPS/redirect hosts stay on Node's on-demand path, and
+    /// the id set is kept so non-Moonraker ids still route straight to Node.
     pub async fn snapshot_unavailable(&mut self, grace: Duration) {
         let now = tokio::time::Instant::now();
         let since = *self.stale_since.get_or_insert(now);
-        if now.duration_since(since) >= grace {
-            self.stop().await;
+        if now.duration_since(since) < grace {
+            return;
+        }
+        let polled: Vec<_> = self
+            .hosts
+            .iter()
+            .filter(|(_, p)| !matches!(*p.status.lock().expect("Status mutex"), Slot::Node))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in polled {
+            if let Some(mut poller) = self.hosts.remove(&id) {
+                poller.cancel.cancel();
+                if let Some(task) = poller.task.take() {
+                    let _ = task.await;
+                }
+            }
         }
     }
     /// An invalid or denied snapshot fails closed: stop pollers and forget the id set.
@@ -643,6 +658,10 @@ mod tests {
         // The redirecting host's poller stops instead of retrying the redirect.
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+        // Past the snapshot grace period both hosts stay on Node's path.
+        watchers.snapshot_unavailable(Duration::ZERO).await;
+        assert_eq!(watchers.route("tls"), Route::Node);
+        assert_eq!(watchers.route("host"), Route::Node);
         watchers.stop().await;
         server.abort();
     }
