@@ -11,3 +11,20 @@ serde.workspace = true
 serde_json.workspace = true
 serde_path_to_error.workspace = true
 pp-domain = { path = "../pp-domain" }
+jsonschema = { version = "=0.33.0", default-features = false }
+regress = "=0.10.4"
+chrono = { version = "=0.4.45", default-features = false, features = ["std", "serde"] }
+typify = { version = "=0.5.0", default-features = false, optional = true }
+schemars = { version = "=0.8.22", optional = true }
+syn = { version = "=2.0.119", features = ["visit"], optional = true }
+prettyplease = { version = "=0.2.37", optional = true }
+
+[features]
+codegen = ["dep:typify", "dep:schemars", "dep:syn", "dep:prettyplease"]
+
+[[bin]]
+name = "generate-wire-dtos"
+required-features = ["codegen"]
+
+[dev-dependencies]
+insta = { version = "=1.43.2", features = ["json", "redactions"] }

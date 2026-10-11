@@ -15,7 +15,7 @@
     "predev": "npm run build -w @print-partner/contracts && npm run build -w @print-partner/domain",
     "dev": "concurrently -n server,web -c blue,green \"npm run dev -w @print-partner/server\" \"npm run dev -w @print-partner/web\"",
     "build": "npm run build -w @print-partner/contracts && npm run build -w @print-partner/domain && npm run build -w @print-partner/server && npm run build -w @print-partner/web",
-    "test": "npm run test:desktop-parity && npm run contracts:schemas && npm run test:release && npm run test:build-tools && npm run test -w @print-partner/contracts --if-present && npm run test -w @print-partner/domain --if-present && npm run test -w @print-partner/web --if-present && npm run test:ci -w @print-partner/server --if-present",
+    "test": "npm run test:contract-semantics && npm run test:desktop-parity && npm run contracts:schemas && npm run test:release && npm run test:build-tools && npm run test -w @print-partner/contracts --if-present && npm run test -w @print-partner/domain --if-present && npm run test -w @print-partner/web --if-present && npm run test:ci -w @print-partner/server --if-present",
     "test:release": "node ../scripts/audit-public-release.mjs && node --test ../scripts/release.test.mjs ../scripts/site-map-docs.test.mjs ../scripts/autopilot-pr-state.test.mjs ../scripts/docker-startup.test.mjs",
     "test:build-tools": "node --test scripts/atomic-package-build.test.mjs",
     "test:runtime": "node --test scripts/server-runtime.test.mjs ../.cursor/skills/verify-print-partner/helpers/control-print-partner.test.mjs",
@@ -29,8 +29,13 @@
     "quality": "npm run lint && npm run lint:dead && npm run typecheck && npm test && npm run test:workflow-smoke && npm run build && npm run test:bundles -w @print-partner/web && npm run test:runtime && npm run test:browser",
     "db:migrate": "npm run db:migrate -w @print-partner/server",
     "lint:dead": "knip --no-gitignore",
+    "fixture:storage:export-data": "node --conditions=development --import tsx scripts/storage-fixtures/export-data.mts",
+    "fixture:storage:node-access": "node --conditions=development --import tsx scripts/storage-fixtures/node-access.mts",
+    "fixture:storage:prepare": "node --conditions=development --import tsx scripts/storage-fixtures/prepare.mts",
     "test:desktop-parity": "node --conditions=development --import tsx scripts/desktop-parity/verify.mts",
     "contracts:schemas": "node --conditions=development --import tsx scripts/desktop-contracts/schema-check.mjs",
+    "contracts:generate": "node scripts/desktop-contracts/regenerate.mjs",
+    "test:contract-semantics": "node --conditions=development --import tsx --test scripts/desktop-contracts/semantics.test.mjs",
     "contracts:verify": "node scripts/desktop-contracts/verify.mjs"
   },
   "devDependencies": {
