@@ -13,6 +13,7 @@ on:
       - 'web/package.json'
       - 'web/package-lock.json'
       - 'web/scripts/**'
+      - '.cursor/skills/verify-print-partner-rust/**'
       - '.github/workflows/desktop-runtime.yml'
   push:
     branches: [main, master]
@@ -26,6 +27,7 @@ on:
       - 'web/package.json'
       - 'web/package-lock.json'
       - 'web/scripts/**'
+      - '.cursor/skills/verify-print-partner-rust/**'
       - '.github/workflows/desktop-runtime.yml'
 
 permissions:
@@ -47,7 +49,7 @@ jobs:
       VITE_PRINT_PARTNER_DESKTOP: '1'
       CARGO_INCREMENTAL: '0'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Initialize evidence
@@ -57,7 +59,7 @@ jobs:
           mkdir -p "$PP_EVIDENCE"
           uname -a > "$PP_EVIDENCE/runner.txt"
           git rev-parse HEAD > "$PP_EVIDENCE/head.txt"
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.21.0'
       - name: Install pinned tools and build desktop assets
@@ -106,7 +108,7 @@ jobs:
           fi
           git diff -- rust/Cargo.lock web/package-lock.json > "$PP_EVIDENCE/lockfile-diff.patch"
           df -h > "$PP_EVIDENCE/storage-after.txt"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: desktop-runtime-${{ github.run_id }}-${{ github.run_attempt }}
@@ -118,10 +120,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.21.0'
       - name: Install source artifact validation tools
@@ -143,7 +145,7 @@ jobs:
             --node "$(command -v node)" \
             --node-snapshot web/apps/server/dist/current/services/local-source-snapshot.js \
             --binary rust/target/debug/pp-source
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: source-artifacts-${{ github.run_id }}-${{ github.run_attempt }}
@@ -152,4 +154,78 @@ jobs:
             ${{ runner.temp }}/source-artifacts-evidence/*.strace
             ${{ runner.temp }}/source-artifacts-evidence/*.stderr
           if-no-files-found: warn
+          retention-days: 14
+
+  rust-verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Initialize evidence
+        run: |
+          export PP_EVIDENCE="$RUNNER_TEMP/rust-verify-evidence"
+          echo "PP_EVIDENCE=$PP_EVIDENCE" >> "$GITHUB_ENV"
+          mkdir -p "$PP_EVIDENCE"
+          uname -a > "$PP_EVIDENCE/runner.txt"
+          git rev-parse HEAD > "$PP_EVIDENCE/head.txt"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.21.0'
+      - name: Install pinned tools
+        run: |
+          rustup toolchain install 1.99.0 --profile minimal
+          rustc --version --verbose > "$PP_EVIDENCE/rust-version.txt"
+          node -p 'JSON.stringify({node:process.version,abi:process.versions.modules,os:process.platform,arch:process.arch})' > "$PP_EVIDENCE/node-version.json"
+          python3 --version > "$PP_EVIDENCE/python-version.txt"
+      - name: Block private LAN egress (loopback only)
+        run: |
+          # verify.py must only talk to the 127.0.0.1 origin Rust prints; any
+          # attempt to reach a LAN printer (192.168.*, incl. .80/.81) is rejected
+          # and counted, then fails the job below.
+          sudo iptables -N PP_LAN_GUARD
+          sudo iptables -A PP_LAN_GUARD -j REJECT
+          sudo iptables -I OUTPUT -d 192.168.0.0/16 -m conntrack --ctstate NEW -j PP_LAN_GUARD
+          sudo iptables -L OUTPUT -n -v > "$PP_EVIDENCE/egress-guard-before.txt"
+      - name: Run Rust gateway verify.py end to end
+        run: |
+          python3 .cursor/skills/verify-print-partner-rust/helpers/verify.py 2>&1 | tee "$PP_EVIDENCE/verify.log"
+          grep -qx 'PASS: Rust build, gateway endpoints, persisted Source and shutdown' "$PP_EVIDENCE/verify.log"
+          grep -E '^START: pid=[0-9]+ origin=http://127\.0\.0\.1:[0-9]+$' "$PP_EVIDENCE/verify.log"
+      - name: Assert no LAN egress was attempted
+        if: always()
+        run: |
+          sudo iptables -L OUTPUT -n -v -x > "$PP_EVIDENCE/egress-guard-after.txt"
+          blocked="$(sudo iptables -L PP_LAN_GUARD -n -v -x | awk 'NR>2 {sum+=$1} END {print sum+0}')"
+          echo "blocked_lan_packets=$blocked" | tee "$PP_EVIDENCE/egress-guard-result.txt"
+          test "$blocked" -eq 0
+      - name: Summarize verification checks
+        if: always()
+        run: |
+          log="$PP_EVIDENCE/verify.log"
+          {
+            echo "head=$(cat "$PP_EVIDENCE/head.txt")"
+            if test -f "$log"; then
+              grep -E '^(START|HTTP|STOP|PASS|CLEANUP ERROR|Traceback|RuntimeError)' "$log" || true
+              tail -n 3 "$log"
+            else
+              echo "verify.log missing"
+            fi
+          } | tee "$PP_EVIDENCE/summary.txt"
+          {
+            echo '### Rust gateway verify.py'
+            echo '```'
+            cat "$PP_EVIDENCE/summary.txt"
+            cat "$PP_EVIDENCE/egress-guard-result.txt" 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: rust-verify-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rust-verify-evidence/
+          if-no-files-found: error
           retention-days: 14
