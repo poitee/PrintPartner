@@ -17,6 +17,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -66,14 +67,80 @@ def release_signals():
         raise begin_stop(held["pending"])
 
 
+def stop_group(process, grace=5):
+    # No subprocesses are spawned here, so blocking cannot leak a mask into build workers.
+    # Deliver any additional stop only after the whole group has been cleaned up.
+    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGINT})
+    try:
+        _stop_group(process, grace)
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+
+
+def _stop_group(process, grace):
+    # The build runs in its own session, so its pid is also its process group id. Terminate the
+    # whole group (npm, node, rustc, ...), escalate to SIGKILL after `grace` seconds, and return
+    # only once no member is left, so a replacement launch never overlaps with leftover writers.
+    group = process.pid
+
+    def signal_group(signum):
+        try:
+            os.killpg(group, signum)
+        except ProcessLookupError:
+            pass
+
+    def group_gone():
+        process.poll()  # reaps the leader if it has exited; its descendants keep the group alive
+        try:
+            os.killpg(group, 0)
+        except ProcessLookupError:
+            return True
+        return False
+
+    def wait_gone(seconds):
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            if group_gone():
+                return True
+            time.sleep(0.05)
+        return group_gone()
+
+    signal_group(signal.SIGTERM)
+    if not wait_gone(grace):
+        signal_group(signal.SIGKILL)
+        check(wait_gone(5), f"build process group {group} survived SIGKILL")
+    if process.stdout is not None:
+        process.stdout.close()
+
+
 def run(root, *args, env=None, stdout=None):
     print("BUILD:", " ".join(args), flush=True)
+    # Defer launch's signal exception until the child is recorded. Keeping the OS mask
+    # unchanged lets build workers handle SIGTERM normally rather than inherit blocked signals.
+    was_held = held["active"]
+    held["active"] = True
+    process = None
     try:
-        return subprocess.run(args, cwd=root, env=env, stdout=stdout, text=True, check=True, timeout=600)
-    except subprocess.CalledProcessError as error:
-        if error.stdout:
-            print(error.stdout, end="", flush=True)
-        raise
+        process = subprocess.Popen(args, cwd=root, env=env, stdout=stdout, text=True, start_new_session=True)
+        if not was_held:
+            release_signals()
+        output, _ = process.communicate(timeout=600)
+    finally:
+        # Even successful/nonzero leaders can leave background workers behind. Finish each
+        # group before another build starts, and defer launch signals during this teardown.
+        held["active"] = True
+        try:
+            if process is not None:
+                stop_group(process)
+        finally:
+            held["active"] = was_held
+        if not was_held:
+            release_signals()
+    if process.returncode:
+        if output:
+            print(output, end="", flush=True)
+        raise subprocess.CalledProcessError(process.returncode, args, output=output)
+    return subprocess.CompletedProcess(args, process.returncode, output, None)
 
 
 def checkout(root):
@@ -228,16 +295,21 @@ def verify(root):
 
 
 def publish_credential(source, target):
-    # Exclusive create: refuses to clobber a file that appeared after launch started.
+    # Write a private temporary inode, then hard-link it to the target: link() refuses to clobber
+    # a file that appeared after launch started, and the target only ever names a complete file.
     # The returned handle stays open to pin this inode, so its number cannot be reused.
-    handle = os.fdopen(os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb")
+    fd, temporary = tempfile.mkstemp(prefix=".pp-credential-", dir=target.parent)
+    handle = os.fdopen(fd, "wb")
     try:
-        handle.write(source.read_bytes())
-        handle.flush()
-        os.fsync(handle.fileno())
+        try:
+            handle.write(source.read_bytes())
+            handle.flush()
+            os.fsync(handle.fileno())
+            os.link(temporary, target)
+        finally:
+            os.unlink(temporary)
     except BaseException:
-        # Remove our own partial file so a failed publish leaves nothing behind.
-        unpublish_credential(target, handle)
+        handle.close()
         raise
     return handle
 
@@ -248,7 +320,11 @@ def unpublish_credential(target, handle):
     if handle is None:
         return
     try:
-        vault = Path(tempfile.mkdtemp(prefix=f".{target.name}.", dir=target.parent))
+        try:
+            vault = Path(tempfile.mkdtemp(prefix=".pp-credential-", dir=target.parent))
+        except FileNotFoundError:
+            # The caller removed the parent after consuming the credential, so nothing is left to remove.
+            return
         entry = vault / "entry"
         try:
             os.rename(target, entry)
@@ -282,7 +358,7 @@ def unpublish_credential(target, handle):
 
 def launch(root, credentials):
     # Fast refusal before a long build; publish_credential() is the authoritative check.
-    if credentials is not None and credentials.exists():
+    if credentials is not None and (credentials.exists() or credentials.is_symlink()):
         raise SystemExit(f"credential file already exists: {credentials}")
     try:
         # Block both signals while installing handlers, so neither arrives half-installed.
@@ -347,7 +423,9 @@ def main():
         parser.error("--credential-file applies only to launch")
     root = args.repo.resolve()
     if args.mode == "launch":
-        launch(root, args.credential_file.resolve() if args.credential_file else None)
+        # Resolve the directory only: a symlink at the final component is an existing entry to refuse.
+        credentials = args.credential_file.parent.resolve() / args.credential_file.name if args.credential_file else None
+        launch(root, credentials)
     else:
         verify(root)
 
