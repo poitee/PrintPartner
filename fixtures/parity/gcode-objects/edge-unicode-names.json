@@ -1,0 +1,213 @@
+{
+  "source": [
+    "web/apps/server/src/services/gcode-object-parser.ts",
+    "web/packages/domain/src/sliced-object-matching.ts"
+  ],
+  "origin": "edge: unicode, percent-encoded and compatibility-form names",
+  "input": {
+    "names": [
+      "Halterung_für_Rohr.stl_id_0_copy_0",
+      "Halterung_f%C3%BCr_Rohr.stl",
+      "'CAFÉ_lid_stl'",
+      "ＢＲＡＣＫＥＴ.stl",
+      "支架_左.stl",
+      "ΣΊΣΥΦΟΣ_mount.stl",
+      "İstanbul_plate.stl (Instance 2)",
+      "ﬁlament_guide_①.stl",
+      "😀 fan duct.3mf",
+      "naïve cover.stl"
+    ],
+    "libraryFilenames": [
+      "Halterung_fur_Rohr.stl",
+      "cafe_lid.stl",
+      "bracket.stl",
+      "支架_右.stl",
+      "σίσυφος_mount.stl",
+      "istanbul_plate.stl",
+      "filament_guide_1.stl",
+      "fan_duct.stl",
+      "naive_cover.stl"
+    ]
+  },
+  "expected": {
+    "groups": [
+      {
+        "key": "halterung_für_rohr.stl",
+        "stlBasename": "halterung_für_rohr.stl",
+        "count": 2,
+        "objects": [
+          {
+            "name": "Halterung_für_Rohr.stl_id_0_copy_0",
+            "stlBasename": "Halterung_für_Rohr.stl",
+            "copyIndex": 0,
+            "format": "exclude_object_orca"
+          },
+          {
+            "name": "Halterung_f%C3%BCr_Rohr.stl",
+            "stlBasename": "Halterung_für_Rohr.stl",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      },
+      {
+        "key": "café_lid.stl",
+        "stlBasename": "café_lid.stl",
+        "count": 1,
+        "objects": [
+          {
+            "name": "'CAFÉ_lid_stl'",
+            "stlBasename": "CAFÉ_lid.stl",
+            "copyIndex": 0,
+            "format": "exclude_object_prusa"
+          }
+        ]
+      },
+      {
+        "key": "ｂｒａｃｋｅｔ.stl",
+        "stlBasename": "ｂｒａｃｋｅｔ.stl",
+        "count": 1,
+        "objects": [
+          {
+            "name": "ＢＲＡＣＫＥＴ.stl",
+            "stlBasename": "ＢＲＡＣＫＥＴ.stl",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      },
+      {
+        "key": "支架_左.stl",
+        "stlBasename": "支架_左.stl",
+        "count": 1,
+        "objects": [
+          {
+            "name": "支架_左.stl",
+            "stlBasename": "支架_左.stl",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      },
+      {
+        "key": "σίσυφος_mount.stl",
+        "stlBasename": "σίσυφος_mount.stl",
+        "count": 1,
+        "objects": [
+          {
+            "name": "ΣΊΣΥΦΟΣ_mount.stl",
+            "stlBasename": "ΣΊΣΥΦΟΣ_mount.stl",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      },
+      {
+        "key": "i̇stanbul_plate.stl",
+        "stlBasename": "i̇stanbul_plate.stl",
+        "count": 1,
+        "objects": [
+          {
+            "name": "İstanbul_plate.stl (Instance 2)",
+            "stlBasename": "İstanbul_plate.stl",
+            "copyIndex": 1,
+            "format": "exclude_object_prusa"
+          }
+        ]
+      },
+      {
+        "key": "ﬁlament_guide_①.stl",
+        "stlBasename": "ﬁlament_guide_①.stl",
+        "count": 1,
+        "objects": [
+          {
+            "name": "ﬁlament_guide_①.stl",
+            "stlBasename": "ﬁlament_guide_①.stl",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      },
+      {
+        "key": "😀 fan duct.3mf",
+        "stlBasename": "😀 fan duct.3mf",
+        "count": 1,
+        "objects": [
+          {
+            "name": "😀 fan duct.3mf",
+            "stlBasename": "😀 fan duct.3mf",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      },
+      {
+        "key": "naïve cover.stl",
+        "stlBasename": "naïve cover.stl",
+        "count": 1,
+        "objects": [
+          {
+            "name": "naïve cover.stl",
+            "stlBasename": "naïve cover.stl",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      }
+    ],
+    "matches": [
+      {
+        "key": "halterung_für_rohr.stl",
+        "filenames": [
+          "Halterung_fur_Rohr.stl"
+        ]
+      },
+      {
+        "key": "café_lid.stl",
+        "filenames": [
+          "cafe_lid.stl"
+        ]
+      },
+      {
+        "key": "ｂｒａｃｋｅｔ.stl",
+        "filenames": [
+          "bracket.stl"
+        ]
+      },
+      {
+        "key": "支架_左.stl",
+        "filenames": []
+      },
+      {
+        "key": "σίσυφος_mount.stl",
+        "filenames": [
+          "σίσυφος_mount.stl"
+        ]
+      },
+      {
+        "key": "i̇stanbul_plate.stl",
+        "filenames": [
+          "istanbul_plate.stl"
+        ]
+      },
+      {
+        "key": "ﬁlament_guide_①.stl",
+        "filenames": [
+          "filament_guide_1.stl"
+        ]
+      },
+      {
+        "key": "😀 fan duct.3mf",
+        "filenames": [
+          "fan_duct.stl"
+        ]
+      },
+      {
+        "key": "naïve cover.stl",
+        "filenames": [
+          "naive_cover.stl"
+        ]
+      }
+    ]
+  }
+}
