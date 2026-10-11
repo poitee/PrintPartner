@@ -867,7 +867,7 @@ function referenceContainerLines(value) {
  * A definition's destination may sit on the next line and its title may span
  * lines, so everything up to the next blank line goes with it (fail closed).
  */
-function stripReferenceDefinitions(value, references) {
+function stripReferenceDefinitions(value, references, { keepMalformed = false } = {}) {
   let concrete = false;
   let dropping = false;
   const defined = new Set();
@@ -883,6 +883,14 @@ function stripReferenceDefinitions(value, references) {
     }
     const definition = referenceLines[index].match(REFERENCE_DEFINITION);
     if (definition) {
+      if (keepMalformed) {
+        // Only valid definitions are hidden Markdown. A malformed opener and
+        // any later labels remain raw text for conservative LAN checking.
+        const parsed = referenceDestination(referenceLines, index, true);
+        if (parsed) index = parsed.end;
+        else kept.push(line);
+        continue;
+      }
       dropping = true;
       const label = normalizeReferenceLabel(definition[1]);
       const referenced = references.has(label);
@@ -924,8 +932,8 @@ function linkTextStart(text, close, floor) {
  * as an artifact. Each character is scanned a bounded number of times, so the
  * pass is linear.
  */
-function stripLinks(value, references) {
-  const definitions = stripReferenceDefinitions(value, references);
+function stripLinks(value, references, { keepMalformed = false } = {}) {
+  const definitions = stripReferenceDefinitions(value, references, { keepMalformed });
   let concrete = definitions.concrete;
   const text = definitions.text;
   let rest = "";
@@ -933,9 +941,9 @@ function stripLinks(value, references) {
   for (let at = text.indexOf("](", cursor); at !== -1; at = text.indexOf("](", cursor)) {
     const open = linkTextStart(text, at, cursor);
     rest += `${text.slice(cursor, open === -1 ? at : open)} `;
-    if (open === -1) return { rest, concrete };
+    if (open === -1) return { rest: rest + (keepMalformed ? text.slice(at) : ""), concrete };
     const tail = parseLinkTail(text, at + 1);
-    if (!tail) return { rest, concrete };
+    if (!tail) return { rest: rest + (keepMalformed ? text.slice(open) : ""), concrete };
     const image = open > 0 && text[open - 1] === "!" && !isEscaped(text, open - 1);
     if (isConcreteTarget(tail.destination)
       && (image || visibleFieldText(text.slice(open + 1, at)).replace(/[\p{Default_Ignorable_Code_Point}\p{Mark}]/gu, "").trim())) concrete = true;
@@ -944,7 +952,7 @@ function stripLinks(value, references) {
   return { rest: rest + text.slice(cursor), concrete };
 }
 
-function stripRawHtmlTags(value) {
+function stripRawHtmlTags(value, { keepMalformed = false } = {}) {
   const opener = /<\/?[a-z][a-z\d-]*(?=[\s>]|\/>)/iy;
   let kept = "";
   let cursor = 0;
@@ -968,6 +976,11 @@ function stripRawHtmlTags(value) {
       else if (ch === "<") break;
     }
     const markup = value.slice(start, end);
+    if (keepMalformed && !markup.endsWith(">")) {
+      if (!hidden.length) kept += markup;
+      cursor = end;
+      continue;
+    }
     const name = markup.match(/^<\/?([a-z][a-z\d-]*)/i)?.[1].toLowerCase();
     const closing = markup.startsWith("</");
     if (closing && name === hidden.at(-1)) hidden.pop();
@@ -1024,12 +1037,12 @@ function normalizeReferenceLabel(label) {
   return label.replace(/\\(.)/g, "$1").trim().replace(/\s+/g, " ").toLowerCase();
 }
 
-function referenceUses(value, { requireVisible = false } = {}) {
-  let text = stripRawHtmlTags(value);
+function referenceUses(value, { requireVisible = false, keepMalformed = false } = {}) {
+  let text = stripRawHtmlTags(value, { keepMalformed });
   for (const range of codeSpanRanges(text).reverse()) {
     text = text.slice(0, range.start) + " " + text.slice(range.end);
   }
-  text = stripLinks(text, new Set()).rest;
+  text = stripLinks(text, new Set(), { keepMalformed }).rest;
   const references = new Set();
   const uses = /\[((?:[^\]\\\n]|\\.){0,999})\](?:\[((?:[^\]\\\n]|\\.){0,999})\])?/g;
   for (const match of text.matchAll(uses)) {
@@ -1147,7 +1160,9 @@ function targetsBannedLan(sectionText, definitions) {
     });
   };
   return bannedTarget(verification)
-    || (definitions.size > 0 && [...referenceUses(verification)].some((label) => bannedTarget(definitions.get(label) ?? "")));
+    // Malformed links render as raw text. Unlike artifact validation, the LAN
+    // scan must retain their suffix so later reference uses cannot disappear.
+    || (definitions.size > 0 && [...referenceUses(verification, { keepMalformed: true })].some((label) => bannedTarget(definitions.get(label) ?? "")));
 }
 
 function documentReferences(body) {

@@ -4,11 +4,14 @@
 
 ## Evidence
 
-<!-- Add verification output or a description of what you checked.
-Whitespace, HTML comments, and unfilled template placeholders count as empty.
-If Evidence is empty, provide a reason on the Exemption: line below.
-See docs/contributing/gate-evidence.md. -->
+<!-- Fill Steps, Result, and a concrete artifact for Exemption: none.
+For a named exemption, fill the Exemption reason and indent continuation lines
+under its bullet. See docs/contributing/gate-evidence.md. -->
 
-## Exemption
+Exemption: none
 
-Exemption: <none or reason for exemption>
+- Exemption reason (required when claiming an exemption):
+- Journey exercised:
+- Steps followed to produce the evidence:
+- Result observed:
+- Screenshot / recording / verify-skill output or trace:

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,6 +39,55 @@ Exemption: <none|docs-only|CI-only|dependency-only|internal refactor>
 - Result observed:
 - Screenshot / recording / verify-skill output or trace:
 `;
+
+const repositoryTemplate = readFileSync(new URL("../.github/pull_request_template.md", import.meta.url), "utf8");
+
+test("filled repository PR template passes evidence lint", () => {
+  const filled = repositoryTemplate
+    .replace("- Journey exercised:", "- Journey exercised: local lint verification")
+    .replace("- Steps followed to produce the evidence:", "- Steps followed to produce the evidence: ran the lint self-tests locally")
+    .replace("- Result observed:", "- Result observed: all tests passed")
+    .replace("- Screenshot / recording / verify-skill output or trace:", "- Screenshot / recording / verify-skill output or trace: `node --test scripts/lint-pr-evidence.test.mjs`");
+  const result = lintPrEvidence(filled);
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+
+test("blank repository PR template fails with incomplete evidence", () => {
+  const result = lintPrEvidence(repositoryTemplate);
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /Evidence is incomplete/);
+});
+
+for (const suffix of ["80", "81"]) {
+  const host = `http://192.168.200.${suffix}/`;
+  for (const syntax of [
+    `[x](${host}`,
+    `[x] (${host})`,
+    `[x] （${host}）`,
+    `[target]: <${host}`,
+    `[target] : ${host}`,
+    `[target]: ${host} "unterminated title`,
+    `[x](${host})`,
+  ]) {
+    test(`LAN scan rejects raw or malformed link syntax ${syntax}`, () => {
+      const result = lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n${syntax}`));
+      assert.equal(result.ok, false);
+      assert.match(result.errors.join("\n"), /LAN instances/);
+    });
+  }
+  for (const malformed of ["[x](unfinished", "](unfinished", "[x](# \"unterminated title", "[x] (unfinished", "[x] （unfinished", "[broken]: <unfinished"]) {
+    test(`LAN reference after malformed syntax remains checked: ${malformed}, .${suffix}`, () => {
+      const result = lintPrEvidence(`[target]: ${host}\n\n` + bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n${malformed} [target]`));
+      assert.equal(result.ok, false);
+      assert.match(result.errors.join("\n"), /LAN instances/);
+    });
+  }
+}
+
+test("well-formed safe link does not resolve its label as a LAN reference", () => {
+  const result = lintPrEvidence("[target]: http://192.168.200.80/\n\n" + bodyWithEvidence("Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[target](http://localhost:8080/)"));
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
 
 test("VALID_EXEMPTIONS lists the four named exemptions", () => {
   assert.deepEqual([...VALID_EXEMPTIONS].sort(), [
