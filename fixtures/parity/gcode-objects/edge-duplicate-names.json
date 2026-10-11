@@ -1,0 +1,92 @@
+{
+  "source": [
+    "web/apps/server/src/services/gcode-object-parser.ts",
+    "web/packages/domain/src/sliced-object-matching.ts"
+  ],
+  "origin": "edge: duplicate and case-variant object names",
+  "input": {
+    "names": [
+      "bracket.stl_id_0_copy_0",
+      "bracket.stl_id_0_copy_0",
+      "Bracket.STL_id_1_copy_1",
+      "'bracket_stl'",
+      "'bracket_stl__Instance_2_'",
+      "bracket.stl (Instance 3)",
+      "bracket_stl",
+      "bracket_stl"
+    ],
+    "libraryFilenames": [
+      "bracket.stl",
+      "parts/Bracket.stl",
+      "bracket_holder.stl"
+    ]
+  },
+  "expected": {
+    "groups": [
+      {
+        "key": "bracket.stl",
+        "stlBasename": "bracket.stl",
+        "count": 8,
+        "objects": [
+          {
+            "name": "bracket.stl_id_0_copy_0",
+            "stlBasename": "bracket.stl",
+            "copyIndex": 0,
+            "format": "exclude_object_orca"
+          },
+          {
+            "name": "bracket.stl_id_0_copy_0",
+            "stlBasename": "bracket.stl",
+            "copyIndex": 0,
+            "format": "exclude_object_orca"
+          },
+          {
+            "name": "Bracket.STL_id_1_copy_1",
+            "stlBasename": "Bracket.STL",
+            "copyIndex": 1,
+            "format": "exclude_object_orca"
+          },
+          {
+            "name": "'bracket_stl'",
+            "stlBasename": "bracket.stl",
+            "copyIndex": 0,
+            "format": "exclude_object_prusa"
+          },
+          {
+            "name": "'bracket_stl__Instance_2_'",
+            "stlBasename": "bracket.stl",
+            "copyIndex": 1,
+            "format": "exclude_object_prusa"
+          },
+          {
+            "name": "bracket.stl (Instance 3)",
+            "stlBasename": "bracket.stl",
+            "copyIndex": 2,
+            "format": "exclude_object_prusa"
+          },
+          {
+            "name": "bracket_stl",
+            "stlBasename": "bracket.stl",
+            "copyIndex": 0,
+            "format": "m486"
+          },
+          {
+            "name": "bracket_stl",
+            "stlBasename": "bracket.stl",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      }
+    ],
+    "matches": [
+      {
+        "key": "bracket.stl",
+        "filenames": [
+          "bracket.stl",
+          "parts/Bracket.stl"
+        ]
+      }
+    ]
+  }
+}
