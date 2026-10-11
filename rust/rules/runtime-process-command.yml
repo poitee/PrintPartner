@@ -257,6 +257,16 @@ utils:
       stopBy:
         not:
           matches: import-tree
+  module-process-import-scope:
+    any:
+      - kind: source_file
+      - kind: declaration_list
+    matches: process-import-scope
+  module-std-import-scope:
+    any:
+      - kind: source_file
+      - kind: declaration_list
+    matches: std-import-scope
   generic-shadow-scope:
     has:
       field: type_parameters
@@ -436,6 +446,11 @@ rule:
                       stopBy:
                         matches: non-comment
                       pattern: $MODULE
+                      not:
+                        follows:
+                          regex: '^::$'
+                          stopBy:
+                            matches: non-comment
                 - kind: use_wildcard
                   any:
                     - has:
@@ -479,6 +494,387 @@ rule:
                         matches: process-import-scope
                   stopBy:
                     matches: module-boundary
+        - all:
+          # self resolves a module-scoped process alias.
+            - any:
+                - any:
+                    - kind: scoped_identifier
+                    - kind: scoped_type_identifier
+                  has:
+                    field: name
+                    regex: '^(r#)?Command$'
+                  all:
+                    - has:
+                        field: path
+                        kind: scoped_identifier
+                        has:
+                          field: name
+                          pattern: $MODULE
+                        all:
+                          - has:
+                              field: path
+                              regex: '^self$'
+                    - not:
+                        inside:
+                          kind: scoped_use_list
+                          stopBy:
+                            kind: use_declaration
+                - kind: identifier
+                  regex: '^(r#)?Command$'
+                  inside:
+                    kind: token_tree
+                  follows:
+                    regex: '^::$'
+                    stopBy:
+                      matches: non-comment
+                    follows:
+                      stopBy:
+                        matches: non-comment
+                      pattern: $MODULE
+                      follows:
+                        regex: '^::$'
+                        stopBy:
+                          matches: non-comment
+                        follows:
+                          stopBy:
+                            matches: non-comment
+                          regex: '^self$'
+                          not:
+                            follows:
+                              regex: '^::$'
+                              stopBy:
+                                matches: non-comment
+            - inside:
+                matches: module-process-import-scope
+                stopBy:
+                  matches: module-boundary
+        - all:
+          # crate resolves a module-scoped process alias.
+            - any:
+                - any:
+                    - kind: scoped_identifier
+                    - kind: scoped_type_identifier
+                  has:
+                    field: name
+                    regex: '^(r#)?Command$'
+                  all:
+                    - has:
+                        field: path
+                        kind: scoped_identifier
+                        has:
+                          field: name
+                          pattern: $MODULE
+                        all:
+                          - has:
+                              field: path
+                              regex: '^crate$'
+                    - not:
+                        inside:
+                          kind: scoped_use_list
+                          stopBy:
+                            kind: use_declaration
+                - kind: identifier
+                  regex: '^(r#)?Command$'
+                  inside:
+                    kind: token_tree
+                  follows:
+                    regex: '^::$'
+                    stopBy:
+                      matches: non-comment
+                    follows:
+                      stopBy:
+                        matches: non-comment
+                      pattern: $MODULE
+                      follows:
+                        regex: '^::$'
+                        stopBy:
+                          matches: non-comment
+                        follows:
+                          stopBy:
+                            matches: non-comment
+                          regex: '^crate$'
+                          not:
+                            follows:
+                              regex: '^::$'
+                              stopBy:
+                                matches: non-comment
+            - inside:
+                kind: source_file
+                matches: module-process-import-scope
+                stopBy: end
+        - all:
+          # super resolves a module-scoped process alias.
+            - any:
+                - any:
+                    - kind: scoped_identifier
+                    - kind: scoped_type_identifier
+                  has:
+                    field: name
+                    regex: '^(r#)?Command$'
+                  all:
+                    - has:
+                        field: path
+                        kind: scoped_identifier
+                        has:
+                          field: name
+                          pattern: $MODULE
+                        all:
+                          - has:
+                              field: path
+                              regex: '^super$'
+                    - not:
+                        inside:
+                          kind: scoped_use_list
+                          stopBy:
+                            kind: use_declaration
+                - kind: identifier
+                  regex: '^(r#)?Command$'
+                  inside:
+                    kind: token_tree
+                  follows:
+                    regex: '^::$'
+                    stopBy:
+                      matches: non-comment
+                    follows:
+                      stopBy:
+                        matches: non-comment
+                      pattern: $MODULE
+                      follows:
+                        regex: '^::$'
+                        stopBy:
+                          matches: non-comment
+                        follows:
+                          stopBy:
+                            matches: non-comment
+                          regex: '^super$'
+                          not:
+                            follows:
+                              regex: '^::$'
+                              stopBy:
+                                matches: non-comment
+            - inside:
+                matches: module-boundary
+                inside:
+                  kind: mod_item
+                  inside:
+                    matches: module-process-import-scope
+                    stopBy:
+                      matches: module-boundary
+                stopBy:
+                  matches: module-boundary
+        - all:
+          # self resolves a module-scoped std alias.
+            - any:
+                - any:
+                    - kind: scoped_identifier
+                    - kind: scoped_type_identifier
+                  has:
+                    field: name
+                    regex: '^(r#)?Command$'
+                  all:
+                    - has:
+                        field: path
+                        kind: scoped_identifier
+                        has:
+                          field: name
+                          regex: '^(r#)?process$'
+                        all:
+                          - has:
+                              field: path
+                              kind: scoped_identifier
+                              has:
+                                field: name
+                                pattern: $MODULE
+                              all:
+                                - has:
+                                    field: path
+                                    regex: '^self$'
+                    - not:
+                        inside:
+                          kind: scoped_use_list
+                          stopBy:
+                            kind: use_declaration
+                - kind: identifier
+                  regex: '^(r#)?Command$'
+                  inside:
+                    kind: token_tree
+                  follows:
+                    regex: '^::$'
+                    stopBy:
+                      matches: non-comment
+                    follows:
+                      stopBy:
+                        matches: non-comment
+                      regex: '^(r#)?process$'
+                      follows:
+                        regex: '^::$'
+                        stopBy:
+                          matches: non-comment
+                        follows:
+                          stopBy:
+                            matches: non-comment
+                          pattern: $MODULE
+                          follows:
+                            regex: '^::$'
+                            stopBy:
+                              matches: non-comment
+                            follows:
+                              stopBy:
+                                matches: non-comment
+                              regex: '^self$'
+                              not:
+                                follows:
+                                  regex: '^::$'
+                                  stopBy:
+                                    matches: non-comment
+            - inside:
+                matches: module-std-import-scope
+                stopBy:
+                  matches: module-boundary
+        - all:
+          # crate resolves a module-scoped std alias.
+            - any:
+                - any:
+                    - kind: scoped_identifier
+                    - kind: scoped_type_identifier
+                  has:
+                    field: name
+                    regex: '^(r#)?Command$'
+                  all:
+                    - has:
+                        field: path
+                        kind: scoped_identifier
+                        has:
+                          field: name
+                          regex: '^(r#)?process$'
+                        all:
+                          - has:
+                              field: path
+                              kind: scoped_identifier
+                              has:
+                                field: name
+                                pattern: $MODULE
+                              all:
+                                - has:
+                                    field: path
+                                    regex: '^crate$'
+                    - not:
+                        inside:
+                          kind: scoped_use_list
+                          stopBy:
+                            kind: use_declaration
+                - kind: identifier
+                  regex: '^(r#)?Command$'
+                  inside:
+                    kind: token_tree
+                  follows:
+                    regex: '^::$'
+                    stopBy:
+                      matches: non-comment
+                    follows:
+                      stopBy:
+                        matches: non-comment
+                      regex: '^(r#)?process$'
+                      follows:
+                        regex: '^::$'
+                        stopBy:
+                          matches: non-comment
+                        follows:
+                          stopBy:
+                            matches: non-comment
+                          pattern: $MODULE
+                          follows:
+                            regex: '^::$'
+                            stopBy:
+                              matches: non-comment
+                            follows:
+                              stopBy:
+                                matches: non-comment
+                              regex: '^crate$'
+                              not:
+                                follows:
+                                  regex: '^::$'
+                                  stopBy:
+                                    matches: non-comment
+            - inside:
+                kind: source_file
+                matches: module-std-import-scope
+                stopBy: end
+        - all:
+          # super resolves a module-scoped std alias.
+            - any:
+                - any:
+                    - kind: scoped_identifier
+                    - kind: scoped_type_identifier
+                  has:
+                    field: name
+                    regex: '^(r#)?Command$'
+                  all:
+                    - has:
+                        field: path
+                        kind: scoped_identifier
+                        has:
+                          field: name
+                          regex: '^(r#)?process$'
+                        all:
+                          - has:
+                              field: path
+                              kind: scoped_identifier
+                              has:
+                                field: name
+                                pattern: $MODULE
+                              all:
+                                - has:
+                                    field: path
+                                    regex: '^super$'
+                    - not:
+                        inside:
+                          kind: scoped_use_list
+                          stopBy:
+                            kind: use_declaration
+                - kind: identifier
+                  regex: '^(r#)?Command$'
+                  inside:
+                    kind: token_tree
+                  follows:
+                    regex: '^::$'
+                    stopBy:
+                      matches: non-comment
+                    follows:
+                      stopBy:
+                        matches: non-comment
+                      regex: '^(r#)?process$'
+                      follows:
+                        regex: '^::$'
+                        stopBy:
+                          matches: non-comment
+                        follows:
+                          stopBy:
+                            matches: non-comment
+                          pattern: $MODULE
+                          follows:
+                            regex: '^::$'
+                            stopBy:
+                              matches: non-comment
+                            follows:
+                              stopBy:
+                                matches: non-comment
+                              regex: '^super$'
+                              not:
+                                follows:
+                                  regex: '^::$'
+                                  stopBy:
+                                    matches: non-comment
+            - inside:
+                matches: module-boundary
+                inside:
+                  kind: mod_item
+                  inside:
+                    matches: module-std-import-scope
+                    stopBy:
+                      matches: module-boundary
+                stopBy:
+                  matches: module-boundary
         # An alias of std preserves the process::Command path beneath that alias.
         - all:
             - any:
@@ -574,6 +970,11 @@ rule:
                           stopBy:
                             matches: non-comment
                           pattern: $MODULE
+                          not:
+                            follows:
+                              regex: '^::$'
+                              stopBy:
+                                matches: non-comment
             - inside:
                 matches: std-import-scope
                 stopBy:

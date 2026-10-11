@@ -1,5 +1,20 @@
 # Protected runtime foundation
 
+The Rust lint ratchet runs with ast-grep 0.50.0:
+
+```sh
+ast-grep test --config rust/sgconfig.yml --skip-snapshot-tests
+python3 rust/scripts/test_ast_grep.py
+python3 rust/scripts/check-ast-grep.py
+```
+
+Use the Python gate for production counts. It canonicalizes non-keyword raw
+identifier AST nodes in temporary copies before checking process aliases, so
+`r#p` and `p` share provenance and shadowing. Strings, comments, source files,
+and other rules retain their original text. Diagnostics use original source
+spelling and byte positions. Qualified `self`, `crate`, and single-parent
+`super` aliases resolve module imports rather than block-local bindings.
+
 This workspace runs the existing React application behind a Rust loopback gateway. The real Node compatibility server owns all admitted domain operations and listens only on a private Unix socket. This is an unsigned Linux proof. It is not a Tauri build or a Rust-only backend release.
 
 Use Rust 1.99.0 and Node 24.21.0. From the repository root:

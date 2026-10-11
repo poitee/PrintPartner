@@ -4,8 +4,84 @@ from collections import Counter
 import json
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
+
+
+# Keywords have no ordinary identifier spelling. Replacing their raw prefix
+# would change the parse, whereas non-keyword raw identifiers name the same item.
+RUST_KEYWORDS = set("""
+    as async await break const continue crate dyn else enum extern false fn for
+    if impl in let loop match mod move mut pub ref return self Self static struct
+    super trait true type unsafe use where while abstract become box do final
+    gen macro override priv try typeof unsized virtual yield
+""".split())
+RAW_IDENTIFIER_RULE = """id: raw-identifier
+language: Rust
+rule:
+  any:
+    - kind: identifier
+    - kind: type_identifier
+  regex: '^r#'
+"""
+
+
+def command_hits_with_canonical_names(root, original_hits):
+    """Canonicalize AST identifier nodes in a scan-only copy, keeping byte spans.
+
+    Repeated YAML metavariables compare spelling, but Rust resolves r#p and p
+    to the same name. The AST pass excludes strings and comments. Only affected
+    files are rescanned, with the same crate-relative paths and exemptions.
+    Other rules retain their original scan results.
+    """
+    raw_scan = subprocess.run(
+        ["ast-grep", "scan", "--inline-rules", RAW_IDENTIFIER_RULE,
+         "--json=compact", "crates"], cwd=root, text=True,
+        capture_output=True, check=True,
+    )
+    edits = {}
+    for node in json.loads(raw_scan.stdout):
+        if node["text"][2:] not in RUST_KEYWORDS:
+            edits.setdefault(node["file"], []).append(node["range"]["byteOffset"])
+    if not edits:
+        return original_hits
+    with tempfile.TemporaryDirectory(prefix="pp-ast-grep-names-") as directory:
+        copy = Path(directory)
+        shutil.copy(root / "sgconfig.yml", copy)
+        shutil.copytree(root / "rules", copy / "rules")
+        for file, ranges in edits.items():
+            relative = Path(file)
+            if relative.is_absolute() or ".." in relative.parts:
+                raise ValueError(f"unexpected scanner path: {file}")
+            data = bytearray((root / relative).read_bytes())
+            for span in ranges:
+                start = span["start"]
+                if data[start:start + 2] != b"r#":
+                    raise ValueError(f"invalid raw identifier span: {file}")
+                data[start:start + 2] = b"  "
+            target = copy / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+        scan = subprocess.run(
+            ["ast-grep", "scan", "--config", "sgconfig.yml", "--json=compact", "crates"],
+            cwd=copy, text=True, capture_output=True, check=True,
+        )
+        hits = [hit for hit in original_hits
+                if hit["ruleId"] != "runtime-process-command" or hit["file"] not in edits]
+        for hit in json.loads(scan.stdout):
+            if hit["ruleId"] == "runtime-process-command":
+                # Report the original spelling; normalized spans have equal length.
+                span = hit["range"]["byteOffset"]
+                original = (root / hit["file"]).read_bytes()
+                # The parser starts the canonical identifier after the two spaces.
+                if span["start"] >= 2 and original[span["start"] - 2:span["start"]] == b"r#":
+                    span["start"] -= 2
+                    hit["range"]["start"]["column"] -= 2
+                hit["text"] = original[span["start"]:span["end"]].decode()
+                hits.append(hit)
+        return hits
 
 
 def main():
@@ -33,7 +109,7 @@ def main():
             f"unloaded={sorted(baseline.keys() - loaded)}, "
             f"unbaselined={sorted(loaded - baseline.keys())}"
         )
-    hits = json.loads(scan.stdout)
+    hits = command_hits_with_canonical_names(root, json.loads(scan.stdout))
     counts = Counter(hit["ruleId"] for hit in hits)
     unknown = counts.keys() - baseline.keys()
     if unknown:

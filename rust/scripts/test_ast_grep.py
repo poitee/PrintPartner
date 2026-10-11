@@ -92,6 +92,57 @@ class RatchetTests(unittest.TestCase):
         self.baseline(unwrap=1, command=1)
         self.assertEqual(self.check().returncode, 0)
 
+    def test_raw_and_ordinary_aliases_share_provenance(self):
+        for code in (
+            'use std::process as r#p; fn f() { p::Command::new("sh"); }',
+            'use std::process as p; fn f() { r#p::Command::new("sh"); }',
+            'use std as r#s; fn f() { s::process::Command::new("sh"); }',
+            'use std as s; fn f() { r#s::process::Command::new("sh"); }',
+            'use std::process as r#p; fn f() { self::p::Command::new("sh"); }',
+            'use std::process as p; fn f() { vec![crate::r#p::Command::new("sh")]; }',
+            'use std::process as r#p; mod child { fn f() { super::p::Command::new("sh"); } }',
+            'use std::process as r#p; fn f() { p::Command::new("sh"); p::Command::new("sh"); }',
+        ):
+            with self.subTest(code=code):
+                self.source("pp-source/src/lib.rs", code)
+                self.baseline()
+                result = self.check()
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                count = 2 if code.count('new("sh")') == 2 else 1
+                self.assertIn(f"runtime-process-command: {count} hits", result.stdout)
+
+    def test_raw_alias_shadows_and_non_code_are_preserved(self):
+        for code in (
+            'use std::process as p; fn f() { use local as r#p; p::Command::new("sh"); }',
+            'use std::process as r#p; trait T { type Command; } fn f<p:T>() { let _: p::Command; }',
+            '#[cfg(any())] use std::process as r#p; use local as p; fn f(_: p::Command) {}',
+            'use std::process as r#p; fn f() { q::Command::new("sh"); }',
+            'fn f() { let _ = "r#p::Command"; /* r#p::Command */ }',
+            'mod r#type {} fn f() { r#type::Command::new("sh"); }',
+            'use std::process as r#p; fn f() { use other::r#p::{self}; p::Command::new("sh"); }',
+        ):
+            with self.subTest(code=code):
+                self.source("pp-source/src/lib.rs", code)
+                self.baseline()
+                result = self.check()
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_raw_alias_reports_original_unicode_spelling_and_line(self):
+        code = 'const TEXT: &str = "é";\nuse std::process as r#p;\nfn f() { r#p::Command::new("sh"); }'
+        self.source("pp-source/src/lib.rs", code)
+        self.baseline()
+        result = self.check()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('crates/pp-source/src/lib.rs:3: runtime-process-command: r#p::Command', result.stdout)
+        self.assertEqual((self.root / "crates/pp-source/src/lib.rs").read_text(), code)
+
+    def test_raw_aliases_retain_runtime_crate_exemptions(self):
+        for crate in ("pp-core", "pp-compat", "pp-desktop"):
+            self.source(f"{crate}/src/lib.rs", 'use std::process as r#p; fn f() { p::Command::new("sh"); }')
+        result = self.check()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("runtime-process-command: 0 hits", result.stdout)
+
     def test_invalid_rules_fail_closed(self):
         (self.root / "rules" / "broken.yml").write_text("not a rule")
         result = self.check()
