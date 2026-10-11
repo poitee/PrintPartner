@@ -1166,3 +1166,22 @@ for (const use of ['[shot]', '[shot][]', '[screen][shot]']) {
     assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} ${use}\n\n[shot]: evidence/shot.png`)).ok, true);
   });
 }
+
+for (const prose of ['nothing attached', 'artifact forthcoming', 'evidence will follow', 'ran it successfully']) {
+  test(`rejects arbitrary inline-code prose ${prose}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} \`${prose}\``)).ok, false);
+  });
+}
+for (const use of ['[preview][target]', '[target]', '[target][]']) {
+  for (const placement of ['before', 'after']) {
+    test(`rejects banned document-wide reference ${use} defined ${placement}`, () => {
+      const evidence = bodyWithEvidence(`Exemption: docs-only\n- Exemption reason: Documentation update.\n- Steps followed to produce the evidence: checked ${use}`);
+      const definition = '[target]: http://192.168.1.80:8080';
+      const body = placement === 'before' ? definition + '\n\n' + evidence : evidence + '\n\n## Appendix\n' + definition;
+      assert.equal(lintPrEvidence(body).ok, false);
+    });
+  }
+}
+test('unused banned document-wide definition is not a verification target', () => {
+  assert.equal(lintPrEvidence('[target]: http://192.168.1.80:8080\n\n' + bodyWithEvidence('Exemption: docs-only\n- Exemption reason: Documentation update.')).ok, true);
+});

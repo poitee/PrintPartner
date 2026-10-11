@@ -469,7 +469,10 @@ function hasSubstantiveCodeSpan(value) {
       content &&
       !NON_ARTIFACT_WORD.test(content) &&
       !PLACEHOLDER_WORD.test(content) &&
-      /[\s/.:=]/.test(content)
+      (HTTP_URL.test(content)
+        || /^(?:[\w.-]+\/)+[\w.-]+$/.test(content)
+        || /^(?:\$\s*)?(?:node\s+(?:--test\b|\S+\.m?[jc]s\b)|cargo\s+(?:test|nextest|check|build|fmt|clippy)\b|(?:pnpm|npm)\s+(?:test|run|exec|check|build)\b|python3?\s+\S+\.py\b|curl\s+(?:-\S+\s+)*https?:\/\/)/i.test(content)
+        || /\b(?:tests?|pass(?:ed)?|fail(?:ed)?|exit(?: status)?|status(?: code)?|assertions?)\s*[:=]?\s*\d+\b/i.test(content))
     );
   });
 }
@@ -728,14 +731,29 @@ export function hasEvidenceContent(sectionText) {
  * exemption. Mentions only in the Exemption reason or Exemption line are allowed;
  * reason lines must sit in its content column (lazy lines stay checked).
  */
-function targetsBannedLan(sectionText) {
+function targetsBannedLan(sectionText, definitions) {
   const verification = withoutFields(sectionText, [FIELD_LABELS.reason], {
     keepLazy: true,
   }).replace(
     EXEMPTION_LINE,
     "",
   );
-  return BANNED_LAN_IP.test(verification);
+  return BANNED_LAN_IP.test(verification)
+    || (definitions.size > 0 && [...referenceUses(verification)].some((label) => BANNED_LAN_IP.test(definitions.get(label) ?? "")));
+}
+
+function documentReferences(body) {
+  const definitions = new Map();
+  const lines = stripHiddenMarkdown(body).split("\n");
+  for (let i = 0; i < lines.length; i += 1) {
+    const match = lines[i].match(REFERENCE_DEFINITION);
+    if (!match) continue;
+    const label = normalizeReferenceLabel(match[1]);
+    if (definitions.has(label)) continue;
+    const target = match[2] || lines[i + 1]?.trim().split(/\s+/)[0];
+    if (target) definitions.set(label, target);
+  }
+  return definitions;
 }
 
 /**
@@ -771,7 +789,8 @@ export function lintPrEvidence(body) {
 
   // Preserve the selected section boundaries even for the conservative LAN view.
   // Also scan the visible section so commented decoy headings cannot redirect it.
-  if (targetsBannedLan(section) || targetsBannedLan(extractEvidenceSection(body, { inlineMultiline: false }) ?? section)) {
+  const definitions = documentReferences(body);
+  if (targetsBannedLan(section, definitions) || targetsBannedLan(extractEvidenceSection(body, { inlineMultiline: false }) ?? section, definitions)) {
     errors.push(
       "Evidence must not target Chad's LAN instances (.80/.81). Use a disposable local verify instance instead. (To mention these hosts in the Exemption reason, indent every reason line under its bullet.)",
     );
