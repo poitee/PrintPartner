@@ -270,6 +270,18 @@ utils:
           has:
             field: name
             pattern: $MODULE
+        - kind: extern_crate_declaration
+          any:
+            - has:
+                field: alias
+                pattern: $MODULE
+            - has:
+                field: name
+                pattern: $MODULE
+              not:
+                has:
+                  field: alias
+                  regex: '.'
         - kind: use_as_clause
           has:
             field: alias

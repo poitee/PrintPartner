@@ -1,5 +1,8 @@
 id: runtime-process-command
 valid:
+  - 'struct Command; use std::process as p; fn production() { extern crate self as p; let _: p::Command; }'
+  - 'mod process { pub struct Command; } use std as s; fn production() { extern crate self as s; let _: s::process::Command; }'
+  - 'use std::process as p; fn production() { extern crate p; let _: p::Command; }'
   - 'use std as s; use foreign::{s::process::*};'
   - 'use std as s; use foreign::{s::process::{*}};'
   - 'use std as s; use s::os::unix::process::*;'
@@ -64,6 +67,10 @@ valid:
   - 'use std::{os::unix::{process::*}};'
   - 'use std::os::unix::process::*;'
 invalid:
+  - 'use std::process as p; fn production() { extern crate self as unrelated; p::Command::new("sh"); }'
+  - 'use std::process as p; fn production() { extern crate p as unrelated; p::Command::new("sh"); }'
+  - 'use std::process as p; fn production() { #[cfg(any())] extern crate self as p; p::Command::new("sh"); }'
+  - 'extern crate std as s; fn production() { s::process::Command::new("sh"); }'
   - 'use std as s; use s::process::*;'
   - 'use std as s; use s::process::{*};'
   - 'extern crate std as s; use s::process::*;'
