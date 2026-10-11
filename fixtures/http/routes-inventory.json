@@ -204,6 +204,8 @@
       "websocket": false,
       "authRequired": "mode-dependent",
       "authByMode": {
+        "self-host/single-user": null,
+        "self-host/multi-user": null,
         "saas/multi-user": {
           "status": 401,
           "authRequired": true
@@ -219,6 +221,8 @@
       "websocket": false,
       "authRequired": "mode-dependent",
       "authByMode": {
+        "self-host/single-user": null,
+        "self-host/multi-user": null,
         "saas/multi-user": {
           "status": 401,
           "authRequired": true
@@ -234,6 +238,8 @@
       "websocket": false,
       "authRequired": "mode-dependent",
       "authByMode": {
+        "self-host/single-user": null,
+        "self-host/multi-user": null,
         "saas/multi-user": {
           "status": 401,
           "authRequired": true
@@ -249,6 +255,8 @@
       "websocket": false,
       "authRequired": "mode-dependent",
       "authByMode": {
+        "self-host/single-user": null,
+        "self-host/multi-user": null,
         "saas/multi-user": {
           "status": 401,
           "authRequired": true
@@ -264,6 +272,8 @@
       "websocket": false,
       "authRequired": "mode-dependent",
       "authByMode": {
+        "self-host/single-user": null,
+        "self-host/multi-user": null,
         "saas/multi-user": {
           "status": 401,
           "authRequired": true
@@ -279,6 +289,8 @@
       "websocket": false,
       "authRequired": "mode-dependent",
       "authByMode": {
+        "self-host/single-user": null,
+        "self-host/multi-user": null,
         "saas/multi-user": {
           "status": 401,
           "authRequired": true
@@ -294,6 +306,8 @@
       "websocket": false,
       "authRequired": "mode-dependent",
       "authByMode": {
+        "self-host/single-user": null,
+        "self-host/multi-user": null,
         "saas/multi-user": {
           "status": 401,
           "authRequired": true
@@ -309,6 +323,8 @@
       "websocket": false,
       "authRequired": "mode-dependent",
       "authByMode": {
+        "self-host/single-user": null,
+        "self-host/multi-user": null,
         "saas/multi-user": {
           "status": 401,
           "authRequired": true
@@ -1405,6 +1421,7 @@
       "websocket": false,
       "authRequired": "mode-dependent",
       "authByMode": {
+        "self-host/single-user": null,
         "self-host/multi-user": {
           "status": 401,
           "authRequired": true
@@ -2159,6 +2176,7 @@
       "websocket": false,
       "authRequired": "mode-dependent",
       "authByMode": {
+        "self-host/single-user": null,
         "self-host/multi-user": {
           "status": 401,
           "authRequired": true
@@ -2178,6 +2196,7 @@
       "websocket": false,
       "authRequired": "mode-dependent",
       "authByMode": {
+        "self-host/single-user": null,
         "self-host/multi-user": {
           "status": 401,
           "authRequired": true
@@ -2197,6 +2216,7 @@
       "websocket": false,
       "authRequired": "mode-dependent",
       "authByMode": {
+        "self-host/single-user": null,
         "self-host/multi-user": {
           "status": 401,
           "authRequired": true
@@ -2216,6 +2236,7 @@
       "websocket": false,
       "authRequired": "mode-dependent",
       "authByMode": {
+        "self-host/single-user": null,
         "self-host/multi-user": {
           "status": 401,
           "authRequired": true
@@ -3733,6 +3754,8 @@
       "websocket": false,
       "authRequired": "mode-dependent",
       "authByMode": {
+        "self-host/single-user": null,
+        "self-host/multi-user": null,
         "saas/multi-user": {
           "status": 401,
           "authRequired": true
@@ -3748,6 +3771,8 @@
       "websocket": false,
       "authRequired": "mode-dependent",
       "authByMode": {
+        "self-host/single-user": null,
+        "self-host/multi-user": null,
         "saas/multi-user": {
           "status": 401,
           "authRequired": true
@@ -3763,6 +3788,8 @@
       "websocket": false,
       "authRequired": "mode-dependent",
       "authByMode": {
+        "self-host/single-user": null,
+        "self-host/multi-user": null,
         "saas/multi-user": {
           "status": 401,
           "authRequired": true
@@ -3778,6 +3805,8 @@
       "websocket": false,
       "authRequired": "mode-dependent",
       "authByMode": {
+        "self-host/single-user": null,
+        "self-host/multi-user": null,
         "saas/multi-user": {
           "status": 401,
           "authRequired": true
@@ -3793,6 +3822,8 @@
       "websocket": false,
       "authRequired": "mode-dependent",
       "authByMode": {
+        "self-host/single-user": null,
+        "self-host/multi-user": null,
         "saas/multi-user": {
           "status": 401,
           "authRequired": true
@@ -3808,6 +3839,8 @@
       "websocket": false,
       "authRequired": "mode-dependent",
       "authByMode": {
+        "self-host/single-user": null,
+        "self-host/multi-user": null,
         "saas/multi-user": {
           "status": 401,
           "authRequired": true
@@ -3823,6 +3856,8 @@
       "websocket": false,
       "authRequired": "mode-dependent",
       "authByMode": {
+        "self-host/single-user": null,
+        "self-host/multi-user": null,
         "saas/multi-user": {
           "status": 401,
           "authRequired": true
@@ -3838,6 +3873,8 @@
       "websocket": false,
       "authRequired": "mode-dependent",
       "authByMode": {
+        "self-host/single-user": null,
+        "self-host/multi-user": null,
         "saas/multi-user": {
           "status": 401,
           "authRequired": true
@@ -4798,6 +4835,7 @@
       "websocket": false,
       "authRequired": "mode-dependent",
       "authByMode": {
+        "self-host/single-user": null,
         "self-host/multi-user": {
           "status": 401,
           "authRequired": true
@@ -5657,6 +5695,7 @@
       "websocket": false,
       "authRequired": "mode-dependent",
       "authByMode": {
+        "self-host/single-user": null,
         "self-host/multi-user": {
           "status": 401,
           "authRequired": true
@@ -5676,6 +5715,7 @@
       "websocket": false,
       "authRequired": "mode-dependent",
       "authByMode": {
+        "self-host/single-user": null,
         "self-host/multi-user": {
           "status": 401,
           "authRequired": true
@@ -5695,6 +5735,7 @@
       "websocket": false,
       "authRequired": "mode-dependent",
       "authByMode": {
+        "self-host/single-user": null,
         "self-host/multi-user": {
           "status": 401,
           "authRequired": true
@@ -5714,6 +5755,7 @@
       "websocket": false,
       "authRequired": "mode-dependent",
       "authByMode": {
+        "self-host/single-user": null,
         "self-host/multi-user": {
           "status": 401,
           "authRequired": true

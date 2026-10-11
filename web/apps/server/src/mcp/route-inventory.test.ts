@@ -59,6 +59,15 @@ describe("golden route inventory: /api/v1/mcp auth per mode", () => {
     });
   });
 
+  it("every mode-dependent route records all auth modes, including routes first seen in a later mode", () => {
+    const modes = Object.keys(expectedByMode);
+    const sparse = inventory.routes
+      .filter((route) => route.authRequired === "mode-dependent")
+      .filter((route) => modes.some((mode) => !(mode in (route.authByMode ?? {}))))
+      .map((route) => `${route.method} ${route.path}`);
+    expect(sparse).toEqual([]);
+  });
+
   it("HEAD is session-gated in every mode (MCP transport does not serve HEAD)", () => {
     const route = mcpRoute("HEAD");
     expect(route.authRequired).toBe(true);

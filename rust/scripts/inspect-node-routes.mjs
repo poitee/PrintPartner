@@ -28,6 +28,7 @@ const modes = [
   { name: 'self-host/non-loopback', deployMode: 'self-host', multiUser: false, host: '0.0.0.0', integrationApiKey: null },
 ];
 const registered = new Map();
+const completedModes = [];
 let modeKeys = new Set();
 Error.stackTraceLimit = Infinity;
 const initialized = ({ fastify }) => {
@@ -45,8 +46,11 @@ const initialized = ({ fastify }) => {
     for (const method of Array.isArray(options.method) ? options.method : [options.method]) {
       const key = method + ' ' + options.url;
       modeKeys.add(key);
+      // A route first seen in a later mode is absent from every earlier one; record that
+      // explicitly so collapse cannot mistake the sparse map for a uniform result.
       if (!registered.has(key)) registered.set(key, {
-        method, path: options.url, owner, websocket: options.websocket === true, probes: {},
+        method, path: options.url, owner, websocket: options.websocket === true,
+        probes: Object.fromEntries(completedModes.map(name => [name, null])),
       });
     }
   });
@@ -93,6 +97,7 @@ try {
           authRequired: [401, 403, 503].includes(response.statusCode),
         };
       }
+      completedModes.push(mode.name);
     } finally {
       await app?.close();
       await ports.db.close();
