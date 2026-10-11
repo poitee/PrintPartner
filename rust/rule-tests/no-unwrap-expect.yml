@@ -45,6 +45,9 @@ valid:
   - '#[cfg(all(test, any(unix, windows)))] fn helper() { println!("{}", value.unwrap()); }'
   - '#[cfg(all /* platform */ (test, unix))] fn helper() { value.unwrap(); }'
 invalid:
+  - '#[foo = test] fn production() { value.unwrap(); }'
+  - '#[foo = /* fixture */ test] fn production() { value.unwrap(); }'
+  - '#[my_attr = a::test] fn production() { value.unwrap(); }'
   - '#[/* fixture */ test] fn case() {} fn production() { value.unwrap(); }'
   - '#[doc(/* fixture */ test)] fn production() { value.unwrap(); }'
   - 'fn production() { custom::std /* module */ :: stringify!(value.unwrap()); }'

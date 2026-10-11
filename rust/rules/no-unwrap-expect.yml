@@ -34,6 +34,10 @@ utils:
   test-attribute:
     has:
       kind: attribute
+      not:
+        has:
+          field: value
+          regex: '.'
       has:
         any:
           - kind: identifier
