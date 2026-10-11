@@ -667,6 +667,47 @@ async fn unexpected_marker_directory_is_preserved_and_reported() {
     );
 }
 
+#[tokio::test]
+async fn same_process_restart_retries_failed_storage_release_without_double_ownership() {
+    use fs2::FileExt;
+
+    let data = temporary("restart-after-failed-release");
+    let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    let marker = data.join(".desktop-owner.json");
+    std::fs::remove_file(&marker).unwrap();
+    std::fs::create_dir(&marker).unwrap();
+    let blocker = marker.join("retain");
+    std::fs::write(&blocker, b"must not delete").unwrap();
+    let lease = data.join(".desktop-lease/owner.json");
+    let owner = std::fs::read(&lease).unwrap();
+    let lock = std::fs::File::open(data.join(".desktop.lock")).unwrap();
+
+    let receipt = runtime.shutdown().await;
+    assert!(receipt.compat_reaped && receipt.gateway_stopped && receipt.runtime_removed);
+    assert!(!receipt.storage_released && !receipt.marker_removed && !receipt.complete());
+    assert!(receipt.errors.contains(&"storage_ownership_retained"));
+    assert!(lock.try_lock_exclusive().is_err());
+
+    assert!(CoreRuntime::start(launch(data.clone())).await.is_err());
+    assert_eq!(std::fs::read(&lease).unwrap(), owner);
+    assert_eq!(std::fs::read(&blocker).unwrap(), b"must not delete");
+    assert!(lock.try_lock_exclusive().is_err());
+
+    std::fs::remove_file(blocker).unwrap();
+    std::fs::remove_dir(&marker).unwrap();
+    let restarted = CoreRuntime::start(launch(data.clone()))
+        .await
+        .expect("same-process restart retries the retained failed release");
+    assert_ne!(std::fs::read(&lease).unwrap(), owner);
+    assert!(lock.try_lock_exclusive().is_err());
+    assert!(CoreRuntime::start(launch(data.clone())).await.is_err());
+    assert!(restarted.shutdown().await.complete());
+    assert!(!marker.exists() && !data.join(".desktop-lease").exists());
+    lock.try_lock_exclusive().unwrap();
+    FileExt::unlock(&lock).unwrap();
+    std::fs::remove_dir_all(data).unwrap();
+}
+
 #[test]
 fn drop_after_caller_runtime_teardown_reaps_writer_and_descendant() {
     use fs2::FileExt;
@@ -784,6 +825,11 @@ async fn compatibility_cleanup_failure_reports_failed_instead_of_ready() {
     assert!(receipt.errors.contains(&"compat_cleanup_unproved"));
     assert!(matches!(*state.borrow(), CoreStatus::Failed));
     std::fs::remove_dir_all(runtime_dir).unwrap();
+    let error = CoreRuntime::start(launch(data.clone()))
+        .await
+        .err()
+        .expect("unproved child closure must prevent same-process restart");
+    assert!(error.to_string().contains("Closure was not proved"));
     std::fs::remove_dir_all(data).unwrap();
 }
 

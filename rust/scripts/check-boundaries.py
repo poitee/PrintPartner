@@ -4,7 +4,7 @@ import shutil
 import subprocess
 import sys
 
-ALLOWED = {"pp-source": set(), "pp-core": {"pp-gateway", "pp-compat"}, "pp-gateway": {"pp-compat", "pp-net", "pp-drivers"}, "pp-compat": set(), "pp-server": {"pp-core"}, "pp-contracts": {"pp-api-types"}, "pp-desktop": {"pp-core"}, "pp-domain": set(), "pp-api-types": {"pp-domain"}, "pp-net": set(), "pp-drivers": {"pp-net", "pp-api-types"}, "pp-services": set()}
+ALLOWED = {'pp-source': set(), 'pp-core': {'pp-gateway', 'pp-compat', 'pp-storage'}, 'pp-gateway': {'pp-compat', 'pp-drivers', 'pp-net'}, 'pp-compat': set(), 'pp-server': {'pp-core'}, 'pp-contracts': {'pp-api-types'}, 'pp-desktop': {'pp-core'}, 'pp-domain': set(), 'pp-api-types': {'pp-domain'}, 'pp-net': set(), 'pp-drivers': {'pp-net', 'pp-api-types'}, 'pp-services': set(), 'pp-storage': set()}
 
 
 def violations(packages):
