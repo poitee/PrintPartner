@@ -1,0 +1,526 @@
+{
+  "schemaVersion": 1,
+  "helper": "printer-queue-suggestions",
+  "cases": [
+    {
+      "name": "returns empty when no queue items",
+      "input": {
+        "fleet": [
+          {
+            "model": "Voron",
+            "bed_width_mm": 250,
+            "bed_depth_mm": 250,
+            "bed_height_mm": 250,
+            "margin_mm": 5,
+            "max_filament_slots": 1,
+            "loaded_filaments": [
+              {
+                "slot": 1,
+                "filament_color_id": null,
+                "label": ""
+              }
+            ],
+            "integration_id": "int-p1",
+            "id": "p1",
+            "name": "Voron"
+          }
+        ],
+        "idleIntegrationIds": [
+          "int-p1"
+        ],
+        "queuedItems": [],
+        "wantedFilamentIdsByItem": {}
+      },
+      "output": []
+    },
+    {
+      "name": "returns empty when no idle printers",
+      "input": {
+        "fleet": [
+          {
+            "model": "Voron",
+            "bed_width_mm": 250,
+            "bed_depth_mm": 250,
+            "bed_height_mm": 250,
+            "margin_mm": 5,
+            "max_filament_slots": 1,
+            "loaded_filaments": [
+              {
+                "slot": 1,
+                "filament_color_id": null,
+                "label": ""
+              }
+            ],
+            "integration_id": "int-p1",
+            "id": "p1",
+            "name": "Voron"
+          }
+        ],
+        "idleIntegrationIds": [],
+        "queuedItems": [
+          {
+            "id": "q1",
+            "filename": "red.gcode",
+            "artifact_path": "/exports/x.gcode",
+            "printer_id": "p1",
+            "match": "pinned",
+            "wait_for_idle": true,
+            "start": true,
+            "state": "queued",
+            "created_at": "2026-01-01T00:00:00.000Z",
+            "updated_at": "2026-01-01T00:00:00.000Z"
+          }
+        ],
+        "wantedFilamentIdsByItem": {
+          "q1": [
+            "red"
+          ]
+        }
+      },
+      "output": []
+    },
+    {
+      "name": "does not suggest a legacy compatible item to another same-bed Printer",
+      "input": {
+        "fleet": [
+          {
+            "model": "Main",
+            "bed_width_mm": 250,
+            "bed_depth_mm": 250,
+            "bed_height_mm": 250,
+            "margin_mm": 5,
+            "max_filament_slots": 1,
+            "loaded_filaments": [
+              {
+                "slot": 1,
+                "filament_color_id": null,
+                "label": ""
+              }
+            ],
+            "integration_id": "int-p1",
+            "id": "p1",
+            "name": "Main"
+          },
+          {
+            "model": "Twin",
+            "bed_width_mm": 250,
+            "bed_depth_mm": 250,
+            "bed_height_mm": 250,
+            "margin_mm": 5,
+            "max_filament_slots": 1,
+            "loaded_filaments": [
+              {
+                "slot": 1,
+                "filament_color_id": null,
+                "label": ""
+              }
+            ],
+            "integration_id": "int-p2",
+            "id": "p2",
+            "name": "Twin"
+          }
+        ],
+        "idleIntegrationIds": [
+          "int-p2"
+        ],
+        "queuedItems": [
+          {
+            "id": "q1",
+            "filename": "red.gcode",
+            "artifact_path": "/exports/x.gcode",
+            "printer_id": "p1",
+            "match": "compatible",
+            "wait_for_idle": true,
+            "start": true,
+            "state": "queued",
+            "created_at": "2026-01-01T00:00:00.000Z",
+            "updated_at": "2026-01-01T00:00:00.000Z"
+          }
+        ],
+        "wantedFilamentIdsByItem": {
+          "q1": [
+            "red"
+          ]
+        }
+      },
+      "output": []
+    },
+    {
+      "name": "pinned item only matches exact printer",
+      "input": {
+        "fleet": [
+          {
+            "model": "Main",
+            "bed_width_mm": 250,
+            "bed_depth_mm": 250,
+            "bed_height_mm": 250,
+            "margin_mm": 5,
+            "max_filament_slots": 1,
+            "loaded_filaments": [
+              {
+                "slot": 1,
+                "filament_color_id": null,
+                "label": ""
+              }
+            ],
+            "integration_id": "int-p1",
+            "id": "p1",
+            "name": "Main"
+          },
+          {
+            "model": "Twin",
+            "bed_width_mm": 250,
+            "bed_depth_mm": 250,
+            "bed_height_mm": 250,
+            "margin_mm": 5,
+            "max_filament_slots": 1,
+            "loaded_filaments": [
+              {
+                "slot": 1,
+                "filament_color_id": null,
+                "label": ""
+              }
+            ],
+            "integration_id": "int-p2",
+            "id": "p2",
+            "name": "Twin"
+          }
+        ],
+        "idleIntegrationIds": [
+          "int-p2"
+        ],
+        "queuedItems": [
+          {
+            "id": "q1",
+            "filename": "red.gcode",
+            "artifact_path": "/exports/x.gcode",
+            "printer_id": "p1",
+            "match": "pinned",
+            "wait_for_idle": true,
+            "start": true,
+            "state": "queued",
+            "created_at": "2026-01-01T00:00:00.000Z",
+            "updated_at": "2026-01-01T00:00:00.000Z"
+          }
+        ],
+        "wantedFilamentIdsByItem": {
+          "q1": [
+            "red"
+          ]
+        }
+      },
+      "output": []
+    },
+    {
+      "name": "pinned item matches when correct printer is idle",
+      "input": {
+        "fleet": [
+          {
+            "model": "Main",
+            "bed_width_mm": 250,
+            "bed_depth_mm": 250,
+            "bed_height_mm": 250,
+            "margin_mm": 5,
+            "max_filament_slots": 1,
+            "loaded_filaments": [
+              {
+                "slot": 1,
+                "filament_color_id": null,
+                "label": ""
+              }
+            ],
+            "integration_id": "int-p1",
+            "id": "p1",
+            "name": "Main"
+          }
+        ],
+        "idleIntegrationIds": [
+          "int-p1"
+        ],
+        "queuedItems": [
+          {
+            "id": "q1",
+            "filename": "red.gcode",
+            "artifact_path": "/exports/x.gcode",
+            "printer_id": "p1",
+            "match": "pinned",
+            "wait_for_idle": true,
+            "start": true,
+            "state": "queued",
+            "created_at": "2026-01-01T00:00:00.000Z",
+            "updated_at": "2026-01-01T00:00:00.000Z"
+          }
+        ],
+        "wantedFilamentIdsByItem": {
+          "q1": [
+            "red"
+          ]
+        }
+      },
+      "output": [
+        {
+          "printer_id": "p1",
+          "printer_name": "Main",
+          "integration_id": "int-p1",
+          "items": [
+            {
+              "item_id": "q1",
+              "filename": "red.gcode",
+              "filament_color_ids": [
+                "red"
+              ],
+              "overlap": 0
+            }
+          ],
+          "item_count": 1
+        }
+      ]
+    },
+    {
+      "name": "excludes items not in queued state",
+      "input": {
+        "fleet": [
+          {
+            "model": "Voron",
+            "bed_width_mm": 250,
+            "bed_depth_mm": 250,
+            "bed_height_mm": 250,
+            "margin_mm": 5,
+            "max_filament_slots": 1,
+            "loaded_filaments": [
+              {
+                "slot": 1,
+                "filament_color_id": null,
+                "label": ""
+              }
+            ],
+            "integration_id": "int-p1",
+            "id": "p1",
+            "name": "Voron"
+          }
+        ],
+        "idleIntegrationIds": [
+          "int-p1"
+        ],
+        "queuedItems": [
+          {
+            "id": "q1",
+            "filename": "red.gcode",
+            "artifact_path": "/exports/x.gcode",
+            "printer_id": "p1",
+            "match": "pinned",
+            "wait_for_idle": true,
+            "start": true,
+            "state": "sending",
+            "created_at": "2026-01-01T00:00:00.000Z",
+            "updated_at": "2026-01-01T00:00:00.000Z"
+          },
+          {
+            "id": "q2",
+            "filename": "blue.gcode",
+            "artifact_path": "/exports/x.gcode",
+            "printer_id": "p1",
+            "match": "pinned",
+            "wait_for_idle": true,
+            "start": true,
+            "state": "done",
+            "created_at": "2026-01-01T00:00:00.000Z",
+            "updated_at": "2026-01-01T00:00:00.000Z"
+          }
+        ],
+        "wantedFilamentIdsByItem": {
+          "q1": [
+            "red"
+          ],
+          "q2": [
+            "blue"
+          ]
+        }
+      },
+      "output": []
+    },
+    {
+      "name": "sorts items by filament overlap desc",
+      "input": {
+        "fleet": [
+          {
+            "model": "XL",
+            "bed_width_mm": 250,
+            "bed_depth_mm": 250,
+            "bed_height_mm": 250,
+            "margin_mm": 5,
+            "max_filament_slots": 2,
+            "loaded_filaments": [
+              {
+                "slot": 1,
+                "filament_color_id": "red",
+                "label": "Red"
+              },
+              {
+                "slot": 2,
+                "filament_color_id": "blue",
+                "label": "Blue"
+              }
+            ],
+            "integration_id": "int-p1",
+            "id": "p1",
+            "name": "XL"
+          }
+        ],
+        "idleIntegrationIds": [
+          "int-p1"
+        ],
+        "queuedItems": [
+          {
+            "id": "q1",
+            "filename": "green.gcode",
+            "artifact_path": "/exports/x.gcode",
+            "printer_id": "p1",
+            "match": "pinned",
+            "wait_for_idle": true,
+            "start": true,
+            "state": "queued",
+            "created_at": "2026-01-01T00:00:00.000Z",
+            "updated_at": "2026-01-01T00:00:00.000Z"
+          },
+          {
+            "id": "q2",
+            "filename": "red.gcode",
+            "artifact_path": "/exports/x.gcode",
+            "printer_id": "p1",
+            "match": "pinned",
+            "wait_for_idle": true,
+            "start": true,
+            "state": "queued",
+            "created_at": "2026-01-01T00:00:00.000Z",
+            "updated_at": "2026-01-01T00:00:00.000Z"
+          },
+          {
+            "id": "q3",
+            "filename": "red_blue.gcode",
+            "artifact_path": "/exports/x.gcode",
+            "printer_id": "p1",
+            "match": "pinned",
+            "wait_for_idle": true,
+            "start": true,
+            "state": "queued",
+            "created_at": "2026-01-01T00:00:00.000Z",
+            "updated_at": "2026-01-01T00:00:00.000Z"
+          }
+        ],
+        "wantedFilamentIdsByItem": {
+          "q1": [
+            "green"
+          ],
+          "q2": [
+            "red"
+          ],
+          "q3": [
+            "red",
+            "blue"
+          ]
+        }
+      },
+      "output": [
+        {
+          "printer_id": "p1",
+          "printer_name": "XL",
+          "integration_id": "int-p1",
+          "items": [
+            {
+              "item_id": "q3",
+              "filename": "red_blue.gcode",
+              "filament_color_ids": [
+                "red",
+                "blue"
+              ],
+              "overlap": 2
+            },
+            {
+              "item_id": "q2",
+              "filename": "red.gcode",
+              "filament_color_ids": [
+                "red"
+              ],
+              "overlap": 1
+            },
+            {
+              "item_id": "q1",
+              "filename": "green.gcode",
+              "filament_color_ids": [
+                "green"
+              ],
+              "overlap": 0
+            }
+          ],
+          "item_count": 3
+        }
+      ]
+    },
+    {
+      "name": "suggests a legacy compatible item only when its exact Printer is idle",
+      "input": {
+        "fleet": [
+          {
+            "model": "Voron",
+            "bed_width_mm": 250,
+            "bed_depth_mm": 250,
+            "bed_height_mm": 250,
+            "margin_mm": 5,
+            "max_filament_slots": 1,
+            "loaded_filaments": [
+              {
+                "slot": 1,
+                "filament_color_id": null,
+                "label": ""
+              }
+            ],
+            "integration_id": "int-p1",
+            "id": "p1",
+            "name": "Voron"
+          }
+        ],
+        "idleIntegrationIds": [
+          "int-p1"
+        ],
+        "queuedItems": [
+          {
+            "id": "q1",
+            "filename": "red.gcode",
+            "artifact_path": "/exports/x.gcode",
+            "printer_id": "p1",
+            "match": "compatible",
+            "wait_for_idle": true,
+            "start": true,
+            "state": "queued",
+            "created_at": "2026-01-01T00:00:00.000Z",
+            "updated_at": "2026-01-01T00:00:00.000Z"
+          }
+        ],
+        "wantedFilamentIdsByItem": {
+          "q1": [
+            "red"
+          ]
+        }
+      },
+      "output": [
+        {
+          "printer_id": "p1",
+          "printer_name": "Voron",
+          "integration_id": "int-p1",
+          "items": [
+            {
+              "item_id": "q1",
+              "filename": "red.gcode",
+              "filament_color_ids": [
+                "red"
+              ],
+              "overlap": 0
+            }
+          ],
+          "item_count": 1
+        }
+      ]
+    }
+  ]
+}

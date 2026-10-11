@@ -1,0 +1,6 @@
+{
+  "print": {
+    "gcode_state": "IDLE",
+    "mc_percent": 0
+  }
+}

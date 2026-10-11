@@ -1,0 +1,9 @@
+---
+source: crates/pp-api-types/tests/autosave_snapshots.rs
+expression: boundary_error_value(error)
+---
+{
+  "category": "unknown_field",
+  "detail": "unknown field `extra`, expected one of `expected_base`, `expected_draft`, `remap_checkoff_links`, `decisions`",
+  "field": "extra"
+}

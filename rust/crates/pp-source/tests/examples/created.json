@@ -1,0 +1,22 @@
+{
+  "tenantId": "tenant-fixture",
+  "sourceId": 42,
+  "upstreamRevisionKey": "caller-uuid",
+  "manifestDigest": "f7c7feb9abbc9d6884d57682756f32bcd472674592d78fcfb8508d277ed5a4bd",
+  "snapshotLocator": "42/revisions/caller-uuid",
+  "files": [
+    {
+      "path": "part.stl",
+      "kind": "stl",
+      "sizeBytes": 11,
+      "sha256": "4b82b8ea76ac6ce84d2f3f817d4bae78754a82caa1fa088f4a08cf18d646b4c2"
+    }
+  ],
+  "selection": {
+    "maxStlFiles": 500,
+    "maxDocumentationBytes": 1000,
+    "omittedFiles": []
+  },
+  "publication": "created",
+  "storedBytes": 445
+}

@@ -1,6 +1,13 @@
 import type { JobEvent } from "@print-partner/contracts";
 import { getEngineBaseUrl } from "./contractRequest";
 
+export class JobNotFoundError extends Error {
+  constructor() {
+    super("Job not found");
+    this.name = "JobNotFoundError";
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -48,7 +55,8 @@ export function connectJobWebSocket(
 
   function reconnect() {
     if (closed) return;
-    retryTimer = setTimeout(connect, retryDelay);
+    const delay = Math.min(retryDelay * (0.8 + Math.random() * 0.4), 10_000);
+    retryTimer = setTimeout(connect, delay);
     retryDelay = Math.min(retryDelay * 2, 10_000);
   }
 
@@ -58,6 +66,9 @@ export function connectJobWebSocket(
     try {
       const current = new WebSocket(url.toString());
       socket = current;
+      current.onopen = () => {
+        if (!closed && socket === current) retryDelay = 500;
+      };
       current.onmessage = (event) => {
         if (closed || socket !== current) return;
         try {
@@ -65,7 +76,6 @@ export function connectJobWebSocket(
           if (!isJobEvent(value)) {
             throw new Error("Job event stream returned an invalid event");
           }
-          retryDelay = 500;
           if (value.status === "done" || value.status === "error" || value.status === "cancelled") {
             disconnect();
           }
@@ -77,10 +87,18 @@ export function connectJobWebSocket(
       current.onerror = () => {
         if (!closed && socket === current) onError(new Error("Job event stream failed"));
       };
-      current.onclose = () => {
+      current.onclose = (event) => {
         if (closed || socket !== current) return;
         socket = null;
-        reconnect();
+        if (event.code === 1008 && event.reason === "Job not found") {
+          closed = true;
+          onError(new JobNotFoundError());
+          return;
+        }
+        // Policy rejection is terminal. Every other close can be a restart,
+        // including a no-code shutdown (1005 in the browser).
+        if (event.code === 1008) closed = true;
+        else reconnect();
       };
     } catch (error) {
       onError(error instanceof Error ? error : new Error(String(error)));
