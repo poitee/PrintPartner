@@ -1,0 +1,5955 @@
+{
+  "evidence": "Fastify onRoute union: self-host single-user, self-host multi-user, SaaS; authRequired observed without credentials with authRequired=true; static build assets excluded",
+  "routes": [
+    {
+      "method": "OPTIONS",
+      "path": "*",
+      "authRequired": true,
+      "owner": "web/node_modules/@fastify/cors/index.js",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/admin/import-kit-bundle",
+      "authRequired": true,
+      "owner": "web/apps/server/src/app.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/discord-digest",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/discord-digest.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/api-v1.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/api-v1.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/api-v1.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/api/discord-digest",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/discord-digest.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/assistant/actions/apply",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/assistant/actions/dismiss",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/assistant/chat",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/assistant/decisions",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/assistant/domain",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/assistant/domain",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/assistant/domain/import",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/assistant/feedback",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/assistant/feedback",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/assistant/feedback",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/assistant/feedback",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/assistant/history",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/assistant/history",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/assistant/history",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/assistant/preferences",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/assistant/preferences",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/assistant/status",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/assistant/status",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/bambu-connect/handoff",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/bambu-connect.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/bambu-connect/handoff/:id/file",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/bambu-connect.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/bambu-connect/handoff/:id/file",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/bambu-connect.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/board/comments/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/board.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/board/posts",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/board.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/board/posts",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/board.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/board/posts",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/board.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/board/posts/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/board.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/board/posts/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/board.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/board/posts/:id/comments",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/board.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/board/posts/:id/hide",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/board.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/docs",
+      "authRequired": true,
+      "owner": "web/node_modules/@fastify/swagger-ui/lib/routes.js",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/docs",
+      "authRequired": true,
+      "owner": "web/node_modules/@fastify/swagger-ui/lib/routes.js",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/docs/",
+      "authRequired": true,
+      "owner": "web/node_modules/@fastify/swagger-ui/lib/routes.js",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/docs/json",
+      "authRequired": true,
+      "owner": "web/node_modules/@fastify/swagger-ui/lib/routes.js",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/docs/json",
+      "authRequired": true,
+      "owner": "web/node_modules/@fastify/swagger-ui/lib/routes.js",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/docs/static/*",
+      "authRequired": true,
+      "owner": "web/node_modules/@fastify/static/index.js",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/docs/static/*",
+      "authRequired": true,
+      "owner": "web/node_modules/@fastify/static/index.js",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/docs/static/index.html",
+      "authRequired": true,
+      "owner": "web/node_modules/@fastify/swagger-ui/lib/routes.js",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/docs/static/index.html",
+      "authRequired": true,
+      "owner": "web/node_modules/@fastify/swagger-ui/lib/routes.js",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/docs/static/swagger-initializer.js",
+      "authRequired": false,
+      "owner": "web/node_modules/@fastify/swagger-ui/lib/routes.js",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/docs/static/swagger-initializer.js",
+      "authRequired": false,
+      "owner": "web/node_modules/@fastify/swagger-ui/lib/routes.js",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/docs/yaml",
+      "authRequired": true,
+      "owner": "web/node_modules/@fastify/swagger-ui/lib/routes.js",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/docs/yaml",
+      "authRequired": true,
+      "owner": "web/node_modules/@fastify/swagger-ui/lib/routes.js",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exports/*",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/exports.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/exports/*",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/exports.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/filaments/catalog",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/filaments/catalog",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/filaments/custom",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/filaments/custom",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/filaments/custom",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/filaments/custom/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/help/workflow",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/help/workflow",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/imports/kit-bundle",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/imports.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/integrations",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/integrations.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/integrations",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/integrations.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/integrations",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/integrations.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/integrations/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/integrations.ts",
+      "websocket": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/integrations/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/integrations.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/integrations/:id/devices",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/integrations.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/integrations/:id/devices",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/integrations.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/integrations/:id/spoolman/filaments",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/spoolman-proxy.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/integrations/:id/spoolman/filaments",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/spoolman-proxy.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/integrations/:id/spoolman/spools",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/spoolman-proxy.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/integrations/:id/spoolman/spools",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/spoolman-proxy.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/integrations/:id/status",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/integrations.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/integrations/:id/status",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/integrations.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/integrations/:id/test",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/integrations.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/jobs",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/api-v1-extensions.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/jobs",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/api-v1-extensions.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/jobs/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/jobs.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/jobs/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/jobs.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/jobs/check-source-updates",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/jobs.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/jobs/export-accepted-plate-3mf",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/jobs.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/jobs/export-checklist-html",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/jobs.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/jobs/export-direct-3mf",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/jobs.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/jobs/export-kit-bundle",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/jobs.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/jobs/export-stl-pack",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/jobs.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/jobs/extract-source-docs",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/jobs.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/jobs/import-scan",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/jobs.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/jobs/printer-upload",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/jobs.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/jobs/sync",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/jobs.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/kit-catalog",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/kit-catalog",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/legal/attribution",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/legal.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/legal/attribution",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/legal.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/legal/license",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/legal.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/legal/license",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/legal.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/legal/summary",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/legal.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/legal/summary",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/legal.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/legal/third-party",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/legal.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/legal/third-party",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/legal.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/manifest-registry",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/manifest-registry",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/manifest-registry/:slug",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/manifest-registry/:slug",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/manifest-registry/export-draft",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/manifest-templates",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/manifest-templates",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/manifest-templates/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/manifest-templates/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/mcp",
+      "authRequired": false,
+      "owner": "web/apps/server/src/mcp/http-routes.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/mcp",
+      "authRequired": false,
+      "owner": "web/apps/server/src/mcp/http-routes.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/mcp",
+      "authRequired": true,
+      "owner": "web/apps/server/src/mcp/http-routes.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/mcp",
+      "authRequired": false,
+      "owner": "web/apps/server/src/mcp/http-routes.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/openapi.json",
+      "authRequired": false,
+      "owner": "web/apps/server/src/routes/api-v1.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/openapi.json",
+      "authRequired": false,
+      "owner": "web/apps/server/src/routes/api-v1.ts",
+      "websocket": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/parts/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/parts.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/parts/:id/assembled",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/parts.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/parts/:id/assembled",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/parts.ts",
+      "websocket": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/parts/:id/assembled",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/parts.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/parts/:id/mesh",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/parts.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/parts/:id/mesh",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/parts.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/parts/:id/preview",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/parts.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/parts/:id/preview",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/parts.ts",
+      "websocket": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/parts/:id/progress",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/parts.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/parts/:id/thumbnail",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/parts.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/parts/:id/thumbnail",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/parts.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/parts/:id/thumbnail",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/parts.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/plans",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/plans",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/plans/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/plans/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/plans/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/plans/:id/apply-role-colors",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/plans/:id/apply-stack-preset",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/plans/:id/archive",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/artifacts",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/api-v1-extensions.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/plans/:id/artifacts",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/api-v1-extensions.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/build-planning",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/plans/:id/build-planning",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/checkoff",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/plans/:id/checkoff",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/decisions",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/plans/:id/decisions",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/plans/:id/decisions",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/plans/:id/duplicate",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/kit-manifest",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/plans/:id/kit-manifest",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/plans/:id/kit-manifest",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/layers",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/plans/:id/layers",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/plans/:id/layers",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/plans/:id/layers/:layerId",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/plans/:id/layers/:layerId",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/plans/:id/layers/base",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/manifest-summary",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/plans/:id/manifest-summary",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/manifest-v2",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/plans/:id/manifest-v2",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/manifest-warnings",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/plans/:id/manifest-warnings",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/parts",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/plans/:id/parts",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/parts-grouped",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/plans/:id/parts-grouped",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/phase-manifest",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/plans/:id/phase-manifest",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/plan-manifest-builder",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/plans/:id/plan-manifest-builder",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/production-setup",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/production-setup.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/plans/:id/production-setup",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/production-setup.ts",
+      "websocket": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/plans/:id/production-setup",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/production-setup.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/recipe",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/plans/:id/recipe",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/reference-share",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/reference-sharing.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/plans/:id/reference-share",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/reference-sharing.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/plans/:id/regenerate-thumbnails",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/parts.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/review",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/plans/:id/review",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/plans/:id/role-filament",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/role-filaments",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/plans/:id/role-filaments",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/plans/:id/shares",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/shares.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/snapshots",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/plans/:id/snapshots",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/plans/:id/snapshots",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/snapshots/:sid",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/plans/:id/snapshots/:sid",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/plans/:id/snapshots/:sid/restore",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/plans/:id/touch",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/variant-dimensions",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/plans/:id/variant-dimensions",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/plans/:id/variant-selection",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/workflow",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/plans/:id/workflow",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:profileId/filename-grouping",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/jobs.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/plans/:profileId/filename-grouping",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/jobs.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/plans/:profileId/filename-grouping",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/jobs.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/maintenance",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/plans/maintenance",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/printer-checkoff",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-checkoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/printer-checkoff",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-checkoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/printer-checkoff/:id/manual-complete",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-checkoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/printer-checkoff/:id/recheck-remote-file",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-checkoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/printer-checkoff/dismiss",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-checkoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/printer-checkoff/file-assignments",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-checkoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/printer-checkoff/file-assignments/preview",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-checkoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/printer-checkoff/file-assignments/upload",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-checkoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/printer-checkoff/reconcile",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-checkoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/printer-checkoff/unattributed",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-checkoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/printer-checkoff/unattributed",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-checkoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/printer-checkoff/unattributed/:id/claim",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-checkoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/printer-checkoff/unattributed/:id/dismiss",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-checkoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/printer-checkoff/verify",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-checkoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/printer-outcomes/summary",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-checkoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/printer-outcomes/summary",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-checkoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/printer-presets",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/printer-presets",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/printer-send-queue",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-send-queue.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/printer-send-queue",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-send-queue.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/printer-send-queue",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-send-queue.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/printer-send-queue/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-send-queue.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/printer-send-queue/:id/dispatch",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-send-queue.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/printer-send-queue/drain",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-send-queue.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/printer-send-queue/suggestions",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-send-queue.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/printer-send-queue/suggestions",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-send-queue.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/printers",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/printers",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/printers",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/printers",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/printers/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/printers/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/printers/:id/cameras",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/printers/:id/cameras",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/printers/:id/cameras/view",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/printers/:id/cameras/view",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/printers/:id/capabilities",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/printers/:id/capabilities",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/printers/:id/details",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/printers/:id/files",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/printers/:id/files",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/printers/:id/files/content",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/printers/:id/files/content",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/printers/:id/profile-assignment",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/printers/:id/profile-assignment",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/printers/:id/profile-assignment",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/profile-library",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/profile-library.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/profile-library",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/profile-library.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/reference-shares/collections",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/reference-sharing.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/reference-shares/dependencies",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/reference-sharing.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/reference-shares/git",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/reference-sharing.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/reference-shares/imports",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/reference-sharing.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/reference-shares/validate",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/reference-sharing.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/settings/build-tracking",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/settings/build-tracking",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/settings/build-tracking",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/settings/date-format",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/settings/date-format",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/settings/date-format",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/settings/discord-notify",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/settings/discord-notify",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/settings/discord-notify",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/settings/discord-notify/test",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/settings/external-access",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/settings/external-access",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/settings/external-access",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/settings/github-pat",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/settings/github-pat",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/settings/github-pat",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/settings/printer-plan-bindings",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/settings/printer-plan-bindings",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/settings/printer-plan-bindings",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/settings/printer-plan-bindings/:integration_id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/settings/source-categories",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/settings/source-categories",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/settings/source-categories",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/settings/source-update-check",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/settings/source-update-check",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/settings/source-update-check",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/settings/spoolman-default",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/settings/spoolman-default",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/settings/spoolman-default",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/settings/stl-naming",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/settings/stl-naming",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/settings/stl-naming",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/settings/stl-naming/preview",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/settings/update-check",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/settings/update-check",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/shares/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/shares.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/shares/:token/accept",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/shares.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/shares/incoming",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/shares.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/shares/incoming",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/shares.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/slicer-handoff/exchange-status",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/slicer-handoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/slicer-handoff/exchange-status",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/slicer-handoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/slicer-instances",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/slicer-instances.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/slicer-instances",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/slicer-instances.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/slicer-instances",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/slicer-instances.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/slicer-instances/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/slicer-instances.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/slicer-instances/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/slicer-instances.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/slicer-instances/:id/docker-logs",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/slicer-instances.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/slicer-instances/:id/docker-logs",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/slicer-instances.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/slicer-instances/:id/docker-pull",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/slicer-instances.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/slicer-instances/:id/docker-start",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/slicer-instances.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/slicer-instances/:id/docker-status",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/slicer-instances.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/slicer-instances/:id/docker-status",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/slicer-instances.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/slicer-instances/:id/docker-stop",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/slicer-instances.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/slicer-instances/:id/open-accepted-plates",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/slicer-handoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/slicer-instances/seed-defaults",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/slicer-instances.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/slicer-profile-options",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/slicer-profile-options",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sources",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/sources",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sources",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/sources/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sources/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/sources/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/sources/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sources/:id/cover",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/sources/:id/cover",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sources/:id/docs",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/source-docs.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/sources/:id/docs",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/source-docs.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sources/:id/docs/*",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/source-docs.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/sources/:id/docs/*",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/source-docs.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sources/:id/has-manifest",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/sources/:id/has-manifest",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sources/:id/import-rules",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/sources/:id/import-rules",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/sources/:id/import-rules",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sources/:id/knowledge-bundle",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/source-docs.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/sources/:id/knowledge-bundle",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/source-docs.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sources/:id/knowledge-bundle/import",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/source-docs.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sources/:id/manifest-builder",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/repo-manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/sources/:id/manifest-builder",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/repo-manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sources/:id/manifest-draft",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sources/:id/naming",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/sources/:id/naming",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/sources/:id/naming",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sources/:id/notes",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/source-docs.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/sources/:id/notes",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/source-docs.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sources/:id/notes",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/source-docs.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/sources/:id/notes/:noteId",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/source-docs.ts",
+      "websocket": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/sources/:id/notes/:noteId",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/source-docs.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sources/:id/readme",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/source-docs.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/sources/:id/readme",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/source-docs.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sources/:id/repo-manifest",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/repo-manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/sources/:id/repo-manifest",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/repo-manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/sources/:id/repo-manifest",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/repo-manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sources/:id/stl-tree",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/sources/:id/stl-tree",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sources/:id/stl/*",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/sources/:id/stl/*",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sources/:id/upload-files",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sources/:id/upload-zip",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sources/activity",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/sources/activity",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sources/bulk-category",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sources/github-branches",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/sources/github-branches",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sources/github-tags",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/sources/github-tags",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sources/import-repos-txt",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sources/maintenance",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/sources/maintenance",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sources/stl-search",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/sources/stl-search",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/webhooks",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/webhooks.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/webhooks",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/webhooks.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/webhooks",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/webhooks.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/webhooks/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/webhooks.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/api-v2.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v2",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/api-v2.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v2/",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/api-v2.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/openapi.json",
+      "authRequired": false,
+      "owner": "web/apps/server/src/routes/api-v1.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v2/openapi.json",
+      "authRequired": false,
+      "owner": "web/apps/server/src/routes/api-v1.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v2/plans",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v2/plans/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v2/plans/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v2/plans/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/apply-role-colors",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/archive",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/build-planning",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v2/plans/:id/build-planning",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/checkoff",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v2/plans/:id/checkoff",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/decisions",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v2/plans/:id/decisions",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/decisions",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/drafts",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plan-drafts.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v2/plans/:id/drafts",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plan-drafts.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/drafts/:draftId",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plan-drafts.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v2/plans/:id/drafts/:draftId",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plan-drafts.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/drafts/:draftId/abandon",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plan-drafts.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/drafts/:draftId/apply",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plan-drafts.ts",
+      "websocket": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v2/plans/:id/drafts/:draftId/parts",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plan-drafts.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/drafts/:draftId/rebase",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plan-drafts.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v2/plans/:id/drafts/:draftId/reconciliation",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plan-drafts.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/drafts/recompute",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plan-drafts.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/duplicate",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/kit-manifest",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v2/plans/:id/kit-manifest",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v2/plans/:id/kit-manifest",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/layers",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v2/plans/:id/layers",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/layers",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v2/plans/:id/layers/:layerId",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v2/plans/:id/layers/:layerId",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v2/plans/:id/layers/base",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/manifest-summary",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v2/plans/:id/manifest-summary",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/manifest-v2",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v2/plans/:id/manifest-v2",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/manifest-warnings",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v2/plans/:id/manifest-warnings",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/parts",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v2/plans/:id/parts",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/parts-grouped",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v2/plans/:id/parts-grouped",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/phase-manifest",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v2/plans/:id/phase-manifest",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/plan-manifest-builder",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v2/plans/:id/plan-manifest-builder",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/plates",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/accepted-plates.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v2/plans/:id/plates",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/accepted-plates.ts",
+      "websocket": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v2/plans/:id/plates/:plateId/units/:token",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/accepted-plates.ts",
+      "websocket": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v2/plans/:id/plates/:plateId/units/:token/pin",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/accepted-plates.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/plates/:plateId/units/:token/transfer",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/accepted-plates.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/plates/:plateId/units/:token/unplace",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/accepted-plates.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/plates/arrange",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/accepted-plates.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/plates/initialize",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/accepted-plates.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/plates/restore",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/accepted-plates.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/progress/import",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plan-drafts.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/recipe",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v2/plans/:id/recipe",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/review",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v2/plans/:id/review",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v2/plans/:id/role-filament",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/role-filaments",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v2/plans/:id/role-filaments",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/save",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plan-drafts.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/snapshots",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v2/plans/:id/snapshots",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/snapshots",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/snapshots/:sid",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v2/plans/:id/snapshots/:sid",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/snapshots/:sid/restore",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/touch",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/variant-dimensions",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v2/plans/:id/variant-dimensions",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/variant-selection",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/workflow",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v2/plans/:id/workflow",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/maintenance",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v2/plans/maintenance",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/assistant/actions/apply",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/assistant/actions/dismiss",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/assistant/chat",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/assistant/decisions",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/assistant/domain",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/assistant/domain",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/assistant/domain/import",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/assistant/feedback",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/assistant/feedback",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/assistant/feedback",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/assistant/feedback",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/assistant/history",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/assistant/history",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/assistant/history",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/assistant/preferences",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/assistant/preferences",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/assistant/status",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/assistant/status",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/assistant.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/auth/callback",
+      "authRequired": false,
+      "owner": "web/apps/server/src/routes/auth.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/auth/callback",
+      "authRequired": false,
+      "owner": "web/apps/server/src/routes/auth.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/auth/change-password",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/auth.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/auth/dev-login",
+      "authRequired": false,
+      "owner": "web/apps/server/src/routes/auth.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/auth/discord",
+      "authRequired": false,
+      "owner": "web/apps/server/src/routes/auth.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/auth/discord",
+      "authRequired": false,
+      "owner": "web/apps/server/src/routes/auth.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/auth/discord/callback",
+      "authRequired": false,
+      "owner": "web/apps/server/src/routes/auth.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/auth/discord/callback",
+      "authRequired": false,
+      "owner": "web/apps/server/src/routes/auth.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/auth/forgot-password",
+      "authRequired": false,
+      "owner": "web/apps/server/src/routes/auth.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/auth/github",
+      "authRequired": false,
+      "owner": "web/apps/server/src/routes/auth.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/auth/github",
+      "authRequired": false,
+      "owner": "web/apps/server/src/routes/auth.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/auth/login",
+      "authRequired": false,
+      "owner": "web/apps/server/src/routes/auth.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/auth/logout",
+      "authRequired": false,
+      "owner": "web/apps/server/src/routes/auth.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/auth.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/auth/me",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/auth.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/auth/register",
+      "authRequired": false,
+      "owner": "web/apps/server/src/routes/auth.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/auth/reset-password",
+      "authRequired": false,
+      "owner": "web/apps/server/src/routes/auth.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/backups",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/backups.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/backups",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/backups.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/backups",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/backups.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/backups/:name",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/backups.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/backups/:name",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/backups.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/backups/:name",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/backups.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/backups/:name/preflight",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/backups.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/backups/:name/preflight",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/backups.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/backups/restore",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/backups.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/backups/storage",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/backups.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/backups/storage",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/backups.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/backups/validate",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/backups.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/bambu-connect/handoff",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/bambu-connect.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/bambu-connect/handoff/:id/file",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/bambu-connect.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/bambu-connect/handoff/:id/file",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/bambu-connect.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/board/comments/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/board.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/board/posts",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/board.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/board/posts",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/board.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/board/posts",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/board.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/board/posts/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/board.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/board/posts/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/board.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/board/posts/:id/comments",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/board.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/board/posts/:id/hide",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/board.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/exports/*",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/exports.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/exports/*",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/exports.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/filaments/catalog",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/filaments/catalog",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/filaments/custom",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/filaments/custom",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/filaments/custom",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/filaments/custom/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/health",
+      "authRequired": false,
+      "owner": "web/apps/server/src/routes/health.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/health",
+      "authRequired": false,
+      "owner": "web/apps/server/src/routes/health.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/help/workflow",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/help/workflow",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/imports/kit-bundle",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/imports.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/jobs/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/jobs.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/jobs/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/jobs.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/jobs/check-source-updates",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/jobs.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/jobs/export-accepted-plate-3mf",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/jobs.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/jobs/export-checklist-html",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/jobs.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/jobs/export-direct-3mf",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/jobs.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/jobs/export-kit-bundle",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/jobs.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/jobs/export-stl-pack",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/jobs.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/jobs/extract-source-docs",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/jobs.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/jobs/import-scan",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/jobs.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/jobs/printer-upload",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/jobs.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/jobs/sync",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/jobs.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/kit-catalog",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/kit-catalog",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/legal/attribution",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/legal.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/legal/attribution",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/legal.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/legal/license",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/legal.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/legal/license",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/legal.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/legal/summary",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/legal.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/legal/summary",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/legal.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/legal/third-party",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/legal.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/legal/third-party",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/legal.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/manifest-registry",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/manifest-registry",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/manifest-registry/:slug",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/manifest-registry/:slug",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/manifest-registry/export-draft",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/manifest-templates",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/manifest-templates",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/manifest-templates/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/manifest-templates/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/metrics",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/metrics.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/metrics",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/metrics.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/openapi.json",
+      "authRequired": false,
+      "owner": "web/apps/server/src/routes/api-v1.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/openapi.json",
+      "authRequired": false,
+      "owner": "web/apps/server/src/routes/api-v1.ts",
+      "websocket": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/parts/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/parts.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/parts/:id/assembled",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/parts.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/parts/:id/assembled",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/parts.ts",
+      "websocket": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/parts/:id/assembled",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/parts.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/parts/:id/mesh",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/parts.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/parts/:id/mesh",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/parts.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/parts/:id/preview",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/parts.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/parts/:id/preview",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/parts.ts",
+      "websocket": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/parts/:id/progress",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/parts.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/parts/:id/thumbnail",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/parts.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/parts/:id/thumbnail",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/parts.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/parts/:id/thumbnail",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/parts.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/plans",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/plans",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/plans",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/plans/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/plans/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/plans/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/apply-role-colors",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/apply-stack-preset",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/archive",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/build-planning",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/plans/:id/build-planning",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/checkoff",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/plans/:id/checkoff",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/decisions",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/plans/:id/decisions",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/decisions",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/drafts",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plan-drafts.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/plans/:id/drafts",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plan-drafts.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/drafts/:draftId",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plan-drafts.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/plans/:id/drafts/:draftId",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plan-drafts.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/drafts/:draftId/abandon",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plan-drafts.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/drafts/:draftId/apply",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plan-drafts.ts",
+      "websocket": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/plans/:id/drafts/:draftId/parts",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plan-drafts.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/drafts/:draftId/rebase",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plan-drafts.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/plans/:id/drafts/:draftId/reconciliation",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plan-drafts.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/drafts/recompute",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plan-drafts.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/duplicate",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/kit-manifest",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/plans/:id/kit-manifest",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/plans/:id/kit-manifest",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/layers",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/plans/:id/layers",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/layers",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/plans/:id/layers/:layerId",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/plans/:id/layers/:layerId",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/plans/:id/layers/base",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/manifest-summary",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/plans/:id/manifest-summary",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/manifest-v2",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/plans/:id/manifest-v2",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/manifest-warnings",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/plans/:id/manifest-warnings",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/parts",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/plans/:id/parts",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/parts-grouped",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/plans/:id/parts-grouped",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/phase-manifest",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/plans/:id/phase-manifest",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/plan-manifest-builder",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/plans/:id/plan-manifest-builder",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/plates",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/accepted-plates.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/plans/:id/plates",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/accepted-plates.ts",
+      "websocket": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/plans/:id/plates/:plateId/units/:token",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/accepted-plates.ts",
+      "websocket": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/plans/:id/plates/:plateId/units/:token/pin",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/accepted-plates.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/plates/:plateId/units/:token/transfer",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/accepted-plates.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/plates/:plateId/units/:token/unplace",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/accepted-plates.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/plates/arrange",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/accepted-plates.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/plates/initialize",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/accepted-plates.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/plates/restore",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/accepted-plates.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/production-setup",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/production-setup.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/plans/:id/production-setup",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/production-setup.ts",
+      "websocket": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/plans/:id/production-setup",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/production-setup.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/progress/import",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plan-drafts.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/recipe",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/plans/:id/recipe",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/reference-share",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/reference-sharing.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/plans/:id/reference-share",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/reference-sharing.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/regenerate-thumbnails",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/parts.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/review",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/plans/:id/review",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/plans/:id/role-filament",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/role-filaments",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/plans/:id/role-filaments",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/save",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plan-drafts.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/shares",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/shares.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/snapshots",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/plans/:id/snapshots",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/snapshots",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/snapshots/:sid",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/plans/:id/snapshots/:sid",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/snapshots/:sid/restore",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/touch",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/variant-dimensions",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/plans/:id/variant-dimensions",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/variant-selection",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/workflow",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/plans/:id/workflow",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:profileId/filename-grouping",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/jobs.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/plans/:profileId/filename-grouping",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/jobs.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/plans/:profileId/filename-grouping",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/jobs.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/plans/maintenance",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/plans/maintenance",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/printer-checkoff",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-checkoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/printer-checkoff",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-checkoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/printer-checkoff/:id/manual-complete",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-checkoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/printer-checkoff/:id/recheck-remote-file",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-checkoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/printer-checkoff/dismiss",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-checkoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/printer-checkoff/file-assignments",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-checkoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/printer-checkoff/file-assignments/preview",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-checkoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/printer-checkoff/file-assignments/upload",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-checkoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/printer-checkoff/reconcile",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-checkoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/printer-checkoff/unattributed",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-checkoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/printer-checkoff/unattributed",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-checkoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/printer-checkoff/unattributed/:id/claim",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-checkoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/printer-checkoff/unattributed/:id/dismiss",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-checkoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/printer-checkoff/verify",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-checkoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/printer-outcomes/summary",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-checkoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/printer-outcomes/summary",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-checkoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/printer-presets",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/printer-presets",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/printer-send-queue",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-send-queue.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/printer-send-queue",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-send-queue.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/printer-send-queue",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-send-queue.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/printer-send-queue/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-send-queue.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/printer-send-queue/:id/dispatch",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-send-queue.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/printer-send-queue/drain",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-send-queue.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/printer-send-queue/suggestions",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-send-queue.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/printer-send-queue/suggestions",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printer-send-queue.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/printers",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/printers",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/printers",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/printers",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/printers/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/printers/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/printers/:id/cameras",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/printers/:id/cameras",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/printers/:id/cameras/view",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/printers/:id/cameras/view",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/printers/:id/capabilities",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/printers/:id/capabilities",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/printers/:id/details",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/printers/:id/files",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/printers/:id/files",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/printers/:id/files/content",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/printers/:id/files/content",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/printers/:id/profile-assignment",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/printers/:id/profile-assignment",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/printers/:id/profile-assignment",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/profile-library",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/profile-library.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/profile-library",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/profile-library.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/reference-shares/collections",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/reference-sharing.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/reference-shares/dependencies",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/reference-sharing.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/reference-shares/git",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/reference-sharing.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/reference-shares/imports",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/reference-sharing.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/reference-shares/validate",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/reference-sharing.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/settings/api-keys",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/api-key-management.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/settings/api-keys",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/api-key-management.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/settings/api-keys",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/api-key-management.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/settings/api-keys/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/api-key-management.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/settings/api-keys/:id/regenerate",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/api-key-management.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/settings/build-tracking",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/settings/build-tracking",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/settings/build-tracking",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/settings/date-format",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/settings/date-format",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/settings/date-format",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/settings/discord-notify",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/settings/discord-notify",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/settings/discord-notify",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/settings/discord-notify/test",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/settings/external-access",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/settings/external-access",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/settings/external-access",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/settings/github-pat",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/settings/github-pat",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/settings/github-pat",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/settings/logging/config",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/logging.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/settings/logging/config",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/logging.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/settings/logging/config",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/logging.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/settings/logging/export",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/logging.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/settings/logging/export",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/logging.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/settings/logging/logs",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/logging.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/settings/logging/logs",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/logging.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/settings/logging/logs",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/logging.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/settings/logging/stats",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/logging.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/settings/logging/stats",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/logging.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/settings/printer-plan-bindings",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/settings/printer-plan-bindings",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/settings/printer-plan-bindings",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/settings/printer-plan-bindings/:integration_id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/settings/source-categories",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/settings/source-categories",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/settings/source-categories",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/settings/source-update-check",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/settings/source-update-check",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/settings/source-update-check",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/settings/spoolman-default",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/settings/spoolman-default",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/settings/spoolman-default",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/settings/stl-naming",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/settings/stl-naming",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/settings/stl-naming",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/settings/stl-naming/preview",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/settings/update-check",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/settings/update-check",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/shares/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/shares.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/shares/:token/accept",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/shares.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/shares/incoming",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/shares.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/shares/incoming",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/shares.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/slicer-handoff/exchange-status",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/slicer-handoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/slicer-handoff/exchange-status",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/slicer-handoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/slicer-instances",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/slicer-instances.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/slicer-instances",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/slicer-instances.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/slicer-instances",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/slicer-instances.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/slicer-instances/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/slicer-instances.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/slicer-instances/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/slicer-instances.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/slicer-instances/:id/docker-logs",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/slicer-instances.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/slicer-instances/:id/docker-logs",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/slicer-instances.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/slicer-instances/:id/docker-pull",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/slicer-instances.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/slicer-instances/:id/docker-start",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/slicer-instances.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/slicer-instances/:id/docker-status",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/slicer-instances.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/slicer-instances/:id/docker-status",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/slicer-instances.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/slicer-instances/:id/docker-stop",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/slicer-instances.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/slicer-instances/:id/open-accepted-plates",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/slicer-handoff.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/slicer-instances/seed-defaults",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/slicer-instances.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/slicer-profile-options",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/slicer-profile-options",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/printers.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/sources",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/sources",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/sources",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/sources/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/sources/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/sources/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/sources/:id",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/sources/:id/cover",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/sources/:id/cover",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/sources/:id/docs",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/source-docs.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/sources/:id/docs",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/source-docs.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/sources/:id/docs/*",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/source-docs.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/sources/:id/docs/*",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/source-docs.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/sources/:id/has-manifest",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/sources/:id/has-manifest",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/sources/:id/import-rules",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/sources/:id/import-rules",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/sources/:id/import-rules",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/sources/:id/knowledge-bundle",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/source-docs.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/sources/:id/knowledge-bundle",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/source-docs.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/sources/:id/knowledge-bundle/import",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/source-docs.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/sources/:id/manifest-builder",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/repo-manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/sources/:id/manifest-builder",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/repo-manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/sources/:id/manifest-draft",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/sources/:id/naming",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/sources/:id/naming",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/sources/:id/naming",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/sources/:id/notes",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/source-docs.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/sources/:id/notes",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/source-docs.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/sources/:id/notes",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/source-docs.ts",
+      "websocket": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/sources/:id/notes/:noteId",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/source-docs.ts",
+      "websocket": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/sources/:id/notes/:noteId",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/source-docs.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/sources/:id/readme",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/source-docs.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/sources/:id/readme",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/source-docs.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/sources/:id/repo-manifest",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/repo-manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/sources/:id/repo-manifest",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/repo-manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "PUT",
+      "path": "/sources/:id/repo-manifest",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/repo-manifest.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/sources/:id/stl-tree",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/sources/:id/stl-tree",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/sources/:id/stl/*",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/sources/:id/stl/*",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/sources/:id/upload-files",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/sources/:id/upload-zip",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/sources/activity",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/sources/activity",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/sources/bulk-category",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/sources/github-branches",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/sources/github-branches",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/sources/github-tags",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/sources/github-tags",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "POST",
+      "path": "/sources/import-repos-txt",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/sources/maintenance",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/sources/maintenance",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/sources/stl-search",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "HEAD",
+      "path": "/sources/stl-search",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/sources.ts",
+      "websocket": false
+    },
+    {
+      "method": "GET",
+      "path": "/ws/jobs/:jobId",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/jobs.ts",
+      "websocket": true
+    },
+    {
+      "method": "HEAD",
+      "path": "/ws/jobs/:jobId",
+      "authRequired": true,
+      "owner": "web/apps/server/src/routes/jobs.ts",
+      "websocket": true
+    },
+    {
+      "method": "GET",
+      "path": "/ws/profile-sync",
+      "authRequired": true,
+      "owner": "web/apps/server/src/services/profile-sync-broadcast.ts",
+      "websocket": true
+    },
+    {
+      "method": "HEAD",
+      "path": "/ws/profile-sync",
+      "authRequired": true,
+      "owner": "web/apps/server/src/services/profile-sync-broadcast.ts",
+      "websocket": true
+    }
+  ]
+}
