@@ -1,0 +1,20 @@
+{
+  "print": {
+    "gcode_state": "IDLE",
+    "mc_percent": 0,
+    "ams": {
+      "ams": [
+        {
+          "id": "0",
+          "tray": [
+            {
+              "id": "0",
+              "tray_type": "PLA",
+              "tray_color": "FF0000FF"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
