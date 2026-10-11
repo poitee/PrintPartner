@@ -52,7 +52,7 @@ pub fn permitted(ip: IpAddr) -> bool {
                     && first != 0x2002
                     && ip.segments()[..2] != [0x2001, 0])
                 || first & 0xfe00 == 0xfc00)
-                && ip != "fd00:ec2::254".parse::<std::net::Ipv6Addr>().unwrap()
+                && ip != std::net::Ipv6Addr::new(0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254)
         }
     }
 }

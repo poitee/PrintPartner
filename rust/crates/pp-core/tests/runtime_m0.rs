@@ -1671,8 +1671,26 @@ async fn gre_335_shared_status_route_keeps_node_path_for_other_printers() {
         body["state"]
     );
 
-    // (2) Failing snapshot (Node answers 503 above 128 Moonraker hosts).
-    for index in 0..127 {
+    // An oversized Moonraker row fails only its own id closed; other printers keep routing.
+    let oversized_id = create(
+        "Oversized",
+        "moonraker",
+        serde_json::json!({"base_url": format!("http://{}", "a".repeat(5000)), "enabled": true}),
+    )
+    .await;
+    let (status, _, _) = get(&origin, &cookie, &oversized_id).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    let (status, body, _) = get(&origin, &cookie, &prusa_id).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body, _) = get(&origin, &cookie, &moonraker_id).await;
+    assert_eq!(
+        (status, &body["state"]),
+        (StatusCode::OK, &serde_json::json!("printing"))
+    );
+    println!("gre_335 trace: oversized row=503, prusalink and moonraker unaffected");
+
+    // (2) Over-cap snapshot (above 128 Moonraker hosts): no new pollers, grace for old ones.
+    for index in 0..125 {
         create(
             &format!("Disabled {index}"),
             "moonraker",
@@ -1680,11 +1698,22 @@ async fn gre_335_shared_status_route_keeps_node_path_for_other_printers() {
         )
         .await;
     }
+    let (overflow, overflow_calls, _) = fake(Some(moonraker_reply)).await;
+    let newest = create(
+        "129th enabled HTTP host",
+        "moonraker",
+        serde_json::json!({"base_url": format!("http://{overflow}"), "enabled": true}),
+    )
+    .await;
     let calls = prusa_calls.load(Ordering::SeqCst);
     let (status, body, elapsed) = get(&origin, &cookie, &prusa_id).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(prusa_calls.load(Ordering::SeqCst) > calls);
     assert!(elapsed < Duration::from_secs(2), "{elapsed:?}");
+    // The 129th host is not proven non-Moonraker, so it must not fall back to Node.
+    let (status, body, _) = get(&origin, &cookie, &newest).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(overflow_calls.load(Ordering::SeqCst), 0);
     let (status, body, _) = get(&origin, &cookie, &moonraker_id).await;
     assert_eq!(
         (status, &body["state"]),
@@ -1710,6 +1739,15 @@ async fn gre_335_shared_status_route_keeps_node_path_for_other_printers() {
     println!(
         "gre_335 trace: after grace, moonraker=503, prusalink status={status} via Node in {elapsed:?}, https moonraker status={tls_status} via Node in {tls_elapsed:?}"
     );
+
+    let (status, body, _) = get(&origin, &cookie, &newest).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(
+        overflow_calls.load(Ordering::SeqCst),
+        0,
+        "no Node fallback or new poller, even after grace"
+    );
+    println!("gre_335 trace: 129th enabled HTTP host=503, outbound calls=0 before and after grace");
 
     let receipt = runtime.shutdown().await;
     assert!(receipt.complete(), "{receipt:?}");

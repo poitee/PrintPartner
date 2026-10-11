@@ -133,7 +133,7 @@ impl Gateway {
             "{origin}/__desktop/bootstrap?token={token}"
         )));
         let state = Arc::new(GatewayState {
-            watchers: tokio::sync::Mutex::new(Watchers::new()),
+            watchers: tokio::sync::Mutex::new(Watchers::new()?),
             snapshot_refresh: tokio::sync::Mutex::new(()),
             watcher_cancelled: CancellationToken::new(),
             watcher_tasks: TaskTracker::new(),
@@ -633,10 +633,9 @@ async fn handle(
             if request.method() == "HEAD" {
                 // Keep GET's representation length even though HEAD has no body.
                 if let Some(length) = http_body::Body::size_hint(response.body()).exact() {
-                    response.headers_mut().insert(
-                        "content-length",
-                        HeaderValue::from_str(&length.to_string()).expect("decimal length"),
-                    );
+                    response
+                        .headers_mut()
+                        .insert("content-length", HeaderValue::from(length));
                 }
                 *response.body_mut() = Body::empty();
             }
@@ -805,6 +804,10 @@ async fn refresh_watchers(state: &GatewayState) -> bool {
         return false;
     }
     match snapshot {
+        Ok(hosts) if hosts.len() > pp_drivers::moonraker::MAX_HOSTS => {
+            watchers.over_cap(&hosts, SNAPSHOT_GRACE).await;
+            false
+        }
         Ok(hosts) => watchers.replace(hosts).await.is_ok(),
         Err(SnapshotError::Invalid) => {
             watchers.invalidate().await;

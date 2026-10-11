@@ -6,7 +6,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, MutexGuard, PoisonError},
     time::Duration,
 };
 use tokio::task::JoinHandle;
@@ -67,16 +67,15 @@ pub struct Watchers {
     interval: Duration,
 }
 impl Watchers {
-    pub fn new() -> Self {
-        Self::with_guard(
+    pub fn new() -> Result<Self> {
+        Ok(Self::with_guard(
             HttpGuard::new(
                 Arc::new(SystemResolver),
                 Duration::from_secs(5),
                 2 * 1024 * 1024,
-            )
-            .expect("Static bounds"),
+            )?,
             Duration::from_secs(2),
-        )
+        ))
     }
     pub fn with_guard(guard: HttpGuard, interval: Duration) -> Self {
         assert!(!interval.is_zero());
@@ -96,7 +95,7 @@ impl Watchers {
     }
     pub fn route(&self, id: &str) -> Route {
         if let Some(poller) = self.hosts.get(id) {
-            return match &*poller.status.lock().expect("Status mutex") {
+            return match &*lock(&poller.status) {
                 Slot::Status(status) => Route::Cached(status.clone()),
                 Slot::Node => Route::Node,
             };
@@ -119,7 +118,7 @@ impl Watchers {
         let polled: Vec<_> = self
             .hosts
             .iter()
-            .filter(|(_, p)| !matches!(*p.status.lock().expect("Status mutex"), Slot::Node))
+            .filter(|(_, p)| !matches!(*lock(&p.status), Slot::Node))
             .map(|(id, _)| id.clone())
             .collect();
         for id in polled {
@@ -131,6 +130,17 @@ impl Watchers {
             }
         }
     }
+    /// More hosts than the cap: start nothing new, but record every id as Moonraker so a
+    /// newly added host fails closed instead of falling back to Node. Existing pollers
+    /// get the same grace as an unavailable snapshot.
+    pub async fn over_cap(&mut self, hosts: &[Host], grace: Duration) {
+        let Some(ids) = valid_ids(hosts) else {
+            self.invalidate().await;
+            return;
+        };
+        self.known = Some(ids);
+        self.snapshot_unavailable(grace).await;
+    }
     /// An invalid or denied snapshot fails closed: stop pollers and forget the id set.
     pub async fn invalidate(&mut self) {
         self.stop().await;
@@ -139,21 +149,23 @@ impl Watchers {
     /// The caller serializes snapshots; join removed/replaced tasks before spawning.
     /// An empty snapshot is also the sleep/shutdown/backend-loss cancellation path.
     pub async fn replace(&mut self, hosts: Vec<Host>) -> Result<()> {
-        let valid = hosts.len() <= MAX_HOSTS
-            && hosts.iter().all(|h| {
-                !h.id.is_empty()
-                    && h.id.len() <= MAX_ID_BYTES
-                    && h.base_url.len() <= MAX_CONFIG_BYTES
+        let Some(ids) = valid_ids(&hosts).filter(|_| hosts.len() <= MAX_HOSTS) else {
+            self.invalidate().await;
+            anyhow::bail!("Invalid host snapshot");
+        };
+        // An oversized row is never polled but stays known, so only that id fails
+        // closed; unrelated hosts and printer types keep routing.
+        let wanted: HashMap<_, _> = hosts
+            .into_iter()
+            .filter(|h| {
+                h.base_url.len() <= MAX_CONFIG_BYTES
                     && h.api_key
                         .as_ref()
                         .is_none_or(|key| key.len() <= MAX_CONFIG_BYTES)
-            });
-        let wanted: HashMap<_, _> = hosts.iter().map(|h| (h.id.clone(), h.clone())).collect();
-        if !valid || wanted.len() != hosts.len() {
-            self.invalidate().await;
-            anyhow::bail!("Invalid host snapshot");
-        }
-        self.known = Some(wanted.keys().cloned().collect());
+            })
+            .map(|h| (h.id.clone(), h))
+            .collect();
+        self.known = Some(ids);
         self.stale_since = None;
         let removed: Vec<_> = self
             .hosts
@@ -194,17 +206,16 @@ impl Watchers {
                         let delay = match response {
                             Ok(value) => {
                                 failures = 0;
-                                *current.lock().expect("Status mutex") = Slot::Status(value);
+                                *lock(&current) = Slot::Status(value);
                                 interval
                             }
                             Err(Failure::Redirect) => {
-                                *current.lock().expect("Status mutex") = Slot::Node;
+                                *lock(&current) = Slot::Node;
                                 break;
                             }
                             Err(failure) => {
                                 failures = failures.saturating_add(1);
-                                *current.lock().expect("Status mutex") =
-                                    Slot::Status(Status::offline(&failure.message()));
+                                *lock(&current) = Slot::Status(Status::offline(&failure.message()));
                                 backoff(interval, failures)
                             }
                         };
@@ -236,10 +247,18 @@ impl Watchers {
         }
     }
 }
-impl Default for Watchers {
-    fn default() -> Self {
-        Self::new()
-    }
+/// Non-empty, bounded and unique ids, or `None` when the snapshot is unusable.
+fn valid_ids(hosts: &[Host]) -> Option<HashSet<String>> {
+    let ids: HashSet<_> = hosts
+        .iter()
+        .filter(|h| !h.id.is_empty() && h.id.len() <= MAX_ID_BYTES)
+        .map(|h| h.id.clone())
+        .collect();
+    (ids.len() == hosts.len()).then_some(ids)
+}
+/// A slot only ever holds a whole value, so a poisoned lock is still consistent.
+fn lock(slot: &Mutex<Slot>) -> MutexGuard<'_, Slot> {
+    slot.lock().unwrap_or_else(PoisonError::into_inner)
 }
 /// The status guard is plain HTTP without redirects; Node's moonrakerFetch serves
 /// HTTPS and follows checked redirects, so those hosts stay on Node until GRE-359.
@@ -510,7 +529,7 @@ mod tests {
     #[tokio::test]
     async fn ticket_t_4_prompt_inflight_cancellation_and_invalid_snapshot() {
         let (url, calls, server) = simulator(true).await;
-        let mut watchers = Watchers::new();
+        let mut watchers = Watchers::new().unwrap();
         watchers.replace(vec![host(url.clone())]).await.unwrap();
         wait_calls(&calls, 1).await;
         tokio::time::timeout(Duration::from_millis(200), watchers.replace(vec![]))
@@ -569,7 +588,7 @@ mod tests {
     }
     #[tokio::test]
     async fn gre_335_last_valid_snapshot_routes_other_ids_to_node() {
-        let mut watchers = Watchers::new();
+        let mut watchers = Watchers::new().unwrap();
         assert_eq!(watchers.route("prusa"), Route::NoSnapshot);
         let mut disabled = host("http://printer.test".into());
         disabled.enabled = false;
@@ -606,7 +625,7 @@ mod tests {
     #[tokio::test]
     async fn gre_335_awaiting_status_is_unknown() {
         let (url, calls, server) = simulator(true).await;
-        let mut watchers = Watchers::new();
+        let mut watchers = Watchers::new().unwrap();
         watchers.replace(vec![host(url)]).await.unwrap();
         wait_calls(&calls, 1).await;
         assert_eq!(
@@ -664,5 +683,58 @@ mod tests {
         assert_eq!(watchers.route("host"), Route::Node);
         watchers.stop().await;
         server.abort();
+    }
+    #[tokio::test]
+    async fn gre_335_over_cap_snapshot_fails_new_moonraker_ids_closed() {
+        let mut watchers = Watchers::new().unwrap();
+        let mut known = host("http://printer.test".into());
+        known.enabled = false;
+        watchers.replace(vec![known.clone()]).await.unwrap();
+        // A 129th host arrives with the over-cap snapshot: it must not route to Node.
+        let over: Vec<_> = (0..=MAX_HOSTS)
+            .map(|i| Host {
+                id: if i == 0 {
+                    "host".into()
+                } else {
+                    format!("new-{i}")
+                },
+                enabled: i != 0,
+                ..known.clone()
+            })
+            .collect();
+        watchers.over_cap(&over, Duration::from_secs(60)).await;
+        assert!(matches!(watchers.route("host"), Route::Cached(_)));
+        assert_eq!(watchers.route("new-128"), Route::Unavailable);
+        assert_eq!(watchers.route("prusa"), Route::Node);
+        assert_eq!(watchers.hosts.len(), 1, "no poller started over the cap");
+        // Past grace the old poller stops too; other printers still reach Node.
+        watchers.over_cap(&over, Duration::ZERO).await;
+        assert_eq!(watchers.route("host"), Route::Unavailable);
+        assert_eq!(watchers.route("new-128"), Route::Unavailable);
+        assert_eq!(watchers.route("prusa"), Route::Node);
+    }
+    #[tokio::test]
+    async fn gre_335_oversized_row_only_fails_its_own_id() {
+        let mut watchers = Watchers::new().unwrap();
+        let mut healthy = host("http://printer.test".into());
+        healthy.enabled = false;
+        let oversized = Host {
+            id: "big".into(),
+            base_url: "h".repeat(MAX_CONFIG_BYTES + 1),
+            ..healthy.clone()
+        };
+        let big_key = Host {
+            id: "key".into(),
+            api_key: Some("k".repeat(MAX_CONFIG_BYTES + 1)),
+            ..healthy.clone()
+        };
+        watchers
+            .replace(vec![healthy, oversized, big_key])
+            .await
+            .unwrap();
+        assert!(matches!(watchers.route("host"), Route::Cached(_)));
+        assert_eq!(watchers.route("big"), Route::Unavailable);
+        assert_eq!(watchers.route("key"), Route::Unavailable);
+        assert_eq!(watchers.route("prusa"), Route::Node);
     }
 }
