@@ -2,6 +2,7 @@
 """Proof for `verify.py launch`: start, reach /health, SIGTERM, clean exit."""
 import contextlib
 import importlib.util
+import inspect
 import io
 import json
 import os
@@ -584,35 +585,49 @@ os.waitpid(pid, 0)
                         verify.run(root, "sh", "-c", command)
                     self.assertFalse(process_alive(int(pidfile.read_text())))
 
-    def test_stop_at_build_cleanup_entry_still_reaps_group(self):
+    def test_stop_at_any_line_of_run_still_reaps_group(self):
+        # Deliver a real SIGTERM as each line of run() is reached, including the step from the
+        # leader exiting to group cleanup. Every stop must surface, and only after the
+        # background worker has been reaped.
         verify = load_verify()
-
-        class StopOnCleanupEntry(dict):
-            # Deliver the stop exactly where run() starts holding signals for cleanup.
-            holds = 0
-
-            def __setitem__(self, key, value):
-                if key == "active" and value is True:
-                    self.holds += 1
-                    if self.holds == 2:
-                        raise verify.begin_stop("SIGTERM")
-                super().__setitem__(key, value)
-
-        verify.held = StopOnCleanupEntry(active=False, pending=None)
         previous = {signum: signal.getsignal(signum) for signum in verify.STOP_SIGNALS}
+        lines, first = inspect.getsourcelines(verify.run)
         with tempfile.TemporaryDirectory(prefix="pp-build-group-test-") as temporary:
             root = Path(temporary)
             pidfile = root / "child.pid"
-            try:
-                with self.assertRaisesRegex(verify.Stop, "SIGTERM"), contextlib.redirect_stdout(io.StringIO()):
-                    verify.run(root, "sh", "-c", f'sleep 600 & echo $! > "{pidfile}"; exit 0')
-                self.assertFalse(process_alive(int(pidfile.read_text())))
-                self.assertIs(verify.held["active"], False)
-            finally:
-                for signum, handler in previous.items():
-                    signal.signal(signum, handler)  # begin_stop() ignored them in this test process
-                if pidfile.exists() and process_alive(int(pidfile.read_text())):
-                    os.kill(int(pidfile.read_text()), signal.SIGKILL)
+            for target in range(first + 1, first + len(lines)):
+                with self.subTest(line=target):
+                    pidfile.unlink(missing_ok=True)
+                    verify.held.update(active=False, pending=None)
+                    verify.install_stop_handlers()
+                    fired = []
+
+                    def trace(frame, event, _arg):
+                        if frame.f_code is not verify.run.__code__:
+                            return None
+                        if event == "line" and frame.f_lineno == target and not fired:
+                            fired.append(target)
+                            os.kill(os.getpid(), signal.SIGTERM)
+                        return trace
+
+                    try:
+                        with self.assertRaisesRegex(verify.Stop, "SIGTERM"), \
+                                contextlib.redirect_stdout(io.StringIO()):
+                            sys.settrace(trace)
+                            try:
+                                verify.run(root, "sh", "-c", f'sleep 600 & echo $! > "{pidfile}"; exit 0')
+                            finally:
+                                sys.settrace(None)
+                            if not fired:
+                                raise verify.Stop("SIGTERM")  # line not executed (comment, blank, ...)
+                        if pidfile.exists():
+                            self.assertFalse(process_alive(int(pidfile.read_text())))
+                        self.assertIs(verify.held["active"], False)
+                    finally:
+                        for signum, handler in previous.items():
+                            signal.signal(signum, handler)  # begin_stop() ignored them in this process
+                        if pidfile.exists() and process_alive(int(pidfile.read_text())):
+                            os.kill(int(pidfile.read_text()), signal.SIGKILL)
 
     def test_repeated_sigint_cannot_interrupt_group_cleanup(self):
         with tempfile.TemporaryDirectory(prefix="pp-build-group-test-") as temporary:

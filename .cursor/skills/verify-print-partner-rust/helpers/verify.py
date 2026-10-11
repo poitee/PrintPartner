@@ -140,38 +140,37 @@ def _stop_group(process, grace):
         process.stdout.close()
 
 
-def run(root, *args, env=None, stdout=None):
+def run(root, *args, env=None, stdout=None, timeout=600):
     print("BUILD:", " ".join(args), flush=True)
-    # Defer launch's signal exception until the child is recorded. Keeping the OS mask
-    # unchanged lets build workers handle SIGTERM normally rather than inherit blocked signals.
+    # Signals stay held for the whole build: a stop is only recorded, so it can never escape
+    # between the leader exiting and its group being reaped. Waiting in short slices still
+    # cancels promptly. Keeping the OS mask unchanged lets build workers handle SIGTERM normally.
     was_held = held["active"]
     held["active"] = True
     process = None
     try:
         process = subprocess.Popen(args, cwd=root, env=env, stdout=stdout, text=True, start_new_session=True)
-        if not was_held:
-            release_signals()
-        output, _ = process.communicate(timeout=600)
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                output, _ = process.communicate(timeout=0.1)
+                break
+            except subprocess.TimeoutExpired:
+                if held["pending"] is not None:
+                    output = None
+                    break
+                if time.monotonic() >= deadline:
+                    raise subprocess.TimeoutExpired(args, timeout) from None
     finally:
         # Even successful/nonzero leaders can leave background workers behind. Finish each
-        # group before another build starts, and defer launch signals during this teardown.
-        cleanup_stop = None
-        try:
-            held["active"] = True
-        except Stop as stop:
-            # A stop at cleanup entry must not skip the group; its handler already ignores
-            # further signals, so it is re-raised once the group is gone.
-            cleanup_stop = stop
-            held["active"] = True
+        # group before another build starts; a stop recorded meanwhile is raised afterwards.
         try:
             if process is not None:
                 stop_group(process)
         finally:
             held["active"] = was_held
-        if cleanup_stop is not None:
-            raise cleanup_stop
-        if not was_held:
-            release_signals()
+    if not was_held:
+        release_signals()
     if process.returncode:
         if output:
             print(output, end="", flush=True)
