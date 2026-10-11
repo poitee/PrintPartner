@@ -1,5 +1,5 @@
 import { acceptPlanForTest } from "../test/accept-plan.js";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -429,6 +429,26 @@ option_groups:
     expect(applied.ok).toBe(true);
     expect(repo.getSource(source.id)?.last_commit_sha).toMatch(/^[a-f0-9]{64}$/);
     expect(applied.result?.artifacts).toEqual(expect.arrayContaining([expect.objectContaining({ path: "parts/uploaded.stl" })]));
+  });
+
+  it("preserves working bytes when a confirmed MCP archive is invalid", async () => {
+    const source = repo.createSource({ name: "Rejected archive", source_kind: "local" });
+    const working = join(dataDir, "sources", String(source.id));
+    mkdirSync(join(working, "files"), { recursive: true });
+    writeFileSync(join(working, "files", "keep.stl"), "previous STL");
+    writeFileSync(join(working, "upload.zip"), "previous ZIP");
+    const before = repo.getSourceActivationObservation(source.id);
+    const proposal = await invokeAssistantTool("propose_import_source_files", {
+      source_id: source.id, archive_base64: Buffer.from("not-a-zip").toString("base64"),
+    }, { repo });
+    const applied = await applyAssistantAction(proposal.proposedAction!, {
+      repo, dataDir, jobs: { start: async () => "unused" } as never,
+    });
+    expect(applied.ok).toBe(false);
+    expect(applied.detail).toMatch(/not a valid ZIP/);
+    expect(repo.getSourceActivationObservation(source.id)).toEqual(before);
+    expect(readFileSync(join(working, "files", "keep.stl"), "utf8")).toBe("previous STL");
+    expect(readFileSync(join(working, "upload.zip"), "utf8")).toBe("previous ZIP");
   });
 
   it("refuses MCP file imports above the 64 MiB inline limit", async () => {

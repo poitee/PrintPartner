@@ -14,7 +14,7 @@ import { join } from "node:path";
 import * as fsPromises from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getDb, SqliteDatabase } from "../db/client.js";
-import { AppRepository } from "../db/repository.js";
+import { AppRepository, SourceActivationConflictError } from "../db/repository.js";
 import {
   runWithTenantDiskQuota,
   TenantDiskQuotaError,
@@ -397,6 +397,81 @@ describe("publishLocalSourceWorkingTree", () => {
       "print-partner.manifest.yaml",
     ]);
     expect(repo.listSourceRevisions(source.id)).toHaveLength(1);
+    sqlite.close();
+  });
+});
+
+
+describe("candidate publication", () => {
+  it("publishes one complete candidate when two writers observed the same source", async () => {
+    const { dir, sqlite, repo, source, workingTree } = fixture();
+    const other = join(dir, "other");
+    mkdirSync(other);
+    writeFileSync(join(other, "other.stl"), "other candidate");
+    const observed = repo.getSourceActivationObservation(source.id)!;
+    const results = await Promise.allSettled([workingTree, other].map((tree) => publishLocalSourceWorkingTree({
+      repo, reposDir: sqlite.reposDir, sourceId: source.id, workingTree: tree, observed,
+    })));
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const loser = results.find((result) => result.status === "rejected");
+    expect(loser?.status === "rejected" && loser.reason).toBeInstanceOf(SourceActivationConflictError);
+    const active = repo.getSource(source.id)!;
+    const winner = results[0]!.status === "fulfilled" ? "cube.stl" : "other.stl";
+    expect(readdirSync(active.local_path!).sort()).toEqual([SOURCE_SNAPSHOT_MANIFEST_FILE, winner].sort());
+    expect(readFileSync(join(active.local_path!, winner), "utf8")).toBe(winner === "cube.stl" ? "solid cube\nendsolid cube\n" : "other candidate");
+    expect(readFileSync(join(workingTree, "cube.stl"), "utf8")).toBe("solid cube\nendsolid cube\n");
+    sqlite.close();
+  });
+
+  it("reuses one complete snapshot for concurrent identical candidates", async () => {
+    const { dir, sqlite, repo, source, workingTree } = fixture();
+    const other = join(dir, "identical");
+    mkdirSync(other);
+    writeFileSync(join(other, "cube.stl"), "solid cube\nendsolid cube\n");
+    const observed = repo.getSourceActivationObservation(source.id)!;
+    const results = await Promise.all([workingTree, other].map((tree) => publishLocalSourceWorkingTree({
+      repo, reposDir: sqlite.reposDir, sourceId: source.id, workingTree: tree, observed,
+    })));
+    expect(results[0]!.local_path).toBe(results[1]!.local_path);
+    expect(readFileSync(join(results[0]!.local_path!, "cube.stl"), "utf8")).toBe("solid cube\nendsolid cube\n");
+    expect(repo.listSourceRevisions(source.id)).toHaveLength(1);
+    sqlite.close();
+  });
+
+  it("rejects an upload observed before a manifest publication", async () => {
+    const { sqlite, repo, source, workingTree } = fixture();
+    await publishLocalSourceWorkingTree({ repo, reposDir: sqlite.reposDir, sourceId: source.id, workingTree });
+    const observed = repo.getSourceActivationObservation(source.id)!;
+    const manifest = "project: preserved\nparts: []\n";
+    const winner = await publishSourceManifestRevision({ repo, sourceId: source.id, manifestYaml: manifest });
+    writeFileSync(join(workingTree, "cube.stl"), "losing upload");
+    await expect(publishLocalSourceWorkingTree({ repo, reposDir: sqlite.reposDir, sourceId: source.id, workingTree, observed })).rejects.toBeInstanceOf(SourceActivationConflictError);
+    expect(repo.getSource(source.id)?.local_path).toBe(winner.local_path);
+    expect(readFileSync(join(winner.local_path!, "cube.stl"), "utf8")).toBe("solid cube\nendsolid cube\n");
+    expect(readFileSync(join(winner.local_path!, "print-partner.manifest.yaml"), "utf8")).toBe(manifest);
+    sqlite.close();
+  });
+
+  it("rolls activation back when import-rule persistence fails", async () => {
+    const { sqlite, repo, source, workingTree } = fixture();
+    const previous = await publishLocalSourceWorkingTree({ repo, reposDir: sqlite.reposDir, sourceId: source.id, workingTree });
+    writeFileSync(join(workingTree, "cube.stl"), "replacement");
+    const spy = vi.spyOn(repo, "updateImportRules").mockImplementationOnce(() => { throw new Error("injected write failure"); });
+    await expect(publishLocalSourceWorkingTree({ repo, reposDir: sqlite.reposDir, sourceId: source.id, workingTree, suggestedImportRules: ["cube.stl"] })).rejects.toThrow("injected write failure");
+    spy.mockRestore();
+    expect(repo.getSource(source.id)?.local_path).toBe(previous.local_path);
+    expect(readFileSync(join(previous.local_path!, "cube.stl"), "utf8")).toBe("solid cube\nendsolid cube\n");
+    expect(repo.getProjectRow(source.id)?.importedPaths).toBeNull();
+    sqlite.close();
+  });
+
+  it("retains every uploaded file, including unrecognized and hidden files", async () => {
+    const { sqlite, repo, source, workingTree } = fixture();
+    writeFileSync(join(workingTree, "license.txt"), "license bytes");
+    writeFileSync(join(workingTree, ".source-info"), "hidden bytes");
+    const active = await publishLocalSourceWorkingTree({ repo, reposDir: sqlite.reposDir, sourceId: source.id, workingTree, preserveAllFiles: true });
+    expect(readFileSync(join(active.local_path!, "license.txt"), "utf8")).toBe("license bytes");
+    expect(readFileSync(join(active.local_path!, ".source-info"), "utf8")).toBe("hidden bytes");
     sqlite.close();
   });
 });

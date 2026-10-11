@@ -1,6 +1,6 @@
 import * as pdfText from "./pdf-text-extract.js";
 import { TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -28,6 +28,7 @@ vi.mock("@octokit/rest", () => ({
 
 import { createSelfHostPorts } from "../adapters/self-host/index.js";
 import { createJobRunner } from "./job-runner.js";
+import { publishLocalSourceWorkingTree } from "./local-source-revision.js";
 import { syncProjectById } from "../routes/sources.js";
 import {
   listGithubBranches,
@@ -90,6 +91,36 @@ afterEach(() => {
 });
 
 describe("atomic GitHub Source sync", () => {
+  it("does not overwrite an upload that publishes during a pending sync", async () => {
+    const dataDir = reposRoot();
+    const ports = createSelfHostPorts(dataDir);
+    await ports.db.connect();
+    const repo = ports.repository!;
+    const source = repo.createSource({ name: "Concurrent kit", url: "https://github.com/example/kit", source_kind: "github" });
+    let fetched!: () => void;
+    const fetching = new Promise<void>((resolve) => { fetched = resolve; });
+    let resume!: () => void;
+    const gate = new Promise<void>((resolve) => { resume = resolve; });
+    setTree(COMMIT_A, [{ path: "remote.stl", type: "blob", mode: "100644", size: 6 }]);
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      fetched();
+      await gate;
+      return new Response("remote", { status: 200, headers: { "content-length": "6" } });
+    }));
+    const syncing = syncProjectById(repo, repo.reposDir, source.id);
+    await fetching;
+    const candidate = join(dataDir, "upload-candidate");
+    mkdirSync(candidate);
+    writeFileSync(join(candidate, "upload.stl"), "upload wins");
+    const uploaded = await publishLocalSourceWorkingTree({ repo, reposDir: repo.reposDir, sourceId: source.id, workingTree: candidate });
+    resume();
+    await expect(syncing).rejects.toThrow("Source changed during sync");
+    expect(repo.getSource(source.id)?.local_path).toBe(uploaded.local_path);
+    expect(readFileSync(join(uploaded.local_path!, "upload.stl"), "utf8")).toBe("upload wins");
+    expect(readdirSync(uploaded.local_path!).sort()).toEqual([".printpartner-source-snapshot.json", "upload.stl"]);
+    await ports.db.close();
+  });
+
   it("keeps the branch from a deep GitHub tree URL", () => {
     const url =
       "https://github.com/MillenniumMachines/Milo-V2.0/tree/Current/STL%20Files/Spindle-Mounts/LDO-Kit-Spindle-Mount";

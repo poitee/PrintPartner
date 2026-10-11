@@ -3297,8 +3297,9 @@ export async function applyAssistantAction(
       case "propose_import_source_files": {
         const sourceId = asInt(action.params.source_id);
         if (sourceId == null) return { ok: false, detail: "source_id required" };
+        const observed = deps.repo.getSourceActivationObservation(sourceId);
         const source = deps.repo.getSource(sourceId);
-        if (!source) return { ok: false, detail: "Source not found" };
+        if (!source || !observed) return { ok: false, detail: "Source not found" };
         const archive = typeof action.params.archive_base64 === "string" ? action.params.archive_base64.trim() : "";
         const rawFiles = Array.isArray(action.params.files) ? action.params.files : [];
         if ((!archive && rawFiles.length === 0) || (archive && rawFiles.length > 0)) return { ok: false, detail: "provide exactly one of archive_base64 or files" };
@@ -3314,7 +3315,7 @@ export async function applyAssistantAction(
             if (buffer.length > MAX_MCP_INLINE_FILE_BYTES) return { ok: false, detail: MCP_INLINE_UPLOAD_TOO_LARGE_DETAIL };
             const stagedZip = join(staging, "upload.zip");
             writeFileSync(stagedZip, buffer);
-            workingTree = writeUploadedZip(stagedZip, sourcesDir, sourceId);
+            workingTree = writeUploadedZip(stagedZip, staging);
             const finalized = finalizeUploadedSource(workingTree);
             importedFiles = 1;
             stlCount = finalized.stlCount;
@@ -3336,23 +3337,29 @@ export async function applyAssistantAction(
               writeFileSync(path, buffer);
               files.push({ relativePath, path });
             }
-            const written = writeUploadedFiles(files, sourcesDir, sourceId);
+            const written = writeUploadedFiles(files, staging);
             workingTree = written.extractDir;
             importedFiles = written.fileCount;
             stlCount = written.stlCount;
             suggestedRules = written.suggestedImportRules;
           }
-          const updated = await publishLocalSourceWorkingTree({ repo: deps.repo, reposDir: deps.repo.reposDir, sourceId, workingTree });
-          const existingRules = deps.repo.getProjectRow(sourceId)?.importedPaths;
-          if ((!existingRules || existingRules === "[]") && suggestedRules.length > 0) deps.repo.updateImportRules(sourceId, suggestedRules);
-          indexSourceDocsFromDisk(deps.repo, sourceId, updated.local_path ?? workingTree);
+          const artifacts = scanSourceArtifacts(workingTree);
+          const updated = await publishLocalSourceWorkingTree({
+            repo: deps.repo, reposDir: deps.repo.reposDir, sourceId, workingTree, observed,
+            preserveAllFiles: true, suggestedImportRules: suggestedRules,
+          });
+          try {
+            indexSourceDocsFromDisk(deps.repo, sourceId, updated.local_path ?? workingTree);
+          } catch (error) {
+            getLogger().log("warn", "Uploaded Source documentation indexing failed", { error: String(error) });
+          }
           outcome = {
             ok: true,
             result: {
               source: deps.repo.sourceSummaryForClient(updated),
               imported_files: importedFiles,
               stl_count: stlCount,
-              artifacts: updated.local_path ? scanSourceArtifacts(updated.local_path) : [],
+              artifacts,
               suggested_import_rules: suggestedRules,
             },
           };
@@ -3360,8 +3367,11 @@ export async function applyAssistantAction(
           if (error instanceof TenantDiskQuotaError) throw error;
           return { ok: false, detail: error instanceof Error ? error.message : String(error) };
         } finally {
-          rmSync(staging, { recursive: true, force: true });
-          if (deps.hostedPlanning) rmSync(join(sourcesDir, String(sourceId)), { recursive: true, force: true });
+          try {
+            rmSync(staging, { recursive: true, force: true });
+          } catch (error) {
+            getLogger().log("warn", "Source upload staging cleanup failed", { error: String(error) });
+          }
         }
         break;
       }

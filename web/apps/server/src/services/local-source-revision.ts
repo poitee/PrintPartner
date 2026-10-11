@@ -82,6 +82,7 @@ function resolveUnderRoot(root: string, relativePath: string): string | null {
 async function collectSnapshotFiles(
   root: string,
   excludeManagedSnapshots = false,
+  preserveAllFiles = false,
 ): Promise<CollectedSnapshotFile[]> {
   try {
     const rootStat = await lstat(root);
@@ -94,7 +95,7 @@ async function collectSnapshotFiles(
   const walk = async (dir: string, relative: string): Promise<void> => {
     const entries = await readdir(dir, { withFileTypes: true });
     for (const entry of entries) {
-      if (entry.name.startsWith(".")) continue;
+      if (!preserveAllFiles && entry.name.startsWith(".")) continue;
       const rel = relative ? `${relative}/${entry.name}` : entry.name;
       const abs = join(dir, entry.name);
       if (entry.isDirectory()) {
@@ -115,7 +116,7 @@ async function collectSnapshotFiles(
         continue;
       }
       if (!entry.isFile()) continue;
-      const kind = classifySnapshotPath(rel);
+      const kind = classifySnapshotPath(rel) ?? (preserveAllFiles ? "artifact" : null);
       if (!kind) continue;
       const stat = await lstat(abs);
       if (stat.isSymbolicLink() || !stat.isFile()) continue;
@@ -204,6 +205,7 @@ async function materializeLocalSourceWorkingTree(input: {
   sourceId: number;
   workingTree: string;
   manifestYaml?: string;
+  preserveAllFiles?: boolean;
   maxStlFiles: number;
   maxDocumentationBytes: number;
   maxTotalBytes: number;
@@ -212,6 +214,7 @@ async function materializeLocalSourceWorkingTree(input: {
   const liveFiles = await collectSnapshotFiles(
     input.workingTree,
     resolve(input.workingTree) === sourceWorkspace,
+    input.preserveAllFiles,
   );
   assertSnapshotResourceLimits({
     files: resourcesWithManifest(liveFiles, input.manifestYaml),
@@ -243,7 +246,7 @@ async function materializeLocalSourceWorkingTree(input: {
         { encoding: "utf8", flag: "wx" },
       );
     }
-    const collected = await collectSnapshotFiles(stagingRoot);
+    const collected = await collectSnapshotFiles(stagingRoot, false, input.preserveAllFiles);
     assertSnapshotResourceLimits({
       files: collected,
       maxStlFiles: input.maxStlFiles,
@@ -290,26 +293,33 @@ function registerAndActivateSnapshot(input: {
   sourceVersion: string;
   markRemoteCurrent: boolean;
   recordLegacyManifestCutover: boolean;
+  suggestedImportRules?: string[];
 }): SourceSummary {
-  const revision = input.repo.recordSourceRevision({
-    sourceId: input.sourceId,
-    upstreamRevisionKey: input.snapshot.upstreamRevisionKey,
-    manifestDigest: input.snapshot.manifestDigest,
-    snapshotLocator: input.snapshot.snapshotLocator,
-    syncedAt: new Date().toISOString(),
-    completeness: "complete",
-  });
-  const activated = input.repo.activateSourceRevision({
-    sourceId: input.sourceId,
-    revisionId: revision.id,
-    observed: input.observed,
-    sourceVersion: input.sourceVersion,
-    recordLegacyManifestCutover: input.recordLegacyManifestCutover,
-  });
-  if (input.markRemoteCurrent) {
-    input.repo.markSourceRevisionCurrent(input.sourceId, revision.id);
-  }
-  return activated;
+  return input.repo.transaction(() => {
+    const revision = input.repo.recordSourceRevision({
+      sourceId: input.sourceId,
+      upstreamRevisionKey: input.snapshot.upstreamRevisionKey,
+      manifestDigest: input.snapshot.manifestDigest,
+      snapshotLocator: input.snapshot.snapshotLocator,
+      syncedAt: new Date().toISOString(),
+      completeness: "complete",
+    });
+    const activated = input.repo.activateSourceRevision({
+      sourceId: input.sourceId,
+      revisionId: revision.id,
+      observed: input.observed,
+      sourceVersion: input.sourceVersion,
+      recordLegacyManifestCutover: input.recordLegacyManifestCutover,
+    });
+    if (input.markRemoteCurrent) {
+      input.repo.markSourceRevisionCurrent(input.sourceId, revision.id);
+    }
+    const rules = input.repo.getProjectRow(input.sourceId)?.importedPaths;
+    if ((!rules || rules.trim() === "[]") && input.suggestedImportRules?.length) {
+      input.repo.updateImportRules(input.sourceId, input.suggestedImportRules);
+    }
+    return activated;
+  }, "immediate");
 }
 
 export async function publishLocalSourceWorkingTree(input: {
@@ -317,11 +327,14 @@ export async function publishLocalSourceWorkingTree(input: {
   reposDir: string;
   sourceId: number;
   workingTree: string;
+  observed?: SourceActivationObservation;
+  preserveAllFiles?: boolean;
+  suggestedImportRules?: string[];
   maxStlFiles?: number;
   maxDocumentationBytes?: number;
   maxTotalBytes?: number;
 }): Promise<SourceSummary> {
-  const observed = input.repo.getSourceActivationObservation(input.sourceId);
+  const observed = input.observed ?? input.repo.getSourceActivationObservation(input.sourceId);
   if (!observed) throw new Error("Source not found");
 
   const maxStlFiles = input.maxStlFiles ?? DEFAULT_LOCAL_SNAPSHOT_STL_LIMIT;
@@ -331,6 +344,7 @@ export async function publishLocalSourceWorkingTree(input: {
     reposDir: input.reposDir,
     sourceId: input.sourceId,
     workingTree: input.workingTree,
+    preserveAllFiles: input.preserveAllFiles,
     maxStlFiles,
     maxDocumentationBytes,
     maxTotalBytes,
@@ -343,6 +357,7 @@ export async function publishLocalSourceWorkingTree(input: {
     sourceVersion: snapshot.upstreamRevisionKey,
     markRemoteCurrent: true,
     recordLegacyManifestCutover: false,
+    suggestedImportRules: input.suggestedImportRules,
   });
 }
 
