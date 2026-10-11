@@ -71,19 +71,26 @@ fn main() {
             .next()
             .unwrap_or_else(|| panic!("{flag} needs a value"));
         match flag.as_str() {
-            "--cases" => cases = value.parse().expect("--cases must be an integer"),
+            "--cases" => {
+                cases = value
+                    .parse()
+                    .unwrap_or_else(|error| panic!("--cases must be an integer: {error:?}"));
+            }
             "--seed" => seed = value,
             "--test-reject" => regression_reject = Some(value),
             _ => panic!("unknown flag {flag}"),
         }
     }
     let seed_bytes: [u8; 32] = hex::decode(&seed)
-        .expect("--seed must be hex")
+        .unwrap_or_else(|error| panic!("--seed must be hex: {error:?}"))
         .try_into()
-        .expect("--seed must be 32 bytes");
+        .unwrap_or_else(|error| panic!("--seed must be 32 bytes: {error:?}"));
 
     let fixtures: Vec<Fixture> =
-        serde_json::from_str(include_str!("../tests/fixtures/source-path-cases.json")).unwrap();
+        serde_json::from_str(include_str!("../tests/fixtures/source-path-cases.json"))
+            .unwrap_or_else(|error| {
+                panic!("called `Result::unwrap()` on an `Err` value: {error:?}")
+            });
     let mut corpus: Vec<Case> = fixtures
         .into_iter()
         .map(|f| Case::new(f.path, "fixture"))
@@ -103,7 +110,12 @@ fn main() {
     );
     let strategy = any_path();
     for _ in 0..cases {
-        let path = strategy.new_tree(&mut runner).unwrap().current();
+        let path = strategy
+            .new_tree(&mut runner)
+            .unwrap_or_else(|error| {
+                panic!("called `Result::unwrap()` on an `Err` value: {error:?}")
+            })
+            .current();
         corpus.push(Case::new(path, "generated"));
     }
 
@@ -111,7 +123,7 @@ fn main() {
         let case = corpus
             .iter_mut()
             .find(|case| &case.path == path)
-            .expect("--test-reject must name an emitted case");
+            .unwrap_or_else(|| panic!("--test-reject must name an emitted case"));
         case.rust_accepts = false;
     }
     let out = Corpus {
@@ -121,5 +133,6 @@ fn main() {
         regression_reject,
         cases: corpus,
     };
-    serde_json::to_writer(std::io::stdout().lock(), &out).unwrap();
+    serde_json::to_writer(std::io::stdout().lock(), &out)
+        .unwrap_or_else(|error| panic!("called `Result::unwrap()` on an `Err` value: {error:?}"));
 }
