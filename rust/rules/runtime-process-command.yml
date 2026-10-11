@@ -78,6 +78,14 @@ utils:
       - has:
           field: path
           regex: '^(::)?(r#)?std$'
+  std-alias-process-path:
+    has:
+      field: name
+      regex: '^(r#)?process$'
+    all:
+      - has:
+          field: path
+          pattern: $MODULE
   std-list:
     kind: scoped_use_list
     has:
@@ -421,6 +429,29 @@ rule:
         # An alias of std preserves the process::Command path beneath that alias.
         - all:
             - any:
+                - kind: use_wildcard
+                  has:
+                    matches: std-alias-process-path
+                  inside:
+                    kind: use_declaration
+                    stopBy:
+                      not:
+                        matches: root-import-group
+                - kind: use_wildcard
+                  regex: '^\*$'
+                  inside:
+                    kind: scoped_use_list
+                    has:
+                      field: path
+                      matches: std-alias-process-path
+                    inside:
+                      kind: use_declaration
+                      stopBy:
+                        not:
+                          matches: root-import-group
+                    stopBy:
+                      not:
+                        kind: use_list
                 - kind: identifier
                   regex: '^(r#)?Command$'
                   any:

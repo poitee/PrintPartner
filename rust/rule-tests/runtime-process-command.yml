@@ -1,5 +1,10 @@
 id: runtime-process-command
 valid:
+  - 'use std as s; use foreign::{s::process::*};'
+  - 'use std as s; use foreign::{s::process::{*}};'
+  - 'use std as s; use s::os::unix::process::*;'
+  - 'use std as s; fn production() { use other as s; use s::process::*; }'
+  - 'use other as s; use s::process::*;'
   - 'use std as s; use foreign::{s::process::{Command}};'
   - 'use std as s; use s::process::{id as Command};'
   - 'use std::process as p; fn production() { #[cfg(all())] use other as p; p::Command::new("sh"); }'
@@ -59,6 +64,12 @@ valid:
   - 'use std::{os::unix::{process::*}};'
   - 'use std::os::unix::process::*;'
 invalid:
+  - 'use std as s; use s::process::*;'
+  - 'use std as s; use s::process::{*};'
+  - 'extern crate std as s; use s::process::*;'
+  - 'use std::{self as s}; fn production() { use s::process::*; }'
+  - 'use r#std as s; use {s /* alias */ :: r#process /* module */ :: *};'
+  - 'use std as s; use ::{s::process::{*}};'
   - 'use std as s; use s::process::{Command};'
   - 'use std as s; use s::process::{Command as Spawn};'
   - 'use std as s; fn production() { use s::process::{r#Command}; }'
