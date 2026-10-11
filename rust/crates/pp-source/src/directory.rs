@@ -186,7 +186,7 @@ mod tests {
     use super::*;
     use std::{
         fs::{self, Permissions},
-        os::unix::fs::PermissionsExt,
+        os::unix::fs::{MetadataExt, PermissionsExt},
         path::PathBuf,
         sync::atomic::{AtomicU64, Ordering},
     };
@@ -252,20 +252,38 @@ mod tests {
 
     #[test]
     fn foreign_owned_ancestor_is_rejected() {
-        let tree = Tree::new().dir("repos", 0o700);
-        // Unprivileged tests cannot chown, so open as a different user: the
-        // fixture directories then belong to someone else (unless that owner
-        // is root, which stays trusted).
-        let result = Directory::open_root_as(&tree.0.join("repos"), euid().wrapping_add(1));
-        if euid() == 0 {
-            assert!(result.is_ok());
-        } else {
-            assert!(matches!(result, Err(Error::UnsafeAncestor)));
-        }
         assert!(!ancestor_is_trusted(1001, 0o755, 1000));
         assert!(!ancestor_is_trusted(1001, 0o1777, 1000));
         assert!(ancestor_is_trusted(1000, 0o755, 1000));
         assert!(ancestor_is_trusted(0, 0o755, 1000));
+
+        let tree = Tree::new().dir("repos", 0o700);
+        let root = tree.0.join("repos");
+        // Unprivileged tests cannot chown, so open as a different user: the
+        // fixture directories then belong to someone else. Root-owned
+        // fixtures stay trusted, so only the pure policy runs as root.
+        if euid() == 0 {
+            return;
+        }
+        let other = euid().wrapping_add(1);
+        assert!(Directory::open_root_as(&root, euid()).is_ok());
+        assert!(matches!(
+            Directory::open_root_as(&root, other),
+            Err(Error::UnsafeAncestor)
+        ));
+        // When every directory above the fixture is root-owned (Linux /tmp),
+        // pin the rejection to the selected root's own owner.
+        let temp = tree.0.parent().unwrap();
+        if temp
+            .ancestors()
+            .all(|path| fs::metadata(path).unwrap().uid() == 0)
+        {
+            assert!(Directory::open_root_as(temp, other).is_ok());
+            assert!(matches!(
+                Directory::open_root_as(&tree.0, other),
+                Err(Error::UnsafeAncestor)
+            ));
+        }
     }
 
     #[test]
