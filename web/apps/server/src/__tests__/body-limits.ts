@@ -71,6 +71,9 @@ function readMultipartRouteLimits(srcDir: string): Map<string, Limits> {
           const limits: Limits = {};
           if (node.arguments[0]) {
             const options = object(node.arguments[0]);
+            if (options.properties.some(ts.isSpreadAssignment)) {
+              throw new Error("Unsupported spread in multipart options");
+            }
             const property = options.properties.find((p) => p.name?.getText() === "limits");
             if (property && !ts.isPropertyAssignment(property)) {
               throw new Error("Unsupported multipart limits property");
@@ -107,7 +110,11 @@ function readMultipartRouteLimits(srcDir: string): Map<string, Limits> {
         const handler = node.arguments.at(-1)!;
         const limits = multipartIn(handler);
         if (limits.length > 1) throw new Error(`Multiple multipart parsers: ${node.arguments[0].text}`);
-        if (limits[0]) routes.set(`${node.expression.name.text.toUpperCase()} ${node.arguments[0].text}`, limits[0]);
+        if (limits[0]) {
+          const key = `${node.expression.name.text.toUpperCase()} ${node.arguments[0].text}`;
+          if (routes.has(key)) throw new Error(`Ambiguous multipart source route: ${key}`);
+          routes.set(key, limits[0]);
+        }
       }
       ts.forEachChild(node, visit);
     }
@@ -187,6 +194,19 @@ export function exportHttpBodyLimits(
         timeWindow: typeof rate === "object" ? rate.timeWindow ?? defaults.rateLimit.timeWindow : defaults.rateLimit.timeWindow,
       };
       const enforced = defaults.rateLimitedRoutes.has(route);
+      const customKeyGenerator = typeof rate === "object" ? rate.keyGenerator : undefined;
+      const customKeys = customKeyGenerator ? {
+        source: customKeyGenerator.toString().replace(/\s+/g, " ").trim(),
+        examples: [
+          { ip: "127.0.0.1", parameter: "1" },
+          { ip: "127.0.0.1", parameter: "2" },
+          { ip: "127.0.0.2", parameter: "1" },
+        ].map(({ ip, parameter }) => {
+          const params = Object.fromEntries([...route.url.matchAll(/:([^/]+)/g)].map((match) => [match[1], parameter]));
+          const sample = { ...request, ip, params, url: route.url.replace(/:[^/]+/g, parameter) };
+          return { ip, params, key: customKeyGenerator(sample as Parameters<typeof customKeyGenerator>[0]) };
+        }),
+      } : undefined;
       return {
         method, path: route.url,
         jsonBodyBytes: route.bodyLimit ?? defaults.jsonBodyBytes,
@@ -196,6 +216,7 @@ export function exportHttpBodyLimits(
         } : null,
         rateLimit: !enforced || rate === false || defaults.rateLimit.allowList(request) ? null : {
           ...rateValues,
+          ...(customKeys ? { keyGenerator: customKeys } : {}),
           bucket: typeof rate === "object" ? "route" : defaults.rateLimit.keyGenerator(request).replace("127.0.0.1:", ""),
         },
         ...(!enforced && typeof rate === "object" ? { unenforcedRateLimit: rateValues } : {}),

@@ -35,8 +35,9 @@ vi.mock("@fastify/multipart", async (importOriginal) => {
   const original = await importOriginal<typeof import("@fastify/multipart")>();
   return { ...original, default: new Proxy(original.default, {
     apply(target, thisArg, args) {
+      const result = Reflect.apply(target, thisArg, args);
       captured.multipart = args[1].limits;
-      return Reflect.apply(target, thisArg, args);
+      return result;
     },
   }) };
 });
@@ -93,10 +94,14 @@ describe("HTTP body limits golden", () => {
       vi.stubEnv("OPENAPI_UI", "0");
       for (const nodeEnv of ["test", "production"]) {
         vi.stubEnv("NODE_ENV", nodeEnv);
-        for (const deployMode of ["self-host", "saas"] as const) {
+        for (const { deployMode, multiUser } of [
+          { deployMode: "self-host", multiUser: false },
+          { deployMode: "self-host", multiUser: true },
+          { deployMode: "saas", multiUser: true },
+        ] as const) {
           app = await buildApp({
             ...loadConfig(), dataDir, staticDir: nodeEnv === "production" ? staticDir : null, deployMode,
-            multiUser: true, singleUserAuth: false, authRequired: true,
+            multiUser, singleUserAuth: false, authRequired: true,
             sessionSecret: "golden-fixture-session-secret-for-tests",
             integrationApiKey: null, updateCheckEnabled: false,
             discordOAuthConfigured: true, githubOAuthConfigured: true,

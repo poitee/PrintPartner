@@ -74,8 +74,8 @@
     {"method":"HEAD","path":"/api/v1/integrations/:id/spoolman/filaments","jsonBodyBytes":1048576,"multipart":null,"rateLimit":{"max":1000,"timeWindow":"1 minute","bucket":"app"}},
     {"method":"GET","path":"/api/v1/integrations/:id/spoolman/spools","jsonBodyBytes":1048576,"multipart":null,"rateLimit":{"max":1000,"timeWindow":"1 minute","bucket":"app"}},
     {"method":"HEAD","path":"/api/v1/integrations/:id/spoolman/spools","jsonBodyBytes":1048576,"multipart":null,"rateLimit":{"max":1000,"timeWindow":"1 minute","bucket":"app"}},
-    {"method":"GET","path":"/api/v1/integrations/:id/status","jsonBodyBytes":1048576,"multipart":null,"rateLimit":{"max":30,"timeWindow":"1 minute","bucket":"route"}},
-    {"method":"HEAD","path":"/api/v1/integrations/:id/status","jsonBodyBytes":1048576,"multipart":null,"rateLimit":{"max":30,"timeWindow":"1 minute","bucket":"route"}},
+    {"method":"GET","path":"/api/v1/integrations/:id/status","jsonBodyBytes":1048576,"multipart":null,"rateLimit":{"max":30,"timeWindow":"1 minute","keyGenerator":{"source":"(request) => { const id = request.params.id ?? \"\"; return `${request.ip}:${id}`; }","examples":[{"ip":"127.0.0.1","params":{"id":"1"},"key":"127.0.0.1:1"},{"ip":"127.0.0.1","params":{"id":"2"},"key":"127.0.0.1:2"},{"ip":"127.0.0.2","params":{"id":"1"},"key":"127.0.0.2:1"}]},"bucket":"route"}},
+    {"method":"HEAD","path":"/api/v1/integrations/:id/status","jsonBodyBytes":1048576,"multipart":null,"rateLimit":{"max":30,"timeWindow":"1 minute","keyGenerator":{"source":"(request) => { const id = request.params.id ?? \"\"; return `${request.ip}:${id}`; }","examples":[{"ip":"127.0.0.1","params":{"id":"1"},"key":"127.0.0.1:1"},{"ip":"127.0.0.1","params":{"id":"2"},"key":"127.0.0.1:2"},{"ip":"127.0.0.2","params":{"id":"1"},"key":"127.0.0.2:1"}]},"bucket":"route"}},
     {"method":"POST","path":"/api/v1/integrations/:id/test","jsonBodyBytes":1048576,"multipart":null,"rateLimit":{"max":5,"timeWindow":"1 minute","bucket":"route"}},
     {"method":"GET","path":"/api/v1/jobs","jsonBodyBytes":1048576,"multipart":null,"rateLimit":{"max":1000,"timeWindow":"1 minute","bucket":"app"}},
     {"method":"HEAD","path":"/api/v1/jobs","jsonBodyBytes":1048576,"multipart":null,"rateLimit":{"max":1000,"timeWindow":"1 minute","bucket":"app"}},
@@ -852,6 +852,8 @@
     {"method":"GET","path":"/sources/stl-search","jsonBodyBytes":1048576,"multipart":null,"rateLimit":{"max":1000,"timeWindow":"1 minute","bucket":"app"}},
     {"method":"HEAD","path":"/sources/stl-search","jsonBodyBytes":1048576,"multipart":null,"rateLimit":{"max":1000,"timeWindow":"1 minute","bucket":"app"}},
     {"method":"GET","path":"/ws/jobs/:jobId","jsonBodyBytes":1048576,"multipart":null,"rateLimit":{"max":1000,"timeWindow":"1 minute","bucket":"app"}},
-    {"method":"HEAD","path":"/ws/jobs/:jobId","jsonBodyBytes":1048576,"multipart":null,"rateLimit":{"max":1000,"timeWindow":"1 minute","bucket":"app"}}
+    {"method":"HEAD","path":"/ws/jobs/:jobId","jsonBodyBytes":1048576,"multipart":null,"rateLimit":{"max":1000,"timeWindow":"1 minute","bucket":"app"}},
+    {"method":"GET","path":"/ws/profile-sync","jsonBodyBytes":1048576,"multipart":null,"rateLimit":{"max":1000,"timeWindow":"1 minute","bucket":"app"}},
+    {"method":"HEAD","path":"/ws/profile-sync","jsonBodyBytes":1048576,"multipart":null,"rateLimit":{"max":1000,"timeWindow":"1 minute","bucket":"app"}}
   ]
 }
