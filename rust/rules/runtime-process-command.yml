@@ -9,6 +9,12 @@ ignores:
   - crates/pp-core/**
   - crates/pp-desktop/**
 utils:
+  macro-path-prefix:
+    any:
+      - kind: identifier
+      - kind: self
+      - kind: super
+      - kind: crate
   disabled-cfg-item:
     follows:
       kind: attribute_item
@@ -321,14 +327,17 @@ utils:
             any:
               - kind: use_declaration
               - kind: use_list
+            stopBy: neighbor
           has:
             field: name
             pattern: $MODULE
         - kind: self
           inside:
             kind: use_list
+            stopBy: neighbor
             inside:
               kind: scoped_use_list
+              stopBy: neighbor
               has:
                 field: path
                 any:
@@ -344,6 +353,7 @@ utils:
             any:
               - kind: use_declaration
               - kind: use_list
+            stopBy: neighbor
       stopBy:
         not:
           matches: import-tree
@@ -1022,7 +1032,7 @@ rule:
                       stopBy:
                         matches: non-comment
                       follows:
-                        regex: '^(r#)?[A-Za-z_][A-Za-z_0-9]*$'
+                        matches: macro-path-prefix
                         stopBy:
                           matches: non-comment
         # A wildcard import includes Command, even if referenced through an alias.
@@ -1048,6 +1058,15 @@ rule:
                 stopBy:
                   not:
                     kind: use_list
+    # An underscore import introduces no usable Command binding.
+    - not:
+        inside:
+          kind: use_as_clause
+          has:
+            field: alias
+            regex: '^_$'
+          stopBy:
+            kind: use_declaration
     - not:
         inside:
           any:
@@ -1087,7 +1106,7 @@ rule:
                               stopBy:
                                 matches: non-comment
                               follows:
-                                regex: '^(r#)?[A-Za-z_][A-Za-z_0-9]*$'
+                                matches: macro-path-prefix
                                 stopBy:
                                   matches: non-comment
           stopBy: end

@@ -10,6 +10,12 @@ ignores:
   - crates/*/src/**/tests.rs
   - crates/*/src/**/tests/**
 utils:
+  macro-path-prefix:
+    any:
+      - kind: identifier
+      - kind: self
+      - kind: super
+      - kind: crate
   test-cfg-any:
     has:
       kind: attribute
@@ -194,7 +200,7 @@ rule:
                               stopBy:
                                 matches: non-comment
                               follows:
-                                regex: '^(r#)?[A-Za-z_][A-Za-z_0-9]*$'
+                                matches: macro-path-prefix
                                 stopBy:
                                   matches: non-comment
           stopBy: end

@@ -104,3 +104,8 @@ invalid:
   - '#[cfg(all(test, unix))] fn helper() {} fn production() { value.unwrap(); }'
   - '#[cfg(all(test = "fixture", unix))] fn production() { value.unwrap(); }'
   - '#[cfg(all(test /* feature */ = "fixture", unix))] fn production() { value.unwrap(); }'
+  - 'fn f() { outer!(mód::std::stringify!(value.unwrap())); }'
+  - 'fn f() { outer!(r#mód::core::stringify!(value.expect("x"))); }'
+  - 'fn f() { outer!(self::std::stringify!(value.unwrap())); }'
+  - 'fn f() { outer!(crate::std::stringify!(value.unwrap())); }'
+  - 'fn f() { outer!(super::std::stringify!(value.unwrap())); }'
