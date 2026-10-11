@@ -314,10 +314,11 @@ describe("repo manifest routes", () => {
       sourceId: source.id,
       manifestYaml: "project: upstream\n",
     });
-    const activate = repo.activateSourceRevision.bind(repo);
-    vi.spyOn(repo, "activateSourceRevision").mockImplementation((input) => {
+    const observe = repo.getSourceActivationObservation.bind(repo);
+    vi.spyOn(repo, "getSourceActivationObservation").mockImplementationOnce((id) => {
+      const observed = observe(id);
       repo.updateSource(source.id, { branch: "release" });
-      return activate(input);
+      return observed;
     });
     const app = Fastify();
     await registerRepoManifestRoutes(app, { repo });
