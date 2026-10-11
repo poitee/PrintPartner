@@ -457,7 +457,7 @@ function codeSpans(value) {
 /**
  * Inline code counts only when it holds a command, path, or output: something
  * with whitespace or path/URL punctuation that is not a bare category word
- * or a placeholder note (`TODO: attach screenshot`).
+ * or a placeholder note asking to attach a screenshot later.
  */
 const PLACEHOLDER_WORD = /\b(?:todo|tbd|fixme|placeholder)\b/i;
 
@@ -645,7 +645,7 @@ function stripLinks(value, references) {
 function looksLikeArtifact(value, references) {
   if (!value) return false;
   // Parse markup before evaluating prose: a placeholder link's title cannot
-  // escape into a later clause, and filenames may legitimately include TODO.
+  // escape into a later clause, and filenames may contain placeholder words.
   if (/^\s*`?(?:TODO|TBD|FIXME|placeholder)(?:[ :]|$)/i.test(value)) return false;
   const { rest, concrete } = stripLinks(value, references);
   // A link is concrete by its destination. Explicit denial outside its markup
