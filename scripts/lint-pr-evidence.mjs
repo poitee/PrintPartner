@@ -212,6 +212,34 @@ function normalizeWs(text) {
   return text.replace(/\r\n/g, "\n").trim();
 }
 
+const EVIDENCE_HEADING = /^[ ]{0,3}##[ \t]+Evidence[ \t]*$/gim;
+
+function evidenceSectionEnd(text) {
+  let offset = 0;
+  let paragraphStart = null;
+  const fields = parseFields(text);
+  let fieldIndex = 0;
+  for (const line of text.split("\n")) {
+    while (fieldIndex < fields.length && fields[fieldIndex].end <= offset) fieldIndex += 1;
+    const field = fields[fieldIndex];
+    const nested = field && offset >= field.start
+      && indentWidth(line.match(/^[ \t]*/)[0]) >= field.contentIndent;
+    if (nested) {
+      paragraphStart = null;
+      offset += line.length + 1;
+      continue;
+    }
+    if (/^[ ]{0,3}#{1,2}(?:[ \t]+|$)/.test(line)) return offset;
+    if (paragraphStart != null && /^[ ]{0,3}(?:=+|-+)[ \t]*$/.test(line)) return paragraphStart;
+    const paragraph = /^[ ]{0,3}\S/.test(line)
+      && !/^[ ]{0,3}(?:#{1,6}(?:[ \t]+|$)|>|[-*+][ \t]|\d{1,9}[.)][ \t])/.test(line)
+      && !HTML_BLOCK_START.test(line);
+    paragraphStart = paragraph ? paragraphStart ?? offset : null;
+    offset += line.length + 1;
+  }
+  return text.length;
+}
+
 /**
  * Extract the ## Evidence section body (without the heading), with comments
  * and fences already removed. Returns null when the heading is missing.
@@ -221,13 +249,11 @@ function normalizeWs(text) {
 export function extractEvidenceSection(body, options) {
   if (typeof body !== "string" || !body.trim()) return null;
   const visible = stripHiddenMarkdown(body, options);
-  const match = visible.match(/^[ ]{0,3}##[ \t]+Evidence[ \t]*$/im);
+  const match = [...visible.matchAll(EVIDENCE_HEADING)][0];
   if (!match || match.index == null) return null;
   const start = match.index + match[0].length;
   const rest = visible.slice(start);
-  const nextHeading = rest.search(/^[ ]{0,3}#{1,2}(?:[ \t]+|$)/m);
-  const section = nextHeading === -1 ? rest : rest.slice(0, nextHeading);
-  return section;
+  return rest.slice(0, evidenceSectionEnd(rest));
 }
 
 function parseExemption(sectionText) {
@@ -376,13 +402,14 @@ function parseFields(cleaned) {
     blankSeen = false;
     lazyOk = !LEAF_BLOCK_START.test(line);
   }
-  return fields.map(({ label, lines, lazy, start, end }) => ({
+  return fields.map(({ label, lines, lazy, start, end, contentIndent }) => ({
     label,
     value: lines.join(" ").trim(),
     text: lines.join("\n"),
     lazy,
     start,
     end,
+    contentIndent,
   }));
 }
 
@@ -469,7 +496,7 @@ function hasSubstantiveCodeSpan(value) {
       content &&
       !NON_ARTIFACT_WORD.test(content) &&
       !PLACEHOLDER_WORD.test(content) &&
-      (HTTP_URL.test(content)
+      (hasConcreteHttpUrl(content)
         || /^(?:[\w.-]+\/)+[\w.-]+$/.test(content)
         || /^(?:\$\s*)?(?:node\s+(?:--test\b|\S+\.m?[jc]s\b)|cargo\s+(?:test|nextest|check|build|fmt|clippy)\b|(?:pnpm|npm)\s+(?:test|run|exec|check|build)\b|python3?\s+\S+\.py\b|curl\s+(?:-\S+\s+)*https?:\/\/)/i.test(content)
         || /\b(?:tests?|pass(?:ed)?|fail(?:ed)?|exit(?: status)?|status(?: code)?|assertions?)\s*[:=]?\s*\d+\b/i.test(content))
@@ -504,12 +531,26 @@ function trimToken(token) {
   return token.slice(start, end);
 }
 
-const HTTP_URL = /https?:\/\/[^\s/?#<>()"'`]+/i;
+const HTTP_URL = /https?:\/\/[^\s<>()"'`]+/gi;
+
+function isHttpTarget(target) {
+  if (!/^https?:\/\//i.test(target)) return false;
+  try {
+    const url = new URL(target);
+    return ["http:", "https:"].includes(url.protocol) && Boolean(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function hasConcreteHttpUrl(text) {
+  return [...text.matchAll(HTTP_URL)].some((match) => isHttpTarget(trimToken(match[0])));
+}
 
 /** A link destination that identifies something: a web URL or a file path. */
 function isConcreteTarget(destination) {
   const target = destination.replace(/^<|>$/g, "").replace(/\\(.)/g, "$1").trim();
-  if (/^https?:\/\/[^\s/?#<>]+/i.test(target)) return true;
+  if (/^https?:/i.test(target)) return isHttpTarget(target);
   // Relative paths only: no anchors, queries, or other schemes (mailto:, javascript:).
   if (!target || /^[#?]/.test(target) || /^[a-z][a-z0-9+.-]*:/i.test(target)) return false;
   const path = target.split(/[?#]/)[0];
@@ -656,7 +697,7 @@ function looksLikeArtifact(value, references) {
   // still cannot claim it as proof.
   const denial = /\b(?:not|no|without|never|missing|absent|unavailable|unable|omitted|n\/a)\b/i;
   const prose = (text) => text.split(/\s+/).filter((token) =>
-    !HTTP_URL.test(token) && !isArtifactPath(trimToken(token)),
+    !hasConcreteHttpUrl(token) && !isArtifactPath(trimToken(token)),
   ).join(" ");
   if (concrete && !denial.test(prose(rest))) return true;
   for (const clause of rest.split(/[;\n]/)) {
@@ -664,7 +705,7 @@ function looksLikeArtifact(value, references) {
     if (!text) continue;
     // A denied clause cannot suppress another independently cited artifact.
     if (denial.test(prose(text))) continue;
-    if (HTTP_URL.test(text) || hasSubstantiveCodeSpan(text)) return true;
+    if (hasConcreteHttpUrl(text) || hasSubstantiveCodeSpan(text)) return true;
     // Bare paths count only as a citation, not as incidental prose about a
     // missing file. Prose can use a Markdown link or an explicit citation.
     const citation = text.replace(/^(?:see|artifact(?: at|:)?|attached|saved(?: at| to)?|captured(?: at| to)?|output(?: at|:)?)\s+/i, "");
@@ -725,16 +766,16 @@ function visibleFieldText(value) {
     if (!tail) {
       // Stop after a malformed tail rather than scanning overlapping tails.
       // Its destination/title cannot supply substantive visible field text.
-      text += value.slice(cursor, open) + value.slice(open + 1, at);
+      text += value.slice(cursor, open > cursor && value[open - 1] === "!" ? open - 1 : open) + value.slice(open + 1, at);
       cursor = value.length;
       break;
     }
-    text += value.slice(cursor, open) + value.slice(open + 1, at);
+    text += value.slice(cursor, open > cursor && value[open - 1] === "!" ? open - 1 : open) + value.slice(open + 1, at);
     cursor = tail.end;
   }
   text += value.slice(cursor);
   text = text.replace(/<\/?[a-z][^<>\n]*>/gi, "")
-    .replace(/\[([^\]\n]*)\](?:\[[^\]\n]*\])?/g, "$1")
+    .replace(/!?\[([^\]\n]*)\](?:\[[^\]\n]*\])?/g, "$1")
     .replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\]\\^_`{|}~])/g, "$1");
   const entities = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", Tab: "\t", NewLine: "\n" };
   text = text.replace(/&(#x[\da-f]+|#\d+|amp|lt|gt|quot|apos|nbsp|Tab|NewLine);/gi, (match, entity) => {
@@ -834,6 +875,10 @@ export function lintPrEvidence(body) {
   const { raw, value, unknown } = parseExemption(section);
   const reason = extractExemptionReason(section);
   const hasEvidence = hasEvidenceContent(section);
+
+  if ([...stripHiddenMarkdown(body).matchAll(EVIDENCE_HEADING)].length > 1) {
+    errors.push("PR body must contain exactly one visible Evidence section.");
+  }
 
   // Preserve the selected section boundaries even for the conservative LAN view.
   // Also scan the visible section so commented decoy headings cannot redirect it.

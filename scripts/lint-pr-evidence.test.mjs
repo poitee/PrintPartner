@@ -1222,3 +1222,29 @@ for (const placeholder of ['ＴＯＤＯ', 'ⓣⓞⓓⓞ', 'T\u200bODO', 'TO\u20
 test('accepts substantive Unicode explanation', () => {
   assert.equal(lintPrEvidence(bodyWithEvidence('Exemption: docs-only\n- Exemption reason: 更新了用户指南。')).ok, true);
 });
+
+for (const reason of ['![](#)', '![TODO](#)', '![**TBD**](#)', '![][missing]', '![TODO][missing]']) {
+  test(`rejects empty/placeholder image reason ${reason}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: docs-only\n- Exemption reason: ${reason}`)).ok, false);
+  });
+}
+for (const artifact of ['[shot](http://256.256.256.256)', 'http://256.256.256.256', '`http://256.256.256.256`', '[shot](https://)', '[shot](http://example.test:99999)', 'http://[invalid]']) {
+  test(`rejects invalid HTTP evidence ${artifact}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} ${artifact}`)).ok, false);
+  });
+}
+for (const underline of ['====', '----']) {
+  test(`Evidence ends before setext Test plan ${underline}`, () => {
+    assert.equal(lintPrEvidence(`## Evidence\nExemption: none\n\nTest plan\n${underline}\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} https://example.test/shot.png`).ok, false);
+  });
+  test(`fields before setext boundary still supply valid Evidence ${underline}`, () => {
+    assert.equal(lintPrEvidence(`## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} https://example.test/shot.png\n\nTest plan\n${underline}\nOther text`).ok, true);
+  });
+}
+test('rejects duplicate visible Evidence sections', () => {
+  const body = bodyWithEvidence('Exemption: docs-only\n- Exemption reason: Updated docs.') + '\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: http://192.168.1.80';
+  assert.equal(lintPrEvidence(body).ok, false);
+});
+test('a fenced duplicate Evidence heading stays ignored', () => {
+  assert.equal(lintPrEvidence(bodyWithEvidence('Exemption: docs-only\n- Exemption reason: Updated docs.') + '\n```text\n## Evidence\n```').ok, true);
+});
