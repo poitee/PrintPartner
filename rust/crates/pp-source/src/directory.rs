@@ -25,10 +25,12 @@ impl Directory {
             Self::search_flags() | OFlags::DIRECTORY | OFlags::CLOEXEC,
             Mode::empty(),
         )?));
-        root.check_ancestor(uid)?;
-        for component in path.components() {
+        // `/` is already pinned. A sticky directory is safe only when a
+        // subsequently checked component confines access below it.
+        let mut components = path.components().skip(1).peekable();
+        root.check_ancestor(uid, components.peek().is_some())?;
+        while let Some(component) = components.next() {
             match component {
-                Component::RootDir => {}
                 Component::Normal(name) => {
                     let name = name.to_str().ok_or(Error::UnsafePath)?;
                     root = Self(File::from(fs::openat(
@@ -40,7 +42,7 @@ impl Directory {
                             | OFlags::CLOEXEC,
                         Mode::empty(),
                     )?));
-                    root.check_ancestor(uid)?;
+                    root.check_ancestor(uid, components.peek().is_some())?;
                 }
                 _ => return Err(Error::UnsafePath),
             }
@@ -50,9 +52,9 @@ impl Directory {
         root.child(".", false)
     }
 
-    fn check_ancestor(&self, uid: u32) -> Result<()> {
+    fn check_ancestor(&self, uid: u32, allow_sticky: bool) -> Result<()> {
         let stat = fs::fstat(&self.0)?;
-        if ancestor_is_trusted(stat.st_uid, stat.st_mode as RawMode, uid) {
+        if ancestor_is_trusted(stat.st_uid, stat.st_mode as RawMode, uid, allow_sticky) {
             Ok(())
         } else {
             Err(Error::UnsafeAncestor)
@@ -174,11 +176,13 @@ impl Directory {
 /// A root ancestor is trusted when only `uid` or root can replace its entries:
 /// it is owned by one of them and is not group/world-writable unless sticky.
 /// Sticky `/tmp`-style ancestors are accepted because the next component must
-/// itself pass this check, so other users cannot rename it away.
-fn ancestor_is_trusted(owner: u32, mode: RawMode, uid: u32) -> bool {
+/// itself pass this check, so other users cannot rename it away. The selected
+/// root has no such checked child, so it must not be group/world-writable.
+fn ancestor_is_trusted(owner: u32, mode: RawMode, uid: u32, allow_sticky: bool) -> bool {
     let mode = Mode::from_raw_mode(mode);
     (owner == uid || owner == 0)
-        && (!mode.intersects(Mode::WGRP | Mode::WOTH) || mode.contains(Mode::SVTX))
+        && (!mode.intersects(Mode::WGRP | Mode::WOTH)
+            || (allow_sticky && mode.contains(Mode::SVTX)))
 }
 
 #[cfg(test)]
@@ -252,10 +256,10 @@ mod tests {
 
     #[test]
     fn foreign_owned_ancestor_is_rejected() {
-        assert!(!ancestor_is_trusted(1001, 0o755, 1000));
-        assert!(!ancestor_is_trusted(1001, 0o1777, 1000));
-        assert!(ancestor_is_trusted(1000, 0o755, 1000));
-        assert!(ancestor_is_trusted(0, 0o755, 1000));
+        assert!(!ancestor_is_trusted(1001, 0o755, 1000, true));
+        assert!(!ancestor_is_trusted(1001, 0o1777, 1000, true));
+        assert!(ancestor_is_trusted(1000, 0o755, 1000, false));
+        assert!(ancestor_is_trusted(0, 0o755, 1000, false));
 
         let tree = Tree::new().dir("repos", 0o700);
         let root = tree.0.join("repos");
@@ -278,7 +282,10 @@ mod tests {
             .ancestors()
             .all(|path| fs::metadata(path).unwrap().uid() == 0)
         {
-            assert!(Directory::open_root_as(temp, other).is_ok());
+            // A sticky temp directory is trusted as an intermediate ancestor,
+            // even though it is no longer accepted as the selected root.
+            let temp_handle = Directory(File::open(temp).unwrap());
+            assert!(temp_handle.check_ancestor(other, true).is_ok());
             assert!(matches!(
                 Directory::open_root_as(&tree.0, other),
                 Err(Error::UnsafeAncestor)
@@ -291,7 +298,7 @@ mod tests {
         let tree = Tree::new().dir("repos", 0o700).dir("repos/nested", 0o755);
         assert!(tree.open("repos").is_ok());
         assert!(tree.open("repos/nested").is_ok());
-        assert!(ancestor_is_trusted(1000, 0o40755, 1000));
+        assert!(ancestor_is_trusted(1000, 0o40755, 1000, false));
     }
 
     #[test]
@@ -300,10 +307,18 @@ mod tests {
         // (or root). Entries below it must still pass the ownership check.
         let tree = Tree::new().dir("tmp", 0o1777).dir("tmp/repos", 0o700);
         assert!(tree.open("tmp/repos").is_ok());
-        assert!(tree.open("tmp").is_ok());
-        assert!(ancestor_is_trusted(0, 0o41777, 1000));
-        assert!(ancestor_is_trusted(1000, 0o1770, 1000));
+        assert!(ancestor_is_trusted(0, 0o41777, 1000, true));
+        assert!(ancestor_is_trusted(1000, 0o1770, 1000, true));
         let tree = Tree::new().dir("tmp", 0o1777).dir("tmp/repos", 0o777);
         assert!(matches!(tree.open("tmp/repos"), Err(Error::UnsafeAncestor)));
+    }
+
+    #[test]
+    fn sticky_writable_root_is_rejected() {
+        for mode in [0o1777, 0o1770, 0o1707] {
+            let tree = Tree::new().dir("repos", mode);
+            assert!(matches!(tree.open("repos"), Err(Error::UnsafeAncestor)));
+            assert!(!ancestor_is_trusted(0, mode, 1000, false));
+        }
     }
 }
