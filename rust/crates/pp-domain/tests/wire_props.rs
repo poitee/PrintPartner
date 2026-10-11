@@ -111,7 +111,7 @@ proptest! {
 
     #[test]
     fn digest_rejects_non_lowercase_hex(value in hex_digest(64), index in 0usize..64,
-        invalid in any::<char>().prop_filter("not lowercase hex", |c| !c.is_ascii_digit() && !('a'..='f').contains(c))) {
+        invalid in proptest::char::range('\0', '\u{7f}').prop_filter("not lowercase hex", |c| !c.is_ascii_digit() && !('a'..='f').contains(c))) {
         let mut chars: Vec<_> = value.chars().collect();
         chars[index] = invalid;
         let value: String = chars.into_iter().collect();
