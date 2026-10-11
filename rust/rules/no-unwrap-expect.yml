@@ -10,6 +10,38 @@ ignores:
   - crates/*/src/**/tests.rs
   - crates/*/src/**/tests/**
 utils:
+  stringify-macro-name:
+    any:
+      - regex: '^(::)?(r#)?stringify$'
+      - kind: scoped_identifier
+        has:
+          field: name
+          regex: '^(r#)?stringify$'
+        all:
+          - has:
+              field: path
+              any:
+                - kind: identifier
+                  regex: '^(r#)?(std|core)$'
+                - kind: scoped_identifier
+                  has:
+                    field: name
+                    regex: '^(r#)?(std|core)$'
+                  not:
+                    has:
+                      field: path
+                      regex: '.'
+  test-attribute:
+    has:
+      kind: attribute
+      has:
+        any:
+          - kind: identifier
+            regex: '^(r#)?test$'
+          - kind: scoped_identifier
+            has:
+              field: name
+              regex: '^(r#)?test$'
   test-cfg-direct:
     has:
       kind: attribute
@@ -100,14 +132,18 @@ rule:
             - kind: macro_invocation
               has:
                 field: macro
-                regex: '^(::)?((r#)?(std|core)\s*::\s*)?(r#)?stringify$'
+                matches: stringify-macro-name
             # Nested invocations in another macro are token trees too.
             - kind: token_tree
               follows:
                 regex: '^!$'
+                stopBy:
+                  matches: non-comment
                 follows:
                   kind: identifier
                   regex: '^(r#)?stringify$'
+                  stopBy:
+                    matches: non-comment
                   any:
                     - not:
                         follows:
@@ -152,7 +188,7 @@ rule:
           follows:
             kind: attribute_item
             any:
-              - regex: '^#\s*\[\s*((r#)?[A-Za-z_][A-Za-z_0-9]*::)*(r#)?test(\s*\([^]]*\))?\s*\]$'
+              - matches: test-attribute
               - matches: test-cfg-direct
               # A direct test term in all(...) makes every build test-only.
               - matches: test-cfg-all

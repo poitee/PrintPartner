@@ -1,5 +1,11 @@
 id: no-unwrap-expect
 valid:
+  - 'fn production() { outer!(std /* module */ :: stringify /* macro */ ! /* arguments */ (value.unwrap())); }'
+  - '#[/* fixture */ test] fn case() { value.unwrap(); }'
+  - '#[tokio /* fixture */ :: test(flavor = "current_thread")] async fn case() { value.expect("fixture"); }'
+  - '#[r#test /* fixture */] fn case() { value.unwrap(); }'
+  - 'fn production() { std /* module */ :: stringify!(value.unwrap()); }'
+  - 'fn production() { :: /* root */ core /* module */ :: stringify!(value.expect("fixture")); }'
   - '#[cfg(/* test-only */ test)] fn fixture() { value.unwrap(); }'
   - '#[/* attribute */ cfg /* predicate */ (test /* fixture */)] fn fixture() { value.expect("fixture"); }'
   - '#![cfg(/* test-only */ test)] fn fixture() { value.unwrap(); }'
@@ -39,6 +45,9 @@ valid:
   - '#[cfg(all(test, any(unix, windows)))] fn helper() { println!("{}", value.unwrap()); }'
   - '#[cfg(all /* platform */ (test, unix))] fn helper() { value.unwrap(); }'
 invalid:
+  - '#[/* fixture */ test] fn case() {} fn production() { value.unwrap(); }'
+  - '#[doc(/* fixture */ test)] fn production() { value.unwrap(); }'
+  - 'fn production() { custom::std /* module */ :: stringify!(value.unwrap()); }'
   - '#[cfg(test /* feature */ = "fixture")] fn production() { value.unwrap(); }'
   - '#![cfg(test /* feature */ = "fixture")] fn production() { value.unwrap(); }'
   - '#[cfg(/* fixture */ test)] fn fixture() {} fn production() { value.unwrap(); }'

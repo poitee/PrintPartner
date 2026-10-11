@@ -9,6 +9,27 @@ ignores:
   - crates/pp-core/**
   - crates/pp-desktop/**
 utils:
+  stringify-macro-name:
+    any:
+      - regex: '^(::)?(r#)?stringify$'
+      - kind: scoped_identifier
+        has:
+          field: name
+          regex: '^(r#)?stringify$'
+        all:
+          - has:
+              field: path
+              any:
+                - kind: identifier
+                  regex: '^(r#)?(std|core)$'
+                - kind: scoped_identifier
+                  has:
+                    field: name
+                    regex: '^(r#)?(std|core)$'
+                  not:
+                    has:
+                      field: path
+                      regex: '.'
   root-import-group:
     any:
       - kind: use_list
@@ -325,6 +346,30 @@ rule:
                       stopBy:
                         matches: non-comment
                       pattern: $MODULE
+                - kind: use_wildcard
+                  any:
+                    - has:
+                        kind: identifier
+                        pattern: $MODULE
+                      inside:
+                        kind: use_declaration
+                        stopBy:
+                          not:
+                            matches: root-import-group
+                    - regex: '^\*$'
+                      inside:
+                        kind: scoped_use_list
+                        has:
+                          field: path
+                          pattern: $MODULE
+                        inside:
+                          kind: use_declaration
+                          stopBy:
+                            not:
+                              matches: root-import-group
+                        stopBy:
+                          not:
+                            kind: use_list
             - inside:
                 matches: process-import-scope
                 stopBy:
@@ -426,10 +471,21 @@ rule:
           any:
             - has:
                 matches: std-process-path
+              inside:
+                kind: use_declaration
+                stopBy:
+                  not:
+                    matches: root-import-group
             - has:
                 regex: '^(r#)?process$'
               inside:
                 matches: std-list
+                stopBy:
+                  not:
+                    kind: use_list
+            - regex: '^\*$'
+              inside:
+                matches: std-process-list
                 stopBy:
                   not:
                     kind: use_list
@@ -439,11 +495,13 @@ rule:
             - kind: macro_invocation
               has:
                 field: macro
-                regex: '^(::)?((r#)?(std|core)\s*::\s*)?(r#)?stringify$'
+                matches: stringify-macro-name
             # Nested invocations in another macro are token trees too.
             - kind: token_tree
               follows:
                 regex: '^!$'
+                stopBy:
+                  matches: non-comment
                 follows:
                   kind: identifier
                   stopBy:

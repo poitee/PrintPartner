@@ -1,5 +1,13 @@
 id: runtime-process-command
 valid:
+  - 'fn production() { outer!(std /* module */ :: stringify /* macro */ ! /* arguments */ (std::process::Command)); }'
+  - 'use std::process as p; fn production() { use other as p; use p::*; }'
+  - 'fn production() { std /* module */ :: stringify!(std::process::Command); }'
+  - 'fn production() { :: /* root */ core /* module */ :: stringify!(std::process::Command); }'
+  - 'use foo::{std::process::*};'
+  - 'use foo::{std::process::{*}};'
+  - 'use std::process as p; use foo::{p::*};'
+  - 'use std::process as p; use p::{nested::{*}};'
   - 'use foo::{std::process::Command};'
   - 'use foo::{std::process::Command as Spawn};'
   - 'use foo::{std::{process::Command}};'
@@ -48,6 +56,12 @@ valid:
   - 'use std::{os::unix::{process::*}};'
   - 'use std::os::unix::process::*;'
 invalid:
+  - 'fn production() { custom::std /* module */ :: stringify!(std::process::Command); }'
+  - 'use std::process::{*};'
+  - 'use std::process::{{*}};'
+  - 'use std::process as p; use p::*;'
+  - 'use std::process as p; use p::{*};'
+  - 'use std::process as p; fn production() { use p::*; }'
   - 'use ::{std::process::{Command as Spawn}};'
   - 'use ::{std::{process::{Command}}};'
   - 'use std::process as p; use {p::{Command as Spawn}};'
