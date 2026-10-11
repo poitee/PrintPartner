@@ -10,9 +10,6 @@ on:
         required: false
         default: main
         type: string
-  # TEMPORARY PROOF TRIGGER (removed in the follow-up commit): the file is not on the default branch yet, so dispatch is unavailable.
-  push:
-    branches: [bot/gre-545, bot/gre-545-tip-proof]
 
 permissions:
   contents: read
@@ -31,7 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.ref || (github.ref_name == 'bot/gre-545-tip-proof' && 'desktop/storage-runtime') || 'main' }}
+          ref: ${{ inputs.ref }}
           persist-credentials: false
       - uses: Swatinem/rust-cache@v2
         with:
