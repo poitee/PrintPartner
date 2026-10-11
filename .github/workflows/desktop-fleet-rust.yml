@@ -1,9 +1,5 @@
 name: Desktop Rust (hosted)
 
-# Snapshot baselines must be committed; CI must never accept or create them.
-env:
-  INSTA_UPDATE: 'no'
-
 on:
   pull_request:
     paths:
@@ -32,6 +28,8 @@ permissions:
   contents: read
 
 env:
+  # Snapshot baselines must be committed; CI must never accept or create them.
+  INSTA_UPDATE: 'no'
   # Linux-only sccache + mold for the Rust jobs (GRE-533). Set repository variable
   # FLEET_RUST_ACCEL=off to disable both without a workflow change.
   FLEET_RUST_ACCEL: ${{ vars.FLEET_RUST_ACCEL || 'on' }}
