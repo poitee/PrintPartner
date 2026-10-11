@@ -408,7 +408,9 @@ def serve(binary, root, node, commit, credentials):
                 print(f"PP_SERVER_URL={origin} PP_SERVER_PORT={port} PP_SERVER_PID={process.pid}", flush=True)
                 release_signals()
                 process.wait()
-                raise RuntimeError(f"pp-server exited without a stop request (exit={process.returncode})")
+                if process.returncode != 0:
+                    raise RuntimeError(f"pp-server exited without a stop request (exit={process.returncode})")
+                print("STOP: pp-server exited cleanly; checking shutdown", flush=True)
             except Stop as stop:
                 print(f"STOP: {stop} received; stopping pp-server", flush=True)
             finally:

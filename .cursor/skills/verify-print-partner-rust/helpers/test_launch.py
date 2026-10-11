@@ -2,6 +2,7 @@
 """Proof for `verify.py launch`: start, reach /health, SIGTERM, clean exit."""
 import contextlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -199,6 +200,42 @@ class CredentialFileTest(unittest.TestCase):
             shutil.rmtree(parent)  # the consumer removed its directory after reading the credential
             verify.unpublish_credential(parent / "credentials.json", handle)
             self.assertFalse(parent.exists())
+
+
+class ServerExitTest(unittest.TestCase):
+    def test_clean_server_exit_runs_shutdown_checks(self):
+        self.assert_server_exit(0)
+
+    def test_failed_server_exit_remains_an_error(self):
+        self.assert_server_exit(1)
+
+    def assert_server_exit(self, status):
+        verify = load_verify()
+        process = SimpleNamespace(pid=123, returncode=status, stdout=io.StringIO(), wait=lambda: status)
+        runtime = Path("/tmp/pp-test-runtime")
+
+        def origin(_process, errors):
+            marker = Path(errors.name).parent / "data/.desktop-owner.json"
+            marker.parent.mkdir()
+            marker.write_text(json.dumps({"runtime_dir": str(runtime)}))
+            return "http://127.0.0.1:12345"
+
+        output = io.StringIO()
+        with mock.patch.object(verify, "start_server", return_value=process), \
+                mock.patch.object(verify, "read_origin", side_effect=origin), \
+                mock.patch.object(verify, "terminate") as terminate, \
+                mock.patch.object(verify, "verify_shutdown") as shutdown, \
+                mock.patch.object(verify, "ignore_signals"), contextlib.redirect_stdout(output):
+            if status:
+                with self.assertRaisesRegex(RuntimeError, "exit=1"):
+                    verify.serve(Path("pp-server"), Path("repo"), "node", "commit", None)
+                shutdown.assert_not_called()
+            else:
+                verify.serve(Path("pp-server"), Path("repo"), "node", "commit", None)
+                shutdown.assert_called_once_with(process, mock.ANY, runtime)
+                self.assertIn("STOP: exit=0;", output.getvalue())
+            terminate.assert_called_once_with(process)
+        self.assertTrue(process.stdout.closed)
 
 
 class BuildGroupTest(unittest.TestCase):
