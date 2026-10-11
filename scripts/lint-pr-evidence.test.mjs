@@ -1335,3 +1335,26 @@ for (const label of [' ', '&ZeroWidthSpace;']) {
     assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} [${label}][proof]\n\n[proof]: https://example.test/shot.png`)).ok, false);
   });
 }
+
+for (const definition of ['> [target]: http://192.168.1.%38%30:8080', '- [target]: http://3232235856/', '1. [target]: http://0300.0250.1.0120/', '> - [target]: http://192.168.1.80/', '> [target]:\n> http://192.168.1.%38%30:8080', '- [target]:\n  http://192.168.1.80/']) {
+  test(`rejects banned reference in block container ${JSON.stringify(definition)}`, () => {
+    assert.equal(lintPrEvidence(definition + '\n\n' + bodyWithEvidence('Exemption: docs-only\n- Exemption reason: Updated docs.\n- Journey exercised: [preview][target]')).ok, false);
+  });
+}
+for (const comment of ['<!-- hidden -->## Evidence', '<!-- hidden\nend -->## Evidence', '> <!-- hidden -->\n-->## Evidence']) {
+  test(`block comment closing suffix cannot supply Evidence ${JSON.stringify(comment)}`, () => {
+    assert.equal(lintPrEvidence(comment + '\nExemption: docs-only\n- Exemption reason: Updated docs.').ok, false);
+  });
+}
+test('genuinely inline comment preserves its rendered suffix', () => {
+  assert.equal(lintPrEvidence(bodyWithEvidence('Exemption: docs-only\n- Exemption reason: Updated <!-- hidden --> docs.')).ok, true);
+});
+test('unused quoted reference destination cannot supply proof', () => {
+  assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} screenshot\n\n> [unused]: https://example.test/shot.png`)).ok, false);
+});
+
+for (const definition of ['> [proof]: https://example.test/shot.png', '- [proof]: evidence/shot.png', '> [proof]:\n> https://example.test/shot.png']) {
+  test(`accepts used valid container reference ${JSON.stringify(definition)}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} [proof]\n\n${definition}`)).ok, true);
+  });
+}

@@ -181,7 +181,6 @@ function stripHiddenMarkdown(text, { inlineMultiline = true, includeRawHtml = fa
       }
     }
     let line = raw;
-    let visible = "";
     if (inComment) {
       const end = line.indexOf("-->");
       // An inline comment cannot cross a paragraph break.
@@ -191,21 +190,29 @@ function stripHiddenMarkdown(text, { inlineMultiline = true, includeRawHtml = fa
         kept.push("");
         continue;
       } else {
+        const blockComment = !inlineComment;
         line = line.slice(end + 3);
         inComment = false;
+        if (blockComment) {
+          kept.push("");
+          paragraphOpen = false;
+          continue;
+        }
       }
     } else if (line.slice(containerPrefix(line).end).startsWith("<!--")) {
       // An HTML block comment hides everything up to its closing -->.
       const start = line.indexOf("<!--");
       const end = line.indexOf("-->", start + 4);
-      visible = line.slice(0, start);
       if (end === -1) {
         inComment = true;
         inlineComment = false;
-        kept.push(visible);
+        kept.push("");
+        paragraphOpen = false;
         continue;
       }
-      line = line.slice(end + 3);
+      kept.push("");
+      paragraphOpen = false;
+      continue;
     }
     // Inline comments must close on the line; an unclosed, escaped, or
     // code-span `<!--` is literal text, as Markdown renders it.
@@ -214,7 +221,7 @@ function stripHiddenMarkdown(text, { inlineMultiline = true, includeRawHtml = fa
       inComment = true;
       inlineComment = true;
     }
-    const shown = visible + inline.visible;
+    const shown = inline.visible;
     kept.push(shown);
     paragraphOpen = Boolean(shown.trim()) && !LEAF_BLOCK_START.test(shown);
   }
@@ -689,6 +696,10 @@ function referenceDestination(lines, index) {
   return parsed?.end === wrapped.length ? parsed.destination : null;
 }
 
+function referenceContainerLines(value) {
+  return value.split("\n").map((line) => line.slice(containerPrefix(line).end));
+}
+
 /**
  * Drop link reference definitions, noting whether any destination is concrete.
  * A definition's destination may sit on the next line and its title may span
@@ -700,6 +711,7 @@ function stripReferenceDefinitions(value, references) {
   const defined = new Set();
   const kept = [];
   const lines = value.split("\n");
+  const referenceLines = referenceContainerLines(value);
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
     if (!line.trim()) {
@@ -707,12 +719,12 @@ function stripReferenceDefinitions(value, references) {
       kept.push(line);
       continue;
     }
-    const definition = line.match(REFERENCE_DEFINITION);
+    const definition = referenceLines[index].match(REFERENCE_DEFINITION);
     if (definition) {
       dropping = true;
       const label = normalizeReferenceLabel(definition[1]);
       const referenced = references.has(label);
-      const destination = referenceDestination(lines, index);
+      const destination = referenceDestination(referenceLines, index);
       if (destination && !defined.has(label)) {
         defined.add(label);
         if (referenced && isConcreteTarget(destination)) concrete = true;
@@ -956,7 +968,7 @@ function targetsBannedLan(sectionText, definitions) {
 
 function documentReferences(body) {
   const definitions = new Map();
-  const lines = stripHiddenMarkdown(body).split("\n");
+  const lines = referenceContainerLines(stripHiddenMarkdown(body));
   for (let i = 0; i < lines.length; i += 1) {
     const match = lines[i].match(REFERENCE_DEFINITION);
     if (!match) continue;
