@@ -10,6 +10,30 @@ ignores:
   - crates/*/src/**/tests.rs
   - crates/*/src/**/tests/**
 utils:
+  test-cfg-all:
+    has:
+      kind: attribute
+      has:
+        kind: identifier
+        regex: '^cfg$'
+      all:
+        - has:
+            field: arguments
+            has:
+              kind: token_tree
+              follows:
+                kind: identifier
+                regex: '^all$'
+                stopBy:
+                  matches: non-comment
+              has:
+                kind: identifier
+                regex: '^test$'
+                not:
+                  precedes:
+                    regex: '^=$'
+                    stopBy:
+                      matches: non-comment
   non-comment:
     not:
       any:
@@ -71,11 +95,26 @@ rule:
                     - not:
                         follows:
                           regex: '^::$'
+                          stopBy:
+                            matches: non-comment
                     - follows:
                         regex: '^::$'
+                        stopBy:
+                          matches: non-comment
                         follows:
                           kind: identifier
+                          stopBy:
+                            matches: non-comment
                           regex: '^(std|core)$'
+                          not:
+                            follows:
+                              regex: '^::$'
+                              stopBy:
+                                matches: non-comment
+                              follows:
+                                regex: '^(r#)?[A-Za-z_][A-Za-z_0-9]*$'
+                                stopBy:
+                                  matches: non-comment
           stopBy: end
     # Inner cfg attributes apply to the containing file, module, or block.
     - not:
@@ -86,7 +125,9 @@ rule:
             - kind: block
           has:
             kind: inner_attribute_item
-            regex: '^#!\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]$'
+            any:
+              - regex: '^#!\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]$'
+              - matches: test-cfg-all
           stopBy: end
     - not:
         inside:
@@ -96,29 +137,7 @@ rule:
             any:
               - regex: '^#\s*\[\s*(cfg\s*\(\s*test\s*\)|([A-Za-z_][A-Za-z_0-9]*::)*test(\s*\([^]]*\))?)\s*\]$'
               # A direct test term in all(...) makes every build test-only.
-              - has:
-                  kind: attribute
-                  has:
-                    kind: identifier
-                    regex: '^cfg$'
-                  all:
-                    - has:
-                        field: arguments
-                        has:
-                          kind: token_tree
-                          follows:
-                            kind: identifier
-                            regex: '^all$'
-                            stopBy:
-                              matches: non-comment
-                          has:
-                            kind: identifier
-                            regex: '^test$'
-                            not:
-                              precedes:
-                                regex: '^=$'
-                                stopBy:
-                                  matches: non-comment
+              - matches: test-cfg-all
             # Attributes apply only to the next item, including other attributes
             # and comments between them; never exempt subsequent production code.
             stopBy:

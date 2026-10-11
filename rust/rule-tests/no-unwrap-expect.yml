@@ -1,5 +1,9 @@
 id: no-unwrap-expect
 valid:
+  - '#![cfg(all(test, unix))] fn fixture() { value.unwrap(); }'
+  - 'mod fixture { #![cfg(all(unix, test))] fn fixture() { value.expect("fixture"); } }'
+  - 'fn production() { outer!(::std::stringify!(value.unwrap())); }'
+  - 'fn production() { outer!(::core::stringify!(value.expect("name"))); }'
   - '#![cfg(test)] fn fixture() { Some(1).unwrap(); }'
   - 'mod fixture { #![cfg(test)] fn helper() { value.unwrap(); } fn case() { value.expect("fixture"); } }'
   - 'fn production() { let function = (Option::unwrap); }'
@@ -23,6 +27,11 @@ valid:
   - '#[cfg(all(test, any(unix, windows)))] fn helper() { println!("{}", value.unwrap()); }'
   - '#[cfg(all /* platform */ (test, unix))] fn helper() { value.unwrap(); }'
 invalid:
+  - '#![cfg(all(not(test), unix))] fn production() { value.unwrap(); }'
+  - '#![cfg(all(test = "fixture", unix))] fn production() { value.unwrap(); }'
+  - 'mod fixture { #![cfg(all(test, unix))] fn helper() { value.unwrap(); } } fn production() { value.unwrap(); }'
+  - 'fn production() { outer!(custom::std::stringify!(value.unwrap())); }'
+  - 'fn production() { outer!(custom::core::stringify!(value.expect("reason"))); }'
   - 'fn production() { (Option::unwrap)(Some(1)); }'
   - 'fn production() { (Result::expect)(value, "reason"); }'
   - 'fn production() { (Option::r#unwrap)(Some(1)); }'

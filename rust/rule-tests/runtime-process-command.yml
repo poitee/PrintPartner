@@ -1,5 +1,8 @@
 id: runtime-process-command
 valid:
+  - 'use foo::{std as standard}; fn production(_: standard::process::Command) {}'
+  - 'fn production() { outer!(::std::stringify!(std::process::Command)); }'
+  - 'fn production() { outer!(::core::stringify!(std::process::Command)); }'
   - 'use {std::process::id}; mod process { pub struct Command; } fn production(_: process::Command) {}'
   - 'fn production() { std::process::id(); }'
   - 'use std::process::{id, ExitCode};'
@@ -28,6 +31,9 @@ valid:
   - 'use std::{os::unix::{process::*}};'
   - 'use std::os::unix::process::*;'
 invalid:
+  - 'use {std as standard}; fn production(_: standard::process::Command) {}'
+  - 'fn production() { outer!(custom::std::stringify!(std::process::Command)); }'
+  - 'fn production() { outer!(custom::core::stringify!(std::process::Command)); }'
   - 'use {std::process}; fn production() { process::Command::new("sh"); }'
   - 'use {std::process as p}; fn production() { p::Command::new("sh"); }'
   - 'fn production() { std::process::Command::new("sh"); }'

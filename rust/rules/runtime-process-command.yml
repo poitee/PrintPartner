@@ -132,7 +132,15 @@ utils:
           has:
             field: path
             any:
-              - regex: '^(::)?(r#)?std$'
+              - regex: '^::(r#)?std$'
+              - regex: '^(r#)?std$'
+                inside:
+                  kind: use_as_clause
+                  inside:
+                    kind: use_declaration
+                    stopBy:
+                      not:
+                        kind: use_list
               - kind: self
                 inside:
                   kind: use_as_clause
@@ -378,9 +386,20 @@ rule:
                             matches: non-comment
                     - follows:
                         regex: '^::$'
+                        stopBy:
+                          matches: non-comment
                         follows:
                           kind: identifier
                           stopBy:
                             matches: non-comment
                           regex: '^(std|core)$'
+                          not:
+                            follows:
+                              regex: '^::$'
+                              stopBy:
+                                matches: non-comment
+                              follows:
+                                regex: '^(r#)?[A-Za-z_][A-Za-z_0-9]*$'
+                                stopBy:
+                                  matches: non-comment
           stopBy: end
