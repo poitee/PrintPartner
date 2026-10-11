@@ -55,9 +55,9 @@ They forward to the pages above.
 | `HelpPage` | `/help` | pp-server | TBD | TBD | missing | — |
 | `NotFoundPage` | `* (fallback)` | pp-desktop | TBD | TBD | missing | — |
 
-## MCP tools (85 rows)
+## MCP tools (86 rows)
 
-The 82 product tools from `ASSISTANT_TOOL_SPECS` (with `ui_*` excluded) and the
+The 83 product tools from `ASSISTANT_TOOL_SPECS` (with `ui_*` excluded) and the
 three proposal tools (`list_pending_actions`, `confirm_apply`,
 `dismiss_proposed_action`). The `plan_build` prompt is not a tool and has no row.
 `docs/assistant-mcp.md` describes the MCP surface.
@@ -107,6 +107,7 @@ three proposal tools (`list_pending_actions`, `confirm_apply`,
 | `get_remaining` | pp-domain | TBD | TBD | missing | — |
 | `get_plan_checkoff` | pp-domain | TBD | TBD | missing | — |
 | `get_printer_checkoff` | pp-drivers | TBD | TBD | missing | — |
+| `propose_import_3mf_checkoff` | pp-domain | TBD | TBD | missing | — |
 | `propose_set_plan_progress` | pp-domain | TBD | TBD | missing | — |
 | `propose_set_plan_assembly` | pp-domain | TBD | TBD | missing | — |
 | `propose_verify_printer_checkoff` | pp-drivers | TBD | TBD | missing | — |
@@ -155,8 +156,8 @@ three proposal tools (`list_pending_actions`, `confirm_apply`,
 | Section | Rows |
 |---|---|
 | UI pages | 15 |
-| MCP tools | 85 |
-| **Total** | **100** |
+| MCP tools | 86 |
+| **Total** | **101** |
 
-All 100 rows are `missing`. Four tool rows link a golden fixture
+All 101 rows are `missing`. Four tool rows link a golden fixture
 (`golden-eval.fixtures.ts`).
