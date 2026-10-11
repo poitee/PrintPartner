@@ -634,6 +634,7 @@ function stripLinks(value, references) {
   for (let at = text.indexOf("](", cursor); at !== -1; at = text.indexOf("](", cursor)) {
     const open = linkTextStart(text, at, cursor);
     rest += `${text.slice(cursor, open === -1 ? at : open)} `;
+    if (open === -1) return { rest, concrete };
     const tail = parseLinkTail(text, at + 1);
     if (!tail) return { rest, concrete };
     if (isConcreteTarget(tail.destination)) concrete = true;
@@ -687,6 +688,24 @@ function normalizeReferenceLabel(label) {
   return label.replace(/\\(.)/g, "$1").trim().replace(/\s+/g, " ").toLowerCase();
 }
 
+function referenceUses(value) {
+  let text = value;
+  for (const range of codeSpanRanges(value).reverse()) {
+    text = text.slice(0, range.start) + " " + text.slice(range.end);
+  }
+  text = stripLinks(text, new Set()).rest;
+  const references = new Set();
+  const uses = /\[((?:[^\]\\\n]|\\.){1,999})\](?:\[((?:[^\]\\\n]|\\.){0,999})\])?/g;
+  for (const match of text.matchAll(uses)) {
+    if (text[match.index + match[0].length] === ":") continue;
+    let escapes = 0;
+    for (let at = match.index - 1; at >= 0 && text[at] === "\\"; at -= 1) escapes += 1;
+    if (escapes % 2) continue;
+    references.add(normalizeReferenceLabel(match[2] || match[1]));
+  }
+  return references;
+}
+
 export function hasEvidenceContent(sectionText) {
   const steps = readField(sectionText, FIELD_LABELS.steps);
   const result = readField(sectionText, FIELD_LABELS.result);
@@ -700,10 +719,7 @@ export function hasEvidenceContent(sectionText) {
   // Count reference destinations only for visible reference uses in verification
   // content, never for definitions or labels inside the exemption reason.
   const verification = withoutFields(sectionText, [FIELD_LABELS.reason]);
-  const references = new Set(
-    [...verification.matchAll(/\[((?:[^\]\\\n]|\\.){1,999})\](?!:)/g)]
-      .map((match) => normalizeReferenceLabel(match[1])),
-  );
+  const references = referenceUses(verification);
   return looksLikeArtifact(artifact, references) || looksLikeArtifact(freeformText(sectionText), references);
 }
 

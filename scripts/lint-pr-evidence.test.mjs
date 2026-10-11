@@ -1155,3 +1155,14 @@ ${ARTIFACT_LABEL} trace.json`).replace(`${field}: ${field.startsWith("Steps") ? 
     });
   }
 }
+
+for (const artifact of ['](evidence/shot.png)', '\\](evidence/shot.png)', '[foo](#)\n\n[foo]: evidence/shot.png', '`[foo]`\n\n[foo]: evidence/shot.png', '\\[foo]\n\n[foo]: evidence/shot.png', '[foo][bar]\n\n[foo]: evidence/shot.png']) {
+  test(`reference/opener regression rejects ${artifact}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} ${artifact}`)).ok, false);
+  });
+}
+for (const use of ['[shot]', '[shot][]', '[screen][shot]']) {
+  test(`accepts actual reference use ${use}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} ${use}\n\n[shot]: evidence/shot.png`)).ok, true);
+  });
+}
