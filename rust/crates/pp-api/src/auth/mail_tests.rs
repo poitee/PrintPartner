@@ -356,6 +356,37 @@ async fn smtp_http_failure_keeps_committed_token_without_enumeration_or_retry() 
             .await
             .unwrap();
         assert_eq!(reset.status(), 200);
+        // Known and unknown requests each reserve a slot for the same window,
+        // even after SMTP succeeds, rejects, or drops the connection. This uses
+        // all 20 credential requests in the rate window, matching the attack.
+        for _ in 0..14 {
+            let response = client
+                .post(format!("{origin}/auth/forgot-password"))
+                .header("Origin", &origin)
+                .json(&json!({"email":"unknown@example.com"}))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 200);
+            assert_eq!(response.bytes().await.unwrap(), known);
+        }
+        let mut overload = None;
+        for email in ["normalized@example.com", "unknown@example.com"] {
+            let response = client
+                .post(format!("{origin}/auth/forgot-password"))
+                .header("Origin", &origin)
+                .json(&json!({"email":email}))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 503);
+            let body = response.bytes().await.unwrap();
+            if let Some(previous) = &overload {
+                assert_eq!(&body, previous);
+            } else {
+                overload = Some(body);
+            }
+        }
         stop.send(()).unwrap();
         task.await.unwrap();
         owner.shutdown().unwrap();

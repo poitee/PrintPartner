@@ -398,8 +398,8 @@ async fn forgot(
         (app.config.dev_reset_exposure && !app.mail.configured())
             .then_some(app.config.origin.as_str())
     });
-    // Reserve delivery capacity before looking up the account, so overload is
-    // independent of whether the address exists. SMTP must not delay the reply.
+    // Reserve the same fixed delivery window for every address. Neither account
+    // existence nor SMTP completion may change the capacity visible to callers.
     let delivery_permit = if origin.is_some() && app.mail.configured() {
         Some(
             app.reset_delivery
@@ -415,7 +415,8 @@ async fn forgot(
     } else {
         None
     };
-    if let Some(origin) = origin
+    let deadline = tokio::time::Instant::now() + super::mail::DELIVERY_TIMEOUT;
+    let reset_url = if let Some(origin) = origin
         && let Outcome::ResetToken(Some(token)) = invoke(
             &app.auth,
             Request::RequestReset {
@@ -427,15 +428,24 @@ async fn forgot(
         let mut url =
             reqwest::Url::parse(&format!("{origin}/reset-password")).expect("validated origin");
         url.query_pairs_mut().append_pair("token", token.expose());
-        if let Some(permit) = delivery_permit {
-            let mail = app.mail.clone();
-            tokio::spawn(async move {
-                let _permit = permit;
-                mail.deliver(&email, url.as_str()).await;
+        Some(url.to_string())
+    } else {
+        None
+    };
+    if let Some(permit) = delivery_permit {
+        let mail = app.mail.clone();
+        tokio::spawn(async move {
+            let _permit = permit;
+            tokio::join!(tokio::time::sleep_until(deadline), async {
+                if let Some(url) = reset_url {
+                    mail.deliver_until(&email, &url, deadline).await;
+                }
             });
-        } else if app.config.dev_reset_exposure {
-            result["dev_reset_url"] = json!(url.as_str());
-        }
+        });
+    } else if app.config.dev_reset_exposure
+        && let Some(url) = reset_url
+    {
+        result["dev_reset_url"] = json!(url);
     }
     Ok(wire::json_response(result))
 }

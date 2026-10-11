@@ -280,21 +280,6 @@ fn validate_request(request: &mut SnapshotRequest) -> Result<()> {
     {
         return Err(Error::Limit);
     }
-    let mut paths = PathCollisions::default();
-    for file in &request.files {
-        if file.size_hint_bytes.is_some_and(|n| n > MAX_SAFE_INTEGER) {
-            return Err(Error::Limit);
-        }
-        paths.insert(&file.path, false)?;
-    }
-    for file in &request.selection.omitted_files {
-        if matches!(file.kind, FileKind::Stl | FileKind::Artifact)
-            || file.size_hint_bytes.is_some_and(|n| n > MAX_SAFE_INTEGER)
-        {
-            return Err(Error::CorruptSnapshot);
-        }
-        paths.insert(&file.path, false)?;
-    }
     request
         .files
         .sort_by(|a, b| compare_paths(a.path.as_str(), b.path.as_str()));
@@ -302,6 +287,24 @@ fn validate_request(request: &mut SnapshotRequest) -> Result<()> {
         .selection
         .omitted_files
         .sort_by(|a, b| compare_paths(a.path.as_str(), b.path.as_str()));
+    // Validate the directory spellings that publication will actually use,
+    // while retaining the original paths for case-sensitive input reads.
+    let mut directories = BTreeMap::new();
+    let mut paths = PathCollisions::default();
+    for file in &request.files {
+        if file.size_hint_bytes.is_some_and(|n| n > MAX_SAFE_INTEGER) {
+            return Err(Error::Limit);
+        }
+        paths.insert(&canonical_destination(&file.path, &mut directories)?, false)?;
+    }
+    for file in &request.selection.omitted_files {
+        if matches!(file.kind, FileKind::Stl | FileKind::Artifact)
+            || file.size_hint_bytes.is_some_and(|n| n > MAX_SAFE_INTEGER)
+        {
+            return Err(Error::CorruptSnapshot);
+        }
+        paths.insert(&canonical_destination(&file.path, &mut directories)?, false)?;
+    }
     Ok(())
 }
 fn digest(files: &[ContentFile]) -> Result<String> {
