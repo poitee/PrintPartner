@@ -57,9 +57,10 @@ jobs:
 
   bundle:
     needs: changes
-    # Always expand the matrix so every bundle check reports. Only an explicit
-    # native=false skips the work; a failed or cancelled changes job builds.
-    if: always()
+    # Expand the matrix so every bundle check reports. Only an explicit
+    # native=false skips the work; a failed changes job builds. !cancelled()
+    # lets a superseded run honor concurrency cancellation.
+    if: ${{ !cancelled() }}
     strategy:
       fail-fast: false
       matrix:
@@ -189,7 +190,7 @@ jobs:
           python3 rust/scripts/check-macos-bundle.py --app "$relocated" --manifest "$PP_EVIDENCE/bundle-manifest.json" --arch '${{ matrix.arch }}' --receipt "$PP_EVIDENCE/relocation-verifier.json" 2>&1 | tee "$PP_EVIDENCE/relocation-verifier.log"
           cmp "$PP_EVIDENCE/bundle-manifest.json" "$PP_DESKTOP_STAGE/bundle-manifest.json"
       - name: Preserve available bundle and receipts
-        if: always() && needs.changes.outputs.native != 'false'
+        if: ${{ !cancelled() && needs.changes.outputs.native != 'false' }}
         run: |
           export PP_EVIDENCE="$RUNNER_TEMP/desktop-evidence"
           export PP_DESKTOP_STAGE="$RUNNER_TEMP/desktop-stage"
@@ -204,7 +205,7 @@ jobs:
           git diff -- rust/Cargo.lock web/package-lock.json > "$PP_EVIDENCE/lockfile-diff.patch"
           df -h > "$PP_EVIDENCE/storage-after.txt"
       - uses: actions/upload-artifact@v7
-        if: always() && needs.changes.outputs.native != 'false'
+        if: ${{ !cancelled() && needs.changes.outputs.native != 'false' }}
         with:
           name: native-macos-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/desktop-evidence/
