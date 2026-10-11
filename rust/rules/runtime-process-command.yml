@@ -9,6 +9,12 @@ ignores:
   - crates/pp-core/**
   - crates/pp-desktop/**
 utils:
+  root-import-group:
+    any:
+      - kind: use_list
+      # A leading-root brace group is scoped_use_list without a module prefix.
+      - kind: scoped_use_list
+        regex: '^(?s)::(?:\s|/\*.*?\*/|//[^\n]*\n)*\{'
   non-comment:
     not:
       any:
@@ -51,7 +57,7 @@ utils:
           kind: use_declaration
           stopBy:
             not:
-              kind: use_list
+              matches: root-import-group
       - kind: use_as_clause
         has:
           field: path
@@ -60,7 +66,7 @@ utils:
           kind: use_declaration
           stopBy:
             not:
-              kind: use_list
+              matches: root-import-group
         all:
           - has:
               field: alias
@@ -146,7 +152,7 @@ utils:
                     kind: use_declaration
                     stopBy:
                       not:
-                        kind: use_list
+                        matches: root-import-group
               - kind: self
                 inside:
                   kind: use_as_clause
