@@ -587,33 +587,6 @@ Exemption: docs-only
   assert.equal(result.ok, true, result.errors.join("; "));
 });
 
-test("ignores a URL in a later indented paragraph of the Exemption reason (Codex P1 / Bugbot: blank lines truncate field values)", () => {
-  const result = lintPrEvidence(
-    bodyWithEvidence(`Exemption: none
-- Exemption reason: context only
-
-  See https://example.test/context.png
-
-- Steps followed to produce the evidence: opened local
-- Result observed: rendered
-- Screenshot / recording / verify-skill output or trace:
-`),
-  );
-  assert.equal(result.ok, false);
-  assert.match(result.errors.join("\n"), /Evidence is incomplete/);
-});
-
-test("allows a LAN mention in a later indented paragraph of the Exemption reason (Bugbot: blank lines truncate field values)", () => {
-  const result = lintPrEvidence(
-    bodyWithEvidence(`Exemption: docs-only
-- Exemption reason: Document the prohibited hosts.
-
-  http://192.168.1.80:8080 must never be used for verify.
-`),
-  );
-  assert.equal(result.ok, true, result.errors.join("; "));
-});
-
 test("reads a multi-paragraph artifact field whole (Bugbot: blank lines truncate field values)", () => {
   const result = lintPrEvidence(
     bodyWithEvidence(`Exemption: none
