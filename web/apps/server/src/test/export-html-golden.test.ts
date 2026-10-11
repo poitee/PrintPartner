@@ -27,7 +27,7 @@ describe("HTML checklist parity goldens", () => {
       const fixture = readChecklistFixture(name);
       const rendered = renderChecklistFixture(fixture);
       const expected = readFileSync(join(exportHtmlFixtureRoot, "expected",
-        name.replace(/\.json$/, ".html")), "utf8");
+        name.replace(/\.json$/, ".html")), "utf8").replace(/\r\n/g, "\n");
       expect(rendered.html).toBe(expected);
       expect(rendered.partCount).toBe(fixture.parts.filter((part) => part.included).length);
       expect(rendered.thumbCount).toBe(0);
