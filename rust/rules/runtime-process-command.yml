@@ -126,39 +126,45 @@ utils:
       stopBy:
         not:
           matches: import-tree
-  # Stop at a nested module boundary or a closer definition/import of the name.
-  import-boundary:
-    any:
-      - kind: declaration_list
-        inside:
-          kind: mod_item
-      - matches: lexical-scope
-        has:
-          any:
-            - any:
-                - kind: mod_item
-                - kind: struct_item
-                - kind: enum_item
-                - kind: type_item
-                - kind: trait_item
-              has:
-                field: name
-                pattern: $MODULE
-            - kind: use_as_clause
-              has:
-                field: alias
-                pattern: $MODULE
-            - kind: scoped_identifier
-              has:
-                field: name
-                pattern: $MODULE
-            - kind: identifier
-              pattern: $MODULE
-              inside:
-                kind: use_list
-          stopBy:
-            not:
-              matches: import-tree
+  module-boundary:
+    kind: declaration_list
+    inside:
+      kind: mod_item
+  # Compare bound names in the main rule; stopBy does not retain metavariables.
+  shadow-scope:
+    matches: lexical-scope
+    has:
+      any:
+        - any:
+            - kind: mod_item
+            - kind: struct_item
+            - kind: enum_item
+            - kind: type_item
+            - kind: trait_item
+          has:
+            field: name
+            pattern: $MODULE
+        - kind: use_as_clause
+          has:
+            field: alias
+            pattern: $MODULE
+        - kind: scoped_identifier
+          inside:
+            any:
+              - kind: use_declaration
+              - kind: use_list
+          has:
+            field: name
+            pattern: $MODULE
+        - kind: identifier
+          pattern: $MODULE
+          inside:
+            any:
+              - kind: use_declaration
+              - kind: use_list
+      stopBy:
+        not:
+          matches: import-tree
 rule:
   any:
     - all:
@@ -209,7 +215,15 @@ rule:
         - inside:
             matches: process-import-scope
             stopBy:
-              matches: import-boundary
+              matches: module-boundary
+        - not:
+            inside:
+              all:
+                - matches: shadow-scope
+                - not:
+                    matches: process-import-scope
+              stopBy:
+                matches: module-boundary
     # An alias of std preserves the process::Command path beneath that alias.
     - all:
         - any:
@@ -246,7 +260,15 @@ rule:
         - inside:
             matches: std-import-scope
             stopBy:
-              matches: import-boundary
+              matches: module-boundary
+        - not:
+            inside:
+              all:
+                - matches: shadow-scope
+                - not:
+                    matches: std-import-scope
+              stopBy:
+                matches: module-boundary
     - kind: identifier
       regex: '^Command$'
       inside:
