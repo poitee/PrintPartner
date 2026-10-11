@@ -27,6 +27,23 @@ class PathFilterTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertFalse(bundle_filter.is_native_input(path))
 
+    def test_singular_web_test_support_paths(self):
+        paths = ["web/apps/web/test/browser/browserExecutable.mjs",
+                 "web/apps/web/test/browser/thumbnail-recovery.html",
+                 "web/apps/web/test/browser/thumbnail-recovery.tsx",
+                 "web/apps/web/test/browser/workflow-cleanup.browser.mjs",
+                 "web/apps/web/test/browser/filename-grouping.isolated.mjs"]
+        for path in paths:
+            with self.subTest(path=path):
+                self.assertEqual(bundle_filter.is_native_input(path), False)
+        self.assertEqual(bundle_filter.is_native_input("web/apps/web/src/browserExecutable.mjs"), True)
+        self.assertEqual(bundle_filter.is_native_input("rust/crates/pp-compat/tests/lifecycle.rs"), True)
+
+    def test_workflow_pin_linter_is_not_a_bundle_input(self):
+        self.assertEqual(bundle_filter.is_native_input("scripts/check-github-actions-pinned.sh"), False)
+        self.assertEqual(bundle_filter.is_native_input("scripts/check-desktop-bundle.sh"), True)
+        self.assertEqual(bundle_filter.is_native_input("scripts/check-github-actions-pinned-helper.sh"), True)
+
     def test_pr_194(self):
         paths = [".github/pull_request_template.md", ".github/workflows/pr-evidence-tests.yml",
                  ".github/workflows/pr-evidence.yml", "docs/contributing/gate-evidence.md",
@@ -79,6 +96,11 @@ class PathFilterTests(unittest.TestCase):
             base = commit("README.md")
             head = commit("web/apps/server/fixtures/space and\nnewline.json")
             git("checkout", "-q", "--detach", base)
+            browser_head = commit("web/apps/web/test/browser/browserExecutable.mjs")
+            git("checkout", "-q", "--detach", base)
+            lint_head = commit("scripts/check-github-actions-pinned.sh")
+            mixed_head = commit("web/apps/server/src/data/pitfalls.md")
+            git("checkout", "-q", "--detach", base)
             markdown_head = commit("web/apps/server/src/data/pitfalls.md")
             git("checkout", "-q", "--detach", base)
             advanced_base = commit("rust/src/lib.rs")
@@ -86,6 +108,9 @@ class PathFilterTests(unittest.TestCase):
             try:
                 os.chdir(directory)
                 self.assertFalse(bundle_filter.select_native("pull_request", advanced_base, head))
+                self.assertEqual(bundle_filter.select_native("pull_request", advanced_base, browser_head), False)
+                self.assertEqual(bundle_filter.select_native("pull_request", advanced_base, lint_head), False)
+                self.assertEqual(bundle_filter.select_native("pull_request", base, mixed_head), True)
                 self.assertTrue(bundle_filter.select_native("pull_request", base, markdown_head))
                 self.assertTrue(bundle_filter.select_native("workflow_dispatch", base, head))
                 self.assertTrue(bundle_filter.select_native("push", "0" * 40, head))

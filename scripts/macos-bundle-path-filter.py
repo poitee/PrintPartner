@@ -15,12 +15,13 @@ def is_native_input(path):
     # These exclusions apply inside app/package trees as well as at the root.
     if (path.startswith("docs/") or (name.endswith(".md") and not source_markdown)
             or "fixtures" in parts or "test-fixtures" in parts
-            or (path.startswith("web/") and any(p in {"tests", "__tests__"} for p in parts))
+            or (path.startswith("web/") and any(p in {"test", "tests", "__tests__"} for p in parts))
             or re.search(r"\.(test|spec)\.", name)):
         return False
     if re.match(r"(?:\.?eslint|\.?prettier|\.?actionlint)(?:[.-]|rc(?:\.|$))", name):
         return False
-    if (path.startswith(("scripts/lint-", "web/scripts/lint-"))
+    if (path == "scripts/check-github-actions-pinned.sh"
+            or path.startswith(("scripts/lint-", "web/scripts/lint-"))
             or re.match(r"\.github/workflows/(?:lint(?:[.-]|$)|.*-lint[.-]|actionlint[.-]|pr-evidence(?:-tests)?\.)", path)):
         return False
     # Broad web/Rust trees include source, build configuration and lockfiles.
