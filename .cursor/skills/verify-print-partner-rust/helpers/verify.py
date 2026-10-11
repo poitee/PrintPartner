@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Build, drive and stop an isolated Rust gateway; stdout is the proof."""
+"""Build, drive and stop an isolated Rust gateway; stdout is the proof.
+
+Modes: `verify` (default) runs the full proof. `launch` builds, starts pp-server
+on loopback, prints `PP_SERVER_URL=...` and stays up until SIGTERM, SIGINT or SIGHUP,
+then stops it cleanly.
+"""
 import argparse
 import fcntl
 import json
@@ -7,17 +12,27 @@ import os
 from pathlib import Path
 import select
 import shutil
+import signal
+import stat
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
 
+STOP_SIGNALS = frozenset({signal.SIGTERM, signal.SIGINT, signal.SIGHUP})
+
+
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
+
+
+class Stop(Exception):
+    """Raised from a SIGTERM/SIGINT/SIGHUP handler so launch mode can clean up."""
 
 
 def check(condition, message):
@@ -60,10 +75,159 @@ def check_shape(name, actual, shapes):
     print(f"SHAPE: {name} keys and types match {SHAPE_FIXTURE.name}", flush=True)
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[4])
-    root = parser.parse_args().repo.resolve()
+def ignore_signals():
+    # Once cleanup starts, further signals must not interrupt it.
+    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)
+    try:
+        for signum in STOP_SIGNALS:
+            signal.signal(signum, signal.SIG_IGN)
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+
+
+def begin_stop(name):
+    ignore_signals()
+    return Stop(name)
+
+
+# While held, a signal is recorded and raised only after release_signals(), so
+# pp-server is never stopped before it is recorded or before its origin is printed.
+# Holding also means no stop can escape between statements of a cleanup path; work that
+# must react promptly polls `pending` or registers `on_stop`, called from the handler.
+held = {"active": False, "pending": None, "on_stop": None}
+
+
+def stop_on_signal(signum, _frame):
+    name = signal.Signals(signum).name
+    if held["active"]:
+        held["pending"] = name
+        if held.get("on_stop") is not None:
+            held["on_stop"]()
+        return
+    raise begin_stop(name)
+
+
+def signal_server(process):
+    # Called from the stop handler: the proof's next request then fails fast. Once reaped,
+    # the pid is never signalled again, so it cannot hit a reused pid.
+    if process.returncode is None:
+        try:
+            os.kill(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+
+
+def install_stop_handlers():
+    # Handler installation is atomic; preserve unrelated masks inherited from the caller.
+    signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)
+    for signum in STOP_SIGNALS:
+        signal.signal(signum, stop_on_signal)
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, STOP_SIGNALS)
+
+
+def release_signals():
+    held["active"] = False
+    if held["pending"] is not None:
+        raise begin_stop(held["pending"])
+
+
+def stop_group(process, grace=5):
+    # Build workers are already spawned, so blocking cannot leak a mask into them.
+    # Deliver any additional stop only after the whole group has been cleaned up.
+    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)
+    try:
+        _stop_group(process, grace)
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+
+
+def _stop_group(process, grace):
+    # The build runs in its own session, so its pid is also its process group id. Terminate the
+    # whole group (npm, node, rustc, ...), escalate to SIGKILL after `grace` seconds, and return
+    # only once no live member is left, so a replacement launch cannot overlap leftover writers.
+    group = process.pid
+
+    def signal_group(signum):
+        try:
+            os.killpg(group, signum)
+        except ProcessLookupError:
+            pass
+
+    def group_gone():
+        process.poll()  # reaps the leader if it has exited; its descendants keep the group alive
+        try:
+            os.killpg(group, 0)
+        except ProcessLookupError:
+            return True
+        # An orphan can remain as a zombie until PID 1 reaps it. Such a member cannot
+        # execute or write files; killpg(0) alone cannot distinguish it from a live worker.
+        try:
+            members = subprocess.check_output(["ps", "-axo", "pgid=,stat="], text=True, timeout=1)
+            for line in members.splitlines():
+                fields = line.split()
+                if len(fields) == 2 and int(fields[0]) == group and not fields[1].startswith("Z"):
+                    return False
+        except (OSError, subprocess.SubprocessError, ValueError):
+            # Failed inspection cannot establish that workers exited. Keep waiting and
+            # escalate normally rather than abandoning cleanup before SIGKILL.
+            return False
+        return True
+
+    def wait_gone(seconds):
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            if group_gone():
+                return True
+            time.sleep(0.05)
+        return group_gone()
+
+    signal_group(signal.SIGTERM)
+    if not wait_gone(grace):
+        signal_group(signal.SIGKILL)
+        check(wait_gone(5), f"build process group {group} survived SIGKILL")
+    if process.stdout is not None:
+        process.stdout.close()
+
+
+def run(root, *args, env=None, stdout=None, timeout=600):
+    print("BUILD:", " ".join(args), flush=True)
+    # Signals stay held for the whole build: a stop is only recorded, so it can never escape
+    # between the leader exiting and its group being reaped. Waiting in short slices still
+    # cancels promptly. Keeping the OS mask unchanged lets build workers handle SIGTERM normally.
+    was_held = held["active"]
+    held["active"] = True
+    process = None
+    try:
+        process = subprocess.Popen(args, cwd=root, env=env, stdout=stdout, text=True, start_new_session=True)
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                output, _ = process.communicate(timeout=0.1)
+                break
+            except subprocess.TimeoutExpired:
+                if held["pending"] is not None:
+                    output = None
+                    break
+                if time.monotonic() >= deadline:
+                    raise subprocess.TimeoutExpired(args, timeout) from None
+    finally:
+        # Even successful/nonzero leaders can leave background workers behind. Finish each
+        # group before another build starts; a stop recorded meanwhile is raised afterwards.
+        try:
+            if process is not None:
+                stop_group(process)
+        finally:
+            held["active"] = was_held
+    if not was_held:
+        release_signals()
+    if process.returncode:
+        if output:
+            print(output, end="", flush=True)
+        raise subprocess.CalledProcessError(process.returncode, args, output=output)
+    return subprocess.CompletedProcess(args, process.returncode, output, None)
+
+
+def checkout(root):
     if not (root / "rust").is_dir():
         raise SystemExit("rust/ not found; check out the desktop chain")
     check((root / "rust/crates/pp-server/Cargo.toml").is_file(), "Rust pp-server checkout required")
@@ -71,22 +235,15 @@ def main():
     print(f"Rust verification checkout: {root}\nCommit: {commit}", flush=True)
     node_path = shutil.which("node")
     check(node_path is not None, "node not found; install the Node version documented in rust/README.md")
-    node = str(Path(node_path).resolve())
+    return commit, str(Path(node_path).resolve())
 
-    def run(*args, env=None, stdout=None):
-        print("BUILD:", " ".join(args), flush=True)
-        try:
-            return subprocess.run(args, cwd=root, env=env, stdout=stdout, text=True, check=True, timeout=600)
-        except subprocess.CalledProcessError as error:
-            if error.stdout:
-                print(error.stdout, end="", flush=True)
-            raise
 
-    run("npm", "--prefix", "web", "ci")
-    run("npm", "--prefix", "web", "run", "build", env=dict(os.environ, VITE_PRINT_PARTNER_DESKTOP="1"))
-    run(sys.executable, "rust/scripts/build-desktop-manifest.py", "--web", "web", "--node", node,
+def build(root, node, commit):
+    run(root, "npm", "--prefix", "web", "ci")
+    run(root, "npm", "--prefix", "web", "run", "build", env=dict(os.environ, VITE_PRINT_PARTNER_DESKTOP="1"))
+    run(root, sys.executable, "rust/scripts/build-desktop-manifest.py", "--web", "web", "--node", node,
         "--output", "rust/bundle-manifest.json", "--commit", commit)
-    build = run("cargo", "build", "--manifest-path", "rust/Cargo.toml", "--locked", "-p", "pp-server",
+    build = run(root, "cargo", "build", "--manifest-path", "rust/Cargo.toml", "--locked", "-p", "pp-server",
                 "--message-format=json", stdout=subprocess.PIPE)
     binary = None
     for line in build.stdout.splitlines():
@@ -98,25 +255,91 @@ def main():
             binary = Path(artifact["executable"])
     check(binary is not None, "Cargo did not report a pp-server executable")
     print(f"EXECUTABLE: {binary}", flush=True)
+    return binary
+
+
+def start_server(binary, root, node, commit, fixture, errors, credentials=None, isolated=False):
+    args = [str(binary), "--data", str(fixture / "data"), "--web", str(root / "web"),
+            "--node", node, "--commit", commit]
+    if credentials is not None:
+        args += ["--test-credential-file", str(credentials)]
+    # A new session keeps terminal Ctrl-C from reaching pp-server before its signal handlers exist.
+    return subprocess.Popen(args, cwd=root, stdout=subprocess.PIPE, stderr=errors, text=True,
+                            start_new_session=isolated)
+
+
+def read_origin(process, errors):
+    # Read only available bytes, so a silent server or an unterminated origin line
+    # cannot postpone a held stop request until the full startup timeout.
+    deadline = time.monotonic() + 60
+    data = bytearray()
+    while b"\n" not in data:
+        remaining = deadline - time.monotonic()
+        check(remaining > 0, "Rust startup timed out")
+        # With a stop pending, drain what is already queued first: an origin printed before
+        # the stop means pp-server is ready, and its shutdown must still be checked.
+        stopping = held["active"] and held["pending"] is not None
+        if not select.select([process.stdout], [], [], 0 if stopping else min(0.1, remaining))[0]:
+            if stopping:
+                release_signals()
+            continue
+        chunk = os.read(process.stdout.fileno(), 4096)
+        if not chunk:
+            break
+        data.extend(chunk)
+    # A stop arriving with the origin line stays pending: the caller has a running server
+    # to stop and must still check its shutdown, so it honours the stop after this returns.
+    origin = bytes(data).split(b"\n", 1)[0].decode().strip()
+    if not origin:
+        process.wait(timeout=5)
+        errors.seek(0)
+        raise RuntimeError(f"Rust startup failed (exit={process.returncode}): {errors.read().strip()}")
+    parsed = urllib.parse.urlsplit(origin)
+    check(parsed.scheme == "http" and parsed.hostname == "127.0.0.1" and parsed.port,
+          "Rust did not emit a loopback origin")
+    return origin
+
+
+def terminate(process):
+    if process.poll() is None:
+        process.terminate()
+    try:
+        process.wait(timeout=25)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=5)
+        raise RuntimeError("Rust shutdown timed out")
+
+
+def verify_shutdown(process, fixture, runtime_dir, require_lock=True):
+    check(process.returncode == 0, f"Rust exited {process.returncode}")
+    check(not (fixture / "data/.desktop-owner.json").exists(), "Owner marker survived")
+    check(runtime_dir is None or not runtime_dir.exists(), "Private runtime directory survived")
+    try:
+        with (fixture / "data/.desktop.lock").open("rb") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except FileNotFoundError:
+        if require_lock:
+            raise RuntimeError("Rust shutdown verification failed: data lock file missing") from None
+
+
+def verify(root):
+    commit, node = checkout(root)
+    binary = build(root, node, commit)
     with tempfile.TemporaryDirectory(prefix="pp-verify-rust-") as temporary:
         fixture = Path(temporary)
         credentials = fixture / "credentials.json"
         with (fixture / "server.stderr").open("w+") as errors:
-            process = subprocess.Popen([
-                str(binary), "--data", str(fixture / "data"), "--web", str(root / "web"),
-                "--node", node, "--commit", commit, "--test-credential-file", str(credentials),
-            ], cwd=root, stdout=subprocess.PIPE, stderr=errors, text=True)
+            # Signals stay held until cleanup ends, so a stop can never skip it. A stop during
+            # the proof stops pp-server at once and is raised after cleanup.
+            held["active"] = True
+            process = start_server(binary, root, node, commit, fixture, errors, credentials)
             runtime_dir = None
+            held["on_stop"] = lambda: signal_server(process)
             try:
-                check(select.select([process.stdout], [], [], 60)[0], "Rust startup timed out")
-                origin = process.stdout.readline().strip()
-                if not origin:
-                    process.wait(timeout=5)
-                    errors.seek(0)
-                    raise RuntimeError(f"Rust startup failed (exit={process.returncode}): {errors.read().strip()}")
-                parsed = urllib.parse.urlsplit(origin)
-                check(parsed.scheme == "http" and parsed.hostname == "127.0.0.1" and parsed.port,
-                      "Rust did not emit a loopback origin")
+                if held["pending"] is not None:
+                    signal_server(process)
+                origin = read_origin(process, errors)
                 print(f"START: pid={process.pid} origin={origin}", flush=True)
                 marker = fixture / "data/.desktop-owner.json"
                 runtime_dir = Path(json.loads(marker.read_text())["runtime_dir"])
@@ -168,16 +391,22 @@ def main():
                 check(saved["id"] == source["id"] and saved["name"] == "Rust verification source",
                       "Source did not persist")
             finally:
-                failed = sys.exc_info()[0] is not None
+                cleanup_stop = None
                 try:
-                    if process.poll() is None:
-                        process.terminate()
-                    try:
-                        process.wait(timeout=25)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait(timeout=5)
-                        raise RuntimeError("Rust shutdown timed out")
+                    ignore_signals()
+                except Stop as stop:
+                    # The handler installed ignored handlers before raising. Finish cleanup
+                    # before propagating cancellation, preserving any earlier proof failure.
+                    cleanup_stop = stop
+                held["on_stop"] = None
+                if cleanup_stop is None and held["pending"] is not None:
+                    cleanup_stop = Stop(held["pending"])
+                held["active"] = False
+                failed = sys.exc_info()[0] is not None
+                if failed and cleanup_stop is not None:
+                    print(f"STOP: {cleanup_stop} received; proof cancelled", flush=True)
+                try:
+                    terminate(process)
                     credentials.unlink(missing_ok=True)
                 except Exception as error:
                     if not failed:
@@ -187,16 +416,184 @@ def main():
                     process.stdout.close()
                     errors.seek(0)
                     print("SERVER STDERR:\n" + errors.read(), flush=True)
-            check(process.returncode == 0, f"Rust exited {process.returncode}")
-            check(not (fixture / "data/.desktop-owner.json").exists(), "Owner marker survived")
-            check(runtime_dir is not None and not runtime_dir.exists(), "Private runtime directory survived")
-            try:
-                with (fixture / "data/.desktop.lock").open("rb") as lock:
-                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except FileNotFoundError:
-                raise RuntimeError("Rust shutdown verification failed: data lock file missing") from None
+            if cleanup_stop is not None and not failed:
+                raise cleanup_stop
+            verify_shutdown(process, fixture, runtime_dir)
             print("STOP: exit=0; owner marker removed; private sockets removed; data lock reacquired", flush=True)
     print("PASS: Rust build, gateway endpoints, persisted Source and shutdown", flush=True)
+
+
+def publish_credential(source, target):
+    # Write a private temporary inode, then hard-link it to the target: link() refuses to clobber
+    # a file that appeared after launch started, and the target only ever names a complete file.
+    # The returned handle stays open to pin this inode, so its number cannot be reused.
+    fd, temporary = tempfile.mkstemp(prefix=".pp-credential-", dir=target.parent)
+    handle = os.fdopen(fd, "wb")
+    linked = False
+    try:
+        try:
+            handle.write(source.read_bytes())
+            handle.flush()
+            os.fsync(handle.fileno())
+            os.link(temporary, target)
+            linked = True
+        finally:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass  # A consumer already removed the private name.
+    except BaseException:
+        try:
+            if linked:
+                unpublish_credential(target, handle)
+        finally:
+            handle.close()
+        raise
+    return handle
+
+
+def unpublish_credential(target, handle):
+    # Move the entry into a fresh private directory first: its name is unpredictable and
+    # empty, so the rename cannot overwrite anything and only this launch touches it.
+    if handle is None:
+        return
+    try:
+        try:
+            vault = Path(tempfile.mkdtemp(prefix=".pp-credential-", dir=target.parent))
+        except FileNotFoundError:
+            # The caller removed the parent after consuming the credential, so nothing is left to remove.
+            return
+        entry = vault / "entry"
+        try:
+            os.rename(target, entry)
+        except FileNotFoundError:
+            vault.rmdir()
+            return
+        except BaseException:
+            vault.rmdir()
+            raise
+        status = entry.lstat()
+        owned = os.fstat(handle.fileno())
+        if (status.st_dev, status.st_ino) == (owned.st_dev, owned.st_ino):
+            entry.unlink()
+            vault.rmdir()
+            return
+        # Foreign entries are never deleted. Only a regular file is restored, and never over
+        # whatever now occupies the path; anything else stays in the vault with a warning.
+        if not stat.S_ISREG(status.st_mode):
+            print(f"WARNING: foreign non-file entry kept at {entry}", flush=True)
+            return
+        try:
+            os.link(entry, target)
+        except OSError as error:
+            print(f"WARNING: foreign file kept at {entry} ({error})", flush=True)
+            return
+        entry.unlink()
+        vault.rmdir()
+    finally:
+        handle.close()
+
+
+def launch(root, credentials):
+    # Fast refusal before a long build; publish_credential() is the authoritative check.
+    if credentials is not None and (credentials.exists() or credentials.is_symlink()):
+        raise SystemExit(f"credential file already exists: {credentials}")
+    try:
+        install_stop_handlers()
+        commit, node = checkout(root)
+        binary = build(root, node, commit)
+        serve(binary, root, node, commit, credentials)
+    except Stop as stop:
+        print(f"STOP: {stop} received before pp-server started", flush=True)
+
+
+def serve(binary, root, node, commit, credentials):
+    with tempfile.TemporaryDirectory(prefix="pp-launch-rust-") as temporary:
+        fixture = Path(temporary)
+        runtime_dir = None
+        published = None
+        origin = None
+        with (fixture / "server.stderr").open("w+") as errors:
+            # pp-server writes its bootstrap into the private fixture; launch publishes it below.
+            internal = fixture / "bootstrap.json" if credentials is not None else None
+            held["active"] = True
+            process = start_server(binary, root, node, commit, fixture, errors, internal, isolated=True)
+            try:
+                origin = read_origin(process, errors)
+                marker = fixture / "data/.desktop-owner.json"
+                runtime_dir = Path(json.loads(marker.read_text())["runtime_dir"])
+                if held["pending"] is not None:
+                    # Stopped once ready: skip publishing and stop below with full shutdown checks.
+                    release_signals()
+                if credentials is not None:
+                    published = publish_credential(internal, credentials)
+                port = urllib.parse.urlsplit(origin).port
+                print(f"PP_SERVER_URL={origin} PP_SERVER_PORT={port} PP_SERVER_PID={process.pid}", flush=True)
+                # Signals stay held while serving, so a stop is only recorded and cannot escape
+                # between statements of the cleanup below; poll for it instead.
+                while held["pending"] is None:
+                    try:
+                        process.wait(timeout=0.1)
+                        break
+                    except subprocess.TimeoutExpired:
+                        pass
+                if held["pending"] is not None:
+                    release_signals()
+                if process.returncode != 0:
+                    raise RuntimeError(f"pp-server exited without a stop request (exit={process.returncode})")
+                print("STOP: pp-server exited cleanly; checking shutdown", flush=True)
+            except Stop as stop:
+                print(f"STOP: {stop} received; stopping pp-server", flush=True)
+            finally:
+                try:
+                    ignore_signals()
+                except Stop:
+                    # A stop at cleanup entry must still remove credentials and check shutdown.
+                    pass
+                held["active"] = False
+                try:
+                    # Startup may create resources before it announces an origin. Capture
+                    # their ownership record before termination removes it.
+                    try:
+                        marker = fixture / "data/.desktop-owner.json"
+                        if runtime_dir is None and marker.exists():
+                            runtime_dir = Path(json.loads(marker.read_text())["runtime_dir"])
+                    finally:
+                        terminate(process)
+                finally:
+                    if credentials is not None:
+                        unpublish_credential(credentials, published)
+                    process.stdout.close()
+                    errors.seek(0)
+                    print("SERVER STDERR:\n" + errors.read(), flush=True)
+            if origin is None:
+                # A missing lock is valid before startup acquired it; any resources that
+                # were created and the child exit status must still pass shutdown checks.
+                verify_shutdown(process, fixture, runtime_dir, require_lock=False)
+                print("STOP: exit=0; pp-server stopped before readiness", flush=True)
+            else:
+                verify_shutdown(process, fixture, runtime_dir)
+                print("STOP: exit=0; owner marker removed; private sockets removed; data lock reacquired", flush=True)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("mode", nargs="?", choices=["verify", "launch"], default="verify")
+    parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[4])
+    parser.add_argument("--credential-file", type=Path,
+                        help="launch only: pp-server writes the one-use bootstrap credential here")
+    args = parser.parse_args()
+    if args.credential_file is not None and args.mode != "launch":
+        parser.error("--credential-file applies only to launch")
+    root = args.repo.resolve()
+    if args.mode == "launch":
+        # Resolve the directory only: a symlink at the final component is an existing entry to refuse.
+        credentials = args.credential_file.parent.resolve() / args.credential_file.name if args.credential_file else None
+        launch(root, credentials)
+    else:
+        # Cancelled proofs remain nonzero, after their owned processes have been cleaned up.
+        install_stop_handlers()
+        verify(root)
 
 
 if __name__ == "__main__":
