@@ -16,6 +16,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { Transform, type Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { fileChunks } from "../lib/byte-chunks.js";
+import { tenantSourceUploadPrefix } from "../lib/secure-path.js";
 import { chargeTenantDiskBytes } from "../lib/tenant-disk-quota.js";
 import { extractThreeMfMeshes } from "./three-mf-import.js";
 import { MAX_SOURCE_UPLOAD_BYTES, SOURCE_UPLOAD_TOO_LARGE_DETAIL } from "./upload-limits.js";
@@ -139,10 +140,9 @@ export class SourceUploadTooLargeError extends Error {
   }
 }
 
-/** Staging sits beside the Source directories so publishing is a rename, outside the per-Source quota scan. */
-export function createSourceUploadStaging(sourcesDir: string): string {
+export function createSourceUploadStaging(sourcesDir: string, tenantId: string): string {
   mkdirSync(sourcesDir, { recursive: true });
-  return mkdtempSync(join(sourcesDir, ".upload-"));
+  return mkdtempSync(join(sourcesDir, tenantSourceUploadPrefix(tenantId)));
 }
 
 /** Write one uploaded file to disk, failing as soon as it passes the byte budget. */
@@ -266,7 +266,6 @@ export function writeUploadedFiles(
       if (targets.has(target)) throw new Error(`Duplicate uploaded file path: ${file.relativePath}`);
       targets.add(target);
       mkdirSync(dirname(target), { recursive: true });
-      chargeTenantDiskBytes(file.bytes);
       renameSync(file.path, target);
       if (file.relativePath.toLowerCase().endsWith(".stl")) stlCount += 1;
     }
@@ -287,7 +286,6 @@ export function writeUploadedZip(stagedZip: string, stagingDir: string): string 
   const extractDir = join(stagingDir, "files");
   mkdirSync(extractDir);
   try {
-    chargeTenantDiskBytes(statSync(stagedZip).size);
     extractZipFile(stagedZip, extractDir);
     expandThreeMfFiles(extractDir);
   } catch (error) {

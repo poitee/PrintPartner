@@ -28,6 +28,13 @@ import {
 } from "./upload-limits.js";
 import { isRecord } from "../lib/guards.js";
 
+export const SOURCE_PUBLICATION_UNAVAILABLE_DETAIL =
+  "Source revision publication is unavailable on experimental PostgreSQL because atomic publication transactions are not supported.";
+
+function assertSourcePublicationSupported(repo: AppRepository): void {
+  if (!repo.canPublishSourceRevision()) throw new Error(SOURCE_PUBLICATION_UNAVAILABLE_DETAIL);
+}
+
 const DEFAULT_LOCAL_SNAPSHOT_STL_LIMIT = 500;
 const DEFAULT_LOCAL_SNAPSHOT_DOCS_BYTES = 1024 * 1024 * 1024;
 const DEFAULT_LOCAL_SNAPSHOT_TOTAL_BYTES = 1024 * 1024 * 1024;
@@ -334,6 +341,7 @@ export async function publishLocalSourceWorkingTree(input: {
   maxDocumentationBytes?: number;
   maxTotalBytes?: number;
 }): Promise<SourceSummary> {
+  assertSourcePublicationSupported(input.repo);
   const observed = input.observed ?? input.repo.getSourceActivationObservation(input.sourceId);
   if (!observed) throw new Error("Source not found");
 
@@ -367,6 +375,7 @@ export async function publishSourceManifestRevision(input: {
   manifestYaml: string;
   observed?: SourceActivationObservation;
 }): Promise<SourceSummary> {
+  assertSourcePublicationSupported(input.repo);
   try {
     loadManifestYaml(input.manifestYaml);
   } catch (error) {

@@ -1,4 +1,4 @@
-import { TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
+import { chargeTenantDiskBytes, TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync, readdirSync, lstatSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
@@ -97,7 +97,7 @@ import { createSourceUploadStaging, finalizeUploadedSource, writeUploadedFiles, 
 import { MAX_MCP_INLINE_FILE_BYTES, MCP_INLINE_UPLOAD_TOO_LARGE_DETAIL } from "../services/upload-limits.js";
 import { indexSourceDocsFromDisk } from "../services/source-docs-index.js";
 import { resolvedFileUnderRoot } from "../lib/secure-path.js";
-import { publishLocalSourceWorkingTree } from "../services/local-source-revision.js";
+import { publishLocalSourceWorkingTree, SOURCE_PUBLICATION_UNAVAILABLE_DETAIL } from "../services/local-source-revision.js";
 import { addCustomFilament, listCustomFilaments } from "../services/custom-filaments.js";
 import { extractThreeMfMeshes } from "../services/three-mf-import.js";
 import { bufferChunks } from "../lib/byte-chunks.js";
@@ -956,6 +956,9 @@ export async function invokeAssistantTool(
         });
       }
       case "propose_import_source_files": {
+        if (!ctx.repo.canPublishSourceRevision()) {
+          return { content: JSON.stringify({ error: SOURCE_PUBLICATION_UNAVAILABLE_DETAIL }) };
+        }
         const sourceId = asInt(input.source_id);
         if (sourceId == null || !ctx.repo.getSource(sourceId)) return { content: JSON.stringify({ error: "source_id must reference an existing Source" }) };
         const archive = typeof input.archive_base64 === "string" ? input.archive_base64.trim() : "";
@@ -3295,6 +3298,9 @@ export async function applyAssistantAction(
         break;
       }
       case "propose_import_source_files": {
+        if (!deps.repo.canPublishSourceRevision()) {
+          return { ok: false, status: 503, detail: SOURCE_PUBLICATION_UNAVAILABLE_DETAIL };
+        }
         const sourceId = asInt(action.params.source_id);
         if (sourceId == null) return { ok: false, detail: "source_id required" };
         const observed = deps.repo.getSourceActivationObservation(sourceId);
@@ -3308,12 +3314,13 @@ export async function applyAssistantAction(
         let importedFiles = 0;
         let stlCount = 0;
         let suggestedRules: string[] = [];
-        const staging = createSourceUploadStaging(sourcesDir);
+        const staging = createSourceUploadStaging(sourcesDir, deps.tenantId ?? "default");
         try {
           if (archive) {
             const buffer = Buffer.from(archive, "base64");
             if (buffer.length > MAX_MCP_INLINE_FILE_BYTES) return { ok: false, detail: MCP_INLINE_UPLOAD_TOO_LARGE_DETAIL };
             const stagedZip = join(staging, "upload.zip");
+            chargeTenantDiskBytes(buffer.length);
             writeFileSync(stagedZip, buffer);
             workingTree = writeUploadedZip(stagedZip, staging);
             const finalized = finalizeUploadedSource(workingTree);
@@ -3334,6 +3341,7 @@ export async function applyAssistantAction(
               totalBytes += buffer.length;
               if (totalBytes > MAX_MCP_INLINE_FILE_BYTES) return { ok: false, detail: MCP_INLINE_UPLOAD_TOO_LARGE_DETAIL };
               const path = join(staging, String(index));
+              chargeTenantDiskBytes(buffer.length);
               writeFileSync(path, buffer);
               files.push({ relativePath, path });
             }

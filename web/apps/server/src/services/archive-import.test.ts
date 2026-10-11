@@ -5,10 +5,7 @@ import { tmpdir } from "node:os";
 import AdmZip from "adm-zip";
 import { ZipFile } from "yazl";
 import { encodeAcceptedPlate3mf, type StlMesh } from "@print-partner/domain";
-import {
-  runWithTenantDiskQuota,
-  TenantDiskQuotaError,
-} from "../lib/tenant-disk-quota.js";
+import { runWithTenantDiskQuota } from "../lib/tenant-disk-quota.js";
 import { createSourceUploadStaging, extractZipFile, writeUploadedFiles, writeUploadedZip, discoverImportRules } from "./archive-import.js";
 
 function tempRoot(): string {
@@ -134,29 +131,17 @@ describe("archive extraction hardening", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it("cleans uploaded file staging when quota blocks a file write", async () => {
+  it("does not charge a rename for bytes already counted in tenant upload staging", async () => {
     const root = tempRoot();
-    const sourcesDir = join(root, "sources");
-    mkdirSync(sourcesDir);
-
-    await expect(
-      runWithTenantDiskQuota(
-        {
-          dataDir: root,
-          reposDir: join(root, "repos"),
-          tenantId: "tenant-a",
-          quotaBytes: 3,
-          sourceIds: () => [42],
-        },
-        async () =>
-          writeUploadedFiles(
-            [staged("parts/a.stl", Buffer.from("solid a"))],
-            sourcesDir,
-          ),
-      ),
-    ).rejects.toBeInstanceOf(TenantDiskQuotaError);
-
-    expect(existsSync(join(sourcesDir, "42", "files"))).toBe(false);
+    const staging = createSourceUploadStaging(join(root, "sources"), "tenant-a");
+    const path = join(staging, "upload");
+    writeFileSync(path, "solid a");
+    const result = await runWithTenantDiskQuota({
+      dataDir: root, reposDir: join(root, "repos"), tenantId: "tenant-a",
+      quotaBytes: 7, sourceIds: () => [],
+    }, async () => writeUploadedFiles([{ relativePath: "parts/a.stl", path }], staging));
+    expect(result.fileCount).toBe(1);
+    expect(readFileSync(join(result.extractDir, "parts/a.stl"), "utf8")).toBe("solid a");
     rmSync(root, { recursive: true, force: true });
   });
 
@@ -255,7 +240,7 @@ describe("upload candidates", () => {
       const central = bytes.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
       bytes.writeUInt32LE(0, central + 16);
     }
-    const candidate = createSourceUploadStaging(root);
+    const candidate = createSourceUploadStaging(root, "default");
     const incoming = join(candidate, "upload.zip");
     writeFileSync(incoming, bytes);
     expect(() => writeUploadedZip(incoming, candidate)).toThrow();
@@ -269,7 +254,7 @@ describe("upload candidates", () => {
     const root = tempRoot();
     mkdirSync(join(root, "42", "files"), { recursive: true });
     writeFileSync(join(root, "42", "files", "keep.stl"), "previous STL");
-    const candidate = createSourceUploadStaging(root);
+    const candidate = createSourceUploadStaging(root, "default");
     expect(() => writeUploadedFiles([
       staged("ok.stl", Buffer.from("new STL")),
       staged("../escape.stl", Buffer.from("escape")),

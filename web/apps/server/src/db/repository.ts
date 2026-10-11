@@ -1196,6 +1196,10 @@ export class AppRepository {
     return this.syncSqlite ? this.transaction(read, "deferred") : read();
   }
 
+  canPublishSourceRevision(): boolean {
+    return this.syncSqlite;
+  }
+
   canMutateAcceptedPlan(): boolean {
     return this.syncSqlite;
   }

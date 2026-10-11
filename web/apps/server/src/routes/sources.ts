@@ -45,7 +45,7 @@ import {
 } from "../services/source-docs-index.js";
 import { PDF_BG_EXTRACT_BYTES } from "../services/pdf-text-extract.js";
 import { sourcePdfTextStorage } from "../services/source-workspace.js";
-import { publishLocalSourceWorkingTree } from "../services/local-source-revision.js";
+import { publishLocalSourceWorkingTree, SOURCE_PUBLICATION_UNAVAILABLE_DETAIL } from "../services/local-source-revision.js";
 import { scanSourceArtifacts } from "../services/source-artifacts.js";
 import { sendIfTenantDiskQuotaExceeded, runWithTenantDiskQuota, TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
 
@@ -69,7 +69,6 @@ async function refuseIfHostedQuotaExceeded(
   reply: import("fastify").FastifyReply,
   deps: RouteDeps,
   tenantId: string,
-  additionalBytes = 0,
 ): Promise<boolean> {
   const quota = deps.hostedPlanning ? HOSTED_TENANT_DISK_QUOTA_BYTES : null;
   return sendIfTenantDiskQuotaExceeded(reply, {
@@ -77,7 +76,6 @@ async function refuseIfHostedQuotaExceeded(
     reposDir: deps.reposDir,
     tenantId,
     sourceIds: deps.repo.listSources().map((source) => source.id),
-    additionalBytes,
     quotaBytes: quota,
   });
 }
@@ -372,6 +370,9 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
   });
 
   app.post("/sources/:id/upload-zip", async (request, reply) => {
+    if (!deps.repo.canPublishSourceRevision()) {
+      return reply.status(503).send({ detail: SOURCE_PUBLICATION_UNAVAILABLE_DETAIL });
+    }
     const id = Number((request.params as { id: string }).id);
     const observed = deps.repo.getSourceActivationObservation(id);
     const row = deps.repo.getProjectRow(id);
@@ -388,7 +389,7 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
       },
     });
     if (!data) return reply.status(400).send({ detail: "ZIP file required" });
-    const staging = createSourceUploadStaging(deps.sourcesDir);
+    const staging = createSourceUploadStaging(deps.sourcesDir, request.tenantId);
     try {
       const stagedZip = join(staging, "upload.zip");
       let uploadedBytes: number;
@@ -400,7 +401,7 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
         }
         throw error;
       }
-      if (await refuseIfHostedQuotaExceeded(reply, deps, request.tenantId, uploadedBytes)) {
+      if (await refuseIfHostedQuotaExceeded(reply, deps, request.tenantId)) {
         return;
       }
       try {
@@ -448,6 +449,9 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
   });
 
   app.post("/sources/:id/upload-files", async (request, reply) => {
+    if (!deps.repo.canPublishSourceRevision()) {
+      return reply.status(503).send({ detail: SOURCE_PUBLICATION_UNAVAILABLE_DETAIL });
+    }
     const id = Number((request.params as { id: string }).id);
     const observed = deps.repo.getSourceActivationObservation(id);
     const row = deps.repo.getProjectRow(id);
@@ -456,7 +460,7 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
       return reply.status(400).send({ detail: HOSTED_SOURCE_KIND_DETAIL });
     }
 
-    const staging = createSourceUploadStaging(deps.sourcesDir);
+    const staging = createSourceUploadStaging(deps.sourcesDir, request.tenantId);
     try {
       const uploads: Array<{ relativePath: string; path: string }> = [];
       let relativePaths: string[] = [];
@@ -516,7 +520,7 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
       if (!uploads.length) {
         return reply.status(400).send({ detail: "At least one file is required" });
       }
-      if (await refuseIfHostedQuotaExceeded(reply, deps, request.tenantId, uploadedBytes)) {
+      if (await refuseIfHostedQuotaExceeded(reply, deps, request.tenantId)) {
         return;
       }
 
