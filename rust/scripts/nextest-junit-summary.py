@@ -32,8 +32,9 @@ if args.junit.is_file():
         name = f"{case.get('classname', '')} {case.get('name', '')}".strip().replace('|', '\\|')
         cases.append((float(case.get('time', 0)), name, status))
     cases.sort(reverse=True)
-    lines += [f'Slowest {args.top} of {len(cases)} tests:', '', '| Time (s) | Test | Status |', '| ---: | --- | --- |']
-    lines += [f'| {t:.3f} | `{name}` | {status} |' for t, name, status in cases[:args.top]]
+    shown = min(args.top, len(cases))
+    lines += [f'Slowest {shown} of {len(cases)} tests:', '', '| Time (s) | Test | Status |', '| ---: | --- | --- |']
+    lines += [f'| {t:.3f} | `{name}` | {status} |' for t, name, status in cases[:shown]]
 else:
     lines.append(f'No JUnit report at `{args.junit}`; the test run did not produce one.')
 
