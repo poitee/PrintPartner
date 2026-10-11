@@ -2,7 +2,7 @@
 """Build, drive and stop an isolated Rust gateway; stdout is the proof.
 
 Modes: `verify` (default) runs the full proof. `launch` builds, starts pp-server
-on loopback, prints `PP_SERVER_URL=...` and stays up until SIGTERM or SIGINT,
+on loopback, prints `PP_SERVER_URL=...` and stays up until SIGTERM, SIGINT or SIGHUP,
 then stops it cleanly.
 """
 import argparse
@@ -29,7 +29,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class Stop(Exception):
-    """Raised from a SIGTERM/SIGINT handler so launch mode can clean up."""
+    """Raised from a SIGTERM/SIGINT/SIGHUP handler so launch mode can clean up."""
 
 
 def check(condition, message):
@@ -41,6 +41,7 @@ def ignore_signals():
     # Once cleanup starts, further signals must not interrupt it.
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
 
 
 def begin_stop(name):
@@ -70,7 +71,7 @@ def release_signals():
 def stop_group(process, grace=5):
     # Build workers are already spawned, so blocking cannot leak a mask into them.
     # Deliver any additional stop only after the whole group has been cleaned up.
-    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGINT})
+    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGINT, signal.SIGHUP})
     try:
         _stop_group(process, grace)
     finally:
@@ -373,12 +374,13 @@ def launch(root, credentials):
     if credentials is not None and (credentials.exists() or credentials.is_symlink()):
         raise SystemExit(f"credential file already exists: {credentials}")
     try:
-        # Block both signals while installing handlers, so neither arrives half-installed.
-        signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGINT})
+        # Block stop signals while installing handlers, so none arrives half-installed.
+        signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGINT, signal.SIGHUP})
         signal.signal(signal.SIGTERM, stop_on_signal)
         signal.signal(signal.SIGINT, stop_on_signal)
-        # Unblock only these two, so a caller's other masked signals stay masked.
-        signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM, signal.SIGINT})
+        signal.signal(signal.SIGHUP, stop_on_signal)
+        # Unblock only stop signals, so a caller's other masked signals stay masked.
+        signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM, signal.SIGINT, signal.SIGHUP})
         commit, node = checkout(root)
         binary = build(root, node, commit)
         serve(binary, root, node, commit, credentials)
@@ -439,6 +441,8 @@ def main():
         credentials = args.credential_file.parent.resolve() / args.credential_file.name if args.credential_file else None
         launch(root, credentials)
     else:
+        # Detached build groups also need cleanup when a verification terminal closes.
+        signal.signal(signal.SIGHUP, stop_on_signal)
         verify(root)
 
 

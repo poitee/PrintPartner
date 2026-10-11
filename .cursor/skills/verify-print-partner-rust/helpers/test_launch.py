@@ -306,7 +306,13 @@ class StopDuringBuildTest(unittest.TestCase):
     def test_sigint_during_build_leaves_no_build_children(self):
         self.assert_stop_leaves_no_children(signal.SIGINT)
 
-    def assert_stop_leaves_no_children(self, stop_signal):
+    def test_sighup_during_build_leaves_no_build_children(self):
+        self.assert_stop_leaves_no_children(signal.SIGHUP)
+
+    def test_sighup_during_verify_build_leaves_no_build_children(self):
+        self.assert_stop_leaves_no_children(signal.SIGHUP, mode="verify")
+
+    def assert_stop_leaves_no_children(self, stop_signal, mode="launch"):
         with tempfile.TemporaryDirectory(prefix="pp-launch-build-test-") as temporary:
             temp = Path(temporary)
             root = make_fixture_repo(temp / "repo")
@@ -322,7 +328,7 @@ class StopDuringBuildTest(unittest.TestCase):
             # Output goes to a file, not a pipe: a surviving build child must not keep a pipe open.
             log = temp / "launch.log"
             with log.open("w") as stdout:
-                process = subprocess.Popen([sys.executable, str(HELPER), "launch", "--repo", str(root)],
+                process = subprocess.Popen([sys.executable, str(HELPER), mode, "--repo", str(root)],
                                            env=env, stdout=stdout, stderr=subprocess.STDOUT, text=True)
             child_pid = None
             try:
@@ -334,12 +340,17 @@ class StopDuringBuildTest(unittest.TestCase):
                 self.assertTrue(process_alive(child_pid), "build child should be running before the stop")
 
                 process.send_signal(stop_signal)
-                self.assertEqual(process.wait(timeout=60), 0)
+                exit_code = process.wait(timeout=60)
                 output = log.read_text()
                 self.assertIn("BUILD: npm --prefix web ci", output)
-                self.assertIn(f"STOP: {stop_signal.name} received before pp-server started", output)
+                if mode == "launch":
+                    self.assertEqual(exit_code, 0, output)
+                    self.assertIn(f"STOP: {stop_signal.name} received before pp-server started", output)
+                else:
+                    self.assertNotEqual(exit_code, 0, output)
+                    self.assertIn(f"Stop: {stop_signal.name}", output)
                 self.assertTrue(wait_until_gone(child_pid, 5), "build child outlived the launcher")
-                print(f"{stop_signal.name} during build -> exit 0; build process tree gone")
+                print(f"{stop_signal.name} during {mode} build -> exit {exit_code}; build process tree gone")
             finally:
                 if process.poll() is None:
                     process.kill()
