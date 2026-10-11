@@ -9,3 +9,6 @@ publish = false
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
+
+[dev-dependencies]
+proptest = "=1.9.0"
