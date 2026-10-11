@@ -118,7 +118,15 @@ utils:
       kind: use_as_clause
       has:
         field: path
-        regex: '^(::)?std$'
+        any:
+          - regex: '^(::)?std$'
+          - kind: self
+            inside:
+              kind: use_as_clause
+              inside:
+                kind: use_list
+                inside:
+                  matches: std-list
       all:
         - has:
             field: alias

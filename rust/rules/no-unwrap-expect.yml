@@ -16,11 +16,15 @@ rule:
         - pattern: $VALUE.expect($$$ARGS)
         - pattern: $TYPE::unwrap($$$ARGS)
         - pattern: $TYPE::expect($$$ARGS)
+        - pattern: $VALUE.r#unwrap()
+        - pattern: $VALUE.r#expect($$$ARGS)
+        - pattern: $TYPE::r#unwrap($$$ARGS)
+        - pattern: $TYPE::r#expect($$$ARGS)
         # Macro arguments are token trees, not parsed call expressions. Match
         # the method-name token between a dot and its argument list instead.
         - all:
             - kind: identifier
-            - regex: '^(unwrap|expect)$'
+            - regex: '^(r#)?(unwrap|expect)$'
             - inside:
                 kind: token_tree
             - follows:
@@ -38,6 +42,31 @@ rule:
                     any:
                       - kind: line_comment
                       - kind: block_comment
+    # stringify! returns the argument tokens without evaluating any calls.
+    - not:
+        inside:
+          any:
+            - kind: macro_invocation
+              has:
+                field: macro
+                regex: '^(::)?((std|core)\s*::\s*)?stringify$'
+            # Nested invocations in another macro are token trees too.
+            - kind: token_tree
+              follows:
+                regex: '^!$'
+                follows:
+                  kind: identifier
+                  regex: '^stringify$'
+                  any:
+                    - not:
+                        follows:
+                          regex: '^::$'
+                    - follows:
+                        regex: '^::$'
+                        follows:
+                          kind: identifier
+                          regex: '^(std|core)$'
+          stopBy: end
     - not:
         inside:
           stopBy: end

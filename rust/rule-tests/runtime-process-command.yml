@@ -19,6 +19,7 @@ valid:
   - 'use std as standard; fn production() { use other as standard; let _: standard::process::Command; }'
   - 'use std::process; fn production() { use crate::process; let _: process::Command; }'
   - 'use std::process; fn production() { mod process { pub struct Command; } let _: process::Command; }'
+  - 'use other::{self as standard}; fn production(_: standard::process::Command) {}'
 invalid:
   - 'fn production() { std::process::Command::new("sh"); }'
   - 'use std::process::Command;'
@@ -55,3 +56,5 @@ invalid:
   - 'use std as standard; fn production() { use std::io::Read; standard::process::Command::new("sh"); }'
   - 'use std::process; fn production() { use std::io::Write; vec![process::Command::new("sh")]; }'
   - 'use std::process; fn production() { use std::process::Stdio; process::Command::new("sh"); }'
+  - 'use std::{self as standard}; fn production() { standard::process::Command::new("sh"); }'
+  - 'use ::std::{self as standard, io}; fn production() { vec![standard::process::Command::new("sh")]; }'
