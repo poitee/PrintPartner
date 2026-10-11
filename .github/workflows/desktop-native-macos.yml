@@ -48,7 +48,7 @@ jobs:
       CARGO_PROFILE_RELEASE_DEBUG: '0'
       npm_config_build_from_source: 'true'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Record runner and check parser controls
@@ -63,7 +63,7 @@ jobs:
           xcodebuild -version >> "$PP_EVIDENCE/runner.txt"
           test "$(uname -m)" = '${{ matrix.arch }}'
           python3 rust/scripts/check-macos-bundle.py --self-test 2>&1 | tee "$PP_EVIDENCE/self-tests.log"
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.21.0'
           architecture: ${{ matrix.node_arch }}
@@ -119,7 +119,7 @@ jobs:
           PP_COMPAT_TEST_RECEIPT="$PP_EVIDENCE/compat-lifecycle.json" \
           CARGO_NET_OFFLINE=true cargo test --manifest-path rust/Cargo.toml \
             -p pp-compat --test installed_bundle_lifecycle \
-            -- --exact installed_bundle_start_health_shutdown --nocapture \
+            -- --ignored --exact installed_bundle_start_health_shutdown --nocapture \
             2>&1 | tee "$PP_EVIDENCE/compat-lifecycle.log"
           python3 - "$PP_EVIDENCE/compat-lifecycle.json" "$GITHUB_SHA" <<'PY'
           import json
@@ -158,7 +158,7 @@ jobs:
           fi
           git diff -- rust/Cargo.lock web/package-lock.json > "$PP_EVIDENCE/lockfile-diff.patch"
           df -h > "$PP_EVIDENCE/storage-after.txt"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: native-macos-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}

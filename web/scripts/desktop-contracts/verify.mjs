@@ -18,7 +18,7 @@ const checks = [];
 function files(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((item) => item.name === "target" || item.name === "node_modules" ? [] : item.isDirectory() ? files(join(directory, item.name)) : [join(directory, item.name)]);
 }
-const sourceFiles = [...files(join(repo, "rust/crates/pp-contracts")), ...files(join(web, "scripts/desktop-contracts")), join(web, "packages/contracts/src/plan-drafts.ts"), join(web, "packages/contracts/test-fixtures/desktop/autosave-v1.json"), join(web, "package.json"), join(web, "package-lock.json"), join(repo, "rust/Cargo.toml"), join(repo, "rust/Cargo.lock"), join(repo, "rust/scripts/check-boundaries.py")];
+const sourceFiles = [...files(join(repo, "rust/crates/pp-contracts")), ...files(join(repo, "rust/crates/pp-api-types")), ...files(join(repo, "rust/crates/pp-domain")), ...files(join(web, "scripts/desktop-contracts")), join(web, "packages/contracts/src/plan-drafts.ts"), join(web, "packages/contracts/src/wire-schema.ts"), ...files(join(web, "packages/contracts/test-fixtures/t9")), join(web, "packages/contracts/test-fixtures/desktop/autosave-v1.json"), join(web, "package.json"), join(web, "package-lock.json"), join(repo, "rust/Cargo.toml"), join(repo, "rust/Cargo.lock"), join(repo, "rust/scripts/check-boundaries.py")];
 const sources = Object.fromEntries(sourceFiles.map((path) => [path, sha256(readFileSync(path))]));
 let failure;
 function run(name, executable, args, cwd) {
@@ -30,13 +30,20 @@ function run(name, executable, args, cwd) {
   process.stdout.write(`${name}: exit 0\n`);
 }
 try {
+  run("rust-version", cargo, ["--version"], repo);
+  assert.match(readFileSync(join(output, "rust-version.log"), "utf8"), /^cargo 1\.99\.0\b/, "Use the pinned Rust 1.99.0 toolchain");
+  run("regenerate", process.execPath, ["scripts/desktop-contracts/regenerate.mjs"], web);
+  run("generated-diff", "git", ["diff", "--exit-code", "--", "web/scripts/desktop-contracts/schemas", "rust/crates/pp-api-types/src/generated.rs"], repo);
+  run("generated-untracked", "git", ["ls-files", "--others", "--exclude-standard", "--", "web/scripts/desktop-contracts/schemas", "rust/crates/pp-api-types/src/generated.rs"], repo);
+  assert.equal(readFileSync(join(output, "generated-untracked.log"), "utf8").trim(), "", "Untracked generated artifacts: add them to git");
+  run("node-semantics", process.execPath, ["--conditions=development", "--import", "tsx", "--test", "scripts/desktop-contracts/semantics.test.mjs"], web);
   run("schemas", process.execPath, ["--conditions=development", "--import", "tsx", "scripts/desktop-contracts/generate.mjs", "--check", output], web);
   run("node-text-tests", process.execPath, ["--conditions=development", "--import", "tsx", "--test", "scripts/desktop-contracts/text.test.mjs"], web);
-  run("rust-test", cargo, ["+1.99.0", "test", "--manifest-path", manifest, "--locked"], repo);
-  run("rust-parity", cargo, ["+1.99.0", "run", "--manifest-path", manifest, "--locked", "--bin", "contract-parity", "--", join(output, "node-cases.json"), join(output, "rust-cases.json")], repo);
+  run("rust-test", cargo, ["test", "--manifest-path", manifest, "--locked", "-p", "pp-contracts", "-p", "pp-api-types"], repo);
+  run("rust-parity", cargo, ["run", "--manifest-path", manifest, "--locked", "--bin", "contract-parity", "--", join(output, "node-cases.json"), join(output, "rust-cases.json")], repo);
   run("boundary", "python3", ["rust/scripts/check-boundaries.py", "--self-test"], repo);
-  run("rust-fmt", cargo, ["+1.99.0", "fmt", "--manifest-path", manifest, "--check"], repo);
-  run("rust-clippy", cargo, ["+1.99.0", "clippy", "--manifest-path", manifest, "--locked", "--all-targets", "--", "-D", "warnings"], repo);
+  run("rust-fmt", cargo, ["fmt", "--manifest-path", manifest, "-p", "pp-api-types", "-p", "pp-contracts", "--check"], repo);
+  run("rust-clippy", cargo, ["clippy", "--manifest-path", manifest, "--locked", "-p", "pp-api-types", "-p", "pp-contracts", "--features", "pp-api-types/codegen", "--all-targets", "--", "-D", "warnings"], repo);
   run("negative-controls", process.execPath, ["--test", "scripts/desktop-contracts/controls.test.mjs"], web);
   const report = JSON.parse(readFileSync(join(output, "rust-cases.json"), "utf8"));
   assert.equal(report.mismatches.length, 0);
@@ -49,7 +56,7 @@ try {
   writeFileSync(join(output, "checks.json"), `${JSON.stringify(checks, null, 2)}\n`);
   const artifacts = Object.fromEntries(readdirSync(output).map((name) => [name, sha256(readFileSync(join(output, name)))]));
   writeFileSync(join(output, "manifest.json"), `${JSON.stringify({ status: failure ? "ISSUES" : "PASS", sources, artifacts, versions: { node: process.version } }, null, 2)}\n`);
-  verifyFreshness(output);
+  if (!failure) verifyFreshness(output);
   process.stdout.write(`Receipts: ${output}\n`);
 }
 if (failure) throw failure;

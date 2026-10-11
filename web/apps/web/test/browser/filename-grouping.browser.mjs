@@ -109,7 +109,10 @@ try {
     assert.ok(match, "Expected a fixture job endpoint");
     return decodeURIComponent(match[1]);
   };
+  let wsInterceptCount = 0;
+  // Disable the actual job stream so WebSocket completion cannot race the failed HTTP poll.
   await recoveryPage.routeWebSocket(/\/ws\/jobs\/[^/?]+$/, async (socket) => {
+    wsInterceptCount += 1;
     const jobId = jobIdFromUrl(socket.url());
     try {
       await awaitWitness(socket.close(), `socket close for job ${jobId}`);
@@ -170,6 +173,7 @@ try {
     assert.deepEqual(observation.fixtureErrors, [], "Fault handlers must finish without errors");
     assert.equal(initialAttempt.exportJobs.length, 1, "One initial download action must start one real export");
     assert.deepEqual(retryAttempt.exportJobs, [], "No retry may start before the explicit Try again action");
+    assert.ok(wsInterceptCount >= 1, "WebSocket intercept must fire for /ws/jobs/:jobId (not HTTP-only recovery)");
     const interruptedJobId = initialAttempt.exportJobs[0];
     assert.ok(observation.closedSocketJobs.includes(interruptedJobId), "The intended export's canonical job socket must be closed");
     assert.ok(observation.deniedPollJobs.length > 0, "The job HTTP status request must receive the injected 503");

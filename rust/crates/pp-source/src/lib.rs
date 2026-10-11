@@ -9,7 +9,8 @@ use path_policy::PathCollisions;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeSet,
+    borrow::Borrow,
+    collections::{BTreeMap, BTreeSet},
     fmt,
     io::{self, Read, Write},
     path::Path,
@@ -340,17 +341,24 @@ fn tree_paths(
         if result.len() >= MAX_ENTRIES {
             return Err(Error::Limit);
         }
-        let path = format!("{prefix}{name}");
+        // HFS+ may enumerate decomposed names even though the manifest uses
+        // NFC. Normalize only the comparison path; open the original entry
+        // relative to the pinned directory with NOFOLLOW below.
+        let path = format!("{prefix}{}", name.nfc().collect::<String>());
         SourcePath::try_from(path.clone())?;
         match dir.child(&name, false) {
             Ok(child) => {
-                result.insert(format!("{path}/"));
+                if !result.insert(format!("{path}/")) {
+                    return Err(Error::CorruptSnapshot);
+                }
                 tree_paths(&child, &format!("{path}/"), result, depth + 1)?;
                 child.sync()?;
             }
             Err(_) => {
                 dir.file(&name, false)?;
-                result.insert(path);
+                if !result.insert(path) {
+                    return Err(Error::CorruptSnapshot);
+                }
             }
         }
     }
@@ -369,16 +377,57 @@ fn expected_paths(files: &[ContentFile]) -> BTreeSet<String> {
     paths
 }
 
+fn canonical_destination(
+    path: &SourcePath,
+    directories: &mut BTreeMap<String, String>,
+) -> Result<SourcePath> {
+    let mut original = String::new();
+    let mut canonical = String::new();
+    let mut components = path.as_str().split('/').peekable();
+    while let Some(component) = components.next() {
+        if !original.is_empty() {
+            original.push('/');
+            canonical.push('/');
+        }
+        original.push_str(component);
+        canonical.push_str(component);
+        if components.peek().is_some() {
+            canonical = directories
+                .entry(original.to_lowercase())
+                .or_insert_with(|| canonical.clone())
+                .clone();
+        }
+    }
+    SourcePath::try_from(canonical)
+}
+
 impl SourceRoot {
     pub fn materialize(
         &mut self,
-        mut request: SnapshotRequest,
+        request: SnapshotRequest,
         input: &LocalFiles,
+        budget: ArtifactBudget,
+    ) -> Result<PublishedSnapshot> {
+        self.materialize_lazy(request, || Ok(input), budget)
+    }
+    /// Open local inputs only if the revision needs a new publication.
+    pub fn materialize_from_directory(
+        &mut self,
+        request: SnapshotRequest,
+        input_directory: &Path,
+        budget: ArtifactBudget,
+    ) -> Result<PublishedSnapshot> {
+        self.materialize_lazy(request, || LocalFiles::open(input_directory), budget)
+    }
+    fn materialize_lazy<I: Borrow<LocalFiles>>(
+        &mut self,
+        mut request: SnapshotRequest,
+        open_input: impl FnOnce() -> Result<I>,
         budget: ArtifactBudget,
     ) -> Result<PublishedSnapshot> {
         validate_request(&mut request)?;
         self.revisions.0.lock_exclusive()?;
-        let result = self.materialize_locked(request, input, budget);
+        let result = self.materialize_locked(request, open_input, budget);
         let unlocked = FileExt::unlock(&self.revisions.0);
         match result {
             Err(error) => Err(error),
@@ -388,10 +437,10 @@ impl SourceRoot {
             }
         }
     }
-    fn materialize_locked(
+    fn materialize_locked<I: Borrow<LocalFiles>>(
         &self,
         request: SnapshotRequest,
-        input: &LocalFiles,
+        open_input: impl FnOnce() -> Result<I>,
         budget: ArtifactBudget,
     ) -> Result<PublishedSnapshot> {
         self.revisions.remove_tree(CANDIDATE)?;
@@ -400,8 +449,9 @@ impl SourceRoot {
             Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
         }
+        let input = open_input()?;
         let candidate = self.revisions.child(CANDIDATE, true)?;
-        let outcome = self.write_candidate(&candidate, request, input, budget);
+        let outcome = self.write_candidate(&candidate, request, input.borrow(), budget);
         let cleanup = self
             .revisions
             .remove_tree(CANDIDATE)
@@ -425,10 +475,25 @@ impl SourceRoot {
         let mut docs = 0;
         let mut stls = 0;
         let mut files = Vec::new();
+        let mut directories = BTreeMap::new();
+        let omitted_paths: BTreeSet<_> = request
+            .selection
+            .omitted_files
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect();
         for selected in request.files {
             let source = input.root.file(selected.path.as_str(), false)?;
             let length = source.metadata()?.len();
-            let mut destination = candidate.file(selected.path.as_str(), true)?;
+            // Keep the original spelling for reading case-sensitive inputs, but
+            // share one deterministic spelling for destination directories.
+            let path = canonical_destination(&selected.path, &mut directories)?;
+            // Folder canonicalization can introduce an exact omission overlap
+            // that was absent from the original case-sensitive input paths.
+            if omitted_paths.contains(path.as_str()) {
+                return Err(Error::DuplicatePath);
+            }
+            let mut destination = candidate.file(path.as_str(), true)?;
             let (size_bytes, sha256) = copy_hash(
                 source,
                 &mut destination,
@@ -450,12 +515,13 @@ impl SourceRoot {
                 return Err(Error::Limit);
             }
             files.push(ContentFile {
-                path: selected.path,
+                path,
                 kind: selected.kind,
                 size_bytes,
                 sha256,
             });
         }
+        files.sort_by(|a, b| compare_paths(a.path.as_str(), b.path.as_str()));
         let manifest = Manifest {
             version: 1,
             upstream_revision_key: request.upstream_revision_key,
@@ -555,6 +621,89 @@ impl SourceRoot {
             selection: manifest.selection,
             publication,
             stored_bytes,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        fs,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    struct Tree(std::path::PathBuf);
+    impl Tree {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "pp-source-tree-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir(&path).unwrap();
+            Self(fs::canonicalize(path).unwrap())
+        }
+        fn paths(&self) -> Result<BTreeSet<String>> {
+            let mut paths = BTreeSet::new();
+            tree_paths(&Directory::open_root(&self.0)?, "", &mut paths, 0)?;
+            Ok(paths)
+        }
+    }
+    impl Drop for Tree {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+
+    #[test]
+    fn decomposed_listing_names_compare_as_nfc_with_original_names_for_io() {
+        let tree = Tree::new();
+        // Real NFD names exercise HFS+ listings on Linux too. Opening their
+        // NFC replacements would fail on Linux, proving raw-name I/O here.
+        fs::create_dir(tree.0.join("pie\u{300}ces")).unwrap();
+        fs::write(tree.0.join("pie\u{300}ces/cafe\u{301}.stl"), b"solid").unwrap();
+        fs::write(tree.0.join("re\u{301}sume\u{301}.md"), b"notes").unwrap();
+        assert_eq!(
+            tree.paths().unwrap(),
+            BTreeSet::from([
+                "pièces/".into(),
+                "pièces/café.stl".into(),
+                "résumé.md".into(),
+            ])
+        );
+    }
+
+    #[test]
+    fn normalized_listing_names_do_not_hide_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let tree = Tree::new();
+        fs::write(tree.0.join("target.stl"), b"solid").unwrap();
+        symlink("target.stl", tree.0.join("cafe\u{301}.stl")).unwrap();
+        assert!(tree.paths().is_err());
+        fs::remove_file(tree.0.join("cafe\u{301}.stl")).unwrap();
+        symlink("..", tree.0.join("pie\u{300}ces")).unwrap();
+        assert!(tree.paths().is_err());
+    }
+
+    #[test]
+    fn normalization_collisions_cannot_hide_extra_entries() {
+        use std::io::ErrorKind;
+
+        let tree = Tree::new();
+        fs::write(tree.0.join("café.stl"), b"first").unwrap();
+        // On normalization-insensitive volumes the second spelling cannot be
+        // created separately; the NFD regression above still runs there.
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(tree.0.join("cafe\u{301}.stl"))
+        {
+            Ok(_) => assert!(matches!(tree.paths(), Err(Error::CorruptSnapshot))),
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+            Err(error) => panic!("{error}"),
         }
     }
 }
