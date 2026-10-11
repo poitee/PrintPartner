@@ -1,0 +1,132 @@
+{
+  "scenario": "confirm-twice",
+  "description": "confirm_apply twice on the same action_id applies once; the second call is rejected without mutating",
+  "steps": [
+    {
+      "request": {
+        "method": "tools/call",
+        "params": {
+          "name": "propose_add_custom_filament",
+          "arguments": {
+            "display_name": "Galaxy Black",
+            "hex": "#1a1a1a",
+            "product_line": "PLA Basic"
+          }
+        }
+      },
+      "response": {
+        "isError": false,
+        "content": [
+          {
+            "type": "text",
+            "json": {
+              "status": "proposed",
+              "note": "Not applied yet — user must confirm via Apply in the UI.",
+              "action": {
+                "id": "<action-id-1>",
+                "type": "propose_add_custom_filament",
+                "plan_id": 0,
+                "label": "add custom filament Galaxy Black",
+                "summary": "Add a named external filament without stock tracking.",
+                "params": {
+                  "display_name": "Galaxy Black",
+                  "hex": "#1a1a1a",
+                  "product_line": "PLA Basic"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "method": "tools/call",
+        "params": {
+          "name": "confirm_apply",
+          "arguments": {
+            "action_id": "<action-id-1>"
+          }
+        }
+      },
+      "response": {
+        "isError": false,
+        "content": [
+          {
+            "type": "text",
+            "json": {
+              "ok": true,
+              "result": {
+                "filament": {
+                  "id": "<custom-filament-id-1>",
+                  "display_name": "Galaxy Black",
+                  "product_line": "PLA Basic",
+                  "hex": "#1a1a1a",
+                  "combo_label": "Galaxy Black"
+                },
+                "inventory_tracking": "external_named_color_only",
+                "idempotent_replay": false
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "method": "tools/call",
+        "params": {
+          "name": "confirm_apply",
+          "arguments": {
+            "action_id": "<action-id-1>"
+          }
+        }
+      },
+      "response": {
+        "isError": true,
+        "content": [
+          {
+            "type": "text",
+            "json": {
+              "ok": false,
+              "error": "Unknown, in-flight, or already applied/dismissed action_id",
+              "action_id": "<action-id-1>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "method": "tools/call",
+        "params": {
+          "name": "list_pending_actions",
+          "arguments": {}
+        }
+      },
+      "response": {
+        "isError": false,
+        "content": [
+          {
+            "type": "text",
+            "json": {
+              "actions": []
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "final_state": {
+    "pending_action_ids": [],
+    "custom_filaments": [
+      {
+        "id": "<custom-filament-id-1>",
+        "display_name": "Galaxy Black",
+        "product_line": "PLA Basic",
+        "hex": "#1a1a1a",
+        "combo_label": "Galaxy Black"
+      }
+    ]
+  }
+}
