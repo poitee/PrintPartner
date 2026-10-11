@@ -56,7 +56,7 @@ jobs:
           npm --prefix web ci
           npm --prefix web rebuild better-sqlite3
           npm --prefix web run build
-          python3 rust/scripts/build-desktop-manifest.py --web web --node /usr/bin/node --output rust/bundle-manifest.json --commit "$GITHUB_SHA"
+          python3 rust/scripts/build-desktop-manifest.py --web web --node /usr/bin/node --output rust/bundle-manifest.json --commit "$(git rev-parse HEAD)"
       - name: cargo fmt --check
         id: fmt
         continue-on-error: true
@@ -77,16 +77,24 @@ jobs:
         id: domain_deps
         continue-on-error: true
         run: python3 rust/scripts/check-domain-deps.py --self-test
-      - name: Contracts parity
-        id: contracts
+      - name: Build contracts and domain packages
+        id: contracts_build
         continue-on-error: true
         working-directory: web
         run: |
           set -euo pipefail
           npm run build -w @print-partner/contracts
           npm run build -w @print-partner/domain
-          npm run contracts:verify -- "${RUNNER_TEMP}/contract-receipts"
-          npm run test:desktop-parity
+      - name: Contracts verify
+        id: contracts_verify
+        continue-on-error: true
+        working-directory: web
+        run: npm run contracts:verify -- "${RUNNER_TEMP}/contract-receipts"
+      - name: Desktop parity
+        id: parity
+        continue-on-error: true
+        working-directory: web
+        run: npm run test:desktop-parity
       - name: Write gate summary
         if: always()
         shell: bash
@@ -97,7 +105,9 @@ jobs:
           NEXTEST: ${{ steps.nextest.outcome }}
           BOUNDARIES: ${{ steps.boundaries.outcome }}
           DOMAIN_DEPS: ${{ steps.domain_deps.outcome }}
-          CONTRACTS: ${{ steps.contracts.outcome }}
+          CONTRACTS_BUILD: ${{ steps.contracts_build.outcome }}
+          CONTRACTS_VERIFY: ${{ steps.contracts_verify.outcome }}
+          PARITY: ${{ steps.parity.outcome }}
         run: |
           set -uo pipefail
           row() {
@@ -122,7 +132,9 @@ jobs:
           row 'cargo nextest (workspace)' "$NEXTEST"
           row 'check-boundaries' "$BOUNDARIES"
           row 'pp-domain dependency guard' "$DOMAIN_DEPS"
-          row 'contracts parity' "$CONTRACTS"
-          for outcome in "$FMT" "$CLIPPY" "$NEXTEST" "$BOUNDARIES" "$DOMAIN_DEPS" "$CONTRACTS"; do
+          row 'contracts build' "$CONTRACTS_BUILD"
+          row 'contracts verify' "$CONTRACTS_VERIFY"
+          row 'desktop parity' "$PARITY"
+          for outcome in "$FMT" "$CLIPPY" "$NEXTEST" "$BOUNDARIES" "$DOMAIN_DEPS" "$CONTRACTS_BUILD" "$CONTRACTS_VERIFY" "$PARITY"; do
             test "$outcome" = success || exit 1
           done
