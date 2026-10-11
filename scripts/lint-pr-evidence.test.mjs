@@ -952,3 +952,132 @@ test("parses fence prefixes, link tails, and the Exemption line in linear time (
     assert.ok(elapsed < 1000, `lint took ${Math.round(elapsed)} ms for ${JSON.stringify(body.slice(0, 80))}`);
   }
 });
+
+test("checks text after a nested quote fence drops to an outer quote level for .80/.81 (substitute review r3 P1: nested quote fences)", () => {
+  const result = lintPrEvidence(
+    bodyWithEvidence(`Exemption: docs-only
+- Exemption reason: Updated docs.
+
+> > \`\`\`text
+> > example
+> Verified against http://192.168.1.80:8080
+`),
+  );
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /\.80\/\.81/);
+});
+
+for (const opener of ["`<!--`", "\\<!--", "<!-- (unclosed)"]) {
+  test(`does not let a literal ${opener} in the reason hide later verification (substitute review r3 P1: comment openers)`, () => {
+    const result = lintPrEvidence(
+      bodyWithEvidence(`Exemption: docs-only
+- Exemption reason: Documented the literal ${opener} opener.
+
+Verified against http://192.168.1.80:8080
+`),
+    );
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join("\n"), /\.80\/\.81/);
+  });
+}
+
+test("still hides a multi-line inline comment from the artifact check (substitute review r3 P1 guard: comment openers)", () => {
+  const result = lintPrEvidence(
+    bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: opened local
+- Result observed: rendered
+${ARTIFACT_LABEL} pending <!--
+  https://example.test/shot.png
+  -->
+`),
+  );
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /Evidence is incomplete/);
+});
+
+for (const artifact of ["[`evidence.png`](#)", "[ evidence.png ](#)", "![run.trace](#)", "[a [nested `trace.json`]](#)", "[x\\] evidence.png](#)"]) {
+  test(`fails when only placeholder link text names an artifact: ${artifact} (substitute review r3 P1: placeholder-link labels)`, () => {
+    const result = lintPrEvidence(
+      bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: opened local
+- Result observed: rendered
+${ARTIFACT_LABEL} ${artifact}
+`),
+    );
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join("\n"), /Evidence is incomplete/);
+  });
+}
+
+for (const definition of ['[1]: #\n  "evidence.png"', "[1]:\n  #\n  'evidence.png'", '[a\\]b]: # "evidence.png"', '[1]: # "multi\n  line evidence.png"']) {
+  test(`fails when a reference definition hides an artifact in its title: ${JSON.stringify(definition)} (substitute review r3 P1: multiline reference titles)`, () => {
+    const result = lintPrEvidence(
+      bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: opened local
+- Result observed: rendered
+${ARTIFACT_LABEL} [screenshot][1]
+
+${definition}
+`),
+    );
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join("\n"), /Evidence is incomplete/);
+  });
+}
+
+test("passes a reference definition whose destination is on the next line (substitute review r3 P1 guard)", () => {
+  const result = lintPrEvidence(
+    bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: opened local
+- Result observed: rendered
+${ARTIFACT_LABEL} [screenshot][1]
+
+[1]:
+  https://example.test/shot.png
+`),
+  );
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+
+for (const artifact of ["`TODO: attach screenshot`", "`tbd later`", "`FIXME add trace.json`", "TODO: attach trace.json"]) {
+  test(`fails when the artifact is a placeholder note ${artifact} (substitute review r3 P1: TODO placeholders)`, () => {
+    const result = lintPrEvidence(
+      bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: opened local
+- Result observed: rendered
+${ARTIFACT_LABEL} ${artifact}
+`),
+    );
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join("\n"), /Evidence is incomplete/);
+  });
+}
+
+test("passes a link whose <…> destination escapes > (substitute review r3 P2: escaped angle brackets)", () => {
+  const result = lintPrEvidence(
+    bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: opened local
+- Result observed: rendered
+${ARTIFACT_LABEL} [shot](<evidence/shot\\>one.png>)
+`),
+  );
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+
+test("strips comments and link text in linear time (substitute review r3 P2: repeated comment stripping)", () => {
+  const prefix = "## Evidence\nExemption: docs-only\n- Exemption reason: docs\n";
+  const cases = [
+    prefix + "<!<!--x-->--".repeat(5456),
+    prefix + "<!--".repeat(16000),
+    prefix + "`<!--` ".repeat(9000),
+    bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: a\n- Result observed: b\n${ARTIFACT_LABEL} ${"\\".repeat(60000)}](#)\n`),
+    bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: a\n- Result observed: b\n${ARTIFACT_LABEL} ${"[".repeat(30000)}${"](#)".repeat(8000)}\n`),
+    bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: a\n- Result observed: b\n${ARTIFACT_LABEL} x\n\n${"[1]: #\n".repeat(9000)}`),
+  ];
+  for (const body of cases) {
+    const started = performance.now();
+    lintPrEvidence(body);
+    const elapsed = performance.now() - started;
+    assert.ok(elapsed < 1000, `lint took ${Math.round(elapsed)} ms for ${JSON.stringify(body.slice(55, 120))}`);
+  }
+});

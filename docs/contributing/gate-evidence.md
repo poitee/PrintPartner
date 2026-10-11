@@ -41,7 +41,8 @@ lightweight lint on every pull request body:
   `trace.json` or `evidence/run-42/trace.zip`, a Markdown link or image whose
   destination is a URL or file path, or inline code holding a command, path, or
   output. A journey name, a bare category word such as `screenshot` (with or
-  without backticks), a placeholder link such as `[screenshot](#)`, and
+  without backticks), a placeholder link such as `[screenshot](#)`, a line
+  holding a TODO/TBD/FIXME/placeholder note, and
   Exemption reason text (every paragraph indented under it) do not count.
 - Fail when `Exemption:` is still the template placeholder, unknown, or a named
   exemption without a non-empty reason.

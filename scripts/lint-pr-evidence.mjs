@@ -37,22 +37,18 @@ const FIELD_LABELS = Object.freeze({
 
 const EXEMPTION_LINE = /^[ \t]*Exemption[ \t]*:.*$/gim;
 
-function stripHtmlComments(text) {
-  return text.replace(/<!--[\s\S]*?-->/g, "");
-}
-
 /**
  * Leading container markup of a line, consumed left to right without
  * backtracking: whitespace, blockquote markers, and list markers.
- * Returns where the content starts, its column, and whether a `>` was seen.
+ * Returns where the content starts, its column, and how many `>` were seen.
  */
 function containerPrefix(line) {
   let i = 0;
-  let quote = false;
+  let quote = 0;
   for (;;) {
     while (line[i] === " " || line[i] === "\t") i += 1;
     if (line[i] === ">") {
-      quote = true;
+      quote += 1;
       i += 1;
       continue;
     }
@@ -79,11 +75,12 @@ function fenceOpener(line) {
 
 /**
  * Whether a line still belongs to an open fence's container. A fence inside a
- * blockquote ends at the first line without `>`; a fence inside a list item or
- * indented under one ends at the first non-blank line left of its column.
+ * blockquote ends at the first line with fewer `>` markers; a fence inside a
+ * list item or indented under one ends at the first non-blank line left of
+ * its column.
  */
 function insideFenceContainer(line, fence) {
-  if (fence.quote) return /^[ \t]*>/.test(line);
+  if (fence.quote) return containerPrefix(line).quote >= fence.quote;
   return !line.trim() || indentWidth(line.match(/^[ \t]*/)[0]) >= fence.column;
 }
 
@@ -96,10 +93,11 @@ function insideFenceContainer(line, fence) {
  * fence also ends with its container, and an unclosed top-level fence runs to
  * the end of the text.
  */
-function stripHiddenMarkdown(text) {
+function stripHiddenMarkdown(text, { inlineMultiline = true } = {}) {
   const kept = [];
   let fence = null;
   let inComment = false;
+  let inlineComment = false;
   for (const raw of text.replace(/\r\n/g, "\n").split("\n")) {
     if (fence && !insideFenceContainer(raw, fence)) fence = null;
     if (fence) {
@@ -119,26 +117,70 @@ function stripHiddenMarkdown(text) {
     }
     let line = raw;
     let visible = "";
-    for (;;) {
-      if (inComment) {
-        const end = line.indexOf("-->");
-        if (end === -1) break;
+    if (inComment) {
+      const end = line.indexOf("-->");
+      // An inline comment cannot cross a paragraph break.
+      if (inlineComment && !line.trim()) {
+        inComment = false;
+      } else if (end === -1) {
+        kept.push("");
+        continue;
+      } else {
         line = line.slice(end + 3);
         inComment = false;
-      } else {
-        const start = line.indexOf("<!--");
-        if (start === -1) {
-          visible += line;
-          break;
-        }
-        visible += line.slice(0, start);
-        line = line.slice(start + 4);
-        inComment = true;
       }
+    } else if (line.slice(containerPrefix(line).end).startsWith("<!--")) {
+      // An HTML block comment hides everything up to its closing -->.
+      const start = line.indexOf("<!--");
+      const end = line.indexOf("-->", start + 4);
+      visible = line.slice(0, start);
+      if (end === -1) {
+        inComment = true;
+        inlineComment = false;
+        kept.push(visible);
+        continue;
+      }
+      line = line.slice(end + 3);
     }
-    kept.push(visible);
+    // Inline comments must close on the line; an unclosed, escaped, or
+    // code-span `<!--` is literal text, as Markdown renders it.
+    const inline = stripInlineComments(line, inlineMultiline);
+    if (inline.open) {
+      inComment = true;
+      inlineComment = true;
+    }
+    kept.push(visible + inline.visible);
   }
   return kept.join("\n");
+}
+
+/**
+ * Remove inline `<!-- … -->` comments from one line, skipping escaped openers
+ * and openers inside code spans. An opener without `-->` on the line is
+ * literal when `multiline` is false; otherwise it hides the rest of the line
+ * and `open` reports that the comment continues.
+ */
+function stripInlineComments(line, multiline) {
+  const code = codeSpanRanges(line);
+  let kept = "";
+  let cursor = 0;
+  let span = 0;
+  for (let start = line.indexOf("<!--"); start !== -1; start = line.indexOf("<!--", start + 1)) {
+    if (start < cursor) continue;
+    while (span < code.length && code[span].end <= start) span += 1;
+    if (span < code.length && code[span].start <= start) continue;
+    let slashes = 0;
+    while (line[start - 1 - slashes] === "\\") slashes += 1;
+    if (slashes % 2 === 1) continue;
+    const end = line.indexOf("-->", start + 4);
+    if (end === -1) {
+      if (!multiline) break;
+      return { visible: kept + line.slice(cursor, start), open: true };
+    }
+    kept += line.slice(cursor, start);
+    cursor = end + 3;
+  }
+  return { visible: kept + line.slice(cursor), open: false };
 }
 
 function normalizeWs(text) {
@@ -146,12 +188,14 @@ function normalizeWs(text) {
 }
 
 /**
- * Extract the ## Evidence section body (without the heading).
- * Returns null when the heading is missing.
+ * Extract the ## Evidence section body (without the heading), with comments
+ * and fences already removed. Returns null when the heading is missing.
+ * `inlineMultiline: false` gives the view for the .80/.81 check, where an
+ * inline `<!--` hides text only when it closes on the same line.
  */
-export function extractEvidenceSection(body) {
+export function extractEvidenceSection(body, options) {
   if (typeof body !== "string" || !body.trim()) return null;
-  const visible = stripHiddenMarkdown(body);
+  const visible = stripHiddenMarkdown(body, options);
   const match = visible.match(/^##\s+Evidence\s*$/im);
   if (!match || match.index == null) return null;
   const start = match.index + match[0].length;
@@ -162,8 +206,7 @@ export function extractEvidenceSection(body) {
 }
 
 function parseExemption(sectionText) {
-  const cleaned = stripHtmlComments(sectionText);
-  const match = cleaned.match(/^[ \t]*Exemption[ \t]*:(.*)$/im);
+  const match = sectionText.match(/^[ \t]*Exemption[ \t]*:(.*)$/im);
   if (!match) return { raw: null, value: null };
   const raw = match[1].trim();
   if (!raw || PLACEHOLDER_EXEMPTION.test(raw)) {
@@ -322,7 +365,7 @@ function parseFields(cleaned) {
  * Read a template field value (same line and the lines that belong to it).
  */
 function findField(sectionText, label) {
-  return parseFields(stripHtmlComments(sectionText)).find((field) => field.label === label);
+  return parseFields(sectionText).find((field) => field.label === label);
 }
 
 function readField(sectionText, label) {
@@ -330,11 +373,11 @@ function readField(sectionText, label) {
 }
 
 /**
- * Section text with HTML comments removed and the given fields cut out. With
+ * Section text with the given fields cut out. With
  * keepLazy, the fields' lazy continuation lines stay in the text.
  */
 function withoutFields(sectionText, labels, { keepLazy = false } = {}) {
-  const text = stripHtmlComments(sectionText);
+  const text = sectionText;
   let kept = "";
   let cursor = 0;
   for (const field of parseFields(text)) {
@@ -355,36 +398,53 @@ const NON_ARTIFACT_WORD =
   /^(?:evidence|screenshot|recording|verify-skill|trace|output|n\/?a|none|tbd|todo)$/i;
 
 /**
- * Inline code spans in document order. Linear scan: each backtick run opens a
- * span closed by the next run of the same length; unmatched runs are literal.
+ * Inline code span ranges in document order. Linear scan: each backtick run
+ * opens a span closed by the next run of the same length; unmatched runs are
+ * literal. Ranges are [open, close) with content between the backtick runs.
  */
-function codeSpans(value) {
+function codeSpanRanges(value) {
   const runs = [...value.matchAll(/`+/g)].map((m) => ({ at: m.index, len: m[0].length }));
   const byLength = new Map();
   runs.forEach((run, index) => {
     if (!byLength.has(run.len)) byLength.set(run.len, { indexes: [], next: 0 });
     byLength.get(run.len).indexes.push(index);
   });
-  const spans = [];
+  const ranges = [];
   for (let i = 0; i < runs.length; i += 1) {
     const same = byLength.get(runs[i].len);
     while (same.next < same.indexes.length && same.indexes[same.next] <= i) same.next += 1;
     if (same.next === same.indexes.length) continue;
-    const close = same.indexes[same.next];
-    spans.push(value.slice(runs[i].at + runs[i].len, runs[close].at));
-    i = close;
+    const close = runs[same.indexes[same.next]];
+    ranges.push({
+      start: runs[i].at,
+      end: close.at + close.len,
+      content: value.slice(runs[i].at + runs[i].len, close.at),
+    });
+    i = same.indexes[same.next];
   }
-  return spans;
+  return ranges;
+}
+
+function codeSpans(value) {
+  return codeSpanRanges(value).map((range) => range.content);
 }
 
 /**
  * Inline code counts only when it holds a command, path, or output: something
- * with whitespace or path/URL punctuation that is not a bare category word.
+ * with whitespace or path/URL punctuation that is not a bare category word
+ * or a placeholder note (`TODO: attach screenshot`).
  */
+const PLACEHOLDER_WORD = /\b(?:todo|tbd|fixme|placeholder)\b/i;
+
 function hasSubstantiveCodeSpan(value) {
   return codeSpans(value).some((span) => {
     const content = span.trim();
-    return content && !NON_ARTIFACT_WORD.test(content) && /[\s/.:=]/.test(content);
+    return (
+      content &&
+      !NON_ARTIFACT_WORD.test(content) &&
+      !PLACEHOLDER_WORD.test(content) &&
+      /[\s/.:=]/.test(content)
+    );
   });
 }
 
@@ -445,10 +505,14 @@ function parseLinkTail(text, open) {
   while (isSpace(text[i])) i += 1;
   let destination = "";
   if (text[i] === "<") {
-    const close = text.indexOf(">", i);
-    if (close === -1 || text.slice(i, close).includes("\n")) return null;
-    destination = text.slice(i, close + 1);
-    i = close + 1;
+    const start = i;
+    for (i += 1; i < text.length && text[i] !== ">"; i += 1) {
+      if (text[i] === "\n" || text[i] === "<") return null;
+      if (text[i] === "\\") i += 1;
+    }
+    if (i >= text.length) return null;
+    destination = text.slice(start, i + 1);
+    i += 1;
   } else {
     const start = i;
     let depth = 0;
@@ -477,26 +541,75 @@ function parseLinkTail(text, open) {
   return text[i] === ")" ? { destination, end: i + 1 } : null;
 }
 
+/** Link reference definition opener: `[label]:` (escapes allowed), optional destination. */
+const REFERENCE_DEFINITION = /^[ \t]*\[((?:[^\]\\\n]|\\.){1,999})\]:[ \t]*(<(?:[^>\\\n]|\\.)*>|\S+)?/;
+
 /**
- * Remove link reference definitions and inline link tails (`](…)`), noting
- * whether any destination is concrete. Link text is kept: it is ordinary text.
- * A `](` that does not form a link tail hides the rest of the value (fail
- * closed), so a malformed title can never surface as an artifact. Every scan
- * moves forward, so the whole pass is linear.
+ * Drop link reference definitions, noting whether any destination is concrete.
+ * A definition's destination may sit on the next line and its title may span
+ * lines, so everything up to the next blank line goes with it (fail closed).
+ */
+function stripReferenceDefinitions(value) {
+  let concrete = false;
+  let dropping = false;
+  let wantDestination = false;
+  const kept = [];
+  for (const line of value.split("\n")) {
+    if (!line.trim()) {
+      dropping = false;
+      wantDestination = false;
+      kept.push(line);
+      continue;
+    }
+    const definition = line.match(REFERENCE_DEFINITION);
+    if (definition) {
+      dropping = true;
+      wantDestination = !definition[2];
+      if (definition[2] && isConcreteTarget(definition[2])) concrete = true;
+      continue;
+    }
+    if (dropping) {
+      if (wantDestination && isConcreteTarget(line.trim().split(/\s+/)[0])) concrete = true;
+      wantDestination = false;
+      continue;
+    }
+    kept.push(line);
+  }
+  return { text: kept.join("\n"), concrete };
+}
+
+/**
+ * Index of the `[` that opens the link text ending at `close` (a `]`), looking
+ * no further back than `floor`; -1 when there is none. One forward pass that
+ * honours backslash escapes and nesting.
+ */
+function linkTextStart(text, close, floor) {
+  const opens = [];
+  for (let i = floor; i < close; i += 1) {
+    if (text[i] === "\\") i += 1;
+    else if (text[i] === "[") opens.push(i);
+    else if (text[i] === "]") opens.pop();
+  }
+  return opens.length ? opens[opens.length - 1] : -1;
+}
+
+/**
+ * Remove links (`[text](…)`, images, and reference definitions), noting
+ * whether any destination is concrete. A link counts only by its destination:
+ * its text and title are dropped. A `](` that does not form a link tail hides
+ * the rest of the value (fail closed), so a malformed title can never surface
+ * as an artifact. Each character is scanned a bounded number of times, so the
+ * pass is linear.
  */
 function stripLinks(value) {
-  let concrete = false;
-  const lines = value.split("\n").filter((line) => {
-    const definition = line.match(/^[ \t]*\[[^\]\n]{1,999}\]:[ \t]*(<[^>\n]*>|\S+)/);
-    if (!definition) return true;
-    if (isConcreteTarget(definition[1])) concrete = true;
-    return false;
-  });
-  const text = lines.join("\n");
+  const definitions = stripReferenceDefinitions(value);
+  let concrete = definitions.concrete;
+  const text = definitions.text;
   let rest = "";
   let cursor = 0;
   for (let at = text.indexOf("](", cursor); at !== -1; at = text.indexOf("](", cursor)) {
-    rest += `${text.slice(cursor, at)}] `;
+    const open = linkTextStart(text, at, cursor);
+    rest += `${text.slice(cursor, open === -1 ? at : open)} `;
     const tail = parseLinkTail(text, at + 1);
     if (!tail) return { rest, concrete };
     if (isConcreteTarget(tail.destination)) concrete = true;
@@ -507,6 +620,11 @@ function stripLinks(value) {
 
 function looksLikeArtifact(value) {
   if (!value) return false;
+  // A line that is a placeholder note (TODO: attach trace.json) is not evidence.
+  value = value
+    .split("\n")
+    .filter((line) => !PLACEHOLDER_WORD.test(line))
+    .join("\n");
   // A link counts by its destination; its title never makes it evidence.
   const { rest, concrete } = stripLinks(value);
   if (concrete) return true;
@@ -582,7 +700,7 @@ export function lintPrEvidence(body) {
   const reason = extractExemptionReason(section);
   const hasEvidence = hasEvidenceContent(section);
 
-  if (targetsBannedLan(section)) {
+  if (targetsBannedLan(extractEvidenceSection(body, { inlineMultiline: false }) ?? section)) {
     errors.push(
       "Evidence must not target Chad's LAN instances (.80/.81). Use a disposable local verify instance instead. (To mention these hosts in the Exemption reason, indent every reason line under its bullet.)",
     );
