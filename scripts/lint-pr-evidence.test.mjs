@@ -1135,3 +1135,23 @@ test("an unrelated denial clause does not suppress an explicit artifact citation
 ${ARTIFACT_LABEL} Verified without redeploy; artifact at artifacts/screen.png`));
   assert.equal(result.ok, true, result.errors.join(";"));
 });
+
+for (const artifact of ["artifacts/missing/trace.json", "artifact at artifacts/not-a-screenshot.png", "https://example.com/missing/trace.json"]) {
+  test(`denial words inside a cited target remain valid: ${artifact}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: ran locally
+- Result observed: passed
+${ARTIFACT_LABEL} ${artifact}`)).ok, true);
+  });
+}
+for (const field of ["Steps followed to produce the evidence", "Result observed"]) {
+  for (const placeholder of ["TODO", "TBD", "N/A", "** **", "none"]) {
+    test(`rejects placeholder ${placeholder} in ${field}`, () => {
+      const body = bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: ran locally
+- Result observed: passed
+${ARTIFACT_LABEL} trace.json`).replace(`${field}: ${field.startsWith("Steps") ? "ran locally" : "passed"}`, `${field}: ${placeholder}`);
+      assert.equal(lintPrEvidence(body).ok, false);
+    });
+  }
+}

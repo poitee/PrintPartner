@@ -464,6 +464,7 @@ const PLACEHOLDER_WORD = /\b(?:todo|tbd|fixme|placeholder)\b/i;
 function hasSubstantiveCodeSpan(value) {
   return codeSpans(value).some((span) => {
     const content = span.trim();
+    if (/^(?:not provided|no screenshot|could not test)$/i.test(content)) return false;
     return (
       content &&
       !NON_ARTIFACT_WORD.test(content) &&
@@ -650,12 +651,15 @@ function looksLikeArtifact(value, references) {
   // A link is concrete by its destination. Explicit denial outside its markup
   // still cannot claim it as proof.
   const denial = /\b(?:not|no|without|never|missing|absent|unavailable|unable|omitted|n\/a)\b/i;
-  if (concrete && !denial.test(rest)) return true;
+  const prose = (text) => text.split(/\s+/).filter((token) =>
+    !HTTP_URL.test(token) && !isArtifactPath(trimToken(token)),
+  ).join(" ");
+  if (concrete && !denial.test(prose(rest))) return true;
   for (const clause of rest.split(/[;\n]/)) {
     const text = clause.trim();
     if (!text) continue;
     // A denied clause cannot suppress another independently cited artifact.
-    if (denial.test(text)) continue;
+    if (denial.test(prose(text))) continue;
     if (HTTP_URL.test(text) || hasSubstantiveCodeSpan(text)) return true;
     // Bare paths count only as a citation, not as incidental prose about a
     // missing file. Prose can use a Markdown link or an explicit citation.
@@ -687,7 +691,12 @@ export function hasEvidenceContent(sectionText) {
   const steps = readField(sectionText, FIELD_LABELS.steps);
   const result = readField(sectionText, FIELD_LABELS.result);
   const artifact = findField(sectionText, FIELD_LABELS.artifact)?.text ?? "";
-  if (!steps || !result) return false;
+  const placeholder = (text) => {
+    const plain = text.replace(/[*_`~<>]/g, "").trim();
+    return !plain || /^(?:todo|tbd|fixme|placeholder)\b/i.test(plain)
+      || /^(?:n\/?a|none|pending|not provided)[.!?]*$/i.test(plain);
+  };
+  if (placeholder(steps) || placeholder(result)) return false;
   // Count reference destinations only for visible reference uses in verification
   // content, never for definitions or labels inside the exemption reason.
   const verification = withoutFields(sectionText, [FIELD_LABELS.reason]);
