@@ -17,16 +17,16 @@ utils:
   std-process-path:
     has:
       field: name
-      regex: '^process$'
+      regex: '^(r#)?process$'
     all:
       - has:
           field: path
-          regex: '^(::)?std$'
+          regex: '^(::)?(r#)?std$'
   std-list:
     kind: scoped_use_list
     has:
       field: path
-      regex: '^(::)?std$'
+      regex: '^(::)?(r#)?std$'
   std-process-list:
     kind: scoped_use_list
     has:
@@ -34,7 +34,7 @@ utils:
       any:
         - matches: std-process-path
         - all:
-            - regex: '^process$'
+            - regex: '^(r#)?process$'
             - inside:
                 matches: std-list
                 stopBy: end
@@ -62,12 +62,12 @@ utils:
       - all:
           - any:
               - kind: identifier
-                regex: '^process$'
+                regex: '^(r#)?process$'
                 pattern: $MODULE
               - kind: use_as_clause
                 has:
                   field: path
-                  regex: '^process$'
+                  regex: '^(r#)?process$'
                 all:
                   - has:
                       field: alias
@@ -100,7 +100,7 @@ utils:
                   has:
                     field: name
                     pattern: $MODULE
-                - regex: '^process$'
+                - regex: '^(r#)?process$'
                   pattern: $MODULE
   import-tree:
     any:
@@ -132,7 +132,7 @@ utils:
           has:
             field: path
             any:
-              - regex: '^(::)?std$'
+              - regex: '^(::)?(r#)?std$'
               - kind: self
                 inside:
                   kind: use_as_clause
@@ -147,7 +147,7 @@ utils:
         - kind: extern_crate_declaration
           has:
             field: name
-            regex: '^std$'
+            regex: '^(r#)?std$'
           all:
             - has:
                 field: alias
@@ -224,6 +224,8 @@ rule:
         - any:
             - pattern: process::Command
             - pattern: process::r#Command
+            - pattern: r#process::Command
+            - pattern: r#process::r#Command
           inside:
             matches: std-list
             stopBy: end
@@ -279,7 +281,7 @@ rule:
                         field: path
                         has:
                           field: name
-                          regex: '^process$'
+                          regex: '^(r#)?process$'
                         all:
                           - has:
                               field: path
@@ -296,7 +298,7 @@ rule:
                       kind: identifier
                       stopBy:
                         matches: non-comment
-                      regex: '^process$'
+                      regex: '^(r#)?process$'
                       follows:
                         regex: '^::$'
                         stopBy:
@@ -330,7 +332,7 @@ rule:
               kind: identifier
               stopBy:
                 matches: non-comment
-              regex: '^process$'
+              regex: '^(r#)?process$'
               follows:
                 regex: '^::$'
                 stopBy:
@@ -339,17 +341,18 @@ rule:
                   kind: identifier
                   stopBy:
                     matches: non-comment
-                  regex: '^std$'
+                  regex: '^(r#)?std$'
         # A wildcard import includes Command, even if referenced through an alias.
         - kind: use_wildcard
           any:
             - has:
                 matches: std-process-path
             - has:
-                regex: '^process$'
+                regex: '^(r#)?process$'
               inside:
-                matches: std-list
-                stopBy: end
+                kind: use_list
+                inside:
+                  matches: std-list
     - not:
         inside:
           any:
