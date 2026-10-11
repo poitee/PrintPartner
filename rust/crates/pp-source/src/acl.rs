@@ -85,16 +85,15 @@ mod policy {
         fn foreign_write_grants_are_rejected() {
             assert_eq!(UNSAFE_PERMS.iter().fold(0, |all, perm| all | perm), ALL);
             for perm in UNSAFE_PERMS {
-                for principal in [
-                    Principal::User(1001),
-                    Principal::Group,
-                    Principal::Unknown,
-                ] {
+                for principal in [Principal::User(1001), Principal::Group, Principal::Unknown] {
                     assert!(!entries_are_trusted(&[allow(principal, perm)], 1000));
                 }
             }
             // Groups are foreign even when their id would equal the user's or root's.
-            assert!(!entries_are_trusted(&[allow(Principal::Group, ADD_FILE)], 1000));
+            assert!(!entries_are_trusted(
+                &[allow(Principal::Group, ADD_FILE)],
+                1000
+            ));
             assert!(!entries_are_trusted(
                 &[allow(Principal::Group, DELETE_CHILD)],
                 1000
@@ -116,10 +115,7 @@ mod policy {
         fn deny_only_and_read_grants_are_accepted() {
             assert!(entries_are_trusted(&[], 1000));
             assert!(entries_are_trusted(
-                &[
-                    deny(Principal::Group, ALL),
-                    deny(Principal::Unknown, ALL)
-                ],
+                &[deny(Principal::Group, ALL), deny(Principal::Unknown, ALL)],
                 1000
             ));
             // A read-only grant records no unsafe rights.
