@@ -36,6 +36,7 @@ permissions:
 jobs:
   parity:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     strategy:
       matrix:
         node: ["22", "24"]
