@@ -113,13 +113,36 @@ function insideFenceContainer(line, fence) {
  * fence also ends with its container, and an unclosed top-level fence runs to
  * the end of the text.
  */
-function stripHiddenMarkdown(text, { inlineMultiline = true } = {}) {
+function stripHiddenMarkdown(text, { inlineMultiline = true, includeRawHtml = false } = {}) {
   const kept = [];
   let fence = null;
   let inComment = false;
   let inlineComment = false;
   let listColumn = 0;
+  let htmlBlock = null;
+  let indentedCode = null;
+  let paragraphOpen = false;
   for (const raw of text.replace(/\r\n/g, "\n").split("\n")) {
+    const indent = indentWidth(raw.match(/^[ \t]*/)[0]);
+    if (htmlBlock && !insideFenceContainer(raw, htmlBlock)) htmlBlock = null;
+    if (htmlBlock) {
+      const closed = htmlBlock.tag
+        ? new RegExp(`</${htmlBlock.tag}[ \\t]*>`, "i").test(raw)
+        : !raw.trim();
+      if (closed) htmlBlock = null;
+      kept.push("");
+      paragraphOpen = false;
+      continue;
+    }
+    if (indentedCode != null) {
+      if (!raw.trim() || indent >= indentedCode) { kept.push(""); continue; }
+      indentedCode = null;
+    }
+    if (!fence && !inComment && !paragraphOpen && indent >= listColumn + 4) {
+      indentedCode = listColumn + 4;
+      kept.push("");
+      continue;
+    }
     if (fence && !insideFenceContainer(raw, fence)) fence = null;
     if (fence) {
       const content = quoteContent(raw, fence.quote);
@@ -140,6 +163,20 @@ function stripHiddenMarkdown(text, { inlineMultiline = true } = {}) {
       fence = fenceOpener(raw, listColumn);
       if (fence) {
         kept.push("");
+        paragraphOpen = false;
+        continue;
+      }
+      const prefix = containerPrefix(raw);
+      const content = raw.slice(prefix.end);
+      const rawTag = content.match(/^<(pre|script|style|textarea)(?:[ \t>]|$)/i);
+      if (!includeRawHtml && (rawTag || HTML_BLOCK_START.test(content))) {
+        const quoteLine = quoteContent(raw, prefix.quote);
+        const hasList = /^[ \t]*(?:[-+*]|\d{1,9}[.)])[ \t]/.test(quoteLine);
+        htmlBlock = { tag: rawTag?.[1], quote: prefix.quote,
+          column: hasList ? containerPrefix(quoteLine).column : (prefix.quote ? 0 : listColumn) };
+        if (rawTag && new RegExp(`</${rawTag[1]}[ \\t]*>`, "i").test(content)) htmlBlock = null;
+        kept.push("");
+        paragraphOpen = false;
         continue;
       }
     }
@@ -177,7 +214,9 @@ function stripHiddenMarkdown(text, { inlineMultiline = true } = {}) {
       inComment = true;
       inlineComment = true;
     }
-    kept.push(visible + inline.visible);
+    const shown = visible + inline.visible;
+    kept.push(shown);
+    paragraphOpen = Boolean(shown.trim()) && !LEAF_BLOCK_START.test(shown);
   }
   return kept.join("\n");
 }
@@ -723,7 +762,9 @@ function stripLinks(value, references) {
     if (open === -1) return { rest, concrete };
     const tail = parseLinkTail(text, at + 1);
     if (!tail) return { rest, concrete };
-    if (isConcreteTarget(tail.destination)) concrete = true;
+    const image = open > 0 && text[open - 1] === "!";
+    if (isConcreteTarget(tail.destination)
+      && (image || visibleFieldText(text.slice(open + 1, at)).replace(/[\p{Default_Ignorable_Code_Point}\p{Mark}]/gu, "").trim())) concrete = true;
     cursor = tail.end;
   }
   return { rest: rest + text.slice(cursor), concrete };
@@ -802,7 +843,7 @@ function normalizeReferenceLabel(label) {
   return label.replace(/\\(.)/g, "$1").trim().replace(/\s+/g, " ").toLowerCase();
 }
 
-function referenceUses(value) {
+function referenceUses(value, { requireVisible = false } = {}) {
   let text = value;
   for (const range of codeSpanRanges(value).reverse()) {
     text = text.slice(0, range.start) + " " + text.slice(range.end);
@@ -815,6 +856,8 @@ function referenceUses(value) {
     let escapes = 0;
     for (let at = match.index - 1; at >= 0 && text[at] === "\\"; at -= 1) escapes += 1;
     if (escapes % 2) continue;
+    if (requireVisible && text[match.index - 1] !== "!"
+      && !visibleFieldText(match[1]).replace(/[\p{Default_Ignorable_Code_Point}\p{Mark}]/gu, "").trim()) continue;
     references.add(normalizeReferenceLabel(match[2] || match[1]));
   }
   return references;
@@ -847,12 +890,15 @@ function visibleFieldText(value) {
   text = stripRawHtmlTags(text)
     .replace(/!?\[([^\]\n]*)\](?:\[[^\]\n]*\])?/g, "$1")
     .replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\]\\^_`{|}~])/g, "$1");
-  text = text.replace(/&(#[xX][\da-fA-F]+|#\d+|[a-zA-Z][a-zA-Z\d]*);/g, (match, entity) => {
+  return decodeCharacterReferences(text).replace(/[*_`~]/g, "").trim();
+}
+
+function decodeCharacterReferences(text) {
+  return text.replace(/&(#[xX][\da-fA-F]+|#\d+|[a-zA-Z][a-zA-Z\d]*);/g, (match, entity) => {
     if (entity[0] !== "#") return Object.hasOwn(NAMED_CHARACTER_REFERENCES, entity) ? NAMED_CHARACTER_REFERENCES[entity] : match;
     const code = entity[1].toLowerCase() === "x" ? Number.parseInt(entity.slice(2), 16) : Number(entity.slice(1));
     return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "\ufffd";
   });
-  return text.replace(/[*_`~]/g, "").trim();
 }
 
 // Fold common Greek/Cyrillic lookalikes only for placeholder comparison.
@@ -880,7 +926,7 @@ export function hasEvidenceContent(sectionText) {
   // Count reference destinations only for visible reference uses in verification
   // content, never for definitions or labels inside the exemption reason.
   const verification = withoutFields(sectionText, [FIELD_LABELS.reason]);
-  const references = referenceUses(verification);
+  const references = referenceUses(verification, { requireVisible: true });
   return looksLikeArtifact(artifact, references) || looksLikeArtifact(freeformText(sectionText), references);
 }
 
@@ -896,8 +942,16 @@ function targetsBannedLan(sectionText, definitions) {
     EXEMPTION_LINE,
     "",
   );
-  return BANNED_LAN_IP.test(verification)
-    || (definitions.size > 0 && [...referenceUses(verification)].some((label) => BANNED_LAN_IP.test(definitions.get(label) ?? "")));
+  const bannedTarget = (value) => {
+    if (BANNED_LAN_IP.test(value)) return true;
+    const decoded = decodeCharacterReferences(value).replace(/\\(.)/g, "$1");
+    return [...decoded.matchAll(HTTP_URL)].some((match) => {
+      try { return BANNED_LAN_IP.test(new URL(trimToken(match[0])).hostname); }
+      catch { return false; }
+    });
+  };
+  return bannedTarget(verification)
+    || (definitions.size > 0 && [...referenceUses(verification)].some((label) => bannedTarget(definitions.get(label) ?? "")));
 }
 
 function documentReferences(body) {
@@ -952,7 +1006,7 @@ export function lintPrEvidence(body) {
   // Preserve the selected section boundaries even for the conservative LAN view.
   // Also scan the visible section so commented decoy headings cannot redirect it.
   const definitions = documentReferences(body);
-  if (targetsBannedLan(section, definitions) || targetsBannedLan(extractEvidenceSection(body, { inlineMultiline: false }) ?? section, definitions)) {
+  if (targetsBannedLan(section, definitions) || targetsBannedLan(extractEvidenceSection(body, { inlineMultiline: false, includeRawHtml: true }) ?? section, definitions)) {
     errors.push(
       "Evidence must not target Chad's LAN instances (.80/.81). Use a disposable local verify instance instead. (To mention these hosts in the Exemption reason, indent every reason line under its bullet.)",
     );

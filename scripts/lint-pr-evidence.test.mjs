@@ -1299,3 +1299,39 @@ for (const result of ['0', '✓ 3 checks', '成功', 'Готово']) {
     assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: ${result}\n${ARTIFACT_LABEL} trace.json`)).ok, true);
   });
 }
+
+for (const host of ['192.168.1.%38%30:8080', '0300.0250.1.0120', '3232235856', '0xc0a80150', '192.168.337', '192.168.1.81']) {
+  test(`rejects normalized banned LAN host ${host}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: curl http://${host}/a.png\n- Result observed: passed\n${ARTIFACT_LABEL} https://example.test/shot.png`)).ok, false);
+  });
+  test(`rejects normalized banned reference destination ${host}`, () => {
+    assert.equal(lintPrEvidence('[target]: http://' + host + '/a.png\n\n' + bodyWithEvidence('Exemption: docs-only\n- Exemption reason: Updated docs.\n- Steps followed to produce the evidence: [target]')).ok, false);
+  });
+}
+for (const tag of ['pre', 'script', 'style', 'textarea', 'div']) {
+  test(`ignores Evidence heading inside raw HTML block ${tag}`, () => {
+    assert.equal(lintPrEvidence(`<${tag}>\n## Evidence\nExemption: docs-only\n- Exemption reason: Updated docs.\n</${tag}>`).ok, false);
+  });
+  test(`raw HTML ${tag} content cannot supply missing artifact`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} screenshot\n\n<${tag}>\nhttps://example.test/shot.png\n</${tag}>`)).ok, false);
+  });
+}
+for (const indentation of ['    ', '\t']) {
+  test(`ignores indented code declarations ${JSON.stringify(indentation)}`, () => {
+    assert.equal(lintPrEvidence('## Evidence\n' + indentation + 'Exemption: docs-only\n' + indentation + '- Exemption reason: changed docs').ok, false);
+  });
+}
+for (const artifact of ['[](https://example.test/shot.png)', '[ ](https://example.test/shot.png)', '[&ZeroWidthSpace;](https://example.test/shot.png)']) {
+  test(`rejects invisible non-image artifact link ${artifact}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} ${artifact}`)).ok, false);
+  });
+}
+test('empty-alt image artifact still renders and counts', () => {
+  assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} ![](https://example.test/shot.png)`)).ok, true);
+});
+
+for (const label of [' ', '&ZeroWidthSpace;']) {
+  test(`rejects invisible reference-link artifact label ${label}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} [${label}][proof]\n\n[proof]: https://example.test/shot.png`)).ok, false);
+  });
+}
