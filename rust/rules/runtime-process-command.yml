@@ -9,6 +9,35 @@ ignores:
   - crates/pp-core/**
   - crates/pp-desktop/**
 utils:
+  disabled-cfg-item:
+    follows:
+      kind: attribute_item
+      has:
+        kind: attribute
+        has:
+          kind: identifier
+          regex: '^(r#)?cfg$'
+        all:
+          - has:
+              field: arguments
+              has:
+                kind: token_tree
+                follows:
+                  kind: identifier
+                  regex: '^(r#)?any$'
+                  stopBy:
+                    matches: non-comment
+                not:
+                  has:
+                    all:
+                      - matches: non-comment
+                      - regex: '[^()]'
+      stopBy:
+        not:
+          any:
+            - kind: attribute_item
+            - kind: line_comment
+            - kind: block_comment
   stringify-macro-name:
     any:
       - regex: '^(::)?(r#)?stringify$'
@@ -216,6 +245,13 @@ utils:
   shadow-scope:
     matches: lexical-scope
     has:
+      # cfg(any()) is always false, so these items introduce no binding.
+      not:
+        any:
+          - matches: disabled-cfg-item
+          - inside:
+              matches: disabled-cfg-item
+              stopBy: end
       any:
         - any:
             - kind: mod_item
@@ -385,6 +421,37 @@ rule:
         # An alias of std preserves the process::Command path beneath that alias.
         - all:
             - any:
+                - kind: identifier
+                  regex: '^(r#)?Command$'
+                  any:
+                    - inside:
+                        kind: use_list
+                    - inside:
+                        kind: use_as_clause
+                        has:
+                          field: path
+                          regex: '^(r#)?Command$'
+                  inside:
+                    kind: scoped_use_list
+                    has:
+                      field: path
+                      has:
+                        field: name
+                        regex: '^(r#)?process$'
+                      all:
+                        - has:
+                            field: path
+                            pattern: $MODULE
+                    inside:
+                      kind: use_declaration
+                      stopBy:
+                        not:
+                          matches: root-import-group
+                    stopBy:
+                      not:
+                        any:
+                          - kind: use_list
+                          - kind: use_as_clause
                 - all:
                     - any:
                         - kind: scoped_identifier

@@ -1,5 +1,8 @@
 id: runtime-process-command
 valid:
+  - 'use std as s; use foreign::{s::process::{Command}};'
+  - 'use std as s; use s::process::{id as Command};'
+  - 'use std::process as p; fn production() { #[cfg(all())] use other as p; p::Command::new("sh"); }'
   - 'fn production() { outer!(std /* module */ :: stringify /* macro */ ! /* arguments */ (std::process::Command)); }'
   - 'use std::process as p; fn production() { use other as p; use p::*; }'
   - 'fn production() { std /* module */ :: stringify!(std::process::Command); }'
@@ -56,6 +59,12 @@ valid:
   - 'use std::{os::unix::{process::*}};'
   - 'use std::os::unix::process::*;'
 invalid:
+  - 'use std as s; use s::process::{Command};'
+  - 'use std as s; use s::process::{Command as Spawn};'
+  - 'use std as s; fn production() { use s::process::{r#Command}; }'
+  - 'use std::process as p; fn production() { #[cfg(any())] use other as p; p::Command::new("sh"); }'
+  - 'use std::process as p; fn production() { #[cfg(any(/* disabled */))] use other::{p}; p::Command::new("sh"); }'
+  - 'use std::process as p; fn production() { #[cfg(any())] mod p {} p::Command::new("sh"); }'
   - 'fn production() { custom::std /* module */ :: stringify!(std::process::Command); }'
   - 'use std::process::{*};'
   - 'use std::process::{{*}};'

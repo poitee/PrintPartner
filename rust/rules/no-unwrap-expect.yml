@@ -10,6 +10,31 @@ ignores:
   - crates/*/src/**/tests.rs
   - crates/*/src/**/tests/**
 utils:
+  test-cfg-any:
+    has:
+      kind: attribute
+      has:
+        kind: identifier
+        regex: '^(r#)?cfg$'
+      all:
+        - has:
+            field: arguments
+            has:
+              kind: token_tree
+              follows:
+                kind: identifier
+                regex: '^(r#)?any$'
+                stopBy:
+                  matches: non-comment
+              has:
+                kind: identifier
+                regex: '^(r#)?test$'
+              not:
+                has:
+                  all:
+                    - matches: non-comment
+                    - not:
+                        regex: '^(r#)?test$|^[(),]$'
   stringify-macro-name:
     any:
       - regex: '^(::)?(r#)?stringify$'
@@ -183,6 +208,7 @@ rule:
           has:
             kind: inner_attribute_item
             any:
+              - matches: test-cfg-any
               - matches: test-cfg-direct
               - matches: test-cfg-all
           stopBy: end
@@ -192,6 +218,7 @@ rule:
           follows:
             kind: attribute_item
             any:
+              - matches: test-cfg-any
               - matches: test-attribute
               - matches: test-cfg-direct
               # A direct test term in all(...) makes every build test-only.

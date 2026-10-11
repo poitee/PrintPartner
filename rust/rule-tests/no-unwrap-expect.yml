@@ -1,5 +1,8 @@
 id: no-unwrap-expect
 valid:
+  - '#[cfg(any(test))] fn helper() { value.unwrap(); }'
+  - '#![cfg(any(/* fixture */ test,))] fn helper() { value.unwrap(); }'
+  - '#[r#cfg(r#any(r#test, r#test))] fn helper() { value.expect("fixture"); }'
   - 'fn production() { outer!(std /* module */ :: stringify /* macro */ ! /* arguments */ (value.unwrap())); }'
   - '#[/* fixture */ test] fn case() { value.unwrap(); }'
   - '#[tokio /* fixture */ :: test(flavor = "current_thread")] async fn case() { value.expect("fixture"); }'
@@ -45,6 +48,9 @@ valid:
   - '#[cfg(all(test, any(unix, windows)))] fn helper() { println!("{}", value.unwrap()); }'
   - '#[cfg(all /* platform */ (test, unix))] fn helper() { value.unwrap(); }'
 invalid:
+  - '#[cfg(any(test = "fixture"))] fn production() { value.unwrap(); }'
+  - '#[cfg(any(test, not(unix)))] fn production() { value.unwrap(); }'
+  - '#[cfg(any(test))] fn helper() {} fn production() { value.unwrap(); }'
   - '#[foo = test] fn production() { value.unwrap(); }'
   - '#[foo = /* fixture */ test] fn production() { value.unwrap(); }'
   - '#[my_attr = a::test] fn production() { value.unwrap(); }'
