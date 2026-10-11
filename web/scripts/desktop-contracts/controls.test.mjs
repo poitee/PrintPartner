@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import process from "node:process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -19,7 +19,7 @@ function detects(change) {
   try {
     const path = join(temporary, "cases.json");
     writeFileSync(path, JSON.stringify(input));
-    const result = spawnSync(process.env.CARGO ?? "cargo", ["+1.99.0", "run", "--manifest-path", join(repo, "rust/crates/pp-contracts/Cargo.toml"), "--locked", "--bin", "contract-parity", "--", path, join(temporary, "result.json")], { cwd: repo, encoding: "utf8" });
+    const result = spawnSync(process.env.CARGO ?? "cargo", ["run", "--manifest-path", join(repo, "rust/crates/pp-contracts/Cargo.toml"), "--locked", "--bin", "contract-parity", "--", path, join(temporary, "result.json")], { cwd: repo, encoding: "utf8" });
     assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
     assert(JSON.parse(readFileSync(join(temporary, "result.json"), "utf8")).mismatches.length > 0);
   } finally {
@@ -53,25 +53,43 @@ test("modified per-run receipt fails freshness audit", () => {
   } finally { rmSync(temporary, { recursive: true, force: true }); }
 });
 
-test("actual schema check rejects committed schema drift without refreshing it", () => {
+function withSchemaCopy(check) {
   const temporary = mkdtempSync(join(tmpdir(), "pp-schema-drift-"));
   try {
     const web = join(repo, "web");
     const scripts = join(temporary, "scripts/desktop-contracts");
     mkdirSync(scripts, { recursive: true });
-    cpSync(join(web, "scripts/desktop-contracts/generate.mjs"), join(scripts, "generate.mjs"));
+    for (const name of ["generate.mjs", "refinements.mjs", "boundary-adapters.json"]) cpSync(join(web, "scripts/desktop-contracts", name), join(scripts, name));
     cpSync(join(web, "scripts/desktop-contracts/schemas"), join(scripts, "schemas"), { recursive: true });
     cpSync(join(web, "package.json"), join(temporary, "package.json"));
     symlinkSync(join(web, "node_modules"), join(temporary, "node_modules"), "dir");
     symlinkSync(join(web, "packages"), join(temporary, "packages"), "dir");
-    const changed = join(scripts, "schemas/save-request.input.schema.json");
-    const schema = JSON.parse(readFileSync(changed, "utf8"));
-    schema.additionalProperties = true;
-    writeFileSync(changed, JSON.stringify(schema));
-    const before = readFileSync(changed, "utf8");
-    const result = spawnSync(process.execPath, ["--conditions=development", "--import", "tsx", join(scripts, "generate.mjs"), "--check", join(temporary, "receipts")], { cwd: temporary, encoding: "utf8" });
-    assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /Schema drift: save-request.input.schema.json/);
-    assert.equal(readFileSync(changed, "utf8"), before);
+    const generate = (mode) => spawnSync(process.execPath, ["--conditions=development", "--import", "tsx", join(scripts, "generate.mjs"), mode, join(temporary, "receipts")], { cwd: temporary, encoding: "utf8" });
+    check(scripts, generate);
   } finally { rmSync(temporary, { recursive: true, force: true }); }
-});
+}
+
+test("actual schema check rejects committed schema drift without refreshing it", () => withSchemaCopy((scripts, generate) => {
+  const changed = join(scripts, "schemas/save-request.input.schema.json");
+  const schema = JSON.parse(readFileSync(changed, "utf8"));
+  schema.additionalProperties = true;
+  writeFileSync(changed, JSON.stringify(schema));
+  const before = readFileSync(changed, "utf8");
+  const result = generate("--check");
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Schema drift: save-request.input.schema.json/);
+  assert.equal(readFileSync(changed, "utf8"), before);
+}));
+
+test("obsolete schemas fail check and are removed before DTO regeneration", () => withSchemaCopy((scripts, generate) => {
+  const obsolete = join(scripts, "schemas/removed-contract.input.schema.json");
+  writeFileSync(obsolete, JSON.stringify({ type: "string" }));
+  const checked = generate("--check");
+  assert.notEqual(checked.status, 0);
+  assert.match(checked.stderr, /Obsolete schema artifact: removed-contract.input.schema.json/);
+  assert(existsSync(obsolete), "Check mode must not delete the artifact");
+  const written = generate("--write");
+  assert.equal(written.status, 0, written.stderr);
+  assert(!existsSync(obsolete), "Write mode must remove obsolete schemas before the Rust generator scans the directory");
+  assert.equal(generate("--check").status, 0);
+}));

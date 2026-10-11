@@ -33,7 +33,7 @@ node.parent.mkdir(parents=True)
 shutil.copy2(args.node, node)
 for path in ['apps/server/dist/current', 'apps/web/dist', 'packages/contracts/dist/current', 'packages/domain/dist/current']:
     shutil.copytree(source / path, web / path)
-for path in ['package.json', 'package-lock.json', 'apps/server/package.json', 'apps/web/package.json',
+for path in ['package.json', 'package-lock.json', 'apps/server/package.json',
              'packages/contracts/package.json', 'packages/domain/package.json']:
     target = web / path
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -57,6 +57,17 @@ for name, relative in [('contracts', 'packages/contracts'), ('domain', 'packages
         alias.parent.mkdir(parents=True, exist_ok=True)
         alias.symlink_to(os.path.relpath(web / relative, alias.parent))
 if system == 'macos':
+    from macos_addon_slices import normalize_addon, select_better_sqlite3_prebuild
+    target_architecture = {'aarch64': 'arm64', 'x86_64': 'x86_64'}[arch]
+    sqlite_prebuilds = web / 'node_modules/better-sqlite3/prebuilds'
+    sqlite_selection = select_better_sqlite3_prebuild(
+        [entry.name for entry in sqlite_prebuilds.iterdir()],
+        target_architecture,
+    )
+    for name in sqlite_selection.discard_names:
+        (sqlite_prebuilds / name).unlink()
+    for addon in list(web.rglob('*.node')):
+        normalize_addon(addon, target_architecture)
     frameworks = stage / 'Frameworks'
     frameworks.mkdir()
     for addon in list(web.rglob('*.node')):
@@ -75,7 +86,7 @@ identity_path = stage / ('Resources/desktop-runtime/release.json' if system == '
 identity_path.write_text(json.dumps(release, sort_keys=True)+'\n')
 if system == 'macos':
     native_config = json.loads((pathlib.Path(__file__).resolve().parents[1] / 'crates/pp-desktop/tauri.conf.json').read_text())
-    bundle = {'resources': {str(stage / 'Resources/desktop-runtime'): 'desktop-runtime'},
+    bundle = {'resources': {},
               'macOS': {'minimumSystemVersion': native_config['bundle']['macOS']['minimumSystemVersion'],
                         'files': {str(path.relative_to(stage)): str(path)
                                   for directory in ['MacOS', 'Frameworks']
