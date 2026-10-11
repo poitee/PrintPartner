@@ -1081,3 +1081,48 @@ test("strips comments and link text in linear time (substitute review r3 P2: rep
     assert.ok(elapsed < 1000, `lint took ${Math.round(elapsed)} ms for ${JSON.stringify(body.slice(55, 120))}`);
   }
 });
+
+// Sweep regressions for confirmed current-head review findings.
+for (const reason of ["TODO", "TBD", "N/A", "none"]) {
+  test(`rejects placeholder exemption reason ${reason}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: docs-only\n- Exemption reason: ${reason}`)).ok, false);
+  });
+}
+for (const artifact of ["No screenshot.png was produced", "evidence/trace.zip was not generated", "`not provided`", "[unused]: evidence/shot.png"]) {
+  test(`rejects absent or unused artifact ${artifact}`, () => {
+    const result = lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} ${artifact}`));
+    assert.equal(result.ok, false);
+  });
+}
+test("quoted list fence ends when verification leaves the list item", () => {
+  const result = lintPrEvidence(bodyWithEvidence('Exemption: docs-only\n- Exemption reason: Updated docs.\n\n> - ```text\n>   example\n> Verified against http://192.168.1.80:8080'));
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join(";"), /\.80\/\.81/);
+});
+test("commented decoy heading cannot redirect the LAN scan", () => {
+  const result = lintPrEvidence('## Evidence\nExemption: none\n- Steps followed to produce the evidence: see <!-- note\n## Evidence\ndecoy\nhttp://192.168.1.81\nend comment --> real steps curl http://192.168.1.80:8080\n- Result observed: ok\n- Screenshot / recording / verify-skill output or trace: https://example.test/trace.json');
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join(";"), /\.80\/\.81/);
+});
+test("top-level Appendix cannot supply missing Evidence fields", () => {
+  assert.equal(lintPrEvidence('## Evidence\n\n# Appendix\nExemption: docs-only\n- Exemption reason: Updated docs.').ok, false);
+});
+test("rejects a split Evidence heading", () => {
+  assert.equal(lintPrEvidence('##\nEvidence\nExemption: docs-only\n- Exemption reason: Updated docs.').ok, false);
+});
+for (const spaces of [1, 2, 3]) {
+  test(`accepts Evidence heading with ${spaces} leading spaces`, () => {
+    assert.equal(lintPrEvidence(' '.repeat(spaces) + '## Evidence\nExemption: docs-only\n- Exemption reason: Updated docs.').ok, true);
+  });
+}
+test("rejects duplicate Exemption declarations", () => {
+  assert.equal(lintPrEvidence(bodyWithEvidence('Exemption: docs-only\nExemption: none\n- Exemption reason: Updated docs.')).ok, false);
+});
+test("flush fence closer closes an indented top-level fence", () => {
+  assert.equal(lintPrEvidence('  ```text\nexample\n```\n## Evidence\nExemption: docs-only\n- Exemption reason: Updated docs.').ok, true);
+});
+for (const closer of ['> ```', '- ```']) {
+  test(`container marker does not close a top-level fence: ${closer}`, () => {
+    assert.equal(lintPrEvidence('```text\n' + closer + '\n## Evidence\nExemption: docs-only\n- Exemption reason: Updated docs.').ok, false);
+  });
+}

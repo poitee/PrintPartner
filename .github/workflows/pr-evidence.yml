@@ -3,20 +3,38 @@ name: PR evidence
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
 
 permissions:
   contents: read
   pull-requests: read
 
 jobs:
+  test-checker:
+    if: github.event_name == 'pull_request'
+    name: Unit-test Evidence checker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      - name: Unit-test PR evidence lint
+        run: node --test scripts/lint-pr-evidence.test.mjs
   lint-pr-body:
+    if: github.event_name == 'pull_request_target'
     name: Lint Evidence block
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Execute only the protected base checker, never PR-controlled code.
+          ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
       - name: Unit-test PR evidence lint

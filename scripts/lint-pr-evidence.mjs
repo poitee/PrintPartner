@@ -67,10 +67,26 @@ function containerPrefix(line) {
 }
 
 /** A fence opener after any container prefix; backtick openers hold no other backticks. */
-function fenceOpener(line) {
+function quoteContent(line, depth) {
+  let rest = line;
+  for (let n = 0; n < depth; n += 1) {
+    const marker = rest.match(/^[ ]{0,3}>[ ]?/);
+    if (!marker) return null;
+    rest = rest.slice(marker[0].length);
+  }
+  return rest;
+}
+
+function fenceOpener(line, listColumn = 0) {
   const prefix = containerPrefix(line);
   const open = line.slice(prefix.end).match(/^(`{3,}(?=[^`]*$)|~{3,})/);
-  return open ? { marker: open[1], ...prefix } : null;
+  if (!open) return null;
+  const content = quoteContent(line, prefix.quote);
+  const hasList = /^[ \t]*(?:[-+*]|\d{1,9}[.)])[ \t]/.test(content);
+  const column = hasList
+    ? containerPrefix(content).column
+    : (prefix.quote ? 0 : listColumn);
+  return { marker: open[1], ...prefix, column };
 }
 
 /**
@@ -80,8 +96,9 @@ function fenceOpener(line) {
  * its column.
  */
 function insideFenceContainer(line, fence) {
-  if (fence.quote) return containerPrefix(line).quote >= fence.quote;
-  return !line.trim() || indentWidth(line.match(/^[ \t]*/)[0]) >= fence.column;
+  const content = quoteContent(line, fence.quote);
+  if (content == null) return false;
+  return !content.trim() || indentWidth(content.match(/^[ \t]*/)[0]) >= fence.column;
 }
 
 /**
@@ -98,10 +115,15 @@ function stripHiddenMarkdown(text, { inlineMultiline = true } = {}) {
   let fence = null;
   let inComment = false;
   let inlineComment = false;
+  let listColumn = 0;
   for (const raw of text.replace(/\r\n/g, "\n").split("\n")) {
     if (fence && !insideFenceContainer(raw, fence)) fence = null;
     if (fence) {
-      const close = raw.slice(containerPrefix(raw).end).match(/^(`{3,}|~{3,})[ \t]*$/);
+      const content = quoteContent(raw, fence.quote);
+      const indent = indentWidth(content.match(/^[ \t]*/)[0]);
+      const close = indent <= fence.column + 3
+        ? content.trimStart().match(/^(`{3,}|~{3,})[ \t]*$/)
+        : null;
       if (close && close[1][0] === fence.marker[0] && close[1].length >= fence.marker.length) {
         fence = null;
       }
@@ -109,7 +131,10 @@ function stripHiddenMarkdown(text, { inlineMultiline = true } = {}) {
       continue;
     }
     if (!inComment) {
-      fence = fenceOpener(raw);
+      const list = raw.match(/^[ \t]*(?:[-+*]|\d{1,9}[.)])[ \t]+/);
+      if (list) listColumn = indentWidth(list[0]);
+      else if (raw.trim() && indentWidth(raw.match(/^[ \t]*/)[0]) < listColumn) listColumn = 0;
+      fence = fenceOpener(raw, listColumn);
       if (fence) {
         kept.push("");
         continue;
@@ -196,11 +221,11 @@ function normalizeWs(text) {
 export function extractEvidenceSection(body, options) {
   if (typeof body !== "string" || !body.trim()) return null;
   const visible = stripHiddenMarkdown(body, options);
-  const match = visible.match(/^##\s+Evidence\s*$/im);
+  const match = visible.match(/^[ ]{0,3}##[ \t]+Evidence[ \t]*$/im);
   if (!match || match.index == null) return null;
   const start = match.index + match[0].length;
   const rest = visible.slice(start);
-  const nextHeading = rest.search(/^##\s+/m);
+  const nextHeading = rest.search(/^[ ]{0,3}#{1,2}(?:[ \t]+|$)/m);
   const section = nextHeading === -1 ? rest : rest.slice(0, nextHeading);
   return section;
 }
@@ -549,10 +574,11 @@ const REFERENCE_DEFINITION = /^[ \t]*\[((?:[^\]\\\n]|\\.){1,999})\]:[ \t]*(<(?:[
  * A definition's destination may sit on the next line and its title may span
  * lines, so everything up to the next blank line goes with it (fail closed).
  */
-function stripReferenceDefinitions(value) {
+function stripReferenceDefinitions(value, references) {
   let concrete = false;
   let dropping = false;
   let wantDestination = false;
+  let referenced = false;
   const kept = [];
   for (const line of value.split("\n")) {
     if (!line.trim()) {
@@ -565,11 +591,12 @@ function stripReferenceDefinitions(value) {
     if (definition) {
       dropping = true;
       wantDestination = !definition[2];
-      if (definition[2] && isConcreteTarget(definition[2])) concrete = true;
+      referenced = references.has(normalizeReferenceLabel(definition[1]));
+      if (referenced && definition[2] && isConcreteTarget(definition[2])) concrete = true;
       continue;
     }
     if (dropping) {
-      if (wantDestination && isConcreteTarget(line.trim().split(/\s+/)[0])) concrete = true;
+      if (referenced && wantDestination && isConcreteTarget(line.trim().split(/\s+/)[0])) concrete = true;
       wantDestination = false;
       continue;
     }
@@ -601,8 +628,8 @@ function linkTextStart(text, close, floor) {
  * as an artifact. Each character is scanned a bounded number of times, so the
  * pass is linear.
  */
-function stripLinks(value) {
-  const definitions = stripReferenceDefinitions(value);
+function stripLinks(value, references) {
+  const definitions = stripReferenceDefinitions(value, references);
   let concrete = definitions.concrete;
   const text = definitions.text;
   let rest = "";
@@ -618,15 +645,16 @@ function stripLinks(value) {
   return { rest: rest + text.slice(cursor), concrete };
 }
 
-function looksLikeArtifact(value) {
+function looksLikeArtifact(value, references) {
   if (!value) return false;
+  // An explicit statement that no artifact exists cannot prove verification.
+  const negative = /\b(?:not (?:provided|produced|generated|available|attached)|no (?:screenshot|recording|trace|evidence)|could not (?:test|verify)|was not|not yet)\b/i;
+  if (negative.test(value)) return false;
   // A line that is a placeholder note (TODO: attach trace.json) is not evidence.
-  value = value
-    .split("\n")
-    .filter((line) => !PLACEHOLDER_WORD.test(line))
-    .join("\n");
+  // A placeholder note is rejected as a whole; filenames containing todo remain valid.
+  if (/^\s*`?(?:TODO|TBD|FIXME|placeholder)(?:[ :]|$)/i.test(value)) return false;
   // A link counts by its destination; its title never makes it evidence.
-  const { rest, concrete } = stripLinks(value);
+  const { rest, concrete } = stripLinks(value, references);
   if (concrete) return true;
   if (HTTP_URL.test(rest)) return true;
   if (hasSubstantiveCodeSpan(rest)) return true;
@@ -646,12 +674,23 @@ function freeformText(sectionText) {
  * artifact field or freeform text outside the template fields. A journey name,
  * a bare category word, or exemption-reason text cannot pass.
  */
+function normalizeReferenceLabel(label) {
+  return label.replace(/\\(.)/g, "$1").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
 export function hasEvidenceContent(sectionText) {
   const steps = readField(sectionText, FIELD_LABELS.steps);
   const result = readField(sectionText, FIELD_LABELS.result);
   const artifact = findField(sectionText, FIELD_LABELS.artifact)?.text ?? "";
   if (!steps || !result) return false;
-  return looksLikeArtifact(artifact) || looksLikeArtifact(freeformText(sectionText));
+  // Count reference destinations only for visible reference uses in verification
+  // content, never for definitions or labels inside the exemption reason.
+  const verification = withoutFields(sectionText, [FIELD_LABELS.reason]);
+  const references = new Set(
+    [...verification.matchAll(/\[((?:[^\]\\\n]|\\.){1,999})\](?!:)/g)]
+      .map((match) => normalizeReferenceLabel(match[1])),
+  );
+  return looksLikeArtifact(artifact, references) || looksLikeArtifact(freeformText(sectionText), references);
 }
 
 /**
@@ -700,10 +739,16 @@ export function lintPrEvidence(body) {
   const reason = extractExemptionReason(section);
   const hasEvidence = hasEvidenceContent(section);
 
-  if (targetsBannedLan(extractEvidenceSection(body, { inlineMultiline: false }) ?? section)) {
+  // Preserve the selected section boundaries even for the conservative LAN view.
+  // Also scan the visible section so commented decoy headings cannot redirect it.
+  if (targetsBannedLan(section) || targetsBannedLan(extractEvidenceSection(body, { inlineMultiline: false }) ?? section)) {
     errors.push(
       "Evidence must not target Chad's LAN instances (.80/.81). Use a disposable local verify instance instead. (To mention these hosts in the Exemption reason, indent every reason line under its bullet.)",
     );
+  }
+
+  if ([...section.matchAll(EXEMPTION_LINE)].length > 1) {
+    errors.push("Evidence must contain exactly one Exemption declaration.");
   }
 
   if (raw == null) {
@@ -723,7 +768,7 @@ export function lintPrEvidence(body) {
       );
     }
   } else if (VALID_EXEMPTIONS.includes(value)) {
-    if (!reason) {
+    if (!reason || /^(?:todo|tbd|n\/?a|none|fixme|placeholder)[.!?]*$/i.test(reason.trim())) {
       errors.push(
         `Exemption "${value}" requires a non-empty Exemption reason (for docs/CI-only and other exempt PRs).`,
       );
