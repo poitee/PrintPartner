@@ -1,0 +1,410 @@
+{
+  "schemaVersion": 1,
+  "helper": "production-packing-rules",
+  "cases": [
+    {
+      "name": "separates different values and preserves stable source order",
+      "input": {
+        "units": [
+          {
+            "token": "a",
+            "objectName": "a",
+            "filename": "a.stl",
+            "sourceDirectory": "XY",
+            "sourceLayer": "base",
+            "role": "primary",
+            "filamentColorId": "green"
+          },
+          {
+            "token": "b",
+            "objectName": "b",
+            "filename": "b.stl",
+            "sourceDirectory": "XY",
+            "sourceLayer": "base",
+            "role": "primary",
+            "filamentColorId": "orange"
+          },
+          {
+            "token": "c",
+            "objectName": "c",
+            "filename": "c.stl",
+            "sourceDirectory": "skirts",
+            "sourceLayer": "base",
+            "role": "accent",
+            "filamentColorId": "green"
+          }
+        ],
+        "rules": [
+          {
+            "id": "color",
+            "enabled": true,
+            "kind": "separate_by",
+            "field": "color"
+          }
+        ]
+      },
+      "output": [
+        [
+          {
+            "token": "a",
+            "objectName": "a",
+            "filename": "a.stl",
+            "sourceDirectory": "XY",
+            "sourceLayer": "base",
+            "role": "primary",
+            "filamentColorId": "green"
+          },
+          {
+            "token": "c",
+            "objectName": "c",
+            "filename": "c.stl",
+            "sourceDirectory": "skirts",
+            "sourceLayer": "base",
+            "role": "accent",
+            "filamentColorId": "green"
+          }
+        ],
+        [
+          {
+            "token": "b",
+            "objectName": "b",
+            "filename": "b.stl",
+            "sourceDirectory": "XY",
+            "sourceLayer": "base",
+            "role": "primary",
+            "filamentColorId": "orange"
+          }
+        ]
+      ]
+    },
+    {
+      "name": "isolates a requested directory without hard-coding directory names",
+      "input": {
+        "units": [
+          {
+            "token": "a",
+            "objectName": "a",
+            "filename": "a.stl",
+            "sourceDirectory": "XY",
+            "sourceLayer": "base",
+            "role": "primary",
+            "filamentColorId": "green"
+          },
+          {
+            "token": "b",
+            "objectName": "b",
+            "filename": "b.stl",
+            "sourceDirectory": "XY",
+            "sourceLayer": "base",
+            "role": "primary",
+            "filamentColorId": "orange"
+          },
+          {
+            "token": "c",
+            "objectName": "c",
+            "filename": "c.stl",
+            "sourceDirectory": "skirts",
+            "sourceLayer": "base",
+            "role": "accent",
+            "filamentColorId": "green"
+          }
+        ],
+        "rules": [
+          {
+            "id": "xy",
+            "enabled": true,
+            "kind": "keep_together",
+            "field": "source_directory",
+            "value": "XY"
+          }
+        ]
+      },
+      "output": [
+        [
+          {
+            "token": "a",
+            "objectName": "a",
+            "filename": "a.stl",
+            "sourceDirectory": "XY",
+            "sourceLayer": "base",
+            "role": "primary",
+            "filamentColorId": "green"
+          },
+          {
+            "token": "b",
+            "objectName": "b",
+            "filename": "b.stl",
+            "sourceDirectory": "XY",
+            "sourceLayer": "base",
+            "role": "primary",
+            "filamentColorId": "orange"
+          }
+        ],
+        [
+          {
+            "token": "c",
+            "objectName": "c",
+            "filename": "c.stl",
+            "sourceDirectory": "skirts",
+            "sourceLayer": "base",
+            "role": "accent",
+            "filamentColorId": "green"
+          }
+        ]
+      ]
+    },
+    {
+      "name": "ignores disabled and printer-assignment rules during plate grouping",
+      "input": {
+        "units": [
+          {
+            "token": "a",
+            "objectName": "a",
+            "filename": "a.stl",
+            "sourceDirectory": "XY",
+            "sourceLayer": "base",
+            "role": "primary",
+            "filamentColorId": "green"
+          },
+          {
+            "token": "b",
+            "objectName": "b",
+            "filename": "b.stl",
+            "sourceDirectory": "XY",
+            "sourceLayer": "base",
+            "role": "primary",
+            "filamentColorId": "orange"
+          },
+          {
+            "token": "c",
+            "objectName": "c",
+            "filename": "c.stl",
+            "sourceDirectory": "skirts",
+            "sourceLayer": "base",
+            "role": "accent",
+            "filamentColorId": "green"
+          }
+        ],
+        "rules": [
+          {
+            "id": "off",
+            "enabled": false,
+            "kind": "separate_by",
+            "field": "color"
+          },
+          {
+            "id": "printer",
+            "enabled": true,
+            "kind": "assign_to_printer",
+            "field": "role",
+            "value": "accent",
+            "printer_id": "p1"
+          }
+        ]
+      },
+      "output": [
+        [
+          {
+            "token": "a",
+            "objectName": "a",
+            "filename": "a.stl",
+            "sourceDirectory": "XY",
+            "sourceLayer": "base",
+            "role": "primary",
+            "filamentColorId": "green"
+          },
+          {
+            "token": "b",
+            "objectName": "b",
+            "filename": "b.stl",
+            "sourceDirectory": "XY",
+            "sourceLayer": "base",
+            "role": "primary",
+            "filamentColorId": "orange"
+          },
+          {
+            "token": "c",
+            "objectName": "c",
+            "filename": "c.stl",
+            "sourceDirectory": "skirts",
+            "sourceLayer": "base",
+            "role": "accent",
+            "filamentColorId": "green"
+          }
+        ]
+      ]
+    },
+    {
+      "name": "uses editable material assignments when separating by material",
+      "input": {
+        "units": [
+          {
+            "token": "a",
+            "objectName": "a",
+            "filename": "a.stl",
+            "sourceDirectory": "XY",
+            "sourceLayer": "base",
+            "role": "primary",
+            "filamentColorId": "green"
+          },
+          {
+            "token": "b",
+            "objectName": "b",
+            "filename": "b.stl",
+            "sourceDirectory": "XY",
+            "sourceLayer": "base",
+            "role": "primary",
+            "filamentColorId": "orange"
+          },
+          {
+            "token": "c",
+            "objectName": "c",
+            "filename": "c.stl",
+            "sourceDirectory": "skirts",
+            "sourceLayer": "base",
+            "role": "accent",
+            "filamentColorId": "green"
+          }
+        ],
+        "rules": [
+          {
+            "id": "xy-abs",
+            "enabled": true,
+            "kind": "set_material",
+            "field": "source_directory",
+            "value": "XY",
+            "material_type": "ABS"
+          },
+          {
+            "id": "skirts-asa",
+            "enabled": true,
+            "kind": "set_material",
+            "field": "source_directory",
+            "value": "skirts",
+            "material_type": "ASA"
+          },
+          {
+            "id": "materials",
+            "enabled": true,
+            "kind": "separate_by",
+            "field": "material"
+          }
+        ]
+      },
+      "output": [
+        [
+          {
+            "token": "a",
+            "objectName": "a",
+            "filename": "a.stl",
+            "sourceDirectory": "XY",
+            "sourceLayer": "base",
+            "role": "primary",
+            "filamentColorId": "green"
+          },
+          {
+            "token": "b",
+            "objectName": "b",
+            "filename": "b.stl",
+            "sourceDirectory": "XY",
+            "sourceLayer": "base",
+            "role": "primary",
+            "filamentColorId": "orange"
+          }
+        ],
+        [
+          {
+            "token": "c",
+            "objectName": "c",
+            "filename": "c.stl",
+            "sourceDirectory": "skirts",
+            "sourceLayer": "base",
+            "role": "accent",
+            "filamentColorId": "green"
+          }
+        ]
+      ]
+    },
+    {
+      "name": "separates custom hex colors and normalizes their spelling",
+      "input": {
+        "units": [
+          {
+            "token": "hex-a",
+            "objectName": "a",
+            "filename": "a.stl",
+            "sourceDirectory": "XY",
+            "sourceLayer": "base",
+            "role": "primary",
+            "filamentColorId": null,
+            "filamentCustomHex": "#FF6600"
+          },
+          {
+            "token": "hex-b",
+            "objectName": "b",
+            "filename": "b.stl",
+            "sourceDirectory": "XY",
+            "sourceLayer": "base",
+            "role": "primary",
+            "filamentColorId": null,
+            "filamentCustomHex": "ff6600"
+          },
+          {
+            "token": "hex-c",
+            "objectName": "c",
+            "filename": "c.stl",
+            "sourceDirectory": "skirts",
+            "sourceLayer": "base",
+            "role": "accent",
+            "filamentColorId": null,
+            "filamentCustomHex": "#008000"
+          }
+        ],
+        "rules": [
+          {
+            "id": "custom-colors",
+            "enabled": true,
+            "kind": "separate_by",
+            "field": "color"
+          }
+        ]
+      },
+      "output": [
+        [
+          {
+            "token": "hex-a",
+            "objectName": "a",
+            "filename": "a.stl",
+            "sourceDirectory": "XY",
+            "sourceLayer": "base",
+            "role": "primary",
+            "filamentColorId": null,
+            "filamentCustomHex": "#FF6600"
+          },
+          {
+            "token": "hex-b",
+            "objectName": "b",
+            "filename": "b.stl",
+            "sourceDirectory": "XY",
+            "sourceLayer": "base",
+            "role": "primary",
+            "filamentColorId": null,
+            "filamentCustomHex": "ff6600"
+          }
+        ],
+        [
+          {
+            "token": "hex-c",
+            "objectName": "c",
+            "filename": "c.stl",
+            "sourceDirectory": "skirts",
+            "sourceLayer": "base",
+            "role": "accent",
+            "filamentColorId": null,
+            "filamentCustomHex": "#008000"
+          }
+        ]
+      ]
+    }
+  ]
+}
