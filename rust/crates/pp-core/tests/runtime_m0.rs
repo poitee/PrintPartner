@@ -4,7 +4,7 @@ use axum::{
 };
 use http_body_util::BodyExt;
 use hyper_util::rt::TokioIo;
-use pp_core::{CoreRuntime, CoreStatus, DesktopLaunch, VerifiedBundle};
+use pp_core::{CoreRuntime, CoreStatus, DesktopLaunch, SupervisorConfig, VerifiedBundle};
 use std::{path::PathBuf, time::Duration};
 
 fn launch(data: PathBuf) -> DesktopLaunch {
@@ -598,9 +598,16 @@ async fn cleanup_error_publishes_failed_and_preserves_failure() {
 
 #[tokio::test]
 async fn stable_child_resets_backoff_without_erasing_rapid_crash_escalation() {
-    let runtime = CoreRuntime::start(launch(temporary("stable-backoff")))
-        .await
-        .unwrap();
+    let window = Duration::from_secs(1);
+    let stable_time = window + Duration::from_millis(100);
+    let runtime = CoreRuntime::start_with_compat_config(
+        launch(temporary("stable-backoff")),
+        SupervisorConfig {
+            crash_guard_window: window,
+        },
+    )
+    .await
+    .unwrap();
     let mut state = runtime.handle().subscribe();
     let mut prior_pid = 0;
     for (index, expected) in [0, 1, 0].into_iter().enumerate() {
@@ -617,7 +624,7 @@ async fn stable_child_resets_backoff_without_erasing_rapid_crash_escalation() {
         };
         prior_pid = pid;
         if index == 2 {
-            tokio::time::sleep(Duration::from_secs(121)).await;
+            tokio::time::sleep(stable_time).await;
         }
         assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGKILL) }, 0);
         let attempt = loop {
@@ -635,7 +642,7 @@ async fn stable_child_resets_backoff_without_erasing_rapid_crash_escalation() {
     assert!(receipt.complete());
     println!(
         "{}",
-        serde_json::json!({"case":"stable_backoff_reset", "observed_attempts":[0,1,0], "stable_seconds":121, "receipt":receipt})
+        serde_json::json!({"case":"stable_backoff_reset", "observed_attempts":[0,1,0], "window_ms":window.as_millis(), "stable_ms":stable_time.as_millis(), "receipt":receipt})
     );
 }
 
