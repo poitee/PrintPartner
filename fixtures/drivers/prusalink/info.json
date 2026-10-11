@@ -1,0 +1,12 @@
+{
+  "status": 200,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "name": "Fixture Prusa",
+    "hostname": "printer.example",
+    "printer_model": "MK4",
+    "version": "6.0.0"
+  }
+}
