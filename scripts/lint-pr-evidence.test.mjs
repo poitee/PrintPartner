@@ -1427,3 +1427,24 @@ test('safe mapped IPv6 target remains allowed', () => {
 test('valid multiline title does not hide actual declarations', () => {
   assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} [trace](https://example.test/a.png "first\nsecond")`)).ok, true);
 });
+
+for (const definition of ['[foo]: /target "title\nExemption: docs-only\n- Exemption reason: Updated docs.\n"', '[foo]: /target\n  "title\nExemption: docs-only\n- Exemption reason: Updated docs.\n"']) {
+  test(`reference definition title cannot supply exemption metadata ${JSON.stringify(definition)}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(definition)).ok, false);
+  });
+  test(`real exemption after reference title remains valid ${JSON.stringify(definition)}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(definition + '\n\nExemption: docs-only\n- Exemption reason: Actually updated docs.')).ok, true);
+  });
+}
+for (const tag of ['<span title="', "<span title='", '<custom-tag data-proof="']) {
+  const quote=tag.at(-1);
+  test(`multiline inline HTML attributes cannot supply exemption ${tag}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Intro ${tag}\nExemption: docs-only\n- Exemption reason: Updated docs.\n${quote}>visible`)).ok, false);
+  });
+  test(`multiline inline HTML attributes cannot supply result ${tag}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\nIntro ${tag}\n- Result observed: passed\n${quote}>visible\n${ARTIFACT_LABEL} trace.json`)).ok, false);
+  });
+  test(`real declarations after multiline inline tag stay visible ${tag}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Intro ${tag}\nplaceholder\n${quote}>visible\nExemption: docs-only\n- Exemption reason: Updated docs.`)).ok, true);
+  });
+}

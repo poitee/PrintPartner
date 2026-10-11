@@ -298,7 +298,7 @@ function evidenceSectionEnd(text) {
  */
 export function extractEvidenceSection(body, options) {
   if (typeof body !== "string" || !body.trim()) return null;
-  const visible = stripHiddenMarkdown(inlineMetadataView(body), options);
+  const visible = stripHiddenMarkdown(structuralMetadataView(body), options);
   const match = [...referenceHeadingView(visible).matchAll(EVIDENCE_HEADING)][0];
   if (!match || match.index == null) return null;
   const start = match.index + match[0].length;
@@ -742,6 +742,61 @@ function inlineMetadataView(value) {
   return kept + value.slice(cursor);
 }
 
+/** Keep complete hidden metadata on its opening line, so its contents cannot
+ * impersonate block-level fields while links/definitions remain available
+ * for artifact and LAN validation. */
+function structuralMetadataView(value) {
+  const inline = inlineHtmlMetadataView(inlineMetadataView(value));
+  const lines = inline.split("\n");
+  const normalized = referenceContainerLines(stripHiddenMarkdown(inline));
+  for (let index = 0; index < lines.length; index += 1) {
+    const definition = referenceDestination(normalized, index, true);
+    if (!definition) continue;
+    const start = index;
+    const continuation = [];
+    for (index += 1; index <= definition.end; index += 1) {
+      continuation.push(normalized[index]);
+      lines[index] = "";
+    }
+    lines[start] += continuation.length ? " " + continuation.join(" ") : "";
+    index -= 1;
+  }
+  return lines.join("\n");
+}
+
+function inlineHtmlMetadataView(value) {
+  const ranges = codeSpanRanges(value);
+  let rangeIndex = 0;
+  let cursor = 0;
+  let kept = "";
+  const opener = /<\/?[A-Za-z][A-Za-z0-9-]*(?=[\s/>])/y;
+  for (let start = value.indexOf("<"); start !== -1; start = value.indexOf("<", cursor)) {
+    while (rangeIndex < ranges.length && ranges[rangeIndex].end <= start) rangeIndex += 1;
+    opener.lastIndex = start;
+    const inCode = rangeIndex < ranges.length && ranges[rangeIndex].start <= start;
+    const tag = !inCode && !isEscaped(value, start) ? opener.exec(value) : null;
+    if (!tag) {
+      kept += value.slice(cursor, start + 1);
+      cursor = start + 1;
+      continue;
+    }
+    let quote = null;
+    let end = opener.lastIndex;
+    for (; end < value.length; end += 1) {
+      const ch = value[end];
+      if (quote) { if (ch === quote) quote = null; }
+      else if (ch === '"' || ch === "'") quote = ch;
+      else if (ch === ">") { end += 1; break; }
+      else if (ch === "<") break;
+    }
+    const raw = value.slice(start, end);
+    const flat = raw.replace(/\r?\n/g, " ");
+    kept += value.slice(cursor, start) + (isCompleteHtmlTag(flat) ? flat : raw);
+    cursor = end;
+  }
+  return kept + value.slice(cursor);
+}
+
 /** Type-7 HTML blocks require a complete tag alone on a boundary line. */
 function isCompleteHtmlTag(value) {
   return /^[ \t]*<\/[A-Za-z][A-Za-z0-9-]*[ \t]*>[ \t]*$/.test(value)
@@ -1072,7 +1127,7 @@ export function lintPrEvidence(body) {
   const reason = extractExemptionReason(section);
   const hasEvidence = hasEvidenceContent(section);
 
-  if ([...referenceHeadingView(stripHiddenMarkdown(inlineMetadataView(body))).matchAll(EVIDENCE_HEADING)].length > 1) {
+  if ([...referenceHeadingView(stripHiddenMarkdown(structuralMetadataView(body))).matchAll(EVIDENCE_HEADING)].length > 1) {
     errors.push("PR body must contain exactly one visible Evidence section.");
   }
 
