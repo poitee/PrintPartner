@@ -149,6 +149,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust -> target
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      - name: Verify source Unicode and case regressions on macOS
+        run: cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-source
       - name: Install locked dependencies and build measured desktop assets
         shell: bash
         env:
