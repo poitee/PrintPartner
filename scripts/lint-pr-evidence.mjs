@@ -648,7 +648,7 @@ function stripLinks(value, references) {
 function looksLikeArtifact(value, references) {
   if (!value) return false;
   // An explicit statement that no artifact exists cannot prove verification.
-  const negative = /\b(?:not (?:provided|produced|generated|available|attached)|no (?:screenshot|recording|trace|evidence)|could not (?:test|verify)|was not|not yet)\b/i;
+  const negative = /\b(?:not (?:provided|produced|generated|available|attached|uploaded|captured)|without|never (?:uploaded|produced|generated|attached|captured)|missing from|did not (?:produce|generate|capture|upload|attach)|no (?:screenshot|recording|trace|evidence)|could not (?:test|verify)|was not|not yet)\b/i;
   if (negative.test(value)) return false;
   // A line that is a placeholder note (TODO: attach trace.json) is not evidence.
   // A placeholder note is rejected as a whole; filenames containing todo remain valid.
