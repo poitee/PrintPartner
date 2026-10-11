@@ -291,6 +291,9 @@ def read_origin(process, errors):
     # to stop and must still check its shutdown, so it honours the stop after this returns.
     origin = bytes(data).split(b"\n", 1)[0].decode().strip()
     if not origin:
+        # A stop that arrived before EOF is honoured here, so the caller still runs shutdown checks.
+        if held["pending"] is not None:
+            release_signals()
         process.wait(timeout=5)
         errors.seek(0)
         raise RuntimeError(f"Rust startup failed (exit={process.returncode}): {errors.read().strip()}")
