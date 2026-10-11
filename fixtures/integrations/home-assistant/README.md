@@ -19,7 +19,12 @@ The adapter consumes REST responses, not WebSocket `state_changed` events:
   filename, and defaults an empty name to `print.gcode`. Uploads do not start a
   print and do not send an authorization header.
 
-State mapping trims whitespace and ignores case (`state-normalized.json`):
+The connection entity check displays the raw state without mapping it and uses
+`unknown` when the state is missing. A 404 fails that check; other HTTP errors
+leave the connection successful with an entity-check warning.
+
+For `getStatus` and `listDevices`, state mapping trims whitespace and ignores
+case (`state-normalized.json`):
 
 | Raw state | Printer state |
 | --- | --- |
