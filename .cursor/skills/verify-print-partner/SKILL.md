@@ -1,6 +1,7 @@
 ---
 name: verify-print-partner
 description: >
+  Verify PrintPartner changes through its running API and browser UI.
   Drive Print Partner's desk-loop web UI (Library → Builds → Sources → Plan →
   Production ↔ Checkoff) the way a user does. Use after implementing
   user-visible behavior, for end-to-end proof, or when asked to verify Print
@@ -13,6 +14,8 @@ description: >
 
 Prove changed behavior through the desk-loop surface a user reaches. Keep every
 verification run isolated from developer and LAN data.
+
+Prove the changed behavior through the same boundary a user reaches. Keep every verification run isolated from the developer's data.
 
 Control helper (machine-readable JSON on stdout):
 
