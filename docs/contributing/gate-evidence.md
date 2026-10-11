@@ -48,7 +48,8 @@ lightweight lint on every pull request body:
 - Fail when any verification content (Journey, Steps, Result, artifact, or other
   freeform text in the section) targets Chad's LAN instances
   (`192.168.*.80` / `*.81`). This applies to named exemptions too. Mention those
-  hosts only in the Exemption reason.
+  hosts only in the Exemption reason, with every reason line indented under its
+  bullet (unindented continuation lines are still checked).
 - HTML comments and fenced code blocks are ignored, so commented-out or example
   Evidence sections do not count. Put real output in a linked file or inline code.
 

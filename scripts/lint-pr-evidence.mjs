@@ -42,36 +42,77 @@ function stripHtmlComments(text) {
 }
 
 /**
- * A fence opener, also inside list items or blockquotes. A backtick opener
- * cannot have backticks later on its line (that is inline code).
+ * Leading container markup of a line, consumed left to right without
+ * backtracking: whitespace, blockquote markers, and list markers.
+ * Returns where the content starts, its column, and whether a `>` was seen.
  */
-const FENCE_OPEN = /^(?:[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+|[ \t]*>)*[ \t]*(`{3,}(?=[^`]*$)|~{3,})/;
+function containerPrefix(line) {
+  let i = 0;
+  let quote = false;
+  for (;;) {
+    while (line[i] === " " || line[i] === "\t") i += 1;
+    if (line[i] === ">") {
+      quote = true;
+      i += 1;
+      continue;
+    }
+    let j = i;
+    if (line[j] === "-" || line[j] === "*" || line[j] === "+") {
+      j += 1;
+    } else {
+      while (j < line.length && j - i < 9 && line[j] >= "0" && line[j] <= "9") j += 1;
+      if (j === i || (line[j] !== "." && line[j] !== ")")) break;
+      j += 1;
+    }
+    if (line[j] !== " " && line[j] !== "\t") break;
+    i = j;
+  }
+  return { end: i, column: indentWidth(line.slice(0, i)), quote };
+}
+
+/** A fence opener after any container prefix; backtick openers hold no other backticks. */
+function fenceOpener(line) {
+  const prefix = containerPrefix(line);
+  const open = line.slice(prefix.end).match(/^(`{3,}(?=[^`]*$)|~{3,})/);
+  return open ? { marker: open[1], ...prefix } : null;
+}
+
+/**
+ * Whether a line still belongs to an open fence's container. A fence inside a
+ * blockquote ends at the first line without `>`; a fence inside a list item or
+ * indented under one ends at the first non-blank line left of its column.
+ */
+function insideFenceContainer(line, fence) {
+  if (fence.quote) return /^[ \t]*>/.test(line);
+  return !line.trim() || indentWidth(line.match(/^[ \t]*/)[0]) >= fence.column;
+}
 
 /**
  * The body as a reviewer sees it: no CRLF, fenced code, or HTML comments. Fence
  * lines become blank lines so the text after a fence is not read as a lazy
- * continuation of the paragraph before it. One
- * pass in document order, so comment text cannot open a fence and fence text
- * cannot hide a comment. A closing fence uses the same character and at least
- * the opening length; an unclosed fence runs to the end of the text.
+ * continuation of the paragraph before it. One pass in document order, so
+ * comment text cannot open a fence and fence text cannot hide a comment. A
+ * closing fence uses the same character and at least the opening length; a
+ * fence also ends with its container, and an unclosed top-level fence runs to
+ * the end of the text.
  */
 function stripHiddenMarkdown(text) {
   const kept = [];
   let fence = null;
   let inComment = false;
   for (const raw of text.replace(/\r\n/g, "\n").split("\n")) {
+    if (fence && !insideFenceContainer(raw, fence)) fence = null;
     if (fence) {
-      const close = raw.match(/^[ \t]*(`{3,}|~{3,})[ \t]*$/);
-      if (close && close[1][0] === fence[0] && close[1].length >= fence.length) {
+      const close = raw.slice(containerPrefix(raw).end).match(/^(`{3,}|~{3,})[ \t]*$/);
+      if (close && close[1][0] === fence.marker[0] && close[1].length >= fence.marker.length) {
         fence = null;
       }
       kept.push("");
       continue;
     }
     if (!inComment) {
-      const open = raw.match(FENCE_OPEN);
-      if (open) {
-        fence = open[1];
+      fence = fenceOpener(raw);
+      if (fence) {
         kept.push("");
         continue;
       }
@@ -122,7 +163,7 @@ export function extractEvidenceSection(body) {
 
 function parseExemption(sectionText) {
   const cleaned = stripHtmlComments(sectionText);
-  const match = cleaned.match(/^[ \t]*Exemption[ \t]*:[ \t]*(.+?)[ \t]*$/im);
+  const match = cleaned.match(/^[ \t]*Exemption[ \t]*:(.*)$/im);
   if (!match) return { raw: null, value: null };
   const raw = match[1].trim();
   if (!raw || PLACEHOLDER_EXEMPTION.test(raw)) {
@@ -211,6 +252,10 @@ function labelKey(text) {
  * of the content column that follows a blank line or a heading, rule, or HTML
  * block (no lazy continuation there), or any outer list item, heading,
  * blockquote, rule, or HTML block.
+ *
+ * Lazy continuation lines (left of the content column) are ambiguous across
+ * Markdown renderers, so each field records them in `lazy`: they count as
+ * field text, yet callers can keep them visible to the .80/.81 check.
  */
 function parseFields(cleaned) {
   const fields = [];
@@ -233,6 +278,7 @@ function parseFields(cleaned) {
         label: labelKey(label),
         contentIndent: markerEnd + (gapWidth >= 1 && gapWidth <= 4 ? gapWidth : 1),
         lines: rest.trim() ? [rest.trim()] : [],
+        lazy: [],
         start: lineStart,
         end,
       };
@@ -257,13 +303,16 @@ function parseFields(cleaned) {
       continue;
     }
     current.lines.push(trimmed);
+    if (outer) current.lazy.push({ start: lineStart, end });
     current.end = end;
     blankSeen = false;
     lazyOk = !LEAF_BLOCK_START.test(line);
   }
-  return fields.map(({ label, lines, start, end }) => ({
+  return fields.map(({ label, lines, lazy, start, end }) => ({
     label,
     value: lines.join(" ").trim(),
+    text: lines.join("\n"),
+    lazy,
     start,
     end,
   }));
@@ -272,21 +321,26 @@ function parseFields(cleaned) {
 /**
  * Read a template field value (same line and the lines that belong to it).
  */
-function readField(sectionText, label) {
-  return (
-    parseFields(stripHtmlComments(sectionText)).find((field) => field.label === label)
-      ?.value ?? ""
-  );
+function findField(sectionText, label) {
+  return parseFields(stripHtmlComments(sectionText)).find((field) => field.label === label);
 }
 
-/** Section text with HTML comments removed and the given fields cut out. */
-function withoutFields(sectionText, labels) {
+function readField(sectionText, label) {
+  return findField(sectionText, label)?.value ?? "";
+}
+
+/**
+ * Section text with HTML comments removed and the given fields cut out. With
+ * keepLazy, the fields' lazy continuation lines stay in the text.
+ */
+function withoutFields(sectionText, labels, { keepLazy = false } = {}) {
   const text = stripHtmlComments(sectionText);
   let kept = "";
   let cursor = 0;
   for (const field of parseFields(text)) {
     if (!labels.includes(field.label)) continue;
     kept += text.slice(cursor, field.start);
+    if (keepLazy) for (const line of field.lazy) kept += text.slice(line.start, line.end);
     cursor = field.end;
   }
   return kept + text.slice(cursor);
@@ -369,26 +423,93 @@ const HTTP_URL = /https?:\/\/[^\s/?#<>()"'`]+/i;
 
 /** A link destination that identifies something: a web URL or a file path. */
 function isConcreteTarget(destination) {
-  const target = destination.replace(/^<|>$/g, "").trim();
-  return /^https?:\/\/[^\s/?#<>]+/i.test(target) || isArtifactPath(target);
+  const target = destination.replace(/^<|>$/g, "").replace(/\\(.)/g, "$1").trim();
+  if (/^https?:\/\/[^\s/?#<>]+/i.test(target)) return true;
+  // Relative paths only: no anchors, queries, or other schemes (mailto:, javascript:).
+  if (!target || /^[#?]/.test(target) || /^[a-z][a-z0-9+.-]*:/i.test(target)) return false;
+  const path = target.split(/[?#]/)[0];
+  const name = path.slice(path.lastIndexOf("/") + 1);
+  if (!name || NON_ARTIFACT_WORD.test(name)) return false;
+  return ARTIFACT_EXTENSION.test(name) || (path.includes("/") && /\.[a-z][a-z0-9]{0,7}$/i.test(name));
+}
+
+const isSpace = (ch) => ch === " " || ch === "\t" || ch === "\n";
+
+/**
+ * Parse the inline link tail that starts at `(` (index `open`): destination,
+ * optional "", '', or () title with backslash escapes, then `)`. Returns the
+ * destination and the index after `)`, or null when it is not a link tail.
+ */
+function parseLinkTail(text, open) {
+  let i = open + 1;
+  while (isSpace(text[i])) i += 1;
+  let destination = "";
+  if (text[i] === "<") {
+    const close = text.indexOf(">", i);
+    if (close === -1 || text.slice(i, close).includes("\n")) return null;
+    destination = text.slice(i, close + 1);
+    i = close + 1;
+  } else {
+    const start = i;
+    let depth = 0;
+    for (; i < text.length && !isSpace(text[i]); i += 1) {
+      if (text[i] === "\\") i += 1;
+      else if (text[i] === "(") depth += 1;
+      else if (text[i] === ")") {
+        if (depth === 0) break;
+        depth -= 1;
+      }
+    }
+    destination = text.slice(start, i);
+  }
+  const afterDestination = i;
+  while (isSpace(text[i])) i += 1;
+  const closer = { '"': '"', "'": "'", "(": ")" }[text[i]];
+  if (closer && i > afterDestination) {
+    for (i += 1; i < text.length && text[i] !== closer; i += 1) {
+      if (text[i] === "\\") i += 1;
+      else if (closer === ")" && text[i] === "(") return null;
+    }
+    if (i >= text.length) return null;
+    i += 1;
+    while (isSpace(text[i])) i += 1;
+  }
+  return text[i] === ")" ? { destination, end: i + 1 } : null;
 }
 
 /**
- * Markdown links and images (no nested brackets) with an optional "", '', or ()
- * title; each part stops at a delimiter, so matching stays linear.
+ * Remove link reference definitions and inline link tails (`](…)`), noting
+ * whether any destination is concrete. Link text is kept: it is ordinary text.
+ * A `](` that does not form a link tail hides the rest of the value (fail
+ * closed), so a malformed title can never surface as an artifact. Every scan
+ * moves forward, so the whole pass is linear.
  */
-const MARKDOWN_LINK =
-  /!?\[([^[\]\n]*)\]\(\s*(<[^<>\n]*>|[^()\s]*)(?:\s+(?:"[^"]*"|'[^']*'|\([^()]*\)))?\s*\)/g;
+function stripLinks(value) {
+  let concrete = false;
+  const lines = value.split("\n").filter((line) => {
+    const definition = line.match(/^[ \t]*\[[^\]\n]{1,999}\]:[ \t]*(<[^>\n]*>|\S+)/);
+    if (!definition) return true;
+    if (isConcreteTarget(definition[1])) concrete = true;
+    return false;
+  });
+  const text = lines.join("\n");
+  let rest = "";
+  let cursor = 0;
+  for (let at = text.indexOf("](", cursor); at !== -1; at = text.indexOf("](", cursor)) {
+    rest += `${text.slice(cursor, at)}] `;
+    const tail = parseLinkTail(text, at + 1);
+    if (!tail) return { rest, concrete };
+    if (isConcreteTarget(tail.destination)) concrete = true;
+    cursor = tail.end;
+  }
+  return { rest: rest + text.slice(cursor), concrete };
+}
 
 function looksLikeArtifact(value) {
   if (!value) return false;
-  let concreteLink = false;
-  // A link counts by its destination; its text alone never makes it evidence.
-  const rest = value.replace(MARKDOWN_LINK, (_, _text, destination) => {
-    if (isConcreteTarget(destination)) concreteLink = true;
-    return " ";
-  });
-  if (concreteLink) return true;
+  // A link counts by its destination; its title never makes it evidence.
+  const { rest, concrete } = stripLinks(value);
+  if (concrete) return true;
   if (HTTP_URL.test(rest)) return true;
   if (hasSubstantiveCodeSpan(rest)) return true;
   return mentionsArtifactPath(rest);
@@ -410,17 +531,20 @@ function freeformText(sectionText) {
 export function hasEvidenceContent(sectionText) {
   const steps = readField(sectionText, FIELD_LABELS.steps);
   const result = readField(sectionText, FIELD_LABELS.result);
-  const artifact = readField(sectionText, FIELD_LABELS.artifact);
+  const artifact = findField(sectionText, FIELD_LABELS.artifact)?.text ?? "";
   if (!steps || !result) return false;
   return looksLikeArtifact(artifact) || looksLikeArtifact(freeformText(sectionText));
 }
 
 /**
  * Verification content must never target Chad's LAN instances, whatever the
- * exemption. Mentions only in the Exemption reason or Exemption line are allowed.
+ * exemption. Mentions only in the Exemption reason or Exemption line are allowed;
+ * reason lines must sit in its content column (lazy lines stay checked).
  */
 function targetsBannedLan(sectionText) {
-  const verification = withoutFields(sectionText, [FIELD_LABELS.reason]).replace(
+  const verification = withoutFields(sectionText, [FIELD_LABELS.reason], {
+    keepLazy: true,
+  }).replace(
     EXEMPTION_LINE,
     "",
   );
@@ -460,7 +584,7 @@ export function lintPrEvidence(body) {
 
   if (targetsBannedLan(section)) {
     errors.push(
-      "Evidence must not target Chad's LAN instances (.80/.81). Use a disposable local verify instance instead.",
+      "Evidence must not target Chad's LAN instances (.80/.81). Use a disposable local verify instance instead. (To mention these hosts in the Exemption reason, indent every reason line under its bullet.)",
     );
   }
 

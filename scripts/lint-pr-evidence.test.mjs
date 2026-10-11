@@ -737,17 +737,20 @@ ${ARTIFACT_LABEL} [shot](https://example.test/shot.png 'Builds page')
   assert.equal(result.ok, true, result.errors.join("; "));
 });
 
-for (const opener of ["  - ```text", "  > ```text", "  1. ~~~"]) {
+for (const [opener, body, closer] of [
+  ["  - ```text", "    https://example.test/example.png", "    ```"],
+  ["  > ```text", "  > https://example.test/example.png", "  > ```"],
+  ["  1. ~~~", "     https://example.test/example.png", "     ~~~"],
+]) {
   test(`ignores a fence opened inside a nested container: ${opener.trim()} (substitute review r1 P1: nested list fences)`, () => {
-    const closer = opener.includes("~") ? "~~~" : "```";
     const result = lintPrEvidence(
       bodyWithEvidence(`Exemption: none
 - Steps followed to produce the evidence: opened local
 - Result observed: rendered
 ${ARTIFACT_LABEL}
 ${opener}
-    https://example.test/example.png
-    ${closer}
+${body}
+${closer}
 `),
     );
     assert.equal(result.ok, false);
@@ -810,14 +813,28 @@ Verified against http://192.168.1.80:8080
   });
 }
 
-test("keeps lazy continuation lines of the Exemption reason in the reason (substitute review r1 P1 guard)", () => {
+test("checks lazy (unindented) continuation lines of the Exemption reason for .80/.81 (substitute review r2 P1: ambiguous lazy lines)", () => {
   const result = lintPrEvidence(
     bodyWithEvidence(`Exemption: docs-only
 - Exemption reason: Document the prohibited host
 http://192.168.1.80:8080 in the setup guide.
 `),
   );
-  assert.equal(result.ok, true, result.errors.join("; "));
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /indent every reason line/);
+});
+
+test("never counts lazy continuation lines of the Exemption reason as evidence (substitute review r2 P1: ambiguous lazy lines)", () => {
+  const result = lintPrEvidence(
+    bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: opened local
+- Result observed: rendered
+- Exemption reason: context only
+https://example.test/context.png
+`),
+  );
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /Evidence is incomplete/);
 });
 
 test("trims artifact tokens in linear time (substitute review r1 P2: quadratic token cleanup)", () => {
@@ -847,3 +864,91 @@ ${ARTIFACT_LABEL} ${artifact}
     assert.equal(result.ok, true, result.errors.join("; "));
   });
 }
+
+for (const [name, block] of [
+  ["a quoted fence", "\n  > ```text\n  > example\n  > ```\n"],
+  ["an unclosed list fence", "\n  - ```text\n    example\n"],
+  ["an unclosed indented fence", "  ```text\n  example\n"],
+]) {
+  test(`checks the paragraph after ${name} in the Exemption reason for .80/.81 (substitute review r2 P1: fence containers)`, () => {
+    const result = lintPrEvidence(
+      bodyWithEvidence(`Exemption: docs-only
+- Exemption reason: Updated docs.
+${block}
+Verified against http://192.168.1.80:8080
+`),
+    );
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join("\n"), /\.80\/\.81/);
+  });
+}
+
+for (const block of ["  > ### Background", "  - ### Background", "  Background\n  ===", "  <div>\n  Documentation"]) {
+  test(`checks an outer line after ${JSON.stringify(block)} in the Exemption reason for .80/.81 (substitute review r2 P1: non-paragraph blocks)`, () => {
+    const result = lintPrEvidence(
+      bodyWithEvidence(`Exemption: docs-only
+- Exemption reason: Updated docs.
+${block}
+Verified against http://192.168.1.80:8080
+`),
+    );
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join("\n"), /\.80\/\.81/);
+  });
+}
+
+for (const artifact of [
+  '[screenshot](# "the \\"before\\" evidence.png")',
+  '[**screenshot [before]**](# "see evidence.png")',
+  "[screenshot](# 'it\\'s https://example.test/x.png')",
+  '[screenshot](#a(b) "evidence.png")',
+  '[screenshot](# "unterminated evidence.png',
+  "[screenshot][1]\n  [1]: # 'evidence.png'",
+]) {
+  test(`fails when a placeholder link hides an artifact in its title: ${JSON.stringify(artifact)} (substitute review r2 P1: escaped titles and nested labels)`, () => {
+    const result = lintPrEvidence(
+      bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: opened local
+- Result observed: rendered
+${ARTIFACT_LABEL} ${artifact}
+`),
+    );
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join("\n"), /Evidence is incomplete/);
+  });
+}
+
+for (const artifact of [
+  '[**shot [before]**](https://example.test/shot.png "the \\"before\\" view")',
+  "[shot](<evidence/shot one.png>)",
+  "[shot][1]\n  [1]: https://example.test/shot.png",
+  "[trace](evidence/run(42).zip)",
+]) {
+  test(`passes when a link with a concrete destination is ${JSON.stringify(artifact)} (substitute review r2 P1: escaped titles and nested labels)`, () => {
+    const result = lintPrEvidence(
+      bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: opened local
+- Result observed: rendered
+${ARTIFACT_LABEL} ${artifact}
+`),
+    );
+    assert.equal(result.ok, true, result.errors.join("; "));
+  });
+}
+
+test("parses fence prefixes, link tails, and the Exemption line in linear time (substitute review r2 P2: exponential and quadratic scans)", () => {
+  const cases = [
+    `## Evidence\nExemption: docs-only\n- Exemption reason: docs\n${"-  ".repeat(20000)}x\n`,
+    `## Evidence\nExemption: docs-only\n- Exemption reason: docs\n${"> 1. ".repeat(12000)}\`\`\`\n`,
+    bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: a\n- Result observed: b\n${ARTIFACT_LABEL} [shot](${" ".repeat(60000)}x\n`),
+    bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: a\n- Result observed: b\n${ARTIFACT_LABEL} ${"](".repeat(30000)}\n`),
+    bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: a\n- Result observed: b\n${ARTIFACT_LABEL} ${'[a](# "'.repeat(9000)}\n`),
+    `## Evidence\nExemption: a${" ".repeat(60000)}x\n- Exemption reason: Updated docs.\n`,
+  ];
+  for (const body of cases) {
+    const started = performance.now();
+    lintPrEvidence(body);
+    const elapsed = performance.now() - started;
+    assert.ok(elapsed < 1000, `lint took ${Math.round(elapsed)} ms for ${JSON.stringify(body.slice(0, 80))}`);
+  }
+});
