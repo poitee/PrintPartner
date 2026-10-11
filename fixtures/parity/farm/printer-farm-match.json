@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "helper": "printer-farm-match",
+  "cases": [
+    {
+      "name": "collects wanted filament ids from queued Checkoff units",
+      "input": {
+        "parts": [
+          {
+            "id": 1,
+            "filament_color_id": "red"
+          },
+          {
+            "id": 2,
+            "filament_color_id": "blue"
+          },
+          {
+            "id": 3,
+            "filament_color_id": null
+          }
+        ],
+        "item": {
+          "id": "q1",
+          "filename": "a.gcode",
+          "artifact_path": "/x",
+          "printer_id": "pref",
+          "match": "pinned",
+          "wait_for_idle": true,
+          "start": true,
+          "state": "queued",
+          "created_at": "2026-01-01T00:00:00.000Z",
+          "updated_at": "2026-01-01T00:00:00.000Z",
+          "profile_id": 9,
+          "checkoff_units": [
+            {
+              "part_id": 1,
+              "unit_index": 0
+            },
+            {
+              "part_id": 2,
+              "unit_index": 0
+            },
+            {
+              "part_id": 3,
+              "unit_index": 0
+            }
+          ]
+        }
+      },
+      "output": [
+        "blue",
+        "red"
+      ]
+    }
+  ]
+}
