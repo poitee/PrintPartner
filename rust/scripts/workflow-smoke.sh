@@ -128,6 +128,9 @@ printf '%s' "$mcp" | grep -q 'MCP is disabled in this foundation' || fail "unexp
 log 'mcp: initialize -> 401 without session, 403 fail-closed with session'
 
 # Clean stop: SIGTERM, exit 0, WS closed, no child or process-group leftovers.
+# The upgrade must still be open here so its close is attributable to shutdown.
+alive "$ws_pid" || fail 'websocket client exited before shutdown'
+if grep -q '"closed"' "$fixture/ws.out"; then fail 'websocket closed before shutdown'; fi
 kill -TERM "$server_pid"
 set +e
 wait "$server_pid"
