@@ -7,6 +7,7 @@ on:
     branches: [main, master]
     paths:
       - "web/**"
+      - "fixtures/**"
       - "fixtures/drivers/bambu/**"
       - "scripts/**"
       - "manifests/**"
@@ -30,6 +31,7 @@ on:
   pull_request:
     paths:
       - "web/**"
+      - "fixtures/**"
       - "fixtures/drivers/bambu/**"
       - "scripts/**"
       - "manifests/**"
