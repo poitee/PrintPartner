@@ -16,7 +16,12 @@ use std::{
 const CANDIDATE: &str = ".candidate";
 pub const MAX_COMPRESSED_BYTES: u64 = 256 * 1024 * 1024;
 pub const MAX_INFLATED_BYTES: u64 = 1024 * 1024 * 1024;
-const MAX_METADATA_BYTES: u64 = 8 * 1024 * 1024;
+pub const MAX_METADATA_BYTES: u64 = 8 * 1024 * 1024;
+/// Each file entry may inflate to at most this multiple of its compressed size.
+pub const MAX_COMPRESSION_RATIO: u64 = 100;
+/// Entries up to this many inflated bytes are exempt from the ratio cap, so
+/// small highly compressible files (padding, empty meshes) stay valid.
+pub const COMPRESSION_RATIO_FLOOR_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug)]
 pub enum ArchiveError {
@@ -27,6 +32,7 @@ pub enum ArchiveError {
     DuplicateEntry,
     Unsupported,
     Limit,
+    CompressionRatio,
     Cancelled,
     Busy,
     Cleanup {
@@ -44,6 +50,7 @@ impl fmt::Display for ArchiveError {
             Self::DuplicateEntry => write!(f, "duplicate-entry"),
             Self::Unsupported => write!(f, "unsupported-archive"),
             Self::Limit => write!(f, "archive-limit"),
+            Self::CompressionRatio => write!(f, "compression-ratio"),
             Self::Cancelled => write!(f, "cancelled"),
             Self::Busy => write!(f, "archive-busy"),
             Self::Cleanup { operation, cleanup } => write!(f, "{operation}; cleanup: {cleanup}"),
@@ -300,12 +307,19 @@ impl SourceRoot {
                 }
             } else {
                 let mut destination = files.root.file(path, true)?;
-                let (size_bytes, sha256) = transfer(
+                let remaining = limits.max_inflated_bytes - receipt.inflated_bytes;
+                let ratio_limit = ratio_limit(entry.compressed_bytes);
+                let (size_bytes, sha256) = match transfer(
                     &mut member,
                     &mut destination,
-                    limits.max_inflated_bytes - receipt.inflated_bytes,
+                    remaining.min(ratio_limit),
                     cancelled,
-                )?;
+                ) {
+                    Err(ArchiveError::Limit) if ratio_limit < remaining => {
+                        return Err(ArchiveError::CompressionRatio);
+                    }
+                    result => result?,
+                };
                 if size_bytes != member.size() {
                     return Err(ArchiveError::InvalidArchive);
                 }
@@ -370,6 +384,12 @@ struct Entry {
     raw_name: String,
     path: SourcePath,
     directory: bool,
+    compressed_bytes: u64,
+}
+fn ratio_limit(compressed_bytes: u64) -> u64 {
+    compressed_bytes
+        .saturating_mul(MAX_COMPRESSION_RATIO)
+        .max(COMPRESSION_RATIO_FLOOR_BYTES)
 }
 fn u16_at(bytes: &[u8], offset: usize) -> u16 {
     u16::from_le_bytes(
@@ -464,6 +484,12 @@ fn inspect_index(
                 crate::Error::Limit => ArchiveError::Limit,
                 other => ArchiveError::Source(other),
             })?;
+        // Reject advertised bombs before inflating; transfer enforces the same
+        // cap on actual bytes because these sizes are untrusted.
+        let compressed_bytes = u32_at(&header, 20) as u64;
+        if u32_at(&header, 24) as u64 > ratio_limit(compressed_bytes) {
+            return Err(ArchiveError::CompressionRatio);
+        }
         validate_local_header(file, &header, &raw_name, central_offset)?;
         let skip = u16_at(&header, 30) as i64 + u16_at(&header, 32) as i64;
         file.seek(SeekFrom::Current(skip))?;
@@ -474,6 +500,7 @@ fn inspect_index(
             raw_name,
             path,
             directory,
+            compressed_bytes,
         });
     }
     if file.stream_position()? != central_offset + central_size {

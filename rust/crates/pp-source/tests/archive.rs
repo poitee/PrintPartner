@@ -583,3 +583,158 @@ fn extraction_is_busy_while_a_peer_holds_the_source_revisions_lock() {
     assert!(!fixture.candidate().exists());
     peer.try_lock_exclusive().unwrap();
 }
+
+fn deflated_zip(fixture: &Fixture, data: &[u8]) {
+    let mut zip = ZipWriter::new(File::create(fixture.0.join("input/upload.zip")).unwrap());
+    zip.start_file(
+        "part.stl",
+        SimpleFileOptions::default().compression_method(CompressionMethod::Deflated),
+    )
+    .unwrap();
+    zip.write_all(data).unwrap();
+    zip.finish().unwrap();
+}
+fn extract(fixture: &Fixture) -> Result<(), ArchiveError> {
+    fixture
+        .tenant()
+        .source(42)
+        .unwrap()
+        .extract_zip(
+            fixture.input(),
+            ArchiveLimits::default(),
+            &AtomicBool::new(false),
+        )?
+        .discard()
+}
+
+#[test]
+fn high_compression_ratio_entry_is_rejected_before_inflating() {
+    use pp_source::archive::MAX_COMPRESSION_RATIO;
+
+    let fixture = Fixture::new();
+    // 8 MiB of zeros deflates to roughly 1000:1, far above the 100:1 cap.
+    deflated_zip(&fixture, &vec![0; 8 * 1024 * 1024]);
+    let compressed = fs::metadata(fixture.0.join("input/upload.zip"))
+        .unwrap()
+        .len();
+    assert!(8 * 1024 * 1024 > compressed * MAX_COMPRESSION_RATIO);
+    assert!(matches!(
+        extract(&fixture),
+        Err(ArchiveError::CompressionRatio)
+    ));
+    assert_eq!(
+        ArchiveError::CompressionRatio.to_string(),
+        "compression-ratio"
+    );
+    assert!(!fixture.candidate().exists());
+    assert!(
+        !fixture
+            .0
+            .join("repos/42/revisions/archive-revision")
+            .exists()
+    );
+}
+
+#[test]
+fn understated_sizes_cannot_smuggle_a_high_ratio_entry_past_the_cap() {
+    use pp_source::archive::COMPRESSION_RATIO_FLOOR_BYTES;
+
+    let fixture = Fixture::new();
+    deflated_zip(&fixture, &vec![0; 8 * 1024 * 1024]);
+    // Advertise exactly the floor so the central-directory check passes and
+    // only the streaming byte cap can stop the real 8 MiB payload.
+    let path = fixture.0.join("input/upload.zip");
+    let mut data = fs::read(&path).unwrap();
+    let central = data.windows(4).position(|w| w == b"PK\x01\x02").unwrap();
+    let floor = (COMPRESSION_RATIO_FLOOR_BYTES as u32).to_le_bytes();
+    data[22..26].copy_from_slice(&floor);
+    data[central + 24..central + 28].copy_from_slice(&floor);
+    fs::write(&path, data).unwrap();
+    assert!(matches!(
+        extract(&fixture),
+        Err(ArchiveError::CompressionRatio)
+    ));
+    assert!(!fixture.candidate().exists());
+}
+
+#[test]
+fn ratio_cap_exempts_small_entries_and_accepts_ordinary_compression() {
+    let fixture = Fixture::new();
+    // Below the 1 MiB floor even an extreme ratio is accepted.
+    deflated_zip(&fixture, &vec![0; 512 * 1024]);
+    extract(&fixture).unwrap();
+    // Above the floor, ordinary low-entropy data (~2:1) is accepted.
+    let mut state = 0x2545_f491_u32;
+    let data: Vec<u8> = (0..4 * 1024 * 1024)
+        .map(|_| {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (state >> 28) as u8
+        })
+        .collect();
+    deflated_zip(&fixture, &data);
+    extract(&fixture).unwrap();
+    assert!(!fixture.candidate().exists());
+}
+
+/// Writes a valid ZIP of empty stored files whose central directory is
+/// exactly `central_bytes` long, padding it with per-entry comments.
+fn zip_with_central_directory(fixture: &Fixture, central_bytes: usize) {
+    const NAME: usize = 9;
+    let mut comments = vec![];
+    let mut remaining = central_bytes;
+    while remaining > 0 {
+        let entry = remaining.min(46 + NAME + 65_535);
+        assert!(entry >= 46 + NAME);
+        comments.push(entry - 46 - NAME);
+        remaining -= entry;
+    }
+    let mut local = vec![];
+    let mut central = vec![];
+    for (index, comment) in comments.iter().enumerate() {
+        let name = format!("f{index:04}.stl");
+        assert_eq!(name.len(), NAME);
+        let offset = local.len() as u32;
+        local.extend_from_slice(b"PK\x03\x04");
+        local.extend_from_slice(&20u16.to_le_bytes());
+        local.extend_from_slice(&[0; 20]);
+        local.extend_from_slice(&(NAME as u16).to_le_bytes());
+        local.extend_from_slice(&0u16.to_le_bytes());
+        local.extend_from_slice(name.as_bytes());
+        central.extend_from_slice(b"PK\x01\x02");
+        central.extend_from_slice(&20u16.to_le_bytes());
+        central.extend_from_slice(&20u16.to_le_bytes());
+        central.extend_from_slice(&[0; 20]);
+        central.extend_from_slice(&(NAME as u16).to_le_bytes());
+        central.extend_from_slice(&0u16.to_le_bytes());
+        central.extend_from_slice(&(*comment as u16).to_le_bytes());
+        central.extend_from_slice(&[0; 8]);
+        central.extend_from_slice(&offset.to_le_bytes());
+        central.extend_from_slice(name.as_bytes());
+        central.extend(std::iter::repeat_n(b'c', *comment));
+    }
+    assert_eq!(central.len(), central_bytes);
+    let count = (comments.len() as u16).to_le_bytes();
+    let mut data = local;
+    let central_offset = (data.len() as u32).to_le_bytes();
+    data.extend_from_slice(&central);
+    data.extend_from_slice(b"PK\x05\x06");
+    data.extend_from_slice(&[0; 4]);
+    data.extend_from_slice(&count);
+    data.extend_from_slice(&count);
+    data.extend_from_slice(&(central_bytes as u32).to_le_bytes());
+    data.extend_from_slice(&central_offset);
+    data.extend_from_slice(&0u16.to_le_bytes());
+    fs::write(fixture.0.join("input/upload.zip"), data).unwrap();
+}
+
+#[test]
+fn central_directory_metadata_is_bounded_at_eight_mebibytes() {
+    use pp_source::archive::MAX_METADATA_BYTES;
+
+    let fixture = Fixture::new();
+    zip_with_central_directory(&fixture, MAX_METADATA_BYTES as usize);
+    extract(&fixture).unwrap();
+    zip_with_central_directory(&fixture, MAX_METADATA_BYTES as usize + 1);
+    assert!(matches!(extract(&fixture), Err(ArchiveError::Limit)));
+    assert!(!fixture.candidate().exists());
+}
