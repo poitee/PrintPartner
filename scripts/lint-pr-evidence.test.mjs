@@ -89,6 +89,49 @@ test("well-formed safe link does not resolve its label as a LAN reference", () =
   assert.equal(result.ok, true, result.errors.join("; "));
 });
 
+test("fenced verification commands reject every recognized banned LAN host form", () => {
+  const targets = [
+    "http://192.168.1.80:8080/", "http://192.168.200.81/",
+    "http://192.168.1.%38%30/", "http://0300.0250.1.0120/",
+    "http://3232235856/", "http://0xc0a80151/", "http://192.168.337/",
+    "http://[::ffff:c0a8:150]/", "http://[::ffff:192.168.1.81]/",
+    "http://[0:0:0:0:0:ffff:c0a8:151]/", "//192.168.1.81/",
+    "http:3232235856", "http:/3232235856", "https:0xc0a80151",
+    "http://192&#46;168&#46;1&#46;80/", String.raw`http://192\.168\.1\.81/`,
+  ];
+  for (const target of targets) {
+    for (const [open, prefix, close] of [
+      ["```sh", "", "```"], ["~~~sh", "", "~~~"],
+      ["> ```sh", "> ", "> ```"], ["- ```sh", "  ", "  ```"],
+      ["```sh", "", ""],
+    ]) {
+      const result = lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran a local command\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n${open}\n${prefix}curl ${target}\n${close}`));
+      assert.equal(result.ok, false, `${open}: ${target}`);
+      assert.match(result.errors.join("\n"), /LAN instances/);
+    }
+  }
+});
+
+test("malformed hidden-element closers cannot hide later banned LAN references", () => {
+  for (const tag of ["script", "style", "template", "head", "title"]) {
+    for (const suffix of ["80", "81"]) {
+      const result = lintPrEvidence(`[target]: http://192.168.200.${suffix}/\n\n` + bodyWithEvidence(`Exemption: docs-only\n- Exemption reason: Updated docs.\n- Journey exercised: <${tag}>hidden</${tag}\n<span>[target]</span>`));
+      assert.equal(result.ok, false, `${tag}, .${suffix}`);
+      assert.match(result.errors.join("\n"), /LAN instances/);
+    }
+  }
+});
+
+test("safe fenced commands cannot introduce metadata or section boundaries", () => {
+  const result = lintPrEvidence(bodyWithEvidence("Exemption: none\n- Steps followed to produce the evidence: ran a local command\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\n## Evidence\nExemption: docs-only\ncurl http://localhost:8080/\n```"));
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+
+test("fenced LAN commands outside Evidence remain outside the scan", () => {
+  const result = lintPrEvidence(bodyWithEvidence("Exemption: docs-only\n- Exemption reason: Updated docs.") + "\n```sh\ncurl http://192.168.1.80/\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+
 test("VALID_EXEMPTIONS lists the four named exemptions", () => {
   assert.deepEqual([...VALID_EXEMPTIONS].sort(), [
     "ci-only",

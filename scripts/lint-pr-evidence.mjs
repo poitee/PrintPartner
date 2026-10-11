@@ -111,9 +111,10 @@ function insideFenceContainer(line, fence) {
  * comment text cannot open a fence and fence text cannot hide a comment. A
  * closing fence uses the same character and at least the opening length; a
  * fence also ends with its container, and an unclosed top-level fence runs to
- * the end of the text.
+ * the end of the text. `includeFencedCode` retains literal fence content only
+ * for the conservative LAN-scanning view.
  */
-function stripHiddenMarkdown(text, { inlineMultiline = true, includeRawHtml = false } = {}) {
+function stripHiddenMarkdown(text, { inlineMultiline = true, includeRawHtml = false, includeFencedCode = false } = {}) {
   const kept = [];
   let fence = null;
   let inComment = false;
@@ -156,7 +157,9 @@ function stripHiddenMarkdown(text, { inlineMultiline = true, includeRawHtml = fa
       if (close && close[1][0] === fence.marker[0] && close[1].length >= fence.marker.length) {
         fence = null;
       }
-      kept.push("");
+      // Fence contents stay literal in the conservative LAN view; they cannot
+      // affect comment/HTML state or the separately selected section bounds.
+      kept.push(includeFencedCode && fence ? raw : "");
       continue;
     }
     if (!inComment) {
@@ -302,6 +305,8 @@ function evidenceSectionEnd(text) {
  * and fences already removed. Returns null when the heading is missing.
  * `inlineMultiline: false` gives the view for the .80/.81 check, where an
  * inline `<!--` hides text only when it closes on the same line.
+ * `includeRawHtml` selects the conservative LAN view using visible section
+ * boundaries; `includeFencedCode` also retains its fenced command/output lines.
  */
 export function extractEvidenceSection(body, options) {
   if (typeof body !== "string" || !body.trim()) return null;
@@ -976,16 +981,16 @@ function stripRawHtmlTags(value, { keepMalformed = false } = {}) {
       else if (ch === "<") break;
     }
     const markup = value.slice(start, end);
-    if (keepMalformed && !markup.endsWith(">")) {
-      if (!hidden.length) kept += markup;
-      cursor = end;
-      continue;
-    }
     const name = markup.match(/^<\/?([a-z][a-z\d-]*)/i)?.[1].toLowerCase();
     const closing = markup.startsWith("</");
     if (closing && name === hidden.at(-1)) hidden.pop();
     else if (!closing && ["script", "style", "template", "head", "title"].includes(name)
       && !["script", "style", "title"].includes(hidden.at(-1))) hidden.push(name);
+    if (keepMalformed && !markup.endsWith(">")) {
+      if (!hidden.length) kept += markup;
+      cursor = end;
+      continue;
+    }
     cursor = end;
   }
   return kept + (hidden.length ? "" : value.slice(cursor));
@@ -1217,7 +1222,7 @@ export function lintPrEvidence(body) {
   // Preserve the selected section boundaries even for the conservative LAN view.
   // Also scan the visible section so commented decoy headings cannot redirect it.
   const definitions = documentReferences(body);
-  if (targetsBannedLan(section, definitions) || targetsBannedLan(extractEvidenceSection(body, { inlineMultiline: false, includeRawHtml: true }) ?? section, definitions)) {
+  if (targetsBannedLan(section, definitions) || targetsBannedLan(extractEvidenceSection(body, { inlineMultiline: false, includeRawHtml: true, includeFencedCode: true }) ?? section, definitions)) {
     errors.push(
       "Evidence must not target Chad's LAN instances (.80/.81). Use a disposable local verify instance instead. (To mention these hosts in the Exemption reason, indent every reason line under its bullet.)",
     );
