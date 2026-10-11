@@ -276,7 +276,7 @@ def terminate(process):
         raise RuntimeError("Rust shutdown timed out")
 
 
-def verify_shutdown(process, fixture, runtime_dir):
+def verify_shutdown(process, fixture, runtime_dir, require_lock=True):
     check(process.returncode == 0, f"Rust exited {process.returncode}")
     check(not (fixture / "data/.desktop-owner.json").exists(), "Owner marker survived")
     check(runtime_dir is None or not runtime_dir.exists(), "Private runtime directory survived")
@@ -284,7 +284,8 @@ def verify_shutdown(process, fixture, runtime_dir):
         with (fixture / "data/.desktop.lock").open("rb") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except FileNotFoundError:
-        raise RuntimeError("Rust shutdown verification failed: data lock file missing") from None
+        if require_lock:
+            raise RuntimeError("Rust shutdown verification failed: data lock file missing") from None
 
 
 def verify(root):
@@ -389,16 +390,25 @@ def publish_credential(source, target):
     # The returned handle stays open to pin this inode, so its number cannot be reused.
     fd, temporary = tempfile.mkstemp(prefix=".pp-credential-", dir=target.parent)
     handle = os.fdopen(fd, "wb")
+    linked = False
     try:
         try:
             handle.write(source.read_bytes())
             handle.flush()
             os.fsync(handle.fileno())
             os.link(temporary, target)
+            linked = True
         finally:
-            os.unlink(temporary)
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass  # A consumer already removed the private name.
     except BaseException:
-        handle.close()
+        try:
+            if linked:
+                unpublish_credential(target, handle)
+        finally:
+            handle.close()
         raise
     return handle
 
@@ -503,7 +513,14 @@ def serve(binary, root, node, commit, credentials):
                     pass
                 held["active"] = False
                 try:
-                    terminate(process)
+                    # Startup may create resources before it announces an origin. Capture
+                    # their ownership record before termination removes it.
+                    try:
+                        marker = fixture / "data/.desktop-owner.json"
+                        if runtime_dir is None and marker.exists():
+                            runtime_dir = Path(json.loads(marker.read_text())["runtime_dir"])
+                    finally:
+                        terminate(process)
                 finally:
                     if credentials is not None:
                         unpublish_credential(credentials, published)
@@ -511,7 +528,9 @@ def serve(binary, root, node, commit, credentials):
                     errors.seek(0)
                     print("SERVER STDERR:\n" + errors.read(), flush=True)
             if origin is None:
-                # Cancellation before readiness need not have created the data lock yet.
+                # A missing lock is valid before startup acquired it; any resources that
+                # were created and the child exit status must still pass shutdown checks.
+                verify_shutdown(process, fixture, runtime_dir, require_lock=False)
                 print("STOP: exit=0; pp-server stopped before readiness", flush=True)
             else:
                 verify_shutdown(process, fixture, runtime_dir)

@@ -170,6 +170,30 @@ def load_verify():
 
 
 class CredentialFileTest(unittest.TestCase):
+    def test_temp_unlink_failure_rolls_back_only_owned_public_link(self):
+        for replace in (False, True):
+            with self.subTest(foreign_replacement=replace):
+                verify = load_verify()
+                with tempfile.TemporaryDirectory(prefix="pp-credential-test-") as temporary:
+                    source = Path(temporary) / "bootstrap.json"
+                    target = Path(temporary) / "public.json"
+                    source.write_text('{}')
+                    unlink = os.unlink
+                    def fail_private_unlink(path, *args, **kwargs):
+                        if Path(path).name.startswith('.pp-credential-'):
+                            if replace:
+                                unlink(target)
+                                target.write_text('foreign')
+                            raise PermissionError('private unlink failed')
+                        return unlink(path, *args, **kwargs)
+                    with mock.patch.object(verify.os, 'unlink', side_effect=fail_private_unlink):
+                        with self.assertRaisesRegex(PermissionError, 'private unlink failed'):
+                            verify.publish_credential(source, target)
+                    if replace:
+                        self.assertEqual(target.read_text(), 'foreign')
+                    else:
+                        self.assertFalse(target.exists())
+
     def test_existing_symlink_is_refused_not_followed(self):
         verify = load_verify()
         with tempfile.TemporaryDirectory(prefix="pp-credential-test-") as temporary:
@@ -204,6 +228,42 @@ class CredentialFileTest(unittest.TestCase):
 
 
 class StartupStopTest(unittest.TestCase):
+    def test_early_stop_checks_exit_and_existing_startup_resources(self):
+        for failure in (None, 'exit', 'owner', 'runtime'):
+            with self.subTest(failure=failure):
+                verify = load_verify()
+                process = SimpleNamespace(pid=123, returncode=3 if failure == 'exit' else 0,
+                                          stdout=io.StringIO())
+                with tempfile.TemporaryDirectory(prefix='pp-early-stop-test-') as temporary:
+                    runtime = Path(temporary) / 'runtime'
+                    runtime.mkdir()
+                    marker = None
+                    def stop_before_origin(_process, errors):
+                        nonlocal marker
+                        marker = Path(errors.name).parent / 'data/.desktop-owner.json'
+                        marker.parent.mkdir()
+                        marker.write_text(json.dumps({'runtime_dir': str(runtime)}))
+                        (marker.parent / '.desktop.lock').touch()
+                        raise verify.Stop('SIGTERM')
+                    def terminate(_process):
+                        if failure != 'owner':
+                            marker.unlink()
+                        if failure != 'runtime':
+                            runtime.rmdir()
+                    output = io.StringIO()
+                    with mock.patch.object(verify, 'start_server', return_value=process), \
+                            mock.patch.object(verify, 'read_origin', side_effect=stop_before_origin), \
+                            mock.patch.object(verify, 'terminate', side_effect=terminate), \
+                            mock.patch.object(verify, 'ignore_signals'), contextlib.redirect_stdout(output):
+                        if failure:
+                            with self.assertRaises(RuntimeError):
+                                verify.serve(Path('server'), Path('repo'), 'node', 'commit', None)
+                            self.assertNotIn('STOP: exit=0', output.getvalue())
+                        else:
+                            verify.serve(Path('server'), Path('repo'), 'node', 'commit', None)
+                            self.assertIn('pp-server stopped before readiness', output.getvalue())
+                    self.assertTrue(process.stdout.closed)
+
     def test_stop_during_silent_or_partial_startup_is_prompt_and_clean(self):
         with tempfile.TemporaryDirectory(prefix="pp-startup-stop-test-") as temporary:
             temp = Path(temporary)
@@ -419,6 +479,12 @@ stop()
             if isinstance(raised, verify.Stop):
                 # Escaping serve() means launch reports "before pp-server started".
                 self.assertFalse(started, output)
+            elif isinstance(raised, RuntimeError):
+                # Before the fixture installs its TERM handler, cancellation is an
+                # unclean child exit and must now be reported as a failure.
+                self.assertFalse(started, output)
+                self.assertEqual(str(raised), f"Rust exited {-signal.SIGTERM}")
+                self.assertNotIn("STOP: exit=0", output)
             else:
                 self.assertIsNone(raised, output)
                 if "pp-server stopped before readiness" not in output:
