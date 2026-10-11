@@ -3,9 +3,9 @@ name: Native macOS bundle
 on:
   workflow_dispatch:
   # No workflow-level paths filter: a PR-level `paths:` skip leaves the
-  # "bundle (...)" checks absent, which blocks any required check. The
-  # `changes` job decides instead, and `bundle` is skipped (a passing status)
-  # when no native inputs changed.
+  # "bundle (...)" checks absent and pending if required. The `changes` job
+  # decides instead: both architecture jobs conclude `skipped` when no native
+  # inputs changed. GitHub accepts this conclusion for required status checks.
   pull_request:
   push:
     branches: [main, master]
