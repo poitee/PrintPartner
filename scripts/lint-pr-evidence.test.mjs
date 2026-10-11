@@ -1401,3 +1401,29 @@ for (const tag of ['<span>', '<custom-tag title="proof">']) {
 test('safe protocol-relative verification remains allowed', () => {
   assert.equal(lintPrEvidence(bodyWithEvidence('Exemption: docs-only\n- Exemption reason: Updated docs.\n- Journey exercised: [preview](//example.test/)')).ok, true);
 });
+
+for (const host of ['[::ffff:c0a8:150]', '[::ffff:192.168.1.80]', '[0:0:0:0:0:ffff:c0a8:151]']) {
+  test(`rejects IPv4-mapped banned LAN target ${host}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: docs-only\n- Exemption reason: Updated docs.\n- Journey exercised: [preview](http://${host}/)`)).ok, false);
+  });
+  test(`rejects IPv4-mapped banned LAN reference ${host}`, () => {
+    assert.equal(lintPrEvidence(`[target]: //${host}/\n\n` + bodyWithEvidence('Exemption: docs-only\n- Exemption reason: Updated docs.\n- Journey exercised: [target]')).ok, false);
+  });
+}
+for (const wrapper of ['[x]', '![x]']) {
+  test(`multiline link title cannot declare exemption ${wrapper}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`${wrapper}(https://example.test "title\nExemption: docs-only\n- Exemption reason: Updated docs.\n")`)).ok, false);
+  });
+  test(`multiline link title cannot supply required result ${wrapper}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n${wrapper}(https://example.test "title\n- Result observed: passed\n")\n${ARTIFACT_LABEL} trace.json`)).ok, false);
+  });
+  test(`multiline link title cannot supply Evidence heading ${wrapper}`, () => {
+    assert.equal(lintPrEvidence(`${wrapper}(https://example.test "title\n## Evidence\n")\nExemption: docs-only\n- Exemption reason: Updated docs.`).ok, false);
+  });
+}
+test('safe mapped IPv6 target remains allowed', () => {
+  assert.equal(lintPrEvidence(bodyWithEvidence('Exemption: docs-only\n- Exemption reason: Updated docs.\n- Journey exercised: http://[::ffff:c000:201]/')).ok, true);
+});
+test('valid multiline title does not hide actual declarations', () => {
+  assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} [trace](https://example.test/a.png "first\nsecond")`)).ok, true);
+});

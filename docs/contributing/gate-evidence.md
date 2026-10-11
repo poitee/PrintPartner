@@ -35,8 +35,11 @@ there is no user-visible change.
 The GitHub Actions workflow `.github/workflows/pr-evidence.yml` runs a
 lightweight lint on every pull request body. The `pull_request_target` job
 checks out the protected base SHA and runs its checker, so a PR cannot bypass
-policy by changing the checker. A separate read-only `pull_request` job tests
-the proposed checker. This trusted policy job becomes active after this
+policy by changing the checker. The separate read-only workflow
+`.github/workflows/pr-evidence-tests.yml` tests the proposed checker on
+`pull_request`. Only the trusted workflow publishes `Lint Evidence block`;
+the PR-side workflow cannot publish a skipped success under that name.
+This trusted policy job becomes active after this
 workflow and checker first land on the base branch.
 
 The lint rules are:

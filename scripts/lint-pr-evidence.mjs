@@ -298,7 +298,7 @@ function evidenceSectionEnd(text) {
  */
 export function extractEvidenceSection(body, options) {
   if (typeof body !== "string" || !body.trim()) return null;
-  const visible = stripHiddenMarkdown(body, options);
+  const visible = stripHiddenMarkdown(inlineMetadataView(body), options);
   const match = [...referenceHeadingView(visible).matchAll(EVIDENCE_HEADING)][0];
   if (!match || match.index == null) return null;
   const start = match.index + match[0].length;
@@ -718,6 +718,30 @@ function isEscaped(text, index) {
   return slashes % 2 === 1;
 }
 
+/** Link destinations/titles are inline metadata even when they span lines.
+ * Preserve the link for artifact validation, but prevent its newlines from
+ * introducing block declarations, fields, or headings. */
+function inlineMetadataView(value) {
+  const ranges = codeSpanRanges(value);
+  let rangeIndex = 0;
+  let cursor = 0;
+  let kept = "";
+  for (let at = value.indexOf("]("); at !== -1; at = value.indexOf("](", cursor)) {
+    while (rangeIndex < ranges.length && ranges[rangeIndex].end <= at) rangeIndex += 1;
+    const inCode = rangeIndex < ranges.length && ranges[rangeIndex].start <= at;
+    const open = linkTextStart(value, at, cursor);
+    const tail = !inCode && open !== -1 ? parseLinkTail(value, at + 1) : null;
+    // A malformed tail may already have scanned the remaining text. Do not
+    // retry every nested opener in it (quadratic on repeated `[a](` input).
+    if (!inCode && open !== -1 && !tail) break;
+    const end = tail?.end ?? at + 2;
+    kept += value.slice(cursor, at + 1);
+    kept += value.slice(at + 1, end).replace(/\r?\n/g, " ");
+    cursor = end;
+  }
+  return kept + value.slice(cursor);
+}
+
 /** Type-7 HTML blocks require a complete tag alone on a boundary line. */
 function isCompleteHtmlTag(value) {
   return /^[ \t]*<\/[A-Za-z][A-Za-z0-9-]*[ \t]*>[ \t]*$/.test(value)
@@ -986,7 +1010,16 @@ function targetsBannedLan(sectionText, definitions) {
     if (BANNED_LAN_IP.test(value)) return true;
     const decoded = decodeCharacterReferences(value).replace(/\\(.)/g, "$1");
     return [...decoded.matchAll(/(?:https?:)?\/\/[^\s<>()"'`]+/gi)].some((match) => {
-      try { return BANNED_LAN_IP.test(new URL(trimToken(match[0]), "https://example.test/").hostname); }
+      try {
+        let host = new URL(trimToken(match[0]), "https://example.test/").hostname;
+        const mapped = host.match(/^\[::ffff:([\da-f]{1,4}):([\da-f]{1,4})\]$/i);
+        if (mapped) {
+          const high = parseInt(mapped[1], 16);
+          const low = parseInt(mapped[2], 16);
+          host = `${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`;
+        }
+        return BANNED_LAN_IP.test(host);
+      }
       catch { return false; }
     });
   };
@@ -1039,7 +1072,7 @@ export function lintPrEvidence(body) {
   const reason = extractExemptionReason(section);
   const hasEvidence = hasEvidenceContent(section);
 
-  if ([...referenceHeadingView(stripHiddenMarkdown(body)).matchAll(EVIDENCE_HEADING)].length > 1) {
+  if ([...referenceHeadingView(stripHiddenMarkdown(inlineMetadataView(body))).matchAll(EVIDENCE_HEADING)].length > 1) {
     errors.push("PR body must contain exactly one visible Evidence section.");
   }
 
