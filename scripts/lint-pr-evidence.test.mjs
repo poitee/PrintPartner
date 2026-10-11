@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import {
@@ -246,4 +248,227 @@ test("CLI --body-file exits 1 for an empty evidence template body", () => {
   rmSync(dir, { recursive: true, force: true });
   assert.equal(code, 1);
   assert.match(errors.join("\n"), /FAILED/);
+});
+
+test("passes when Steps are nested bullets under the Steps label (Greptile P1: Nested steps fail CI)", () => {
+  const result = lintPrEvidence(
+    bodyWithEvidence(`Exemption: none
+
+- Journey exercised: Library → Builds
+- Steps followed to produce the evidence:
+  - Opened https://example.test
+  - Clicked Builds
+- Result observed: Builds table rendered without overlap
+- Screenshot / recording / verify-skill output or trace: https://example.test/evidence.png
+`),
+  );
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+
+test("fails docs-only PRs whose Steps verify against a .80/.81 host (Greptile P1: Banned verification targets pass)", () => {
+  const result = lintPrEvidence(
+    bodyWithEvidence(`Exemption: docs-only
+
+- Exemption reason: Documentation update only.
+- Steps followed to produce the evidence: ran automated verify against http://192.168.1.80:8080
+`),
+  );
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /\.80\/\.81/);
+});
+
+test("fails when a freeform verification link outside labeled fields targets .80/.81 (Greptile P1: Banned verification targets pass)", () => {
+  const result = lintPrEvidence(
+    bodyWithEvidence(`Exemption: none
+
+- Journey exercised: Library
+- Steps followed to produce the evidence: opened local instance
+- Result observed: ok
+- Screenshot / recording / verify-skill output or trace: trace.json
+
+https://192.168.200.81:8443/shot.png
+`),
+  );
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /\.80\/\.81/);
+});
+
+for (const artifact of ["evidence", "screenshot", "recording", "verify-skill"]) {
+  test(`fails when the artifact is only the category word "${artifact}" (Codex P1)`, () => {
+    const result = lintPrEvidence(
+      bodyWithEvidence(`Exemption: none
+
+- Journey exercised: Library
+- Steps followed to produce the evidence: opened local instance, clicked Builds
+- Result observed: table rendered
+- Screenshot / recording / verify-skill output or trace: ${artifact}
+`),
+    );
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join("\n"), /Evidence is incomplete/);
+  });
+}
+
+test("ignores URLs inside a multiline Exemption reason when looking for an artifact (Codex P2)", () => {
+  const result = lintPrEvidence(
+    bodyWithEvidence(`Exemption: none
+
+- Exemption reason (required when claiming an exemption):
+  See the run
+  at https://example.test/evidence.png for the screenshot.
+
+- Journey exercised: Library
+- Steps followed to produce the evidence: opened local instance
+- Result observed: table rendered
+- Screenshot / recording / verify-skill output or trace:
+`),
+  );
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /Evidence is incomplete/);
+});
+
+test("ignores a commented-out Evidence section (Greptile P2: Hidden evidence passes)", () => {
+  const result = lintPrEvidence(`## Summary
+
+<!--
+## Evidence
+
+Exemption: docs-only
+
+- Exemption reason: hidden text
+-->
+`);
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /Missing "## Evidence"/);
+});
+
+test("ignores an Evidence heading inside a fenced code block (Codex P2)", () => {
+  const result = lintPrEvidence(`## Summary
+
+\`\`\`md
+## Evidence
+
+Exemption: docs-only
+
+- Exemption reason: example only
+\`\`\`
+`);
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /Missing "## Evidence"/);
+});
+
+test("CLI runs when invoked with a relative script path (Bugbot: CI lint never runs)", () => {
+  const scriptsDir = dirname(fileURLToPath(import.meta.url));
+  const run = spawnSync(process.execPath, ["lint-pr-evidence.mjs"], {
+    cwd: scriptsDir,
+    env: { ...process.env, PR_BODY: bodyWithEvidence(EMPTY_TEMPLATE_EVIDENCE) },
+    encoding: "utf8",
+  });
+  assert.equal(run.status, 1, run.stderr);
+  assert.match(run.stderr, /FAILED/);
+});
+
+test("fails when a URL sits on a continuation line of a same-line Exemption reason (Codex P2)", () => {
+  const result = lintPrEvidence(
+    bodyWithEvidence(`Exemption: none
+- Exemption reason: context only
+  See https://example.test/evidence.png
+
+- Steps followed to produce the evidence: opened local
+- Result observed: rendered
+- Screenshot / recording / verify-skill output or trace:
+`),
+  );
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /Evidence is incomplete/);
+});
+
+test("allows a LAN mention on a continuation line of a same-line Exemption reason (Codex P2)", () => {
+  const result = lintPrEvidence(
+    bodyWithEvidence(`Exemption: docs-only
+- Exemption reason: Document why this host is prohibited:
+  http://192.168.1.80:8080 must never be used for verify.
+`),
+  );
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+
+test("ignores an Evidence heading inside a fence closed by a longer fence (Codex P2)", () => {
+  const result = lintPrEvidence(`## Summary
+
+\`\`\`md
+## Evidence
+
+Exemption: docs-only
+
+- Exemption reason: example only
+\`\`\`\`
+`);
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /Missing "## Evidence"/);
+});
+
+test("ignores an Evidence heading inside an unclosed fence (Codex P2)", () => {
+  const result = lintPrEvidence(`## Summary
+
+\`\`\`md
+## Evidence
+
+Exemption: docs-only
+
+- Exemption reason: example only
+`);
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /Missing "## Evidence"/);
+});
+
+test("ignores an Evidence heading inside a tilde fence (Codex P2)", () => {
+  const result = lintPrEvidence(`## Summary
+
+~~~md
+## Evidence
+
+Exemption: docs-only
+
+- Exemption reason: example only
+~~~
+`);
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /Missing "## Evidence"/);
+});
+
+test("fails when an unindented sibling bullet after the reason targets .80/.81 (Codex P1)", () => {
+  const result = lintPrEvidence(
+    bodyWithEvidence(`Exemption: docs-only
+- Exemption reason: Update docs.
+- Verification target: http://192.168.1.80:8080
+`),
+  );
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /\.80\/\.81/);
+});
+
+test("does not let an HTML comment containing a fence opener hide Evidence (Codex P2)", () => {
+  const result = lintPrEvidence(`<!--
+\`\`\`
+-->
+## Evidence
+
+Exemption: docs-only
+
+- Exemption reason: Update docs.
+`);
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+
+test("treats triple-backtick inline code as a paragraph, not a fence (Codex P2)", () => {
+  const result = lintPrEvidence(`\`\`\`inline code\`\`\`
+
+## Evidence
+
+Exemption: docs-only
+
+- Exemption reason: Update docs.
+`);
+  assert.equal(result.ok, true, result.errors.join("; "));
 });

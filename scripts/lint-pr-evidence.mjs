@@ -35,8 +35,62 @@ const FIELD_LABELS = Object.freeze({
   reason: "Exemption reason",
 });
 
+const EXEMPTION_LINE = /^[ \t]*Exemption[ \t]*:.*$/gim;
+
 function stripHtmlComments(text) {
   return text.replace(/<!--[\s\S]*?-->/g, "");
+}
+
+/** A backtick fence opener cannot have backticks later on its line (inline code). */
+const FENCE_OPEN = /^[ \t]*(`{3,}(?=[^`]*$)|~{3,})/;
+
+/**
+ * The body as a reviewer sees it: no CRLF, fenced code, or HTML comments. One
+ * pass in document order, so comment text cannot open a fence and fence text
+ * cannot hide a comment. A closing fence uses the same character and at least
+ * the opening length; an unclosed fence runs to the end of the text.
+ */
+function stripHiddenMarkdown(text) {
+  const kept = [];
+  let fence = null;
+  let inComment = false;
+  for (const raw of text.replace(/\r\n/g, "\n").split("\n")) {
+    if (fence) {
+      const close = raw.match(/^[ \t]*(`{3,}|~{3,})[ \t]*$/);
+      if (close && close[1][0] === fence[0] && close[1].length >= fence.length) {
+        fence = null;
+      }
+      continue;
+    }
+    if (!inComment) {
+      const open = raw.match(FENCE_OPEN);
+      if (open) {
+        fence = open[1];
+        continue;
+      }
+    }
+    let line = raw;
+    let visible = "";
+    for (;;) {
+      if (inComment) {
+        const end = line.indexOf("-->");
+        if (end === -1) break;
+        line = line.slice(end + 3);
+        inComment = false;
+      } else {
+        const start = line.indexOf("<!--");
+        if (start === -1) {
+          visible += line;
+          break;
+        }
+        visible += line.slice(0, start);
+        line = line.slice(start + 4);
+        inComment = true;
+      }
+    }
+    kept.push(visible);
+  }
+  return kept.join("\n");
 }
 
 function normalizeWs(text) {
@@ -49,10 +103,11 @@ function normalizeWs(text) {
  */
 export function extractEvidenceSection(body) {
   if (typeof body !== "string" || !body.trim()) return null;
-  const match = body.match(/^##\s+Evidence\s*$/im);
+  const visible = stripHiddenMarkdown(body);
+  const match = visible.match(/^##\s+Evidence\s*$/im);
   if (!match || match.index == null) return null;
   const start = match.index + match[0].length;
-  const rest = body.slice(start);
+  const rest = visible.slice(start);
   const nextHeading = rest.search(/^##\s+/m);
   const section = nextHeading === -1 ? rest : rest.slice(0, nextHeading);
   return section;
@@ -87,31 +142,61 @@ function fieldLabelPattern(label) {
   return escaped;
 }
 
+/** A line that starts the next template field (or the heading after the section). */
+const FIELD_BOUNDARY = new RegExp(
+  `^(?:[ \\t]*[-*][ \\t]*(?:${Object.values(FIELD_LABELS).map(fieldLabelPattern).join("|")})[ \\t]*:|[-*][ \\t]|[ \\t]*Exemption[ \\t]*:|[ \\t]*##[ \\t]+)`,
+  "i",
+);
+
+/**
+ * Locate a template field in comment-free section text. Returns its value
+ * (same line plus following freeform lines, nested bullets included) and the
+ * span it occupies, so callers can read or cut the same text.
+ */
+function findField(cleaned, label) {
+  const labeled = cleaned.match(
+    new RegExp(`^[ \\t]*[-*][ \\t]*${fieldLabelPattern(label)}[ \\t]*:[ \\t]*(.*)$`, "im"),
+  );
+  if (!labeled) return null;
+  const sameLine = labeled[1].trim();
+  const lines = sameLine ? [sameLine] : [];
+  const valueEnd = labeled.index + labeled[0].length;
+  let end = valueEnd;
+  // The first segment is the rest of the label line, which the match already holds.
+  const tail = cleaned.slice(valueEnd).split("\n").slice(1);
+  for (const line of tail) {
+    if (FIELD_BOUNDARY.test(line)) break;
+    const trimmed = line.trim();
+    if (!trimmed) {
+      if (lines.length) break;
+    } else {
+      lines.push(trimmed);
+    }
+    end += line.length + 1;
+  }
+  return {
+    value: lines.join(" ").trim(),
+    start: labeled.index,
+    end,
+  };
+}
+
 /**
  * Read a template field value (same line and optional following freeform lines).
  */
 function readField(sectionText, label) {
-  const cleaned = stripHtmlComments(sectionText);
-  const labelRe = fieldLabelPattern(label);
-  const labeled = cleaned.match(
-    new RegExp(`^[ \\t]*[-*][ \\t]*${labelRe}[ \\t]*:[ \\t]*(.*)$`, "im"),
-  );
-  if (!labeled) return "";
-  const sameLine = labeled[1].trim();
-  const lines = sameLine ? [sameLine] : [];
-  const after = cleaned.slice(labeled.index + labeled[0].length);
-  for (const line of after.split("\n")) {
-    if (/^[ \t]*[-*][ \t]+\S[^:]*:[ \t]*/.test(line)) break;
-    if (/^[ \t]*Exemption[ \t]*:/i.test(line)) break;
-    if (/^[ \t]*##[ \t]+/.test(line)) break;
-    const trimmed = line.trim();
-    if (!trimmed) {
-      if (lines.length) break;
-      continue;
+  return findField(stripHtmlComments(sectionText), label)?.value ?? "";
+}
+
+/** Section text with HTML comments removed and the given fields cut out. */
+function withoutFields(sectionText, labels) {
+  let text = stripHtmlComments(sectionText);
+  for (const label of labels) {
+    for (let field = findField(text, label); field; field = findField(text, label)) {
+      text = text.slice(0, field.start) + text.slice(field.end);
     }
-    lines.push(trimmed);
   }
-  return lines.join(" ").trim();
+  return text;
 }
 
 function extractExemptionReason(sectionText) {
@@ -125,74 +210,40 @@ function looksLikeArtifact(value) {
   if (/https?:\/\/\S+/i.test(value)) return true;
   if (/`[^`]+`/.test(value)) return true;
   // Paths / filenames commonly used for verify traces and screenshots.
-  if (/\.(?:png|jpe?g|gif|webp|mp4|webm|mov|json|txt|log|md)\b/i.test(value)) {
-    return true;
-  }
-  if (/(?:screenshot|recording|trace|verify[- ]skill|evidence)\b/i.test(value)) {
-    return value.length >= 8;
-  }
-  return false;
+  return /\.(?:png|jpe?g|gif|webp|mp4|webm|mov|json|txt|log|md)\b/i.test(value);
+}
+
+/** Section text outside every template field and the Exemption line. */
+function freeformText(sectionText) {
+  return withoutFields(sectionText, Object.values(FIELD_LABELS)).replace(
+    EXEMPTION_LINE,
+    "",
+  );
 }
 
 /**
- * Evidence requires steps, observed result, and an artifact (not journey alone,
- * and not exemption-reason text).
+ * Evidence requires steps, observed result, and a concrete artifact: either the
+ * artifact field or freeform text outside the template fields. A journey name,
+ * a bare category word, or exemption-reason text cannot pass.
  */
 export function hasEvidenceContent(sectionText) {
   const steps = readField(sectionText, FIELD_LABELS.steps);
   const result = readField(sectionText, FIELD_LABELS.result);
   const artifact = readField(sectionText, FIELD_LABELS.artifact);
-
-  if (!steps || !result || !looksLikeArtifact(artifact)) {
-    // Also accept a markdown image / evidence URL elsewhere in the section
-    // (outside Exemption / reason / journey-only stubs), but still require
-    // steps + result so a journey name alone cannot pass.
-    const cleaned = stripHtmlComments(sectionText)
-      .replace(/^[ \t]*Exemption[ \t]*:.*$/gim, "")
-      .replace(
-        new RegExp(
-          `^[ \\t]*[-*][ \\t]*${fieldLabelPattern(FIELD_LABELS.reason)}[ \\t]*:[ \\t]*.*$`,
-          "gim",
-        ),
-        "",
-      );
-
-    // Drop multiline exemption-reason paragraphs that follow an empty reason label.
-    // readField already consumed them when present; strip residual freeform that
-    // sits only under the reason bullet by removing reason field text explicitly.
-    const reason = extractExemptionReason(sectionText);
-    let withoutReason = cleaned;
-    if (reason) {
-      withoutReason = withoutReason.split(reason).join("");
-    }
-
-    const freeformArtifact =
-      /!\[[^\]]*]\([^)]+\)/.test(withoutReason) ||
-      /\[[^\]]+]\(https?:\/\/[^)]+\)/.test(withoutReason) ||
-      /https?:\/\/\S+/i.test(withoutReason) ||
-      /\.(?:png|jpe?g|gif|webp|mp4|webm|mov)\b/i.test(withoutReason);
-
-    return Boolean(steps && result && (looksLikeArtifact(artifact) || freeformArtifact));
-  }
-
-  return true;
+  if (!steps || !result) return false;
+  return looksLikeArtifact(artifact) || looksLikeArtifact(freeformText(sectionText));
 }
 
 /**
- * Fail only when verification evidence targets banned LAN hosts.
- * Docs/CI exemptions may mention those hosts without using them as targets.
+ * Verification content must never target Chad's LAN instances, whatever the
+ * exemption. Mentions only in the Exemption reason or Exemption line are allowed.
  */
-function targetsBannedLan(sectionText, exemptionValue) {
-  if (exemptionValue && exemptionValue !== EXEMPTION_NONE) {
-    return false;
-  }
-  const verificationText = [
-    readField(sectionText, FIELD_LABELS.journey),
-    readField(sectionText, FIELD_LABELS.steps),
-    readField(sectionText, FIELD_LABELS.result),
-    readField(sectionText, FIELD_LABELS.artifact),
-  ].join("\n");
-  return BANNED_LAN_IP.test(verificationText);
+function targetsBannedLan(sectionText) {
+  const verification = withoutFields(sectionText, [FIELD_LABELS.reason]).replace(
+    EXEMPTION_LINE,
+    "",
+  );
+  return BANNED_LAN_IP.test(verification);
 }
 
 /**
@@ -226,7 +277,7 @@ export function lintPrEvidence(body) {
   const reason = extractExemptionReason(section);
   const hasEvidence = hasEvidenceContent(section);
 
-  if (targetsBannedLan(section, value)) {
+  if (targetsBannedLan(section)) {
     errors.push(
       "Evidence must not target Chad's LAN instances (.80/.81). Use a disposable local verify instance instead.",
     );

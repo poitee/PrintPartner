@@ -36,14 +36,18 @@ The GitHub Actions workflow `.github/workflows/pr-evidence.yml` runs a
 lightweight lint on every pull request body:
 
 - Fail when the `## Evidence` section is missing.
-- Fail when `Exemption: none` lacks Steps followed, Result observed, and a
-  Screenshot/recording/verify-skill artifact (a journey name alone is not
-  enough; Exemption reason text does not count as evidence).
+- Fail when `Exemption: none` lacks Steps followed (nested bullets are fine),
+  Result observed, and a concrete artifact: a URL, a file path such as
+  `trace.json`, a Markdown link or image, or inline code. A journey name, a bare
+  category word such as `screenshot`, and Exemption reason text do not count.
 - Fail when `Exemption:` is still the template placeholder, unknown, or a named
   exemption without a non-empty reason.
-- Fail when verification evidence fields target Chad's LAN instances
-  (`192.168.*.80` / `*.81`). Named exemptions may mention those hosts without
-  using them as verify targets.
+- Fail when any verification content (Journey, Steps, Result, artifact, or other
+  freeform text in the section) targets Chad's LAN instances
+  (`192.168.*.80` / `*.81`). This applies to named exemptions too. Mention those
+  hosts only in the Exemption reason.
+- HTML comments and fenced code blocks are ignored, so commented-out or example
+  Evidence sections do not count. Put real output in a linked file or inline code.
 
 Local check:
 
