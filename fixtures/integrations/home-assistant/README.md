@@ -44,11 +44,17 @@ HTTP errors and network failures have no canonical JSON payload: a missing
 entity (404) or unsuccessful status read produces an offline status; an
 unsuccessful upload produces a failed result.
 
-Run the TypeScript parsing check from `web`:
+Run the TypeScript fixture checks from `web`:
 
 ```sh
 npm run test -w @print-partner/server -- src/integrations/adapters/home-assistant.fixtures.test.ts --reporter=verbose
 ```
 
 The test discovers every JSON file in this directory and reports the fixture
-count in its suite name, including future additions.
+count in its suite name, including future additions. Every `state-*` and
+`api-running*` fixture has an explicit expected output in
+`home-assistant.fixtures.test.ts`. The suite serves those payloads through a
+mocked fetch to the real adapter's `getStatus` or `testConnection` method and
+compares the complete output, including status, progress, filename and message.
+A coverage assertion requires expectations for any newly added state or API
+probe fixture.
