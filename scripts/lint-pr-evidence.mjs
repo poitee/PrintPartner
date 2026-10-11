@@ -868,7 +868,7 @@ function isPlaceholderField(value) {
   const visible = visibleFieldText(value).normalize("NFKD").toLowerCase()
     .replace(/[\p{Default_Ignorable_Code_Point}\p{Mark}]/gu, "");
   const plain = [...visible].map((letter) => PLACEHOLDER_LOOKALIKES.get(letter) ?? letter).join("").trim();
-  return !plain || /^(?:todo|tbd|fixme|placeholder)\b/i.test(plain)
+  return !/[\p{Letter}\p{Number}]/u.test(plain) || /^(?:todo|tbd|fixme|placeholder)\b/i.test(plain)
     || /^(?:n\/?a|none|pending|not provided)[.!?]*$/i.test(plain);
 }
 

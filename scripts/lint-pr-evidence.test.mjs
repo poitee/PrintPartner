@@ -1283,3 +1283,19 @@ for (const [definitions, ok] of [['[proof]: #\n[proof]: evidence/shot.png', fals
     assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} [proof]\n\n${definitions}`)).ok, ok);
   });
 }
+
+for (const punctuation of ['.', '!', '…', '—', ':;()', '&rsquo;', '<em>...</em>', '[.](#)']) {
+  for (const field of ['Steps followed to produce the evidence', 'Result observed', 'Exemption reason']) {
+    test(`rejects punctuation-only ${punctuation} in ${field}`, () => {
+      const body = field === 'Exemption reason'
+        ? bodyWithEvidence(`Exemption: docs-only\n- Exemption reason: ${punctuation}`)
+        : bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} trace.json`).replace(`${field}: ${field.startsWith('Steps') ? 'ran locally' : 'passed'}`, `${field}: ${punctuation}`);
+      assert.equal(lintPrEvidence(body).ok, false);
+    });
+  }
+}
+for (const result of ['0', '✓ 3 checks', '成功', 'Готово']) {
+  test(`accepts substantive Unicode letter/number result ${result}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: ${result}\n${ARTIFACT_LABEL} trace.json`)).ok, true);
+  });
+}
