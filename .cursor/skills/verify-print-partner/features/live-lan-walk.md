@@ -1,7 +1,7 @@
 # Live LAN walk (human / Mac)
 
 This is a **separate evidence path** for a human on the Mac desk loop. Cloud
-agents **cannot** reach `192.168.200.80:8080`. Do not pretend a cloud run verified
+agents **cannot** reach `192.168.200.80:8080` or `192.168.200.81:8080`. Do not pretend a cloud run verified
 this checklist. Use Docker verification (`SKILL.md` Launch) for agent proof.
 
 ## Sub-features
@@ -23,7 +23,7 @@ this checklist. Use Docker verification (`SKILL.md` Launch) for agent proof.
 Preconditions:
 
 - **Human on LAN Mac only.** Cloud agents must skip and record
-  `blocked: LAN 192.168.200.80 unreachable from cloud VM`.
+  `blocked: LAN 192.168.200.80/.81 unreachable from cloud VM`.
 - Live data is developer-owned — prefer read-only observation; do not run
   `workflow-smoke.sh` against it.
 
@@ -52,4 +52,4 @@ and an explicit note that print counts were left unchanged.
 - Touching live checkoff counts or accepting Plans on LAN data is out of scope
   for a default verification walk.
 - If the LAN bind changed (`PP_BIND_ADDRESS`), use the Mac's current published URL
-  from README / `.env` instead of assuming `192.168.200.80`.
+  from README / `.env` instead of assuming `192.168.200.80` or `192.168.200.81`.
