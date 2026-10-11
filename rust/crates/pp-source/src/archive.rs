@@ -26,6 +26,11 @@ pub enum ArchiveError {
     Source(crate::Error),
     Zip(zip::result::ZipError),
     InvalidArchive,
+    /// An entry's extra-field records are truncated, overrun their declared
+    /// length, or carry a ZIP64 field too short for the sizes it must replace.
+    MalformedExtraField,
+    /// The opened ZIP reader indexed different metadata than preflight checked.
+    ReaderMismatch(ReaderMismatch),
     UnsafeEntry,
     DuplicateEntry,
     Unsupported,
@@ -44,6 +49,10 @@ impl fmt::Display for ArchiveError {
             Self::Source(e) => write!(f, "{e}"),
             Self::Zip(e) => write!(f, "invalid-archive: {e}"),
             Self::InvalidArchive => write!(f, "invalid-archive"),
+            Self::MalformedExtraField => write!(f, "invalid-archive: malformed extra field"),
+            Self::ReaderMismatch(field) => {
+                write!(f, "invalid-archive: reader {field} differs from preflight")
+            }
             Self::UnsafeEntry => write!(f, "unsafe-entry"),
             Self::DuplicateEntry => write!(f, "duplicate-entry"),
             Self::Unsupported => write!(f, "unsupported-archive"),
@@ -81,6 +90,31 @@ impl From<zip::result::ZipError> for ArchiveError {
     }
 }
 type Result<T> = std::result::Result<T, ArchiveError>;
+
+/// Which reader-resolved value disagreed with the preflight record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReaderMismatch {
+    ArchiveOffset,
+    CentralDirectoryStart,
+    Comment,
+    EntryCount,
+    CentralHeaderOffset,
+    LocalHeaderOffset,
+    EntryMetadata,
+}
+impl fmt::Display for ReaderMismatch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::ArchiveOffset => "archive offset",
+            Self::CentralDirectoryStart => "central directory start",
+            Self::Comment => "archive comment",
+            Self::EntryCount => "entry count",
+            Self::CentralHeaderOffset => "central header offset",
+            Self::LocalHeaderOffset => "local header offset",
+            Self::EntryMetadata => "entry metadata",
+        })
+    }
+}
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -237,18 +271,16 @@ impl SourceRoot {
         )?;
         compressed.sync_all()?;
         let mut archive_file = stage.root.file_read_write("archive.zip")?;
-        let (entries, eocd_offset) =
-            inspect_index(&mut archive_file, compressed_bytes, limits, cancelled)?;
-        bind_zip_reader_to_validated_eocd(&mut archive_file, eocd_offset)?;
+        let preflight = inspect_index(&mut archive_file, compressed_bytes, limits, cancelled)?;
+        bind_zip_reader_to_validated_eocd(&mut archive_file, preflight.eocd_offset)?;
         let mut archive = zip::ZipArchive::with_config(
             zip::read::Config {
                 archive_offset: zip::read::ArchiveOffset::Known(0),
             },
             archive_file,
         )?;
-        if archive.len() != entries.len() {
-            return Err(ArchiveError::InvalidArchive);
-        }
+        verify_reader_archive(&archive, &preflight)?;
+        let entries = &preflight.entries;
         let files = LocalFiles {
             root: stage.root.child("files", true)?,
         };
@@ -267,14 +299,7 @@ impl SourceRoot {
         for (index, entry) in entries.iter().enumerate() {
             check_cancel(cancelled)?;
             let mut member = archive.by_index(index)?;
-            // The reader may resolve sizes from ZIP64 extra fields; the ratio
-            // cap and limits are only sound for the sizes checked in preflight.
-            if member.name_raw() != entry.raw_name.as_bytes()
-                || member.compressed_size() != entry.compressed_bytes
-                || member.size() != entry.inflated_bytes
-            {
-                return Err(ArchiveError::InvalidArchive);
-            }
+            verify_reader_entry(&member, entry)?;
             let path = entry.path.as_str();
             let mut parent = path;
             while let Some((prefix, _)) = parent.rsplit_once('/') {
@@ -373,6 +398,102 @@ struct Entry {
     directory: bool,
     compressed_bytes: u64,
     inflated_bytes: u64,
+    central_header_offset: u64,
+    local_header_offset: u64,
+}
+struct Preflight {
+    entries: Vec<Entry>,
+    central_offset: u64,
+    eocd_offset: u64,
+}
+
+/// The ZIP crate falls back to earlier end records when the validated central
+/// directory fails its own parse, so the opened reader must be proven to index
+/// exactly the directory preflight walked.
+fn verify_reader_archive<R: Read + Seek>(
+    archive: &zip::ZipArchive<R>,
+    preflight: &Preflight,
+) -> Result<()> {
+    let mismatch = if archive.offset() != 0 {
+        ReaderMismatch::ArchiveOffset
+    } else if archive.central_directory_start() != preflight.central_offset {
+        ReaderMismatch::CentralDirectoryStart
+    } else if !archive.comment().is_empty() {
+        ReaderMismatch::Comment
+    } else if archive.len() != preflight.entries.len() {
+        ReaderMismatch::EntryCount
+    } else {
+        return Ok(());
+    };
+    Err(ArchiveError::ReaderMismatch(mismatch))
+}
+
+/// ZIP64 extra fields may replace sizes and the local header offset; the ratio
+/// cap, limits and local-header validation only hold for preflight's values.
+fn verify_reader_entry<R: Read + ?Sized>(
+    member: &zip::read::ZipFile<'_, R>,
+    entry: &Entry,
+) -> Result<()> {
+    let mismatch = if member.central_header_start() != entry.central_header_offset {
+        ReaderMismatch::CentralHeaderOffset
+    } else if member.header_start() != entry.local_header_offset {
+        ReaderMismatch::LocalHeaderOffset
+    } else if member.name_raw() != entry.raw_name.as_bytes()
+        || member.compressed_size() != entry.compressed_bytes
+        || member.size() != entry.inflated_bytes
+    {
+        ReaderMismatch::EntryMetadata
+    } else {
+        return Ok(());
+    };
+    Err(ArchiveError::ReaderMismatch(mismatch))
+}
+
+/// Walks central extra-field records the way zip 8.6 parses them and rejects
+/// anything it would fail on, so the reader never abandons the validated
+/// directory for an earlier end record.
+fn validate_extra_field(extra: &[u8], central: &[u8; 46]) -> Result<()> {
+    let mut rest = extra;
+    while !rest.is_empty() {
+        if rest.len() < 4 {
+            return Err(ArchiveError::MalformedExtraField);
+        }
+        let id = u16_at(rest, 0);
+        let len = u16_at(rest, 2) as usize;
+        let Some(data) = rest.get(4..4 + len) else {
+            return Err(ArchiveError::MalformedExtraField);
+        };
+        match id {
+            // ZIP64: each saturated 32-bit value needs its 64-bit replacement;
+            // a 24-byte field replaces all three.
+            0x0001 => {
+                let required = [24, 20, 42]
+                    .iter()
+                    .filter(|&&at| len >= 24 || u32_at(central, at) == u32::MAX)
+                    .count()
+                    * 8;
+                if len < required {
+                    return Err(ArchiveError::MalformedExtraField);
+                }
+            }
+            0x000a => {
+                if len != 32 || u16_at(data, 4) != 1 || u16_at(data, 6) != 24 {
+                    return Err(ArchiveError::MalformedExtraField);
+                }
+            }
+            0x5455 => {
+                if len == 0 || (len != 5 && len != 1 + 4 * data[0].count_ones() as usize) {
+                    return Err(ArchiveError::MalformedExtraField);
+                }
+            }
+            // Unicode path/comment fields rename entries and AES is
+            // encryption; neither is supported.
+            0x6375 | 0x7075 | 0x9901 => return Err(ArchiveError::Unsupported),
+            _ => {}
+        }
+        rest = &rest[4 + len..];
+    }
+    Ok(())
 }
 fn ratio_limit(compressed_bytes: u64) -> u64 {
     compressed_bytes
@@ -428,7 +549,7 @@ fn inspect_index(
     length: u64,
     limits: ArchiveLimits,
     cancelled: &AtomicBool,
-) -> Result<(Vec<Entry>, u64)> {
+) -> Result<Preflight> {
     let tail_size = length.min(65_557) as usize;
     file.seek(SeekFrom::End(-(tail_size as i64)))?;
     let mut tail = vec![0u8; tail_size];
@@ -482,6 +603,7 @@ fn inspect_index(
     let mut paths = PathCollisions::default();
     for _ in 0..count {
         check_cancel(cancelled)?;
+        let central_header_offset = file.stream_position()?;
         let mut header = [0u8; 46];
         file.read_exact(&mut header)?;
         if header[..4] != *b"PK\x01\x02" {
@@ -528,9 +650,15 @@ fn inspect_index(
         if inflated_bytes > ratio_limit(compressed_bytes) {
             return Err(ArchiveError::CompressionRatio);
         }
+        let extra_end = file.stream_position()? + u16_at(&header, 30) as u64;
+        if extra_end > central_offset + central_size {
+            return Err(ArchiveError::InvalidArchive);
+        }
+        let mut extra = vec![0; u16_at(&header, 30) as usize];
+        file.read_exact(&mut extra)?;
+        validate_extra_field(&extra, &header)?;
         validate_local_header(file, &header, &raw_name, central_offset)?;
-        let skip = u16_at(&header, 30) as i64 + u16_at(&header, 32) as i64;
-        file.seek(SeekFrom::Current(skip))?;
+        file.seek(SeekFrom::Current(u16_at(&header, 32) as i64))?;
         if file.stream_position()? > central_offset + central_size {
             return Err(ArchiveError::InvalidArchive);
         }
@@ -540,13 +668,19 @@ fn inspect_index(
             directory,
             compressed_bytes,
             inflated_bytes,
+            central_header_offset,
+            local_header_offset: u32_at(&header, 42) as u64,
         });
     }
     if file.stream_position()? != central_offset + central_size {
         return Err(ArchiveError::InvalidArchive);
     }
     file.seek(SeekFrom::Start(0))?;
-    Ok((entries, eocd_offset))
+    Ok(Preflight {
+        entries,
+        central_offset,
+        eocd_offset,
+    })
 }
 
 fn validate_local_header(
@@ -592,4 +726,91 @@ fn validate_local_header(
     }
     file.seek(SeekFrom::Start(next))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn central(size: u32, extra: &[u8]) -> Vec<u8> {
+        let mut header = Vec::from(*b"PK\x01\x02");
+        header.extend_from_slice(&[45, 0, 45, 0]);
+        header.extend_from_slice(&[0; 12]);
+        header.extend_from_slice(&size.to_le_bytes());
+        header.extend_from_slice(&size.to_le_bytes());
+        header.extend_from_slice(&8u16.to_le_bytes());
+        header.extend_from_slice(&(extra.len() as u16).to_le_bytes());
+        header.extend_from_slice(&[0; 14]);
+        header.extend_from_slice(b"part.stl");
+        header.extend_from_slice(extra);
+        header
+    }
+    fn end_record(offset: usize, size: usize) -> Vec<u8> {
+        let mut record = Vec::from(*b"PK\x05\x06");
+        record.extend_from_slice(&[0, 0, 0, 0, 1, 0, 1, 0]);
+        record.extend_from_slice(&(size as u32).to_le_bytes());
+        record.extend_from_slice(&(offset as u32).to_le_bytes());
+        record.extend_from_slice(&[0, 0]);
+        record
+    }
+
+    #[test]
+    fn reader_on_a_fallback_directory_is_rejected_even_when_old_checks_pass() {
+        // Exercise the post-open binding on its own: preflight recorded the
+        // directory at `central_offset`, but the reader fell back to a decoy
+        // directory with the same count, name and sizes.
+        let size = 256u32;
+        let mut data = Vec::from(*b"PK\x03\x04");
+        data.extend_from_slice(&[20, 0]);
+        data.extend_from_slice(&[0; 12]);
+        data.extend_from_slice(&size.to_le_bytes());
+        data.extend_from_slice(&size.to_le_bytes());
+        data.extend_from_slice(&[8, 0, 0, 0]);
+        data.extend_from_slice(b"part.stl");
+        let decoy_offset = data.len() + 16;
+        let decoy = central(size, &[]);
+        let mut payload = vec![b'p'; 16];
+        payload.extend_from_slice(&decoy);
+        payload.extend(end_record(decoy_offset, decoy.len()));
+        payload.resize(size as usize, b'p');
+        data.extend_from_slice(&payload);
+        let central_offset = data.len();
+        let real = central(size, &[1, 0]);
+        data.extend_from_slice(&real);
+        data.extend(end_record(central_offset, real.len()));
+
+        let archive = zip::ZipArchive::with_config(
+            zip::read::Config {
+                archive_offset: zip::read::ArchiveOffset::Known(0),
+            },
+            io::Cursor::new(data),
+        )
+        .unwrap();
+        let preflight = Preflight {
+            entries: vec![Entry {
+                raw_name: "part.stl".into(),
+                path: SourcePath::try_from("part.stl".to_owned()).unwrap(),
+                directory: false,
+                compressed_bytes: size as u64,
+                inflated_bytes: size as u64,
+                central_header_offset: central_offset as u64,
+                local_header_offset: 0,
+            }],
+            central_offset: central_offset as u64,
+            eocd_offset: (central_offset + real.len()) as u64,
+        };
+        // The pre-fix check compared only the entry count after opening.
+        assert_eq!(archive.len(), preflight.entries.len());
+        assert_eq!(archive.central_directory_start(), decoy_offset as u64);
+        assert!(matches!(
+            verify_reader_archive(&archive, &preflight),
+            Err(ArchiveError::ReaderMismatch(
+                ReaderMismatch::CentralDirectoryStart
+            ))
+        ));
+        assert!(matches!(
+            validate_extra_field(&[1, 0], &[0; 46]),
+            Err(ArchiveError::MalformedExtraField)
+        ));
+    }
 }

@@ -1,7 +1,7 @@
 use pp_source::{
     ArtifactBudget, FileKind, LocalFiles, SelectedFile, Selection, SnapshotRequest, SourcePath,
     TenantRepos,
-    archive::{ArchiveError, ArchiveLimits, ZipInput},
+    archive::{ArchiveError, ArchiveLimits, ReaderMismatch, ZipInput},
 };
 use std::{
     fs::{self, File},
@@ -804,7 +804,13 @@ fn zip64_extra_sizes_cannot_override_the_checked_central_sizes() {
     data.extend_from_slice(&0u16.to_le_bytes());
     fs::write(fixture.0.join("input/upload.zip"), data).unwrap();
     let error = extract(&fixture).unwrap_err();
-    assert!(matches!(error, ArchiveError::InvalidArchive), "{error:?}");
+    assert!(
+        matches!(
+            error,
+            ArchiveError::ReaderMismatch(ReaderMismatch::EntryMetadata)
+        ),
+        "{error:?}"
+    );
     assert!(!fixture.candidate().exists());
 }
 
@@ -884,6 +890,246 @@ fn ordinary_archive_comment_is_accepted() {
     fs::write(&path, data).unwrap();
     extract(&fixture).unwrap();
     assert!(!fixture.candidate().exists());
+}
+
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc = !0u32;
+    for &byte in data {
+        crc ^= byte as u32;
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ (0xedb8_8320 & (crc & 1).wrapping_neg());
+        }
+    }
+    !crc
+}
+/// A stored local header for `part.stl` whose sizes are both `size`.
+fn stored_local_header(crc: u32, size: u32, extra_len: u16) -> Vec<u8> {
+    let mut header = Vec::from(*b"PK\x03\x04");
+    header.extend_from_slice(&20u16.to_le_bytes());
+    header.extend_from_slice(&[0; 8]);
+    header.extend_from_slice(&crc.to_le_bytes());
+    header.extend_from_slice(&size.to_le_bytes());
+    header.extend_from_slice(&size.to_le_bytes());
+    header.extend_from_slice(&8u16.to_le_bytes());
+    header.extend_from_slice(&extra_len.to_le_bytes());
+    header.extend_from_slice(b"part.stl");
+    header
+}
+/// A stored central header for `part.stl` carrying `extra`.
+fn stored_central_header(crc: u32, size: u32, local_offset: u32, extra: &[u8]) -> Vec<u8> {
+    let mut header = Vec::from(*b"PK\x01\x02");
+    header.extend_from_slice(&45u16.to_le_bytes());
+    header.extend_from_slice(&45u16.to_le_bytes());
+    header.extend_from_slice(&[0; 8]);
+    header.extend_from_slice(&crc.to_le_bytes());
+    header.extend_from_slice(&size.to_le_bytes());
+    header.extend_from_slice(&size.to_le_bytes());
+    header.extend_from_slice(&8u16.to_le_bytes());
+    header.extend_from_slice(&(extra.len() as u16).to_le_bytes());
+    header.extend_from_slice(&[0; 10]);
+    header.extend_from_slice(&local_offset.to_le_bytes());
+    header.extend_from_slice(b"part.stl");
+    header.extend_from_slice(extra);
+    header
+}
+fn end_record(central_offset: usize, central_size: usize) -> Vec<u8> {
+    let mut record = Vec::from(*b"PK\x05\x06");
+    record.extend_from_slice(&[0; 4]);
+    record.extend_from_slice(&1u16.to_le_bytes());
+    record.extend_from_slice(&1u16.to_le_bytes());
+    record.extend_from_slice(&(central_size as u32).to_le_bytes());
+    record.extend_from_slice(&(central_offset as u32).to_le_bytes());
+    record.extend_from_slice(&0u16.to_le_bytes());
+    record
+}
+fn open_unchecked(data: Vec<u8>) -> zip::ZipArchive<std::io::Cursor<Vec<u8>>> {
+    zip::ZipArchive::with_config(
+        zip::read::Config {
+            archive_offset: zip::read::ArchiveOffset::Known(0),
+        },
+        std::io::Cursor::new(data),
+    )
+    .unwrap()
+}
+
+#[test]
+fn zip64_extra_cannot_redirect_the_reader_to_an_unvalidated_local_header() {
+    // part.stl's local extra field hides a second local header at offset 38.
+    // The central ZIP64 field keeps the checked sizes but moves the header
+    // offset there, so the reader would stream bytes preflight never bound.
+    let fixture = Fixture::new();
+    let decoy = b"decoy bytes preflight never validated";
+    let payload = vec![b'p'; 4096];
+    let size = payload.len() as u32;
+    let view_start = 38 + 38;
+    let mut view = decoy.to_vec();
+    view.extend_from_slice(&payload[..payload.len() - decoy.len()]);
+    let crc = crc32(&view);
+    let mut data = stored_local_header(crc, size, (38 + decoy.len()) as u16);
+    data.extend(stored_local_header(crc, size, 0));
+    data.extend_from_slice(decoy);
+    assert_eq!(data.len(), view_start + decoy.len());
+    data.extend_from_slice(&payload);
+    let central_offset = data.len();
+    let mut zip64 = vec![1, 0, 24, 0];
+    zip64.extend_from_slice(&(size as u64).to_le_bytes());
+    zip64.extend_from_slice(&(size as u64).to_le_bytes());
+    zip64.extend_from_slice(&38u64.to_le_bytes());
+    data.extend(stored_central_header(crc, size, 0, &zip64));
+    let central_size = data.len() - central_offset;
+    data.extend(end_record(central_offset, central_size));
+    fs::write(fixture.0.join("input/upload.zip"), &data).unwrap();
+
+    // The pre-fix post-open checks (count, name, sizes) all pass, and the
+    // reader yields the decoy view instead of the validated payload.
+    let mut reader = open_unchecked(data);
+    assert_eq!(reader.central_directory_start(), central_offset as u64);
+    let mut member = reader.by_index(0).unwrap();
+    assert_eq!(
+        (member.name_raw(), member.compressed_size(), member.size()),
+        (&b"part.stl"[..], size as u64, size as u64)
+    );
+    assert_eq!(member.header_start(), 38);
+    let mut produced = vec![];
+    std::io::Read::read_to_end(&mut member, &mut produced).unwrap();
+    assert_eq!(produced, view);
+    assert_ne!(produced, payload);
+
+    let error = extract(&fixture).unwrap_err();
+    assert!(
+        matches!(
+            error,
+            ArchiveError::ReaderMismatch(ReaderMismatch::LocalHeaderOffset)
+        ),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "invalid-archive: reader local header offset differs from preflight"
+    );
+    assert!(!fixture.candidate().exists());
+}
+
+#[test]
+fn malformed_extra_field_cannot_divert_the_reader_to_an_earlier_directory() {
+    // The validated central entry ends in a truncated ZIP64 extra header. zip
+    // 8.6 fails to parse it and falls back to an end record hidden in
+    // part.stl's local extra field, indexing a decoy directory (and a decoy
+    // local header) that preflight never walked.
+    let fixture = Fixture::new();
+    let decoy = b"decoy bytes preflight never validated";
+    let payload = vec![b'p'; 512];
+    let size = payload.len() as u32;
+    let mut view = decoy.to_vec();
+    view.extend_from_slice(&payload[..payload.len() - decoy.len()]);
+    let crc = crc32(&view);
+    let decoy_offset = 38;
+    let decoy_central = stored_central_header(crc, size, 38 + 54 + 22, &[]);
+    let mut hidden = decoy_central.clone();
+    hidden.extend(end_record(decoy_offset, decoy_central.len()));
+    hidden.extend(stored_local_header(crc, size, 0));
+    hidden.extend_from_slice(decoy);
+    let mut data = stored_local_header(crc, size, hidden.len() as u16);
+    data.extend(hidden);
+    data.extend_from_slice(&payload);
+    let central_offset = data.len();
+    data.extend(stored_central_header(crc, size, 0, &[1, 0]));
+    let central_size = data.len() - central_offset;
+    data.extend(end_record(central_offset, central_size));
+    fs::write(fixture.0.join("input/upload.zip"), &data).unwrap();
+
+    // Pre-fix preflight treated extra fields as opaque and accepted this
+    // directory; the opened reader then passed the old count/name/size checks
+    // while indexing the decoy directory and streaming the decoy view.
+    let mut reader = open_unchecked(data);
+    assert_eq!(reader.central_directory_start(), decoy_offset as u64);
+    assert_ne!(reader.central_directory_start(), central_offset as u64);
+    assert_eq!(reader.len(), 1);
+    let mut member = reader.by_index(0).unwrap();
+    assert_eq!(
+        (member.name_raw(), member.compressed_size(), member.size()),
+        (&b"part.stl"[..], size as u64, size as u64)
+    );
+    let mut produced = vec![];
+    std::io::Read::read_to_end(&mut member, &mut produced).unwrap();
+    assert_eq!(produced, view);
+    assert_ne!(produced, payload);
+    drop(member);
+
+    let error = extract(&fixture).unwrap_err();
+    assert!(
+        matches!(error, ArchiveError::MalformedExtraField),
+        "{error:?}"
+    );
+    assert_eq!(error.to_string(), "invalid-archive: malformed extra field");
+    assert!(!fixture.candidate().exists());
+}
+
+#[test]
+fn well_formed_extra_fields_are_accepted() {
+    let fixture = Fixture::new();
+    let payload = b"solid part";
+    let size = payload.len() as u32;
+    let crc = crc32(payload);
+    let mut data = stored_local_header(crc, size, 0);
+    data.extend_from_slice(payload);
+    let central_offset = data.len();
+    // Extended timestamp (mtime only), Info-ZIP unix, then an unknown field.
+    let mut extra = vec![0x55, 0x54, 5, 0, 1, 0, 0, 0, 0];
+    extra.extend_from_slice(&[0x75, 0x78, 11, 0, 1, 4, 0xe8, 3, 0, 0, 4, 0xe8, 3, 0, 0]);
+    extra.extend_from_slice(&[0xcd, 0xab, 2, 0, 9, 9]);
+    data.extend(stored_central_header(crc, size, 0, &extra));
+    let central_size = data.len() - central_offset;
+    data.extend(end_record(central_offset, central_size));
+    fs::write(fixture.0.join("input/upload.zip"), &data).unwrap();
+    extract(&fixture).unwrap();
+    assert!(!fixture.candidate().exists());
+}
+
+#[test]
+fn truncated_or_overrunning_extra_records_are_rejected() {
+    let payload = b"solid part";
+    let size = payload.len() as u32;
+    let crc = crc32(payload);
+    let mut short_zip64 = vec![1, 0, 8, 0];
+    short_zip64.extend_from_slice(&0u64.to_le_bytes());
+    let cases: [&[u8]; 6] = [
+        // A record header cut short.
+        &[0xcd, 0xab, 2],
+        // A record whose length overruns the extra field.
+        &[0xcd, 0xab, 9, 0, 1, 2],
+        // An empty extended timestamp.
+        &[0x55, 0x54, 0, 0],
+        // Extended timestamp flags that disagree with its length.
+        &[0x55, 0x54, 9, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+        // NTFS with the wrong length.
+        &[0x0a, 0, 4, 0, 0, 0, 0, 0],
+        // ZIP64 too short to replace every saturated 32-bit value.
+        &short_zip64,
+    ];
+    for (index, extra) in cases.iter().enumerate() {
+        let fixture = Fixture::new();
+        let local_size = if index == 5 { u32::MAX } else { size };
+        let mut data = stored_local_header(crc, local_size, 0);
+        data.extend_from_slice(payload);
+        let central_offset = data.len();
+        let mut central = stored_central_header(crc, size, 0, extra);
+        if index == 5 {
+            // Saturate the central sizes so a ZIP64 field needs 16 bytes.
+            central[20..28].copy_from_slice(&[0xff; 8]);
+            data[18..26].copy_from_slice(&[0xff; 8]);
+        }
+        data.extend(central);
+        let central_size = data.len() - central_offset;
+        data.extend(end_record(central_offset, central_size));
+        fs::write(fixture.0.join("input/upload.zip"), &data).unwrap();
+        let error = extract(&fixture).unwrap_err();
+        assert!(
+            matches!(error, ArchiveError::MalformedExtraField),
+            "case {index}: {error:?}"
+        );
+        assert!(!fixture.candidate().exists());
+    }
 }
 
 #[test]
