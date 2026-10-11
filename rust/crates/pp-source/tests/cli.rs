@@ -45,13 +45,14 @@ impl Fixture {
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
-        fs::remove_dir_all(&self.0).unwrap();
+        let _ = fs::remove_dir_all(&self.0);
     }
 }
 
 // The binary's arguments are fields of its single JSON command on stdin.
-fn invoke(command: &Value) -> Output {
+fn invoke(fixture: &Fixture, command: &Value) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_pp-source"))
+        .current_dir(&fixture.0)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -71,17 +72,22 @@ fn assert_error(output: Output, category: &str) {
     let response: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(response.as_object().unwrap().len(), 1, "{response}");
     let error = response["error"].as_str().unwrap();
-    // Ignore serde's field lists and line/column suffixes, which are diagnostics.
-    assert!(error.starts_with(category), "{error}");
+    // The application owns the category; any suffix is diagnostic text.
+    assert_eq!(
+        error
+            .split_once(": ")
+            .map_or(error, |(category, _)| category),
+        category
+    );
     assert!(output.stderr.is_empty(), "{output:?}");
 }
 
 #[test]
-fn unknown_argument_exits_nonzero_with_unknown_field_category() {
+fn unknown_argument_exits_nonzero_with_invalid_json_category() {
     let fixture = Fixture::new();
     let mut command = fixture.command();
     command["unknownArgument"] = json!(true);
-    assert_error(invoke(&command), "unknown field `unknownArgument`");
+    assert_error(invoke(&fixture, &command), "invalid-json");
     assert!(
         fs::read_dir(fixture.0.join("repos"))
             .unwrap()
@@ -91,11 +97,11 @@ fn unknown_argument_exits_nonzero_with_unknown_field_category() {
 }
 
 #[test]
-fn missing_value_exits_nonzero_with_missing_field_category() {
+fn missing_value_exits_nonzero_with_invalid_json_category() {
     let fixture = Fixture::new();
     let mut command = fixture.command();
     command.as_object_mut().unwrap().remove("inputDir");
-    assert_error(invoke(&command), "missing field `inputDir`");
+    assert_error(invoke(&fixture, &command), "invalid-json");
     assert!(
         fs::read_dir(fixture.0.join("repos"))
             .unwrap()
@@ -109,7 +115,8 @@ fn bad_path_exits_nonzero_with_unsafe_path_category() {
     let fixture = Fixture::new();
     let mut command = fixture.command();
     command["reposDir"] = json!("relative/repos");
-    assert_error(invoke(&command), "unsafe-path");
+    assert_error(invoke(&fixture, &command), "unsafe-path");
+    assert!(!fixture.0.join("relative").exists());
     assert!(
         fs::read_dir(fixture.0.join("repos"))
             .unwrap()
@@ -121,7 +128,7 @@ fn bad_path_exits_nonzero_with_unsafe_path_category() {
 #[test]
 fn success_emits_json_matching_committed_example() {
     let fixture = Fixture::new();
-    let output = invoke(&fixture.command());
+    let output = invoke(&fixture, &fixture.command());
     assert!(output.status.success(), "{output:?}");
     assert!(output.stderr.is_empty(), "{output:?}");
     let actual: Value = serde_json::from_slice(&output.stdout).unwrap();
