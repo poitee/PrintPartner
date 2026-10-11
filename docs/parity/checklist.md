@@ -95,7 +95,7 @@ three proposal tools (`list_pending_actions`, `confirm_apply`,
 | `propose_rebuild_plan` | pp-domain | TBD | TBD | missing | — |
 | `propose_apply_plan_draft` | pp-domain | TBD | TBD | missing | — |
 | `find_filament_matches` | pp-domain | TBD | TBD | missing | — |
-| `get_kit_catalog` | pp-domain | TBD | TBD | missing | [golden-eval](web/apps/server/src/assistant/golden-eval.fixtures.ts) |
+| `get_kit_catalog` | pp-domain | TBD | TBD | missing | [golden-eval](../../web/apps/server/src/assistant/golden-eval.fixtures.ts) |
 | `list_sources` | pp-source | TBD | TBD | missing | — |
 | `list_source_categories` | pp-source | TBD | TBD | missing | — |
 | `propose_set_source_category` | pp-source | TBD | TBD | missing | — |
@@ -112,11 +112,11 @@ three proposal tools (`list_pending_actions`, `confirm_apply`,
 | `propose_verify_printer_checkoff` | pp-drivers | TBD | TBD | missing | — |
 | `get_plan_review` | pp-domain | TBD | TBD | missing | — |
 | `get_workflow_help` | pp-server | TBD | TBD | missing | — |
-| `list_example_builds` | pp-domain | TBD | TBD | missing | [golden-eval](web/apps/server/src/assistant/golden-eval.fixtures.ts) |
+| `list_example_builds` | pp-domain | TBD | TBD | missing | [golden-eval](../../web/apps/server/src/assistant/golden-eval.fixtures.ts) |
 | `get_source_docs` | pp-source | TBD | TBD | missing | — |
 | `propose_source_mapping` | pp-source | TBD | TBD | missing | — |
-| `apply_stack_preset` | pp-domain | TBD | TBD | missing | [golden-eval](web/apps/server/src/assistant/golden-eval.fixtures.ts) |
-| `set_base` | pp-domain | TBD | TBD | missing | [golden-eval](web/apps/server/src/assistant/golden-eval.fixtures.ts) |
+| `apply_stack_preset` | pp-domain | TBD | TBD | missing | [golden-eval](../../web/apps/server/src/assistant/golden-eval.fixtures.ts) |
+| `set_base` | pp-domain | TBD | TBD | missing | [golden-eval](../../web/apps/server/src/assistant/golden-eval.fixtures.ts) |
 | `set_source_git_ref` | pp-source | TBD | TBD | missing | — |
 | `add_addon` | pp-domain | TBD | TBD | missing | — |
 | `remove_layer` | pp-domain | TBD | TBD | missing | — |
