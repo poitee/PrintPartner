@@ -71,7 +71,9 @@ fn main() -> Result<()> {
             )?;
             assert_eq!(reply.recv()??, outcome);
         }
-        owner.backup(&directory.with_extension("backup.db"))?;
+        if args[1] == "settings" {
+            owner.backup(&directory.with_extension("backup.db"))?;
+        }
     }
     println!("{}", serde_json::to_string(&ready)?);
     io::stdout().flush()?;
