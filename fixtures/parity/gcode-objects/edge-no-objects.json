@@ -1,0 +1,18 @@
+{
+  "source": [
+    "web/apps/server/src/services/gcode-object-parser.ts",
+    "web/packages/domain/src/sliced-object-matching.ts"
+  ],
+  "origin": "edge: no objects on the plate",
+  "input": {
+    "names": [],
+    "libraryFilenames": [
+      "bracket.stl",
+      "z_tensioner_left.stl"
+    ]
+  },
+  "expected": {
+    "groups": [],
+    "matches": []
+  }
+}

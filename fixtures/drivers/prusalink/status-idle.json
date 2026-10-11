@@ -1,0 +1,15 @@
+{
+  "status": 200,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "printer": {
+      "state": "READY",
+      "temp_nozzle": 24.5,
+      "target_nozzle": 0,
+      "temp_bed": 23,
+      "target_bed": 0
+    }
+  }
+}
