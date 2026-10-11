@@ -55,6 +55,10 @@ jobs:
           mkdir -p "$PP_EVIDENCE"
           uname -a > "$PP_EVIDENCE/runner.txt"
           git rev-parse HEAD > "$PP_EVIDENCE/head.txt"
+      - name: Run rust/scripts self-tests
+        run: |
+          python3 rust/scripts/gateway-operations.py rust/crates/pp-gateway/operations.json --self-test 2>&1 | tee "$PP_EVIDENCE/gateway-operations-self-tests.log"
+          python3 rust/scripts/native-process-probe.py --self-test 2>&1 | tee "$PP_EVIDENCE/native-process-probe-self-tests.log"
       - uses: actions/setup-node@v7
         with:
           node-version: '24.21.0'
