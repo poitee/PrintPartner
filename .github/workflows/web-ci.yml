@@ -7,6 +7,7 @@ on:
     branches: [main, master]
     paths:
       - "web/**"
+      - "fixtures/drivers/bambu/**"
       - "scripts/**"
       - "manifests/**"
       - "docs/**"
@@ -29,6 +30,7 @@ on:
   pull_request:
     paths:
       - "web/**"
+      - "fixtures/drivers/bambu/**"
       - "scripts/**"
       - "manifests/**"
       - "docs/**"
@@ -55,14 +57,18 @@ permissions:
 jobs:
   web:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v7
+      - name: Check GitHub Actions are SHA-pinned
+        working-directory: .
+        run: bash scripts/check-github-actions-pinned.sh
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
           cache: npm
@@ -71,6 +77,15 @@ jobs:
         run: npm ci
       - name: Check workaround ratchet
         run: node ../scripts/workaround-ratchet.mjs && node --test ../scripts/workaround-ratchet.test.mjs
+      - name: Check MCP tool inventory golden
+        run: |
+          npm run mcp:inventory -w @print-partner/server
+          golden=apps/server/fixtures/mcp/tools-inventory.json
+          if [ -n "$(git status --porcelain -- "$golden")" ]; then
+            git --no-pager diff -- "$golden"
+            echo "::error file=web/$golden::MCP tool inventory drifted. Run 'npm run mcp:inventory -w @print-partner/server' in web/ and commit the result."
+            exit 1
+          fi
       - name: Audit high-severity vulnerabilities
         run: npm audit --audit-level=high
       - name: Full quality suite
@@ -81,8 +96,9 @@ jobs:
   docker:
     needs: web
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Validate Compose definitions
