@@ -142,59 +142,118 @@ function fieldLabelPattern(label) {
   return escaped;
 }
 
-/** A line that starts the next template field (or the heading after the section). */
-const FIELD_BOUNDARY = new RegExp(
-  `^(?:[ \\t]*[-*][ \\t]*(?:${Object.values(FIELD_LABELS).map(fieldLabelPattern).join("|")})[ \\t]*:|[-*][ \\t]|[ \\t]*Exemption[ \\t]*:|[ \\t]*##[ \\t]+)`,
+/** Any Markdown list marker: bullet (-, *, +) or ordered (1. / 1)). */
+const LIST_MARKER = "(?:[-*+]|\\d{1,9}[.)])";
+
+const LABEL_LINE = new RegExp(
+  `^([ \\t]*)(${LIST_MARKER})([ \\t]*)(${Object.values(FIELD_LABELS).map(fieldLabelPattern).join("|")})[ \\t]*:[ \\t]*(.*)$`,
   "i",
 );
 
+/** A line that ends any field regardless of indentation. */
+const EXEMPTION_START = /^[ \t]*Exemption[ \t]*:/i;
+
 /**
- * Locate a template field in comment-free section text. Returns its value
- * (same line plus following freeform lines, nested bullets included) and the
- * span it occupies, so callers can read or cut the same text.
+ * Blocks that interrupt a paragraph and, outside a list item's content column,
+ * end the item: list items of any marker, ATX headings, blockquotes, thematic
+ * breaks, and HTML blocks.
  */
-function findField(cleaned, label) {
-  const labeled = cleaned.match(
-    new RegExp(`^[ \\t]*[-*][ \\t]*${fieldLabelPattern(label)}[ \\t]*:[ \\t]*(.*)$`, "im"),
-  );
-  if (!labeled) return null;
-  const sameLine = labeled[1].trim();
-  const lines = sameLine ? [sameLine] : [];
-  const valueEnd = labeled.index + labeled[0].length;
-  let end = valueEnd;
-  // The first segment is the rest of the label line, which the match already holds.
-  const tail = cleaned.slice(valueEnd).split("\n").slice(1);
-  // Blank lines stay inside the span: a later paragraph of the reason is still
-  // reason text. Only a template label, an unindented bullet, or a heading ends it.
-  for (const line of tail) {
-    if (FIELD_BOUNDARY.test(line)) break;
-    const trimmed = line.trim();
-    if (trimmed) lines.push(trimmed);
-    end += line.length + 1;
-  }
-  return {
-    value: lines.join(" ").trim(),
-    start: labeled.index,
-    end,
-  };
+const BLOCK_START = new RegExp(
+  `^[ \\t]*(?:${LIST_MARKER}(?:[ \\t]|$)|#{1,6}(?:[ \\t]|$)|>|(?:[-*_][ \\t]*){3,}$|</?(?:address|article|aside|blockquote|details|dialog|div|dl|figure|footer|form|h[1-6]|header|hr|li|main|nav|ol|p|pre|script|section|style|summary|table|tbody|td|textarea|th|thead|tr|ul)(?:[\\s/>]|$))`,
+  "i",
+);
+
+/** Indentation width of a line prefix (tabs to the next stop of 4). */
+function indentWidth(prefix) {
+  let width = 0;
+  for (const ch of prefix) width = ch === "\t" ? width + 4 - (width % 4) : width + 1;
+  return width;
+}
+
+function labelKey(text) {
+  const lower = text.toLowerCase();
+  return Object.values(FIELD_LABELS).find((label) => lower.startsWith(label.toLowerCase()));
 }
 
 /**
- * Read a template field value (same line and optional following freeform lines).
+ * Split comment-free section text into template fields in one pass. A field is
+ * its label line plus every line that belongs to that list item in Markdown:
+ * lazy continuation lines and, after a blank line, blocks indented to the
+ * item's content column (nested lists, later paragraphs). It ends at the next
+ * field label, the Exemption line, a blank-separated block left of the content
+ * column, or any outer list item, heading, blockquote, rule, or HTML block.
+ */
+function parseFields(cleaned) {
+  const fields = [];
+  let current = null;
+  let blankSeen = false;
+  let offset = 0;
+  for (const line of cleaned.split("\n")) {
+    const lineStart = offset;
+    offset += line.length + 1;
+    const end = Math.min(offset, cleaned.length);
+
+    const labeled = line.match(LABEL_LINE);
+    if (labeled) {
+      const [, lead, marker, gap, label, rest] = labeled;
+      const markerEnd = indentWidth(lead + " ".repeat(marker.length));
+      const gapWidth = indentWidth(lead + " ".repeat(marker.length) + gap) - markerEnd;
+      current = {
+        label: labelKey(label),
+        contentIndent: markerEnd + (gapWidth >= 1 && gapWidth <= 4 ? gapWidth : 1),
+        lines: rest.trim() ? [rest.trim()] : [],
+        start: lineStart,
+        end,
+      };
+      fields.push(current);
+      blankSeen = false;
+      continue;
+    }
+    if (!current) continue;
+
+    const trimmed = line.trim();
+    if (!trimmed) {
+      blankSeen = true;
+      continue;
+    }
+    const outer = indentWidth(line.match(/^[ \t]*/)[0]) < current.contentIndent;
+    if (EXEMPTION_START.test(line) || (outer && (blankSeen || BLOCK_START.test(line)))) {
+      current = null;
+      continue;
+    }
+    current.lines.push(trimmed);
+    current.end = end;
+    blankSeen = false;
+  }
+  return fields.map(({ label, lines, start, end }) => ({
+    label,
+    value: lines.join(" ").trim(),
+    start,
+    end,
+  }));
+}
+
+/**
+ * Read a template field value (same line and the lines that belong to it).
  */
 function readField(sectionText, label) {
-  return findField(stripHtmlComments(sectionText), label)?.value ?? "";
+  return (
+    parseFields(stripHtmlComments(sectionText)).find((field) => field.label === label)
+      ?.value ?? ""
+  );
 }
 
 /** Section text with HTML comments removed and the given fields cut out. */
 function withoutFields(sectionText, labels) {
-  let text = stripHtmlComments(sectionText);
-  for (const label of labels) {
-    for (let field = findField(text, label); field; field = findField(text, label)) {
-      text = text.slice(0, field.start) + text.slice(field.end);
-    }
+  const text = stripHtmlComments(sectionText);
+  let kept = "";
+  let cursor = 0;
+  for (const field of parseFields(text)) {
+    if (!labels.includes(field.label)) continue;
+    kept += text.slice(cursor, field.start);
+    cursor = field.end;
   }
-  return text;
+  return kept + text.slice(cursor);
 }
 
 function extractExemptionReason(sectionText) {
@@ -206,27 +265,84 @@ const NON_ARTIFACT_WORD =
   /^(?:evidence|screenshot|recording|verify-skill|trace|output|n\/?a|none|tbd|todo)$/i;
 
 /**
+ * Inline code spans in document order. Linear scan: each backtick run opens a
+ * span closed by the next run of the same length; unmatched runs are literal.
+ */
+function codeSpans(value) {
+  const runs = [...value.matchAll(/`+/g)].map((m) => ({ at: m.index, len: m[0].length }));
+  const byLength = new Map();
+  runs.forEach((run, index) => {
+    if (!byLength.has(run.len)) byLength.set(run.len, { indexes: [], next: 0 });
+    byLength.get(run.len).indexes.push(index);
+  });
+  const spans = [];
+  for (let i = 0; i < runs.length; i += 1) {
+    const same = byLength.get(runs[i].len);
+    while (same.next < same.indexes.length && same.indexes[same.next] <= i) same.next += 1;
+    if (same.next === same.indexes.length) continue;
+    const close = same.indexes[same.next];
+    spans.push(value.slice(runs[i].at + runs[i].len, runs[close].at));
+    i = close;
+  }
+  return spans;
+}
+
+/**
  * Inline code counts only when it holds a command, path, or output: something
  * with whitespace or path/URL punctuation that is not a bare category word.
  */
 function hasSubstantiveCodeSpan(value) {
-  for (const span of value.matchAll(/(`+)([\s\S]*?[^`])\1(?!`)/g)) {
-    const content = span[2].trim();
-    if (content && !NON_ARTIFACT_WORD.test(content) && /[\s/.:=]/.test(content)) {
-      return true;
-    }
-  }
-  return false;
+  return codeSpans(value).some((span) => {
+    const content = span.trim();
+    return content && !NON_ARTIFACT_WORD.test(content) && /[\s/.:=]/.test(content);
+  });
 }
+
+/** File extensions for screenshots, recordings, traces, logs, and archives. */
+const ARTIFACT_EXTENSION =
+  /\.(?:png|jpe?g|gif|webp|avif|svg|bmp|heic|mp4|webm|mov|mkv|avi|json|jsonl|ndjson|har|txt|log|md|html?|csv|xml|ya?ml|pdf|zip|gz|tgz|tar|7z)$/i;
+
+/**
+ * A concrete file path: a known artifact extension, or a directory path ending
+ * in a file name with an extension (`evidence/run-42/out.trace`).
+ */
+function isArtifactPath(token) {
+  if (!/^[\w.@%+~/-]+$/.test(token) || /^\.*$/.test(token)) return false;
+  const name = token.slice(token.lastIndexOf("/") + 1);
+  if (!name || NON_ARTIFACT_WORD.test(name)) return false;
+  return ARTIFACT_EXTENSION.test(name) || (token.includes("/") && /\.[a-z][a-z0-9]{0,7}$/i.test(name));
+}
+
+function mentionsArtifactPath(value) {
+  return value
+    .split(/\s+/)
+    .map((token) => token.replace(/^[(<"'`]+|[)>"'`.,;:!?]+$/g, ""))
+    .some(isArtifactPath);
+}
+
+const HTTP_URL = /https?:\/\/[^\s/?#<>()"'`]+/i;
+
+/** A link destination that identifies something: a web URL or a file path. */
+function isConcreteTarget(destination) {
+  const target = destination.replace(/^<|>$/g, "").trim();
+  return /^https?:\/\/[^\s/?#<>]+/i.test(target) || isArtifactPath(target);
+}
+
+/** Markdown links and images (no nested brackets); bounded per line. */
+const MARKDOWN_LINK = /!?\[([^[\]\n]*)\]\((<[^<>\n]*>|[^()\s]*)(?:[ \t]+"[^"\n]*")?\)/g;
 
 function looksLikeArtifact(value) {
   if (!value) return false;
-  if (/!\[[^\]]*]\([^)]+\)/.test(value)) return true;
-  if (/\[[^\]]+]\([^)]+\)/.test(value)) return true;
-  if (/https?:\/\/\S+/i.test(value)) return true;
-  if (hasSubstantiveCodeSpan(value)) return true;
-  // Paths / filenames commonly used for verify traces and screenshots.
-  return /\.(?:png|jpe?g|gif|webp|mp4|webm|mov|json|txt|log|md)\b/i.test(value);
+  let concreteLink = false;
+  // A link counts by its destination; its text alone never makes it evidence.
+  const rest = value.replace(MARKDOWN_LINK, (_, _text, destination) => {
+    if (isConcreteTarget(destination)) concreteLink = true;
+    return " ";
+  });
+  if (concreteLink) return true;
+  if (HTTP_URL.test(rest)) return true;
+  if (hasSubstantiveCodeSpan(rest)) return true;
+  return mentionsArtifactPath(rest);
 }
 
 /** Section text outside every template field and the Exemption line. */

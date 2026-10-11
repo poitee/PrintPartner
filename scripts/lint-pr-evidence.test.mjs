@@ -586,3 +586,153 @@ Exemption: docs-only
 `);
   assert.equal(result.ok, true, result.errors.join("; "));
 });
+
+test("ignores a URL in a later indented paragraph of the Exemption reason (Codex P1 / Bugbot: blank lines truncate field values)", () => {
+  const result = lintPrEvidence(
+    bodyWithEvidence(`Exemption: none
+- Exemption reason: context only
+
+  See https://example.test/context.png
+
+- Steps followed to produce the evidence: opened local
+- Result observed: rendered
+- Screenshot / recording / verify-skill output or trace:
+`),
+  );
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /Evidence is incomplete/);
+});
+
+test("allows a LAN mention in a later indented paragraph of the Exemption reason (Bugbot: blank lines truncate field values)", () => {
+  const result = lintPrEvidence(
+    bodyWithEvidence(`Exemption: docs-only
+- Exemption reason: Document the prohibited hosts.
+
+  http://192.168.1.80:8080 must never be used for verify.
+`),
+  );
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+
+test("reads a multi-paragraph artifact field whole (Bugbot: blank lines truncate field values)", () => {
+  const result = lintPrEvidence(
+    bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: opened local
+- Result observed: rendered
+- Screenshot / recording / verify-skill output or trace: see below
+
+  https://example.test/evidence.png
+`),
+  );
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+
+for (const marker of ["+", "1.", "2)"]) {
+  test(`fails when a "${marker}" list item after the reason targets .80/.81 (Codex P1: every list marker is a field boundary)`, () => {
+    const result = lintPrEvidence(
+      bodyWithEvidence(`Exemption: docs-only
+- Exemption reason: Update docs.
+${marker} Verification target: http://192.168.1.80:8080
+`),
+    );
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join("\n"), /\.80\/\.81/);
+  });
+}
+
+for (const artifact of ["[screenshot](#)", "[evidence](TODO)", "[evidence.png](#)", "![screenshot](tbd)", "[trace](<>)"]) {
+  test(`fails when the artifact is the placeholder link ${artifact} (Codex P1: placeholder Markdown links)`, () => {
+    const result = lintPrEvidence(
+      bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: opened local
+- Result observed: rendered
+- Screenshot / recording / verify-skill output or trace: ${artifact}
+`),
+    );
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join("\n"), /Evidence is incomplete/);
+  });
+}
+
+for (const artifact of ["[run](https://example.test/run/1)", "![shot](./evidence/shot.png)", "[trace](evidence/trace.zip)"]) {
+  test(`passes when the artifact is the concrete link ${artifact} (Codex P1: placeholder Markdown links)`, () => {
+    const result = lintPrEvidence(
+      bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: opened local
+- Result observed: rendered
+- Screenshot / recording / verify-skill output or trace: ${artifact}
+`),
+    );
+    assert.equal(result.ok, true, result.errors.join("; "));
+  });
+}
+
+for (const artifact of ["evidence/trace.zip", "recording.mkv", "screenshot.svg"]) {
+  test(`passes when the artifact is the path ${artifact} (Codex P2: artifact paths outside the extension shortlist)`, () => {
+    const result = lintPrEvidence(
+      bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: opened local
+- Result observed: rendered
+- Screenshot / recording / verify-skill output or trace: ${artifact}
+`),
+    );
+    assert.equal(result.ok, true, result.errors.join("; "));
+  });
+}
+
+test("scans long unmatched backtick and bracket runs in linear time (Codex P1: bound inline-code scanning)", () => {
+  for (const noise of ["`".repeat(60000), "` `` ".repeat(12000), "[".repeat(60000), "[a](".repeat(15000)]) {
+    const started = performance.now();
+    const result = lintPrEvidence(
+      bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: opened local
+- Result observed: rendered
+- Screenshot / recording / verify-skill output or trace: ${noise}
+`),
+    );
+    const elapsed = performance.now() - started;
+    assert.equal(result.ok, false);
+    assert.ok(elapsed < 1000, `lint took ${Math.round(elapsed)} ms for ${noise.slice(0, 8)}...`);
+  }
+});
+
+test("ends the Exemption reason at an outer blockquote that targets .80/.81 (Codex P1: every list marker is a field boundary)", () => {
+  const result = lintPrEvidence(
+    bodyWithEvidence(`Exemption: docs-only
+- Exemption reason: Update docs.
+> Verified against http://192.168.1.80:8080
+`),
+  );
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /\.80\/\.81/);
+});
+
+test("keeps a heading inside the Exemption reason's content column in the reason (Bugbot: blank lines truncate field values)", () => {
+  const result = lintPrEvidence(
+    bodyWithEvidence(`Exemption: none
+- Exemption reason: context only
+
+  ### Background
+
+  https://example.test/context.png
+
+- Steps followed to produce the evidence: opened local
+- Result observed: rendered
+- Screenshot / recording / verify-skill output or trace:
+`),
+  );
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /Evidence is incomplete/);
+});
+
+test("ends an ordered-list field at an unindented paragraph after a blank line (Bugbot: blank lines truncate field values)", () => {
+  const result = lintPrEvidence(
+    bodyWithEvidence(`Exemption: docs-only
+1. Exemption reason: Update docs.
+
+  Verified against http://192.168.1.80:8080
+`),
+  );
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /\.80\/\.81/);
+});
