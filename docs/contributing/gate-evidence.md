@@ -38,8 +38,9 @@ lightweight lint on every pull request body:
 - Fail when the `## Evidence` section is missing.
 - Fail when `Exemption: none` lacks Steps followed (nested bullets are fine),
   Result observed, and a concrete artifact: a URL, a file path such as
-  `trace.json`, a Markdown link or image, or inline code. A journey name, a bare
-  category word such as `screenshot`, and Exemption reason text do not count.
+  `trace.json`, a Markdown link or image, or inline code holding a command, path,
+  or output. A journey name, a bare category word such as `screenshot` (with or
+  without backticks), and Exemption reason text do not count.
 - Fail when `Exemption:` is still the template placeholder, unknown, or a named
   exemption without a non-empty reason.
 - Fail when any verification content (Journey, Steps, Result, artifact, or other

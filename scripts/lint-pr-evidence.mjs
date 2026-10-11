@@ -203,12 +203,30 @@ function extractExemptionReason(sectionText) {
   return readField(sectionText, FIELD_LABELS.reason);
 }
 
+/** Category names and placeholders that say what an artifact is without being one. */
+const NON_ARTIFACT_WORD =
+  /^(?:evidence|screenshot|recording|verify-skill|trace|output|n\/?a|none|tbd|todo)$/i;
+
+/**
+ * Inline code counts only when it holds a command, path, or output: something
+ * with whitespace or path/URL punctuation that is not a bare category word.
+ */
+function hasSubstantiveCodeSpan(value) {
+  for (const span of value.matchAll(/(`+)([\s\S]*?[^`])\1(?!`)/g)) {
+    const content = span[2].trim();
+    if (content && !NON_ARTIFACT_WORD.test(content) && /[\s/.:=]/.test(content)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function looksLikeArtifact(value) {
   if (!value) return false;
   if (/!\[[^\]]*]\([^)]+\)/.test(value)) return true;
   if (/\[[^\]]+]\([^)]+\)/.test(value)) return true;
   if (/https?:\/\/\S+/i.test(value)) return true;
-  if (/`[^`]+`/.test(value)) return true;
+  if (hasSubstantiveCodeSpan(value)) return true;
   // Paths / filenames commonly used for verify traces and screenshots.
   return /\.(?:png|jpe?g|gif|webp|mp4|webm|mov|json|txt|log|md)\b/i.test(value);
 }

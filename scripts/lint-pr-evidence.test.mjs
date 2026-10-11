@@ -309,6 +309,48 @@ for (const artifact of ["evidence", "screenshot", "recording", "verify-skill"]) 
   });
 }
 
+for (const artifact of [
+  "`screenshot`",
+  "`evidence`",
+  "`recording`",
+  "`verify-skill`",
+  "`` `screenshot` ``",
+  "`ok`",
+]) {
+  test(`fails when the artifact is only inline code ${artifact} with no real content (Codex P1: backticked category words)`, () => {
+    const result = lintPrEvidence(
+      bodyWithEvidence(`Exemption: none
+
+- Journey exercised: Library
+- Steps followed to produce the evidence: opened local instance, clicked Builds
+- Result observed: table rendered
+- Screenshot / recording / verify-skill output or trace: ${artifact}
+`),
+    );
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join("\n"), /Evidence is incomplete/);
+  });
+}
+
+for (const artifact of [
+  "`node --test scripts/lint-pr-evidence.test.mjs`",
+  "`evidence/run-42/trace`",
+  "`tests 37 pass 37 fail 0`",
+]) {
+  test(`passes when the artifact is substantive inline code ${artifact} (Codex P1: backticked category words)`, () => {
+    const result = lintPrEvidence(
+      bodyWithEvidence(`Exemption: none
+
+- Journey exercised: Library
+- Steps followed to produce the evidence: opened local instance, clicked Builds
+- Result observed: table rendered
+- Screenshot / recording / verify-skill output or trace: ${artifact}
+`),
+    );
+    assert.equal(result.ok, true, result.errors.join("; "));
+  });
+}
+
 test("ignores URLs inside a multiline Exemption reason when looking for an artifact (Codex P2)", () => {
   const result = lintPrEvidence(
     bodyWithEvidence(`Exemption: none
