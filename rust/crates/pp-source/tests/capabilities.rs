@@ -463,3 +463,115 @@ fn canonical_folder_overlap_is_rejected_without_publishing_and_retry_can_recover
     assert_eq!(second.files, first.files);
     assert_eq!(second.manifest_digest, first.manifest_digest);
 }
+
+/// Writes a revision the way the earlier lowercase path rule published it.
+fn write_legacy_revision(fixture: &Fixture, key: &str, names: &[&str]) -> PathBuf {
+    use sha2::{Digest, Sha256};
+
+    let revision = fixture.0.join("repos/42/revisions").join(key);
+    let mut files: Vec<_> = names
+        .iter()
+        .map(|name| {
+            let path = revision.join(name);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, name.as_bytes()).unwrap();
+            pp_source::ContentFile {
+                path: SourcePath::try_from((*name).to_owned()).unwrap(),
+                kind: FileKind::Stl,
+                size_bytes: name.len() as u64,
+                sha256: hex::encode(Sha256::digest(name.as_bytes())),
+            }
+        })
+        .collect();
+    files.sort_by(|a, b| {
+        a.path
+            .as_str()
+            .encode_utf16()
+            .cmp(b.path.as_str().encode_utf16())
+    });
+    let manifest = serde_json::json!({
+        "version": 1,
+        "upstreamRevisionKey": key,
+        "manifestDigest": hex::encode(Sha256::digest(serde_json::to_vec(&files).unwrap())),
+        "selection": {"maxStlFiles": 500, "maxDocumentationBytes": 1000, "omittedFiles": []},
+        "files": files,
+    });
+    fs::write(
+        revision.join(pp_source::MANIFEST),
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    revision
+}
+
+#[test]
+fn legacy_ambiguous_revision_reports_permanent_migration_error_and_is_retained() {
+    let fixture = Fixture::new();
+    let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+    let mut source = fixture.repos().source(42).unwrap();
+    for names in [
+        &["Straße.stl", "STRASSE.stl"][..],
+        &["Straße/a.stl", "STRASSE/b.stl"][..],
+        &["Σ.stl", "ς.stl"][..],
+    ] {
+        let revision = write_legacy_revision(&fixture, "legacy-ambiguous", names);
+        let inventory = || {
+            let mut entries: Vec<_> = names
+                .iter()
+                .map(|name| fs::read(revision.join(name)).unwrap())
+                .collect();
+            entries.push(fs::read(revision.join(pp_source::MANIFEST)).unwrap());
+            entries
+        };
+        let before = inventory();
+        let mut retry = request();
+        retry.upstream_revision_key = "legacy-ambiguous".into();
+        for _ in 0..2 {
+            let error = source
+                .materialize(retry.clone(), &input, budget())
+                .unwrap_err();
+            assert!(
+                matches!(&error, pp_source::Error::AmbiguousRevision(key) if key == "legacy-ambiguous"),
+                "{names:?}: {error:?}"
+            );
+            assert_eq!(error.category(), "ambiguous-revision");
+            let message = error.to_string();
+            assert!(message.starts_with("ambiguous-revision: "), "{message}");
+            assert!(message.contains("legacy-ambiguous"), "{message}");
+            assert!(message.contains("new revision key"), "{message}");
+        }
+        assert_eq!(inventory(), before);
+        assert!(
+            !revision
+                .parent()
+                .unwrap()
+                .join(".pp-source-candidate")
+                .exists()
+        );
+        fs::remove_dir_all(&revision).unwrap();
+    }
+}
+
+#[test]
+fn ambiguous_names_keep_generic_errors_unless_the_revision_is_an_intact_legacy_publication() {
+    let fixture = Fixture::new();
+    let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+    let mut source = fixture.repos().source(42).unwrap();
+    let mut retry = request();
+    retry.upstream_revision_key = "legacy-ambiguous".into();
+    // The earlier rule also rejected this pair, so it was never a publication.
+    let revision = write_legacy_revision(&fixture, "legacy-ambiguous", &["a.stl", "A.stl"]);
+    assert!(matches!(
+        source.materialize(retry.clone(), &input, budget()),
+        Err(pp_source::Error::DuplicatePath)
+    ));
+    fs::remove_dir_all(&revision).unwrap();
+    // A tampered legacy-ambiguous revision is corruption, not a policy break.
+    let revision =
+        write_legacy_revision(&fixture, "legacy-ambiguous", &["Straße.stl", "STRASSE.stl"]);
+    fs::write(revision.join("Straße.stl"), b"tampered!!").unwrap();
+    assert!(matches!(
+        source.materialize(retry, &input, budget()),
+        Err(pp_source::Error::CorruptSnapshot)
+    ));
+}

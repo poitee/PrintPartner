@@ -139,8 +139,8 @@ fn cli_invalid_revision_cleans_extraction_and_preserves_published_snapshot() {
         serde_json::json!({"error": "invalid-identity"})
     );
     assert!(!fixture.candidate().exists());
-    let archive_parent = File::open(fixture.candidate().parent().unwrap()).unwrap();
-    archive_parent.try_lock_exclusive().unwrap();
+    let source_lock = File::open(fixture.0.join("repos/42/revisions")).unwrap();
+    source_lock.try_lock_exclusive().unwrap();
     assert_eq!(
         published_files.map(|name| fs::read(published.join(name)).unwrap()),
         retained
@@ -479,4 +479,107 @@ fn decomposed_archive_names_reject_without_normalizing_published_paths() {
         Err(ArchiveError::UnsafeEntry)
     ));
     assert!(!fixture.candidate().exists());
+}
+
+fn local_request(key: &str) -> SnapshotRequest {
+    SnapshotRequest {
+        upstream_revision_key: key.into(),
+        files: vec![SelectedFile {
+            path: SourcePath::try_from("part.stl".to_owned()).unwrap(),
+            kind: FileKind::Stl,
+            size_hint_bytes: None,
+        }],
+        selection: Selection {
+            max_stl_files: 500,
+            max_documentation_bytes: 1024,
+            omitted_files: vec![],
+        },
+    }
+}
+
+#[test]
+fn peer_materialize_waits_until_live_archive_readiness_is_discarded() {
+    let fixture = Fixture::new();
+    fixture.zip(1);
+    fs::write(fixture.0.join("input/part.stl"), b"peer bytes").unwrap();
+    let mut owner = fixture.tenant().source(42).unwrap();
+    let extracted = owner
+        .extract_zip(
+            fixture.input(),
+            ArchiveLimits::default(),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    let revisions = fixture.0.join("repos/42/revisions");
+    let finished = Arc::new(AtomicBool::new(false));
+    let peer = {
+        let mut peer = fixture.tenant().source(42).unwrap();
+        let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+        let finished = finished.clone();
+        thread::spawn(move || {
+            let result = peer.materialize(
+                local_request("peer"),
+                &input,
+                ArtifactBudget::new(1_000_000, 1_000_000).unwrap(),
+            );
+            finished.store(true, Ordering::Release);
+            result
+        })
+    };
+    // The peer's candidate must not stack on top of the live archive stage.
+    thread::sleep(Duration::from_millis(500));
+    assert!(!finished.load(Ordering::Acquire));
+    assert!(!revisions.join(".pp-source-candidate").exists());
+    assert!(!revisions.join("peer").exists());
+    // The owning handle materializes under the lock it already holds.
+    let owned = owner
+        .materialize(
+            local_request("owned"),
+            extracted.files(),
+            ArtifactBudget::new(1_000_000, 1_000_000).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(owned.files[0].size_bytes, 65536);
+    assert!(!finished.load(Ordering::Acquire));
+    extracted.discard().unwrap();
+    let peer = peer.join().unwrap().unwrap();
+    assert!(!fixture.candidate().exists());
+    assert_eq!(
+        fs::read(revisions.join("peer/part.stl")).unwrap(),
+        b"peer bytes"
+    );
+    assert_eq!(peer.files[0].size_bytes, 10);
+}
+
+#[test]
+fn extraction_is_busy_while_a_peer_holds_the_source_revisions_lock() {
+    use fs2::FileExt;
+
+    let fixture = Fixture::new();
+    fixture.zip(1);
+    let mut source = fixture.tenant().source(42).unwrap();
+    // A peer process mid-materialize holds this lock on its own descriptor.
+    let peer = File::open(fixture.0.join("repos/42/revisions")).unwrap();
+    peer.lock_exclusive().unwrap();
+    assert!(matches!(
+        source.extract_zip(
+            fixture.input(),
+            ArchiveLimits::default(),
+            &AtomicBool::new(false)
+        ),
+        Err(ArchiveError::Busy)
+    ));
+    assert!(!fixture.candidate().exists());
+    FileExt::unlock(&peer).unwrap();
+    let extracted = source
+        .extract_zip(
+            fixture.input(),
+            ArchiveLimits::default(),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    assert!(peer.try_lock_exclusive().is_err());
+    drop(extracted);
+    assert!(!fixture.candidate().exists());
+    peer.try_lock_exclusive().unwrap();
 }

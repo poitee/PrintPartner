@@ -13,6 +13,10 @@ use std::{
     fmt,
     io::{self, Read, Write},
     path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 use unicode_normalization::UnicodeNormalization;
 
@@ -32,6 +36,11 @@ pub enum Error {
     DuplicatePath,
     Limit,
     CorruptSnapshot,
+    /// An intact revision published under the earlier lowercase path rule
+    /// contains names that now collide under full Unicode case folding. It is
+    /// permanent, not transient: the revision is retained unchanged and can
+    /// never be reused. Publish the corrected file set under a new revision key.
+    AmbiguousRevision(String),
     Io(io::Error),
     Json(serde_json::Error),
 }
@@ -40,6 +49,12 @@ impl fmt::Display for Error {
         match self {
             Self::Io(error) => write!(f, "io: {error}"),
             Self::Json(error) => write!(f, "invalid-json: {error}"),
+            Self::AmbiguousRevision(key) => write!(
+                f,
+                "ambiguous-revision: published revision {key} has paths that collide under \
+                 Unicode case folding; it is retained but cannot be reused, publish the \
+                 corrected files under a new revision key"
+            ),
             _ => write!(f, "{}", self.category()),
         }
     }
@@ -61,6 +76,7 @@ impl Error {
             Self::DuplicatePath => "duplicate-path",
             Self::Limit => "limit",
             Self::CorruptSnapshot => "corrupt-snapshot",
+            Self::AmbiguousRevision(_) => "ambiguous-revision",
             Self::Io(_) => "io",
             Self::Json(_) => "invalid-json",
         }
@@ -204,6 +220,8 @@ pub struct SourceRoot {
     tenant_id: String,
     source_id: u64,
     revisions: Directory,
+    /// Set while an `ExtractedArchive` from this handle holds the revisions lock.
+    archive_lock: Arc<AtomicBool>,
 }
 pub struct LocalFiles {
     root: Directory,
@@ -245,6 +263,7 @@ impl TenantRepos {
                 .root
                 .child(&source_id.to_string(), true)?
                 .child("revisions", true)?,
+            archive_lock: Arc::default(),
         })
     }
 }
@@ -271,6 +290,34 @@ fn validate_revision(key: &str) -> Result<()> {
 fn compare_paths(a: &str, b: &str) -> std::cmp::Ordering {
     a.encode_utf16().cmp(b.encode_utf16())
 }
+/// True when only the current folding policy rejects these selected paths:
+/// the earlier rule compared whole-path `to_lowercase` spellings and
+/// rejected files that were also parents of other files.
+fn legacy_only_collision(files: &[SelectedFile]) -> bool {
+    let mut current = PathCollisions::merging_folder_case();
+    if files
+        .iter()
+        .all(|file| current.insert(&file.path, false).is_ok())
+    {
+        return false;
+    }
+    let mut paths = BTreeSet::new();
+    for file in files {
+        if !paths.insert(file.path.0.to_lowercase()) {
+            return false;
+        }
+    }
+    paths.iter().all(|path| {
+        let mut parent = path.as_str();
+        while let Some((prefix, _)) = parent.rsplit_once('/') {
+            if paths.contains(prefix) {
+                return false;
+            }
+            parent = prefix;
+        }
+        true
+    })
+}
 fn validate_request(request: &mut SnapshotRequest) -> Result<()> {
     validate_revision(&request.upstream_revision_key)?;
     if request.files.len() + request.selection.omitted_files.len() > MAX_ENTRIES
@@ -293,6 +340,9 @@ fn validate_request(request: &mut SnapshotRequest) -> Result<()> {
         .iter()
         .map(|file| file.path.as_str())
         .collect();
+    // Omitted paths keep Node parity: they dedupe among themselves by
+    // `to_lowercase` and conflict with selected paths only on exact spelling.
+    // Selected paths above use full Unicode case folding instead.
     let mut omitted_paths = BTreeSet::new();
     for file in &request.selection.omitted_files {
         if matches!(file.kind, FileKind::Stl | FileKind::Artifact)
@@ -437,6 +487,11 @@ impl SourceRoot {
         budget: ArtifactBudget,
     ) -> Result<PublishedSnapshot> {
         validate_request(&mut request)?;
+        // A live archive from this handle already holds the per-Source lock
+        // on this open file description; it releases the lock on discard.
+        if self.archive_lock.load(Ordering::Acquire) {
+            return self.materialize_locked(request, open_input, budget);
+        }
         self.revisions.0.lock_exclusive()?;
         let result = self.materialize_locked(request, open_input, budget);
         let unlocked = FileExt::unlock(&self.revisions.0);
@@ -583,7 +638,13 @@ impl SourceRoot {
                 .collect(),
             selection: manifest.selection.clone(),
         };
-        validate_request(&mut request)?;
+        let ambiguous = match validate_request(&mut request) {
+            Err(Error::DuplicatePath) if legacy_only_collision(&request.files) => true,
+            other => {
+                other?;
+                false
+            }
+        };
         if manifest.version != 1
             || manifest.upstream_revision_key != key
             || digest(&manifest.files)? != manifest.manifest_digest
@@ -610,6 +671,10 @@ impl SourceRoot {
                 return Err(Error::CorruptSnapshot);
             }
             bytes += size;
+        }
+        // Report the policy break only for an otherwise intact publication.
+        if ambiguous {
+            return Err(Error::AmbiguousRevision(key.to_owned()));
         }
         Ok(self.receipt(manifest, Publication::Reused, bytes + raw.len() as u64))
     }

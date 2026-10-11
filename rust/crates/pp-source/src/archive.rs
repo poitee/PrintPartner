@@ -7,7 +7,10 @@ use std::{
     fmt,
     fs::File,
     io::{self, Read, Seek, SeekFrom, Write},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 const CANDIDATE: &str = ".candidate";
@@ -117,10 +120,24 @@ pub struct ArchiveReceipt {
     pub directories: Vec<SourcePath>,
 }
 
+/// The per-Source revisions lock, shared with snapshot materialization so a
+/// live archive stage and a peer's snapshot candidate never coexist.
+struct SourceLock {
+    revisions: File,
+    held: Arc<AtomicBool>,
+}
+impl Drop for SourceLock {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.revisions);
+        self.held.store(false, Ordering::Release);
+    }
+}
 struct Stage {
     parent: Directory,
     root: Directory,
     cleaned: bool,
+    // Dropped after `Drop::drop` removes the stage, so the lock outlives it.
+    _lock: SourceLock,
 }
 impl Stage {
     fn cleanup(&mut self) -> Result<()> {
@@ -137,6 +154,11 @@ impl Drop for Stage {
         }
     }
 }
+/// Owned extraction readiness. It holds the Source's revisions lock until
+/// consumed: the originating `SourceRoot` may materialize from it, while other
+/// handles block in `materialize` or get `archive-busy` from `extract_zip`.
+/// Prefer `discard()`, which reports cleanup errors; dropping also cleans up
+/// but cannot report failure.
 pub struct ExtractedArchive {
     stage: Stage,
     files: LocalFiles,
@@ -168,20 +190,32 @@ impl SourceRoot {
             return Err(ArchiveError::Limit);
         }
         check_cancel(cancelled)?;
-        let parent = self.revisions.child(".pp-source-archives", true)?;
-        match parent.0.try_lock_exclusive() {
+        if self.archive_lock.load(Ordering::Acquire) {
+            return Err(ArchiveError::Busy);
+        }
+        // Share the handle's open file description so its own materialize
+        // runs under this lock instead of waiting on it.
+        let revisions = self.revisions.0.try_clone()?;
+        match revisions.try_lock_exclusive() {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 return Err(ArchiveError::Busy);
             }
             Err(error) => return Err(error.into()),
         }
+        self.archive_lock.store(true, Ordering::Release);
+        let lock = SourceLock {
+            revisions,
+            held: self.archive_lock.clone(),
+        };
+        let parent = self.revisions.child(".pp-source-archives", true)?;
         parent.remove_tree(CANDIDATE)?;
         let root = parent.child(CANDIDATE, true)?;
         let mut stage = Stage {
             parent,
             root,
             cleaned: false,
+            _lock: lock,
         };
         let outcome = self.extract_to(&mut input, limits, cancelled, &stage);
         match outcome {
