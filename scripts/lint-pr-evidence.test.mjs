@@ -425,6 +425,78 @@ test("fails when a URL sits on a continuation line of a same-line Exemption reas
   assert.match(result.errors.join("\n"), /Evidence is incomplete/);
 });
 
+test("fails when a URL sits in a later paragraph of an Exemption reason (Codex P1: blank line truncates reason)", () => {
+  const result = lintPrEvidence(
+    bodyWithEvidence(`Exemption: none
+- Exemption reason: context only
+
+  See https://example.test/context.png
+
+- Steps followed to produce the evidence: opened local
+- Result observed: rendered
+- Screenshot / recording / verify-skill output or trace:
+`),
+  );
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /Evidence is incomplete/);
+});
+
+test("fails when a backticked command sits in a later paragraph of an Exemption reason (Codex P1: blank line truncates reason)", () => {
+  const result = lintPrEvidence(
+    bodyWithEvidence(`Exemption: none
+- Exemption reason: context only
+
+
+  Ran \`node --test scripts/lint-pr-evidence.test.mjs\` earlier.
+
+- Steps followed to produce the evidence: opened local
+- Result observed: rendered
+- Screenshot / recording / verify-skill output or trace:
+`),
+  );
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /Evidence is incomplete/);
+});
+
+test("passes when Exemption: none has a reason with a blank line and a real artifact in the artifact field", () => {
+  const result = lintPrEvidence(
+    bodyWithEvidence(`Exemption: none
+- Exemption reason: context only
+
+  Second paragraph of the reason.
+
+- Steps followed to produce the evidence: opened local
+- Result observed: rendered
+- Screenshot / recording / verify-skill output or trace: \`node --test scripts/lint-pr-evidence.test.mjs\`
+`),
+  );
+  assert.equal(result.ok, true, result.errors.join("; "));
+  assert.equal(result.hasEvidence, true);
+});
+
+test("allows a LAN mention in a later paragraph of an Exemption reason (docs-only)", () => {
+  const result = lintPrEvidence(
+    bodyWithEvidence(`Exemption: docs-only
+- Exemption reason: Document why this host is prohibited:
+
+  http://192.168.1.80:8080 must never be used for verify.
+`),
+  );
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+
+test("fails when a LAN target follows a blank line and an unindented sibling bullet (Codex P1 boundary still holds)", () => {
+  const result = lintPrEvidence(
+    bodyWithEvidence(`Exemption: docs-only
+- Exemption reason: Document the setup.
+
+- Steps followed to produce the evidence: curl http://192.168.1.80:8080/health
+`),
+  );
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+
 test("allows a LAN mention on a continuation line of a same-line Exemption reason (Codex P2)", () => {
   const result = lintPrEvidence(
     bodyWithEvidence(`Exemption: docs-only

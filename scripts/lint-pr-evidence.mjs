@@ -164,14 +164,12 @@ function findField(cleaned, label) {
   let end = valueEnd;
   // The first segment is the rest of the label line, which the match already holds.
   const tail = cleaned.slice(valueEnd).split("\n").slice(1);
+  // Blank lines stay inside the span: a later paragraph of the reason is still
+  // reason text. Only a template label, an unindented bullet, or a heading ends it.
   for (const line of tail) {
     if (FIELD_BOUNDARY.test(line)) break;
     const trimmed = line.trim();
-    if (!trimmed) {
-      if (lines.length) break;
-    } else {
-      lines.push(trimmed);
-    }
+    if (trimmed) lines.push(trimmed);
     end += line.length + 1;
   }
   return {
