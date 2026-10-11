@@ -1,0 +1,8 @@
+{
+  "entity_id": "sensor.printer_state",
+  "state": "paused",
+  "attributes": {
+    "progress": "75.8",
+    "filename": " part.gcode "
+  }
+}
