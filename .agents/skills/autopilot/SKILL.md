@@ -70,7 +70,7 @@ Fix CI failures caused by changes within this PR's scope. Read the failing check
 
 Map check names to local commands with [references/printpartner-ci.md](references/printpartner-ci.md). Verify before pushing: run the narrowest check that proves the fix, then one scoped blast-radius check on what you touched. Never push a fix that fails its own checks, and do not run the full test suite when a scoped check suffices.
 
-If the change is user-visible in the app, also follow `$verify-printpartner`.
+If the change is user-visible in the app, also follow `$verify-print-partner`.
 
 Never change CI checks, workflows, or configs just to make failures pass, and never make unrelated code changes; if that would be required, report back instead.
 
