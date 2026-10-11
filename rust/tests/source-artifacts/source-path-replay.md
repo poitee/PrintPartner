@@ -24,16 +24,20 @@ by the known-difference classification. All exact paths, both decisions,
 shared-contract decisions, normalized spellings, origins, classifications, and
 follow-up links are retained. CI uploads both the corpus and report.
 
-Known differences are explicit:
+Known differences are explicit Rust-only rules, all documented in
+`rust/crates/pp-source/README.md`:
 
-- Rust's documented 4,096 UTF-8 byte and 64-component bounds.
-- Colon rejection and the manifest name as the first directory component:
-  tracked in [GRE-555](https://linear.app/greetz/issue/GRE-555/sourcepath-parity-align-rust-and-node-nfc-versions-and-colon).
-  Node rejects the reserved directory later at materialization.
-- Exact full-string transformations from `source-path-unicode-16-17.json`,
-  with Rust Unicode 16.0.0 and Node Unicode 17.0: also GRE-555. These include
-  U+1ADD, U+1AE6, U+1AEB, and the other new combining-class characters.
-  Effects outside the confirmed transformations fail independently.
+- Rust's 4,096 UTF-8 byte and 64-component bounds.
+- Colon rejection (Windows drive and alternate-data-stream safety). Node keeps
+  accepting colons because existing snapshots and GitHub sources may use them.
+- The manifest name as the first directory component. Node rejects the reserved
+  directory later at materialization.
+
+There is no Unicode known difference. Since
+[GRE-555](https://linear.app/greetz/issue/GRE-555/sourcepath-parity-align-rust-and-node-nfc-versions-and-colon),
+`unicode-normalization` 0.1.25 gives Rust Unicode 17.0.0, matching Node 24's
+Unicode 17.0. Any NFC difference is unexpected, and the CLI also exits 1 when
+the corpus's Rust Unicode version differs from Node's.
 
 `unexpectedMismatches` counts cases with new differences or a parser decision
 that violates its independent contract model. A Rust-only exception cannot
@@ -46,9 +50,10 @@ labeled fault injection preserves the reference verdict and proves replay writes
 Node/Rust evidence before exiting 1. Build the example before running those
 tests. `PP_SOURCE_PATH_CORPUS_BINARY` can select an alternate target directory.
 
-Known differences make **zero total mismatches unattainable until GRE-555 is
-resolved**. Report the raw and unexpected counts separately; do not describe a
-successful replay exit as full Rust/Node parity.
+The documented Rust-only rules keep the raw `mismatches` count nonzero.
+Report the raw count, the per-rule counts, and the unexpected count separately;
+a successful replay exit means every difference is one of those rules, not that
+the two validators are identical.
 
 The expanded Unicode fixtures were derived by comparing the official
 [Unicode 16 data](https://www.unicode.org/Public/16.0.0/ucd/UnicodeData.txt) and
@@ -58,6 +63,7 @@ U+10EFA, U+10EFB, U+1E6E3, U+1E6E6, U+1E6EE, U+1E6EF, U+1E6F5. No new
 canonical decomposition mapping occurs in this version pair. Each mark is
 paired with U+0300, U+0301, U+0302, U+0323, U+031B, and U+0315 in both orders
 on a Latin `a` stem. All 408 raw paths were checked against the actual Rust and
-Node validators and normalizers; 113 differ. Generation adds valid directory
+Node validators and normalizers. 113 differed under Rust Unicode 16.0.0. With
+Unicode 17.0.0 none differ, and the fixture's Rust goldens equal Node's. Generation adds valid directory
 prefixes and optional colons. This targets the version delta while the broader
 strategies continue exploring arbitrary scalar strings and other path rules.

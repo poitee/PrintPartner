@@ -8,6 +8,14 @@ A trusted host opens `TenantRepos` from its configured absolute repository direc
 
 `ArtifactBudget` bounds new content and manifest bytes for this operation. The caller must reserve and serialize tenant quota across Sources before calling. This module neither measures other tenant directories nor issues a quota reservation. The hard content ceiling is 1 GiB. STL count and non-STL bytes use the supplied selection limits. Additional bounds are 10,000 selected/omitted files, 10,000 filesystem entries including directories, 64 path components, 4,096 UTF-8 path bytes, and 8 MiB manifest/CLI JSON.
 
+`SourcePath` is a relative, `/`-separated path in Unicode 17 NFC (the `unicode-normalization` pin must match the Unicode version of the pinned Node runtime). Node's `sourceRelativePath` applies the same structural and NFC rules. Rust additionally rejects:
+
+- any `:`, so a path can never name a Windows drive (`C:x`) or an NTFS alternate data stream (`part.stl:stream`) when materialized on Windows. Node accepts colons, and existing Node snapshots or GitHub sources may contain them, so Node is intentionally not tightened;
+- the manifest name `.printpartner-source-snapshot.json` as the first component of a longer path. Node rejects only the exact manifest path here and fails such a directory later at materialization;
+- paths over the 4,096-byte and 64-component bounds below.
+
+`rust/tests/source-artifacts/source-path-replay.mjs` reports these as documented Rust-only differences and fails on any other accept/reject or NFC difference.
+
 Every directory component is opened with `O_NOFOLLOW` through a directory handle. Configured roots containing symlink aliases are rejected; trusted bootstrap may explicitly select the canonical directory. Files stream through a 64 KiB buffer. A per-Source advisory lock on the revisions directory serializes cooperating artifact writers. It is not a database lock. The mutable Source handle also prevents simultaneous use of the same handle.
 
 The single private `.pp-source-candidate` directory is disposable until publication. Under the directory lock, retry removes abandoned staging, validates any existing final snapshot, or stages again. Files, manifest, nested directories, and the candidate directory are synced before a non-overwriting rename. The revisions directory is synced after rename. An error after rename means the caller must retry the same revision key; retry verifies the final manifest and bytes. Published directories are never removed by staging cleanup. This is process-crash evidence on Linux, not proof of power-loss durability on every filesystem.

@@ -1,19 +1,10 @@
 // Usage: node source-path-replay.mjs <local-source-snapshot.js> <corpus.json> <report.json>
-// Every raw mismatch is retained. Exit 1 on a new difference or a validator
-// regression; known differences remain visible and linked to their follow-up.
+// Every raw mismatch is retained. Exit 1 on a new difference, a validator
+// regression, or a Rust/Node Unicode version difference; documented Rust-only
+// rules remain visible.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-const FOLLOW_UP = 'https://linear.app/greetz/issue/GRE-555/sourcepath-parity-align-rust-and-node-nfc-versions-and-colon';
-const unicodeFixtures = JSON.parse(readFileSync(new URL(
-  '../../crates/pp-source/tests/fixtures/source-path-unicode-16-17.json', import.meta.url,
-), 'utf8'));
-const unicodeFragments = new Map(unicodeFixtures.map((c) => [c.path.slice(0, -4), {
-  rustNfc: c.rustNfc.slice(0, -4), nodeNfc: c.nodeNfc.slice(0, -4),
-}]));
-// Fixture fragments consist solely of "a" and combining marks (including
-// astral marks). Every entry is an exact probe, not a wildcard character rule.
-const unicodePattern = new RegExp([...unicodeFragments.keys()].join('|'), 'gu');
 const rustOnlyRules = [
   {
     id: 'utf8-byte-bound',
@@ -25,12 +16,15 @@ const rustOnlyRules = [
     test: (p) => p.split('/').length > 64,
     documented: 'rust/crates/pp-source/README.md (64 path components)',
   },
-  { id: 'colon', test: (p) => p.includes(':'), documented: null, followUp: FOLLOW_UP },
+  {
+    id: 'colon',
+    test: (p) => p.includes(':'),
+    documented: 'rust/crates/pp-source/README.md (no colon: Windows drive and ADS safety)',
+  },
   {
     id: 'manifest-first-directory',
     test: (p, manifest) => p.split('/')[0] === manifest && p !== manifest,
-    documented: null,
-    followUp: FOLLOW_UP,
+    documented: 'rust/crates/pp-source/README.md (reserved manifest name as first component)',
   },
 ];
 
@@ -41,18 +35,10 @@ function sharedStructureAccepts(path, manifest) {
     && path.split('/').every((p) => p !== '' && p !== '.' && p !== '..');
 }
 
-function knownUnicodeDifference(path, rustNfc, nodeNfc, rustVersion) {
-  if (rustNfc === nodeNfc) return false;
-  if (rustVersion.join('.') !== '16.0.0' || process.versions.unicode !== '17.0') return false;
-  let matched = false;
-  const expectedRust = path.replace(unicodePattern, (fragment) => {
-    matched = true;
-    return unicodeFragments.get(fragment).rustNfc;
-  });
-  const expectedNode = path.replace(unicodePattern, (fragment) => unicodeFragments.get(fragment).nodeNfc);
-  // Require the complete normalized strings to match confirmed transformations.
-  // Unknown effects elsewhere in the path, including with a colon, still fail.
-  return matched && rustNfc === expectedRust && nodeNfc === expectedNode;
+// Node reports "major.minor"; unicode-normalization reports (major, minor, patch).
+function unicodeVersionsMatch(rustVersion, nodeVersion = process.versions.unicode) {
+  const [major, minor] = nodeVersion.split('.').map(Number);
+  return rustVersion[0] === major && rustVersion[1] === (minor ?? 0);
 }
 
 export function replayCorpus(corpus, sourceRelativePath, manifest) {
@@ -61,8 +47,7 @@ export function replayCorpus(corpus, sourceRelativePath, manifest) {
       || !Array.isArray(corpus.rust_unicode_version) || corpus.rust_unicode_version.length !== 3) {
     throw new Error('Invalid or empty SourcePath corpus');
   }
-  const byRule = Object.fromEntries(rustOnlyRules.map(({ id, documented, followUp }) =>
-    [id, { count: 0, documented, followUp }]));
+  const byRule = Object.fromEntries(rustOnlyRules.map(({ id, documented }) => [id, { count: 0, documented }]));
   const mismatchCases = [];
   const normalizationCases = [];
   const unexpectedCases = [];
@@ -70,7 +55,6 @@ export function replayCorpus(corpus, sourceRelativePath, manifest) {
   let nodeAccept = 0;
   let generated = 0;
   let knownRustStricter = 0;
-  let knownUnicodeMismatches = 0;
 
   for (const [index, {
     path, origin, rustAccepts, rustReferenceAccepts, rustNfc, rustFixtureAccepts, rustFixtureNfc,
@@ -96,14 +80,13 @@ export function replayCorpus(corpus, sourceRelativePath, manifest) {
     const nodeSharedAccepts = structureAccepts && nodeNfc === path;
     const rules = rustOnlyRules.filter((r) => r.test(path, manifest)).map((r) => r.id);
     const expectedRust = rustSharedAccepts && rules.length === 0;
-    const knownUnicode = knownUnicodeDifference(path, rustNfc, nodeNfc, corpus.rust_unicode_version);
     const errors = [];
     if (rustAccepts !== rustReferenceAccepts) errors.push('Rust decision differs from its reference model');
     if (rustReferenceAccepts !== expectedRust) errors.push('Rust reference differs from its contract model');
     if (rustFixtureAccepts !== undefined && rustAccepts !== rustFixtureAccepts) errors.push('Rust decision differs from fixture');
     if (rustFixtureNfc !== undefined && rustNfc !== rustFixtureNfc) errors.push('Rust NFC differs from fixture');
     if (nodeAccepts !== nodeSharedAccepts) errors.push('Node decision differs from its shared contract model');
-    if (rustNfc !== nodeNfc && !knownUnicode) errors.push('Unclassified NFC difference');
+    if (rustNfc !== nodeNfc) errors.push('Unclassified NFC difference');
 
     let classification = 'agree';
     if (rustAccepts !== nodeAccepts && errors.length === 0) {
@@ -111,9 +94,6 @@ export function replayCorpus(corpus, sourceRelativePath, manifest) {
         classification = 'known-rust-stricter';
         knownRustStricter += 1;
         for (const rule of rules) byRule[rule].count += 1;
-      } else if (rustAccepts && !nodeAccepts && knownUnicode) {
-        classification = 'known-unicode-version';
-        knownUnicodeMismatches += 1;
       } else {
         errors.push('Unclassified accept/reject mismatch');
       }
@@ -123,9 +103,7 @@ export function replayCorpus(corpus, sourceRelativePath, manifest) {
       index, path, origin, rustAccepts, rustReferenceAccepts, nodeAccepts, rustSharedAccepts, nodeSharedAccepts,
       rustFixtureAccepts, rustFixtureNfc,
       rustNfc, nodeNfc, rustOnlyRules: rules, classification, errors,
-      normalizationClassification: rustNfc === nodeNfc ? 'agree'
-        : knownUnicode ? 'known-unicode-version' : 'unexpected',
-      followUp: knownUnicode || rules.some((r) => byRule[r].followUp) ? FOLLOW_UP : null,
+      normalizationClassification: rustNfc === nodeNfc ? 'agree' : 'unexpected',
     };
     if (rustAccepts !== nodeAccepts) mismatchCases.push(record);
     if (rustNfc !== nodeNfc) normalizationCases.push(record);
@@ -137,13 +115,14 @@ export function replayCorpus(corpus, sourceRelativePath, manifest) {
     rustUnicodeVersion: corpus.rust_unicode_version,
     nodeVersion: process.version,
     nodeUnicodeVersion: process.versions.unicode,
+    unicodeVersionsMatch: unicodeVersionsMatch(corpus.rust_unicode_version),
     cases: corpus.cases.length,
     fixtures: corpus.cases.length - generated,
     generated,
     rustAccept, nodeAccept,
     agree: corpus.cases.length - mismatchCases.length,
     mismatches: mismatchCases.length,
-    knownRustStricter, knownUnicodeMismatches,
+    knownRustStricter,
     normalizationDifferences: normalizationCases.length,
     unexpectedMismatches: unexpectedCases.length,
     rustOnlyRules: byRule,
@@ -159,10 +138,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   writeFileSync(reportPath, JSON.stringify(report, null, 2) + '\n');
   const { mismatchCases, normalizationCases, unexpectedCases, rustOnlyRules: _, ...summary } = report;
   console.log(JSON.stringify(summary));
-  for (const [id, { count, documented, followUp }] of Object.entries(report.rustOnlyRules)) {
-    console.log('rust-only rule ' + id + ': ' + count + ' case(s); ' + (documented ?? followUp));
+  for (const [id, { count, documented }] of Object.entries(report.rustOnlyRules)) {
+    console.log('rust-only rule ' + id + ': ' + count + ' case(s); ' + documented);
   }
-  if (report.mismatches > 0) console.log('Known differences are retained in ' + reportPath + '; follow-up: ' + FOLLOW_UP);
+  if (report.mismatches > 0) console.log('Documented Rust-only differences are retained in ' + reportPath);
+  if (!report.unicodeVersionsMatch) {
+    console.error('Rust Unicode ' + report.rustUnicodeVersion.join('.') + ' differs from Node Unicode '
+      + report.nodeUnicodeVersion + '; align unicode-normalization with the pinned Node version');
+    process.exitCode = 1;
+  }
   if (unexpectedCases.length > 0) {
     console.error(JSON.stringify(unexpectedCases.slice(0, 5), null, 2));
     process.exitCode = 1;
