@@ -125,9 +125,13 @@ and checks that the same window returns. It activates **Quit Print Partner**,
 checks exit status 0, child reap, marker/lease/runtime/socket cleanup, and
 re-locks the retained `.desktop.lock` file.
 
-**No literal click was done.** Show Print Partner and Quit Print Partner are
-triggered through the app's own `com.canonical.dbusmenu` over D-Bus. The native
-context menu is opened through the status notifier's D-Bus ContextMenu method.
+**No literal click was done for the menu item activations.** Show Print Partner
+and Quit Print Partner are triggered through the app's own
+`com.canonical.dbusmenu` over D-Bus. The evidence CLI's `tray-click` command
+right-clicks the tray icon to open the native menu for its screenshot. The
+display's watcher reports an empty RegisteredStatusNotifierItems property even
+while its bridge renders the icon, so the harness locates the exported menu on
+a D-Bus connection belonging to the owned native PID.
 The evidence CLI captures the real app window and tray menu. Inspect the two
 PNGs before publishing:
 
