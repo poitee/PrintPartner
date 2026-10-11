@@ -1,5 +1,9 @@
 name: Desktop Rust (hosted)
 
+# Snapshot baselines must be committed; CI must never accept or create them.
+env:
+  INSTA_UPDATE: 'no'
+
 on:
   pull_request:
     paths:
