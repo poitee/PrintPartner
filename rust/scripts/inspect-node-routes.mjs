@@ -32,8 +32,6 @@ const modes = [
   { name: 'self-host/non-loopback', deployMode: 'self-host', multiUser: false, host: '0.0.0.0', integrationApiKey: null },
 ];
 const registered = new Map();
-const completedModes = [];
-let modeKeys = new Set();
 Error.stackTraceLimit = Infinity;
 const initialized = ({ fastify }) => {
   fastify.addHook('onRoute', options => {
@@ -49,47 +47,51 @@ const initialized = ({ fastify }) => {
     if (!owner) throw new Error(`Unrecognized route owner: ${frame}`);
     for (const method of Array.isArray(options.method) ? options.method : [options.method]) {
       const key = method + ' ' + options.url;
-      modeKeys.add(key);
-      // A route first seen in a later mode is absent from every earlier one; record that
-      // explicitly so collapse cannot mistake the sparse map for a uniform result.
       if (!registered.has(key)) registered.set(key, {
         method, path: options.url, owner, websocket: options.websocket === true,
-        probes: Object.fromEntries(completedModes.map(name => [name, null])),
+        probes: Object.fromEntries(modes.map(mode => [mode.name, null])),
       });
     }
   });
 };
 diagnostics.channel('fastify.initialization').subscribe(initialized);
+// Builds the app for one mode and hands it to `use`. Routes are registered per mode
+// (board, shares, profile-sync only in some), so the union is only complete after every
+// mode has built: pass one collects it, pass two probes every mode against the full union.
+const withApp = async (mode, use) => {
+  const dataDir = join(fixture, mode.name.replace('/', '-'));
+  await mkdir(dataDir, { recursive: true });
+  const config = loadConfig();
+  Object.assign(config, { dataDir, authRequired: true, registrationOpen: true, multiUser: mode.multiUser,
+    singleUserAuth: !mode.multiUser, trustProxy: false, staticDir: null, databaseUrl: null,
+    deployMode: mode.deployMode, host: mode.host, integrationApiKey: mode.integrationApiKey,
+    basicAuthUser: null, basicAuthPass: null, saasBasicAuth: null, saasAllowAnonymous: false,
+    sessionSecret: 'route-inventory-only', githubOAuthConfigured: true, discordOAuthConfigured: true });
+  const ports = createPorts(config);
+  let app;
+  try {
+    await ports.db.connect();
+    app = await buildApp(config, ports);
+    await app.ready();
+    await use(app);
+  } finally {
+    await app?.close();
+    await ports.db.close();
+  }
+};
 try {
   for (const mode of modes) {
-    const dataDir = join(fixture, mode.name.replace('/', '-'));
-    await mkdir(dataDir, { recursive: true });
-    const config = loadConfig();
-    Object.assign(config, { dataDir, authRequired: true, registrationOpen: true, multiUser: mode.multiUser,
-      singleUserAuth: !mode.multiUser, trustProxy: false, staticDir: null, databaseUrl: null,
-      deployMode: mode.deployMode, host: mode.host, integrationApiKey: mode.integrationApiKey,
-      basicAuthUser: null, basicAuthPass: null, saasBasicAuth: null, saasAllowAnonymous: false,
-      sessionSecret: 'route-inventory-only', githubOAuthConfigured: true, discordOAuthConfigured: true });
-    const ports = createPorts(config);
-    let app;
-    modeKeys = new Set();
-    try {
-      await ports.db.connect();
-      app = await buildApp(config, ports);
-      await app.ready();
+    await withApp(mode, () => {});
+  }
+  for (const mode of modes) {
+    await withApp(mode, async app => {
       await writeFile(output + '.' + mode.name.replace('/', '-') + '.txt', app.printRoutes({ commonPrefix: false }));
-      for (const [key, route] of registered) {
-        if (!modeKeys.has(key)) {
-          route.probes[mode.name] = null;
-          continue;
-        }
+      for (const route of registered.values()) {
         // Probe without credentials against the isolated app. Protected routes
         // stop at the real auth hooks; public auth handlers get an empty body.
+        // Routes not registered in this mode are probed too: the status the server
+        // actually returns there is the observation, not an absence.
         const url = (route.path === '*' ? '/*' : route.path).replace(/:[^/]+/g, '1').replace(/\*/g, 'inventory-probe');
-        if (route.path !== '*' && !app.hasRoute({ method: route.method, url: route.path })) {
-          route.probes[mode.name] = null;
-          continue;
-        }
         const response = await app.inject({ method: route.method, url,
           ...(route.method === 'POST' ? { payload: {} } : {}) });
         // 503 is a fail-closed refusal (MCP without an API key on a non-loopback host).
@@ -101,16 +103,14 @@ try {
           authRequired: [401, 403, 503].includes(response.statusCode),
         };
       }
-      completedModes.push(mode.name);
-    } finally {
-      await app?.close();
-      await ports.db.close();
-    }
+    });
   }
   for (const route of registered.values()) {
-    const observed = Object.values(route.probes).filter(Boolean);
-    const uniform = Object.values(route.probes).every(probe => probe !== null)
-      && new Set(observed.map(probe => probe.authRequired)).size === 1;
+    // Fail loudly rather than classify from a partial map: every mode must have a probe.
+    const missing = modes.filter(mode => !route.probes[mode.name]).map(mode => mode.name);
+    if (missing.length) throw new Error(`Missing auth probe: ${route.method} ${route.path} in ${missing.join(', ')}`);
+    const observed = Object.values(route.probes);
+    const uniform = new Set(observed.map(probe => probe.authRequired)).size === 1;
     if (uniform) {
       route.authRequired = observed[0].authRequired;
     } else {

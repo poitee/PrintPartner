@@ -202,136 +202,56 @@
       "path": "/api/v1/board/comments/:id",
       "owner": "web/apps/server/src/routes/board.ts",
       "websocket": false,
-      "authRequired": "mode-dependent",
-      "authByMode": {
-        "self-host/single-user-auth": null,
-        "self-host/multi-user": null,
-        "saas/multi-user": {
-          "status": 401,
-          "authRequired": true
-        },
-        "self-host/api-key": null,
-        "self-host/non-loopback": null
-      }
+      "authRequired": true
     },
     {
       "method": "GET",
       "path": "/api/v1/board/posts",
       "owner": "web/apps/server/src/routes/board.ts",
       "websocket": false,
-      "authRequired": "mode-dependent",
-      "authByMode": {
-        "self-host/single-user-auth": null,
-        "self-host/multi-user": null,
-        "saas/multi-user": {
-          "status": 401,
-          "authRequired": true
-        },
-        "self-host/api-key": null,
-        "self-host/non-loopback": null
-      }
+      "authRequired": true
     },
     {
       "method": "HEAD",
       "path": "/api/v1/board/posts",
       "owner": "web/apps/server/src/routes/board.ts",
       "websocket": false,
-      "authRequired": "mode-dependent",
-      "authByMode": {
-        "self-host/single-user-auth": null,
-        "self-host/multi-user": null,
-        "saas/multi-user": {
-          "status": 401,
-          "authRequired": true
-        },
-        "self-host/api-key": null,
-        "self-host/non-loopback": null
-      }
+      "authRequired": true
     },
     {
       "method": "POST",
       "path": "/api/v1/board/posts",
       "owner": "web/apps/server/src/routes/board.ts",
       "websocket": false,
-      "authRequired": "mode-dependent",
-      "authByMode": {
-        "self-host/single-user-auth": null,
-        "self-host/multi-user": null,
-        "saas/multi-user": {
-          "status": 401,
-          "authRequired": true
-        },
-        "self-host/api-key": null,
-        "self-host/non-loopback": null
-      }
+      "authRequired": true
     },
     {
       "method": "GET",
       "path": "/api/v1/board/posts/:id",
       "owner": "web/apps/server/src/routes/board.ts",
       "websocket": false,
-      "authRequired": "mode-dependent",
-      "authByMode": {
-        "self-host/single-user-auth": null,
-        "self-host/multi-user": null,
-        "saas/multi-user": {
-          "status": 401,
-          "authRequired": true
-        },
-        "self-host/api-key": null,
-        "self-host/non-loopback": null
-      }
+      "authRequired": true
     },
     {
       "method": "HEAD",
       "path": "/api/v1/board/posts/:id",
       "owner": "web/apps/server/src/routes/board.ts",
       "websocket": false,
-      "authRequired": "mode-dependent",
-      "authByMode": {
-        "self-host/single-user-auth": null,
-        "self-host/multi-user": null,
-        "saas/multi-user": {
-          "status": 401,
-          "authRequired": true
-        },
-        "self-host/api-key": null,
-        "self-host/non-loopback": null
-      }
+      "authRequired": true
     },
     {
       "method": "POST",
       "path": "/api/v1/board/posts/:id/comments",
       "owner": "web/apps/server/src/routes/board.ts",
       "websocket": false,
-      "authRequired": "mode-dependent",
-      "authByMode": {
-        "self-host/single-user-auth": null,
-        "self-host/multi-user": null,
-        "saas/multi-user": {
-          "status": 401,
-          "authRequired": true
-        },
-        "self-host/api-key": null,
-        "self-host/non-loopback": null
-      }
+      "authRequired": true
     },
     {
       "method": "POST",
       "path": "/api/v1/board/posts/:id/hide",
       "owner": "web/apps/server/src/routes/board.ts",
       "websocket": false,
-      "authRequired": "mode-dependent",
-      "authByMode": {
-        "self-host/single-user-auth": null,
-        "self-host/multi-user": null,
-        "saas/multi-user": {
-          "status": 401,
-          "authRequired": true
-        },
-        "self-host/api-key": null,
-        "self-host/non-loopback": null
-      }
+      "authRequired": true
     },
     {
       "method": "GET",
@@ -1419,20 +1339,7 @@
       "path": "/api/v1/plans/:id/shares",
       "owner": "web/apps/server/src/routes/shares.ts",
       "websocket": false,
-      "authRequired": "mode-dependent",
-      "authByMode": {
-        "self-host/single-user-auth": null,
-        "self-host/multi-user": {
-          "status": 401,
-          "authRequired": true
-        },
-        "saas/multi-user": {
-          "status": 403,
-          "authRequired": true
-        },
-        "self-host/api-key": null,
-        "self-host/non-loopback": null
-      }
+      "authRequired": true
     },
     {
       "method": "GET",
@@ -2174,80 +2081,28 @@
       "path": "/api/v1/shares/:id",
       "owner": "web/apps/server/src/routes/shares.ts",
       "websocket": false,
-      "authRequired": "mode-dependent",
-      "authByMode": {
-        "self-host/single-user-auth": null,
-        "self-host/multi-user": {
-          "status": 401,
-          "authRequired": true
-        },
-        "saas/multi-user": {
-          "status": 403,
-          "authRequired": true
-        },
-        "self-host/api-key": null,
-        "self-host/non-loopback": null
-      }
+      "authRequired": true
     },
     {
       "method": "POST",
       "path": "/api/v1/shares/:token/accept",
       "owner": "web/apps/server/src/routes/shares.ts",
       "websocket": false,
-      "authRequired": "mode-dependent",
-      "authByMode": {
-        "self-host/single-user-auth": null,
-        "self-host/multi-user": {
-          "status": 401,
-          "authRequired": true
-        },
-        "saas/multi-user": {
-          "status": 403,
-          "authRequired": true
-        },
-        "self-host/api-key": null,
-        "self-host/non-loopback": null
-      }
+      "authRequired": true
     },
     {
       "method": "GET",
       "path": "/api/v1/shares/incoming",
       "owner": "web/apps/server/src/routes/shares.ts",
       "websocket": false,
-      "authRequired": "mode-dependent",
-      "authByMode": {
-        "self-host/single-user-auth": null,
-        "self-host/multi-user": {
-          "status": 401,
-          "authRequired": true
-        },
-        "saas/multi-user": {
-          "status": 403,
-          "authRequired": true
-        },
-        "self-host/api-key": null,
-        "self-host/non-loopback": null
-      }
+      "authRequired": true
     },
     {
       "method": "HEAD",
       "path": "/api/v1/shares/incoming",
       "owner": "web/apps/server/src/routes/shares.ts",
       "websocket": false,
-      "authRequired": "mode-dependent",
-      "authByMode": {
-        "self-host/single-user-auth": null,
-        "self-host/multi-user": {
-          "status": 401,
-          "authRequired": true
-        },
-        "saas/multi-user": {
-          "status": 401,
-          "authRequired": true
-        },
-        "self-host/api-key": null,
-        "self-host/non-loopback": null
-      }
+      "authRequired": true
     },
     {
       "method": "GET",
@@ -3752,136 +3607,56 @@
       "path": "/board/comments/:id",
       "owner": "web/apps/server/src/routes/board.ts",
       "websocket": false,
-      "authRequired": "mode-dependent",
-      "authByMode": {
-        "self-host/single-user-auth": null,
-        "self-host/multi-user": null,
-        "saas/multi-user": {
-          "status": 401,
-          "authRequired": true
-        },
-        "self-host/api-key": null,
-        "self-host/non-loopback": null
-      }
+      "authRequired": true
     },
     {
       "method": "GET",
       "path": "/board/posts",
       "owner": "web/apps/server/src/routes/board.ts",
       "websocket": false,
-      "authRequired": "mode-dependent",
-      "authByMode": {
-        "self-host/single-user-auth": null,
-        "self-host/multi-user": null,
-        "saas/multi-user": {
-          "status": 401,
-          "authRequired": true
-        },
-        "self-host/api-key": null,
-        "self-host/non-loopback": null
-      }
+      "authRequired": true
     },
     {
       "method": "HEAD",
       "path": "/board/posts",
       "owner": "web/apps/server/src/routes/board.ts",
       "websocket": false,
-      "authRequired": "mode-dependent",
-      "authByMode": {
-        "self-host/single-user-auth": null,
-        "self-host/multi-user": null,
-        "saas/multi-user": {
-          "status": 401,
-          "authRequired": true
-        },
-        "self-host/api-key": null,
-        "self-host/non-loopback": null
-      }
+      "authRequired": true
     },
     {
       "method": "POST",
       "path": "/board/posts",
       "owner": "web/apps/server/src/routes/board.ts",
       "websocket": false,
-      "authRequired": "mode-dependent",
-      "authByMode": {
-        "self-host/single-user-auth": null,
-        "self-host/multi-user": null,
-        "saas/multi-user": {
-          "status": 401,
-          "authRequired": true
-        },
-        "self-host/api-key": null,
-        "self-host/non-loopback": null
-      }
+      "authRequired": true
     },
     {
       "method": "GET",
       "path": "/board/posts/:id",
       "owner": "web/apps/server/src/routes/board.ts",
       "websocket": false,
-      "authRequired": "mode-dependent",
-      "authByMode": {
-        "self-host/single-user-auth": null,
-        "self-host/multi-user": null,
-        "saas/multi-user": {
-          "status": 401,
-          "authRequired": true
-        },
-        "self-host/api-key": null,
-        "self-host/non-loopback": null
-      }
+      "authRequired": true
     },
     {
       "method": "HEAD",
       "path": "/board/posts/:id",
       "owner": "web/apps/server/src/routes/board.ts",
       "websocket": false,
-      "authRequired": "mode-dependent",
-      "authByMode": {
-        "self-host/single-user-auth": null,
-        "self-host/multi-user": null,
-        "saas/multi-user": {
-          "status": 401,
-          "authRequired": true
-        },
-        "self-host/api-key": null,
-        "self-host/non-loopback": null
-      }
+      "authRequired": true
     },
     {
       "method": "POST",
       "path": "/board/posts/:id/comments",
       "owner": "web/apps/server/src/routes/board.ts",
       "websocket": false,
-      "authRequired": "mode-dependent",
-      "authByMode": {
-        "self-host/single-user-auth": null,
-        "self-host/multi-user": null,
-        "saas/multi-user": {
-          "status": 401,
-          "authRequired": true
-        },
-        "self-host/api-key": null,
-        "self-host/non-loopback": null
-      }
+      "authRequired": true
     },
     {
       "method": "POST",
       "path": "/board/posts/:id/hide",
       "owner": "web/apps/server/src/routes/board.ts",
       "websocket": false,
-      "authRequired": "mode-dependent",
-      "authByMode": {
-        "self-host/single-user-auth": null,
-        "self-host/multi-user": null,
-        "saas/multi-user": {
-          "status": 401,
-          "authRequired": true
-        },
-        "self-host/api-key": null,
-        "self-host/non-loopback": null
-      }
+      "authRequired": true
     },
     {
       "method": "GET",
@@ -4833,20 +4608,7 @@
       "path": "/plans/:id/shares",
       "owner": "web/apps/server/src/routes/shares.ts",
       "websocket": false,
-      "authRequired": "mode-dependent",
-      "authByMode": {
-        "self-host/single-user-auth": null,
-        "self-host/multi-user": {
-          "status": 401,
-          "authRequired": true
-        },
-        "saas/multi-user": {
-          "status": 403,
-          "authRequired": true
-        },
-        "self-host/api-key": null,
-        "self-host/non-loopback": null
-      }
+      "authRequired": true
     },
     {
       "method": "GET",
@@ -5693,80 +5455,28 @@
       "path": "/shares/:id",
       "owner": "web/apps/server/src/routes/shares.ts",
       "websocket": false,
-      "authRequired": "mode-dependent",
-      "authByMode": {
-        "self-host/single-user-auth": null,
-        "self-host/multi-user": {
-          "status": 401,
-          "authRequired": true
-        },
-        "saas/multi-user": {
-          "status": 403,
-          "authRequired": true
-        },
-        "self-host/api-key": null,
-        "self-host/non-loopback": null
-      }
+      "authRequired": true
     },
     {
       "method": "POST",
       "path": "/shares/:token/accept",
       "owner": "web/apps/server/src/routes/shares.ts",
       "websocket": false,
-      "authRequired": "mode-dependent",
-      "authByMode": {
-        "self-host/single-user-auth": null,
-        "self-host/multi-user": {
-          "status": 401,
-          "authRequired": true
-        },
-        "saas/multi-user": {
-          "status": 403,
-          "authRequired": true
-        },
-        "self-host/api-key": null,
-        "self-host/non-loopback": null
-      }
+      "authRequired": true
     },
     {
       "method": "GET",
       "path": "/shares/incoming",
       "owner": "web/apps/server/src/routes/shares.ts",
       "websocket": false,
-      "authRequired": "mode-dependent",
-      "authByMode": {
-        "self-host/single-user-auth": null,
-        "self-host/multi-user": {
-          "status": 401,
-          "authRequired": true
-        },
-        "saas/multi-user": {
-          "status": 403,
-          "authRequired": true
-        },
-        "self-host/api-key": null,
-        "self-host/non-loopback": null
-      }
+      "authRequired": true
     },
     {
       "method": "HEAD",
       "path": "/shares/incoming",
       "owner": "web/apps/server/src/routes/shares.ts",
       "websocket": false,
-      "authRequired": "mode-dependent",
-      "authByMode": {
-        "self-host/single-user-auth": null,
-        "self-host/multi-user": {
-          "status": 401,
-          "authRequired": true
-        },
-        "saas/multi-user": {
-          "status": 401,
-          "authRequired": true
-        },
-        "self-host/api-key": null,
-        "self-host/non-loopback": null
-      }
+      "authRequired": true
     },
     {
       "method": "GET",
@@ -6298,46 +6008,14 @@
       "path": "/ws/profile-sync",
       "owner": "web/apps/server/src/services/profile-sync-broadcast.ts",
       "websocket": true,
-      "authRequired": "mode-dependent",
-      "authByMode": {
-        "self-host/single-user-auth": {
-          "status": 401,
-          "authRequired": true
-        },
-        "self-host/multi-user": null,
-        "saas/multi-user": null,
-        "self-host/api-key": {
-          "status": 401,
-          "authRequired": true
-        },
-        "self-host/non-loopback": {
-          "status": 401,
-          "authRequired": true
-        }
-      }
+      "authRequired": true
     },
     {
       "method": "HEAD",
       "path": "/ws/profile-sync",
       "owner": "web/apps/server/src/services/profile-sync-broadcast.ts",
       "websocket": true,
-      "authRequired": "mode-dependent",
-      "authByMode": {
-        "self-host/single-user-auth": {
-          "status": 401,
-          "authRequired": true
-        },
-        "self-host/multi-user": null,
-        "saas/multi-user": null,
-        "self-host/api-key": {
-          "status": 401,
-          "authRequired": true
-        },
-        "self-host/non-loopback": {
-          "status": 401,
-          "authRequired": true
-        }
-      }
+      "authRequired": true
     }
   ]
 }

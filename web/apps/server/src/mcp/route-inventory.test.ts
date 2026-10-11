@@ -43,6 +43,13 @@ const expectedByMode = {
   "self-host/non-loopback": gated(503),
 };
 
+const allModes = Object.keys(expectedByMode);
+
+// A mode counts as observed only when it has a probe: an absent key and a null probe both
+// mean the inventory never recorded that mode.
+const missingModes = (route: InventoryRoute): string[] =>
+  allModes.filter((mode) => !route.authByMode?.[mode]);
+
 describe("golden route inventory: /api/v1/mcp auth per mode", () => {
   for (const method of ["GET", "DELETE"]) {
     it(`${method} records each auth mode's observed status`, () => {
@@ -61,13 +68,26 @@ describe("golden route inventory: /api/v1/mcp auth per mode", () => {
     });
   });
 
-  it("every mode-dependent route records all auth modes, including routes first seen in a later mode", () => {
-    const modes = Object.keys(expectedByMode);
-    const sparse = inventory.routes
+  it("every mode-dependent route records a real probe for every auth mode", () => {
+    const incomplete = inventory.routes
       .filter((route) => route.authRequired === "mode-dependent")
-      .filter((route) => modes.some((mode) => !(mode in (route.authByMode ?? {}))))
-      .map((route) => `${route.method} ${route.path}`);
-    expect(sparse).toEqual([]);
+      .map((route) => ({ route: `${route.method} ${route.path}`, modes: missingModes(route) }))
+      .filter((entry) => entry.modes.length > 0);
+    expect(incomplete).toEqual([]);
+  });
+
+  it("flags a planted entry whose mode is absent or null, so incomplete maps cannot pass as uniform", () => {
+    const withoutApiKey: Record<string, ModeProbe> = { ...expectedByMode };
+    delete withoutApiKey["self-host/api-key"];
+    const absentMode: InventoryRoute = { method: "GET", path: "/planted", authRequired: "mode-dependent", authByMode: withoutApiKey };
+    const nullMode: InventoryRoute = {
+      method: "GET",
+      path: "/planted",
+      authRequired: "mode-dependent",
+      authByMode: { ...expectedByMode, "saas/multi-user": null },
+    };
+    expect(missingModes(absentMode)).toEqual(["self-host/api-key"]);
+    expect(missingModes(nullMode)).toEqual(["saas/multi-user"]);
   });
 
   it("HEAD is session-gated in every mode (MCP transport does not serve HEAD)", () => {
