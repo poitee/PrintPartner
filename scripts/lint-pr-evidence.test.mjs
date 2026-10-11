@@ -1208,3 +1208,17 @@ test('bounds malformed link-tail scanning in required fields', () => {
   lintPrEvidence(bodyWithEvidence('Exemption: docs-only\n- Exemption reason: ' + '[a]('.repeat(15000)));
   assert.ok(performance.now() - start < 1000);
 });
+
+for (const placeholder of ['ＴＯＤＯ', 'ⓣⓞⓓⓞ', 'T\u200bODO', 'TO\u200dDO', 'TODо', 'ΤΟDΟ', 'ТВD', 'Ｎ／Ａ', 'T\u0301ODO', '\u200b']) {
+  for (const field of ['Steps followed to produce the evidence', 'Result observed', 'Exemption reason']) {
+    test(`rejects Unicode placeholder ${JSON.stringify(placeholder)} in ${field}`, () => {
+      const body = field === 'Exemption reason'
+        ? bodyWithEvidence(`Exemption: docs-only\n- Exemption reason: ${placeholder}`)
+        : bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} trace.json`).replace(`${field}: ${field.startsWith('Steps') ? 'ran locally' : 'passed'}`, `${field}: ${placeholder}`);
+      assert.equal(lintPrEvidence(body).ok, false);
+    });
+  }
+}
+test('accepts substantive Unicode explanation', () => {
+  assert.equal(lintPrEvidence(bodyWithEvidence('Exemption: docs-only\n- Exemption reason: 更新了用户指南。')).ok, true);
+});

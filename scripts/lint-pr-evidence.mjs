@@ -745,8 +745,19 @@ function visibleFieldText(value) {
   return text.replace(/[*_`~]/g, "").trim();
 }
 
+// Fold common Greek/Cyrillic lookalikes only for placeholder comparison.
+// This never changes the submitted explanation or requires English prose.
+const PLACEHOLDER_LOOKALIKES = new Map([
+  ["a", "αа"], ["b", "βв"], ["c", "ϲс"], ["d", "ԁ"],
+  ["e", "εе"], ["f", "ϝғ"], ["h", "ηнһ"], ["i", "ιіӏ"],
+  ["k", "κк"], ["m", "μм"], ["n", "νп"], ["o", "οо"],
+  ["p", "ρр"], ["s", "ѕ"], ["t", "τт"], ["x", "χх"], ["y", "υу"],
+].flatMap(([ascii, letters]) => [...letters].map((letter) => [letter, ascii])));
+
 function isPlaceholderField(value) {
-  const plain = visibleFieldText(value);
+  const visible = visibleFieldText(value).normalize("NFKD").toLowerCase()
+    .replace(/[\p{Default_Ignorable_Code_Point}\p{Mark}]/gu, "");
+  const plain = [...visible].map((letter) => PLACEHOLDER_LOOKALIKES.get(letter) ?? letter).join("").trim();
   return !plain || /^(?:todo|tbd|fixme|placeholder)\b/i.test(plain)
     || /^(?:n\/?a|none|pending|not provided)[.!?]*$/i.test(plain);
 }
