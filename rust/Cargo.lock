@@ -2828,6 +2828,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "pp-api-types"
+version = "0.1.0"
+dependencies = [
+ "pp-domain",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+]
+
+[[package]]
 name = "pp-compat"
 version = "0.1.0"
 dependencies = [
@@ -2895,6 +2905,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "pp-domain"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "pp-drivers"
+version = "0.1.0"
+
+[[package]]
 name = "pp-gateway"
 version = "0.1.0"
 dependencies = [
@@ -2916,6 +2937,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "pp-net"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+]
+
+[[package]]
 name = "pp-server"
 version = "0.1.0"
 dependencies = [
@@ -2924,6 +2953,10 @@ dependencies = [
  "serde_json",
  "tokio",
 ]
+
+[[package]]
+name = "pp-services"
+version = "0.1.0"
 
 [[package]]
 name = "pp-source"
@@ -5677,36 +5710,3 @@ name = "zlib-rs"
 version = "0.6.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b268e58e7c693d7c271f93ffc4ba3b380412554231c85bf61ca7af91042a4112"
-[[package]]
-name = "pp-api-types"
-version = "0.1.0"
-dependencies = [
- "pp-domain",
- "serde",
- "serde_json",
- "serde_path_to_error",
-]
-
-[[package]]
-name = "pp-domain"
-version = "0.1.0"
-dependencies = [
- "serde",
-]
-
-[[package]]
-name = "pp-drivers"
-version = "0.1.0"
-
-[[package]]
-name = "pp-net"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
-]
-
-[[package]]
-name = "pp-services"
-version = "0.1.0"
-
