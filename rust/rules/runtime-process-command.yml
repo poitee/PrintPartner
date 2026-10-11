@@ -203,12 +203,24 @@ utils:
     matches: lexical-scope
     has:
       matches: process-module-import
+      not:
+        any:
+          - matches: disabled-cfg-item
+          - inside:
+              matches: disabled-cfg-item
+              stopBy: end
       stopBy:
         not:
           matches: import-tree
   std-import-scope:
     matches: lexical-scope
     has:
+      not:
+        any:
+          - matches: disabled-cfg-item
+          - inside:
+              matches: disabled-cfg-item
+              stopBy: end
       any:
         - kind: use_as_clause
           has:
@@ -245,6 +257,14 @@ utils:
       stopBy:
         not:
           matches: import-tree
+  generic-shadow-scope:
+    has:
+      field: type_parameters
+      has:
+        kind: type_parameter
+        has:
+          field: name
+          pattern: $MODULE
   module-boundary:
     kind: declaration_list
     inside:
@@ -294,6 +314,20 @@ utils:
           has:
             field: name
             pattern: $MODULE
+        - kind: self
+          inside:
+            kind: use_list
+            inside:
+              kind: scoped_use_list
+              has:
+                field: path
+                any:
+                  - kind: identifier
+                    pattern: $MODULE
+                  - kind: scoped_identifier
+                    has:
+                      field: name
+                      pattern: $MODULE
         - kind: identifier
           pattern: $MODULE
           inside:
@@ -432,6 +466,13 @@ rule:
                   matches: module-boundary
             - not:
                 inside:
+                  matches: generic-shadow-scope
+                  stopBy:
+                    any:
+                      - matches: module-boundary
+                      - matches: process-import-scope
+            - not:
+                inside:
                   all:
                     - matches: shadow-scope
                     - not:
@@ -537,6 +578,13 @@ rule:
                 matches: std-import-scope
                 stopBy:
                   matches: module-boundary
+            - not:
+                inside:
+                  matches: generic-shadow-scope
+                  stopBy:
+                    any:
+                      - matches: module-boundary
+                      - matches: std-import-scope
             - not:
                 inside:
                   all:
