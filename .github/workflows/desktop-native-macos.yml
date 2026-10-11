@@ -57,10 +57,12 @@ jobs:
           echo "PP_EVIDENCE=$PP_EVIDENCE" >> "$GITHUB_ENV"
           echo "PP_DESKTOP_STAGE=$RUNNER_TEMP/desktop-stage" >> "$GITHUB_ENV"
           mkdir -p "$PP_EVIDENCE"
-          sw_vers > "$PP_EVIDENCE/runner.txt"
-          uname -a >> "$PP_EVIDENCE/runner.txt"
-          df -h >> "$PP_EVIDENCE/runner.txt"
-          xcodebuild -version >> "$PP_EVIDENCE/runner.txt"
+          {
+            sw_vers
+            uname -a
+            df -h
+            xcodebuild -version
+          } > "$PP_EVIDENCE/runner.txt"
           test "$(uname -m)" = '${{ matrix.arch }}'
           python3 rust/scripts/check-macos-bundle.py --self-test 2>&1 | tee "$PP_EVIDENCE/self-tests.log"
       - uses: actions/setup-node@v7
