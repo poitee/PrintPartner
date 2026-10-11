@@ -1248,3 +1248,38 @@ test('rejects duplicate visible Evidence sections', () => {
 test('a fenced duplicate Evidence heading stays ignored', () => {
   assert.equal(lintPrEvidence(bodyWithEvidence('Exemption: docs-only\n- Exemption reason: Updated docs.') + '\n```text\n## Evidence\n```').ok, true);
 });
+
+for (const placeholder of ['&ZeroWidthSpace;', '&NoBreak;', '&NegativeThinSpace;', 'T&ZeroWidthSpace;ODO', '&MediumSpace;', '&ThickSpace;']) {
+  for (const field of ['Steps followed to produce the evidence', 'Result observed', 'Exemption reason']) {
+    test(`rejects named-entity placeholder ${placeholder} in ${field}`, () => {
+      const body = field === 'Exemption reason'
+        ? bodyWithEvidence(`Exemption: docs-only\n- Exemption reason: ${placeholder}`)
+        : bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} trace.json`).replace(`${field}: ${field.startsWith('Steps') ? 'ran locally' : 'passed'}`, `${field}: ${placeholder}`);
+      assert.equal(lintPrEvidence(body).ok, false);
+    });
+  }
+}
+for (const definition of ['[proof]: evidence/shot.png garbage', '[proof]: evidence/shot.png "title" garbage', '[proof]:\n  evidence/shot.png garbage', '[proof]: https://example.test/shot.png (title) garbage']) {
+  test(`rejects invalid complete reference definition ${JSON.stringify(definition)}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} [proof]\n\n${definition}`)).ok, false);
+  });
+}
+for (const artifact of ['<span class="https://example.test/shot.png"></span>', '<span title="trace.json"></span>', '<span class=https://example.test/shot.png></span>', '<div data-artifact="https://example.test/shot.png"></div>']) {
+  test(`ignores raw HTML artifact attributes ${artifact}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} ${artifact}`)).ok, false);
+  });
+}
+test('visible artifact URL inside an HTML span still counts', () => {
+  assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} <span>https://example.test/shot.png</span>`)).ok, true);
+});
+for (const definition of ['[proof]: evidence/shot.png "capture"', "[proof]: evidence/shot.png 'capture'", '[proof]: evidence/shot.png (capture)', '[proof]:\n  evidence/shot.png\n  "capture"', '[proof]: evidence/shot.png "multi\n  line capture"']) {
+  test(`accepts complete reference title ${JSON.stringify(definition)}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} [proof]\n\n${definition}`)).ok, true);
+  });
+}
+
+for (const [definitions, ok] of [['[proof]: #\n[proof]: evidence/shot.png', false], ['[proof]: evidence/shot.png garbage\n[proof]: evidence/shot.png', true]]) {
+  test(`first valid reference definition wins: ${JSON.stringify(definitions)}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} [proof]\n\n${definitions}`)).ok, ok);
+  });
+}

@@ -11,6 +11,9 @@
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+// WHATWG HTML named characters: https://html.spec.whatwg.org/entities.json
+// Vendored so the standalone checker needs no package install or network.
+import NAMED_CHARACTER_REFERENCES from "./html-named-character-references.json" with { type: "json" };
 
 export const VALID_EXEMPTIONS = Object.freeze([
   "docs-only",
@@ -610,6 +613,43 @@ function parseLinkTail(text, open) {
 /** Link reference definition opener: `[label]:` (escapes allowed), optional destination. */
 const REFERENCE_DEFINITION = /^[ \t]*\[((?:[^\]\\\n]|\\.){1,999})\]:[ \t]*(<(?:[^>\\\n]|\\.)*>|\S+)?/;
 
+/** Validate a complete destination and optional title, including continuation
+ * lines. A prefix followed by unquoted garbage is not a Markdown definition. */
+function referenceDestination(lines, index) {
+  const opening = lines[index].match(REFERENCE_DEFINITION);
+  if (!opening) return null;
+  let tail = lines[index].slice(opening[0].length - (opening[2]?.length ?? 0));
+  if (!tail.trim()) {
+    index += 1;
+    tail = lines[index]?.trim() ?? "";
+  }
+  const destination = (`[ref]: ${tail}`).match(REFERENCE_DEFINITION)?.[2];
+  if (!destination) return null;
+  let title = tail.slice(tail.indexOf(destination) + destination.length).trim();
+  if (!title && /^[ \t]*["'(]/.test(lines[index + 1] ?? "")) title = lines[++index].trim();
+  if (title) {
+    const closer = { '"': '"', "'": "'", "(": ")" }[title[0]];
+    if (!closer) return null;
+    const parts = [title];
+    let closed = false;
+    for (let at = 1; ; at = 0) {
+      const part = parts[parts.length - 1];
+      for (; at < part.length; at += 1) {
+        if (part[at] === "\\") at += 1;
+        else if (part[at] === closer) { closed = true; break; }
+      }
+      if (closed) break;
+      const next = lines[++index];
+      if (!next?.trim() || REFERENCE_DEFINITION.test(next)) return null;
+      parts.push(next);
+    }
+    title = parts.join("\n");
+  }
+  const wrapped = `(${destination}${title ? " " + title : ""})`;
+  const parsed = parseLinkTail(wrapped, 0);
+  return parsed?.end === wrapped.length ? parsed.destination : null;
+}
+
 /**
  * Drop link reference definitions, noting whether any destination is concrete.
  * A definition's destination may sit on the next line and its title may span
@@ -618,27 +658,29 @@ const REFERENCE_DEFINITION = /^[ \t]*\[((?:[^\]\\\n]|\\.){1,999})\]:[ \t]*(<(?:[
 function stripReferenceDefinitions(value, references) {
   let concrete = false;
   let dropping = false;
-  let wantDestination = false;
-  let referenced = false;
+  const defined = new Set();
   const kept = [];
-  for (const line of value.split("\n")) {
+  const lines = value.split("\n");
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
     if (!line.trim()) {
       dropping = false;
-      wantDestination = false;
       kept.push(line);
       continue;
     }
     const definition = line.match(REFERENCE_DEFINITION);
     if (definition) {
       dropping = true;
-      wantDestination = !definition[2];
-      referenced = references.has(normalizeReferenceLabel(definition[1]));
-      if (referenced && definition[2] && isConcreteTarget(definition[2])) concrete = true;
+      const label = normalizeReferenceLabel(definition[1]);
+      const referenced = references.has(label);
+      const destination = referenceDestination(lines, index);
+      if (destination && !defined.has(label)) {
+        defined.add(label);
+        if (referenced && isConcreteTarget(destination)) concrete = true;
+      }
       continue;
     }
     if (dropping) {
-      if (referenced && wantDestination && isConcreteTarget(line.trim().split(/\s+/)[0])) concrete = true;
-      wantDestination = false;
       continue;
     }
     kept.push(line);
@@ -687,8 +729,36 @@ function stripLinks(value, references) {
   return { rest: rest + text.slice(cursor), concrete };
 }
 
+function stripRawHtmlTags(value) {
+  const opener = /<\/?[a-z][a-z\d-]*(?=[\s>]|\/>)/iy;
+  let kept = "";
+  let cursor = 0;
+  for (let start = value.indexOf("<"); start !== -1; start = value.indexOf("<", cursor)) {
+    opener.lastIndex = start;
+    const tag = opener.exec(value);
+    if (!tag) {
+      kept += value.slice(cursor, start + 1);
+      cursor = start + 1;
+      continue;
+    }
+    kept += value.slice(cursor, start);
+    let quote = null;
+    let end = opener.lastIndex;
+    for (; end < value.length; end += 1) {
+      const ch = value[end];
+      if (quote) { if (ch === quote) quote = null; }
+      else if (ch === '"' || ch === "'") quote = ch;
+      else if (ch === ">") { end += 1; break; }
+      else if (ch === "<") break;
+    }
+    cursor = end;
+  }
+  return kept + value.slice(cursor);
+}
+
 function looksLikeArtifact(value, references) {
   if (!value) return false;
+  value = stripRawHtmlTags(value);
   // Parse markup before evaluating prose: a placeholder link's title cannot
   // escape into a later clause, and filenames may contain placeholder words.
   if (/^\s*`?(?:TODO|TBD|FIXME|placeholder)(?:[ :]|$)/i.test(value)) return false;
@@ -774,12 +844,11 @@ function visibleFieldText(value) {
     cursor = tail.end;
   }
   text += value.slice(cursor);
-  text = text.replace(/<\/?[a-z][^<>\n]*>/gi, "")
+  text = stripRawHtmlTags(text)
     .replace(/!?\[([^\]\n]*)\](?:\[[^\]\n]*\])?/g, "$1")
     .replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\]\\^_`{|}~])/g, "$1");
-  const entities = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", Tab: "\t", NewLine: "\n" };
-  text = text.replace(/&(#x[\da-f]+|#\d+|amp|lt|gt|quot|apos|nbsp|Tab|NewLine);/gi, (match, entity) => {
-    if (entity[0] !== "#") return entities[entity] ?? match;
+  text = text.replace(/&(#[xX][\da-fA-F]+|#\d+|[a-zA-Z][a-zA-Z\d]*);/g, (match, entity) => {
+    if (entity[0] !== "#") return Object.hasOwn(NAMED_CHARACTER_REFERENCES, entity) ? NAMED_CHARACTER_REFERENCES[entity] : match;
     const code = entity[1].toLowerCase() === "x" ? Number.parseInt(entity.slice(2), 16) : Number(entity.slice(1));
     return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "\ufffd";
   });
@@ -839,7 +908,7 @@ function documentReferences(body) {
     if (!match) continue;
     const label = normalizeReferenceLabel(match[1]);
     if (definitions.has(label)) continue;
-    const target = match[2] || lines[i + 1]?.trim().split(/\s+/)[0];
+    const target = referenceDestination(lines, i);
     if (target) definitions.set(label, target);
   }
   return definitions;
