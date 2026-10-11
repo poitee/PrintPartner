@@ -202,12 +202,201 @@ class CredentialFileTest(unittest.TestCase):
             self.assertFalse(parent.exists())
 
 
+class StartupStopTest(unittest.TestCase):
+    def test_stop_during_silent_or_partial_startup_is_prompt_and_clean(self):
+        with tempfile.TemporaryDirectory(prefix="pp-startup-stop-test-") as temporary:
+            temp = Path(temporary)
+            root = make_fixture_repo(temp / "repo")
+            binary = temp / "server"
+            pidfile = temp / "server.pid"
+            driver = (f"import sys; from pathlib import Path; sys.path.insert(0, {str(HELPER.parent)!r}); "
+                      f"import verify; verify.build = lambda *args: Path({str(binary)!r}); verify.main()")
+            for partial in (False, True):
+                for stop_signal in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+                    with self.subTest(partial_line=partial, signal=stop_signal.name):
+                        pidfile.unlink(missing_ok=True)
+                        write_executable(binary, f"#!{sys.executable}\n" +
+                                         "import os, signal, sys, time\nfrom pathlib import Path\n" +
+                                         "signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))\n" +
+                                         ("print('http://127.0.0.1:', end='', flush=True)\n" if partial else "") +
+                                         f"Path({str(pidfile)!r}).write_text(str(os.getpid()))\n" +
+                                         "time.sleep(600)\n")
+                        log = temp / "launch.log"
+                        with log.open("w") as stdout:
+                            process = subprocess.Popen([sys.executable, "-c", driver, "launch", "--repo", str(root)],
+                                                       stdout=stdout, stderr=subprocess.STDOUT, text=True)
+                        child_pid = None
+                        try:
+                            deadline = time.monotonic() + 15
+                            while not pidfile.exists() and time.monotonic() < deadline:
+                                time.sleep(0.05)
+                            self.assertTrue(pidfile.exists(), log.read_text())
+                            child_pid = int(pidfile.read_text())
+                            process.send_signal(stop_signal)
+                            self.assertEqual(process.wait(timeout=5), 0, log.read_text())
+                            self.assertIn("pp-server stopped before readiness", log.read_text())
+                            self.assertFalse(process_alive(child_pid))
+                        finally:
+                            if process.poll() is None:
+                                process.kill()
+                                process.wait(timeout=10)
+                            if child_pid is not None:
+                                with contextlib.suppress(ProcessLookupError):
+                                    os.kill(child_pid, signal.SIGKILL)
+
+
+class VerifyServerStopTest(unittest.TestCase):
+    def test_cancelled_successful_verify_cleans_up_then_exits_nonzero(self):
+        verify = load_verify()
+        process = SimpleNamespace(pid=123, stdout=io.StringIO())
+        def origin(_process, errors):
+            fixture = Path(errors.name).parent
+            marker = fixture / "data/.desktop-owner.json"
+            marker.parent.mkdir()
+            marker.write_text(json.dumps({"runtime_dir": str(fixture / "runtime")}))
+            credential = fixture / "credentials.json"
+            credential.write_text(json.dumps({"bootstrap_url": "http://127.0.0.1:12345/__desktop/bootstrap?token"}))
+            credential.chmod(0o600)
+            return "http://127.0.0.1:12345"
+        responses = []
+        for status, body, headers in (
+                (401, {}, {}), (303, {}, {"Set-Cookie": "session=test; HttpOnly"}),
+                (200, {"ok": True}, {}), (200, {"compat": {"state": "ready"}}, {}),
+                (200, b'<div id="root">', {"Content-Type": "text/html"}),
+                (200, {"id": 1}, {}), (200, {"id": 1, "name": "Rust verification source"}, {})):
+            response = mock.MagicMock()
+            response.__enter__.return_value = response
+            response.status = status
+            response.headers = {"Content-Type": "application/json", **headers}
+            response.read.return_value = body if isinstance(body, bytes) else json.dumps(body).encode()
+            responses.append(response)
+        opener = mock.Mock()
+        opener.open.side_effect = responses
+        output = io.StringIO()
+        with mock.patch.object(verify, "checkout", return_value=("commit", "node")), \
+                mock.patch.object(verify, "build", return_value=Path("pp-server")), \
+                mock.patch.object(verify, "start_server", return_value=process), \
+                mock.patch.object(verify, "read_origin", side_effect=origin), \
+                mock.patch.object(verify.urllib.request, "build_opener", return_value=opener), \
+                mock.patch.object(verify, "ignore_signals", side_effect=verify.Stop("SIGTERM")), \
+                mock.patch.object(verify, "terminate") as terminate, \
+                mock.patch.object(verify, "verify_shutdown") as shutdown, \
+                contextlib.redirect_stdout(output):
+            with self.assertRaisesRegex(verify.Stop, "SIGTERM"):
+                verify.verify(Path("repo"))
+        terminate.assert_called_once_with(process)
+        shutdown.assert_not_called()
+        self.assertNotIn("PASS:", output.getvalue())
+        self.assertTrue(process.stdout.closed)
+
+    def test_stop_at_server_acquisition_and_during_cleanup_reaps_server(self):
+        with tempfile.TemporaryDirectory(prefix="pp-verify-stop-test-") as temporary:
+            temp = Path(temporary)
+            pidfile = temp / "server.pid"
+            binary = temp / "server"
+            write_executable(binary, f"#!{sys.executable}\n" +
+                             "import os, signal, sys, time\nfrom pathlib import Path\n" +
+                             "def stop(*args):\n    time.sleep(0.3)\n    sys.exit(0)\n" +
+                             "signal.signal(signal.SIGTERM, stop)\n" +
+                             f"Path({str(pidfile)!r}).write_text(str(os.getpid()))\n" +
+                             "time.sleep(600)\n")
+            for phase in ("acquisition", "cleanup", "ignore-installation", "before-block"):
+                with self.subTest(phase=phase):
+                    pidfile.unlink(missing_ok=True)
+                    driver = f"""
+import os, signal, subprocess, sys, time
+from pathlib import Path
+sys.path.insert(0, {str(HELPER.parent)!r})
+import verify
+verify.checkout = lambda *_: ('commit', 'node')
+verify.build = lambda *_: Path({str(binary)!r})
+def start(*args, **kwargs):
+    process = subprocess.Popen([{str(binary)!r}], stdout=subprocess.PIPE, text=True)
+    while not Path({str(pidfile)!r}).exists():
+        time.sleep(0.01)
+    if {phase!r} == 'acquisition':
+        os.kill(os.getpid(), signal.SIGTERM)
+    return process
+verify.start_server = start
+def unread(*args):
+    raise RuntimeError('injected startup failure')
+verify.read_origin = unread
+terminate = verify.terminate
+def cleanup(process):
+    if {phase!r} == 'cleanup':
+        os.kill(os.getpid(), signal.SIGTERM)
+    terminate(process)
+verify.terminate = cleanup
+verify.install_stop_handlers()
+original_signal = signal.signal
+injected = False
+def set_handler(signum, handler):
+    global injected
+    result = original_signal(signum, handler)
+    if {phase!r} == 'ignore-installation' and handler == signal.SIG_IGN and not injected:
+        injected = True
+        other = next(value for value in verify.STOP_SIGNALS if value != signum)
+        os.kill(os.getpid(), other)
+    return result
+signal.signal = set_handler
+original_mask = signal.pthread_sigmask
+def set_mask(how, values):
+    global injected
+    if {phase!r} == 'before-block' and how == signal.SIG_BLOCK and not injected:
+        injected = True
+        os.kill(os.getpid(), signal.SIGTERM)
+    return original_mask(how, values)
+signal.pthread_sigmask = set_mask
+verify.verify(Path({str(temp)!r}))
+"""
+                    child_pid = None
+                    try:
+                        result = subprocess.run([sys.executable, "-c", driver], capture_output=True,
+                                                text=True, timeout=10)
+                        child_pid = int(pidfile.read_text())
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn("Stop: SIGTERM" if phase == "acquisition" else
+                                      "injected startup failure", result.stderr)
+                        self.assertNotIn("CLEANUP ERROR", result.stdout)
+                        self.assertFalse(process_alive(child_pid), result.stdout + result.stderr)
+                    finally:
+                        if child_pid is None and pidfile.exists():
+                            child_pid = int(pidfile.read_text())
+                        if child_pid is not None:
+                            with contextlib.suppress(ProcessLookupError):
+                                os.kill(child_pid, signal.SIGKILL)
+
+
 class ServerExitTest(unittest.TestCase):
     def test_clean_server_exit_runs_shutdown_checks(self):
         self.assert_server_exit(0)
 
     def test_failed_server_exit_remains_an_error(self):
         self.assert_server_exit(1)
+
+    def test_stop_at_launch_cleanup_entry_removes_credential_and_checks_shutdown(self):
+        verify = load_verify()
+        process = SimpleNamespace(pid=123, returncode=0, stdout=io.StringIO(), wait=lambda: 0)
+        with tempfile.TemporaryDirectory(prefix="pp-launch-cleanup-test-") as temporary:
+            credentials = Path(temporary) / "credential.json"
+            def origin(_process, errors):
+                fixture = Path(errors.name).parent
+                marker = fixture / "data/.desktop-owner.json"
+                marker.parent.mkdir()
+                marker.write_text(json.dumps({"runtime_dir": temporary}))
+                (fixture / "bootstrap.json").write_text('{}')
+                return "http://127.0.0.1:12345"
+            with mock.patch.object(verify, "start_server", return_value=process), \
+                    mock.patch.object(verify, "read_origin", side_effect=origin), \
+                    mock.patch.object(verify, "terminate") as terminate, \
+                    mock.patch.object(verify, "verify_shutdown") as shutdown, \
+                    mock.patch.object(verify, "ignore_signals", side_effect=verify.Stop("SIGTERM")), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                verify.serve(Path("pp-server"), Path("repo"), "node", "commit", credentials)
+            terminate.assert_called_once_with(process)
+            shutdown.assert_called_once()
+            self.assertFalse(credentials.exists())
+            self.assertTrue(process.stdout.closed)
 
     def assert_server_exit(self, status):
         verify = load_verify()
@@ -348,6 +537,12 @@ class StopDuringBuildTest(unittest.TestCase):
 
     def test_sighup_during_verify_build_leaves_no_build_children(self):
         self.assert_stop_leaves_no_children(signal.SIGHUP, mode="verify")
+
+    def test_sigterm_during_verify_build_leaves_no_build_children(self):
+        self.assert_stop_leaves_no_children(signal.SIGTERM, mode="verify")
+
+    def test_sigint_during_verify_build_leaves_no_build_children(self):
+        self.assert_stop_leaves_no_children(signal.SIGINT, mode="verify")
 
     def assert_stop_leaves_no_children(self, stop_signal, mode="launch"):
         with tempfile.TemporaryDirectory(prefix="pp-launch-build-test-") as temporary:

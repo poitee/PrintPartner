@@ -23,6 +23,9 @@ import urllib.parse
 import urllib.request
 
 
+STOP_SIGNALS = frozenset({signal.SIGTERM, signal.SIGINT, signal.SIGHUP})
+
+
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
@@ -39,9 +42,12 @@ def check(condition, message):
 
 def ignore_signals():
     # Once cleanup starts, further signals must not interrupt it.
-    signal.signal(signal.SIGTERM, signal.SIG_IGN)
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
-    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)
+    try:
+        for signum in STOP_SIGNALS:
+            signal.signal(signum, signal.SIG_IGN)
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
 
 
 def begin_stop(name):
@@ -62,6 +68,14 @@ def stop_on_signal(signum, _frame):
     raise begin_stop(name)
 
 
+def install_stop_handlers():
+    # Handler installation is atomic; preserve unrelated masks inherited from the caller.
+    signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)
+    for signum in STOP_SIGNALS:
+        signal.signal(signum, stop_on_signal)
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, STOP_SIGNALS)
+
+
 def release_signals():
     held["active"] = False
     if held["pending"] is not None:
@@ -71,7 +85,7 @@ def release_signals():
 def stop_group(process, grace=5):
     # Build workers are already spawned, so blocking cannot leak a mask into them.
     # Deliver any additional stop only after the whole group has been cleaned up.
-    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGINT, signal.SIGHUP})
+    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)
     try:
         _stop_group(process, grace)
     finally:
@@ -198,8 +212,24 @@ def start_server(binary, root, node, commit, fixture, errors, credentials=None, 
 
 
 def read_origin(process, errors):
-    check(select.select([process.stdout], [], [], 60)[0], "Rust startup timed out")
-    origin = process.stdout.readline().strip()
+    # Read only available bytes, so a silent server or an unterminated origin line
+    # cannot postpone a held stop request until the full startup timeout.
+    deadline = time.monotonic() + 60
+    data = bytearray()
+    while b"\n" not in data:
+        if held["active"] and held["pending"] is not None:
+            release_signals()
+        remaining = deadline - time.monotonic()
+        check(remaining > 0, "Rust startup timed out")
+        if not select.select([process.stdout], [], [], min(0.1, remaining))[0]:
+            continue
+        chunk = os.read(process.stdout.fileno(), 4096)
+        if not chunk:
+            break
+        data.extend(chunk)
+    if held["active"] and held["pending"] is not None:
+        release_signals()
+    origin = bytes(data).split(b"\n", 1)[0].decode().strip()
     if not origin:
         process.wait(timeout=5)
         errors.seek(0)
@@ -239,9 +269,11 @@ def verify(root):
         fixture = Path(temporary)
         credentials = fixture / "credentials.json"
         with (fixture / "server.stderr").open("w+") as errors:
+            held["active"] = True
             process = start_server(binary, root, node, commit, fixture, errors, credentials)
             runtime_dir = None
             try:
+                release_signals()
                 origin = read_origin(process, errors)
                 print(f"START: pid={process.pid} origin={origin}", flush=True)
                 marker = fixture / "data/.desktop-owner.json"
@@ -290,6 +322,14 @@ def verify(root):
                 check(saved["id"] == source["id"] and saved["name"] == "Rust verification source",
                       "Source did not persist")
             finally:
+                cleanup_stop = None
+                try:
+                    ignore_signals()
+                except Stop as stop:
+                    # The handler installed ignored handlers before raising. Finish cleanup
+                    # before propagating cancellation, preserving any earlier proof failure.
+                    cleanup_stop = stop
+                held["active"] = False
                 failed = sys.exc_info()[0] is not None
                 try:
                     terminate(process)
@@ -302,6 +342,8 @@ def verify(root):
                     process.stdout.close()
                     errors.seek(0)
                     print("SERVER STDERR:\n" + errors.read(), flush=True)
+            if cleanup_stop is not None and not failed:
+                raise cleanup_stop
             verify_shutdown(process, fixture, runtime_dir)
             print("STOP: exit=0; owner marker removed; private sockets removed; data lock reacquired", flush=True)
     print("PASS: Rust build, gateway endpoints, persisted Source and shutdown", flush=True)
@@ -374,13 +416,7 @@ def launch(root, credentials):
     if credentials is not None and (credentials.exists() or credentials.is_symlink()):
         raise SystemExit(f"credential file already exists: {credentials}")
     try:
-        # Block stop signals while installing handlers, so none arrives half-installed.
-        signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGINT, signal.SIGHUP})
-        signal.signal(signal.SIGTERM, stop_on_signal)
-        signal.signal(signal.SIGINT, stop_on_signal)
-        signal.signal(signal.SIGHUP, stop_on_signal)
-        # Unblock only stop signals, so a caller's other masked signals stay masked.
-        signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM, signal.SIGINT, signal.SIGHUP})
+        install_stop_handlers()
         commit, node = checkout(root)
         binary = build(root, node, commit)
         serve(binary, root, node, commit, credentials)
@@ -393,6 +429,7 @@ def serve(binary, root, node, commit, credentials):
         fixture = Path(temporary)
         runtime_dir = None
         published = None
+        origin = None
         with (fixture / "server.stderr").open("w+") as errors:
             # pp-server writes its bootstrap into the private fixture; launch publishes it below.
             internal = fixture / "bootstrap.json" if credentials is not None else None
@@ -414,7 +451,11 @@ def serve(binary, root, node, commit, credentials):
             except Stop as stop:
                 print(f"STOP: {stop} received; stopping pp-server", flush=True)
             finally:
-                ignore_signals()
+                try:
+                    ignore_signals()
+                except Stop:
+                    # A stop at cleanup entry must still remove credentials and check shutdown.
+                    pass
                 held["active"] = False
                 try:
                     terminate(process)
@@ -424,8 +465,12 @@ def serve(binary, root, node, commit, credentials):
                     process.stdout.close()
                     errors.seek(0)
                     print("SERVER STDERR:\n" + errors.read(), flush=True)
-            verify_shutdown(process, fixture, runtime_dir)
-            print("STOP: exit=0; owner marker removed; private sockets removed; data lock reacquired", flush=True)
+            if origin is None:
+                # Cancellation before readiness need not have created the data lock yet.
+                print("STOP: exit=0; pp-server stopped before readiness", flush=True)
+            else:
+                verify_shutdown(process, fixture, runtime_dir)
+                print("STOP: exit=0; owner marker removed; private sockets removed; data lock reacquired", flush=True)
 
 
 def main():
@@ -443,8 +488,8 @@ def main():
         credentials = args.credential_file.parent.resolve() / args.credential_file.name if args.credential_file else None
         launch(root, credentials)
     else:
-        # Detached build groups also need cleanup when a verification terminal closes.
-        signal.signal(signal.SIGHUP, stop_on_signal)
+        # Cancelled proofs remain nonzero, after their owned processes have been cleaned up.
+        install_stop_handlers()
         verify(root)
 
 
