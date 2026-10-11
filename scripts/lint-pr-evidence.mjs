@@ -298,7 +298,7 @@ function evidenceSectionEnd(text) {
  */
 export function extractEvidenceSection(body, options) {
   if (typeof body !== "string" || !body.trim()) return null;
-  const visible = stripHiddenMarkdown(structuralMetadataView(body), options);
+  const visible = inlineCodeMetadataView(stripHiddenMarkdown(structuralMetadataView(body), options));
   const match = [...referenceHeadingView(visible).matchAll(EVIDENCE_HEADING)][0];
   if (!match || match.index == null) return null;
   const start = match.index + match[0].length;
@@ -774,6 +774,20 @@ function inlineHtmlMetadataView(value) {
     while (rangeIndex < ranges.length && ranges[rangeIndex].end <= start) rangeIndex += 1;
     opener.lastIndex = start;
     const inCode = rangeIndex < ranges.length && ranges[rangeIndex].start <= start;
+    if (!inCode && !isEscaped(value, start)) {
+      const declaration = value.startsWith("<?", start) ? [2, "?>"]
+        : value.startsWith("<![CDATA[", start) ? [9, "]]>"]
+        : /^<![A-Z]/.test(value.slice(start, start + 3)) ? [2, ">"] : null;
+      if (declaration) {
+        const close = value.indexOf(declaration[1], start + declaration[0]);
+        if (close !== -1) {
+          const end = close + declaration[1].length;
+          kept += value.slice(cursor, start) + value.slice(start, end).replace(/\r?\n/g, " ");
+          cursor = end;
+          continue;
+        }
+      }
+    }
     const tag = !inCode && !isEscaped(value, start) ? opener.exec(value) : null;
     if (!tag) {
       kept += value.slice(cursor, start + 1);
@@ -793,6 +807,18 @@ function inlineHtmlMetadataView(value) {
     const flat = raw.replace(/\r?\n/g, " ");
     kept += value.slice(cursor, start) + (isCompleteHtmlTag(flat) ? flat : raw);
     cursor = end;
+  }
+  return kept + value.slice(cursor);
+}
+
+/** Code spans render inline even when their source crosses physical lines. */
+function inlineCodeMetadataView(value) {
+  let cursor = 0;
+  let kept = "";
+  for (const range of codeSpanRanges(value)) {
+    kept += value.slice(cursor, range.start)
+      + value.slice(range.start, range.end).replace(/\r?\n/g, " ");
+    cursor = range.end;
   }
   return kept + value.slice(cursor);
 }
@@ -893,15 +919,16 @@ function stripRawHtmlTags(value) {
   const opener = /<\/?[a-z][a-z\d-]*(?=[\s>]|\/>)/iy;
   let kept = "";
   let cursor = 0;
+  const hidden = [];
   for (let start = value.indexOf("<"); start !== -1; start = value.indexOf("<", cursor)) {
     opener.lastIndex = start;
     const tag = opener.exec(value);
     if (!tag) {
-      kept += value.slice(cursor, start + 1);
+      if (!hidden.length) kept += value.slice(cursor, start + 1);
       cursor = start + 1;
       continue;
     }
-    kept += value.slice(cursor, start);
+    if (!hidden.length) kept += value.slice(cursor, start);
     let quote = null;
     let end = opener.lastIndex;
     for (; end < value.length; end += 1) {
@@ -911,9 +938,15 @@ function stripRawHtmlTags(value) {
       else if (ch === ">") { end += 1; break; }
       else if (ch === "<") break;
     }
+    const markup = value.slice(start, end);
+    const name = markup.match(/^<\/?([a-z][a-z\d-]*)/i)?.[1].toLowerCase();
+    const closing = markup.startsWith("</");
+    if (closing && name === hidden.at(-1)) hidden.pop();
+    else if (!closing && ["script", "style", "template", "head", "title"].includes(name)
+      && (!hidden.length || name === "template" && hidden.at(-1) === "template")) hidden.push(name);
     cursor = end;
   }
-  return kept + value.slice(cursor);
+  return kept + (hidden.length ? "" : value.slice(cursor));
 }
 
 function looksLikeArtifact(value, references) {
@@ -963,8 +996,8 @@ function normalizeReferenceLabel(label) {
 }
 
 function referenceUses(value, { requireVisible = false } = {}) {
-  let text = value;
-  for (const range of codeSpanRanges(value).reverse()) {
+  let text = stripRawHtmlTags(value);
+  for (const range of codeSpanRanges(text).reverse()) {
     text = text.slice(0, range.start) + " " + text.slice(range.end);
   }
   text = stripLinks(text, new Set()).rest;
@@ -1063,7 +1096,7 @@ function targetsBannedLan(sectionText, definitions) {
   );
   const bannedTarget = (value) => {
     if (BANNED_LAN_IP.test(value)) return true;
-    const decoded = decodeCharacterReferences(value).replace(/\\(.)/g, "$1");
+    const decoded = decodeCharacterReferences(value).replace(/\\(.)/g, "$1").replace(/[\t\n\r]/g, "");
     return [...decoded.matchAll(/(?:https?:)?\/\/[^\s<>()"'`]+/gi)].some((match) => {
       try {
         let host = new URL(trimToken(match[0]), "https://example.test/").hostname;
@@ -1127,7 +1160,7 @@ export function lintPrEvidence(body) {
   const reason = extractExemptionReason(section);
   const hasEvidence = hasEvidenceContent(section);
 
-  if ([...referenceHeadingView(stripHiddenMarkdown(structuralMetadataView(body))).matchAll(EVIDENCE_HEADING)].length > 1) {
+  if ([...referenceHeadingView(inlineCodeMetadataView(stripHiddenMarkdown(structuralMetadataView(body)))).matchAll(EVIDENCE_HEADING)].length > 1) {
     errors.push("PR body must contain exactly one visible Evidence section.");
   }
 

@@ -1448,3 +1448,50 @@ for (const tag of ['<span title="', "<span title='", '<custom-tag data-proof="']
     assert.equal(lintPrEvidence(bodyWithEvidence(`Intro ${tag}\nplaceholder\n${quote}>visible\nExemption: docs-only\n- Exemption reason: Updated docs.`)).ok, true);
   });
 }
+
+for (const journey of ['<span title="[proof]">journey</span>', '<span data-proof="[shot][proof]">journey</span>']) {
+  test(`HTML attribute references cannot credit unused definition ${journey}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Journey exercised: ${journey}\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} [proof]: evidence/shot.png`)).ok, false);
+  });
+}
+for (const space of ['&#10;', '&#9;', '&#13;', '&NewLine;', '&Tab;']) {
+  test(`rejects URL parser ignored whitespace ${space}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: docs-only\n- Exemption reason: Updated docs.\n- Journey exercised: <a href="http://3232${space}235856/">preview</a>`)).ok, false);
+  });
+}
+for (const [open,close] of [['<?php','?>'],['<!DOCTYPE','>'],['<![CDATA[',']]>']]) {
+  test(`inline HTML declaration cannot introduce exemption ${open}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Intro ${open}\nExemption: docs-only\n${close}\n- Exemption reason: Updated docs.`)).ok, false);
+  });
+  test(`real exemption after inline declaration remains valid ${open}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Intro ${open}\nexample\n${close}\nExemption: docs-only\n- Exemption reason: Updated docs.`)).ok, true);
+  });
+}
+for (const ticks of ['`','``']) {
+  test(`multiline code span cannot introduce exemption ${ticks}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`${ticks}example\nExemption: docs-only\n${ticks}\n- Exemption reason: Updated docs.`)).ok, false);
+  });
+  test(`multiline code span cannot introduce a field ${ticks}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n${ticks}example\n- Result observed: passed\n${ticks}\n${ARTIFACT_LABEL} trace.json`)).ok, false);
+  });
+}
+for (const tag of ['style','script','template','head','title']) {
+  test(`hidden element ${tag} cannot supply artifact`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} <${tag}>https://example.test/shot.png</${tag}>`)).ok, false);
+  });
+  test(`hidden element ${tag} cannot supply exemption reason`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: docs-only\n- Exemption reason: <${tag}>Updated docs</${tag}>`)).ok, false);
+  });
+}
+test('rendered reference label after raw tag remains valid proof', () => {
+  assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Journey exercised: <span title="example">[proof]</span>\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} [proof]: evidence/shot.png`)).ok, true);
+});
+test('real declaration after multiline code span stays visible', () => {
+  assert.equal(lintPrEvidence(bodyWithEvidence('`example\nnot metadata`\nExemption: docs-only\n- Exemption reason: Updated docs.')).ok, true);
+});
+test('visible prose survives surrounding non-rendering elements', () => {
+  assert.equal(lintPrEvidence(bodyWithEvidence('Exemption: docs-only\n- Exemption reason: Updated <style>hidden</style> docs.')).ok, true);
+});
+test('nested template content cannot supply artifact', () => {
+  assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} <template><template>hidden</template>https://example.test/shot.png</template>`)).ok, false);
+});
