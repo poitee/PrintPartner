@@ -1088,7 +1088,7 @@ for (const reason of ["TODO", "TBD", "N/A", "none"]) {
     assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: docs-only\n- Exemption reason: ${reason}`)).ok, false);
   });
 }
-for (const artifact of ["No screenshot.png was produced", "evidence/trace.zip was not generated", "`not provided`", "[unused]: evidence/shot.png", "without screenshot.png", "screenshot.png missing from run", "never uploaded screenshot.png", "did not produce trace.json"]) {
+for (const artifact of ["No screenshot.png was produced", "evidence/trace.zip was not generated", "`not provided`", "[unused]: evidence/shot.png", "without screenshot.png", "screenshot.png missing from run", "never uploaded screenshot.png", "did not produce trace.json", "screenshot.png absent", "screenshot.png unavailable", "unable to attach screenshot.png", "screenshot.png omitted", "screenshot.png not included", "N/A screenshot.png"]) {
   test(`rejects absent or unused artifact ${artifact}`, () => {
     const result = lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} ${artifact}`));
     assert.equal(result.ok, false);
@@ -1126,3 +1126,12 @@ for (const closer of ['> ```', '- ```']) {
     assert.equal(lintPrEvidence('```text\n' + closer + '\n## Evidence\nExemption: docs-only\n- Exemption reason: Updated docs.').ok, false);
   });
 }
+
+
+test("an unrelated denial clause does not suppress an explicit artifact citation", () => {
+  const result = lintPrEvidence(bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: ran locally
+- Result observed: passed
+${ARTIFACT_LABEL} Verified without redeploy; artifact at artifacts/screen.png`));
+  assert.equal(result.ok, true, result.errors.join(";"));
+});

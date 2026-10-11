@@ -500,10 +500,6 @@ function trimToken(token) {
   return token.slice(start, end);
 }
 
-function mentionsArtifactPath(value) {
-  return value.split(/\s+/).map(trimToken).some(isArtifactPath);
-}
-
 const HTTP_URL = /https?:\/\/[^\s/?#<>()"'`]+/i;
 
 /** A link destination that identifies something: a web URL or a file path. */
@@ -647,18 +643,27 @@ function stripLinks(value, references) {
 
 function looksLikeArtifact(value, references) {
   if (!value) return false;
-  // An explicit statement that no artifact exists cannot prove verification.
-  const negative = /\b(?:not (?:provided|produced|generated|available|attached|uploaded|captured)|without|never (?:uploaded|produced|generated|attached|captured)|missing from|did not (?:produce|generate|capture|upload|attach)|no (?:screenshot|recording|trace|evidence)|could not (?:test|verify)|was not|not yet)\b/i;
-  if (negative.test(value)) return false;
-  // A line that is a placeholder note (TODO: attach trace.json) is not evidence.
-  // A placeholder note is rejected as a whole; filenames containing todo remain valid.
+  // Parse markup before evaluating prose: a placeholder link's title cannot
+  // escape into a later clause, and filenames may legitimately include TODO.
   if (/^\s*`?(?:TODO|TBD|FIXME|placeholder)(?:[ :]|$)/i.test(value)) return false;
-  // A link counts by its destination; its title never makes it evidence.
   const { rest, concrete } = stripLinks(value, references);
-  if (concrete) return true;
-  if (HTTP_URL.test(rest)) return true;
-  if (hasSubstantiveCodeSpan(rest)) return true;
-  return mentionsArtifactPath(rest);
+  // A link is concrete by its destination. Explicit denial outside its markup
+  // still cannot claim it as proof.
+  const denial = /\b(?:not|no|without|never|missing|absent|unavailable|unable|omitted|n\/a)\b/i;
+  if (concrete && !denial.test(rest)) return true;
+  for (const clause of rest.split(/[;\n]/)) {
+    const text = clause.trim();
+    if (!text) continue;
+    // A denied clause cannot suppress another independently cited artifact.
+    if (denial.test(text)) continue;
+    if (HTTP_URL.test(text) || hasSubstantiveCodeSpan(text)) return true;
+    // Bare paths count only as a citation, not as incidental prose about a
+    // missing file. Prose can use a Markdown link or an explicit citation.
+    const citation = text.replace(/^(?:see|artifact(?: at|:)?|attached|saved(?: at| to)?|captured(?: at| to)?|output(?: at|:)?)\s+/i, "");
+    const tokens = citation.split(/\s+/).map(trimToken);
+    if (tokens.length && tokens.every(isArtifactPath)) return true;
+  }
+  return false;
 }
 
 /** Section text outside every template field and the Exemption line. */

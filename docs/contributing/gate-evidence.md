@@ -48,7 +48,8 @@ The lint rules are:
   destination is a URL or file path, or inline code holding a command, path, or
   output. A journey name, a bare category word such as `screenshot` (with or
   without backticks), a placeholder link such as `[screenshot](#)`, a line
-  holding a TODO/TBD/FIXME/placeholder note, and
+  holding a TODO/TBD/FIXME/placeholder note, an incidental filename in prose
+  (use a bare path, `artifact at path`, or a Markdown link), and
   Exemption reason text (every paragraph indented under it) do not count.
 - Fail when `Exemption:` is still the template placeholder, unknown, or a named
   exemption without a non-empty reason.
