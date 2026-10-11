@@ -143,11 +143,11 @@ jobs:
         run: |
           cargo run --manifest-path rust/Cargo.toml --locked -q -p pp-source --example source_path_corpus \
             > "$RUNNER_TEMP/source-artifacts-evidence/source-path-corpus.json"
-          node --test rust/tests/source-artifacts/source-path-replay.test.mjs
           node rust/tests/source-artifacts/source-path-replay.mjs \
             web/apps/server/dist/current/services/local-source-snapshot.js \
             "$RUNNER_TEMP/source-artifacts-evidence/source-path-corpus.json" \
             "$RUNNER_TEMP/source-artifacts-evidence/source-path-replay.json"
+          node --test rust/tests/source-artifacts/source-path-replay.test.mjs
       - uses: actions/upload-artifact@v7
         if: always()
         with:
