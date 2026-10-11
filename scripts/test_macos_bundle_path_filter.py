@@ -49,6 +49,17 @@ class PathFilterTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue(bundle_filter.is_native_input(path))
 
+    def test_packaged_markdown_inputs(self):
+        paths = ["web/apps/server/src/data/pitfalls.md",
+                 "web/apps/server/src/data/legal/THIRD_PARTY_NOTICES.md",
+                 "web/apps/server/src/data/sources/README.md",
+                 "web/apps/server/src/data/assistant-domain/_global/pitfalls.md",
+                 "web/apps/server/src/data/assistant-domain/sources/README.md",
+                 "web/packages/contracts/src/schema.md"]
+        for path in paths:
+            with self.subTest(path=path):
+                self.assertTrue(bundle_filter.is_native_input(path))
+
     def test_git_diff_semantics(self):
         with tempfile.TemporaryDirectory() as directory:
             def git(*args):
@@ -68,11 +79,14 @@ class PathFilterTests(unittest.TestCase):
             base = commit("README.md")
             head = commit("web/apps/server/fixtures/space and\nnewline.json")
             git("checkout", "-q", "--detach", base)
+            markdown_head = commit("web/apps/server/src/data/pitfalls.md")
+            git("checkout", "-q", "--detach", base)
             advanced_base = commit("rust/src/lib.rs")
             previous = os.getcwd()
             try:
                 os.chdir(directory)
                 self.assertFalse(bundle_filter.select_native("pull_request", advanced_base, head))
+                self.assertTrue(bundle_filter.select_native("pull_request", base, markdown_head))
                 self.assertTrue(bundle_filter.select_native("workflow_dispatch", base, head))
                 self.assertTrue(bundle_filter.select_native("push", "0" * 40, head))
                 self.assertTrue(bundle_filter.select_native("pull_request", "", head))

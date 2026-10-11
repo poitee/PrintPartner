@@ -10,8 +10,10 @@ import subprocess
 def is_native_input(path):
     parts = PurePosixPath(path).parts
     name = parts[-1]
+    # Markdown in web source trees can be packaged runtime data.
+    source_markdown = path.startswith("web/") and "src" in parts
     # These exclusions apply inside app/package trees as well as at the root.
-    if (path.startswith("docs/") or name.endswith(".md")
+    if (path.startswith("docs/") or (name.endswith(".md") and not source_markdown)
             or "fixtures" in parts or "test-fixtures" in parts
             or (path.startswith("web/") and any(p in {"tests", "__tests__"} for p in parts))
             or re.search(r"\.(test|spec)\.", name)):
