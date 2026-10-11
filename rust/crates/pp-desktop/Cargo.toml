@@ -19,3 +19,9 @@ gtk = "=0.18.2"
 
 [build-dependencies]
 tauri-build = "=2.7.1"
+
+# cargo-machete --with-metadata can miss build-script use that backs tauri::generate_context!.
+[package.metadata.cargo-machete]
+ignored = [
+  "tauri-build", # false positive: required by build.rs for tauri::generate_context! macro
+]
