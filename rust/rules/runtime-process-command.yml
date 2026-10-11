@@ -350,9 +350,10 @@ rule:
             - has:
                 regex: '^(r#)?process$'
               inside:
-                kind: use_list
-                inside:
-                  matches: std-list
+                matches: std-list
+                stopBy:
+                  not:
+                    kind: use_list
     - not:
         inside:
           any:

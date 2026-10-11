@@ -43,6 +43,8 @@ invalid:
   - 'use std::{process as p, fs}; fn production() { p::Command::new("sh"); }'
   - 'use std::process::*;'
   - 'use std::{process::*};'
+  - 'use std::{{process::*}};'
+  - 'use std::{io, {process::*}};'
   - 'use std::process::{self, id}; fn production() { process::Command::new("sh"); }'
   - 'use std::process::{self}; fn production(_: process::Command) {}'
   - 'use std::process::{self as p}; fn production() { p::Command::new("sh"); }'
