@@ -1482,3 +1482,228 @@ async fn ticket_t_4_real_gateway_hidden_status_and_config_cancellation() {
         "ticket_t_4 gateway: hidden polling, existing v1 alias, no request-driven polls, secret isolation, suspend/resume, disable/removal/shutdown passed"
     );
 }
+
+#[tokio::test]
+async fn gre_335_shared_status_route_keeps_node_path_for_other_printers() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    // Records connections; `reply` is None for a socket that only reads (TLS peer).
+    async fn fake(reply: Option<&'static [u8]>) -> (String, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        let (calls, tls) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+        let (seen, handshakes) = (calls.clone(), tls.clone());
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut bytes = [0; 4096];
+                let count = stream.read(&mut bytes).await.unwrap_or(0);
+                seen.fetch_add(1, Ordering::SeqCst);
+                if count > 0 && bytes[0] == 0x16 {
+                    handshakes.fetch_add(1, Ordering::SeqCst);
+                }
+                if let Some(reply) = reply {
+                    let _ = stream.write_all(reply).await;
+                }
+            }
+        });
+        (address, calls, tls)
+    }
+    async fn get(
+        origin: &str,
+        cookie: &str,
+        id: &str,
+    ) -> (StatusCode, serde_json::Value, Duration) {
+        let started = std::time::Instant::now();
+        let response = request(
+            origin,
+            &format!("/api/v1/integrations/{id}/status"),
+            "GET",
+            Some(cookie),
+            None,
+            None,
+            None,
+        )
+        .await;
+        let body = serde_json::from_slice(&response.2).unwrap_or(serde_json::Value::Null);
+        (response.0, body, started.elapsed())
+    }
+    let success = include_bytes!("../../pp-drivers/tests/fixtures/moonraker-success.json");
+    let moonraker_reply: &'static [u8] = Box::leak(
+        [
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+                success.len()
+            )
+            .as_bytes(),
+            success,
+        ]
+        .concat()
+        .into_boxed_slice(),
+    );
+    let (moonraker, moonraker_calls, _) = fake(Some(moonraker_reply)).await;
+    let (prusa, prusa_calls, _) = fake(Some(
+        b"HTTP/1.1 503 Unavailable\r\nContent-Length: 0\r\n\r\n",
+    ))
+    .await;
+    let (tls, tls_calls, tls_handshakes) = fake(None).await;
+
+    let data = std::env::temp_dir().join(format!(
+        "pp-gre335-{}",
+        hex::encode(rand::random::<[u8; 8]>())
+    ));
+    let mut runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    let origin = runtime.origin().to_owned();
+    let target = runtime.take_launch_target().unwrap().into_url();
+    let bootstrap = request(
+        &origin,
+        target.strip_prefix(&origin).unwrap(),
+        "GET",
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    let cookie = bootstrap.1["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    let create = |name: &str, kind: &str, config: serde_json::Value| {
+        let (origin, cookie) = (origin.clone(), cookie.clone());
+        let body = serde_json::json!({"name": name, "type": kind, "config": config});
+        async move {
+            let created = request(
+                &origin,
+                "/api/v1/integrations",
+                "POST",
+                Some(&cookie),
+                None,
+                None,
+                Some(body),
+            )
+            .await;
+            assert_eq!(
+                created.0,
+                StatusCode::CREATED,
+                "{}",
+                String::from_utf8_lossy(&created.2)
+            );
+            serde_json::from_slice::<serde_json::Value>(&created.2).unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        }
+    };
+    let moonraker_id = create(
+        "Moonraker",
+        "moonraker",
+        serde_json::json!({"base_url": format!("http://{moonraker}"), "api_key": "k"}),
+    )
+    .await;
+    let prusa_id = create(
+        "PrusaLink",
+        "prusalink",
+        serde_json::json!({"base_url": format!("http://{prusa}"), "api_key": "k"}),
+    )
+    .await;
+    let tls_id = create(
+        "TLS Moonraker",
+        "moonraker",
+        serde_json::json!({"base_url": format!("https://{tls}"), "api_key": "k"}),
+    )
+    .await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while get(&origin, &cookie, &moonraker_id).await.1["state"] != "printing" {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("Rust watcher serves the plain-HTTP Moonraker host");
+
+    // (1) Healthy snapshot: a non-Moonraker id forwards straight to Node.
+    let (status, body, elapsed) = get(&origin, &cookie, &prusa_id).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        prusa_calls.load(Ordering::SeqCst) >= 1,
+        "Node queried PrusaLink"
+    );
+    println!(
+        "gre_335 trace: healthy snapshot, prusalink status={status} via Node in {elapsed:?} body={body}"
+    );
+
+    // HTTPS Moonraker stays on Node's on-demand path until GRE-359; Rust never polls it.
+    assert_eq!(tls_calls.load(Ordering::SeqCst), 0);
+    let (status, body, elapsed) = get(&origin, &cookie, &tls_id).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        tls_handshakes.load(Ordering::SeqCst) >= 1,
+        "Node attempted TLS"
+    );
+    println!(
+        "gre_335 trace: https moonraker status={status} via Node fallback in {elapsed:?} body={body}"
+    );
+
+    // A Node stall past the 2 s snapshot deadline keeps Moonraker pollers alive.
+    let pid = match runtime.handle().subscribe().borrow().clone() {
+        CoreStatus::Ready { pid, .. } => pid,
+        _ => panic!("backend not ready"),
+    };
+    assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGSTOP) }, 0);
+    let before = moonraker_calls.load(Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(3500)).await;
+    let during = moonraker_calls.load(Ordering::SeqCst);
+    let (status, body, _) = get(&origin, &cookie, &moonraker_id).await;
+    assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGCONT) }, 0);
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["state"], "printing");
+    assert!(
+        during > before,
+        "pollers kept running through the snapshot timeout"
+    );
+    println!(
+        "gre_335 trace: node stalled 3.5s, moonraker polls {before}->{during}, cached state={}",
+        body["state"]
+    );
+
+    // (2) Failing snapshot (Node answers 503 above 128 Moonraker hosts).
+    for index in 0..127 {
+        create(
+            &format!("Disabled {index}"),
+            "moonraker",
+            serde_json::json!({"base_url": "http://127.0.0.1:9", "enabled": false}),
+        )
+        .await;
+    }
+    let calls = prusa_calls.load(Ordering::SeqCst);
+    let (status, body, elapsed) = get(&origin, &cookie, &prusa_id).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(prusa_calls.load(Ordering::SeqCst) > calls);
+    assert!(elapsed < Duration::from_secs(2), "{elapsed:?}");
+    let (status, body, _) = get(&origin, &cookie, &moonraker_id).await;
+    assert_eq!(
+        (status, &body["state"]),
+        (StatusCode::OK, &serde_json::json!("printing"))
+    );
+    println!(
+        "gre_335 trace: failing snapshot, prusalink status={status} via Node in {elapsed:?}; moonraker still cached"
+    );
+    // Past the grace period Moonraker fails closed, other printers still reach Node.
+    tokio::time::sleep(Duration::from_secs(11)).await;
+    let (status, _, _) = get(&origin, &cookie, &moonraker_id).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    let (status, body, elapsed) = get(&origin, &cookie, &prusa_id).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    println!(
+        "gre_335 trace: after grace, moonraker=503, prusalink status={status} via Node in {elapsed:?}"
+    );
+
+    let receipt = runtime.shutdown().await;
+    assert!(receipt.complete(), "{receipt:?}");
+    std::fs::remove_dir_all(data).unwrap();
+}

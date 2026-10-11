@@ -37,8 +37,14 @@ pub struct PrinterHostStatus {
 }
 impl PrinterHostStatus {
     pub fn offline(message: &str) -> Self {
+        Self::with_state(PrinterHostState::Offline, message)
+    }
+    pub fn unknown(message: &str) -> Self {
+        Self::with_state(PrinterHostState::Unknown, message)
+    }
+    fn with_state(state: PrinterHostState, message: &str) -> Self {
         Self {
-            state: PrinterHostState::Offline,
+            state,
             message: Some(message.into()),
             progress: None,
             filename: None,

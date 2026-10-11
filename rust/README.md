@@ -50,14 +50,22 @@ signed-principal-only UDS snapshot of Moonraker configuration. That endpoint is
 not admitted through the public gateway. Snapshot reconciliation runs once per
 second, has an independently bounded two-second queue wait and two-second Node
 read (at most four seconds total before reconciliation), and also runs after successful integration
-creation/update/removal. At most 128 Moonraker configurations are admitted; malformed or
-unavailable snapshots cancel monitoring. A missing snapshot cannot fall back to
-Node's on-demand Moonraker status path through the gateway.
+creation/update/removal. At most 128 Moonraker configurations are admitted.
+Malformed or denied snapshots cancel monitoring immediately. If Node is slow or
+unavailable, the last-known-good pollers keep running for a 10-second grace
+period and are then stopped. The status route serves cached Moonraker status.
+Ids that are not in the last valid snapshot (PrusaLink, Bambu, Home Assistant)
+are forwarded straight to Node without waiting. When no valid snapshot exists,
+or a known Moonraker host has no running poller, the route refreshes once and
+otherwise returns 503. It never falls back to Node's on-demand path for a plain
+HTTP Moonraker host.
 
 `pp-drivers` owns one task per enabled host and serves the existing optional-field
 `PrinterHostStatus` DTO from `pp-api-types` at the admitted v1 status route. A
-successful poll waits two seconds; errors mark the host offline and back off
-from four to sixty seconds. Reconciliation joins removed/replaced tasks before
+successful poll waits two seconds. A new poller reports `unknown` "Awaiting
+status" until its first poll. Errors mark the host offline with a fixed message,
+which keeps the HTTP status code (for example "Moonraker returned HTTP 401"),
+and back off from four to sixty seconds. Reconciliation joins removed/replaced tasks before
 starting replacements. Core shutdown cancels and joins monitoring. Native power
 adapters can await `CoreHandle::suspend_monitoring()` before sleep and call
 `resume_monitoring()` on wake; hiding the window never suspends monitoring.
@@ -78,7 +86,9 @@ unspecified, multicast and IPv6 transition/translation targets are rejected.
 HTTP requests have five-second monotonic and wall-time deadlines (sleep must
 not extend a socket's life), at most 32 DNS answers and a 2 MiB response limit.
 Redirects are not followed. This seed supports explicit HTTP; HTTPS/TLS provider
-work belongs to GRE-359. API-key/JWT headers stay on the configured connection.
+work belongs to GRE-359. Until then, HTTPS hosts and hosts that answer with a
+redirect stay on Node's existing on-demand status path, which supports HTTPS
+and SSRF-checked redirects. API-key/JWT headers stay on the configured connection.
 
 Monitoring has no database, Checkoff, upload or dispatch dependencies. Node's
 other printer operations retain their existing behavior. Simulator fixtures and
@@ -86,7 +96,7 @@ the real gateway test cover successful, printer-error and offline responses,
 cancellation, backoff, duplicate prevention, DNS rebinding and trust boundaries:
 
 ```sh
-cargo nextest run --locked --manifest-path rust/Cargo.toml --no-tests=fail -E 'test(ticket_t_4)'
+cargo nextest run --locked --manifest-path rust/Cargo.toml --no-tests=fail -E 'test(ticket_t_4) | test(gre_335)'
 ```
 
 GRE-449 and controlled hardware/native-window/power evidence remain separate

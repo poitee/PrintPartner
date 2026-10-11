@@ -1,11 +1,11 @@
 //! One cancellable, bounded status-only task per enabled host. No storage/send APIs.
-use anyhow::{Result, ensure};
+use anyhow::Result;
 use pp_api_types::printer_status::{PrinterHostState as State, PrinterHostStatus as Status};
 use pp_net::outbound::{HttpGuard, SystemResolver};
 use serde::Deserialize;
 use serde_json::Value;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -27,11 +27,28 @@ pub struct Host {
     pub api_key: Option<String>,
     pub enabled: bool,
 }
+/// `Node` hands the host back to Node's on-demand path (HTTPS/redirects) until GRE-359.
+#[derive(Clone)]
+enum Slot {
+    Status(Status),
+    Node,
+}
+/// How the gateway answers `/integrations/:id/status`.
+#[derive(Debug, PartialEq)]
+pub enum Route {
+    Cached(Status),
+    /// Not a Moonraker id in the last valid snapshot, or a Node-fallback host.
+    Node,
+    /// A Moonraker id from the last valid snapshot whose poller is stopped.
+    Unavailable,
+    /// No valid snapshot has been applied yet (or the last one was invalid).
+    NoSnapshot,
+}
 struct Poller {
     host: Host,
     cancel: CancellationToken,
     task: Option<JoinHandle<()>>,
-    status: Arc<Mutex<Status>>,
+    status: Arc<Mutex<Slot>>,
 }
 impl Drop for Poller {
     fn drop(&mut self) {
@@ -43,6 +60,9 @@ impl Drop for Poller {
 }
 pub struct Watchers {
     hosts: HashMap<String, Poller>,
+    /// Moonraker ids of the last valid snapshot; kept across transient stops.
+    known: Option<HashSet<String>>,
+    stale_since: Option<tokio::time::Instant>,
     guard: HttpGuard,
     interval: Duration,
 }
@@ -62,14 +82,44 @@ impl Watchers {
         assert!(!interval.is_zero());
         Self {
             hosts: HashMap::new(),
+            known: None,
+            stale_since: None,
             guard,
             interval,
         }
     }
     pub fn status(&self, id: &str) -> Option<Status> {
-        self.hosts
-            .get(id)
-            .map(|p| p.status.lock().expect("Status mutex").clone())
+        match self.route(id) {
+            Route::Cached(status) => Some(status),
+            _ => None,
+        }
+    }
+    pub fn route(&self, id: &str) -> Route {
+        if let Some(poller) = self.hosts.get(id) {
+            return match &*poller.status.lock().expect("Status mutex") {
+                Slot::Status(status) => Route::Cached(status.clone()),
+                Slot::Node => Route::Node,
+            };
+        }
+        match &self.known {
+            None => Route::NoSnapshot,
+            Some(known) if known.contains(id) => Route::Unavailable,
+            Some(_) => Route::Node,
+        }
+    }
+    /// Node was slow/unavailable: keep last-known-good pollers for `grace`, then stop
+    /// them. The id set is kept so non-Moonraker ids still route straight to Node.
+    pub async fn snapshot_unavailable(&mut self, grace: Duration) {
+        let now = tokio::time::Instant::now();
+        let since = *self.stale_since.get_or_insert(now);
+        if now.duration_since(since) >= grace {
+            self.stop().await;
+        }
+    }
+    /// An invalid or denied snapshot fails closed: stop pollers and forget the id set.
+    pub async fn invalidate(&mut self) {
+        self.stop().await;
+        self.known = None;
     }
     /// The caller serializes snapshots; join removed/replaced tasks before spawning.
     /// An empty snapshot is also the sleep/shutdown/backend-loss cancellation path.
@@ -85,9 +135,11 @@ impl Watchers {
             });
         let wanted: HashMap<_, _> = hosts.iter().map(|h| (h.id.clone(), h.clone())).collect();
         if !valid || wanted.len() != hosts.len() {
-            self.stop().await;
+            self.invalidate().await;
             anyhow::bail!("Invalid host snapshot");
         }
+        self.known = Some(wanted.keys().cloned().collect());
+        self.stale_since = None;
         let removed: Vec<_> = self
             .hosts
             .iter()
@@ -107,12 +159,14 @@ impl Watchers {
                 continue;
             }
             let cancel = CancellationToken::new();
-            let status = Arc::new(Mutex::new(Status::offline(if host.enabled {
-                "Awaiting status"
+            let status = Arc::new(Mutex::new(if !host.enabled {
+                Slot::Status(Status::offline("Integration disabled"))
+            } else if needs_node(&host.base_url) {
+                Slot::Node
             } else {
-                "Integration disabled"
-            })));
-            let task = if host.enabled {
+                Slot::Status(Status::unknown("Awaiting status"))
+            }));
+            let task = if host.enabled && !needs_node(&host.base_url) {
                 let config = host.clone();
                 let stopped = cancel.clone();
                 let current = status.clone();
@@ -125,13 +179,17 @@ impl Watchers {
                         let delay = match response {
                             Ok(value) => {
                                 failures = 0;
-                                *current.lock().expect("Status mutex") = value;
+                                *current.lock().expect("Status mutex") = Slot::Status(value);
                                 interval
                             }
-                            Err(_) => {
+                            Err(Failure::Redirect) => {
+                                *current.lock().expect("Status mutex") = Slot::Node;
+                                break;
+                            }
+                            Err(failure) => {
                                 failures = failures.saturating_add(1);
                                 *current.lock().expect("Status mutex") =
-                                    Status::offline("Moonraker status unavailable");
+                                    Slot::Status(Status::offline(&failure.message()));
                                 backoff(interval, failures)
                             }
                         };
@@ -153,6 +211,7 @@ impl Watchers {
         }
         Ok(())
     }
+    /// Cancel and join every poller. The last valid id set is kept.
     pub async fn stop(&mut self) {
         for (_, mut p) in self.hosts.drain() {
             p.cancel.cancel();
@@ -167,28 +226,51 @@ impl Default for Watchers {
         Self::new()
     }
 }
+/// The status guard is plain HTTP without redirects; Node's moonrakerFetch serves
+/// HTTPS and follows checked redirects, so those hosts stay on Node until GRE-359.
+fn needs_node(base_url: &str) -> bool {
+    base_url
+        .trim()
+        .get(..6)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https:"))
+}
+/// A fixed set of messages: printer/transport error text is never echoed.
+enum Failure {
+    Redirect,
+    Http(u16),
+    Unavailable,
+}
+impl Failure {
+    fn message(&self) -> String {
+        match self {
+            Failure::Http(status) => format!("Moonraker returned HTTP {status}"),
+            _ => "Moonraker status unavailable".into(),
+        }
+    }
+}
 fn backoff(interval: Duration, failures: u32) -> Duration {
     interval
         .saturating_mul(1u32 << failures.min(5))
         .min(Duration::from_secs(60))
 }
-async fn poll(guard: &HttpGuard, host: &Host) -> Result<Status> {
+async fn poll(guard: &HttpGuard, host: &Host) -> Result<Status, Failure> {
     // Accept only an origin plus optional provider path; never append to a query.
     let base = host.base_url.trim().trim_end_matches('/');
-    ensure!(
-        !base.contains('?') && !base.contains('#'),
-        "Invalid base URL"
-    );
+    if base.contains('?') || base.contains('#') {
+        return Err(Failure::Unavailable);
+    }
     let reply = guard
         .get(
             &format!("{base}{QUERY}"),
             host.api_key.as_deref().map(str::trim),
         )
-        .await?;
-    if reply.status != 200 {
-        anyhow::bail!("HTTP status");
+        .await
+        .map_err(|_| Failure::Unavailable)?;
+    match reply.status {
+        200 => recorded_status(&reply.body, base).map_err(|_| Failure::Unavailable),
+        300..=399 => Err(Failure::Redirect),
+        status => Err(Failure::Http(status)),
     }
-    recorded_status(&reply.body, base)
 }
 pub fn recorded_status(body: &[u8], base: &str) -> Result<Status> {
     let value: Value = serde_json::from_slice(body)?;
@@ -457,12 +539,110 @@ mod tests {
         wait_calls(&calls, 1).await;
         tokio::time::sleep(Duration::from_millis(250)).await;
         assert_eq!(watchers.status("host").unwrap().state, State::Offline);
+        assert_eq!(
+            watchers.status("host").unwrap().message.as_deref(),
+            Some("Moonraker returned HTTP 503")
+        );
         assert!(calls.load(Ordering::SeqCst) <= 3);
         assert_eq!(backoff(Duration::from_secs(2), 1), Duration::from_secs(4));
         assert_eq!(
             backoff(Duration::from_secs(2), 100),
             Duration::from_secs(60)
         );
+        watchers.stop().await;
+        server.abort();
+    }
+    #[tokio::test]
+    async fn gre_335_last_valid_snapshot_routes_other_ids_to_node() {
+        let mut watchers = Watchers::new();
+        assert_eq!(watchers.route("prusa"), Route::NoSnapshot);
+        let mut disabled = host("http://printer.test".into());
+        disabled.enabled = false;
+        watchers.replace(vec![disabled.clone()]).await.unwrap();
+        assert!(matches!(watchers.route("host"), Route::Cached(_)));
+        assert_eq!(watchers.route("prusa"), Route::Node);
+        // Node slow/unavailable: last-known-good pollers survive the grace period.
+        watchers
+            .snapshot_unavailable(Duration::from_millis(100))
+            .await;
+        assert!(matches!(watchers.route("host"), Route::Cached(_)));
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        watchers
+            .snapshot_unavailable(Duration::from_millis(100))
+            .await;
+        assert_eq!(watchers.route("host"), Route::Unavailable);
+        assert_eq!(watchers.route("prusa"), Route::Node);
+        // A valid snapshot restarts pollers and resets the grace window.
+        watchers.replace(vec![disabled.clone()]).await.unwrap();
+        watchers
+            .snapshot_unavailable(Duration::from_millis(100))
+            .await;
+        assert!(matches!(watchers.route("host"), Route::Cached(_)));
+        // Invalid snapshots fail closed and forget the id set.
+        assert!(
+            watchers
+                .replace(vec![disabled.clone(), disabled])
+                .await
+                .is_err()
+        );
+        assert_eq!(watchers.route("host"), Route::NoSnapshot);
+        assert_eq!(watchers.route("prusa"), Route::NoSnapshot);
+    }
+    #[tokio::test]
+    async fn gre_335_awaiting_status_is_unknown() {
+        let (url, calls, server) = simulator(true).await;
+        let mut watchers = Watchers::new();
+        watchers.replace(vec![host(url)]).await.unwrap();
+        wait_calls(&calls, 1).await;
+        assert_eq!(
+            serde_json::to_value(watchers.status("host").unwrap()).unwrap(),
+            serde_json::json!({"state":"unknown","message":"Awaiting status"})
+        );
+        watchers.stop().await;
+        server.abort();
+    }
+    #[tokio::test]
+    async fn gre_335_https_and_redirect_hosts_fall_back_to_node() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let seen = calls.clone();
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut data = [0; 4096];
+                let _ = socket.read(&mut data).await;
+                seen.fetch_add(1, Ordering::SeqCst);
+                let _ = socket
+                    .write_all(
+                        b"HTTP/1.1 302 Found\r\nLocation: /moonraker/\r\nContent-Length: 0\r\n\r\n",
+                    )
+                    .await;
+            }
+        });
+        let mut watchers = Watchers::with_guard(
+            HttpGuard::new(Arc::new(SystemResolver), Duration::from_secs(1), 4096).unwrap(),
+            Duration::from_millis(20),
+        );
+        let mut https = host(format!(" HTTPS://{address}"));
+        https.id = "tls".into();
+        watchers
+            .replace(vec![https, host(format!("http://{address}"))])
+            .await
+            .unwrap();
+        // HTTPS never reaches the plain-HTTP guard; Node serves it on demand.
+        assert_eq!(watchers.route("tls"), Route::Node);
+        wait_calls(&calls, 1).await;
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while watchers.route("host") != Route::Node {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        // The redirecting host's poller stops instead of retrying the redirect.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
         watchers.stop().await;
         server.abort();
     }

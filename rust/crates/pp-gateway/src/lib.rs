@@ -8,7 +8,7 @@ use axum::{
 };
 use http_body_util::BodyExt;
 use pp_compat::CompatHandle;
-use pp_drivers::moonraker::{Host, Watchers};
+use pp_drivers::moonraker::{Host, Route, Watchers};
 use pp_net::target;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -605,21 +605,27 @@ async fn handle(
     if matches!(request.method().as_str(), "GET" | "HEAD")
         && let Some(id) = moonraker_status_id(&path)
     {
-        let cached = state.watchers.lock().await.status(id);
-        let status = if cached.is_some() {
-            cached
-        } else {
-            // A missing/failed snapshot must never fall back to on-demand Node
-            // Moonraker requests. A valid snapshot proves a non-Moonraker/missing ID.
-            if !refresh_watchers(&state).await {
+        // The last valid snapshot proves an id is not Moonraker (or is an HTTPS/redirect
+        // host left on Node until GRE-359), so those forward to Node without waiting.
+        let mut route = state.watchers.lock().await.route(id);
+        if matches!(route, Route::NoSnapshot | Route::Unavailable) {
+            // Detached so a client disconnect cannot cut a reconcile short.
+            let refreshing = state.clone();
+            let _ = state
+                .watcher_tasks
+                .spawn(async move { refresh_watchers(&refreshing).await })
+                .await;
+            route = state.watchers.lock().await.route(id);
+            if matches!(route, Route::NoSnapshot | Route::Unavailable) {
+                // Never fall back to on-demand Node polling for a known HTTP Moonraker
+                // id, nor guess when no valid snapshot exists.
                 return error(
                     StatusCode::SERVICE_UNAVAILABLE,
                     "Printer monitoring unavailable",
                 );
             }
-            state.watchers.lock().await.status(id)
-        };
-        if let Some(status) = status {
+        }
+        if let Route::Cached(status) = route {
             let mut response = axum::Json(status).into_response();
             response
                 .headers_mut()
@@ -638,11 +644,7 @@ async fn handle(
         }
     }
     let integrations_changed = matches!(request.method().as_str(), "POST" | "PATCH" | "DELETE")
-        && (path == "/integrations"
-            || path == "/api/v1/integrations"
-            || path
-                .strip_prefix("/integrations/")
-                .is_some_and(|tail| !tail.contains('/'))
+        && (path == "/api/v1/integrations"
             || path
                 .strip_prefix("/api/v1/integrations/")
                 .is_some_and(|tail| !tail.contains('/')));
@@ -751,6 +753,14 @@ async fn snapshot_refresh_guard<'a>(
             (guard, tokio::time::Instant::now() + Duration::from_secs(2))),
     }
 }
+/// Slow/unavailable Node keeps last-known-good pollers this long before stopping them.
+const SNAPSHOT_GRACE: Duration = Duration::from_secs(10);
+enum SnapshotError {
+    /// Timeout, restart or 5xx: the config pollers hold was valid, so keep it briefly.
+    Unavailable,
+    /// Denied (4xx) or unparseable: fail closed immediately.
+    Invalid,
+}
 async fn refresh_watchers(state: &GatewayState) -> bool {
     // Serialize snapshots without blocking already-cached reads on the Node round trip.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
@@ -763,35 +773,45 @@ async fn refresh_watchers(state: &GatewayState) -> bool {
     let snapshot = tokio::select! { biased;
         _ = state.watcher_cancelled.cancelled() => return false,
         snapshot = tokio::time::timeout_at(read_deadline, async {
-            let endpoint = state
-                .compat
-                .endpoint()
-                .ok_or_else(|| anyhow::anyhow!("Backend unavailable"))?;
+            let endpoint = state.compat.endpoint().ok_or(SnapshotError::Unavailable)?;
             let request = Request::builder()
                 .uri("/__desktop/moonraker-hosts")
-                .body(Body::empty())?;
-            let response = endpoint.forward(request).await?;
-            anyhow::ensure!(response.status().is_success(), "Snapshot denied");
+                .body(Body::empty())
+                .map_err(|_| SnapshotError::Invalid)?;
+            let response = endpoint
+                .forward(request)
+                .await
+                .map_err(|_| SnapshotError::Unavailable)?;
+            if response.status().is_client_error() {
+                return Err(SnapshotError::Invalid);
+            }
+            if !response.status().is_success() {
+                return Err(SnapshotError::Unavailable);
+            }
             let body = http_body_util::Limited::new(
                 response.into_body(),
                 pp_drivers::moonraker::MAX_SNAPSHOT_BYTES,
             )
             .collect()
             .await
-            .map_err(|_| anyhow::anyhow!("Snapshot body unavailable"))?
+            .map_err(|_| SnapshotError::Unavailable)?
             .to_bytes();
-            Ok::<Vec<Host>, anyhow::Error>(serde_json::from_slice(&body)?)
-        }) => snapshot,
+            serde_json::from_slice::<Vec<Host>>(&body).map_err(|_| SnapshotError::Invalid)
+        }) => snapshot.unwrap_or(Err(SnapshotError::Unavailable)),
     };
     let mut watchers = state.watchers.lock().await;
+    if *state.monitoring_suspended.borrow() || state.watcher_cancelled.is_cancelled() {
+        watchers.stop().await;
+        return false;
+    }
     match snapshot {
-        Ok(Ok(hosts))
-            if !*state.monitoring_suspended.borrow() && !state.watcher_cancelled.is_cancelled() =>
-        {
-            watchers.replace(hosts).await.is_ok()
+        Ok(hosts) => watchers.replace(hosts).await.is_ok(),
+        Err(SnapshotError::Invalid) => {
+            watchers.invalidate().await;
+            false
         }
-        _ => {
-            watchers.stop().await;
+        Err(SnapshotError::Unavailable) => {
+            watchers.snapshot_unavailable(SNAPSHOT_GRACE).await;
             false
         }
     }
