@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -84,7 +84,10 @@ describe("HTTP body limits golden", () => {
     const goldenPath = resolve(srcDir, "../../../../fixtures/http/body-limits.json");
     const dataDir = mkdtempSync(join(tmpdir(), "pp-body-limits-golden-"));
     const staticDir = join(dataDir, "spa");
-    mkdirSync(staticDir);
+    cpSync(resolve(srcDir, "../../web/public"), staticDir, { recursive: true });
+    mkdirSync(join(staticDir, "assets"), { recursive: true });
+    // Vite content hashes vary independently of server policy; exercise the shipped bundle route family.
+    writeFileSync(join(staticDir, "assets", "index-Fixture1.js"), "export {};\n");
     writeFileSync(join(staticDir, "index.html"), "<!doctype html><title>Fixture SPA</title>");
     const ports = createSelfHostPorts(dataDir);
     let app: Awaited<ReturnType<typeof buildApp>> | undefined;

@@ -5,9 +5,10 @@ import ts from "typescript";
 import type { RouteOptions } from "fastify";
 
 type Limits = Record<string, number>;
+type MultipartLimits = Record<string, number | { totalBytes: number; enforcement: string }>;
 
 /** Test-only source reader: multipart overrides are inside handlers, not Fastify route options. */
-function readMultipartRouteLimits(srcDir: string): Map<string, Limits> {
+function readMultipartRouteLimits(srcDir: string): Map<string, MultipartLimits> {
   const files = globSync("**/*.ts", { cwd: srcDir })
     .filter((file) => !file.endsWith(".test.ts") && !file.includes("__tests__"))
     .map((file) => resolve(srcDir, file));
@@ -55,20 +56,42 @@ function readMultipartRouteLimits(srcDir: string): Map<string, Limits> {
       ["file", "files", "parts", "saveRequestFiles"].includes(node.expression.name.text) &&
       !!checker.getTypeAtLocation(node.expression.expression).getProperty("isMultipart");
   }
-  function multipartIn(handler: ts.Node, visited = new Set<ts.Node>()): Limits[] {
+  function multipartIn(handler: ts.Node, visited = new Set<ts.Node>()): MultipartLimits[] {
     if (visited.has(handler)) return [];
     visited.add(handler);
     if (ts.isIdentifier(handler)) {
       const decl = declaration(handler);
       if (decl) return multipartIn(decl, visited);
     }
-    const found: Limits[] = [];
+    const found: MultipartLimits[] = [];
+    let aggregate: { totalBytes: number; enforcement: string } | undefined;
     function visit(node: ts.Node): void {
       if (ts.isCallExpression(node)) {
         const callee = node.expression;
+        if (ts.isIdentifier(callee) && (declaration(callee) as ts.NamedDeclaration | undefined)?.name?.getText() === "streamSourceUpload") {
+          const budget = node.arguments[2];
+          if (budget && ts.isBinaryExpression(budget) && budget.operatorToken.kind === ts.SyntaxKind.MinusToken) {
+            let statement: ts.Node = node;
+            while (statement.parent && !ts.isExpressionStatement(statement)) statement = statement.parent;
+            if (!ts.isIdentifier(budget.right) || !ts.isExpressionStatement(statement) ||
+                !ts.isBinaryExpression(statement.expression) ||
+                statement.expression.operatorToken.kind !== ts.SyntaxKind.PlusEqualsToken ||
+                statement.expression.left.getText() !== budget.right.text) {
+              throw new Error("Unsupported cumulative multipart budget guard");
+            }
+            const counter = declaration(budget.right);
+            if (!counter || !ts.isVariableDeclaration(counter) || !counter.initializer) {
+              throw new Error("Unsupported cumulative multipart counter");
+            }
+            aggregate = {
+              totalBytes: number(budget.left) - number(counter.initializer),
+              enforcement: statement.getText().replace(/\s+/g, " ").trim(),
+            };
+          }
+        }
         if (isMultipartCall(node)) {
           attributedCalls.add(node);
-          const limits: Limits = {};
+          const limits: MultipartLimits = {};
           if (node.arguments[0]) {
             const options = object(node.arguments[0]);
             if (options.properties.some(ts.isSpreadAssignment)) {
@@ -98,9 +121,13 @@ function readMultipartRouteLimits(srcDir: string): Map<string, Limits> {
       ts.forEachChild(node, visit);
     }
     visit(handler);
+    if (aggregate) {
+      if (found.length !== 1) throw new Error("Unattributed aggregate multipart budget");
+      found[0].aggregateFiles = aggregate;
+    }
     return found;
   }
-  const routes = new Map<string, Limits>();
+  const routes = new Map<string, MultipartLimits>();
   for (const file of files) {
     const source = program.getSourceFile(file)!;
     function visit(node: ts.Node): void {
@@ -208,7 +235,7 @@ export function exportHttpBodyLimits(
         }),
       } : undefined;
       return {
-        method, path: route.url,
+        method, path: route.url.startsWith("/assets/") ? "/assets/*" : route.url,
         jsonBodyBytes: route.bodyLimit ?? defaults.jsonBodyBytes,
         // Unspecified parser limits inherit the app registration and Busboy defaults.
         multipart: multipart ? {
@@ -239,6 +266,8 @@ export function exportHttpBodyLimits(
   return {
     semantics: {
       routeSurface: "Union of self-host/saas production/static and development/docs registrations",
+      staticAssetPaths: "Vite content-hashed bundle filenames are represented by /assets/*; public paths are enumerated",
+      aggregateFiles: "Handler-enforced combined file-byte budget and enforcement expression",
       multipartNull: "Route has no multipart parser",
       multipartLimitNull: "Unlimited",
       rateLimitNull: "No enforced rate limit (uninstalled or allow-listed)",
