@@ -1,0 +1,23 @@
+---
+source: crates/pp-api-types/tests/autosave_snapshots.rs
+expression: value
+---
+{
+  "decisions": [
+    {
+      "kind": "set_included",
+      "target": {
+        "part_key": "part",
+        "relative_path": "part.stl",
+        "source_layer": null
+      },
+      "value": false
+    }
+  ],
+  "expected_base": {
+    "plan_version": 0,
+    "revision_id": null
+  },
+  "expected_draft": null,
+  "remap_checkoff_links": true
+}

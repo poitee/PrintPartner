@@ -4,8 +4,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
+import { EngineHttpError } from "../api/engineTransport";
 import { fetchJob } from "../api/endpoints/jobs";
-import { connectJobWebSocket } from "../api/jobWebSocket";
+import { connectJobWebSocket, JobNotFoundError } from "../api/jobWebSocket";
 import { queryKeys } from "../queries/keys";
 import { JobProvider, useJobContext } from "./JobContext";
 
@@ -13,7 +14,8 @@ vi.mock("../api/endpoints/jobs", () => ({
   fetchJob: vi.fn(),
 }));
 
-vi.mock("../api/jobWebSocket", () => ({
+vi.mock("../api/jobWebSocket", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../api/jobWebSocket")>(),
   connectJobWebSocket: vi.fn(() => vi.fn()),
 }));
 
@@ -24,6 +26,54 @@ afterEach(() => {
 });
 
 describe("JobProvider terminal retention", () => {
+  it("shows Job not found immediately and aborts polling on a missing-job close", async () => {
+    let signal: AbortSignal | undefined;
+    vi.mocked(fetchJob).mockImplementationOnce((_id, pollSignal) => new Promise((_resolve, reject) => {
+      signal = pollSignal;
+      pollSignal?.addEventListener("abort", () => reject(new Error("Aborted")), { once: true });
+    }));
+    const disconnect = vi.fn();
+    vi.mocked(connectJobWebSocket).mockReturnValue(disconnect);
+    const queryClient = new QueryClient();
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}><JobProvider>{children}</JobProvider></QueryClientProvider>
+    );
+    const { result } = renderHook(useJobContext, { wrapper });
+    const onDone = vi.fn();
+    await act(async () => {
+      await result.current.runJob("stl-export", () => Promise.resolve("missing"), onDone);
+      vi.mocked(connectJobWebSocket).mock.calls.at(-1)?.[2](new JobNotFoundError());
+    });
+    expect(result.current.activeJobs).toEqual([expect.objectContaining({ status: "error", message: "Job not found" })]);
+    expect(onDone).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ status: "error", error: "Job not found" }));
+    expect(signal?.aborted).toBe(true);
+    expect(disconnect).toHaveBeenCalledOnce();
+  });
+
+  it("shows Job not found when HTTP 404 arrives before the socket close", async () => {
+    vi.mocked(fetchJob).mockRejectedValueOnce(new EngineHttpError("Job not found", 404, { detail: "Job not found" }));
+    const disconnect = vi.fn();
+    vi.mocked(connectJobWebSocket).mockReturnValue(disconnect);
+    const queryClient = new QueryClient();
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}><JobProvider>{children}</JobProvider></QueryClientProvider>
+    );
+    const { result } = renderHook(useJobContext, { wrapper });
+    const onDone = vi.fn();
+    await act(async () => {
+      await result.current.runJob("stl-export", () => Promise.resolve("missing"), onDone);
+    });
+    expect(result.current.activeJobs).toEqual([expect.objectContaining({ status: "error", message: "Job not found" })]);
+    expect(onDone).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ status: "error", error: "Job not found" }));
+    expect(vi.mocked(fetchJob).mock.calls.at(-1)?.[1]?.aborted).toBe(true);
+    expect(disconnect).toHaveBeenCalledOnce();
+    await act(async () => {
+      vi.mocked(connectJobWebSocket).mock.calls.at(-1)?.[2](new JobNotFoundError());
+    });
+    expect(onDone).toHaveBeenCalledOnce();
+    expect(result.current.activeJobs[0]?.message).toBe("Job not found");
+  });
+
   it.each(["completion", "unmount"])("aborts a stalled poll on %s", async (reason) => {
     let pollSignal: AbortSignal | undefined;
     vi.mocked(fetchJob).mockImplementationOnce((_id, signal) => new Promise((_resolve, reject) => {
@@ -86,6 +136,61 @@ describe("JobProvider terminal retention", () => {
     const calls = vi.mocked(fetchJob).mock.calls.length;
     await act(async () => { await vi.advanceTimersByTimeAsync(800); });
     expect(fetchJob).toHaveBeenCalledTimes(calls);
+  });
+
+  it.each([new TypeError("Failed to fetch"), new EngineHttpError("API restarting", 503)])("keeps the socket observer alive through a transient poll failure: %s", async (failure) => {
+    vi.useFakeTimers();
+    const completed = { job_id: "download", kind: "export-stl-pack", status: "done", message: "Complete", progress: 100, result: {}, error: null };
+    vi.mocked(fetchJob).mockRejectedValueOnce(failure).mockResolvedValue(completed);
+    const disconnect = vi.fn();
+    vi.mocked(connectJobWebSocket).mockReturnValue(disconnect);
+    const queryClient = new QueryClient();
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}><JobProvider>{children}</JobProvider></QueryClientProvider>
+    );
+    const { result } = renderHook(useJobContext, { wrapper });
+    const onDone = vi.fn();
+    await act(async () => {
+      await result.current.runJob("stl-export", () => Promise.resolve("download"), onDone);
+    });
+    expect(disconnect).not.toHaveBeenCalled();
+    expect(onDone).not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    expect(onDone).toHaveBeenCalledExactlyOnceWith(completed);
+    expect(disconnect).toHaveBeenCalledOnce();
+  });
+
+  it("backs off sustained poll failures to 10 seconds and resets after recovery", async () => {
+    vi.useFakeTimers();
+    const running = { job_id: "download", kind: "export-stl-pack", status: "running", message: "Creating ZIP", progress: null, result: null, error: null };
+    const completed = { ...running, status: "done", message: "Complete", progress: 100, result: {} };
+    vi.mocked(fetchJob).mockRejectedValue(new EngineHttpError("API restarting", 502));
+    const disconnect = vi.fn();
+    vi.mocked(connectJobWebSocket).mockReturnValue(disconnect);
+    const queryClient = new QueryClient();
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}><JobProvider>{children}</JobProvider></QueryClientProvider>
+    );
+    const { result } = renderHook(useJobContext, { wrapper });
+    const onDone = vi.fn();
+    await act(async () => { await result.current.runJob("stl-export", () => Promise.resolve("download"), onDone); });
+    let calls = 1;
+    for (const delay of [400, 800, 1600, 3200, 6400, 10_000, 10_000]) {
+      await act(async () => { await vi.advanceTimersByTimeAsync(delay - 1); });
+      expect(fetchJob).toHaveBeenCalledTimes(calls);
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      expect(fetchJob).toHaveBeenCalledTimes(++calls);
+    }
+    expect(onDone).not.toHaveBeenCalled();
+    expect(disconnect).not.toHaveBeenCalled();
+    vi.mocked(fetchJob).mockResolvedValueOnce(running).mockResolvedValue(completed);
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(result.current.activeJobs[0]?.status).toBe("running");
+    await act(async () => { await vi.advanceTimersByTimeAsync(399); });
+    expect(onDone).not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(onDone).toHaveBeenCalledExactlyOnceWith(completed);
+    expect(disconnect).toHaveBeenCalledOnce();
   });
 
   it("settles the download panel when job observation fails", async () => {
