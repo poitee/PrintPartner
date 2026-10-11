@@ -1,0 +1,41 @@
+{
+  "source": [
+    "web/apps/server/src/services/gcode-object-parser.ts",
+    "web/packages/domain/src/sliced-object-matching.ts"
+  ],
+  "origin": "test: uses the shared conservative fuzzy matcher",
+  "input": {
+    "names": [
+      "z_tensionr_left.stl"
+    ],
+    "libraryFilenames": [
+      "z_tensioner_left.stl",
+      "z_tensioner_right.stl"
+    ]
+  },
+  "expected": {
+    "groups": [
+      {
+        "key": "z_tensionr_left.stl",
+        "stlBasename": "z_tensionr_left.stl",
+        "count": 1,
+        "objects": [
+          {
+            "name": "z_tensionr_left.stl",
+            "stlBasename": "z_tensionr_left.stl",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      }
+    ],
+    "matches": [
+      {
+        "key": "z_tensionr_left.stl",
+        "filenames": [
+          "z_tensioner_left.stl"
+        ]
+      }
+    ]
+  }
+}

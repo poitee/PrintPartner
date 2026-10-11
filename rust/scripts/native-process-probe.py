@@ -5,6 +5,59 @@ import subprocess
 import tempfile
 import os
 import signal
+import sys
+
+
+def validate(returncode, stdout, stderr, data):
+    assert returncode == 0, {'exit': returncode, 'stderr': stderr[-2000:]}
+    records = [json.loads(line) for line in stdout.strip().splitlines()]
+    receipt = records[-1]
+    window = next(record['native_window'] for record in records if 'native_window' in record)
+    assert window['close_hid'] and window['show_visible'], window
+    assert receipt['compat_reaped'] and receipt['storage_released'] and receipt['gateway_stopped'] and not receipt['errors'], receipt
+    assert not (data / '.desktop-owner.json').exists()
+    return receipt, window
+
+
+def self_test():
+    window = {'close_hid': True, 'show_visible': True}
+    receipt = {'compat_reaped': True, 'storage_released': True, 'gateway_stopped': True, 'errors': []}
+    with tempfile.TemporaryDirectory(prefix='pp-native-self-test-') as fixture:
+        data = pathlib.Path(fixture)
+
+        def check(code=0, native=window, shutdown=receipt):
+            stdout = json.dumps({'native_window': native}) + '\n' + json.dumps(shutdown) + '\n'
+            return validate(code, stdout, 'fixture stderr', data)
+
+        assert check() == (receipt, window)
+        failures = [lambda: check(code=1)]
+        for key in window:
+            failures.append(lambda key=key: check(native={**window, key: False}))
+        for key in receipt:
+            failures.append(lambda key=key: check(shutdown={**receipt, key: ['fixture error'] if key == 'errors' else False}))
+        for failure in failures:
+            try:
+                failure()
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError('Invalid native process evidence was accepted')
+        (data / '.desktop-owner.json').touch()
+        try:
+            check()
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError('Leaked desktop owner was accepted')
+    print('PASS: native-process-probe self-tests (valid receipt and 8 rejected failures)')
+
+
+if '--self-test' in sys.argv[1:]:
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--self-test', action='store_true')
+    parser.parse_args()
+    self_test()
+    raise SystemExit(0)
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--binary', type=pathlib.Path, required=True)
@@ -48,13 +101,7 @@ except subprocess.TimeoutExpired:
     raise AssertionError('Native process probe timed out')
 args.receipt.with_suffix('.stderr.log').write_text(stderr)
 args.receipt.with_suffix('.stdout.log').write_text(stdout)
-assert process.returncode == 0, {'exit': process.returncode, 'stderr': stderr[-2000:]}
-records = [json.loads(line) for line in stdout.strip().splitlines()]
-receipt = records[-1]
-window = next(record['native_window'] for record in records if 'native_window' in record)
-assert window['close_hid'] and window['show_visible'], window
-assert receipt['compat_reaped'] and receipt['storage_released'] and receipt['gateway_stopped'] and not receipt['errors'], receipt
-assert not (data / '.desktop-owner.json').exists()
+receipt, window = validate(process.returncode, stdout, stderr, data)
 args.receipt.write_text(json.dumps({'proof_class': 'native_linux_unsigned_process', 'fixture': str(fixture),
     'command': command, 'exit_code': process.returncode, 'shutdown': receipt, 'native_window': window,
     'rendered_ui': False, 'macos': False}, indent=2)+'\n')

@@ -1,0 +1,60 @@
+{
+  "source": [
+    "web/apps/server/src/services/gcode-object-parser.ts",
+    "web/packages/domain/src/sliced-object-matching.ts"
+  ],
+  "origin": "test: matches generated unit suffixes to the source STL",
+  "input": {
+    "names": [
+      "z_alignment_tool_rear_01",
+      "z_alignment_tool_rear_02"
+    ],
+    "libraryFilenames": [
+      "z_alignment_tool_rear.stl"
+    ]
+  },
+  "expected": {
+    "groups": [
+      {
+        "key": "z_alignment_tool_rear_01",
+        "stlBasename": "z_alignment_tool_rear_01",
+        "count": 1,
+        "objects": [
+          {
+            "name": "z_alignment_tool_rear_01",
+            "stlBasename": "z_alignment_tool_rear_01",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      },
+      {
+        "key": "z_alignment_tool_rear_02",
+        "stlBasename": "z_alignment_tool_rear_02",
+        "count": 1,
+        "objects": [
+          {
+            "name": "z_alignment_tool_rear_02",
+            "stlBasename": "z_alignment_tool_rear_02",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      }
+    ],
+    "matches": [
+      {
+        "key": "z_alignment_tool_rear_01",
+        "filenames": [
+          "z_alignment_tool_rear.stl"
+        ]
+      },
+      {
+        "key": "z_alignment_tool_rear_02",
+        "filenames": [
+          "z_alignment_tool_rear.stl"
+        ]
+      }
+    ]
+  }
+}
