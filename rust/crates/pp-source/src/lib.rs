@@ -11,12 +11,10 @@ use std::{
     borrow::Borrow,
     collections::{BTreeMap, BTreeSet},
     fmt,
+    fs::File,
     io::{self, Read, Write},
     path::Path,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, Mutex, PoisonError},
 };
 use unicode_normalization::UnicodeNormalization;
 
@@ -220,8 +218,72 @@ pub struct SourceRoot {
     tenant_id: String,
     source_id: u64,
     revisions: Directory,
-    /// Set while an `ExtractedArchive` from this handle holds the revisions lock.
-    archive_lock: Arc<AtomicBool>,
+    lock: Arc<SourceLock>,
+}
+/// The per-Source advisory lock on this handle's revisions descriptor. The
+/// handle's materializations and its live `ExtractedArchive` share one flock
+/// through a holder count, so releasing one holder never unlocks another.
+pub(crate) struct SourceLock {
+    revisions: File,
+    holders: Mutex<usize>,
+}
+pub(crate) struct SourceLockGuard {
+    lock: Arc<SourceLock>,
+    released: bool,
+}
+impl SourceLock {
+    /// Joins this handle's holders, waiting for peers only when none exist.
+    fn acquire(self: &Arc<Self>) -> Result<SourceLockGuard> {
+        let mut holders = self.holders.lock().unwrap_or_else(PoisonError::into_inner);
+        if *holders == 0 {
+            self.revisions.lock_exclusive()?;
+        }
+        *holders += 1;
+        Ok(SourceLockGuard {
+            lock: self.clone(),
+            released: false,
+        })
+    }
+    /// Takes the lock only when neither this handle nor a peer holds it.
+    pub(crate) fn try_acquire_alone(self: &Arc<Self>) -> io::Result<Option<SourceLockGuard>> {
+        let mut holders = self.holders.lock().unwrap_or_else(PoisonError::into_inner);
+        if *holders > 0 {
+            return Ok(None);
+        }
+        match self.revisions.try_lock_exclusive() {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(None),
+            Err(error) => return Err(error),
+        }
+        *holders = 1;
+        Ok(Some(SourceLockGuard {
+            lock: self.clone(),
+            released: false,
+        }))
+    }
+}
+impl SourceLockGuard {
+    fn release(&mut self) -> io::Result<()> {
+        if self.released {
+            return Ok(());
+        }
+        self.released = true;
+        let mut holders = self
+            .lock
+            .holders
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        *holders -= 1;
+        if *holders == 0 {
+            FileExt::unlock(&self.lock.revisions)?;
+        }
+        Ok(())
+    }
+}
+impl Drop for SourceLockGuard {
+    fn drop(&mut self) {
+        let _ = self.release();
+    }
 }
 pub struct LocalFiles {
     root: Directory,
@@ -256,14 +318,18 @@ impl TenantRepos {
         if source_id == 0 || source_id > MAX_SAFE_INTEGER {
             return Err(Error::InvalidIdentity);
         }
+        let revisions = self
+            .root
+            .child(&source_id.to_string(), true)?
+            .child("revisions", true)?;
         Ok(SourceRoot {
             tenant_id: self.tenant_id.clone(),
             source_id,
-            revisions: self
-                .root
-                .child(&source_id.to_string(), true)?
-                .child("revisions", true)?,
-            archive_lock: Arc::default(),
+            lock: Arc::new(SourceLock {
+                revisions: revisions.0.try_clone()?,
+                holders: Mutex::new(0),
+            }),
+            revisions,
         })
     }
 }
@@ -319,6 +385,9 @@ fn legacy_only_collision(files: &[SelectedFile]) -> bool {
     })
 }
 fn validate_request(request: &mut SnapshotRequest) -> Result<()> {
+    validate_request_with(request, true)
+}
+fn validate_request_with(request: &mut SnapshotRequest, selected_collisions: bool) -> Result<()> {
     validate_revision(&request.upstream_revision_key)?;
     if request.files.len() + request.selection.omitted_files.len() > MAX_ENTRIES
         || request.selection.max_stl_files > MAX_SAFE_INTEGER
@@ -333,7 +402,9 @@ fn validate_request(request: &mut SnapshotRequest) -> Result<()> {
         if file.size_hint_bytes.is_some_and(|n| n > MAX_SAFE_INTEGER) {
             return Err(Error::Limit);
         }
-        paths.insert(&file.path, false)?;
+        if selected_collisions {
+            paths.insert(&file.path, false)?;
+        }
     }
     let selected_paths: BTreeSet<_> = request
         .files
@@ -487,14 +558,10 @@ impl SourceRoot {
         budget: ArtifactBudget,
     ) -> Result<PublishedSnapshot> {
         validate_request(&mut request)?;
-        // A live archive from this handle already holds the per-Source lock
-        // on this open file description; it releases the lock on discard.
-        if self.archive_lock.load(Ordering::Acquire) {
-            return self.materialize_locked(request, open_input, budget);
-        }
-        self.revisions.0.lock_exclusive()?;
+        // Joins a live archive's hold from this handle instead of waiting on it.
+        let mut guard = self.lock.acquire()?;
         let result = self.materialize_locked(request, open_input, budget);
-        let unlocked = FileExt::unlock(&self.revisions.0);
+        let unlocked = guard.release();
         match result {
             Err(error) => Err(error),
             Ok(value) => {
@@ -639,7 +706,11 @@ impl SourceRoot {
             selection: manifest.selection.clone(),
         };
         let ambiguous = match validate_request(&mut request) {
-            Err(Error::DuplicatePath) if legacy_only_collision(&request.files) => true,
+            Err(Error::DuplicatePath) if legacy_only_collision(&request.files) => {
+                // Every other request constraint must still hold.
+                validate_request_with(&mut request, false)?;
+                true
+            }
             other => {
                 other?;
                 false
@@ -731,6 +802,31 @@ mod tests {
         fn drop(&mut self) {
             fs::remove_dir_all(&self.0).unwrap();
         }
+    }
+
+    #[test]
+    fn handle_holders_share_one_flock_until_the_last_releases() {
+        use std::fs::File;
+
+        let tree = Tree::new();
+        let source = TenantRepos::open("tenant".into(), &tree.0)
+            .unwrap()
+            .source(1)
+            .unwrap();
+        let peer = File::open(tree.0.join("1/revisions")).unwrap();
+        // Archive readiness, then a materialization joining from this handle.
+        let archive = source.lock.try_acquire_alone().unwrap().unwrap();
+        assert!(source.lock.try_acquire_alone().unwrap().is_none());
+        let materialize = source.lock.acquire().unwrap();
+        // Discarding the archive must not unlock the running materialization.
+        drop(archive);
+        assert!(peer.try_lock_exclusive().is_err());
+        assert!(source.lock.try_acquire_alone().unwrap().is_none());
+        drop(materialize);
+        peer.try_lock_exclusive().unwrap();
+        assert!(source.lock.try_acquire_alone().unwrap().is_none());
+        FileExt::unlock(&peer).unwrap();
+        assert!(source.lock.try_acquire_alone().unwrap().is_some());
     }
 
     #[test]

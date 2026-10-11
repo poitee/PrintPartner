@@ -466,6 +466,14 @@ fn canonical_folder_overlap_is_rejected_without_publishing_and_retry_can_recover
 
 /// Writes a revision the way the earlier lowercase path rule published it.
 fn write_legacy_revision(fixture: &Fixture, key: &str, names: &[&str]) -> PathBuf {
+    write_legacy_revision_with_omissions(fixture, key, names, serde_json::json!([]))
+}
+fn write_legacy_revision_with_omissions(
+    fixture: &Fixture,
+    key: &str,
+    names: &[&str],
+    omitted: serde_json::Value,
+) -> PathBuf {
     use sha2::{Digest, Sha256};
 
     let revision = fixture.0.join("repos/42/revisions").join(key);
@@ -493,7 +501,7 @@ fn write_legacy_revision(fixture: &Fixture, key: &str, names: &[&str]) -> PathBu
         "version": 1,
         "upstreamRevisionKey": key,
         "manifestDigest": hex::encode(Sha256::digest(serde_json::to_vec(&files).unwrap())),
-        "selection": {"maxStlFiles": 500, "maxDocumentationBytes": 1000, "omittedFiles": []},
+        "selection": {"maxStlFiles": 500, "maxDocumentationBytes": 1000, "omittedFiles": omitted},
         "files": files,
     });
     fs::write(
@@ -570,6 +578,31 @@ fn ambiguous_names_keep_generic_errors_unless_the_revision_is_an_intact_legacy_p
     let revision =
         write_legacy_revision(&fixture, "legacy-ambiguous", &["Straße.stl", "STRASSE.stl"]);
     fs::write(revision.join("Straße.stl"), b"tampered!!").unwrap();
+    assert!(matches!(
+        source.materialize(retry, &input, budget()),
+        Err(pp_source::Error::CorruptSnapshot)
+    ));
+}
+
+#[test]
+fn legacy_ambiguous_revision_still_enforces_the_other_manifest_constraints() {
+    let fixture = Fixture::new();
+    let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+    let mut source = fixture.repos().source(42).unwrap();
+    // Omitted STL entries are corrupt regardless of the path collision.
+    write_legacy_revision_with_omissions(
+        &fixture,
+        "legacy-ambiguous",
+        &["Straße.stl", "STRASSE.stl"],
+        serde_json::json!([{
+            "path": "notes.md",
+            "kind": "stl",
+            "sizeHintBytes": null,
+            "reason": "unknown-document-size",
+        }]),
+    );
+    let mut retry = request();
+    retry.upstream_revision_key = "legacy-ambiguous".into();
     assert!(matches!(
         source.materialize(retry, &input, budget()),
         Err(pp_source::Error::CorruptSnapshot)
