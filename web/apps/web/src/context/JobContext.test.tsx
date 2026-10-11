@@ -57,7 +57,7 @@ describe("JobProvider elapsed observation deadline", () => {
     });
     expect(result.current.activeJobs[0]).toMatchObject({ status: "pending", message: "Starting…" });
     expect(result.current.isJobKindRunning("check-source-updates")).toBe(true);
-    expect(fetchJob).toHaveBeenCalledTimes(11);
+    expect(fetchJob).toHaveBeenCalledTimes(10);
     await act(async () => { await vi.advanceTimersByTimeAsync(1); });
     expect(result.current.activeJobs[0]).toMatchObject({ status: "error", message: timeoutMessage });
     expect(result.current.isJobKindRunning("check-source-updates")).toBe(false);
@@ -68,7 +68,7 @@ describe("JobProvider elapsed observation deadline", () => {
     expect(disconnect).toHaveBeenCalledOnce();
     expect(vi.mocked(fetchJob).mock.calls[0]?.[1]?.aborted).toBe(true);
     await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
-    expect(fetchJob).toHaveBeenCalledTimes(11);
+    expect(fetchJob).toHaveBeenCalledTimes(10);
     expect(onDone).toHaveBeenCalledOnce();
   });
 
@@ -134,6 +134,62 @@ describe("JobProvider elapsed observation deadline", () => {
       job_id: "observed", kind: "check-source-updates", status: "error",
       message: timeoutMessage, error: timeoutMessage, progress: null, result: null,
     });
+  });
+
+  it("rejects a late terminal snapshot before the delayed deadline timer runs", async () => {
+    const clock = vi.spyOn(performance, "now").mockReturnValue(0);
+    try {
+      vi.mocked(fetchJob).mockRejectedValue(new TypeError("Failed to fetch"));
+      const { result } = renderHook(useJobContext, { wrapper });
+      const onDone = vi.fn();
+      await act(async () => {
+        await result.current.runJob("check-source-updates", () => Promise.resolve("observed"), onDone);
+      });
+      clock.mockReturnValue(60_000);
+      await act(async () => { vi.mocked(connectJobWebSocket).mock.calls[0]?.[1](completed); });
+      expect(result.current.activeJobs[0]).toMatchObject({ status: "error", message: timeoutMessage });
+      expect(onDone).toHaveBeenCalledExactlyOnceWith({
+        job_id: "observed", kind: "check-source-updates", status: "error", message: timeoutMessage,
+        error: timeoutMessage, progress: null, result: null,
+      });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("reports a non-transient HTTP failure immediately", async () => {
+    vi.mocked(fetchJob).mockRejectedValue(new EngineHttpError("Access denied", 403));
+    const { result } = renderHook(useJobContext, { wrapper });
+    const onDone = vi.fn();
+    await act(async () => {
+      await result.current.runJob("check-source-updates", () => Promise.resolve("observed"), onDone);
+    });
+    const message = "Lost contact with the job. It may still be running on the server. Access denied";
+    expect(result.current.activeJobs[0]).toMatchObject({ status: "error", message });
+    expect(onDone).toHaveBeenCalledExactlyOnceWith({
+      job_id: "observed", kind: "check-source-updates", status: "error", message,
+      error: message, progress: null, result: null,
+    });
+    expect(vi.mocked(fetchJob).mock.calls[0]?.[1]?.aborted).toBe(true);
+  });
+
+  it("aborts bounded observation on unmount without reporting a timeout", async () => {
+    vi.mocked(fetchJob).mockResolvedValue(running);
+    const disconnect = vi.fn();
+    vi.mocked(connectJobWebSocket).mockReturnValue(disconnect);
+    const { result, unmount } = renderHook(useJobContext, { wrapper });
+    const onDone = vi.fn();
+    await act(async () => {
+      await result.current.runJob("check-source-updates", () => Promise.resolve("observed"), onDone);
+    });
+    expect(result.current.activeJobs[0]).toMatchObject({ status: "running", message: "Checking sources" });
+    unmount();
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(vi.mocked(fetchJob).mock.calls[0]?.[1]?.aborted).toBe(true);
+    expect(disconnect).toHaveBeenCalledOnce();
+    expect(fetchJob).toHaveBeenCalledTimes(1);
+    expect(onDone).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("finishes a terminal socket event immediately even if its snapshot fetch stalls", async () => {
