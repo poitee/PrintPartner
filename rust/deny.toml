@@ -4,9 +4,8 @@
 # Policy summary:
 # - Licenses: allow permissive/OSI-friendly licenses that are compatible with
 #   distributing this AGPL-3.0-only workspace; first-party AGPL is via exceptions.
-# - Advisories: vulnerabilities / unsound / notices fail the check. Unmaintained
-#   crates are downgraded to warnings in CI via `cargo deny check -W unmaintained`
-#   (cargo-deny 0.20 has no `unmaintained = "warn"` lint level).
+# - Advisories: vulnerabilities / unsound / notices / unmaintained fail the
+#   check, except the two documented GTK3 advisory IDs tracked for removal.
 # - Bans: duplicate versions warn only (report-only).
 # - Sources: crates.io only.
 
@@ -21,11 +20,15 @@ targets = [
 ]
 
 [advisories]
-# Fail on vulnerability / unsound / notice advisories (cargo-deny 0.20 defaults).
-# Unmaintained: keep default (error) in-config; CI passes `-W unmaintained` so
-# unmaintained crates warn without failing the job.
+# Fail on vulnerability / notice advisories and unsoundness at any dependency depth.
+# Unmaintained advisories also fail, except the specific GTK3 exception below.
+unsound = "all"
 unmaintained = "all"
-ignore = []
+# Gate-approved GTK3 exceptions; remove through the referenced migration tickets.
+ignore = [
+    { id = "RUSTSEC-2024-0429", reason = "glib 0.18.5 unsound string variant iterator, transitive via tauri -> wry/webkit2gtk -> gtk 0.18 (GTK3 Linux webview); our code never calls it (rg proof in PR); remove via GRE-553" },
+    { id = "RUSTSEC-2024-0370", reason = "proc-macro-error 1.0.4 unmaintained, build-time proc-macro via glib-macros 0.18.5 and gtk3-macros 0.18.2 (confirmed with cargo tree --workspace --target all -i proc-macro-error; GTK3 stack); remove via GRE-554" },
+]
 
 [licenses]
 confidence-threshold = 0.8
@@ -57,7 +60,7 @@ allow = [
 # cargo-deny also checks first-party crates; AGPL is allowed only for these
 # crates, not for third-party dependencies. Crates covered: pp-api-types,
 # pp-compat, pp-contracts, pp-core, pp-desktop, pp-domain, pp-drivers,
-# pp-gateway, pp-net, pp-server, pp-services.
+# pp-gateway, pp-net, pp-server, pp-services, pp-source.
 exceptions = [
     { crate = "pp-api-types", allow = ["AGPL-3.0-only"] },
     { crate = "pp-compat", allow = ["AGPL-3.0-only"] },
@@ -70,6 +73,7 @@ exceptions = [
     { crate = "pp-net", allow = ["AGPL-3.0-only"] },
     { crate = "pp-server", allow = ["AGPL-3.0-only"] },
     { crate = "pp-services", allow = ["AGPL-3.0-only"] },
+    { crate = "pp-source", allow = ["AGPL-3.0-only"] },
 ]
 
 [bans]

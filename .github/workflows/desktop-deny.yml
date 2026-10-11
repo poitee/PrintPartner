@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       # Pin EmbarkStudios/cargo-deny-action@v2.1.1 (cargo-deny 0.20.2).
@@ -29,8 +29,7 @@ jobs:
         with:
           manifest-path: rust/Cargo.toml
           command: check
-          # --all-features matches [graph].all-features; -W unmaintained maps the
-          # GRE-534 "unmaintained = warn" policy onto cargo-deny 0.20 (no warn lint).
+          # --all-features matches [graph].all-features. Advisory exceptions are
+          # limited to the two documented GTK3 IDs in rust/deny.toml.
           arguments: --all-features
-          command-arguments: -W unmaintained
           rust-version: '1.99.0'
