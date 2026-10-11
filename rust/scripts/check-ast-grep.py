@@ -3,6 +3,7 @@
 from collections import Counter
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -10,15 +11,28 @@ import sys
 def main():
     root = Path(__file__).resolve().parents[1]
     baseline = json.loads((root / "ast-grep-baseline.json").read_text())
-    if not baseline or any(type(value) is not int or value < 0 for value in baseline.values()):
+    if not isinstance(baseline, dict) or not baseline or any(type(value) is not int or value < 0 for value in baseline.values()):
         raise ValueError("ast-grep baseline must contain nonnegative integer counts")
     scan = subprocess.run(
-        ["ast-grep", "scan", "--config", "sgconfig.yml", "--json=compact", "crates"],
+        ["ast-grep", "scan", "--config", "sgconfig.yml", "--json=compact", "--inspect=entity", "crates"],
         cwd=root,
         text=True,
         capture_output=True,
         check=True,
     )
+    # Use the pinned scanner's loaded-rule report, including rules with no hits.
+    # A deleted, unconfigured, or disabled rule must not look like a decrease.
+    loaded = {
+        rule for rule, severity in re.findall(
+            r"^sg: entity\|rule\|(.+): finalSeverity=(\w+)$", scan.stderr, re.MULTILINE
+        ) if severity != "Off"
+    }
+    if loaded != baseline.keys():
+        raise ValueError(
+            f"ast-grep rule set differs from baseline: "
+            f"unloaded={sorted(baseline.keys() - loaded)}, "
+            f"unbaselined={sorted(loaded - baseline.keys())}"
+        )
     hits = json.loads(scan.stdout)
     counts = Counter(hit["ruleId"] for hit in hits)
     unknown = counts.keys() - baseline.keys()

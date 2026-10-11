@@ -8,6 +8,157 @@ ignores:
   - crates/pp-compat/**
   - crates/pp-core/**
   - crates/pp-desktop/**
+utils:
+  std-process-path:
+    regex: '^(::)?std\s*::\s*process$'
+  std-list:
+    kind: scoped_use_list
+    has:
+      field: path
+      regex: '^(::)?std$'
+  std-process-list:
+    kind: scoped_use_list
+    has:
+      field: path
+      any:
+        - matches: std-process-path
+        - all:
+            - regex: '^process$'
+            - inside:
+                matches: std-list
+                stopBy: end
+  # $MODULE is bound by the Command use site and must match its imported name.
+  process-module-import:
+    any:
+      - kind: use_declaration
+        has:
+          field: argument
+          matches: std-process-path
+          has:
+            field: name
+            pattern: $MODULE
+      - kind: use_declaration
+        has:
+          field: argument
+          kind: use_as_clause
+          has:
+            field: path
+            matches: std-process-path
+          all:
+            - has:
+                field: alias
+                pattern: $MODULE
+      - all:
+          - any:
+              - kind: identifier
+                regex: '^process$'
+                pattern: $MODULE
+              - kind: use_as_clause
+                has:
+                  field: path
+                  regex: '^process$'
+                all:
+                  - has:
+                      field: alias
+                      pattern: $MODULE
+          - inside:
+              kind: use_list
+              inside:
+                matches: std-list
+      - kind: use_as_clause
+        has:
+          field: path
+          kind: self
+        all:
+          - has:
+              field: alias
+              pattern: $MODULE
+          - inside:
+              kind: use_list
+              inside:
+                matches: std-process-list
+      - kind: self
+        inside:
+          kind: use_list
+          inside:
+            matches: std-process-list
+            has:
+              field: path
+              any:
+                - matches: std-process-path
+                  has:
+                    field: name
+                    pattern: $MODULE
+                - regex: '^process$'
+                  pattern: $MODULE
+  import-tree:
+    any:
+      - kind: use_declaration
+      - kind: scoped_use_list
+      - kind: use_list
+      - kind: use_as_clause
+      - kind: scoped_identifier
+      - kind: identifier
+      - kind: self
+  lexical-scope:
+    any:
+      - kind: source_file
+      - kind: declaration_list
+      - kind: block
+  process-import-scope:
+    matches: lexical-scope
+    has:
+      matches: process-module-import
+      stopBy:
+        not:
+          matches: import-tree
+  std-import-scope:
+    matches: lexical-scope
+    has:
+      kind: use_as_clause
+      has:
+        field: path
+        regex: '^(::)?std$'
+      all:
+        - has:
+            field: alias
+            pattern: $MODULE
+      stopBy:
+        not:
+          matches: import-tree
+  # Stop at a nested module boundary or a closer definition/import of the name.
+  import-boundary:
+    any:
+      - kind: declaration_list
+        inside:
+          kind: mod_item
+      - matches: lexical-scope
+        has:
+          any:
+            - any:
+                - kind: mod_item
+                - kind: struct_item
+                - kind: enum_item
+                - kind: type_item
+                - kind: trait_item
+              has:
+                field: name
+                pattern: $MODULE
+            - kind: use_as_clause
+              has:
+                field: alias
+                pattern: $MODULE
+            - kind: scoped_identifier
+              has:
+                field: name
+                pattern: $MODULE
+            - kind: identifier
+              pattern: $MODULE
+              inside:
+                kind: use_list
+          stopBy:
+            not:
+              matches: import-tree
 rule:
   any:
     - all:
@@ -16,93 +167,105 @@ rule:
             - kind: scoped_type_identifier
         - regex: '^(::)?std\s*::\s*process\s*::\s*Command$'
     # Grouped and renamed imports still introduce the same runtime capability.
-    - all:
-        - kind: identifier
-        - regex: '^Command$'
+    - kind: identifier
+      regex: '^Command$'
+      any:
         - inside:
-            kind: scoped_use_list
+            kind: use_list
+        - inside:
+            kind: use_as_clause
             has:
               field: path
-              regex: '^(::)?std\s*::\s*process$'
-            stopBy: end
+              regex: '^Command$'
+      inside:
+        matches: std-process-list
+        stopBy: end
+    - pattern: process::Command
+      inside:
+        matches: std-list
+        stopBy: end
+    # Parsed paths and unparsed macro tokens use the same import resolution.
     - all:
         - any:
-            - pattern: process::Command
             - all:
-                - kind: identifier
-                - regex: '^Command$'
-                - inside:
-                    kind: scoped_use_list
+                - any:
+                    - kind: scoped_identifier
+                    - kind: scoped_type_identifier
+                - has:
+                    field: name
+                    regex: '^Command$'
+                - has:
+                    field: path
+                    pattern: $MODULE
+            - kind: identifier
+              regex: '^Command$'
+              inside:
+                kind: token_tree
+              follows:
+                regex: '^::$'
+                follows:
+                  kind: identifier
+                  pattern: $MODULE
+        - inside:
+            matches: process-import-scope
+            stopBy:
+              matches: import-boundary
+    # An alias of std preserves the process::Command path beneath that alias.
+    - all:
+        - any:
+            - all:
+                - any:
+                    - kind: scoped_identifier
+                    - kind: scoped_type_identifier
+                - has:
+                    field: name
+                    regex: '^Command$'
+                - has:
+                    field: path
                     has:
-                      field: path
+                      field: name
                       regex: '^process$'
-                    stopBy: end
-        - inside:
-            kind: scoped_use_list
-            has:
-              field: path
-              regex: '^(::)?std$'
-            stopBy: end
-    # Resolve a module import in the same file before matching its Command path.
-    - all:
-        - any:
-            - kind: scoped_identifier
-            - kind: scoped_type_identifier
-        - has:
-            field: name
-            regex: '^Command$'
-        - has:
-            field: path
-            pattern: $MODULE
-        - inside:
-            kind: source_file
-            has:
-              any:
-                - all:
-                    - any:
-                        - pattern: use std::process;
-                        - pattern: use ::std::process;
-                    - has:
-                        stopBy: end
-                        kind: identifier
-                        pattern: $MODULE
-                        regex: '^process$'
-                - pattern: use std::process as $MODULE;
-                - pattern: use ::std::process as $MODULE;
-                - all:
-                    - any:
-                        - all:
-                            - kind: identifier
-                            - pattern: $MODULE
-                            - regex: '^process$'
-                            - inside:
-                                kind: use_list
-                        - all:
-                            - kind: use_as_clause
-                            - has:
-                                field: path
-                                regex: '^process$'
-                            - has:
-                                field: alias
-                                pattern: $MODULE
-                    - inside:
-                        kind: scoped_use_list
-                        has:
+                    all:
+                      - has:
                           field: path
-                          regex: '^(::)?std$'
-                        stopBy: end
-              stopBy: end
-            stopBy: end
+                          pattern: $MODULE
+            - kind: identifier
+              regex: '^Command$'
+              inside:
+                kind: token_tree
+              follows:
+                regex: '^::$'
+                follows:
+                  kind: identifier
+                  regex: '^process$'
+                  follows:
+                    regex: '^::$'
+                    follows:
+                      kind: identifier
+                      pattern: $MODULE
+        - inside:
+            matches: std-import-scope
+            stopBy:
+              matches: import-boundary
+    - kind: identifier
+      regex: '^Command$'
+      inside:
+        kind: token_tree
+      follows:
+        regex: '^::$'
+        follows:
+          kind: identifier
+          regex: '^process$'
+          follows:
+            regex: '^::$'
+            follows:
+              kind: identifier
+              regex: '^std$'
     # A wildcard import includes Command, even if referenced through an alias.
-    - all:
-        - kind: use_wildcard
-        - any:
-            - regex: '^(::)?std\s*::\s*process\s*::\s*\*$'
-            - all:
-                - regex: '^process\s*::\s*\*$'
-                - inside:
-                    kind: scoped_use_list
-                    has:
-                      field: path
-                      regex: '^(::)?std$'
-                    stopBy: end
+    - kind: use_wildcard
+      any:
+        - regex: '^(::)?std\s*::\s*process\s*::\s*\*$'
+        - regex: '^process\s*::\s*\*$'
+          inside:
+            matches: std-list
+            stopBy: end

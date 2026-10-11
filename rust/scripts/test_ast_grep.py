@@ -63,6 +63,20 @@ class RatchetTests(unittest.TestCase):
         result = self.check()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_new_macro_unwrap_fails(self):
+        self.source("pp-source/src/lib.rs", 'fn production() { value.unwrap(); println!("{}", value.unwrap()); }')
+        result = self.check()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("no-unwrap-expect: 2 hits (baseline 1)", result.stdout)
+
+    def test_out_of_line_unit_test_file_conventions_are_exempt(self):
+        self.source("pp-source/src/lib.rs", "#[cfg(test)] mod tests;")
+        self.source("pp-source/src/tests.rs", "fn helper() { value.unwrap(); }")
+        self.source("pp-net/src/nested/tests/helper.rs", "fn helper() { value.unwrap(); }")
+        self.baseline()
+        result = self.check()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_command_is_allowed_only_in_runtime_crates(self):
         for crate in ("pp-core", "pp-compat", "pp-desktop"):
             self.source(f"{crate}/src/lib.rs", 'use std::process::Command;')
@@ -83,6 +97,34 @@ class RatchetTests(unittest.TestCase):
         result = self.check()
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("ast-grep ratchet error:", result.stderr)
+
+    def test_deleted_rule_fails_closed(self):
+        (self.root / "rules" / "no-unwrap-expect.yml").unlink()
+        result = self.check()
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("unloaded=['no-unwrap-expect']", result.stderr)
+
+    def test_disabled_rule_fails_closed(self):
+        rule = self.root / "rules" / "no-unwrap-expect.yml"
+        rule.write_text(rule.read_text().replace("severity: warning", "severity: off"))
+        result = self.check()
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("unloaded=['no-unwrap-expect']", result.stderr)
+
+    def test_unconfigured_rules_fail_closed(self):
+        (self.root / "empty-rules").mkdir()
+        (self.root / "sgconfig.yml").write_text("ruleDirs:\n  - empty-rules\n")
+        result = self.check()
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("ast-grep ratchet error:", result.stderr)
+
+    def test_unbaselined_rule_with_no_hits_fails_closed(self):
+        (self.root / "rules" / "extra.yml").write_text(
+            "id: extra-rule\nlanguage: Rust\nseverity: warning\nrule:\n  pattern: nonexistent()\n"
+        )
+        result = self.check()
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("unbaselined=['extra-rule']", result.stderr)
 
 
 if __name__ == "__main__":

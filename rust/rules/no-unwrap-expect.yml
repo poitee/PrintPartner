@@ -6,11 +6,38 @@ files:
   - crates/**/*.rs
 ignores:
   - crates/*/tests/**
+  # Out-of-line unit tests follow the src/**/tests.rs or src/**/tests/** convention.
+  - crates/*/src/**/tests.rs
+  - crates/*/src/**/tests/**
 rule:
   all:
     - any:
         - pattern: $VALUE.unwrap()
         - pattern: $VALUE.expect($$$ARGS)
+        - pattern: $TYPE::unwrap($$$ARGS)
+        - pattern: $TYPE::expect($$$ARGS)
+        # Macro arguments are token trees, not parsed call expressions. Match
+        # the method-name token between a dot and its argument list instead.
+        - all:
+            - kind: identifier
+            - regex: '^(unwrap|expect)$'
+            - inside:
+                kind: token_tree
+            - follows:
+                regex: '^(\.|::)$'
+                stopBy:
+                  not:
+                    any:
+                      - kind: line_comment
+                      - kind: block_comment
+            - precedes:
+                kind: token_tree
+                regex: '^\('
+                stopBy:
+                  not:
+                    any:
+                      - kind: line_comment
+                      - kind: block_comment
     - not:
         inside:
           stopBy: end
