@@ -33,7 +33,7 @@ jobs:
           {
             echo '## cargo-machete (report-only)'
             echo
-            echo 'Pinned tool: `cargo-machete@0.9.2` (via `taiki-e/install-action`).'
+            echo "Pinned tool: \`cargo-machete@0.9.2\` (via \`taiki-e/install-action\`)."
             echo
             echo '```text'
             printf '%s\n' "$output"
@@ -41,9 +41,15 @@ jobs:
             echo
             if [[ "$status" -eq 0 ]]; then
               echo 'No unused dependencies reported.'
+            elif [[ "$status" -eq 1 ]]; then
+              echo "Findings above (tool exit \`1\`). Report-only: this job stays green."
             else
-              echo "Findings above (tool exit \`$status\`). Report-only: this job stays green."
+              echo "cargo-machete tool error (exit \`$status\`); see output above. This job fails."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
-          # Never fail the workflow — findings are for humans/gardeners.
+          # Exit 0 = clean and exit 1 = unused deps (report-only, stay green).
+          # Exit >= 2 = real tool error, so fail the job.
+          if (( status >= 2 )); then
+            exit "$status"
+          fi
           exit 0
