@@ -1,0 +1,14 @@
+---
+source: crates/pp-api-types/tests/autosave_snapshots.rs
+expression: value
+---
+{
+  "applied_at": "[timestamp]",
+  "draft_id": "[draft_id]",
+  "draft_lifecycle_version": 2,
+  "plan_version": 2,
+  "profile_id": "[profile_id]",
+  "required_unit_mapping_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "revision_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "revision_id": "[revision_id]"
+}
