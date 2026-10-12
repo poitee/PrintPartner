@@ -104,6 +104,7 @@ async function collectSnapshotFiles(
     for (const entry of entries) {
       if (!preserveAllFiles && entry.name.startsWith(".")) continue;
       const rel = relative ? `${relative}/${entry.name}` : entry.name;
+      if (rel === SOURCE_SNAPSHOT_MANIFEST_FILE) continue;
       const abs = join(dir, entry.name);
       if (entry.isDirectory()) {
         const segments = rel.split("/");
@@ -322,7 +323,7 @@ function registerAndActivateSnapshot(input: {
       input.repo.markSourceRevisionCurrent(input.sourceId, revision.id);
     }
     const rules = input.repo.getProjectRow(input.sourceId)?.importedPaths;
-    if ((!rules || rules.trim() === "[]") && input.suggestedImportRules?.length) {
+    if ((!rules?.trim() || rules.trim() === "[]") && input.suggestedImportRules?.length) {
       input.repo.updateImportRules(input.sourceId, input.suggestedImportRules);
     }
     return activated;

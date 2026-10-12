@@ -36,6 +36,29 @@ function addMaliciousEntry(zip: AdmZip, name: string, data: Buffer): void {
 }
 
 describe("archive extraction hardening", () => {
+  it.each(["zip", "files"])("shares the nested 3MF validation budget across a %s upload", (kind) => {
+    const root = tempRoot();
+    const model = encodeAcceptedPlate3mf([{ token: "clip", objectName: "Clip", xUm: 0, yUm: 0, mesh: triangle }]);
+    const nested = new AdmZip(Buffer.from(model));
+    nested.addFile("padding.bin", Buffer.alloc(4096, 0));
+    const bytes = nested.toBuffer();
+    const childBytes = nested.getEntries().reduce((total, entry) => total + entry.header.size, 0);
+    const limit = childBytes + 1024;
+    const zip = new AdmZip();
+    zip.addFile("a.3mf", bytes);
+    zip.addFile("b.3mf", bytes);
+    const staging = createSourceUploadStaging(root, "default");
+    try {
+      expect(() => kind === "zip"
+        ? writeUploadedZip(stagedFile(zip.toBuffer()), staging, { maxUncompressedBytes: limit })
+        : writeUploadedFiles([staged("a.3mf", bytes), staged("b.3mf", bytes)], staging, { maxUncompressedBytes: limit })
+      ).toThrow("Nested 3MF uncompressed size exceeds limit");
+      expect(existsSync(join(staging, "files"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("extracts a normal archive and counts STL files", () => {
     const root = tempRoot();
     const zip = new AdmZip();

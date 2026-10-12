@@ -1,5 +1,5 @@
 import { Unzip, UnzipInflate } from "fflate";
-import { crc32 } from "node:zlib";
+import * as zlib from "node:zlib";
 import { InvalidSourceArchiveError, readZipDirectory } from "./zip-directory.js";
 import {
   appendFileSync,
@@ -20,6 +20,22 @@ import { tenantSourceUploadPrefix } from "../lib/secure-path.js";
 import { chargeTenantDiskBytes } from "../lib/tenant-disk-quota.js";
 import { extractThreeMfMeshes } from "./three-mf-import.js";
 import { MAX_SOURCE_UPLOAD_BYTES, SOURCE_UPLOAD_TOO_LARGE_DETAIL } from "./upload-limits.js";
+
+const CRC32_TABLE = Uint32Array.from({ length: 256 }, (_, index) => {
+  let value = index;
+  for (let bit = 0; bit < 8; bit += 1) {
+    value = (value >>> 1) ^ ((value & 1) ? 0xedb88320 : 0);
+  }
+  return value >>> 0;
+});
+
+const crc32 = zlib.crc32 ?? ((bytes: Uint8Array, previous = 0): number => {
+  let checksum = previous ^ 0xffffffff;
+  for (const byte of bytes) {
+    checksum = (checksum >>> 8) ^ CRC32_TABLE[(checksum ^ byte) & 0xff]!;
+  }
+  return (checksum ^ 0xffffffff) >>> 0;
+});
 
 const MAX_ZIP_ENTRIES = 10_000;
 const MAX_ZIP_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024;
@@ -44,6 +60,9 @@ function processZipFile(zipPath: string, destDir: string | null, limits: Extract
   const maxEntries = limits.maxEntries ?? MAX_ZIP_ENTRIES;
   const maxBytes = limits.maxUncompressedBytes ?? MAX_ZIP_UNCOMPRESSED_BYTES;
   const entries = new Map(readZipDirectory(zipPath, maxEntries).map((entry) => [entry.name, entry]));
+  if ([...entries.values()].reduce((total, entry) => total + entry.size, 0) > maxBytes) {
+    throw new Error("Archive uncompressed size exceeds limit");
+  }
   const base = resolve(destDir ?? ".");
   if (destDir) mkdirSync(base, { recursive: true });
   const targets = new Set<string>();
@@ -235,8 +254,18 @@ function expandThreeMfFiles(extractDir: string, maxTotalBytes = MAX_ZIP_UNCOMPRE
   let derivedStlCount = 0;
   let remainingBytes = maxTotalBytes - storedBytes(extractDir);
   if (remainingBytes < 0) throw new Error("Uploaded source exceeds the total size limit");
-  for (const path of paths) {
-    processZipFile(path, null);
+  const children = paths.map((path) => ({
+    path,
+    uncompressedBytes: readZipDirectory(path, MAX_ZIP_ENTRIES)
+      .reduce((total, entry) => total + entry.size, 0),
+  }));
+  let remainingValidationBytes = maxTotalBytes;
+  if (children.reduce((total, child) => total + child.uncompressedBytes, 0) > remainingValidationBytes) {
+    throw new Error("Nested 3MF uncompressed size exceeds limit");
+  }
+  for (const { path, uncompressedBytes } of children) {
+    processZipFile(path, null, { maxUncompressedBytes: remainingValidationBytes });
+    remainingValidationBytes -= uncompressedBytes;
     const result = extractThreeMfMeshes(fileChunks(path), extractDir, path, { maxOutputBytes: remainingBytes });
     derivedStlCount += result.files.length;
     remainingBytes -= result.files.reduce((total, file) => total + file.byteSize, 0);
@@ -248,6 +277,7 @@ function expandThreeMfFiles(extractDir: string, maxTotalBytes = MAX_ZIP_UNCOMPRE
 export function writeUploadedFiles(
   files: Array<{ relativePath: string; path: string }>,
   stagingDir: string,
+  limits: ExtractLimits = {},
 ): UploadedFilesResult {
   if (!files.length) throw new Error("At least one file is required");
   const staged = files.map((file) => ({ ...file, bytes: statSync(file.path).size }));
@@ -269,7 +299,7 @@ export function writeUploadedFiles(
       renameSync(file.path, target);
       if (file.relativePath.toLowerCase().endsWith(".stl")) stlCount += 1;
     }
-    stlCount += expandThreeMfFiles(extractDir);
+    stlCount += expandThreeMfFiles(extractDir, limits.maxUncompressedBytes);
   } catch (error) {
     rmSync(extractDir, { recursive: true, force: true });
     throw error;
@@ -282,12 +312,12 @@ export function writeUploadedFiles(
   };
 }
 
-export function writeUploadedZip(stagedZip: string, stagingDir: string): string {
+export function writeUploadedZip(stagedZip: string, stagingDir: string, limits: ExtractLimits = {}): string {
   const extractDir = join(stagingDir, "files");
   mkdirSync(extractDir);
   try {
-    extractZipFile(stagedZip, extractDir);
-    expandThreeMfFiles(extractDir);
+    extractZipFile(stagedZip, extractDir, limits);
+    expandThreeMfFiles(extractDir, limits.maxUncompressedBytes);
   } catch (error) {
     rmSync(extractDir, { recursive: true, force: true });
     throw error;

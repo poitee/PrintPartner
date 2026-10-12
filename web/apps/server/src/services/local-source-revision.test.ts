@@ -8,6 +8,7 @@ import {
   truncateSync,
   writeFileSync,
 } from "node:fs";
+import { sql } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -48,6 +49,35 @@ function fixture() {
 }
 
 describe("publishLocalSourceWorkingTree", () => {
+  it("seeds suggested rules when legacy imported paths contain only whitespace", async () => {
+    const { sqlite, repo, source, workingTree } = fixture();
+    try {
+      getDb(sqlite).run(sql`UPDATE projects SET imported_paths = ${"  \n\t"} WHERE id = ${source.id}`);
+      await publishLocalSourceWorkingTree({
+        repo, reposDir: sqlite.reposDir, sourceId: source.id, workingTree,
+        suggestedImportRules: ["cube.stl"],
+      });
+      expect(JSON.parse(repo.getProjectRow(source.id)!.importedPaths!)).toEqual(["cube.stl"]);
+    } finally { sqlite.close(); }
+  });
+
+  it("reuploads a managed snapshot while preserving ordinary hidden files", async () => {
+    const { sqlite, repo, source, workingTree } = fixture();
+    try {
+      writeFileSync(join(workingTree, ".notes"), "keep hidden user content");
+      const first = await publishLocalSourceWorkingTree({
+        repo, reposDir: sqlite.reposDir, sourceId: source.id, workingTree, preserveAllFiles: true,
+      });
+      const second = await publishLocalSourceWorkingTree({
+        repo, reposDir: sqlite.reposDir, sourceId: source.id,
+        workingTree: first.local_path!, preserveAllFiles: true,
+      });
+      expect(second.current_source_revision_id).toBe(first.current_source_revision_id);
+      expect(readFileSync(join(second.local_path!, ".notes"), "utf8")).toBe("keep hidden user content");
+      expect(readFileSync(join(second.local_path!, "cube.stl"), "utf8")).toBe("solid cube\nendsolid cube\n");
+    } finally { sqlite.close(); }
+  });
+
   it("streams a large file while deriving its revision digest", async () => {
     const { sqlite, repo, source, workingTree } = fixture();
     const contentBytes = 32 * 1024 * 1024;
