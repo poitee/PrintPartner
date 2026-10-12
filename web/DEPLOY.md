@@ -57,7 +57,7 @@ The app service has a healthcheck that polls `GET /health` every 30s using Node'
 | `SESSION_SECRET` | unset | Not needed for single-user auth. Required when `MULTI_USER=1`. |
 | `SESSION_COOKIE_SECURE` | `0` | Set to `1` when the self-hosted site is served through HTTPS. Leave at `0` for a plain HTTP LAN address. |
 | `SOURCE_DOCS_MAX_BYTES` | `1073741824` | Per-source budget for synced markdown/PDF docs (~1 GiB). Operator escape hatch only. |
-| `PRINT_PARTNER_API_KEY` | unset | When set, requires Bearer or `X-Print-Partner-Api-Key` on `/api/v1/*`. **Required for `/api/v1/mcp` unless `HOST` is loopback** (Docker uses `0.0.0.0`) |
+| `PRINT_PARTNER_API_KEY` | unset | Open self-host deployment secret. When set, requires Bearer or `X-Print-Partner-Api-Key` on `/api/v1/*`. **Required for `/api/v1/mcp` unless `HOST` is loopback** (Docker uses `0.0.0.0`). `MULTI_USER=1` also requires a login session. |
 | `OPENAPI_UI` | unset | Set to `1` to expose `/api/v1/docs` in production |
 | `REDIS_URL` | unset | Optional. When set in SaaS, enables the BullMQ job queue. See SaaS below. |
 | `PRINT_PARTNER_UPDATE_CHECK` | enabled | Set to `0` to disable in-app update checks |
@@ -100,6 +100,8 @@ whether server-managed content can be browsed.
 Streamable HTTP MCP is served by the running app at **`/api/v1/mcp`** (same product tools as stdio). Pending proposes are **per MCP session** (`mcp-session-id`).
 
 **Fail-closed:** set **`PRINT_PARTNER_API_KEY`** whenever `HOST` is not loopback (Compose/`Dockerfile` bind `0.0.0.0`). Without a key on an exposed bind, `/api/v1/mcp` returns **503**. Auth header: Bearer or `X-Print-Partner-Api-Key`.
+
+`MULTI_USER=1` still requires a login session for `/api/v1/mcp`. The deployment key does not select a tenant. `SINGLE_USER_AUTH=1` accepts the deployment key or a Settings API key on that MCP route without a session.
 
 Use **HTTPS** for remote clients (terminate TLS at a reverse proxy). Plain `http://` is only for loopback or an authenticated tunnel.
 
@@ -365,5 +367,5 @@ Run `npm run quality` before deploying a changed image.
 
 - No PyVista/VTK mesh preview server-side (client thumbnails only)
 - Printables/MakerWorld source create returns `501`
-- Community manifest report issue action uses an export-draft stub body
+- Community manifest submission draft export and Source/Plan maintenance and manifest reports return explicit HTTP 501 unsupported responses. Source manifest presence reads owned canonical file availability. These GRE-292 corrections are unreleased; see [manifest API availability](../docs/gre-292-manifest-api-availability.md).
 - Bambu metadata in 3MF is minimal (plate JSON + slice_info stub)

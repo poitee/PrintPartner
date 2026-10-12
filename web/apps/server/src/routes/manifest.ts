@@ -74,12 +74,12 @@ export async function registerManifestRoutes(
     }
   });
 
-  app.post("/manifest-registry/export-draft", async () => ({
-    slug: "draft",
-    manifest_yaml: "format: print-partner-manifest-v2\nversion: 2\n",
-    meta_yaml: "title: Draft\n",
-    issue_body: "Community manifest draft (web stub).",
-  }));
+  app.post("/manifest-registry/export-draft", async (_request, reply) =>
+    reply.status(501).send({
+      code: "manifest_export_draft_unsupported",
+      detail: "Community manifest submission draft export is not supported by this web API.",
+    }),
+  );
 
   app.get("/manifest-templates", async () => ({
     templates: [

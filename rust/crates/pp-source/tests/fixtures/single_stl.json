@@ -1,0 +1,20 @@
+{
+  "tree": {
+    "part.stl": "solid fixture\nendsolid fixture\n"
+  },
+  "request": {
+    "upstreamRevisionKey": "single_stl",
+    "files": [
+      {
+        "path": "part.stl",
+        "kind": "stl",
+        "sizeHintBytes": 999
+      }
+    ],
+    "selection": {
+      "maxStlFiles": 1,
+      "maxDocumentationBytes": 0,
+      "omittedFiles": []
+    }
+  }
+}

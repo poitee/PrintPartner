@@ -132,6 +132,9 @@ impl StorageLease {
             release_allowed: true,
         })
     }
+    pub fn record_child(directory: &Path, pid: u32) -> Result<()> {
+        guard::record_child(directory, pid)
+    }
     pub fn data_dir(&self) -> &Path {
         &self.data_dir
     }

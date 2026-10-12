@@ -6,6 +6,13 @@ use std::{
     sync::atomic::AtomicBool,
     time::Duration,
 };
+
+#[derive(serde::Deserialize)]
+#[serde(tag = "command", rename_all = "kebab-case", deny_unknown_fields)]
+enum HoldCommand {
+    RecordChild { pid: u32 },
+}
+
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let directory = Path::new(args.get(2).ok_or_else(|| {
@@ -78,7 +85,19 @@ fn main() -> Result<()> {
     println!("{}", serde_json::to_string(&ready)?);
     io::stdout().flush()?;
     if args[1] == "hold" {
-        let _ = io::stdin().lock().lines().next();
+        for line in io::stdin().lock().lines() {
+            let line = line?;
+            if line.trim().is_empty() {
+                break;
+            }
+            match serde_json::from_str::<HoldCommand>(&line)? {
+                HoldCommand::RecordChild { pid } => {
+                    pp_storage::lease::record_child(directory, pid)?;
+                    println!("{}", serde_json::json!({"child_pid": pid}));
+                    io::stdout().flush()?;
+                }
+            }
+        }
     }
     owner.shutdown()?;
     Ok(())

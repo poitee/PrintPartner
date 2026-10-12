@@ -1,0 +1,19 @@
+{
+  "status": 200,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "state": "PRINTING",
+    "file": {
+      "name": "BRACKET.BGC",
+      "display_name": "bracket.bgcode",
+      "path": "/usb/BRACKET.BGC"
+    },
+    "progress": 42.6,
+    "time_remaining": 900,
+    "refs": {
+      "download": "/api/v1/files/usb/BRACKET.BGC"
+    }
+  }
+}
