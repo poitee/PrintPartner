@@ -5195,3 +5195,95 @@ test("r22-backtick-literals-and-nested-clients-stay-distinct", () => {
   r19Expect(commandEvidence("curl $(printf 3232235856)"), 1, "", R20_SUBSTITUTION_STDERR);
   r19Expect(commandEvidence("curl http://192.168.1.$((80))/"), 1, "", LAN_STDERR);
 });
+
+const R23_VARIABLE_STDERR = "PR evidence lint FAILED:\n- Evidence contains a curl or wget target with a shell variable this static check could not resolve. Rewrite that operand without variable expansion.\n";
+
+function r23HeadingBody(heading) {
+  return `${heading}
+Exemption: none
+- Steps followed to produce the evidence: ran locally
+- Result observed: passed
+- Screenshot / recording / verify-skill output or trace: trace.json
+`;
+}
+
+test("r23-assigned-shell-variables-fail-closed", () => {
+  for (const command of [
+    "octet=80; curl http://192.168.1.$octet/",
+    "octet=79; curl http://192.168.1.$octet/",
+    "octet=80; wget http://192.168.200.$octet/",
+    'curl "http://192.168.1.$octet/"',
+    "curl http://192.168.1.${octet}/",
+    "curl --url $octet",
+    "curl --proxy $octet http://example.test/",
+    "curl -x $octet http://example.test/",
+    "http_proxy=$octet curl http://example.test/",
+    "wget --base=$octet",
+    "wget -e http_proxy=$octet http://example.test/",
+  ]) {
+    r19Expect(commandEvidence(command), 1, "", R23_VARIABLE_STDERR);
+  }
+});
+
+test("r23-shell-variable-literals-and-data-stay-distinct", () => {
+  for (const command of [
+    "curl 'http://192.168.1.$octet/'",
+    "curl http://192.168.1.\\$octet/",
+    'curl "http://192.168.1.\\$octet/"',
+    "curl --data $octet http://example.test/",
+    "wget -O $octet http://example.test/a",
+    "curl -H $octet http://example.test/",
+    "COUNT=3232235856 curl http://example.test/",
+    "NO_PROXY=$octet curl http://example.test/",
+    "octet=$other; curl http://example.test/",
+    "echo $octet",
+    "curl -e http_proxy=3232235856 http://example.test/",
+  ]) {
+    r19Expect(commandEvidence(command), 0, OK_LINE, "");
+  }
+  r19Expect(commandEvidence("curl http://192.168.1.$((80))/"), 1, "", LAN_STDERR);
+  r19Expect(commandEvidence("curl http://192.168.1.$((x))/"), 1, "", R19_ARITHMETIC_STDERR);
+  r19Expect(commandEvidence("curl $(printf 3232235856)"), 1, "", R20_SUBSTITUTION_STDERR);
+});
+
+test("r23-wget-execute-proxy-targets", () => {
+  for (const command of [
+    "wget -e http_proxy=3232235856 http://example.test/",
+    "wget --execute=http_proxy=3232235856 http://example.test/",
+    "wget --execute http_proxy=3232235856 http://example.test/",
+    "wget -ehttp_proxy=3232235856 http://example.test/",
+    "wget -e http_proxy=3232235857 http://example.test/",
+    "wget -e http_proxy=http://192.168.1.80:8080 http://example.test/",
+    "wget --execute=https_proxy=3232235856 http://example.test/",
+  ]) {
+    r19Expect(commandEvidence(command), 1, "", LAN_STDERR);
+  }
+  for (const command of [
+    "wget -e http_proxy=3232235855 http://example.test/",
+    "wget -e http_proxy=3232235858 http://example.test/",
+    "wget --execute=http_proxy=3232235855 http://example.test/",
+    "wget -e http_proxy=http://192.168.1.79:8080 http://example.test/",
+    "wget -e output=3232235856 http://example.test/",
+    "curl -e http_proxy=3232235856 http://example.test/",
+  ]) {
+    r19Expect(commandEvidence(command), 0, OK_LINE, "");
+  }
+  r19Expect(commandEvidence("wget -e http_proxy=`printf 3232235856` http://example.test/"), 1, "", R20_SUBSTITUTION_STDERR);
+  r19Expect(commandEvidence("wget -e http_proxy=$(printf 3232235856) http://example.test/"), 1, "", R20_SUBSTITUTION_STDERR);
+});
+
+test("r23-raw-html-numeric-artifact-destinations", () => {
+  r19Expect(r19Artifact('<img src="evidence/shot&#46png" alt="shot">'), 0, OK_LINE, "");
+  r19Expect(r19Artifact('<img src="evidence/shot&#46;png" alt="shot">'), 0, OK_LINE, "");
+  r19Expect(r19Artifact('<a href="evidence/shot&#46png">shot</a>'), 0, OK_LINE, "");
+  r19Expect(r19Artifact("![shot](evidence/shot&#46png)"), 1, "", R19_INCOMPLETE_STDERR);
+  r19Expect(r19Artifact("![shot](evidence/shot&#46;png)"), 0, OK_LINE, "");
+  r19Expect(r19Artifact('<a href="evidence/shot&#46png"></a>'), 1, "", R19_INCOMPLETE_STDERR);
+});
+
+test("r23-evidence-heading-case", () => {
+  r19Expect(r23HeadingBody("## evidence"), 0, OK_LINE, "");
+  r19Expect(r23HeadingBody("## EVIDENCE"), 0, OK_LINE, "");
+  r19Expect(r23HeadingBody("## EVIDENCE #"), 0, OK_LINE, "");
+  r19Expect(r23HeadingBody("## Evidence"), 0, OK_LINE, "");
+});
