@@ -297,6 +297,49 @@ pub(crate) fn sql_identity(sql: &str) -> String {
     tokens.join(" ")
 }
 
+/// SQL text SQLite records in `sqlite_master` for a `CREATE` statement.
+///
+/// The catalog drops one leading `IF NOT EXISTS` and any whitespace before
+/// `CREATE`. Indentation and later `NOT EXISTS` predicates stay as written.
+fn sqlite_catalog_sql(sql: &str) -> String {
+    let bytes = sql.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+        index += 1;
+    }
+    let start = index;
+    let mut words = Vec::new();
+    while words.len() < 6 && index < bytes.len() {
+        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        if index >= bytes.len() {
+            break;
+        }
+        let word_start = index;
+        while index < bytes.len() && !bytes[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        words.push((word_start, index));
+    }
+    let word = |position: usize| words.get(position).map(|(from, to)| &sql[*from..*to]);
+    let mut kind_at = 1;
+    if matches!(word(kind_at), Some("UNIQUE" | "TEMP" | "TEMPORARY")) {
+        kind_at += 1;
+    }
+    if word(0) == Some("CREATE")
+        && matches!(word(kind_at), Some("TABLE" | "INDEX" | "TRIGGER" | "VIEW"))
+        && word(kind_at + 1) == Some("IF")
+        && word(kind_at + 2) == Some("NOT")
+        && word(kind_at + 3) == Some("EXISTS")
+    {
+        let kind_end = words[kind_at].1;
+        let exists_end = words[kind_at + 3].1;
+        return format!("{}{}", &sql[start..kind_end], &sql[exists_end..]);
+    }
+    sql[start..].to_owned()
+}
+
 fn canonical_migration<'a>(migrations: &'a [String], needle: &str) -> Result<&'a str> {
     let mut matches = migrations.iter().filter(|sql| sql.contains(needle));
     let found = matches
@@ -423,7 +466,10 @@ fn realign_equivalent_indexes_and_triggers(
         let Some(canonical) = matches.next() else {
             continue;
         };
-        if matches.next().is_some() || canonical == &sql {
+        // sqlite_master omits the leading IF NOT EXISTS that schema.json keeps.
+        // A raw compare is therefore false for every matching object and this
+        // path drops and recreates it on every open. Compare the stored form.
+        if matches.next().is_some() || sqlite_catalog_sql(canonical) == sqlite_catalog_sql(&sql) {
             continue;
         }
         replacements.push((kind, name, canonical.clone()));

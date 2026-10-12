@@ -1156,6 +1156,55 @@ fn schema_version_at(path: &Path) -> String {
         .unwrap()
 }
 
+fn sqlite_schema_cookie(db: &Path) -> i64 {
+    Connection::open(db)
+        .unwrap()
+        .query_row("PRAGMA schema_version", [], |row| row.get(0))
+        .unwrap()
+}
+
+fn index_and_trigger_sql(db: &Path) -> Vec<(String, String, String)> {
+    let connection = Connection::open(db).unwrap();
+    let mut statement = connection
+        .prepare(
+            "SELECT type, name, sql FROM sqlite_master
+              WHERE sql IS NOT NULL AND type IN ('index', 'trigger')
+                AND name NOT LIKE 'sqlite_%'
+              ORDER BY type, name",
+        )
+        .unwrap();
+    statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .unwrap()
+        .map(|row| row.unwrap())
+        .collect()
+}
+
+fn assert_second_open_keeps_catalog(dir: &Path, label: &str) {
+    let db = dir.join("print-partner.db");
+    assert_eq!(schema_version_at(&db), "34", "{label}");
+    let cookie = sqlite_schema_cookie(&db);
+    let catalog = index_and_trigger_sql(&db);
+    let (owner, ready) = open_parity(dir, "2026-10-02T00:00:00.000Z");
+    assert_eq!(ready.version, 34, "{label}");
+    assert_eq!(ready.previous_version, 34, "{label}");
+    assert!(ready.backup.is_none(), "{label}");
+    owner.shutdown().unwrap();
+    assert_eq!(schema_version_at(&db), "34", "{label}");
+    assert_eq!(
+        sqlite_schema_cookie(&db),
+        cookie,
+        "{label} second open changed the SQLite schema cookie"
+    );
+    assert_eq!(index_and_trigger_sql(&db), catalog, "{label}");
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum FixtureRefusal {
     HistoricalClaim,
@@ -2504,6 +2553,7 @@ fn ticket_t_7_migrations_historical_order() {
         fresh_order.sort();
         upgraded_order.sort();
         assert_eq!(fresh_order, upgraded_order, "{label}");
+        assert_second_open_keeps_catalog(&work, label);
         if *version < 33 {
             assert_ne!(fresh_columns, upgraded_columns, "{label}");
             assert_eq!(
@@ -2524,6 +2574,7 @@ fn ticket_t_7_migrations_historical_order() {
             assert_eq!(fresh_columns, upgraded_columns, "{label}");
         }
     }
+    assert_second_open_keeps_catalog(&fresh_dir, "fresh");
 }
 
 fn plan_input_column_defs(db: &Path) -> Vec<String> {
@@ -2896,6 +2947,7 @@ fn ticket_t_7_migrations_preserves_plan_revision_inputs() {
         schema::sql_identity(&rust_trigger)
     );
     assert!(node_trigger.contains("Accepted Plate revision is immutable"));
+    assert_second_open_keeps_catalog(&rust_dir, "plan-input-rust");
 
     let orphan_dir = directory("plan-input-orphan");
     copy_db_files(&historical, &orphan_dir);
