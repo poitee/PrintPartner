@@ -222,6 +222,15 @@ struct Job {
     cancelled: Arc<AtomicBool>,
     reply: mpsc::Sender<Result<Outcome>>,
 }
+#[derive(Debug)]
+enum WorkerStop {
+    Poisoned,
+    Disconnected,
+}
+fn recv_job<T>(receiver: &Mutex<mpsc::Receiver<T>>) -> std::result::Result<T, WorkerStop> {
+    let guard = receiver.lock().map_err(|_| WorkerStop::Poisoned)?;
+    guard.recv().map_err(|_| WorkerStop::Disconnected)
+}
 struct Pool {
     sender: mpsc::SyncSender<Job>,
 }
@@ -237,11 +246,7 @@ impl Pool {
             let receiver = receiver.clone();
             thread::spawn(move || {
                 loop {
-                    let job = match receiver.lock() {
-                        Ok(receiver) => receiver.recv(),
-                        Err(_) => break,
-                    };
-                    let Ok(job) = job else {
+                    let Ok(job) = recv_job(&receiver) else {
                         break;
                     };
                     let result = if job.cancelled.load(Ordering::Acquire) {

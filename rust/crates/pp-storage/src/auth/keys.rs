@@ -34,9 +34,9 @@ impl StoredKey {
         }
     }
 }
-fn digest(raw: &str) -> Result<String> {
+pub(super) fn digest(raw: &str) -> Result<String> {
     let mut mac = Hmac::<Sha256>::new_from_slice(b"print-partner:settings-api-key:v1")
-        .map_err(|_| anyhow!("Invalid API key hashing context"))?;
+        .map_err(|_| anyhow!("API key digest rejected its fixed context"))?;
     mac.update(raw.as_bytes());
     Ok(hex::encode(mac.finalize().into_bytes()))
 }

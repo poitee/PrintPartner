@@ -393,3 +393,47 @@ fn ticket_t_17_transaction_cas_rejects_verified_login_after_public_reset() {
         .unwrap();
     assert_eq!((sessions, resets), (2, 0));
 }
+
+#[test]
+fn api_key_digest_keeps_the_fixed_settings_context() {
+    assert_eq!(
+        keys::digest("ppk_example").unwrap(),
+        "27069c268a731160ba406e8ee2e11460f75a540fabd1c1392e9fd104fcf5e3b5"
+    );
+}
+
+#[test]
+fn auth_pool_receiver_returns_the_queued_value() {
+    let (sender, receiver) = mpsc::sync_channel(1);
+    sender.send(7_u8).unwrap();
+    assert_eq!(recv_job(&Mutex::new(receiver)).unwrap(), 7);
+}
+
+#[test]
+fn disconnected_auth_pool_receiver_stops() {
+    let (sender, receiver) = mpsc::sync_channel::<u8>(1);
+    drop(sender);
+    assert!(matches!(
+        recv_job(&Mutex::new(receiver)),
+        Err(WorkerStop::Disconnected)
+    ));
+}
+
+#[test]
+fn poisoned_auth_pool_receiver_stops_without_taking_the_queued_value() {
+    let (sender, receiver) = mpsc::sync_channel(1);
+    sender.send(7_u8).unwrap();
+    let receiver = Mutex::new(receiver);
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = receiver.lock().unwrap();
+        panic!("poison the auth pool receiver");
+    }));
+    assert!(matches!(recv_job(&receiver), Err(WorkerStop::Poisoned)));
+    let queued = match receiver.into_inner() {
+        Ok(receiver) => receiver,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+    .recv()
+    .unwrap();
+    assert_eq!(queued, 7);
+}
