@@ -36,6 +36,53 @@ function addMaliciousEntry(zip: AdmZip, name: string, data: Buffer): void {
 }
 
 describe("archive extraction hardening", () => {
+  it.each(["zip", "files"])("shares the aggregate entry budget across a %s upload, including empty files and directories", (kind) => {
+    const root = tempRoot();
+    const nested = new AdmZip(Buffer.from(encodeAcceptedPlate3mf([
+      { token: "clip", objectName: "Clip", xUm: 0, yUm: 0, mesh: triangle },
+    ])));
+    nested.addFile("discarded/", Buffer.alloc(0));
+    nested.addFile("discarded/empty.bin", Buffer.alloc(0));
+    const bytes = nested.toBuffer();
+    const entryLimit = 3 * (nested.getEntries().length + 1);
+    const upload = (count: number, maxEntries: number): string => {
+      const staging = createSourceUploadStaging(root, "default");
+      const files = Array.from({ length: count }, (_, index) => staged(`${index}.3mf`, bytes));
+      if (kind === "files") return writeUploadedFiles(files, staging, { maxEntries }).extractDir;
+      const zip = new AdmZip();
+      for (const file of files) zip.addFile(file.relativePath, bytes);
+      return writeUploadedZip(stagedFile(zip.toBuffer()), staging, { maxEntries });
+    };
+    try {
+      expect(() => upload(3, entryLimit - 1)).toThrow(/too many entries/);
+      const extracted = upload(3, entryLimit);
+      expect(readFileSync(join(extracted, "0.3mf"))).toEqual(bytes);
+      expect(readdirSync(join(extracted, "_3mf")).sort()).toEqual(["0", "1", "2"]);
+      expect(readFileSync(join(extracted, "_3mf/2/clip.stl")).length).toBe(134);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("counts outer ZIP directories and empty files toward the nested entry budget", () => {
+    const root = tempRoot();
+    const model = Buffer.from(encodeAcceptedPlate3mf([
+      { token: "clip", objectName: "Clip", xUm: 0, yUm: 0, mesh: triangle },
+    ]));
+    const zip = new AdmZip();
+    zip.addFile("empty/", Buffer.alloc(0));
+    zip.addFile("empty/file.bin", Buffer.alloc(0));
+    zip.addFile("model.3mf", model);
+    try {
+      expect(() => writeUploadedZip(stagedFile(zip.toBuffer()), root, {
+        maxEntries: new AdmZip(model).getEntries().length + 2,
+      })).toThrow(/too many entries/);
+      expect(readdirSync(root)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it.each(["zip", "files"])("shares the nested 3MF validation budget across a %s upload", (kind) => {
     const root = tempRoot();
     const model = encodeAcceptedPlate3mf([{ token: "clip", objectName: "Clip", xUm: 0, yUm: 0, mesh: triangle }]);
