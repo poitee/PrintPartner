@@ -8,6 +8,7 @@ import {
   assertPrinterUploadArtifactPath,
   getPrinterSendQueueItem,
   listActivePrinterSendQueue,
+  loadPrinterSendQueue,
   updatePrinterSendQueueItem,
 } from "./printer-send-queue-store.js";
 
@@ -206,6 +207,58 @@ export async function drainPrinterSendQueue(
   }
 
   return results;
+}
+
+export const INTERRUPTED_PRINTER_SEND_ERROR =
+  "Interrupted by process restart. Printer outcome is unknown, so this send was not marked successful. The staged file remains for an explicit retry. This process will not retry a print on its own.";
+
+function interruptSendingItem(
+  repo: AppRepository,
+  itemId: string,
+): PrinterSendQueueItem | null {
+  return updatePrinterSendQueueItem(
+    repo,
+    itemId,
+    { state: "error", error: INTERRUPTED_PRINTER_SEND_ERROR },
+    { requireState: "sending" },
+  );
+}
+
+export function reconcilePrinterSendsAfterProcessStart(
+  repo: AppRepository,
+): PrinterSendQueueItem[] {
+  const changed: PrinterSendQueueItem[] = [];
+  for (const item of loadPrinterSendQueue(repo)) {
+    if (item.state !== "sending") continue;
+    const updated = interruptSendingItem(repo, item.id);
+    if (updated) changed.push(updated);
+  }
+  return changed;
+}
+
+export async function reconcilePrinterSendsAgainstLiveJobs(
+  repo: AppRepository,
+  jobIsLive: (jobId: string) => Promise<boolean>,
+): Promise<PrinterSendQueueItem[]> {
+  const changed: PrinterSendQueueItem[] = [];
+  for (const item of loadPrinterSendQueue(repo)) {
+    if (item.state !== "sending" || !item.upload_job_id) continue;
+    if (await jobIsLive(item.upload_job_id)) continue;
+    const updated = interruptSendingItem(repo, item.id);
+    if (updated) changed.push(updated);
+  }
+  return changed;
+}
+
+export function reconcileMissingPrinterUploadJob(
+  repo: AppRepository,
+  jobId: string,
+): PrinterSendQueueItem | null {
+  const item = loadPrinterSendQueue(repo).find(
+    (row) => row.state === "sending" && row.upload_job_id === jobId,
+  );
+  if (!item) return null;
+  return interruptSendingItem(repo, item.id);
 }
 
 /** Mark queue items done/error from finished printer-upload jobs. */
