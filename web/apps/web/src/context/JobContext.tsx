@@ -72,18 +72,15 @@ async function pollJobUntilTerminal(
   onProgress: (snap: JobSnapshot) => void,
   signal: AbortSignal,
   intervalMs = 400,
-  maxAttempts = 150,
 ): Promise<void> {
-  let lastSnap: JobSnapshot | null = null;
   let retryDelay = intervalMs;
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+  for (;;) {
     if (signal.aborted) return;
     let waitMs = intervalMs;
     try {
       const snap = await fetchJob(jobId, signal);
       if (signal.aborted) return;
       retryDelay = intervalMs;
-      lastSnap = snap;
       onProgress(snap);
       if (JOB_TERMINAL.has(snap.status)) return;
     } catch (error) {
@@ -106,21 +103,14 @@ async function pollJobUntilTerminal(
       if (signal.aborted) done();
     });
   }
-  throw new Error(
-    lastSnap
-      ? `Job timed out waiting for completion (last status: ${lastSnap.status})`
-      : "Job timed out waiting for completion",
-  );
 }
 
-/** Sync (and similar long jobs) can exceed the default ~60s poll window once docs/PDFs are included. */
-function pollAttemptsForKind(kind: string): number {
-  // STL downloads have no size cap. Keep observing while the server is working.
-  if (kind === "stl-export") return Number.POSITIVE_INFINITY;
+function observationTimeoutForKind(kind: string): number | null {
+  if (kind === "stl-export") return null;
   if (kind === "sync" || kind === "extract-source-docs" || kind === "import-scan") {
-    return 4500; // ~30 minutes at 400ms
+    return 30 * 60_000;
   }
-  return 150;
+  return 60_000;
 }
 
 function upsertJob(jobs: ActiveJob[], next: ActiveJob): ActiveJob[] {
@@ -185,11 +175,13 @@ export function JobProvider({ children }: { children: ReactNode }) {
       options?: RunJobOptions,
     ) => {
       let disconnect: (() => void) | null = null;
+      let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
       let finished = false;
       const observer = new AbortController();
       observers.current.add(observer);
       observer.signal.addEventListener("abort", () => {
         finished = true;
+        if (deadlineTimer !== null) clearTimeout(deadlineTimer);
         disconnect?.();
         observers.current.delete(observer);
       }, { once: true });
@@ -208,6 +200,9 @@ export function JobProvider({ children }: { children: ReactNode }) {
       try {
         const jobId = await start();
         if (observer.signal.aborted) return;
+        const timeoutMs = observationTimeoutForKind(kind);
+        const deadline = timeoutMs === null ? null : performance.now() + timeoutMs;
+        let lastStatus: string | null = null;
         refreshAcceptedExportHistory();
         const initial: ActiveJob = {
           jobId,
@@ -240,8 +235,28 @@ export function JobProvider({ children }: { children: ReactNode }) {
           removeAfterTerminalDisplay(jobId);
         };
 
+        const failObservation = (error: unknown) => {
+          if (finished) return;
+          const message = error instanceof EngineHttpError && error.status === 404
+            ? "Job not found"
+            : `Lost contact with the job. It may still be running on the server. ${error instanceof Error ? error.message : String(error)}`;
+          finish({ job_id: jobId, kind, status: "error", message, error: message, progress: null, result: null });
+          refreshAcceptedExportHistory();
+        };
+
+        const expire = () => failObservation(new Error(
+          lastStatus
+            ? `Job timed out waiting for completion (last status: ${lastStatus})`
+            : "Job timed out waiting for completion",
+        ));
+
         const onProgress = (ev: JobEvent | JobSnapshot) => {
           if (finished) return;
+          if (deadline !== null && performance.now() >= deadline) {
+            expire();
+            return;
+          }
+          lastStatus = ev.status;
           setActiveJobs((prev) =>
             upsertJob(prev, {
               jobId,
@@ -254,10 +269,11 @@ export function JobProvider({ children }: { children: ReactNode }) {
             }),
           );
           if (JOB_TERMINAL.has(ev.status)) {
-            if ("job_id" in ev) finish(ev);
-            else void fetchJob(jobId, observer.signal).then(finish).catch(() => finish({ ...ev, job_id: jobId, kind }));
+            finish("job_id" in ev ? ev : { ...ev, job_id: jobId, kind });
           }
         };
+
+        if (timeoutMs !== null) deadlineTimer = setTimeout(expire, timeoutMs);
 
         disconnect = connectJobWebSocket(
           jobId,
@@ -271,14 +287,7 @@ export function JobProvider({ children }: { children: ReactNode }) {
           },
         );
 
-        void pollJobUntilTerminal(jobId, onProgress, observer.signal, 400, pollAttemptsForKind(kind)).catch((e) => {
-          if (finished) return;
-          const message = e instanceof EngineHttpError && e.status === 404
-            ? "Job not found"
-            : `Lost contact with the job. It may still be running on the server. ${e instanceof Error ? e.message : String(e)}`;
-          finish({ job_id: jobId, kind, status: "error", message, error: message, progress: null, result: null });
-          refreshAcceptedExportHistory();
-        });
+        void pollJobUntilTerminal(jobId, onProgress, observer.signal).catch(failObservation);
       } catch (e) {
         if (observer.signal.aborted) return;
         observer.abort();
