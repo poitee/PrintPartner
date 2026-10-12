@@ -5665,3 +5665,57 @@ test("r27-windows-curl-wget-basename", () => {
   r19Expect(commandEvidence("curl.exe --config -"), 1, "", R25_STDIN_STDERR);
   r19Expect(commandEvidence("wget.exe --input-file=-"), 1, "", R27_WGET_STDIN_STDERR);
 });
+
+test("r28-eval-export-persists", () => {
+  for (const command of [
+    "eval 'export http_proxy=3232235856 NO_PROXY= no_proxy='; curl http://example.test/",
+    "eval 'export http_proxy=3232235855'; eval 'export http_proxy=3232235856'; curl http://example.test/",
+    "eval 'declare -x http_proxy=3232235856'; curl http://example.test/",
+    "http_proxy=3232235856; eval 'export http_proxy'; curl http://example.test/",
+    "eval 'export http_proxy=3232235855; http_proxy=3232235856'; curl http://example.test/",
+    "http_proxy=3232235856 eval 'curl http://example.test/'",
+    "export http_proxy=3232235856; eval 'declare +x http_proxy'; curl http://example.test/",
+    "bash -c \"eval 'export http_proxy=3232235856'; curl http://example.test/\"",
+  ]) {
+    r19Expect(commandEvidence(command), 1, "", LAN_STDERR);
+  }
+  for (const command of [
+    "eval 'export http_proxy=3232235855 NO_PROXY= no_proxy='; curl http://example.test/",
+    "eval 'export http_proxy=3232235856'; eval 'export http_proxy=3232235855'; curl http://example.test/",
+    "eval 'http_proxy=3232235856'; curl http://example.test/",
+    "eval 'export http_proxy=3232235856; http_proxy=3232235855'; curl http://example.test/",
+    "http_proxy=3232235855 eval 'curl http://example.test/'",
+    "http_proxy=3232235856; eval 'declare +x http_proxy'; curl http://example.test/",
+    "export http_proxy=3232235855; bash -c \"eval 'export http_proxy=3232235856'\"; curl http://example.test/",
+    "export http_proxy=3232235856; bash -c 'http_proxy=3232235855; curl http://example.test/'",
+    "eval 'curl 3232235855'",
+  ]) {
+    r19Expect(commandEvidence(command), 0, OK_LINE, "");
+  }
+  r19Expect(r25Fences("eval 'export http_proxy=3232235856'", "curl http://example.test/"), 0, OK_LINE, "");
+  r19Expect(commandEvidence("octet=80; eval 'curl http://192.168.1.$octet/'"), 1, "", R23_VARIABLE_STDERR);
+  r19Expect(commandEvidence("octet=79; eval 'curl http://192.168.1.$octet/'"), 1, "", R23_VARIABLE_STDERR);
+  r19Expect(commandEvidence("eval 'octet=80'; curl http://192.168.1.$octet/"), 1, "", R23_VARIABLE_STDERR);
+  r19Expect(commandEvidence("bash -c 'octet=80'; curl http://192.168.1.$octet/"), 0, OK_LINE, "");
+});
+
+test("r28-eval-command-binding", () => {
+  for (const command of [
+    "cmd='curl 3232235856'; eval '$cmd'",
+    "cmd='curl 3232235856'; eval \"$cmd\"",
+    "a=curl; b=3232235856; eval '$a $b'",
+    "cmd=curl; eval '$cmd 3232235856'",
+  ]) {
+    r19Expect(commandEvidence(command), 1, "", LAN_STDERR);
+  }
+  r19Expect(commandEvidence("cmd=$(printf 'curl 3232235856'); eval '$cmd'"), 1, "", R20_SUBSTITUTION_STDERR);
+  for (const command of [
+    "cmd='curl 3232235855'; eval '$cmd'",
+    "a=curl; b=3232235855; eval '$a $b'",
+    "cmd=curl; eval '$cmd 3232235855'",
+    "cmd='curl 3232235856'; bash -c '$cmd'",
+    "eval '$cmd'",
+  ]) {
+    r19Expect(commandEvidence(command), 0, OK_LINE, "");
+  }
+});
