@@ -976,8 +976,27 @@ async fn core_process_fixture() {
     std::future::pending::<()>().await;
 }
 
+fn pid_is_gone(pid: i32) -> bool {
+    let result = unsafe { libc::kill(pid, 0) };
+    result < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+}
+
+fn canonical_node(node: &Path) -> PathBuf {
+    let candidate = if node.is_absolute() || node.components().count() > 1 {
+        node.to_path_buf()
+    } else if let Some(paths) = std::env::var_os("PATH") {
+        std::env::split_paths(&paths)
+            .map(|directory| directory.join(node))
+            .find(|path| path.is_file())
+            .unwrap_or_else(|| node.to_path_buf())
+    } else {
+        node.to_path_buf()
+    };
+    std::fs::canonicalize(&candidate).unwrap_or(candidate)
+}
+
 #[test]
-fn core_death_with_live_child_refuses_standalone_node() {
+fn core_death_reaps_stopped_node_and_allows_recovery() {
     use std::io::{BufRead, BufReader};
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
@@ -1011,8 +1030,8 @@ fn core_death_with_live_child_refuses_standalone_node() {
                 .unwrap()
                 .is_empty()
         );
-        // Keep the group non-orphaned after core death. Otherwise POSIX sends
-        // SIGHUP/SIGCONT to the stopped group, killing the child before the check.
+        // The peer only keeps the group from being orphaned. POSIX would
+        // SIGHUP a stopped orphan group; a targeted kill must leave the peer.
         group_peer = Some(
             Command::new("sleep")
                 .arg("60")
@@ -1037,66 +1056,57 @@ fn core_death_with_live_child_refuses_standalone_node() {
         }
         core.kill().unwrap();
         core.wait().unwrap();
-        assert_eq!(unsafe { libc::kill(pid, 0) }, 0, "child must remain alive");
-        for legacy in [false, true] {
-            let contents = if legacy {
-                let mut legacy_marker = marker.clone();
-                let fields = legacy_marker.as_object_mut().unwrap();
-                fields.remove("storage_protocol_version");
-                fields.remove("child_pid");
-                fields.remove("child_process_identity");
-                let bytes = serde_json::to_vec(&legacy_marker).unwrap();
-                std::fs::write(&marker_path, &bytes).unwrap();
-                bytes
-            } else {
-                contents.clone()
-            };
-            let input = launch(data.clone());
-            let mut standalone = Command::new(input.bundle.node)
-                .arg(
-                    input
-                        .bundle
-                        .web_root
-                        .join("apps/server/dist/current/index.js"),
-                )
-                .current_dir(&input.bundle.web_root)
-                .env("PRINT_PARTNER_DATA_DIR", &data)
-                .env("HOST", "127.0.0.1")
-                .env("PORT", "0")
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .unwrap();
-            let deadline = std::time::Instant::now() + Duration::from_secs(15);
-            while standalone.try_wait().unwrap().is_none() {
-                if std::time::Instant::now() >= deadline {
-                    let _ = standalone.kill();
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            let standalone = standalone.wait_with_output().unwrap();
-            assert_eq!(
-                unsafe { libc::kill(pid, 0) },
-                0,
-                "child must survive the entire refusal check"
-            );
-            assert!(!standalone.status.success());
-            assert!(
-                String::from_utf8_lossy(&standalone.stderr).contains("already owned"),
-                "{}",
-                String::from_utf8_lossy(&standalone.stderr)
-            );
-            assert_eq!(std::fs::read(&marker_path).unwrap(), contents);
-            // The Rust startup must obey the same two-process marker gate.
-            let caller = tokio::runtime::Runtime::new().unwrap();
-            assert!(
-                caller
-                    .block_on(CoreRuntime::start(launch(data.clone())))
-                    .is_err()
-            );
-            assert_eq!(std::fs::read(&marker_path).unwrap(), contents);
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !pid_is_gone(pid) && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
         }
+        assert!(
+            pid_is_gone(pid),
+            "stopped Node outlived the force-killed owner"
+        );
+        let peer_pid = group_peer.as_ref().unwrap().id() as i32;
+        assert!(
+            !pid_is_gone(peer_pid),
+            "group peer was killed with the Node pid"
+        );
+        assert_eq!(std::fs::read(&marker_path).unwrap(), contents);
+        let input = launch(data.clone());
+        let node = canonical_node(&input.bundle.node);
+        let caller = tokio::runtime::Runtime::new().unwrap();
+        let runtime = caller
+            .block_on(CoreRuntime::start(launch(data.clone())))
+            .expect("dead owner and reaped Node allow recovery");
+        assert_eq!(
+            std::fs::read(data.join(".desktop-lease/previous-marker.json")).unwrap(),
+            contents
+        );
+        let current: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&marker_path).unwrap()).unwrap();
+        let new_pid = current["child_pid"].as_u64().unwrap() as i32;
+        assert_ne!(new_pid, pid);
+        #[cfg(target_os = "linux")]
+        {
+            let exe = std::fs::read_link(format!("/proc/{new_pid}/exe")).unwrap();
+            assert_eq!(
+                std::fs::canonicalize(&exe).unwrap_or(exe),
+                node,
+                "recovered child must be the staged node binary"
+            );
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let comm = Command::new("ps")
+                .args(["-o", "comm=", "-p", &new_pid.to_string()])
+                .output()
+                .unwrap();
+            let comm = String::from_utf8_lossy(&comm.stdout);
+            assert!(
+                comm.to_ascii_lowercase().contains("node"),
+                "recovered child must be node, saw {comm}"
+            );
+        }
+        assert!(caller.block_on(runtime.shutdown()).complete());
+        assert!(!pid_is_gone(peer_pid), "recovery killed the old group peer");
     }));
     let _ = core.kill();
     let _ = core.wait();

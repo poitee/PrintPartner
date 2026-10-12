@@ -206,10 +206,21 @@ def _stop_group(process, grace):
 
 
 PR_SET_PDEATHSIG = 1
+# Written before a normal close so the watcher does not SIGKILL a pgid that has
+# already been reaped and reused. A bare EOF is still parent death.
+GUARD_RELEASE = b"\x00"
 GUARD_SOURCE = ("import os, signal, sys\n"
                 "fd, group = int(sys.argv[1]), int(sys.argv[2])\n"
-                "while os.read(fd, 1):\n"
-                "    pass\n"
+                "released = False\n"
+                "while True:\n"
+                "    chunk = os.read(fd, 1)\n"
+                "    if chunk == b'\\x00':\n"
+                "        released = True\n"
+                "        break\n"
+                "    if not chunk:\n"
+                "        break\n"
+                "if released:\n"
+                "    raise SystemExit(0)\n"
                 "try:\n"
                 "    os.killpg(group, signal.SIGKILL)\n"
                 "except ProcessLookupError:\n"
@@ -268,7 +279,16 @@ def guarded_popen(args, **kwargs):
 
 def release_guard(guard):
     done_fd, write_fd = guard
-    os.close(write_fd)
+    try:
+        pending = GUARD_RELEASE
+        while pending:
+            try:
+                written = os.write(write_fd, pending)
+            except InterruptedError:
+                continue
+            pending = pending[written:]
+    finally:
+        os.close(write_fd)
     try:
         while os.read(done_fd, 1):
             pass
@@ -612,8 +632,10 @@ def serve(binary, root, node, commit, credentials):
             internal = fixture / "bootstrap.json" if credentials is not None else None
             held["active"] = True
             process = start_server(binary, root, node, commit, fixture, errors, internal, isolated=True)
-            guard = process.guard
+            # Read inside the try: a missing or failing guard must still reach terminate().
+            guard = None
             try:
+                guard = getattr(process, "guard", None)
                 origin = read_origin(process, errors)
                 marker = fixture / "data/.desktop-owner.json"
                 runtime_dir = Path(json.loads(marker.read_text())["runtime_dir"])
@@ -657,7 +679,8 @@ def serve(binary, root, node, commit, credentials):
                         try:
                             terminate(process)
                         finally:
-                            release_guard(guard)
+                            if guard is not None:
+                                release_guard(guard)
                 finally:
                     if credentials is not None:
                         unpublish_credential(credentials, published)

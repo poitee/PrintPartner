@@ -12,7 +12,7 @@ pub use release::verify_bundle;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use std::{
-    os::fd::AsRawFd,
+    os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},
     os::unix::process::ExitStatusExt,
     path::PathBuf,
     process::{ExitStatus, Stdio},
@@ -229,6 +229,9 @@ struct Process {
     stdin: Option<ChildStdin>,
     endpoint: Arc<Endpoint>,
     logs: Vec<JoinHandle<()>>,
+    // Last field: Drop runs `child` (kill_on_drop) before this write end closes.
+    #[allow(dead_code)]
+    parent_death: OwnedFd,
 }
 
 #[derive(Debug)]
@@ -303,13 +306,124 @@ fn classify_stop_outcome(
     Ok(intent)
 }
 
-fn configure_child(command: &mut Command, lease_fd: std::os::fd::RawFd) {
+fn parent_death_pipe() -> std::io::Result<(OwnedFd, OwnedFd)> {
+    let mut fds = [0; 2];
+    let created = unsafe {
+        #[cfg(target_os = "linux")]
+        {
+            libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            libc::pipe(fds.as_mut_ptr())
+        }
+    };
+    if created != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    #[cfg(not(target_os = "linux"))]
+    unsafe {
+        for fd in fds {
+            if libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) != 0 {
+                let error = std::io::Error::last_os_error();
+                let _ = libc::close(fds[0]);
+                let _ = libc::close(fds[1]);
+                return Err(error);
+            }
+        }
+    }
+    Ok(unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) })
+}
+
+#[cfg(target_os = "linux")]
+unsafe fn parent_errno() -> libc::c_int {
+    unsafe { *libc::__errno_location() }
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn parent_errno() -> libc::c_int {
+    unsafe { *libc::__error() }
+}
+
+fn close_inherited_except(keep: RawFd) {
+    unsafe {
+        #[cfg(target_os = "linux")]
+        {
+            if keep > 0 {
+                libc::close_range(0, (keep as libc::c_uint) - 1, 0);
+            }
+            libc::close_range(
+                (keep as libc::c_uint).saturating_add(1),
+                libc::c_uint::MAX,
+                0,
+            );
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let mut limit = libc::rlimit {
+                rlim_cur: 256,
+                rlim_max: 256,
+            };
+            let _ = libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit);
+            let max = if limit.rlim_cur == libc::RLIM_INFINITY {
+                65536
+            } else {
+                (limit.rlim_cur as u64).min(65536) as libc::c_int
+            };
+            let mut fd = 0;
+            while fd < max {
+                if fd != keep {
+                    libc::close(fd);
+                }
+                fd += 1;
+            }
+        }
+    }
+}
+
+fn configure_child(command: &mut Command, lease_fd: RawFd) -> std::io::Result<(OwnedFd, OwnedFd)> {
     command.process_group(0);
+    let (read_end, write_end) = parent_death_pipe()?;
+    let read_fd = read_end.as_raw_fd();
+    let write_fd = write_end.as_raw_fd();
     #[cfg(target_os = "linux")]
     let parent = std::process::id() as libc::pid_t;
     unsafe {
         command.pre_exec(move || {
-            // Node has its own group for normal shutdown; tie it to the Rust owner too.
+            // Fork the watcher before PDEATHSIG so it does not inherit that signal.
+            // It stays in Node's group and SIGKILLs only this pid, after EOF, and
+            // only while this pid is still its parent (a reused pid is left alone).
+            let node_pid = libc::getpid();
+            let watcher = libc::fork();
+            if watcher < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if watcher == 0 {
+                // Drop every inherited descriptor except the death pipe. The
+                // spawn handshake pipe must not stay open, or the parent blocks
+                // in Command::spawn forever.
+                close_inherited_except(read_fd);
+                let mut byte = [0u8; 1];
+                loop {
+                    let read = libc::read(read_fd, byte.as_mut_ptr().cast(), 1);
+                    if read == 0 {
+                        break;
+                    }
+                    if read < 0 {
+                        #[cfg(any(target_os = "linux", target_os = "macos"))]
+                        if parent_errno() == libc::EINTR {
+                            continue;
+                        }
+                        libc::_exit(1);
+                    }
+                }
+                if libc::getppid() == node_pid {
+                    libc::kill(node_pid, libc::SIGKILL);
+                }
+                libc::_exit(0);
+            }
+            libc::close(read_fd);
+            libc::close(write_fd);
             #[cfg(target_os = "linux")]
             {
                 if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) < 0 {
@@ -325,6 +439,7 @@ fn configure_child(command: &mut Command, lease_fd: std::os::fd::RawFd) {
             Ok(())
         });
     }
+    Ok((read_end, write_end))
 }
 
 impl Process {
@@ -375,8 +490,11 @@ impl Process {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        configure_child(&mut command, spec.lease_file.as_raw_fd());
+        let (parent_read, parent_death) =
+            configure_child(&mut command, spec.lease_file.as_raw_fd())
+                .context("Could not arm parent-death watcher")?;
         let mut child = command.spawn().context("Could not start bundled Node")?;
+        drop(parent_read);
         // Persist ownership before the child can receive setup or open storage.
         if let Err(error) =
             (spec.record_child)(&spec.data_dir, child.id().context("Missing child PID")?)
@@ -412,6 +530,7 @@ impl Process {
             stdin: Some(stdin),
             endpoint,
             logs,
+            parent_death,
         })
     }
 
@@ -733,17 +852,50 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "linux")]
+    fn node_binary() -> std::path::PathBuf {
+        let configured = std::env::var_os("PP_TEST_NODE")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("/usr/bin/node"));
+        if configured.is_absolute() || configured.components().count() > 1 {
+            return configured;
+        }
+        let Some(paths) = std::env::var_os("PATH") else {
+            return configured;
+        };
+        for directory in std::env::split_paths(&paths) {
+            let candidate = directory.join(&configured);
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+        configured
+    }
+
+    fn pid_is_gone(pid: i32) -> bool {
+        let result = unsafe { libc::kill(pid, 0) };
+        result < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+    }
+
     #[tokio::test]
     async fn parent_death_fixture() {
         let Some(pidfile) = std::env::var_os("PP_COMPAT_DEATH_PIDFILE") else {
             return;
         };
         let lease = std::fs::File::open("/dev/null").unwrap();
-        let mut command = tokio::process::Command::new("sleep");
-        command.arg("600");
-        super::configure_child(&mut command, std::os::fd::AsRawFd::as_raw_fd(&lease));
+        let node = node_binary();
+        let mut command = tokio::process::Command::new(&node);
+        command
+            .arg("-e")
+            .arg("setInterval(() => {}, 1e9)")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let (parent_read, parent_death) =
+            super::configure_child(&mut command, std::os::fd::AsRawFd::as_raw_fd(&lease)).unwrap();
         let mut child = command.spawn().unwrap();
+        drop(parent_read);
+        // Process death, not this function returning, closes the write end.
+        std::mem::forget(parent_death);
         let pidfile = std::path::PathBuf::from(pidfile);
         let temporary = pidfile.with_extension("tmp");
         std::fs::write(&temporary, child.id().unwrap().to_string()).unwrap();
@@ -751,10 +903,10 @@ mod tests {
         child.wait().await.unwrap();
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn separate_group_child_dies_with_force_killed_parent() {
         use std::os::unix::process::CommandExt;
+        let node = node_binary();
         let pidfile = std::env::temp_dir().join(format!(
             "pp-compat-death-{}-{}",
             std::process::id(),
@@ -764,6 +916,7 @@ mod tests {
             .args(["parent_death_fixture", "--nocapture"])
             .env("PP_COMPAT_DEATH_PIDFILE", &pidfile)
             .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
             .process_group(0)
             .spawn()
             .unwrap();
@@ -772,37 +925,69 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         if !pidfile.exists() {
-            owner.kill().unwrap();
-            owner.wait().unwrap();
-            panic!("child never spawned");
+            let _ = owner.kill();
+            let output = owner.wait_with_output().unwrap();
+            panic!(
+                "node fixture never spawned: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
         let pid: i32 = std::fs::read_to_string(&pidfile).unwrap().parse().unwrap();
         let group = unsafe { libc::getpgid(pid) };
+        assert!(node.is_file(), "node binary missing: {}", node.display());
+        #[cfg(target_os = "linux")]
+        {
+            let exe = std::fs::read_link(format!("/proc/{pid}/exe")).unwrap();
+            assert_eq!(
+                std::fs::canonicalize(&exe).unwrap_or(exe),
+                std::fs::canonicalize(&node).unwrap(),
+                "death subject must be the real node binary"
+            );
+        }
+        // The peer only keeps the group from being orphaned. A targeted kill of
+        // the stopped Node must leave this peer alive.
+        let mut peer = std::process::Command::new("sleep")
+            .arg("60")
+            .process_group(pid)
+            .spawn()
+            .unwrap();
+        let peer_pid = peer.id() as i32;
+        assert_eq!(unsafe { libc::getpgid(peer_pid) }, pid);
+        assert_eq!(unsafe { libc::kill(pid, libc::SIGSTOP) }, 0);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let state = std::process::Command::new("ps")
+                .args(["-o", "stat=", "-p", &pid.to_string()])
+                .output()
+                .unwrap();
+            if String::from_utf8_lossy(&state.stdout).contains('T') {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "node did not stop");
+            std::thread::sleep(Duration::from_millis(10));
+        }
         unsafe {
             libc::kill(-(owner.id() as i32), libc::SIGKILL);
         }
         owner.wait().unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(3);
-        let alive = || {
-            std::fs::read_to_string(format!("/proc/{pid}/stat"))
-                .is_ok_and(|stat| !stat.split_once(") ").unwrap().1.starts_with('Z'))
-        };
-        while alive() && std::time::Instant::now() < deadline {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !pid_is_gone(pid) && std::time::Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
-        let survived = alive();
+        let node_gone = pid_is_gone(pid);
+        let peer_alive = !pid_is_gone(peer_pid);
         unsafe {
             libc::kill(pid, libc::SIGKILL);
         }
+        let _ = peer.kill();
+        let _ = peer.wait();
         std::fs::remove_file(pidfile).unwrap();
         assert_eq!(
             group, pid,
             "fixture must reproduce Node's separate process group"
         );
-        assert!(
-            !survived,
-            "Node-group child outlived its force-killed parent"
-        );
+        assert!(node_gone, "stopped Node outlived its force-killed parent");
+        assert!(peer_alive, "group peer was killed with the Node pid");
     }
 
     #[tokio::test]
@@ -846,12 +1031,15 @@ mod tests {
         };
         started.await.unwrap();
 
+        let (parent_death_read, parent_death) = super::parent_death_pipe().unwrap();
+        drop(parent_death_read);
         let process = super::Process {
             child,
             pid,
             stdin: None,
             endpoint,
             logs: vec![first_log, later_log],
+            parent_death,
         };
         let active = tokio_util::sync::CancellationToken::new();
         let error = process.stop(Some(observed), &active).await.unwrap_err();

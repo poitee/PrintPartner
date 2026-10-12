@@ -1047,5 +1047,91 @@ class ForceKillTest(unittest.TestCase):
                             os.kill(pid, signal.SIGKILL)
 
 
+class GuardReleaseTest(unittest.TestCase):
+    def _session_leader(self):
+        # The subject is this interpreter, stopped only by the guard under test.
+        leader = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(60)"],
+            start_new_session=True,
+        )
+        return leader
+
+    def _arm(self, verify, group):
+        read_fd, write_fd = os.pipe()
+        done_fd, done_write = os.pipe()
+        watcher = verify.guard_group(group, read_fd, done_write)
+        os.close(read_fd)
+        os.close(done_write)
+        return watcher, done_fd, write_fd
+
+    def test_release_byte_leaves_the_group_alive(self):
+        verify = load_verify()
+        leader = self._session_leader()
+        watcher = None
+        try:
+            watcher, done_fd, write_fd = self._arm(verify, leader.pid)
+            verify.release_guard((done_fd, write_fd))
+            self.assertTrue(process_alive(leader.pid))
+            self.assertEqual(watcher.wait(timeout=5), 0)
+            watcher = None
+        finally:
+            if watcher is not None and watcher.poll() is None:
+                watcher.kill()
+                watcher.wait(timeout=5)
+            if leader.poll() is None:
+                leader.kill()
+                leader.wait(timeout=5)
+
+    def test_eof_without_release_kills_the_group(self):
+        verify = load_verify()
+        leader = self._session_leader()
+        watcher = None
+        try:
+            watcher, done_fd, write_fd = self._arm(verify, leader.pid)
+            os.close(write_fd)
+            self.assertTrue(wait_until_gone(leader.pid, 5))
+            try:
+                while os.read(done_fd, 1):
+                    pass
+            finally:
+                os.close(done_fd)
+            self.assertEqual(watcher.wait(timeout=5), 0)
+            watcher = None
+        finally:
+            if watcher is not None and watcher.poll() is None:
+                watcher.kill()
+                watcher.wait(timeout=5)
+            if leader.poll() is None:
+                leader.kill()
+                leader.wait(timeout=5)
+
+    def test_guard_lookup_failure_still_terminates_the_child(self):
+        verify = load_verify()
+        verify.held.update(active=False, pending=None)
+
+        class Raising:
+            pid = 123
+            returncode = None
+            stdout = io.StringIO()
+
+            def wait(self, timeout=None):
+                return 0
+
+            @property
+            def guard(self):
+                raise RuntimeError("guard setup failed")
+
+        process = Raising()
+        with mock.patch.object(verify, "start_server", return_value=process), \
+                mock.patch.object(verify, "terminate") as terminate, \
+                mock.patch.object(verify, "release_guard") as release, \
+                mock.patch.object(verify, "read_origin", side_effect=AssertionError("origin")), \
+                contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(RuntimeError, "guard setup failed"):
+                verify.serve(Path("pp-server"), Path("repo"), "node", "commit", None)
+        terminate.assert_called_once_with(process)
+        release.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
