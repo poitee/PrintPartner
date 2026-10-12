@@ -1,8 +1,8 @@
 import * as pdfText from "./pdf-text-extract.js";
-import { TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { measureTenantDiskUsage, TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -51,6 +51,20 @@ type TreeItem = {
   size?: number;
   sha?: string;
 };
+
+function revisionNames(reposDir: string, sourceId: number): string[] {
+  const root = join(reposDir, String(sourceId), "revisions");
+  if (!existsSync(root)) return [];
+  return readdirSync(root).filter((name) => !name.startsWith(".")).sort();
+}
+
+function fileBytes(path: string): number {
+  if (!existsSync(path)) return 0;
+  const stat = statSync(path);
+  if (stat.isSymbolicLink() || !stat.isFile() && !stat.isDirectory()) return 0;
+  if (stat.isFile()) return stat.size;
+  return readdirSync(path).reduce((sum, name) => sum + fileBytes(join(path, name)), 0);
+}
 
 function reposRoot(): string {
   const root = mkdtempSync(join(tmpdir(), "pp-github-sync-"));
@@ -115,10 +129,81 @@ describe("atomic GitHub Source sync", () => {
     const uploaded = await publishLocalSourceWorkingTree({ repo, reposDir: repo.reposDir, sourceId: source.id, workingTree: candidate });
     resume();
     await expect(syncing).rejects.toThrow("Source changed during sync");
-    expect(repo.getSource(source.id)?.local_path).toBe(uploaded.local_path);
+    const active = repo.getSource(source.id);
+    expect(active?.local_path).toBe(uploaded.local_path);
     expect(readFileSync(join(uploaded.local_path!, "upload.stl"), "utf8")).toBe("upload wins");
     expect(readdirSync(uploaded.local_path!).sort()).toEqual([".printpartner-source-snapshot.json", "upload.stl"]);
+    expect(revisionNames(repo.reposDir, source.id)).toEqual([basename(uploaded.local_path!)]);
+    expect(repo.listSourceRevisions(source.id).map((revision) => revision.snapshot_locator)).toEqual([
+      `${source.id}/revisions/${basename(uploaded.local_path!)}`,
+    ]);
+    expect(await measureTenantDiskUsage({
+      dataDir, reposDir: repo.reposDir, tenantId: "default", sourceIds: [source.id],
+    })).toBe(fileBytes(join(repo.reposDir, String(source.id))));
     await ports.db.close();
+  });
+
+  it("keeps a reused Git snapshot when a later sync loses activation to an upload", async () => {
+    const dataDir = reposRoot();
+    const ports = createSelfHostPorts(dataDir);
+    await ports.db.connect();
+    const repo = ports.repository!;
+    const source = repo.createSource({ name: "Reused kit", url: "https://github.com/example/kit", source_kind: "github" });
+    setTree(COMMIT_A, [{ path: "remote.stl", type: "blob", mode: "100644", size: 6 }]);
+    vi.stubGlobal("fetch", rawResponse({ "remote.stl": "remote" }));
+    await syncProjectById(repo, repo.reposDir, source.id);
+    const kept = repo.getSource(source.id);
+    const keptPath = kept?.local_path;
+    if (!keptPath) throw new Error("Expected the first sync to activate a snapshot");
+    expect(readFileSync(join(keptPath, "remote.stl"), "utf8")).toBe("remote");
+    const keptNames = revisionNames(repo.reposDir, source.id);
+
+    let publication = "";
+    let started!: () => void;
+    const waiting = new Promise<void>((resolve) => { started = resolve; });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const real = LocalSourceSnapshotStore.prototype.materialize;
+    let gated = false;
+    const materialize = vi.spyOn(LocalSourceSnapshotStore.prototype, "materialize").mockImplementation(async function (
+      this: LocalSourceSnapshotStore,
+      input: Parameters<LocalSourceSnapshotStore["materialize"]>[0],
+    ) {
+      const snapshot = await real.call(this, input);
+      if (gated) return snapshot;
+      gated = true;
+      publication = snapshot.publication;
+      started();
+      await gate;
+      return snapshot;
+    });
+    try {
+      const syncing = syncProjectById(repo, repo.reposDir, source.id);
+      await waiting;
+      expect(publication).toBe("reused");
+      const candidate = join(dataDir, "upload-candidate");
+      mkdirSync(candidate);
+      writeFileSync(join(candidate, "upload.stl"), "upload wins");
+      const uploaded = await publishLocalSourceWorkingTree({
+        repo, reposDir: repo.reposDir, sourceId: source.id, workingTree: candidate,
+      });
+      release();
+      await expect(syncing).rejects.toThrow("Source changed during sync");
+      expect(repo.getSource(source.id)?.local_path).toBe(uploaded.local_path);
+      expect(readFileSync(join(uploaded.local_path!, "upload.stl"), "utf8")).toBe("upload wins");
+      expect(readFileSync(join(keptPath, "remote.stl"), "utf8")).toBe("remote");
+      expect(revisionNames(repo.reposDir, source.id)).toEqual(
+        [...keptNames, basename(uploaded.local_path!)].sort(),
+      );
+      expect(repo.listSourceRevisions(source.id)).toHaveLength(2);
+      expect(await measureTenantDiskUsage({
+        dataDir, reposDir: repo.reposDir, tenantId: "default", sourceIds: [source.id],
+      })).toBe(fileBytes(join(repo.reposDir, String(source.id))));
+    } finally {
+      release();
+      materialize.mockRestore();
+      await ports.db.close();
+    }
   });
 
   it.each(["github", "git"])("rejects unsupported %s publication before upstream or Source mutation", async (sourceKind) => {
@@ -185,12 +270,17 @@ describe("atomic GitHub Source sync", () => {
     const markCurrent = vi.spyOn(repo, "markSourceRevisionCurrent").mockImplementation(() => {
       throw new Error("forced current-status failure");
     });
+    const beforeNames = revisionNames(repo.reposDir, source.id);
     try {
       await expect(syncProjectById(repo, repo.reposDir, source.id)).rejects.toThrow("forced current-status failure");
       expect(repo.getSource(source.id)?.current_source_revision_id).toBe(previous.current_source_revision_id);
       expect(repo.getSource(source.id)?.local_path).toBe(previous.local_path);
       expect(repo.listSourceRevisions(source.id)).toEqual(revisions);
       expect(readFileSync(join(previous.local_path!, "previous.stl"), "utf8")).toBe("previous bytes");
+      expect(revisionNames(repo.reposDir, source.id)).toEqual(beforeNames);
+      expect(await measureTenantDiskUsage({
+        dataDir, reposDir: repo.reposDir, tenantId: "default", sourceIds: [source.id],
+      })).toBe(fileBytes(join(repo.reposDir, String(source.id))));
     } finally {
       markCurrent.mockRestore();
       await ports.db.close();

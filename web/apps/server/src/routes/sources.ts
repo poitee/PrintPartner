@@ -45,7 +45,7 @@ import {
 } from "../services/source-docs-index.js";
 import { PDF_BG_EXTRACT_BYTES } from "../services/pdf-text-extract.js";
 import { findSourceManifestPath, sourcePdfTextStorage } from "../services/source-workspace.js";
-import { indexDocsForActivatedRevision, publishLocalSourceWorkingTree, removeObsoleteHostedWorkingTree, SOURCE_PUBLICATION_UNAVAILABLE_DETAIL } from "../services/local-source-revision.js";
+import { activateSyncedSourceSnapshot, indexDocsForActivatedRevision, publishLocalSourceWorkingTree, removeObsoleteHostedWorkingTree, SOURCE_PUBLICATION_UNAVAILABLE_DETAIL } from "../services/local-source-revision.js";
 import { scanSourceArtifacts } from "../services/source-artifacts.js";
 import { sendIfTenantDiskQuotaExceeded, runWithTenantDiskQuota, TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
 
@@ -778,24 +778,14 @@ export async function syncProjectById(
           },
         },
       });
-      const activated = repo.transaction(() => {
-        const revision = repo.recordSourceRevision({
-          sourceId: projectId,
-          upstreamRevisionKey: result.snapshot.upstreamRevisionKey,
-          manifestDigest: result.snapshot.manifestDigest,
-          snapshotLocator: result.snapshot.snapshotLocator,
-          syncedAt: new Date().toISOString(),
-          completeness: "complete",
-        });
-        const source = repo.activateSourceRevision({
-          sourceId: projectId,
-          revisionId: revision.id,
-          observed,
-          sourceVersion: result.commitSha,
-        });
-        repo.markSourceRevisionCurrent(projectId, revision.id);
-        return source;
-      }, "immediate");
+      const activated = activateSyncedSourceSnapshot({
+        repo,
+        reposDir,
+        sourceId: projectId,
+        observed,
+        snapshot: result.snapshot,
+        sourceVersion: result.commitSha,
+      });
       const activePath = activated.local_path;
       if (!activePath) throw new Error("Activated Source revision has no local path");
 

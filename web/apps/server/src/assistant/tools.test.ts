@@ -605,8 +605,7 @@ option_groups:
         repo, dataDir, hostedPlanning: true, jobs: { start: async () => "unused" } as never,
       });
       expect(applied.ok).toBe(true);
-      if (!applied.ok) return;
-      expect(applied.result.source.current_source_revision_id).toEqual(expect.any(Number));
+      expect(repo.getSource(source.id)?.current_source_revision_id).toEqual(expect.any(Number));
       expect(readFileSync(join(legacy, "files", "legacy.stl"), "utf8")).toBe("legacy bytes");
       const active = repo.getSource(source.id)?.local_path;
       expect(readFileSync(join(active ?? "", "parts", "uploaded.stl"), "utf8")).toBe("solid uploaded");

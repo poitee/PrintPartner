@@ -410,6 +410,27 @@ function releaseUnreferencedSnapshot(
   }, "immediate");
 }
 
+/** Activate a Git snapshot on the shared rollback path. A failed activation removes only a snapshot this call created and nothing still referenced. */
+export function activateSyncedSourceSnapshot(input: {
+  repo: AppRepository;
+  reposDir: string;
+  sourceId: number;
+  observed: SourceActivationObservation;
+  snapshot: PublishedSourceSnapshot;
+  sourceVersion: string;
+}): SourceSummary {
+  return activateMaterializedSnapshot({
+    repo: input.repo,
+    reposDir: input.reposDir,
+    sourceId: input.sourceId,
+    observed: input.observed,
+    snapshot: input.snapshot,
+    sourceVersion: input.sourceVersion,
+    markRemoteCurrent: true,
+    recordLegacyManifestCutover: false,
+  });
+}
+
 function activateMaterializedSnapshot(input: {
   repo: AppRepository;
   reposDir: string;
