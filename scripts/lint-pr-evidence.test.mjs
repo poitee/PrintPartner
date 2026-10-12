@@ -3829,8 +3829,9 @@ test("r12-env-unread", () => {
   assertSafeCommand("curl --variable %url --expand-url '{{url}}'");
 });
 
-test("r12-shell-unread", () => {
-  assertSafeCommand("sh -c 'curl 3232235856'");
+test("r12-shell-c-scans-static-operand", () => {
+  assertBannedCommand("sh -c 'curl 3232235856'");
+  assertSafeCommand("sh -c 'curl 3232235855'");
 });
 
 test("r12-config-unread", () => {
@@ -5298,4 +5299,153 @@ test("r23-evidence-heading-case", () => {
   r19Expect(r23HeadingBody("## EVIDENCE"), 0, OK_LINE, "");
   r19Expect(r23HeadingBody("## EVIDENCE #"), 0, OK_LINE, "");
   r19Expect(r23HeadingBody("## Evidence"), 0, OK_LINE, "");
+});
+
+const R24_CI_OK = "PR evidence lint OK (exemption=ci-only, hasEvidence=true)\n";
+const R24_MISSING = "PR evidence lint FAILED:\n- Missing \"## Evidence\" section. See docs/contributing/gate-evidence.md.\n";
+
+function r24Ci(extra, heading = "## Evidence") {
+  return `${heading}
+Exemption: ci-only
+- Exemption reason: Evidence checker verification only.
+- Steps followed to produce the evidence: Execute the local verifier.
+- Result observed: The verifier returned its expected result.
+- Screenshot / recording / verify-skill output or trace: evidence/a.png
+${extra}`;
+}
+
+test("r24-evidence-heading-keeps-trailing-space", () => {
+  r19Expect(r24Ci("", "## Evidence   "), 0, R24_CI_OK, "");
+  r19Expect(r23HeadingBody("## Evidence   "), 0, OK_LINE, "");
+  r19Expect(r23HeadingBody("## Evidence\t"), 0, OK_LINE, "");
+  r19Expect(r23HeadingBody("## Evidence ##  "), 0, OK_LINE, "");
+  r19Expect(r23HeadingBody("## Evidence #"), 0, OK_LINE, "");
+  r19Expect(r23HeadingBody("## Evidence#"), 1, "", R24_MISSING);
+});
+
+test("r24-exported-proxy-assignments-are-targets", () => {
+  for (const command of [
+    "export http_proxy=3232235856; curl http://example.test/",
+    "export http_proxy=3232235856\ncurl http://example.test/",
+    "export https_proxy=3232235856; wget http://example.test/",
+    "export ALL_PROXY=3232235857; curl http://example.test/",
+    "export ftp_proxy=3232235856; curl http://example.test/",
+    "export http_proxy=3232235856; curl http://example.test/; curl http://example.test/a",
+    "export http_proxy=3232235856; bash -c 'curl http://example.test/'",
+    "export http_proxy=`printf 3232235856`; curl http://example.test/",
+  ]) {
+    const stderr = command.includes("printf") ? R20_SUBSTITUTION_STDERR : LAN_STDERR;
+    r19Expect(commandEvidence(command), 1, "", stderr);
+  }
+  for (const command of [
+    "export http_proxy=3232235855; curl http://example.test/",
+    "export http_proxy=3232235858; wget http://example.test/",
+    "export HTTP_PROXY=3232235856; curl http://example.test/",
+    "export HTTP_PROXY=3232235856; wget http://example.test/",
+    "HTTP_PROXY=3232235856 curl http://example.test/",
+    "export http_proxy=3232235856; http_proxy=3232235855 curl http://example.test/",
+    "export http_proxy=http://192.168.1.79:8080; curl http://example.test/",
+  ]) {
+    r19Expect(commandEvidence(command), 0, OK_LINE, "");
+  }
+  r19Expect(commandEvidence("export http_proxy=3232235856; http_proxy=3232235855 curl http://example.test/; curl http://example.test/a"), 1, "", LAN_STDERR);
+});
+
+test("r24-wgetrc-proxy-names-normalize", () => {
+  for (const command of [
+    "wget -e HTTP_PROXY=3232235856 http://example.test/",
+    "wget -e HTTP-PROXY=3232235856 http://example.test/",
+    "wget -e httpproxy=3232235856 http://example.test/",
+    "wget --execute=HTTPS_PROXY=3232235856 http://example.test/",
+    "wget -e Http_Proxy=3232235857 http://example.test/",
+    "wget -e ftp-proxy=3232235856 http://example.test/",
+  ]) {
+    r19Expect(commandEvidence(command), 1, "", LAN_STDERR);
+  }
+  for (const command of [
+    "wget -e HTTP_PROXY=3232235855 http://example.test/",
+    "wget -e HTTP_PROXY=3232235858 http://example.test/",
+    "wget -e 'HTTP_PROXY = 3232235856' http://example.test/",
+    "wget -e NO_PROXY=3232235856 http://example.test/",
+    "wget -e use_proxy=on http://example.test/",
+    "curl -e HTTP_PROXY=3232235856 http://example.test/",
+  ]) {
+    r19Expect(commandEvidence(command), 0, OK_LINE, "");
+  }
+});
+
+test("r24-static-shell-c-operands", () => {
+  for (const command of [
+    "bash -c 'curl 3232235856'",
+    "sh -c 'wget 3232235856'",
+    "bash -lc 'curl 3232235856'",
+    "bash --posix -c 'curl 3232235857'",
+    "dash -c 'curl 3232235856'",
+    "bash -c \"bash -c 'curl 3232235856'\"",
+    "octet=80; bash -c 'curl http://192.168.1.$octet/'",
+  ]) {
+    const stderr = command.includes("$octet") ? R23_VARIABLE_STDERR : LAN_STDERR;
+    r19Expect(commandEvidence(command), 1, "", stderr);
+  }
+  for (const command of [
+    "bash -c 'curl 3232235855'",
+    "sh -c 'curl 3232235858'",
+    "bash -c 'curl --data 3232235856 http://example.test/'",
+    "sh -c 'printf %s 3232235856'",
+    "bash -c 'curl http://192.168.1.$HOST:8080/'",
+    "bash ./verify.sh",
+    "bash -c '$cmd'",
+  ]) {
+    r19Expect(commandEvidence(command), 0, OK_LINE, "");
+  }
+});
+
+test("r24-nested-anchor-text-uses-tag-scanner", () => {
+  r19Expect(r19Artifact('<a href="evidence/a.png"><span title="1 > 0"></span></a>'), 1, "", R19_INCOMPLETE_STDERR);
+  r19Expect(r19Artifact('<a href="evidence/a.png"><span title="1 > 0">shot</span></a>'), 0, OK_LINE, "");
+  r19Expect(r19Artifact('<a href="evidence/a.png"><span title="1 > 0"><img src="evidence/b.png"></span></a>'), 0, OK_LINE, "");
+  r19Expect(r19Artifact('<a title="1 > 0" href="evidence/a.png"></a>'), 1, "", R19_INCOMPLETE_STDERR);
+});
+
+test("r24-list-nested-headings-stay-inside-evidence", () => {
+  const nested = (command) => `## Evidence
+Exemption: none
+- Steps followed to produce the evidence: ran locally
+- Result observed: passed
+- Screenshot / recording / verify-skill output or trace: trace.json
+
+- Notes
+  ## Other
+  \`\`\`sh
+  ${command}
+  \`\`\`
+`;
+  r19Expect(nested("curl 3232235856"), 1, "", LAN_STDERR);
+  r19Expect(nested("curl 3232235855"), 0, OK_LINE, "");
+  const ended = `## Evidence
+Exemption: none
+- Steps followed to produce the evidence: ran locally
+- Result observed: passed
+- Screenshot / recording / verify-skill output or trace: trace.json
+
+## Other
+\`\`\`sh
+curl 3232235856
+\`\`\`
+`;
+  r19Expect(ended, 0, OK_LINE, "");
+  const setext = `## Evidence
+Exemption: none
+- Steps followed to produce the evidence: ran locally
+- Result observed: passed
+- Screenshot / recording / verify-skill output or trace: trace.json
+
+- Notes
+  Other
+  ---
+  \`\`\`sh
+  curl 3232235856
+  \`\`\`
+`;
+  r19Expect(setext, 1, "", LAN_STDERR);
 });
