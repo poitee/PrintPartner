@@ -374,12 +374,13 @@ fn read_model(
     };
     let entries = archive::inspect_index(&mut reader, length, ArchiveLimits::default(), cancelled)?;
     let (index, entry) = entries
+        .entries
         .iter()
         .enumerate()
         .filter(|(_, e)| e.raw_name.to_ascii_lowercase().ends_with(".model"))
-        .min_by_key(|(_, e)| e.local_offset)
+        .min_by_key(|(_, e)| e.local_header_offset)
         .ok_or(MediaError::Invalid("3MF model document is missing"))?;
-    if entry.uncompressed_size > limits.max_model_bytes {
+    if entry.inflated_bytes > limits.max_model_bytes {
         return Err(MediaError::Invalid(
             "3MF model document exceeds the size limit",
         ));
@@ -406,7 +407,7 @@ fn read_model(
         }
         bytes.extend_from_slice(&buffer[..n]);
     }
-    if bytes.len() as u64 != entry.uncompressed_size {
+    if bytes.len() as u64 != entry.inflated_bytes {
         return Err(MediaError::Invalid("3MF model size mismatch"));
     }
     drop(member);
@@ -433,30 +434,39 @@ struct Grammar {
     decimal: Regex,
 }
 const XML_SPACE: &str = r"[\x09-\x0d\x20\x{a0}\x{1680}\x{2000}-\x{200a}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}\x{feff}]";
+fn compiled_regex(pattern: &str) -> Regex {
+    match Regex::new(pattern) {
+        Ok(regex) => regex,
+        Err(error) => panic!("3MF grammar regex is invalid: {error}"),
+    }
+}
 static GRAMMAR: LazyLock<Grammar> = LazyLock::new(|| Grammar {
-    model: Regex::new(r"(?i-u:<model\b)([^>]*)>").unwrap(),
-    objects: Regex::new(
+    model: compiled_regex(r"(?i-u:<model\b)([^>]*)>"),
+    objects: compiled_regex(
         &r"(?i-u:<object\b)([^>]*)>(?s:(.*?))(?i-u:</object)\s*>".replace(r"\s", XML_SPACE),
-    )
-    .unwrap(),
-    mesh: Regex::new(r"(?i-u:<mesh\b)").unwrap(),
-    vertices: Regex::new(&r"(?i-u:<vertex\b)([^>]*)/?\s*>".replace(r"\s", XML_SPACE)).unwrap(),
-    triangles: Regex::new(&r"(?i-u:<triangle\b)([^>]*)/?\s*>".replace(r"\s", XML_SPACE)).unwrap(),
-    attributes: Regex::new(
+    ),
+    mesh: compiled_regex(r"(?i-u:<mesh\b)"),
+    vertices: compiled_regex(&r"(?i-u:<vertex\b)([^>]*)/?\s*>".replace(r"\s", XML_SPACE)),
+    triangles: compiled_regex(&r"(?i-u:<triangle\b)([^>]*)/?\s*>".replace(r"\s", XML_SPACE)),
+    attributes: compiled_regex(
         &r#"(?:^|\s)([a-zA-Z0-9_:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')"#.replace(r"\s", XML_SPACE),
-    )
-    .unwrap(),
-    entities: Regex::new(r"(?i-u:&(?:#x([0-9a-f]+)|#([0-9]+)|(amp|quot|apos|lt|gt));)").unwrap(),
-    decimal: Regex::new(r"^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$").unwrap(),
+    ),
+    entities: compiled_regex(r"(?i-u:&(?:#x([0-9a-f]+)|#([0-9]+)|(amp|quot|apos|lt|gt));)"),
+    decimal: compiled_regex(r"^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$"),
 });
 fn attributes(tag: &str) -> Result<BTreeMap<String, String>> {
     let mut result = BTreeMap::new();
     for matched in GRAMMAR.attributes.captures_iter(tag) {
-        let value = matched.get(2).or_else(|| matched.get(3)).unwrap().as_str();
+        let Some(value_match) = matched.get(2).or_else(|| matched.get(3)) else {
+            return Err(MediaError::Invalid("3MF attribute value is missing"));
+        };
+        let value = value_match.as_str();
         let mut decoded = String::new();
         let mut end = 0;
         for entity in GRAMMAR.entities.captures_iter(value) {
-            let whole = entity.get(0).unwrap();
+            let Some(whole) = entity.get(0) else {
+                return Err(MediaError::Invalid("3MF entity match is missing"));
+            };
             decoded.push_str(&value[end..whole.start()]);
             let ch = if let Some(hex) = entity.get(1) {
                 u32::from_str_radix(hex.as_str(), 16)
@@ -552,7 +562,10 @@ fn radix_number(digits: &str, radix: u32) -> f64 {
     let mut significand = 0u64;
     let mut round = false;
     let mut sticky = false;
-    for digit in digits.chars().map(|c| c.to_digit(radix).unwrap()) {
+    for digit in digits.chars() {
+        let Some(digit) = digit.to_digit(radix) else {
+            return f64::NAN;
+        };
         for shift in (0..width).rev() {
             let bit = (digit >> shift) & 1;
             if bits == 0 && bit == 0 {

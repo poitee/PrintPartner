@@ -10,8 +10,9 @@ import {
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { JobEvent, JobSnapshot } from "@print-partner/contracts";
+import { EngineHttpError } from "../api/engineTransport";
 import { fetchJob } from "../api/endpoints/jobs";
-import { connectJobWebSocket } from "../api/jobWebSocket";
+import { connectJobWebSocket, JobNotFoundError } from "../api/jobWebSocket";
 import { invalidateAfterJob } from "../queries/invalidation";
 import { invalidateAcceptedPlateExportJobs } from "../queries/acceptedPlates";
 
@@ -71,17 +72,25 @@ async function pollJobUntilTerminal(
   onProgress: (snap: JobSnapshot) => void,
   signal: AbortSignal,
   intervalMs = 400,
-  maxAttempts = 150,
 ): Promise<void> {
-  let lastSnap: JobSnapshot | null = null;
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+  let retryDelay = intervalMs;
+  for (;;) {
     if (signal.aborted) return;
-    const snap = await fetchJob(jobId, signal);
-    if (signal.aborted) return;
-    lastSnap = snap;
-    onProgress(snap);
-    if (JOB_TERMINAL.has(snap.status)) {
-      return;
+    let waitMs = intervalMs;
+    try {
+      const snap = await fetchJob(jobId, signal);
+      if (signal.aborted) return;
+      retryDelay = intervalMs;
+      onProgress(snap);
+      if (JOB_TERMINAL.has(snap.status)) return;
+    } catch (error) {
+      if (signal.aborted) return;
+      // An API restart must not let the fallback poll cancel socket reconnects.
+      // fetch rejects network failures with TypeError; the dev proxy uses 5xx.
+      if (!(error instanceof TypeError) &&
+          !(error instanceof EngineHttpError && error.status >= 500)) throw error;
+      waitMs = retryDelay;
+      retryDelay = Math.min(retryDelay * 2, 10_000);
     }
     await new Promise<void>((resolve) => {
       const done = () => {
@@ -89,26 +98,19 @@ async function pollJobUntilTerminal(
         signal.removeEventListener("abort", done);
         resolve();
       };
-      const timer = setTimeout(done, intervalMs);
+      const timer = setTimeout(done, waitMs);
       signal.addEventListener("abort", done, { once: true });
       if (signal.aborted) done();
     });
   }
-  throw new Error(
-    lastSnap
-      ? `Job timed out waiting for completion (last status: ${lastSnap.status})`
-      : "Job timed out waiting for completion",
-  );
 }
 
-/** Sync (and similar long jobs) can exceed the default ~60s poll window once docs/PDFs are included. */
-function pollAttemptsForKind(kind: string): number {
-  // STL downloads have no size cap. Keep observing while the server is working.
-  if (kind === "stl-export") return Number.POSITIVE_INFINITY;
+function observationTimeoutForKind(kind: string): number | null {
+  if (kind === "stl-export") return null;
   if (kind === "sync" || kind === "extract-source-docs" || kind === "import-scan") {
-    return 4500; // ~30 minutes at 400ms
+    return 30 * 60_000;
   }
-  return 150;
+  return 60_000;
 }
 
 function upsertJob(jobs: ActiveJob[], next: ActiveJob): ActiveJob[] {
@@ -173,11 +175,13 @@ export function JobProvider({ children }: { children: ReactNode }) {
       options?: RunJobOptions,
     ) => {
       let disconnect: (() => void) | null = null;
+      let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
       let finished = false;
       const observer = new AbortController();
       observers.current.add(observer);
       observer.signal.addEventListener("abort", () => {
         finished = true;
+        if (deadlineTimer !== null) clearTimeout(deadlineTimer);
         disconnect?.();
         observers.current.delete(observer);
       }, { once: true });
@@ -196,6 +200,9 @@ export function JobProvider({ children }: { children: ReactNode }) {
       try {
         const jobId = await start();
         if (observer.signal.aborted) return;
+        const timeoutMs = observationTimeoutForKind(kind);
+        const deadline = timeoutMs === null ? null : performance.now() + timeoutMs;
+        let lastStatus: string | null = null;
         refreshAcceptedExportHistory();
         const initial: ActiveJob = {
           jobId,
@@ -228,8 +235,28 @@ export function JobProvider({ children }: { children: ReactNode }) {
           removeAfterTerminalDisplay(jobId);
         };
 
+        const failObservation = (error: unknown) => {
+          if (finished) return;
+          const message = error instanceof EngineHttpError && error.status === 404
+            ? "Job not found"
+            : `Lost contact with the job. It may still be running on the server. ${error instanceof Error ? error.message : String(error)}`;
+          finish({ job_id: jobId, kind, status: "error", message, error: message, progress: null, result: null });
+          refreshAcceptedExportHistory();
+        };
+
+        const expire = () => failObservation(new Error(
+          lastStatus
+            ? `Job timed out waiting for completion (last status: ${lastStatus})`
+            : "Job timed out waiting for completion",
+        ));
+
         const onProgress = (ev: JobEvent | JobSnapshot) => {
           if (finished) return;
+          if (deadline !== null && performance.now() >= deadline) {
+            expire();
+            return;
+          }
+          lastStatus = ev.status;
           setActiveJobs((prev) =>
             upsertJob(prev, {
               jobId,
@@ -242,25 +269,25 @@ export function JobProvider({ children }: { children: ReactNode }) {
             }),
           );
           if (JOB_TERMINAL.has(ev.status)) {
-            if ("job_id" in ev) finish(ev);
-            else void fetchJob(jobId, observer.signal).then(finish).catch(() => finish({ ...ev, job_id: jobId, kind }));
+            finish("job_id" in ev ? ev : { ...ev, job_id: jobId, kind });
           }
         };
+
+        if (timeoutMs !== null) deadlineTimer = setTimeout(expire, timeoutMs);
 
         disconnect = connectJobWebSocket(
           jobId,
           onProgress,
-          () => {
-            /* WebSocket unavailable — HTTP polling fallback handles completion */
+          (error) => {
+            if (error instanceof JobNotFoundError) {
+              finish({ job_id: jobId, kind, status: "error", message: error.message,
+                error: error.message, progress: null, result: null });
+            }
+            /* Other WebSocket errors leave HTTP polling to handle completion. */
           },
         );
 
-        void pollJobUntilTerminal(jobId, onProgress, observer.signal, 400, pollAttemptsForKind(kind)).catch((e) => {
-          if (finished) return;
-          const message = `Lost contact with the job. It may still be running on the server. ${e instanceof Error ? e.message : String(e)}`;
-          finish({ job_id: jobId, kind, status: "error", message, error: message, progress: null, result: null });
-          refreshAcceptedExportHistory();
-        });
+        void pollJobUntilTerminal(jobId, onProgress, observer.signal).catch(failObservation);
       } catch (e) {
         if (observer.signal.aborted) return;
         observer.abort();

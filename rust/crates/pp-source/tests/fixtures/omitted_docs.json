@@ -1,0 +1,41 @@
+{
+  "tree": {
+    "part.stl": "solid limited\nendsolid limited\n",
+    "README.md": "# Limited documentation\n",
+    "docs/z-large.pdf": "%PDF-1.4\nlarge fixture\n",
+    "docs/a-unknown.md": "Unknown size documentation\n"
+  },
+  "request": {
+    "upstreamRevisionKey": "omitted_docs",
+    "files": [
+      {
+        "path": "part.stl",
+        "kind": "stl",
+        "sizeHintBytes": null
+      },
+      {
+        "path": "README.md",
+        "kind": "readme",
+        "sizeHintBytes": 24
+      }
+    ],
+    "selection": {
+      "maxStlFiles": 1,
+      "maxDocumentationBytes": 24,
+      "omittedFiles": [
+        {
+          "path": "docs/z-large.pdf",
+          "kind": "pdf",
+          "sizeHintBytes": 4096,
+          "reason": "documentation-byte-budget"
+        },
+        {
+          "path": "docs/a-unknown.md",
+          "kind": "md",
+          "sizeHintBytes": null,
+          "reason": "unknown-document-size"
+        }
+      ]
+    }
+  }
+}

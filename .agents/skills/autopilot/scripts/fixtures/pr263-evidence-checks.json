@@ -1,0 +1,210 @@
+{
+  "pr": {
+    "number": 263,
+    "url": "https://github.com/poitee/PrintPartner/pull/263",
+    "title": "fix: remove seven unwrap/expect hits introduced by #219",
+    "isDraft": false,
+    "baseRefName": "main",
+    "headRefName": "fix/source-path-corpus-unwrap",
+    "mergeable": "MERGEABLE",
+    "mergeStateStatus": "CLEAN"
+  },
+  "statusCheckRollup": [
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-11T22:15:45Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/poitee/PrintPartner/actions/runs/38179702927/job/114589459027",
+      "name": "Lint Evidence block",
+      "startedAt": "2026-10-11T22:15:39Z",
+      "status": "COMPLETED",
+      "workflowName": "PR evidence",
+      "checkSuite": {
+        "id": "CS_kwDOUBAtuM8AAAAYFXp2gw",
+        "createdAt": "2026-10-11T22:15:37Z",
+        "app": {
+          "id": "MDM6QXBwMTUzNjg=",
+          "slug": "github-actions"
+        },
+        "workflowRun": {
+          "databaseId": 38179702927,
+          "createdAt": "2026-10-11T22:15:37Z",
+          "workflow": {
+            "id": "W_kwDOUBAtuM4WsTq5",
+            "name": "PR evidence"
+          },
+          "event": "pull_request_target"
+        },
+        "currentRuns": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": [
+            {
+              "id": "CR_kwDOUBAtuM8AAAAarhBiUw"
+            }
+          ]
+        }
+      },
+      "databaseId": 114589459027,
+      "id": "CR_kwDOUBAtuM8AAAAarhBiUw"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-11T22:15:56Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/poitee/PrintPartner/actions/runs/38179712713/job/114589485658",
+      "name": "Lint Evidence block",
+      "startedAt": "2026-10-11T22:15:47Z",
+      "status": "COMPLETED",
+      "workflowName": "PR evidence",
+      "checkSuite": {
+        "id": "CS_kwDOUBAtuM8AAAAYFXrXaw",
+        "createdAt": "2026-10-11T22:15:45Z",
+        "app": {
+          "id": "MDM6QXBwMTUzNjg=",
+          "slug": "github-actions"
+        },
+        "workflowRun": {
+          "databaseId": 38179712713,
+          "createdAt": "2026-10-11T22:15:45Z",
+          "workflow": {
+            "id": "W_kwDOUBAtuM4WsTq5",
+            "name": "PR evidence"
+          },
+          "event": "pull_request_target"
+        },
+        "currentRuns": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": [
+            {
+              "id": "CR_kwDOUBAtuM8AAAAarhDKWg"
+            }
+          ]
+        }
+      },
+      "databaseId": 114589485658,
+      "id": "CR_kwDOUBAtuM8AAAAarhDKWg"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-11T22:15:58Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/poitee/PrintPartner/actions/runs/38179717597/job/114589499222",
+      "name": "Lint Evidence block",
+      "startedAt": "2026-10-11T22:15:51Z",
+      "status": "COMPLETED",
+      "workflowName": "PR evidence",
+      "checkSuite": {
+        "id": "CS_kwDOUBAtuM8AAAAYFXsGtA",
+        "createdAt": "2026-10-11T22:15:49Z",
+        "app": {
+          "id": "MDM6QXBwMTUzNjg=",
+          "slug": "github-actions"
+        },
+        "workflowRun": {
+          "databaseId": 38179717597,
+          "createdAt": "2026-10-11T22:15:49Z",
+          "workflow": {
+            "id": "W_kwDOUBAtuM4WsTq5",
+            "name": "PR evidence"
+          },
+          "event": "pull_request_target"
+        },
+        "currentRuns": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": [
+            {
+              "id": "CR_kwDOUBAtuM8AAAAarhD_Vg"
+            }
+          ]
+        }
+      },
+      "databaseId": 114589499222,
+      "id": "CR_kwDOUBAtuM8AAAAarhD_Vg"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-11T22:19:06Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/poitee/PrintPartner/actions/runs/38179925873/job/114590127334",
+      "name": "Lint Evidence block",
+      "startedAt": "2026-10-11T22:19:00Z",
+      "status": "COMPLETED",
+      "workflowName": "PR evidence",
+      "checkSuite": {
+        "id": "CS_kwDOUBAtuM8AAAAYFYNkSQ",
+        "createdAt": "2026-10-11T22:18:58Z",
+        "app": {
+          "id": "MDM6QXBwMTUzNjg=",
+          "slug": "github-actions"
+        },
+        "workflowRun": {
+          "databaseId": 38179925873,
+          "createdAt": "2026-10-11T22:18:58Z",
+          "workflow": {
+            "id": "W_kwDOUBAtuM4WsTq5",
+            "name": "PR evidence"
+          },
+          "event": "pull_request_target"
+        },
+        "currentRuns": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": [
+            {
+              "id": "CR_kwDOUBAtuM8AAAAarhqU5g"
+            }
+          ]
+        }
+      },
+      "databaseId": 114590127334,
+      "id": "CR_kwDOUBAtuM8AAAAarhqU5g"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-11T23:56:08Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/poitee/PrintPartner/actions/runs/38186110586/job/114608658588",
+      "name": "Lint Evidence block",
+      "startedAt": "2026-10-11T23:56:01Z",
+      "status": "COMPLETED",
+      "workflowName": "PR evidence",
+      "checkSuite": {
+        "id": "CS_kwDOUBAtuM8AAAAYFnnDrQ",
+        "createdAt": "2026-10-11T23:55:59Z",
+        "app": {
+          "id": "MDM6QXBwMTUzNjg=",
+          "slug": "github-actions"
+        },
+        "workflowRun": {
+          "databaseId": 38186110586,
+          "createdAt": "2026-10-11T23:55:59Z",
+          "workflow": {
+            "id": "W_kwDOUBAtuM4WsTq5",
+            "name": "PR evidence"
+          },
+          "event": "pull_request_target"
+        },
+        "currentRuns": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": [
+            {
+              "id": "CR_kwDOUBAtuM8AAAAarzVYnA"
+            }
+          ]
+        }
+      },
+      "databaseId": 114608658588,
+      "id": "CR_kwDOUBAtuM8AAAAarzVYnA"
+    }
+  ],
+  "reviewThreads": []
+}

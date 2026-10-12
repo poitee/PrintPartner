@@ -33,6 +33,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 defaults:
   run:
     shell: bash
@@ -55,6 +59,18 @@ jobs:
           mkdir -p "$PP_EVIDENCE"
           uname -a > "$PP_EVIDENCE/runner.txt"
           git rev-parse HEAD > "$PP_EVIDENCE/head.txt"
+      - name: Run rust/scripts self-tests
+        run: |
+          python3 rust/scripts/gateway-operations.py rust/crates/pp-gateway/operations.json --self-test 2>&1 | tee "$PP_EVIDENCE/gateway-operations-self-tests.log"
+          python3 rust/scripts/native-process-probe.py --self-test 2>&1 | tee "$PP_EVIDENCE/native-process-probe-self-tests.log"
+      - name: Install pinned storage-fixture Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22.23.3'
+      - name: Record storage-fixture executable
+        run: |
+          test "$(node --version)" = v22.23.3
+          echo "PP_SCHEMA_PARITY_NODE=$(node -p process.execPath)" >> "$GITHUB_ENV"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.21.0'
@@ -81,9 +97,10 @@ jobs:
           cargo test --manifest-path rust/Cargo.toml --locked -p pp-core --test runtime_m0 -- --nocapture --test-threads=1 2>&1 | tee "$PP_EVIDENCE/core-runtime.log"
       - name: Run backend units and lint
         run: |
-          cargo test --manifest-path rust/Cargo.toml --locked -p pp-api -p pp-core -p pp-compat -p pp-gateway -p pp-server --lib --bins 2>&1 | tee "$PP_EVIDENCE/backend-units.log"
+          cargo test --manifest-path rust/Cargo.toml --locked -p pp-api -p pp-storage -p pp-core -p pp-compat -p pp-gateway -p pp-server --lib --bins 2>&1 | tee "$PP_EVIDENCE/backend-units.log"
+          cargo test --manifest-path rust/Cargo.toml --locked -p pp-storage 2>&1 | tee "$PP_EVIDENCE/pp-storage-tests.log"
           cargo test --manifest-path rust/Cargo.toml --locked -p pp-api --test auth_http 2>&1 | tee "$PP_EVIDENCE/pp-api-http.log"
-          cargo clippy --manifest-path rust/Cargo.toml --locked -p pp-api -p pp-core -p pp-compat -p pp-gateway -p pp-server --all-targets -- -D warnings 2>&1 | tee "$PP_EVIDENCE/backend-clippy.log"
+          cargo clippy --manifest-path rust/Cargo.toml --locked -p pp-api -p pp-storage -p pp-core -p pp-compat -p pp-gateway -p pp-server --all-targets -- -D warnings 2>&1 | tee "$PP_EVIDENCE/backend-clippy.log"
       - name: Verify authenticated workflow and process cleanup
         run: |
           python3 rust/tests/workflow_m0.py 2>&1 | tee "$PP_EVIDENCE/workflow.log"
@@ -129,6 +146,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends strace time
       - name: Build Node and Rust snapshot implementations
+        id: source_artifacts_build
         run: |
           npm --prefix web ci
           npm --prefix web run build -w @print-partner/contracts
@@ -142,14 +160,36 @@ jobs:
             --node "$(command -v node)" \
             --node-snapshot web/apps/server/dist/current/services/local-source-snapshot.js \
             --binary rust/target/debug/pp-source
+      - name: Verify source archive extraction, limits and crash recovery
+        run: |
+          python3 rust/tests/source-archive/verify.py \
+            --output "$RUNNER_TEMP/source-archive-evidence" \
+            --node "$(command -v node)" \
+            --node-archive web/apps/server/dist/current/services/archive-import.js \
+            --binary rust/target/debug/pp-source-archive
+      - name: Replay SourcePath corpus through Node
+        if: ${{ !cancelled() && steps.source_artifacts_build.outcome == 'success' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/source-artifacts-evidence"
+          cargo run --manifest-path rust/Cargo.toml --locked -q -p pp-source --example source_path_corpus \
+            > "$RUNNER_TEMP/source-artifacts-evidence/source-path-corpus.json"
+          node rust/tests/source-artifacts/source-path-replay.mjs \
+            web/apps/server/dist/current/services/local-source-snapshot.js \
+            "$RUNNER_TEMP/source-artifacts-evidence/source-path-corpus.json" \
+            "$RUNNER_TEMP/source-artifacts-evidence/source-path-replay.json"
+          node --test rust/tests/source-artifacts/source-path-replay.test.mjs
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: source-artifacts-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/source-artifacts-evidence/checks.json
+            ${{ runner.temp }}/source-artifacts-evidence/source-path-replay.json
+            ${{ runner.temp }}/source-artifacts-evidence/source-path-corpus.json
             ${{ runner.temp }}/source-artifacts-evidence/*.strace
             ${{ runner.temp }}/source-artifacts-evidence/*.stderr
+            ${{ runner.temp }}/source-archive-evidence/checks.json
+            ${{ runner.temp }}/source-archive-evidence/*.strace
           if-no-files-found: warn
           retention-days: 14
 
@@ -186,7 +226,7 @@ jobs:
           sudo iptables -N PP_LAN_GUARD
           sudo iptables -A PP_LAN_GUARD -j REJECT
           sudo iptables -I OUTPUT -d 192.168.0.0/16 -m conntrack --ctstate NEW -j PP_LAN_GUARD
-          sudo iptables -L OUTPUT -n -v > "$PP_EVIDENCE/egress-guard-before.txt"
+          sudo iptables -L OUTPUT -n -v | tee "$PP_EVIDENCE/egress-guard-before.txt"
       - name: Run Rust gateway verify.py end to end
         run: |
           python3 .cursor/skills/verify-print-partner-rust/helpers/verify.py 2>&1 | tee "$PP_EVIDENCE/verify.log"
@@ -195,7 +235,7 @@ jobs:
       - name: Assert no LAN egress was attempted
         if: always()
         run: |
-          sudo iptables -L OUTPUT -n -v -x > "$PP_EVIDENCE/egress-guard-after.txt"
+          sudo iptables -L OUTPUT -n -v -x | tee "$PP_EVIDENCE/egress-guard-after.txt"
           blocked="$(sudo iptables -L PP_LAN_GUARD -n -v -x | awk 'NR>2 {sum+=$1} END {print sum+0}')"
           echo "blocked_lan_packets=$blocked" | tee "$PP_EVIDENCE/egress-guard-result.txt"
           test "$blocked" -eq 0

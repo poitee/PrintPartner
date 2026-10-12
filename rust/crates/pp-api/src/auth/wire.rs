@@ -34,7 +34,10 @@ impl From<anyhow::Error> for Failure {
             Some(QueueFull | Stopped) => (503, "Authentication temporarily unavailable"),
             _ => (500, "Authentication unavailable"),
         };
-        Self(StatusCode::from_u16(status).expect("valid status"), detail)
+        let Ok(status) = StatusCode::from_u16(status) else {
+            panic!("valid status");
+        };
+        Self(status, detail)
     }
 }
 pub(super) fn public_user(user: User) -> Value {
@@ -78,7 +81,10 @@ pub(super) fn set_cookie(
     let value = format!("{name}={value}; Max-Age={age}; Path=/; HttpOnly; SameSite=Lax{secure}");
     response.headers_mut().append(
         header::SET_COOKIE,
-        HeaderValue::from_str(&value).expect("generated cookie"),
+        match HeaderValue::from_str(&value) {
+            Ok(header) => header,
+            Err(_) => panic!("generated cookie"),
+        },
     );
 }
 pub(super) fn json_response(value: Value) -> Response {
@@ -88,7 +94,10 @@ pub(super) fn redirect(target: &str) -> Response {
     let mut response = StatusCode::FOUND.into_response();
     response.headers_mut().insert(
         header::LOCATION,
-        HeaderValue::from_str(target).expect("validated redirect"),
+        match HeaderValue::from_str(target) {
+            Ok(header) => header,
+            Err(_) => panic!("validated redirect"),
+        },
     );
     response
 }

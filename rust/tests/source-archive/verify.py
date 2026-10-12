@@ -2,6 +2,7 @@ import argparse
 import hashlib
 import io
 import json
+import random
 from pathlib import Path
 import struct
 import subprocess
@@ -144,13 +145,21 @@ for case in ['forged-inflated-limit', 'crc', 'truncated', 'truncated-body', 'cor
     archive.write_bytes(data)
     run_case(case, archive, False, limits, parity=False)
 run_case('bzip2', make('bzip2', [('part.stl', b'data')], zipfile.ZIP_BZIP2), False)
+# Per-entry compression-ratio cap (100:1 above a 1 MiB floor). Node accepts the
+# bomb within its total limit; Rust rejects it before inflating.
+result, _ = run_case('ratio-bomb', make('ratio-bomb', [('bomb.stl', bytes(64 * 1024**2))]), False, parity=False)
+assert result['error'] == 'compression-ratio', result
+run_case('ratio-floor', make('ratio-floor', [('small.stl', bytes(1024**2))]), True)
+
+def incompressible(seed, size):
+    return random.Random(seed).randbytes(size)
 
 for size in [1, 32]:
     case = f'memory-{size}'
     archive = make(case, [])
     with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as writer:
         with writer.open('model.stl', 'w') as member:
-            for _ in range(size): member.write(b'x' * 1024**2)
+            for chunk in range(size): member.write(incompressible(chunk, 1024**2))
     before = sha(archive)
     times = {}
     for engine in ['node', 'rust']:
@@ -166,7 +175,7 @@ for size in [1, 32]:
     assert times['rust'] < 32 * 1024
     rows.append({'case': case, 'inflatedBytes': size * 1024**2, 'compressedBytes': archive.stat().st_size, 'maxRssKiB': times, 'passed': True})
 
-archive = make('crash-extraction', [('model.stl', b'x' * 8 * 1024**2)])
+archive = make('crash-extraction', [('model.stl', incompressible('crash', 8 * 1024**2))])
 trace = args.output / 'crash-extraction' / 'kill.strace'
 code, result, repos = invoke('crash-extraction', archive, prefix=['strace', '-o', str(trace), '-e', 'trace=write,renameat2,fsync', '-e', 'inject=write:signal=SIGKILL:when=3'])
 assert code != 0 and 'killed by SIGKILL' in trace.read_text()

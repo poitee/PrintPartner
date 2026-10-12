@@ -1,0 +1,58 @@
+name: Rust deps weekly
+
+on:
+  schedule:
+    # Weekly Monday 06:00 UTC — gardener unused-deps report (not a PR gate).
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-machete:
+    name: cargo-machete (report-only)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        with:
+          tool: cargo-machete@0.9.2
+
+      - name: Run cargo-machete on rust/ (report-only)
+        working-directory: rust
+        run: |
+          set +e
+          output="$(cargo machete 2>&1)"
+          status=$?
+          printf '%s\n' "$output"
+          {
+            echo '## cargo-machete (report-only)'
+            echo
+            # shellcheck disable=SC2016 # literal markdown backticks for the step summary
+            echo 'Pinned tool: `cargo-machete@0.9.2` (via `taiki-e/install-action`).'
+            echo
+            # shellcheck disable=SC2016 # literal markdown code fence, not command substitution
+            echo '```text'
+            printf '%s\n' "$output"
+            # shellcheck disable=SC2016 # literal markdown code fence, not command substitution
+            echo '```'
+            echo
+            if [[ "$status" -eq 0 ]]; then
+              echo 'No unused dependencies reported.'
+            elif [[ "$status" -eq 1 ]]; then
+              echo "Findings above (tool exit \`1\`). Report-only: this job stays green."
+            else
+              echo "cargo-machete tool error (exit \`$status\`); see output above. This job fails."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          # Exit 0 = clean and exit 1 = unused deps (report-only, stay green).
+          # Exit >= 2 = real tool error, so fail the job.
+          if (( status >= 2 )); then
+            exit "$status"
+          fi
+          exit 0

@@ -22,9 +22,9 @@ curl http://127.0.0.1:8080/api/v1
 
 ## Authentication
 
-Self-host mode can run without user accounts on a trusted loopback or LAN deployment. Set `PRINT_PARTNER_API_KEY` before exposing API or MCP access beyond the host.
+Open self-host leaves `MULTI_USER` and `SINGLE_USER_AUTH` unset. That process uses the `default` tenant. Set `PRINT_PARTNER_API_KEY` before exposing `/api/v1` or `/api/v1/mcp` beyond the host. `PRINT_PARTNER_API_KEY` is a process secret. A key created in Settings is a different secret, stored for one tenant.
 
-Send the key with either header:
+Send the deployment key with either header:
 
 ```http
 X-Print-Partner-Api-Key: <key>
@@ -34,7 +34,15 @@ X-Print-Partner-Api-Key: <key>
 Authorization: Bearer <key>
 ```
 
-Multi-user mode uses the login session for browser requests and applies tenant boundaries to stored records. Administrative routes can require an API key even when the browser session is valid.
+`SINGLE_USER_AUTH=1` requires the administrator session for the API. The same mode accepts either the deployment key or a Settings API key on the exact `/api/v1/mcp` route without a session. Registration closes after the first account.
+
+`MULTI_USER=1` requires a login session for `/api/v1`, for unprefixed application routes, and for `/api/v1/mcp` on self-host. A request that sends only a bearer key gets `401` and this body:
+
+```json
+{"detail":"Authentication required"}
+```
+
+The server does not choose a tenant from that key. The first registered user is the administrator and owns the `default` tenant. Later accounts each own a separate tenant and are not administrators. Only the administrator can create a Settings API key, and the server stores it for the administrator tenant. A request with that tenant's session can send the matching Settings key. The same session with a key stored for another tenant gets `401` and `Valid API key required`. Hosted planning (`DEPLOY_MODE=saas`) disables the Settings API-key routes. HTTP MCP on the exact `/api/v1/mcp` route is off there too; bearer or session requests get `403` and `This feature is off on the hosted planning site.`, not the `401` body above.
 
 ## API families
 

@@ -95,5 +95,5 @@ fn failed(error_class: &str) -> Delivery {
 }
 
 #[cfg(test)]
-#[path = "mail_tests.rs"]
+#[path = "tests/mail_tests.rs"]
 mod tests;
