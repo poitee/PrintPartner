@@ -1,0 +1,181 @@
+{
+  "source": [
+    "web/apps/server/src/services/gcode-object-parser.ts",
+    "web/packages/domain/src/sliced-object-matching.ts"
+  ],
+  "origin": "edge: stem_NN generated unit suffixes",
+  "input": {
+    "names": [
+      "frame_corner_1",
+      "frame_corner_01",
+      "frame_corner_007",
+      "frame_corner_1234",
+      "frame_corner_02.stl_id_3_copy_1",
+      "'frame_corner_03_stl'",
+      "idler_12",
+      "_42"
+    ],
+    "libraryFilenames": [
+      "frame_corner.stl",
+      "idler.stl",
+      "idler_12.stl",
+      "42.stl"
+    ]
+  },
+  "expected": {
+    "groups": [
+      {
+        "key": "frame_corner_1",
+        "stlBasename": "frame_corner_1",
+        "count": 1,
+        "objects": [
+          {
+            "name": "frame_corner_1",
+            "stlBasename": "frame_corner_1",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      },
+      {
+        "key": "frame_corner_01",
+        "stlBasename": "frame_corner_01",
+        "count": 1,
+        "objects": [
+          {
+            "name": "frame_corner_01",
+            "stlBasename": "frame_corner_01",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      },
+      {
+        "key": "frame_corner_007",
+        "stlBasename": "frame_corner_007",
+        "count": 1,
+        "objects": [
+          {
+            "name": "frame_corner_007",
+            "stlBasename": "frame_corner_007",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      },
+      {
+        "key": "frame_corner_1234",
+        "stlBasename": "frame_corner_1234",
+        "count": 1,
+        "objects": [
+          {
+            "name": "frame_corner_1234",
+            "stlBasename": "frame_corner_1234",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      },
+      {
+        "key": "frame_corner_02.stl",
+        "stlBasename": "frame_corner_02.stl",
+        "count": 1,
+        "objects": [
+          {
+            "name": "frame_corner_02.stl_id_3_copy_1",
+            "stlBasename": "frame_corner_02.stl",
+            "copyIndex": 1,
+            "format": "exclude_object_orca"
+          }
+        ]
+      },
+      {
+        "key": "frame_corner_03.stl",
+        "stlBasename": "frame_corner_03.stl",
+        "count": 1,
+        "objects": [
+          {
+            "name": "'frame_corner_03_stl'",
+            "stlBasename": "frame_corner_03.stl",
+            "copyIndex": 0,
+            "format": "exclude_object_prusa"
+          }
+        ]
+      },
+      {
+        "key": "idler_12",
+        "stlBasename": "idler_12",
+        "count": 1,
+        "objects": [
+          {
+            "name": "idler_12",
+            "stlBasename": "idler_12",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      },
+      {
+        "key": "_42",
+        "stlBasename": "_42",
+        "count": 1,
+        "objects": [
+          {
+            "name": "_42",
+            "stlBasename": "_42",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      }
+    ],
+    "matches": [
+      {
+        "key": "frame_corner_1",
+        "filenames": [
+          "frame_corner.stl"
+        ]
+      },
+      {
+        "key": "frame_corner_01",
+        "filenames": [
+          "frame_corner.stl"
+        ]
+      },
+      {
+        "key": "frame_corner_007",
+        "filenames": [
+          "frame_corner.stl"
+        ]
+      },
+      {
+        "key": "frame_corner_1234",
+        "filenames": []
+      },
+      {
+        "key": "frame_corner_02.stl",
+        "filenames": [
+          "frame_corner.stl"
+        ]
+      },
+      {
+        "key": "frame_corner_03.stl",
+        "filenames": [
+          "frame_corner.stl"
+        ]
+      },
+      {
+        "key": "idler_12",
+        "filenames": [
+          "idler_12.stl"
+        ]
+      },
+      {
+        "key": "_42",
+        "filenames": [
+          "42.stl"
+        ]
+      }
+    ]
+  }
+}

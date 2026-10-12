@@ -2,6 +2,7 @@ use serde_json::{Value, json};
 use std::{
     fs,
     io::Write,
+    os::unix::fs::PermissionsExt,
     path::PathBuf,
     process::{Command, Output, Stdio},
     sync::atomic::{AtomicU64, Ordering},
@@ -20,6 +21,9 @@ impl Fixture {
         fs::create_dir(&path).unwrap();
         fs::create_dir(path.join("repos")).unwrap();
         fs::create_dir(path.join("input")).unwrap();
+        for directory in [&path, &path.join("repos"), &path.join("input")] {
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o755)).unwrap();
+        }
         fs::write(path.join("input/part.stl"), b"solid bytes").unwrap();
         Self(fs::canonicalize(path).unwrap())
     }

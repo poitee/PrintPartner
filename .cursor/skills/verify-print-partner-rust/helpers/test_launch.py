@@ -266,6 +266,29 @@ class StartupStopTest(unittest.TestCase):
                             self.assertIn('pp-server stopped before readiness', output.getvalue())
                     self.assertTrue(process.stdout.closed)
 
+    def test_stop_pending_when_startup_hits_eof_before_origin_runs_shutdown_checks(self):
+        verify = load_verify()
+        # A child that already exited without printing an origin: stdout is at EOF.
+        child = subprocess.Popen([sys.executable, "-c", "pass"], stdout=subprocess.PIPE, text=True)
+        child.wait()
+
+        def start_leaving_owner_marker(_binary, _root, _node, _commit, fixture, _errors, *_args, **_kwargs):
+            runtime = fixture / "runtime"
+            runtime.mkdir()
+            (fixture / "data").mkdir()
+            (fixture / "data/.desktop.lock").touch()
+            (fixture / "data/.desktop-owner.json").write_text(json.dumps({"runtime_dir": str(runtime)}))
+            return child
+
+        verify.held["pending"] = "SIGTERM"
+        with mock.patch.object(verify, "start_server", side_effect=start_leaving_owner_marker), \
+                mock.patch.object(verify, "terminate"), mock.patch.object(verify, "ignore_signals"), \
+                contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(RuntimeError) as failure:
+                verify.serve(Path("server"), Path("repo"), "node", "commit", None)
+        # The shutdown checks ran and found the marker the exited server left behind.
+        self.assertIn("Owner marker survived", str(failure.exception))
+
     def test_stop_during_silent_or_partial_startup_is_prompt_and_clean(self):
         with tempfile.TemporaryDirectory(prefix="pp-startup-stop-test-") as temporary:
             temp = Path(temporary)
