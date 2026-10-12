@@ -6,9 +6,11 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeSet,
     fmt,
-    fs::File,
+    fs::{self, File, OpenOptions},
     io::{self, Read, Seek, SeekFrom, Write},
-    sync::atomic::{AtomicBool, Ordering},
+    os::unix::fs::OpenOptionsExt,
+    path::PathBuf,
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 const CANDIDATE: &str = ".candidate";
@@ -603,6 +605,158 @@ fn bind_zip_reader_to_validated_eocd(file: &mut File, eocd_offset: u64) -> Resul
     file.set_len(eocd_offset + 22)?;
     file.seek(SeekFrom::Start(0))?;
     Ok(())
+}
+
+static BOUND_COPIES: AtomicU64 = AtomicU64::new(0);
+
+/// Private file that receives the validated archive prefix. Binding rewrites the
+/// EOCD, so this must never be the caller's 3MF or a published original.
+struct BoundCopy {
+    path: PathBuf,
+    file: Option<File>,
+}
+impl BoundCopy {
+    fn create() -> Result<Self> {
+        let path = std::env::temp_dir().join(format!(
+            "pp-source-bind-{}-{}",
+            std::process::id(),
+            BOUND_COPIES.fetch_add(1, Ordering::Relaxed)
+        ));
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)?;
+        Ok(Self {
+            path,
+            file: Some(file),
+        })
+    }
+}
+impl Drop for BoundCopy {
+    fn drop(&mut self) {
+        drop(self.file.take());
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+fn local_member_span(
+    source: &mut (impl Read + Seek),
+    entry: &Entry,
+    central_offset: u64,
+) -> Result<(u64, u64)> {
+    source.seek(SeekFrom::Start(entry.local_header_offset))?;
+    let mut local = [0u8; 30];
+    source.read_exact(&mut local)?;
+    if local[..4] != *b"PK\x03\x04" {
+        return Err(ArchiveError::InvalidArchive);
+    }
+    let name_len = u64::from(u16_at(&local, 26)?);
+    let extra_len = u64::from(u16_at(&local, 28)?);
+    let payload_end = entry
+        .local_header_offset
+        .checked_add(30)
+        .and_then(|n| n.checked_add(name_len))
+        .and_then(|n| n.checked_add(extra_len))
+        .and_then(|n| n.checked_add(entry.compressed_bytes))
+        .ok_or(ArchiveError::InvalidArchive)?;
+    if payload_end > central_offset {
+        return Err(ArchiveError::InvalidArchive);
+    }
+    let descriptor = if u16_at(&local, 6)? & 8 != 0 {
+        (central_offset - payload_end).min(24)
+    } else {
+        0
+    };
+    Ok((
+        entry.local_header_offset,
+        payload_end - entry.local_header_offset + descriptor,
+    ))
+}
+
+fn copy_span(
+    source: &mut (impl Read + Seek),
+    dest: &mut (impl Write + Seek),
+    offset: u64,
+    len: u64,
+    cancelled: &AtomicBool,
+) -> Result<()> {
+    source.seek(SeekFrom::Start(offset))?;
+    dest.seek(SeekFrom::Start(offset))?;
+    let mut remaining = len;
+    let mut buffer = [0u8; 64 * 1024];
+    while remaining > 0 {
+        check_cancel(cancelled)?;
+        let want = remaining.min(buffer.len() as u64) as usize;
+        source.read_exact(&mut buffer[..want])?;
+        dest.write_all(&buffer[..want])?;
+        remaining -= want as u64;
+    }
+    Ok(())
+}
+
+/// Copy the central directory and the selected member into a private file, bind
+/// that EOCD, and return the member bytes only after the opened reader matches
+/// the preflight record. A ZIP64 extra that redirects the local header is
+/// rejected before those bytes are returned. Sibling members stay unread.
+pub(crate) fn read_bound_entry(
+    source: &mut (impl Read + Seek),
+    preflight: &Preflight,
+    index: usize,
+    limit: u64,
+    cancelled: &AtomicBool,
+) -> Result<Vec<u8>> {
+    let entry = preflight
+        .entries
+        .get(index)
+        .ok_or(ArchiveError::InvalidArchive)?;
+    let prefix = preflight
+        .eocd_offset
+        .checked_add(22)
+        .ok_or(ArchiveError::InvalidArchive)?;
+    if preflight.central_offset > prefix {
+        return Err(ArchiveError::InvalidArchive);
+    }
+    let mut bound = BoundCopy::create()?;
+    let mut file = bound.file.take().ok_or(ArchiveError::InvalidArchive)?;
+    file.set_len(prefix)?;
+    copy_span(
+        source,
+        &mut file,
+        preflight.central_offset,
+        prefix - preflight.central_offset,
+        cancelled,
+    )?;
+    let (local_offset, local_len) = local_member_span(source, entry, preflight.central_offset)?;
+    copy_span(source, &mut file, local_offset, local_len, cancelled)?;
+    bind_zip_reader_to_validated_eocd(&mut file, preflight.eocd_offset)?;
+    let mut archive = zip::ZipArchive::with_config(
+        zip::read::Config {
+            archive_offset: zip::read::ArchiveOffset::Known(0),
+        },
+        file,
+    )?;
+    verify_reader_archive(&archive, preflight)?;
+    let mut member = archive.by_index(index)?;
+    verify_reader_entry(&member, entry)?;
+    let mut bytes = Vec::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        check_cancel(cancelled)?;
+        let n = member.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        let next = (bytes.len() as u64)
+            .checked_add(n as u64)
+            .ok_or(ArchiveError::Limit)?;
+        if next > limit {
+            return Err(ArchiveError::Limit);
+        }
+        bytes.extend_from_slice(&buffer[..n]);
+    }
+    Ok(bytes)
 }
 
 pub(crate) fn inspect_index(

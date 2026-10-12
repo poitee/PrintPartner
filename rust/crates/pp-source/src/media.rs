@@ -373,47 +373,33 @@ fn read_model(
         seeks: 0,
     };
     let entries = archive::inspect_index(&mut reader, length, ArchiveLimits::default(), cancelled)?;
-    let (index, entry) = entries
+    let (index, inflated_bytes) = entries
         .entries
         .iter()
         .enumerate()
         .filter(|(_, e)| e.raw_name.to_ascii_lowercase().ends_with(".model"))
         .min_by_key(|(_, e)| e.local_header_offset)
+        .map(|(index, entry)| (index, entry.inflated_bytes))
         .ok_or(MediaError::Invalid("3MF model document is missing"))?;
-    if entry.inflated_bytes > limits.max_model_bytes {
+    if inflated_bytes > limits.max_model_bytes {
         return Err(MediaError::Invalid(
             "3MF model document exceeds the size limit",
         ));
     }
-    let mut zip = zip::ZipArchive::with_config(
-        zip::read::Config {
-            archive_offset: zip::read::ArchiveOffset::Known(0),
-        },
+    // Bind a private copy of the validated prefix. The caller's 3MF stays
+    // intact, and a ZIP64 extra cannot redirect this read.
+    let bytes = archive::read_bound_entry(
         &mut reader,
+        &entries,
+        index,
+        limits.max_model_bytes,
+        cancelled,
     )?;
-    let mut member = zip.by_index(index)?;
-    let mut bytes = Vec::new();
-    let mut buffer = [0; 64 * 1024];
-    loop {
-        archive::check_cancel(cancelled)?;
-        let n = member.read(&mut buffer)?;
-        if n == 0 {
-            break;
-        }
-        if bytes.len() as u64 + n as u64 > limits.max_model_bytes {
-            return Err(MediaError::Invalid(
-                "3MF model document exceeds the size limit",
-            ));
-        }
-        bytes.extend_from_slice(&buffer[..n]);
-    }
-    if bytes.len() as u64 != entry.inflated_bytes {
+    if bytes.len() as u64 != inflated_bytes {
         return Err(MediaError::Invalid("3MF model size mismatch"));
     }
-    drop(member);
-    drop(zip);
     let stats = ModelReadStats {
-        read_bytes: reader.bytes,
+        read_bytes: reader.bytes.saturating_add(bytes.len() as u64),
         seek_count: reader.seeks,
         model_bytes: bytes.len() as u64,
     };
