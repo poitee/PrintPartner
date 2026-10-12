@@ -5449,3 +5449,82 @@ Exemption: none
 `;
   r19Expect(setext, 1, "", LAN_STDERR);
 });
+
+const R25_STDIN_STDERR = "PR evidence lint FAILED:\n- Evidence contains a curl --config or -K stdin source this static check does not read. Put the transfer URL on the curl command line.\n";
+const R25_STDIN_AND_LAN = LAN_STDERR + "- Evidence contains a curl --config or -K stdin source this static check does not read. Put the transfer URL on the curl command line.\n";
+
+function r25Fences(first, second) {
+  return `## Evidence
+Exemption: none
+- Steps followed to produce the evidence: ran locally
+- Result observed: passed
+- Screenshot / recording / verify-skill output or trace: trace.json
+
+\`\`\`sh
+${first}
+\`\`\`
+\`\`\`sh
+${second}
+\`\`\`
+`;
+}
+
+test("r25-name-only-export-publishes-static-proxy", () => {
+  for (const command of [
+    "http_proxy=3232235856; export http_proxy; curl http://example.test/",
+    "http_proxy=3232235856\nexport http_proxy\ncurl http://example.test/",
+    "https_proxy=3232235856; export https_proxy; wget http://example.test/",
+    "ALL_PROXY=3232235857; export ALL_PROXY; curl http://example.test/",
+    "ftp_proxy=3232235856; export ftp_proxy; curl http://example.test/",
+    "http_proxy=3232235855; http_proxy=3232235856; export http_proxy; curl http://example.test/",
+    "export http_proxy=3232235855; http_proxy=3232235856; export http_proxy; curl http://example.test/",
+    "http_proxy=3232235856; export http_proxy; http_proxy=3232235855 curl http://example.test/; curl http://example.test/a",
+    "bash -c 'http_proxy=3232235856; export http_proxy; curl http://example.test/'",
+    "http_proxy+=3232235856; export http_proxy; curl http://example.test/",
+    "export http_proxy=3232235856; http_proxy=3232235855; curl http://example.test/",
+  ]) {
+    r19Expect(commandEvidence(command), 1, "", LAN_STDERR);
+  }
+  for (const command of [
+    "http_proxy=3232235855; export http_proxy; curl http://example.test/",
+    "http_proxy=3232235858; export http_proxy; wget http://example.test/",
+    "HTTP_PROXY=3232235856; export HTTP_PROXY; curl http://example.test/",
+    "HTTP_PROXY=3232235856; export HTTP_PROXY; wget http://example.test/",
+    "export http_proxy; curl http://example.test/",
+    "http_proxy=3232235856 true; export http_proxy; curl http://example.test/",
+    "http_proxy=3232235856; export http_proxy; http_proxy=3232235855 curl http://example.test/",
+    "export http_proxy=3232235856; http_proxy=3232235855; export http_proxy; curl http://example.test/",
+    "http_proxy = 3232235856; export http_proxy; curl http://example.test/",
+  ]) {
+    r19Expect(commandEvidence(command), 0, OK_LINE, "");
+  }
+  r19Expect(commandEvidence("http_proxy=$(printf 3232235856); export http_proxy; curl http://example.test/"), 1, "", R20_SUBSTITUTION_STDERR);
+  r19Expect(commandEvidence("http_proxy=$((3232235856)); export http_proxy; curl http://example.test/"), 1, "", R19_ARITHMETIC_STDERR);
+  r19Expect(r25Fences("http_proxy=3232235856", "export http_proxy; curl http://example.test/"), 0, OK_LINE, "");
+});
+
+test("r25-curl-stdin-config-fails-closed", () => {
+  for (const command of [
+    "printf 'url = 3232235856\\n' | curl --config -",
+    "printf 'url = http://example.test/\\n' | curl --config -",
+    "curl --config -",
+    "curl --config=-",
+    "curl -K -",
+    "curl -K-",
+    "curl -sK - http://example.test/",
+    "bash -c 'curl --config -'",
+    "curl --config - --config /no/such/gre583-r25",
+  ]) {
+    r19Expect(commandEvidence(command), 1, "", R25_STDIN_STDERR);
+  }
+  for (const command of [
+    "curl --config /no/such/gre583-r25 http://example.test/",
+    "curl --config=/no/such/gre583-r25 http://example.test/",
+    "curl -K /no/such/gre583-r25 http://example.test/",
+    "curl --variable url@- --expand-url '{{url}}'",
+  ]) {
+    r19Expect(commandEvidence(command), 0, OK_LINE, "");
+  }
+  r19Expect(commandEvidence("curl --config - 3232235856"), 1, "", R25_STDIN_AND_LAN);
+  r19Expect(commandEvidence("curl --config /no/such/gre583-r25 3232235856"), 1, "", LAN_STDERR);
+});
