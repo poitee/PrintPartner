@@ -126,6 +126,21 @@ impl Directory {
         Ok(file)
     }
 
+    pub(crate) fn file_read_write(&self, path: &str) -> Result<File> {
+        let (parent, name) = self.parent(path, false)?;
+        let flags = OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK | OFlags::RDWR;
+        let file = File::from(fs::openat(
+            &parent.0,
+            name.as_str(),
+            flags,
+            Mode::RUSR | Mode::WUSR,
+        )?);
+        if !file.metadata()?.is_file() {
+            return Err(Error::UnsafePath);
+        }
+        Ok(file)
+    }
+
     pub(crate) fn entries(&self) -> Result<Vec<String>> {
         let mut entries = Vec::new();
         for entry in fs::Dir::read_from(&self.0)? {
