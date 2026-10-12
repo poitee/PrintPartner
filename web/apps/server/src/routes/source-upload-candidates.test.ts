@@ -7,6 +7,7 @@ import { buildApp } from "../app.js";
 import { loadConfig } from "../config.js";
 import { createSelfHostPorts } from "../adapters/self-host/index.js";
 import * as sourceDocs from "../services/source-docs-index.js";
+import { SOURCE_PUBLICATION_UNAVAILABLE_DETAIL } from "../services/local-source-revision.js";
 
 vi.mock("../services/source-docs-index.js", { spy: true });
 
@@ -118,5 +119,26 @@ describe("Source upload candidate routes", () => {
     expect(listed.json().docs.map((doc: { path: string }) => doc.path)).toEqual(["new/readme.md"]);
     expect((await app.inject({ method: "GET", url: `/sources/${id}/docs/old/readme.md` })).statusCode).toBe(404);
     expect((await app.inject({ method: "GET", url: `/sources/${id}/docs/new/readme.md` })).statusCode).toBe(200);
+  });
+
+  it("returns the exact unavailable response for repo-manifest publication before changing the active snapshot", async () => {
+    const revisions = join(dir, "repos", String(id), "revisions");
+    const beforeDirectories = readdirSync(revisions).sort();
+    const unavailable = vi.spyOn(ports.repository, "canPublishSourceRevision").mockReturnValue(false);
+    try {
+      const response = await app.inject({
+        method: "PUT",
+        url: `/sources/${id}/repo-manifest`,
+        payload: { yaml: "project: blocked\nparts: []\n" },
+      });
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toEqual({ detail: SOURCE_PUBLICATION_UNAVAILABLE_DETAIL });
+      expect(readdirSync(revisions).sort()).toEqual(beforeDirectories);
+      expect(readFileSync(join(priorPath, "keep.stl"), "utf8")).toBe("previous STL");
+      const current = (await app.inject({ method: "GET", url: `/sources/${id}` })).json();
+      expect(current.local_path).toBe(priorPath);
+    } finally {
+      unavailable.mockRestore();
+    }
   });
 });
