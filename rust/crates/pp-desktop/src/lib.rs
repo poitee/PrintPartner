@@ -160,12 +160,122 @@ fn contained(root: &Path, relative: &Path) -> Result<PathBuf> {
 mod tests {
     use super::*;
     #[test]
-    fn upgrades_reuse_the_legacy_desktop_store() {
+    fn ticket_t_5_upgrades_reuse_the_legacy_desktop_store() {
         assert_eq!(
             desktop_data_dir(Path::new("/users/existing-owner")).unwrap(),
             PathBuf::from("/users/existing-owner/.print-partner")
         );
         assert!(desktop_data_dir(Path::new("relative-home")).is_err());
+    }
+
+    #[test]
+    fn ticket_t_5_generated_context_keeps_the_installed_product_identity() {
+        let context: tauri::Context<tauri::Wry> = tauri::generate_context!();
+        assert_eq!(context.config().identifier, "com.poitee.printpartner");
+        assert_eq!(
+            context.config().product_name.as_deref(),
+            Some("Print Partner")
+        );
+        assert_eq!(context.package_info().name, "Print Partner");
+    }
+
+    #[test]
+    fn ticket_t_5_release_layout_retains_the_product_launch_identity() {
+        let root = std::env::temp_dir().join(format!(
+            "pp-identity-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("real")).unwrap();
+        std::os::unix::fs::symlink(root.join("real"), root.join("linked")).unwrap();
+        let fixture = root.join("linked/fixture");
+        std::fs::create_dir_all(&fixture).unwrap();
+        let fixture = fixture.canonicalize().unwrap();
+        std::fs::create_dir_all(fixture.join("bin")).unwrap();
+        std::fs::create_dir_all(fixture.join("web")).unwrap();
+        std::fs::create_dir_all(fixture.join("home/.print-partner")).unwrap();
+        std::fs::write(fixture.join("bin/node"), b"node").unwrap();
+        let data = fixture.join("home/.print-partner");
+        let release = serde_json::json!({
+            "runtime_version": "3.3.0-web",
+            "commit": "f00471f13d2f0e69631d3130e594b9244f93e01d",
+            "node": "bin/node",
+            "web": "web",
+            "os": std::env::consts::OS,
+            "arch": std::env::consts::ARCH,
+            "node_version": "v24.21.0",
+            "node_abi": "137"
+        });
+        std::fs::write(fixture.join("release.json"), release.to_string()).unwrap();
+        let selected = desktop_data_dir(&fixture.join("home")).unwrap();
+        let launch = ResourceLayout::read(&fixture)
+            .unwrap()
+            .into_launch(selected)
+            .unwrap();
+        assert_eq!(launch.data_dir, data);
+        assert_eq!(
+            launch.bundle.commit,
+            "f00471f13d2f0e69631d3130e594b9244f93e01d"
+        );
+        assert_eq!(launch.bundle.runtime_version, "3.3.0-web");
+        assert_eq!(launch.bundle.node, fixture.join("bin/node"));
+        assert_eq!(
+            launch.bundle.entry,
+            fixture.join("web/apps/server/dist/current/desktop.js")
+        );
+        let mut invalid = release;
+        invalid["commit"] = serde_json::json!("Print Partner");
+        std::fs::write(fixture.join("release.json"), invalid.to_string()).unwrap();
+        assert_eq!(
+            ResourceLayout::read(&fixture).err().unwrap().to_string(),
+            "Desktop commit identity missing"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn release_layout_accepts_macos_resource_paths_and_current_version() {
+        let root = std::env::temp_dir().join(format!(
+            "pp-macos-layout-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("MacOS")).unwrap();
+        std::fs::create_dir_all(root.join("Resources/desktop-runtime/web")).unwrap();
+        std::fs::write(root.join("MacOS/printpartner-node"), b"fixture").unwrap();
+        let root = root.canonicalize().unwrap();
+        std::fs::write(
+            root.join("Resources/desktop-runtime/release.json"),
+            serde_json::json!({
+                "runtime_version": "4.2.1-web",
+                "commit": "f00471f13d2f0e69631d3130e594b9244f93e01d",
+                "node": "MacOS/printpartner-node",
+                "web": "Resources/desktop-runtime/web",
+                "os": std::env::consts::OS,
+                "arch": std::env::consts::ARCH,
+                "node_version": "v24.21.0",
+                "node_abi": "137"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let launch = ResourceLayout::read(&root)
+            .unwrap()
+            .into_launch(root.join("data"))
+            .unwrap();
+        assert_eq!(launch.bundle.node, root.join("MacOS/printpartner-node"));
+        assert_eq!(
+            launch.bundle.web_root,
+            root.join("Resources/desktop-runtime/web")
+        );
+        assert_eq!(launch.bundle.runtime_version, "4.2.1-web");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
