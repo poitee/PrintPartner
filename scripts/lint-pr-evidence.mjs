@@ -1902,12 +1902,12 @@ function assignCurlVariable(variables, input) {
     line = line.slice(range[0].length);
     ranged = true;
   }
-  if (!imported && line.startsWith("@")) {
+  // Curl reads @ as a file or stdin. A % import uses the environment when set, then that file. The path is not content.
+  if (line.startsWith("@")) {
     variables.set(name, { dynamic: true });
     return;
   }
-  const hasContent = line[0] === "=" || (imported && line[0] === "@");
-  if (!hasContent) {
+  if (line[0] !== "=") {
     if (imported) variables.set(name, { dynamic: true });
     return;
   }
