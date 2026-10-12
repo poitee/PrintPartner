@@ -746,7 +746,7 @@ else if (args[0] === "pr") {
         endCursor = hasNextPage ? "p-" + (pageNumber + 1) : null;
         totalCount = total;
       }
-      if (cursor == null && behavior !== "counted" && behavior !== "malformed") {
+      if (cursor == null && behavior !== "counted") {
         let rollup = data.statusCheckRollup;
         if (data.mode === "head-moved" || data.mode === "head-during-suite") {
           rollup = oid === data.oldHead ? data.oldChecks : data.newChecks;
@@ -808,11 +808,11 @@ else if (args[0] === "pr") {
         pageInfo: { hasNextPage: true, endCursor: data.blockedEndCursor },
       } } } } } };
     } else {
-    const last = args.includes("cursor=next");
-    response = { data: { repository: { object: { statusCheckRollup: { contexts: {
-      nodes: last ? [rollup.at(-1)] : rollup.slice(0, -1),
-      pageInfo: { hasNextPage: !last, endCursor: last ? null : "next" },
-    } } } } } };
+      const last = args.includes("cursor=next");
+      response = { data: { repository: { object: { statusCheckRollup: { contexts: {
+        nodes: last ? [rollup.at(-1)] : rollup.slice(0, -1),
+        pageInfo: { hasNextPage: !last, endCursor: last ? null : "next" },
+      } } } } } };
     }
   }
 } else response = [];

@@ -450,11 +450,13 @@ query($owner: String!, $name: String!, $oid: GitObjectID!, $cursor: String) {
 }
 `;
 
-// A cursor that repeats, stalls, or never ends would otherwise request forever.
-const MAX_LATEST_RUN_PAGES = 20;
+// Published default from GitHub's Actions limits. Support can raise it, and
+// this helper has no quota query, so a larger count stays unknown.
+const CHECK_RUN_PAGE_SIZE = 100;
+const DOCUMENTED_MAX_CHECK_RUNS_PER_SUITE = 50000;
 
 const SUITE_LATEST_RUNS_QUERY = `
-query($owner: String!, $name: String!, $oid: GitObjectID!, $suiteId: ID!, $cursor: String!) {
+query($owner: String!, $name: String!, $oid: GitObjectID!, $suiteId: ID!, $cursor: String) {
   repository(owner: $owner, name: $name) {
     object(oid: $oid) {
       ... on Commit { oid }
@@ -486,19 +488,51 @@ function exactLatestIds(nodes) {
   return ids;
 }
 
-function parseLatestConnection(connection) {
-  const info = connection?.pageInfo;
-  if (!connection || !info || typeof info.hasNextPage !== "boolean") return null;
-  if (!Number.isInteger(connection.totalCount) || connection.totalCount < 0) return null;
-  if (info.hasNextPage && (typeof info.endCursor !== "string" || info.endCursor.length === 0)) return null;
-  const ids = exactLatestIds(connection.nodes);
-  if (!ids) return null;
+function connectionCursor(pageInfo) {
+  if (!pageInfo || typeof pageInfo.hasNextPage !== "boolean") return undefined;
+  if (!pageInfo.hasNextPage) return null;
+  if (typeof pageInfo.endCursor !== "string" || pageInfo.endCursor.length === 0) return undefined;
+  return pageInfo.endCursor;
+}
+
+function parseConnectionPage(connection, { requireCount = false, nodeIds = false } = {}) {
+  if (!connection) return null;
+  const endCursor = connectionCursor(connection.pageInfo);
+  if (endCursor === undefined) return null;
+  if (requireCount) {
+    const count = connection.totalCount;
+    if (!Number.isInteger(count) || count < 0 || count > DOCUMENTED_MAX_CHECK_RUNS_PER_SUITE) return null;
+  }
+  let ids = null;
+  if (nodeIds) {
+    ids = exactLatestIds(connection.nodes);
+    if (!ids) return null;
+  }
   return {
+    nodes: connection.nodes,
     ids,
     totalCount: connection.totalCount,
-    hasNextPage: info.hasNextPage,
-    endCursor: info.hasNextPage ? info.endCursor : null,
+    hasNextPage: connection.pageInfo.hasNextPage,
+    endCursor,
   };
+}
+
+function parseLatestConnection(connection) {
+  return parseConnectionPage(connection, { requireCount: true, nodeIds: true });
+}
+
+function latestRunPageBudget(totalCount) {
+  if (!Number.isInteger(totalCount) || totalCount < 0 || totalCount > DOCUMENTED_MAX_CHECK_RUNS_PER_SUITE) return null;
+  return Math.ceil(totalCount / CHECK_RUN_PAGE_SIZE);
+}
+
+function sameLatestSeed(seed, page) {
+  if (!page || page.totalCount !== seed.totalCount || page.hasNextPage !== seed.hasNextPage) return false;
+  if (!page.ids || page.ids.length !== seed.ids.length) return false;
+  for (let index = 0; index < seed.ids.length; index += 1) {
+    if (page.ids[index] !== seed.ids[index]) return false;
+  }
+  return true;
 }
 
 function finishedLatestSet(connection) {
@@ -538,17 +572,19 @@ function groupChecksBySuite(checks) {
 }
 
 function fetchSuiteLatestPage({ owner, name, oid, suiteId, cursor }) {
-  return ghJson([
+  const args = [
     "api", "graphql", "-f", `query=${SUITE_LATEST_RUNS_QUERY}`,
     "-F", `owner=${owner}`,
     "-F", `name=${name}`,
     "-F", `oid=${oid}`,
     "-F", `suiteId=${suiteId}`,
-    "-F", `cursor=${cursor}`,
-  ]);
+  ];
+  if (cursor) args.push("-F", `cursor=${cursor}`);
+  return ghJson(args);
 }
 
 function completeLatestRunMembership(checks, { owner, name, oid }) {
+  let mixed = false;
   for (const [suiteId, group] of groupChecksBySuite(checks)) {
     const seed = sameLatestPage(group);
     if (!seed) continue;
@@ -557,10 +593,12 @@ function completeLatestRunMembership(checks, { owner, name, oid }) {
     const seenCursors = new Set();
     let cursor = seed.endCursor;
     const totalCount = seed.totalCount;
+    const budget = latestRunPageBudget(totalCount);
+    if (budget == null) continue;
     let pages = 1;
     let finished = false;
     while (cursor) {
-      if (pages >= MAX_LATEST_RUN_PAGES) break;
+      if (pages >= budget) break;
       if (seenCursors.has(cursor)) break;
       seenCursors.add(cursor);
       let data;
@@ -583,6 +621,24 @@ function completeLatestRunMembership(checks, { owner, name, oid }) {
       cursor = page.endCursor;
     }
     if (!finished || ids.length !== totalCount || seenIds.size !== ids.length) continue;
+    // CheckSuite has updatedAt and no resource version. Re-reading the first
+    // page can show that this observation mixed two id lists. It cannot show
+    // that a later page stayed still, or that the suite stayed still after
+    // this read, so a mismatch or a failed re-read stays non-authoritative.
+    let again = null;
+    try {
+      again = parseLatestRunPage(
+        fetchSuiteLatestPage({ owner, name, oid, suiteId, cursor: null }),
+        { oid, suiteId },
+      );
+    } catch {
+      mixed = true;
+      continue;
+    }
+    if (!sameLatestSeed(seed, again)) {
+      mixed = true;
+      continue;
+    }
     const currentRuns = {
       membershipAuthoritative: true,
       totalCount,
@@ -591,12 +647,18 @@ function completeLatestRunMembership(checks, { owner, name, oid }) {
     };
     for (const check of group) check.checkSuite.currentRuns = currentRuns;
   }
+  return mixed;
 }
 
-function fetchChecksPaged({ owner, name, oid }) {
+function readStatusContexts({ owner, name, oid }) {
   const checks = [];
   let cursor = null;
+  const seen = new Set();
   do {
+    if (cursor) {
+      if (seen.has(cursor)) return { checks, complete: false };
+      seen.add(cursor);
+    }
     const args = [
       "api", "graphql", "-f", `query=${CHECKS_QUERY}`,
       "-F", `owner=${owner}`, "-F", `name=${name}`, "-F", `oid=${oid}`,
@@ -609,11 +671,27 @@ function fetchChecksPaged({ owner, name, oid }) {
     const commit = data?.data?.repository?.object;
     if (!commit) throw new Error("Could not read pull request head checks");
     const conn = commit.statusCheckRollup?.contexts;
-    checks.push(...(conn?.nodes ?? []));
-    cursor = conn?.pageInfo?.hasNextPage ? conn.pageInfo.endCursor : null;
+    const page = parseConnectionPage(conn);
+    if (!page) {
+      if (Array.isArray(conn?.nodes)) checks.push(...conn.nodes);
+      return { checks, complete: false };
+    }
+    if (Array.isArray(page.nodes)) checks.push(...page.nodes);
+    cursor = page.endCursor;
   } while (cursor);
-  completeLatestRunMembership(checks, { owner, name, oid });
-  return checks;
+  return { checks, complete: true };
+}
+
+function fetchChecksPaged({ owner, name, oid }) {
+  const first = readStatusContexts({ owner, name, oid });
+  const mixed = completeLatestRunMembership(first.checks, { owner, name, oid });
+  if (!mixed) return { checks: first.checks, complete: first.complete, mixed: false };
+  const second = readStatusContexts({ owner, name, oid });
+  return {
+    checks: second.checks.length > 0 ? second.checks : first.checks,
+    complete: second.complete,
+    mixed: true,
+  };
 }
 
 const PR_VIEW_FIELDS =
@@ -670,7 +748,7 @@ export function fetchLiveSnapshot({ prNumber } = {}) {
     } catch {
       issueComments = [];
     }
-    const statusCheckRollup = fetchChecksPaged({ owner, name, oid: pr.headRefOid });
+    const loaded = fetchChecksPaged({ owner, name, oid: pr.headRefOid });
 
     let confirmed;
     try {
@@ -680,13 +758,17 @@ export function fetchLiveSnapshot({ prNumber } = {}) {
       return unknownHeadSnapshot(pr);
     }
     if (confirmed.headRefOid && confirmed.headRefOid === pr.headRefOid) {
-      return evaluateSnapshot({
+      const report = evaluateSnapshot({
         pr: confirmed,
         reviewThreads: threads,
-        statusCheckRollup,
+        statusCheckRollup: loaded.checks,
         issueComments,
         viewerLogin,
       });
+      if ((loaded.mixed || !loaded.complete) && report.nextAction === "ready") {
+        report.nextAction = "recheck";
+      }
+      return report;
     }
   }
 
