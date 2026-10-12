@@ -126,6 +126,29 @@ function stripHiddenMarkdown(text, { inlineMultiline = true, includeRawHtml = fa
   return value;
 }
 
+function rawHtmlArtifactMarker(value, state) {
+  let marker = false;
+  let cursor = 0;
+  for (let index = value.indexOf("<"); index !== -1; index = value.indexOf("<", cursor)) {
+    const tag = readHtmlTag(value, index);
+    if (!state.hiddenTag && state.anchor && anchorVisible(value.slice(cursor, index))) marker = true;
+    if (!tag) { cursor = index + 1; continue; }
+    if (state.hiddenTag) {
+      if (tag.closing && tag.name === state.hiddenTag) state.hiddenTag = null;
+    } else if (["pre", "script", "style", "textarea"].includes(tag.name) && !tag.closing) {
+      state.hiddenTag = tag.name;
+    } else if (tag.name === "a") {
+      state.anchor = !tag.closing && isConcreteTarget(decodeCharacterReferences(htmlAttribute(tag.tag, "href"), { htmlNumeric: true, dropBreaks: true }));
+    } else if (tag.name === "img" && !tag.closing) {
+      const destination = decodeCharacterReferences(htmlAttribute(tag.tag, "src"), { htmlNumeric: true, dropBreaks: true });
+      if (isConcreteTarget(destination)) marker = true;
+    }
+    cursor = tag.end;
+  }
+  if (!state.hiddenTag && state.anchor && anchorVisible(value.slice(cursor))) marker = true;
+  return marker;
+}
+
 function stripHiddenMarkdownCompute(text, { inlineMultiline = true, includeRawHtml = false, onLiteralLine } = {}) {
   const kept = [];
   let fence = null;
@@ -145,7 +168,7 @@ function stripHiddenMarkdownCompute(text, { inlineMultiline = true, includeRawHt
       const visible = stripHtmlComments(raw, htmlBlock.commentOpen);
       htmlBlock.commentOpen = visible.open;
       if (includeRawHtml) onLiteralLine?.(lineIndex, visible.visible);
-      const marker = !htmlBlock.rawTag && htmlConcreteMarker(visible.visible).includes("\u0001");
+      const marker = !htmlBlock.rawTag && rawHtmlArtifactMarker(visible.visible, htmlBlock);
       if (htmlBlock.end.test(quoteContent(raw, htmlBlock.quote))) htmlBlock = null;
       kept.push(marker ? "\u0001" : "");
       paragraphOpen = false;
@@ -227,7 +250,7 @@ function stripHiddenMarkdownCompute(text, { inlineMultiline = true, includeRawHt
             keptLine = `${lead}${destination}`;
           }
         }
-        if (!rawTag && htmlConcreteMarker(visible.visible).includes("\u0001")) keptLine = "\u0001";
+        if (!rawTag && rawHtmlArtifactMarker(visible.visible, htmlBlock ?? {})) keptLine = "\u0001";
         kept.push(keptLine);
         paragraphOpen = false;
         continue;

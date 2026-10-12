@@ -6204,6 +6204,7 @@ test('r34-html-hidden-image-does-not-count', () => {
     '<details>\n<!--\n<img src="evidence/shot.png">\n-->\n</details>',
     '<details><!-- <img src="evidence/shot.png"> --></details>',
     '<script>\n<img src="evidence/shot.png">\n</script>',
+    '<details>\n<script>\n<img src="evidence/shot.png">\n</script>\n</details>',
   ]) {
     const body = bodyWithEvidence(`Exemption: none\n- Journey exercised: Settings saved\n- Steps followed to produce the evidence: Open settings and save\n- Result observed: Settings persisted\n- Screenshot / recording / verify-skill output or trace:\n${artifact}`);
     assert.equal(lintPrEvidence(body).ok, false);
@@ -6216,4 +6217,11 @@ test('r34-cleared-startup-and-sftp-agent-flag', () => {
     assertSafeCommand(`export BASH_ENV=startup.sh; env ${option} bash -c true`);
   }
   assert.equal(lintPrEvidence(commandEvidence('export BASH_ENV=startup.sh; env -u BASH_ENV BASH_ENV=other.sh bash -c true')).ok, false);
+});
+
+test('r34-multiline-nested-html-anchor-preserved', () => {
+  const artifact = '<details>\n<a href="evidence/trace.json">\nRecorded trace\n</a>\n</details>';
+  const body = bodyWithEvidence(`Exemption: none\n- Journey exercised: Settings saved\n- Steps followed to produce the evidence: Open settings and save\n- Result observed: Settings persisted\n- Screenshot / recording / verify-skill output or trace:\n${artifact}`);
+  const result = lintPrEvidence(body);
+  assert.equal(result.ok, true, result.errors.join('\n'));
 });
