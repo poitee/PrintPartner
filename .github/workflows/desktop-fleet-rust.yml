@@ -228,11 +228,13 @@ jobs:
           fixture_root=$(mktemp -d "$RUNNER_TEMP/pp-source-case.XXXXXX")
           fixture_mount="$fixture_root/mount"
           mkdir "$fixture_mount"
-          hdiutil create -size 512m -type SPARSE -fs 'Case-sensitive APFS' \
+          # One archive test retains two 256 MiB copies alongside parallel fixtures.
+          hdiutil create -size 4g -type SPARSE -fs 'Case-sensitive APFS' \
             -volname pp-source-fixtures "$fixture_root/fixtures.sparseimage"
           hdiutil attach -nobrowse -owners on -mountpoint "$fixture_mount" \
             "$fixture_root/fixtures.sparseimage"
           trap 'hdiutil detach "$fixture_mount"' EXIT
+          df -h "$fixture_mount"
           mkdir "$fixture_mount/tmp"
           TMPDIR="$fixture_mount/tmp" cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-source
       - name: Install locked dependencies and build measured desktop assets
