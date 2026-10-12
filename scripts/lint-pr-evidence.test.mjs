@@ -4136,3 +4136,231 @@ test("r14-stdin-percent-eq-fleet", () => {
 test("r14-stdin-percent-eq-fleet-safe", () => {
   assertStdinSafe('curl --variable %url=3232286799 --expand-url "{{url}}"');
 });
+
+test("r15-check-certificate-fleet", () => {
+  assertBannedCommand("wget --check-certificate 3232286800");
+});
+
+test("r15-check-certificate-decimal", () => {
+  assertBannedCommand("wget --check-certificate 3232235856");
+});
+
+test("r15-retr-symlinks-fleet", () => {
+  assertBannedCommand("wget --retr-symlinks 3232286800");
+});
+
+test("r15-retr-symlinks-decimal", () => {
+  assertBannedCommand("wget --retr-symlinks 3232235856");
+});
+
+test("r15-backups-fleet", () => {
+  assertBannedCommand("wget --backups 3232286800");
+});
+
+test("r15-backups-decimal", () => {
+  assertBannedCommand("wget --backups 3232235856");
+});
+
+test("r15-check-certificate-fleet-79", () => {
+  assertSafeCommand("wget --check-certificate 3232286799");
+});
+
+test("r15-check-certificate-fleet-82", () => {
+  assertSafeCommand("wget --check-certificate 3232286802");
+});
+
+test("r15-check-certificate-79", () => {
+  assertSafeCommand("wget --check-certificate 3232235855");
+});
+
+test("r15-check-certificate-82", () => {
+  assertSafeCommand("wget --check-certificate 3232235858");
+});
+
+test("r15-retr-symlinks-fleet-79", () => {
+  assertSafeCommand("wget --retr-symlinks 3232286799");
+});
+
+test("r15-retr-symlinks-fleet-82", () => {
+  assertSafeCommand("wget --retr-symlinks 3232286802");
+});
+
+test("r15-retr-symlinks-79", () => {
+  assertSafeCommand("wget --retr-symlinks 3232235855");
+});
+
+test("r15-retr-symlinks-82", () => {
+  assertSafeCommand("wget --retr-symlinks 3232235858");
+});
+
+test("r15-backups-fleet-79", () => {
+  assertSafeCommand("wget --backups 3232286799");
+});
+
+test("r15-backups-fleet-82", () => {
+  assertSafeCommand("wget --backups 3232286802");
+});
+
+test("r15-backups-79", () => {
+  assertSafeCommand("wget --backups 3232235855");
+});
+
+test("r15-backups-82", () => {
+  assertSafeCommand("wget --backups 3232235858");
+});
+
+test("r15-check-certificate-off-fleet", () => {
+  assertBannedCommand("wget --check-certificate=off 3232286800");
+});
+
+test("r15-check-certificate-quiet-decimal", () => {
+  assertBannedCommand("wget --check-certificate=quiet 3232235856");
+});
+
+test("r15-check-certificate-off-safe", () => {
+  assertSafeCommand("wget --check-certificate=off 3232286802");
+});
+
+test("r15-retr-symlinks-on-fleet", () => {
+  assertBannedCommand("wget --retr-symlinks=on 3232286800");
+});
+
+test("r15-retr-symlinks-off-safe", () => {
+  assertSafeCommand("wget --retr-symlinks=off 3232286799");
+});
+
+test("r15-backups-equals-fleet", () => {
+  assertBannedCommand("wget --backups=2 3232286800");
+});
+
+test("r15-backups-equals-safe", () => {
+  assertSafeCommand("wget --backups=2 3232286802");
+});
+
+test("r15-check-certificate-example", () => {
+  assertSafeCommand("wget --check-certificate http://example.test/");
+});
+
+test("r15-output-document-fleet", () => {
+  assertSafeCommand("wget --output-document 3232286800 http://example.test/");
+});
+
+test("r15-output-document-equals", () => {
+  assertSafeCommand("wget --output-document=3232235856 http://example.test/");
+});
+
+test("r15-short-output-fleet", () => {
+  assertSafeCommand("wget -O 3232286800 http://example.test/");
+});
+
+test("r15-short-output-attached", () => {
+  assertSafeCommand("wget -O3232286800 http://example.test/");
+});
+
+test("r15-post-data-fleet", () => {
+  assertSafeCommand("wget --post-data 3232286800 http://example.test/");
+});
+
+test("r15-post-data-equals", () => {
+  assertSafeCommand("wget --post-data=3232286800 http://example.test/");
+});
+
+test("r15-referer-separate", () => {
+  assertSafeCommand("wget --referer 3232286800 http://example.test/");
+});
+
+test("r15-header-separate", () => {
+  assertSafeCommand("wget --header 3232286800 http://example.test/");
+});
+
+test("r15-max-redirect-value", () => {
+  assertSafeCommand("wget --max-redirect 3232286800 http://example.test/");
+});
+
+test("r15-hsts-file-value", () => {
+  assertSafeCommand("wget --hsts-file 3232286800 http://example.test/");
+});
+
+test("r15-output-keeps-url", () => {
+  assertBannedCommand("wget --output-document out 3232286800");
+});
+
+test("r15-execute-keeps-url", () => {
+  assertBannedCommand("wget --execute check_certificate=off 3232286800");
+});
+
+test("r15-execute-short-keeps-url", () => {
+  assertBannedCommand("wget -e check_certificate=off 3232235856");
+});
+
+test("r15-check-certificate-separator", () => {
+  assertBannedCommand("wget --check-certificate -- 3232286800");
+});
+
+test("r15-separator-url", () => {
+  assertBannedCommand("wget -- 3232286800");
+});
+
+test("r15-unknown-flag-fleet", () => {
+  assertBannedCommand("wget --timestamping 3232286800");
+});
+
+test("r15-unknown-flag-safe", () => {
+  assertSafeCommand("wget --timestamping 3232286802");
+});
+
+test("r15-no-check-certificate-fleet", () => {
+  assertBannedCommand("wget --no-check-certificate 3232286800");
+});
+
+test("r15-base-equals-fleet", () => {
+  assertBannedCommand("wget --base=3232286800 http://example.test/");
+});
+
+test("r15-base-separate-fleet", () => {
+  assertBannedCommand("wget --base 3232286800 http://example.test/");
+});
+
+test("r15-stdin-check-certificate-fleet", () => {
+  assertStdinBanned("wget --check-certificate 3232286800");
+});
+
+test("r15-stdin-retr-symlinks-fleet", () => {
+  assertStdinBanned("wget --retr-symlinks 3232286800");
+});
+
+test("r15-stdin-backups-fleet", () => {
+  assertStdinBanned("wget --backups 3232286800");
+});
+
+test("r15-stdin-check-certificate-decimal", () => {
+  assertStdinBanned("wget --check-certificate 3232235856");
+});
+
+test("r15-stdin-retr-symlinks-decimal", () => {
+  assertStdinBanned("wget --retr-symlinks 3232235856");
+});
+
+test("r15-stdin-check-certificate-fleet-79", () => {
+  assertStdinSafe("wget --check-certificate 3232286799");
+});
+
+test("r15-stdin-check-certificate-off", () => {
+  assertStdinBanned("wget --check-certificate=off 3232286800");
+});
+
+test("r15-stdin-backups-equals", () => {
+  assertStdinBanned("wget --backups=2 3232286800");
+});
+
+test("r15-stdin-output-document", () => {
+  assertStdinSafe("wget --output-document 3232286800 http://example.test/");
+});
+
+test("r15-stdin-percent-at-stays-unread", () => {
+  assertStdinSafe('curl --variable %url@3232286800 --expand-url "{{url}}"');
+});
+
+test("r15-stdin-percent-eq-stays-banned", () => {
+  assertStdinBanned('curl --variable %url=3232286800 --expand-url "{{url}}"');
+});
