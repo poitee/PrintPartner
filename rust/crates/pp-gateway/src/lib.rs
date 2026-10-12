@@ -74,6 +74,9 @@ enum EffectClass {
 struct GatewayState {
     watchers: tokio::sync::Mutex<Watchers>,
     snapshot_refresh: tokio::sync::Mutex<()>,
+    /// One in-flight Node snapshot. Concurrent status misses join it instead of
+    /// each waiting out the queue deadline and reading the snapshot again.
+    snapshot_flight: SnapshotFlight,
     watcher_cancelled: CancellationToken,
     watcher_tasks: TaskTracker,
     monitoring_suspended: tokio::sync::watch::Sender<bool>,
@@ -135,6 +138,7 @@ impl Gateway {
         let state = Arc::new(GatewayState {
             watchers: tokio::sync::Mutex::new(Watchers::new()?),
             snapshot_refresh: tokio::sync::Mutex::new(()),
+            snapshot_flight: SnapshotFlight::new(),
             watcher_cancelled: CancellationToken::new(),
             watcher_tasks: TaskTracker::new(),
             monitoring_suspended: tokio::sync::watch::channel(false).0,
@@ -608,15 +612,17 @@ async fn handle(
         // The last valid snapshot proves an id is not Moonraker (or is an HTTPS/redirect
         // host left on Node until GRE-359), so those forward to Node without waiting.
         let mut route = state.watchers.lock().await.route(id);
-        if matches!(route, Route::NoSnapshot | Route::Unavailable) {
+        if route_needs_snapshot(&route) {
             // Detached so a client disconnect cannot cut a reconcile short.
+            // Concurrent misses share that one refresh; a recorded snapshot then
+            // routes confirmed non-Moonraker ids without another queue wait.
             let refreshing = state.clone();
             let _ = state
                 .watcher_tasks
                 .spawn(async move { refresh_watchers(&refreshing).await })
                 .await;
             route = state.watchers.lock().await.route(id);
-            if matches!(route, Route::NoSnapshot | Route::Unavailable) {
+            if route_needs_snapshot(&route) {
                 // Never fall back to on-demand Node polling for a known HTTP Moonraker
                 // id, nor guess when no valid snapshot exists.
                 return error(
@@ -741,6 +747,93 @@ fn moonraker_status_id(path: &str) -> Option<&str> {
     let id = tail.strip_suffix("/status")?;
     (!id.is_empty() && !id.contains('/')).then_some(id)
 }
+fn route_needs_snapshot(route: &Route) -> bool {
+    matches!(route, Route::NoSnapshot | Route::Unavailable)
+}
+/// Joiners wait out one in-flight read. The cap is the old queue deadline plus
+/// that read's own budget, so a shared 1.2s snapshot does not fail the third caller.
+const SNAPSHOT_FLIGHT_WAIT: Duration = Duration::from_secs(4);
+struct SnapshotFlight {
+    slot: Mutex<Option<tokio::sync::watch::Receiver<Option<bool>>>>,
+}
+struct FlightCleanup<'a> {
+    slot: &'a Mutex<Option<tokio::sync::watch::Receiver<Option<bool>>>>,
+    tx: tokio::sync::watch::Sender<Option<bool>>,
+    published: bool,
+}
+impl Drop for FlightCleanup<'_> {
+    fn drop(&mut self) {
+        if !self.published {
+            let _ = self.tx.send(Some(false));
+        }
+        *flight_slot(self.slot) = None;
+    }
+}
+fn flight_slot(
+    mutex: &Mutex<Option<tokio::sync::watch::Receiver<Option<bool>>>>,
+) -> std::sync::MutexGuard<'_, Option<tokio::sync::watch::Receiver<Option<bool>>>> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+impl SnapshotFlight {
+    fn new() -> Self {
+        Self {
+            slot: Mutex::new(None),
+        }
+    }
+    /// The first caller runs `lead`. Everyone already waiting shares that result.
+    async fn share<F, Fut>(&self, cancelled: &CancellationToken, lead: F) -> bool
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = bool>,
+    {
+        let (tx, rx) = tokio::sync::watch::channel(None);
+        // Drop the guard before any await. A std mutex guard is not Send.
+        let joined = {
+            let mut slot = flight_slot(&self.slot);
+            if let Some(flight) = slot.clone() {
+                Some(flight)
+            } else {
+                *slot = Some(rx);
+                None
+            }
+        };
+        if let Some(flight) = joined {
+            return wait_shared_snapshot(flight, cancelled).await;
+        }
+        let mut cleanup = FlightCleanup {
+            slot: &self.slot,
+            tx,
+            published: false,
+        };
+        let result = lead().await;
+        let _ = cleanup.tx.send(Some(result));
+        cleanup.published = true;
+        result
+    }
+}
+async fn wait_shared_snapshot(
+    mut flight: tokio::sync::watch::Receiver<Option<bool>>,
+    cancelled: &CancellationToken,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + SNAPSHOT_FLIGHT_WAIT;
+    loop {
+        if let Some(done) = *flight.borrow() {
+            return done;
+        }
+        tokio::select! {
+            biased;
+            _ = cancelled.cancelled() => return false,
+            _ = tokio::time::sleep_until(deadline) => return false,
+            changed = flight.changed() => {
+                if changed.is_err() {
+                    return false;
+                }
+            }
+        }
+    }
+}
 async fn snapshot_refresh_guard<'a>(
     mutex: &'a tokio::sync::Mutex<()>,
     cancelled: &CancellationToken,
@@ -761,6 +854,13 @@ enum SnapshotError {
     Invalid,
 }
 async fn refresh_watchers(state: &GatewayState) -> bool {
+    let cancelled = state.watcher_cancelled.clone();
+    state
+        .snapshot_flight
+        .share(&cancelled, || apply_snapshot(state))
+        .await
+}
+async fn apply_snapshot(state: &GatewayState) -> bool {
     // Serialize snapshots without blocking already-cached reads on the Node round trip.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     // Queue contention must not shorten the independent Node-read budget.
@@ -959,6 +1059,84 @@ mod spa_tests {
         ] {
             assert!(!is_spa_client_path(path), "unexpected SPA path: {path}");
         }
+    }
+}
+
+#[cfg(test)]
+mod snapshot_membership_tests {
+    use super::{SnapshotFlight, route_needs_snapshot};
+    use pp_drivers::moonraker::{Host, Route, Watchers};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use std::time::{Duration, Instant};
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    #[tokio::test]
+    async fn three_non_moonraker_misses_share_one_slow_snapshot() {
+        let flight = Arc::new(SnapshotFlight::new());
+        let watchers = Arc::new(Mutex::new(Watchers::new().unwrap()));
+        let runs = Arc::new(AtomicUsize::new(0));
+        let cancel = CancellationToken::new();
+        let mut tasks = tokio::task::JoinSet::new();
+        for id in ["prusa", "bambu", "ha"] {
+            let (flight, watchers, runs, cancel) = (
+                flight.clone(),
+                watchers.clone(),
+                runs.clone(),
+                cancel.clone(),
+            );
+            tasks.spawn(async move {
+                let started = Instant::now();
+                let mut route = watchers.lock().await.route(id);
+                if route_needs_snapshot(&route) {
+                    let (watchers, runs) = (watchers.clone(), runs.clone());
+                    flight
+                        .share(&cancel, || {
+                            let (watchers, runs) = (watchers.clone(), runs.clone());
+                            async move {
+                                runs.fetch_add(1, Ordering::SeqCst);
+                                tokio::time::sleep(Duration::from_millis(1200)).await;
+                                let mut guard = watchers.lock().await;
+                                guard
+                                    .replace(vec![Host {
+                                        id: "printer".into(),
+                                        base_url: "http://printer.test".into(),
+                                        api_key: None,
+                                        enabled: false,
+                                    }])
+                                    .await
+                                    .unwrap();
+                                true
+                            }
+                        })
+                        .await;
+                    route = watchers.lock().await.route(id);
+                }
+                (id, route, started.elapsed())
+            });
+        }
+        let mut elapsed = Vec::new();
+        while let Some(joined) = tasks.join_next().await {
+            let (id, route, took) = joined.unwrap();
+            assert_eq!(route, Route::Node, "{id}");
+            assert!(!route_needs_snapshot(&route), "{id}");
+            elapsed.push(took);
+        }
+        assert_eq!(runs.load(Ordering::SeqCst), 1, "snapshot reads");
+        let slowest = elapsed.into_iter().max().unwrap();
+        assert!(
+            slowest < Duration::from_millis(2500),
+            "third caller waited {slowest:?} for a shared 1.2s snapshot"
+        );
+        let later = Instant::now();
+        let route = watchers.lock().await.route("prusa");
+        assert_eq!(route, Route::Node);
+        assert!(!route_needs_snapshot(&route));
+        assert!(later.elapsed() < Duration::from_millis(200));
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
     }
 }
 
