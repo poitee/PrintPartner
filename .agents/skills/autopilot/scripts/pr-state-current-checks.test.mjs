@@ -555,6 +555,98 @@ function runLiveFixture(context, mode = "pages") {
     data.statusCheckRollup = [failure, stale];
     data.mode = "pages";
   }
+  if (mode === "seed-replaced-visible" || mode === "seed-replaced-hidden") {
+    const seedNodes = Array.from({ length: 100 }, (_, index) => ({
+      id: index === 0 ? "stale-success" : `latest-${index + 1}`,
+    }));
+    const currentRuns = {
+      totalCount: 101,
+      pageInfo: { hasNextPage: true, endCursor: "suite-2" },
+      nodes: seedNodes,
+    };
+    const success = latestCheck();
+    success.id = "stale-success";
+    success.conclusion = "SUCCESS";
+    success.detailsUrl = currentSuccessUrl;
+    success.startedAt = "2026-10-12T04:00:00Z";
+    success.checkSuite.id = "suite-race";
+    success.checkSuite.currentRuns = currentRuns;
+    data.statusCheckRollup = [success];
+    data.page2Ids = ["latest-101"];
+    data.totalCount = 101;
+    data.suiteBehavior = "page2";
+    data.revalidate = "replace-first";
+    data.replacementId = "rerun-failure";
+    data.contextPage = "single";
+    data.mode = "pages";
+    if (mode === "seed-replaced-visible") {
+      const failure = latestCheck();
+      failure.id = "rerun-failure";
+      failure.conclusion = "FAILURE";
+      failure.detailsUrl = laterFailureUrl;
+      failure.startedAt = "2026-10-12T06:00:00Z";
+      failure.checkSuite.id = "suite-race";
+      const replaced = structuredClone(currentRuns);
+      replaced.nodes = seedNodes.map((node, index) => (index === 0 ? { id: "rerun-failure" } : node));
+      failure.checkSuite.currentRuns = replaced;
+      data.replacementRollup = [failure];
+    } else {
+      data.replacementRollup = [structuredClone(success)];
+    }
+  }
+  if (mode === "rollup-cursor-missing" || mode === "rollup-cursor-empty") {
+    const success = latestCheck();
+    success.id = "page-success";
+    success.conclusion = "SUCCESS";
+    success.detailsUrl = currentSuccessUrl;
+    success.checkSuite.currentRuns = {
+      totalCount: 1,
+      pageInfo: { hasNextPage: false, endCursor: null },
+      nodes: [{ id: success.id }],
+    };
+    const failure = latestCheck();
+    failure.id = "later-failure";
+    failure.name = "Later requirement";
+    failure.conclusion = "FAILURE";
+    failure.detailsUrl = laterFailureUrl;
+    failure.checkSuite.id = "suite-later";
+    failure.checkSuite.currentRuns = {
+      totalCount: 1,
+      pageInfo: { hasNextPage: false, endCursor: null },
+      nodes: [{ id: failure.id }],
+    };
+    data.statusCheckRollup = [success, failure];
+    data.contextPage = "blocked";
+    data.blockedEndCursor = mode === "rollup-cursor-empty" ? "" : null;
+    data.mode = "pages";
+  }
+  if (mode === "large-suite" || mode === "over-max-suite") {
+    const totalCount = mode === "large-suite" ? 2001 : 50001;
+    const currentRuns = {
+      totalCount,
+      pageInfo: { hasNextPage: true, endCursor: "p-2" },
+      nodes: Array.from({ length: 100 }, (_, index) => ({ id: `run-${index + 1}` })),
+    };
+    const failure = latestCheck();
+    failure.id = "old-failure";
+    failure.conclusion = "FAILURE";
+    failure.detailsUrl = staleFailureUrl;
+    failure.startedAt = "2026-10-12T02:00:00Z";
+    failure.checkSuite.id = "suite-large";
+    failure.checkSuite.currentRuns = structuredClone(currentRuns);
+    const success = latestCheck();
+    success.id = mode === "large-suite" ? "run-2001" : "run-50001";
+    success.conclusion = "SUCCESS";
+    success.detailsUrl = currentSuccessUrl;
+    success.startedAt = "2026-10-12T06:00:00Z";
+    success.checkSuite.id = "suite-large";
+    success.checkSuite.currentRuns = structuredClone(currentRuns);
+    data.statusCheckRollup = [failure, success];
+    data.totalCount = totalCount;
+    data.suiteBehavior = mode === "large-suite" ? "counted" : "over-max";
+    data.contextPage = "single";
+    data.mode = "pages";
+  }
   const statePath = join(dir, "state.json");
   writeFileSync(statePath, JSON.stringify({
     prViews: 0, checkOids: [], prOids: [], suiteCalls: 0, suiteOids: [], suiteCursors: [],
@@ -600,13 +692,14 @@ else if (args[0] === "pr") {
   const query = args.find((arg) => arg.startsWith("query=")) ?? "";
   if (query.includes("node(id: $suiteId)")) {
     const oid = args.find((arg) => arg.startsWith("oid="))?.slice(4);
-    const cursor = args.find((arg) => arg.startsWith("cursor="))?.slice(7);
+    const cursorArg = args.find((arg) => arg.startsWith("cursor="));
+    const cursor = cursorArg == null ? null : cursorArg.slice(7);
     const suiteId = args.find((arg) => arg.startsWith("suiteId="))?.slice(8);
     state.suiteCalls += 1;
     state.suiteOids.push(oid);
     state.suiteCursors.push(cursor);
     save();
-    if (state.suiteCalls > 25) {
+    if (state.suiteCalls > 80) {
       process.stderr.write("suite pagination did not stop");
       process.exit(1);
     }
@@ -637,6 +730,41 @@ else if (args[0] === "pr") {
         endCursor = "suite-" + (state.suiteCalls + 2);
         totalCount = 5000;
         ids = ["extra-" + state.suiteCalls];
+      } else if (behavior === "over-max") {
+        hasNextPage = true;
+        endCursor = "p-" + (state.suiteCalls + 2);
+        totalCount = data.totalCount;
+        ids = ["over-" + state.suiteCalls];
+      } else if (behavior === "counted") {
+        const total = data.totalCount;
+        const pageSize = 100;
+        const pageNumber = cursor == null ? 1 : Number(String(cursor).slice(2));
+        const start = (pageNumber - 1) * pageSize;
+        const take = Math.max(0, Math.min(pageSize, total - start));
+        ids = Array.from({ length: take }, (_, index) => "run-" + (start + index + 1));
+        hasNextPage = start + take < total;
+        endCursor = hasNextPage ? "p-" + (pageNumber + 1) : null;
+        totalCount = total;
+      }
+      if (cursor == null && behavior !== "counted" && behavior !== "malformed") {
+        let rollup = data.statusCheckRollup;
+        if (data.mode === "head-moved" || data.mode === "head-during-suite") {
+          rollup = oid === data.oldHead ? data.oldChecks : data.newChecks;
+        }
+        let runs = null;
+        for (const check of rollup || []) {
+          const candidate = check && check.checkSuite && check.checkSuite.currentRuns;
+          if (candidate && candidate.pageInfo && candidate.pageInfo.hasNextPage === true && Array.isArray(candidate.nodes) && candidate.nodes.length) {
+            runs = candidate;
+            break;
+          }
+        }
+        let nodes = runs ? runs.nodes.map((node) => ({ id: node.id })) : [];
+        if (data.revalidate === "replace-first" && nodes.length) nodes[0] = { id: data.replacementId };
+        hasNextPage = Boolean(runs && runs.pageInfo && runs.pageInfo.hasNextPage);
+        endCursor = hasNextPage ? runs.pageInfo.endCursor : null;
+        totalCount = runs ? runs.totalCount : totalCount;
+        ids = nodes.map((node) => node.id);
       }
       response = { data: {
         repository: { object: { oid } },
@@ -655,6 +783,7 @@ else if (args[0] === "pr") {
   else if (data.mode === "errors") response = { errors: [{ message: "checks unavailable" }] };
   else {
     const oid = args.find((arg) => arg.startsWith("oid="))?.slice(4);
+    state.checkReads = (state.checkReads || 0) + 1;
     state.checkOids.push(oid);
     save();
     const allowed = new Set([data.pinnedHead, data.oldHead, data.newHead, ...(data.oids ?? [])]);
@@ -667,11 +796,24 @@ else if (args[0] === "pr") {
     if (data.mode === "head-unstable" || data.mode === "head-merge-unknown" || data.mode === "head-confirm-fail" || data.mode === "head-confirm-auth") {
       rollup = data.greenChecks;
     }
+    if (data.replacementRollup && state.checkReads > 1) rollup = data.replacementRollup;
+    if (data.contextPage === "single") {
+      response = { data: { repository: { object: { statusCheckRollup: { contexts: {
+        nodes: rollup,
+        pageInfo: { hasNextPage: false, endCursor: null },
+      } } } } } };
+    } else if (data.contextPage === "blocked") {
+      response = { data: { repository: { object: { statusCheckRollup: { contexts: {
+        nodes: rollup.slice(0, -1),
+        pageInfo: { hasNextPage: true, endCursor: data.blockedEndCursor },
+      } } } } } };
+    } else {
     const last = args.includes("cursor=next");
     response = { data: { repository: { object: { statusCheckRollup: { contexts: {
       nodes: last ? [rollup.at(-1)] : rollup.slice(0, -1),
       pageInfo: { hasNextPage: !last, endCursor: last ? null : "next" },
     } } } } } };
+    }
   }
 } else response = [];
 process.stdout.write(JSON.stringify(response));
@@ -808,8 +950,8 @@ test("live CLI drops a superseded same-suite failure after the second latest-run
   assert.deepEqual(report.pendingChecks, []);
   assert.equal(report.passedCheckCount, 1);
   const state = JSON.parse(readFileSync(result.statePath, "utf8"));
-  assert.equal(state.suiteCalls, 1);
-  assert.deepEqual(state.suiteCursors, ["suite-2"]);
+  assert.equal(state.suiteCalls, 2);
+  assert.deepEqual(state.suiteCursors, ["suite-2", null]);
 });
 
 test("live CLI keeps a current failure listed only on the second latest-run page", { timeout: 20000 }, (context) => {
@@ -820,7 +962,7 @@ test("live CLI keeps a current failure listed only on the second latest-run page
   assert.deepEqual(report.failingChecks.map((check) => check.url), [laterFailureUrl]);
   assert.equal(report.passedCheckCount, 0);
   const state = JSON.parse(readFileSync(result.statePath, "utf8"));
-  assert.equal(state.suiteCalls, 1);
+  assert.equal(state.suiteCalls, 2);
 });
 
 test("live CLI keeps the stale failure when the next latest-run page errors", (context) => {
@@ -1030,7 +1172,7 @@ test("live CLI keeps a member failure when another suite success is not in finis
   assert.deepEqual(report.failingChecks.map((check) => check.url), [staleFailureUrl]);
   assert.equal(report.passedCheckCount, 1);
   const state = JSON.parse(readFileSync(result.statePath, "utf8"));
-  assert.equal(state.suiteCalls, 1);
+  assert.equal(state.suiteCalls, 2);
 });
 
 for (const [mode, label] of [
@@ -1071,6 +1213,67 @@ test("live CLI lets a valid one-id finished seed supersede an older member failu
   assert.equal(report.nextAction, "ready");
   assert.deepEqual(report.failingChecks, []);
   assert.equal(report.passedCheckCount, 1);
+  const state = JSON.parse(readFileSync(result.statePath, "utf8"));
+  assert.equal(state.suiteCalls, 0);
+});
+
+test("live CLI keeps a same-head page-1 replacement failure when the rollup re-read shows it", { timeout: 20000 }, (context) => {
+  const result = runLiveFixture(context, "seed-replaced-visible");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "ci");
+  assert.deepEqual(report.failingChecks.map((check) => check.url), [laterFailureUrl]);
+  assert.equal(report.passedCheckCount, 0);
+  const state = JSON.parse(readFileSync(result.statePath, "utf8"));
+  assert.equal(state.prOids.length, 2);
+  assert.equal(state.prOids[0], state.prOids[1]);
+  assert.equal(state.suiteCalls, 2);
+});
+
+test("live CLI rechecks when a same-head page-1 replacement is absent from the rollup re-read", { timeout: 20000 }, (context) => {
+  const result = runLiveFixture(context, "seed-replaced-hidden");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "recheck");
+  assert.deepEqual(report.failingChecks, []);
+  const state = JSON.parse(readFileSync(result.statePath, "utf8"));
+  assert.equal(state.prOids.length, 2);
+  assert.equal(state.prOids[0], state.prOids[1]);
+});
+
+for (const [mode, label] of [
+  ["rollup-cursor-missing", "no end cursor"],
+  ["rollup-cursor-empty", "an empty end cursor"],
+]) {
+  test(`live CLI rechecks when a later rollup page has ${label}`, { timeout: 20000 }, (context) => {
+    const result = runLiveFixture(context, mode);
+    assert.equal(result.status, 0, result.stderr);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.nextAction, "recheck");
+    assert.deepEqual(report.failingChecks, []);
+    assert.equal(report.passedCheckCount, 1);
+    const state = JSON.parse(readFileSync(result.statePath, "utf8"));
+    assert.equal(state.checkOids.length, 1);
+  });
+}
+
+test("live CLI lets a 2001-id latest-run suite supersede a historical failure", { timeout: 60000 }, (context) => {
+  const result = runLiveFixture(context, "large-suite");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "ready");
+  assert.deepEqual(report.failingChecks, []);
+  assert.equal(report.passedCheckCount, 1);
+  const state = JSON.parse(readFileSync(result.statePath, "utf8"));
+  assert.equal(state.suiteCalls, 21);
+});
+
+test("live CLI keeps a historical failure when latest-run totalCount is above the documented suite maximum", { timeout: 20000 }, (context) => {
+  const result = runLiveFixture(context, "over-max-suite");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "ci");
+  assert.deepEqual(report.failingChecks.map((check) => check.url), [staleFailureUrl]);
   const state = JSON.parse(readFileSync(result.statePath, "utf8"));
   assert.equal(state.suiteCalls, 0);
 });
