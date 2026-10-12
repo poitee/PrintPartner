@@ -780,7 +780,7 @@ function referenceDestination(lines, index, withEnd = false) {
       }
       if (closed) break;
       const next = lines[++index];
-      if (!next?.trim() || REFERENCE_DEFINITION.test(next)) return null;
+      if (!next?.trim()) return null;
       parts.push(next);
     }
     title = parts.join("\n");
@@ -1205,6 +1205,39 @@ export function hasEvidenceContent(sectionText) {
   return looksLikeArtifact(artifact, references) || looksLikeArtifact(freeformText(sectionText), references);
 }
 
+function shellWords(value) {
+  const words = [];
+  let word = "";
+  let quote = null;
+  for (let index = 0; index < value.length; index += 1) {
+    const ch = value[index];
+    if (quote === null && /[\s;|&<>()`]/.test(ch)) {
+      if (word) words.push(word);
+      word = "";
+      continue;
+    }
+    if (quote === null && ch === "#" && !word) {
+      const end = value.indexOf("\n", index);
+      if (end === -1) break;
+      index = end;
+      continue;
+    }
+    if (ch === "\\" && quote !== "'") {
+      const next = value[index + 1];
+      if (next !== undefined && (quote === null || /[\\"$`]/.test(next))) {
+        word += next;
+        index += 1;
+      } else word += ch;
+      continue;
+    }
+    if (ch === quote) quote = null;
+    else if (quote === null && (ch === "'" || ch === '"')) quote = ch;
+    else word += ch;
+  }
+  if (word && quote === null) words.push(word);
+  return words.filter((word) => !/\s/.test(word));
+}
+
 function joinShellContinuations(value) {
   let quote = null;
   let joined = "";
@@ -1246,10 +1279,13 @@ function targetsBannedLan(sectionText, definitions, literalText = []) {
   );
   const bannedTarget = (value) => {
     if (BANNED_LAN_IP.test(value)) return true;
-    const decoded = joinShellContinuations(decodeCharacterReferences(value, { htmlNumeric: true })).replace(/\\(.)/g, "$1");
+    const joined = joinShellContinuations(decodeCharacterReferences(value, { htmlNumeric: true }));
+    const words = shellWords(joined);
+    const decoded = joined.replace(/\\(.)/g, "$1");
     const targets = [...decoded.replace(/[\t\n\r]/g, "").matchAll(/(?:https?:|\/\/)[^\s<>()"'`]+/gi)]
       .map((match) => trimToken(match[0]));
-    for (const token of decoded.split(/[\s<>()"'`]+/)) {
+    targets.push(...words.filter((word) => /^(?:https?:|\/\/)/i.test(word)).map(trimToken));
+    for (const token of [...decoded.split(/[\s<>()"'`]+/), ...words]) {
       const target = trimToken(token);
       if (/[.:/?#]/.test(target)
         && /^(?:0x[\da-f]+|\d+)(?:\.(?:0x[\da-f]+|\d+)){0,3}(?::\d+)?(?:[/?#].*)?$/i.test(target)) {
@@ -1283,10 +1319,11 @@ function documentReferences(body) {
   for (let i = 0; i < lines.length; i += 1) {
     const match = lines[i].match(REFERENCE_DEFINITION);
     if (!match) continue;
+    const definition = referenceDestination(lines, i, true);
+    if (!definition) continue;
     const label = normalizeReferenceLabel(match[1]);
-    if (definitions.has(label)) continue;
-    const target = referenceDestination(lines, i);
-    if (target) definitions.set(label, target);
+    if (!definitions.has(label)) definitions.set(label, definition.destination);
+    i = definition.end;
   }
   return definitions;
 }

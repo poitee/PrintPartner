@@ -1970,7 +1970,7 @@ test("r4 regression shell-safe-safe-target", () => {
   assert.equal(result.ok, true, result.errors.join("; "));
 });
 test("r4 regression shell-safe-single-literal-backslash", () => {
-  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl 'http://192.168.1.8\\0/'\n```");
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl 'http://192.168.1.8\\2/'\n```");
   assert.equal(result.ok, true, result.errors.join("; "));
 });
 test("r4 regression shell-safe-separate-command", () => {
