@@ -9,6 +9,7 @@ import { evaluateSnapshot, main } from "./pr-state.mjs";
 
 const fixturePath = new URL("./fixtures/pr263-evidence-checks.json", import.meta.url);
 const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
+for (const check of fixture.statusCheckRollup) check.checkSuite.workflowRun.runAttempt = 1;
 const currentUrl = "https://github.com/poitee/PrintPartner/actions/runs/38186110586/job/114608658588";
 
 function snapshotWithChecks(checks) {
@@ -19,9 +20,13 @@ function latestCheck() {
   return structuredClone(fixture.statusCheckRollup.at(-1));
 }
 
-test("retained PR263 Evidence results evaluate through the fixture CLI", () => {
+test("retained PR263 Evidence results with first-attempt metadata evaluate through the fixture CLI", (context) => {
+  const dir = mkdtempSync(join(tmpdir(), "pr-state-evidence-"));
+  context.after(() => rmSync(dir, { recursive: true, force: true }));
+  const path = join(dir, "snapshot.json");
+  writeFileSync(path, JSON.stringify(fixture));
   let output = "";
-  assert.equal(main(["--fixture", fixturePath.pathname], {
+  assert.equal(main(["--fixture", path], {
     stdout: { write(chunk) { output += chunk; } },
   }), 0);
   const report = JSON.parse(output);
@@ -121,6 +126,92 @@ test("legacy status contexts stay visible beside an identically named check run"
   assert.equal(report.failingChecks.length, 1);
   assert.equal(report.passedCheckCount, 1);
 });
+
+
+function rerunCheck({ status = "COMPLETED", conclusion = "FAILURE", startedAt = "2026-10-12T03:00:00Z" } = {}) {
+  const check = structuredClone(fixture.statusCheckRollup[0]);
+  Object.assign(check, { status, conclusion, startedAt });
+  check.checkSuite.workflowRun.runAttempt = 2;
+  return check;
+}
+
+for (const [status, conclusion, action, field] of [
+  ["COMPLETED", "FAILURE", "ci", "failingChecks"],
+  ["IN_PROGRESS", null, "watch-ci", "pendingChecks"],
+  ["QUEUED", null, "watch-ci", "pendingChecks"],
+]) {
+  test(`an older workflow's later ${status} rerun fixture stays actionable`, () => {
+    const rerun = rerunCheck({ status, conclusion });
+    for (const checks of [[rerun, latestCheck()], [latestCheck(), rerun]]) {
+      const report = evaluateSnapshot(snapshotWithChecks(checks));
+      assert.equal(report.nextAction, action);
+      assert.deepEqual(report[field].map((check) => check.url), [rerun.detailsUrl]);
+      assert.equal(report.passedCheckCount, 0);
+    }
+  });
+}
+
+test("a later successful rerun supersedes a newer-created failed workflow", () => {
+  const rerun = rerunCheck({ conclusion: "SUCCESS" });
+  const newer = latestCheck();
+  newer.conclusion = "FAILURE";
+  const report = evaluateSnapshot(snapshotWithChecks([newer, rerun]));
+  assert.equal(report.nextAction, "ready");
+  assert.deepEqual(report.failingChecks, []);
+  assert.equal(report.passedCheckCount, 1);
+});
+
+for (const [label, startedAt] of [["missing", null], ["invalid", "bad-date"], ["tied", fixture.statusCheckRollup.at(-1).checkSuite.workflowRun.createdAt]]) {
+  test(`a rerun with ${label} start timing retains a queued blocker`, () => {
+    const rerun = rerunCheck({ status: "QUEUED", conclusion: null, startedAt });
+    const report = evaluateSnapshot(snapshotWithChecks([rerun, latestCheck()]));
+    assert.equal(report.nextAction, "watch-ci");
+    assert.deepEqual(report.pendingChecks.map((check) => check.url), [rerun.detailsUrl]);
+    assert.equal(report.passedCheckCount, 1);
+  });
+}
+
+for (const attempt of [undefined, null, 0, -1, 1.5, "1"]) {
+  test(`unknown attempt metadata ${attempt} cannot hide a failing check`, () => {
+    const rerun = rerunCheck();
+    rerun.checkSuite.workflowRun.runAttempt = attempt;
+    const report = evaluateSnapshot(snapshotWithChecks([rerun, latestCheck()]));
+    assert.equal(report.nextAction, "ci");
+    assert.deepEqual(report.failingChecks.map((check) => check.url), [rerun.detailsUrl]);
+    assert.equal(report.passedCheckCount, 1);
+  });
+}
+
+test("a rerun does not use its original creation time when start timing is absent", () => {
+  const old = rerunCheck();
+  old.checkSuite.workflowRun.runAttempt = 1;
+  const newer = latestCheck();
+  newer.checkSuite.workflowRun.runAttempt = 2;
+  newer.startedAt = null;
+  const report = evaluateSnapshot(snapshotWithChecks([old, newer]));
+  assert.equal(report.nextAction, "ci");
+  assert.deepEqual(report.failingChecks.map((check) => check.url), [old.detailsUrl]);
+  assert.equal(report.passedCheckCount, 1);
+});
+
+for (const completeness of ["missing", "partial", "empty"]) {
+  test(`a ${completeness} attempt list cannot discard a same-suite rerun blocker by timing`, () => {
+    const old = rerunCheck({ startedAt: "2026-10-12T01:00:00Z" });
+    const newer = structuredClone(old);
+    newer.id = "another-attempt";
+    newer.conclusion = "SUCCESS";
+    newer.startedAt = "2026-10-12T03:00:00Z";
+    for (const check of [old, newer]) {
+      if (completeness === "missing") delete check.checkSuite.currentRuns;
+      if (completeness === "partial") check.checkSuite.currentRuns.pageInfo.hasNextPage = true;
+      if (completeness === "empty") check.checkSuite.currentRuns.nodes = [];
+    }
+    const report = evaluateSnapshot(snapshotWithChecks([old, newer]));
+    assert.equal(report.nextAction, "ci");
+    assert.deepEqual(report.failingChecks.map((check) => check.url), [old.detailsUrl]);
+    assert.equal(report.passedCheckCount, 1);
+  });
+}
 
 function runLiveFixture(context, mode = "pages") {
   const dir = mkdtempSync(join(tmpdir(), "pr-state-current-"));
