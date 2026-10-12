@@ -45,6 +45,7 @@ import {
 } from "../services/source-docs-index.js";
 import { PDF_BG_EXTRACT_BYTES } from "../services/pdf-text-extract.js";
 import { findSourceManifestPath, sourcePdfTextStorage } from "../services/source-workspace.js";
+import { releaseSharedSnapshot, type PublishedSourceSnapshot } from "../services/local-source-snapshot.js";
 import { activateSyncedSourceSnapshot, indexDocsForActivatedRevision, publishLocalSourceWorkingTree, removeObsoleteHostedWorkingTree, SOURCE_PUBLICATION_UNAVAILABLE_DETAIL } from "../services/local-source-revision.js";
 import { scanSourceArtifacts } from "../services/source-artifacts.js";
 import { sendIfTenantDiskQuotaExceeded, runWithTenantDiskQuota, TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
@@ -754,6 +755,7 @@ export async function syncProjectById(
   if (!observed) throw new Error("Source not found");
   const token = repo.getSetting(GITHUB_PAT_KEY);
   const maxDocsBytes = options?.maxDocsBytes ?? DEFAULT_SOURCE_DOCS_MAX_BYTES;
+  let retainedSnapshot: PublishedSourceSnapshot | undefined;
 
   try {
     if (row.sourceKind === "github" || row.sourceKind === "git") {
@@ -763,6 +765,7 @@ export async function syncProjectById(
         reposDir,
         sourceId: projectId,
         token,
+        retainSnapshot: true,
         options: {
           maxStlFiles: 500,
           tag: row.tag,
@@ -778,6 +781,7 @@ export async function syncProjectById(
           },
         },
       });
+      retainedSnapshot = result.snapshot;
       const activated = activateSyncedSourceSnapshot({
         repo,
         reposDir,
@@ -864,6 +868,7 @@ export async function syncProjectById(
     repo.markSourceSynced(projectId, row.lastCommitSha);
     return { stl_count: 0, downloaded: 0, doc_count: 0, docs_downloaded: 0 };
   } catch (error) {
+    if (retainedSnapshot) releaseSharedSnapshot(retainedSnapshot);
     const current = repo.getSourceActivationObservation(projectId);
     if (JSON.stringify(current) === JSON.stringify(observed)) {
       repo.updateSource(projectId, { metadata: {
