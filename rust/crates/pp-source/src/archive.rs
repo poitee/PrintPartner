@@ -453,31 +453,41 @@ fn verify_reader_entry<R: Read + ?Sized>(
 /// anything it would fail on, so the reader never abandons the validated
 /// directory for an earlier end record.
 fn validate_extra_field(extra: &[u8], central: &[u8; 46]) -> Result<()> {
+    // zip applies every ZIP64 record to one set of values, so what a record
+    // must carry depends on what earlier records already replaced.
+    let mut zip64 = [
+        u32_at(central, 24)?,
+        u32_at(central, 20)?,
+        u32_at(central, 42)?,
+    ]
+    .map(u64::from);
     let mut rest = extra;
     while !rest.is_empty() {
         if rest.len() < 4 {
             return Err(ArchiveError::MalformedExtraField);
         }
-        let id = u16_at(rest, 0);
-        let len = u16_at(rest, 2) as usize;
+        let id = u16_at(rest, 0)?;
+        let len = u16_at(rest, 2)? as usize;
         let Some(data) = rest.get(4..4 + len) else {
             return Err(ArchiveError::MalformedExtraField);
         };
         match id {
-            // ZIP64: each saturated 32-bit value needs its 64-bit replacement;
-            // a 24-byte field replaces all three.
+            // ZIP64: each value still saturated needs its 64-bit replacement;
+            // a 24-byte field replaces all three (uncompressed size,
+            // compressed size, header offset, in that order).
             0x0001 => {
-                let required = [24, 20, 42]
-                    .iter()
-                    .filter(|&&at| len >= 24 || u32_at(central, at) == u32::MAX)
-                    .count()
-                    * 8;
-                if len < required {
-                    return Err(ArchiveError::MalformedExtraField);
+                let mut replacements = data.as_chunks::<8>().0.iter();
+                for value in &mut zip64 {
+                    if len >= 24 || *value == u64::from(u32::MAX) {
+                        let replacement = replacements
+                            .next()
+                            .ok_or(ArchiveError::MalformedExtraField)?;
+                        *value = u64::from_le_bytes(*replacement);
+                    }
                 }
             }
             0x000a => {
-                if len != 32 || u16_at(data, 4) != 1 || u16_at(data, 6) != 24 {
+                if len != 32 || u16_at(data, 4)? != 1 || u16_at(data, 6)? != 24 {
                     return Err(ArchiveError::MalformedExtraField);
                 }
             }
@@ -500,19 +510,19 @@ fn ratio_limit(compressed_bytes: u64) -> u64 {
         .saturating_mul(MAX_COMPRESSION_RATIO)
         .max(COMPRESSION_RATIO_FLOOR_BYTES)
 }
-fn u16_at(bytes: &[u8], offset: usize) -> u16 {
-    u16::from_le_bytes(
-        bytes[offset..offset + 2]
-            .try_into()
-            .expect("fixed header field"),
-    )
+fn u16_at(bytes: &[u8], offset: usize) -> Result<u16> {
+    bytes
+        .get(offset..offset + 2)
+        .and_then(|field| field.try_into().ok())
+        .map(u16::from_le_bytes)
+        .ok_or(ArchiveError::InvalidArchive)
 }
-fn u32_at(bytes: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes(
-        bytes[offset..offset + 4]
-            .try_into()
-            .expect("fixed header field"),
-    )
+fn u32_at(bytes: &[u8], offset: usize) -> Result<u32> {
+    bytes
+        .get(offset..offset + 4)
+        .and_then(|field| field.try_into().ok())
+        .map(u32::from_le_bytes)
+        .ok_or(ArchiveError::InvalidArchive)
 }
 const ZIP32_EOCD_SIGNATURE: &[u8] = b"PK\x05\x06";
 const ZIP64_EOCD_SIGNATURE: &[u8] = b"PK\x06\x06";
@@ -560,13 +570,13 @@ fn inspect_index(
         if tail[i..i + 4] != *ZIP32_EOCD_SIGNATURE {
             continue;
         }
-        let comment_len = u16_at(&tail, i + 20) as usize;
+        let comment_len = u16_at(&tail, i + 20)? as usize;
         if i + 22 + comment_len != tail_size {
             continue;
         }
         let footer = &tail[i..];
-        let central_size = u32_at(footer, 12) as u64;
-        let central_offset = u32_at(footer, 16) as u64;
+        let central_size = u32_at(footer, 12)? as u64;
+        let central_offset = u32_at(footer, 16)? as u64;
         let eocd_offset = tail_start + i as u64;
         if central_offset + central_size != eocd_offset {
             continue;
@@ -583,12 +593,12 @@ fn inspect_index(
     let Some((footer, eocd_offset)) = chosen else {
         return Err(ArchiveError::InvalidArchive);
     };
-    let count = u16_at(footer, 10) as usize;
-    let central_size = u32_at(footer, 12) as u64;
-    let central_offset = u32_at(footer, 16) as u64;
-    if u16_at(footer, 4) != 0
-        || u16_at(footer, 6) != 0
-        || u16_at(footer, 8) as usize != count
+    let count = u16_at(footer, 10)? as usize;
+    let central_size = u32_at(footer, 12)? as u64;
+    let central_offset = u32_at(footer, 16)? as u64;
+    if u16_at(footer, 4)? != 0
+        || u16_at(footer, 6)? != 0
+        || u16_at(footer, 8)? as usize != count
         || count == 65_535
         || central_size == u32::MAX as u64
         || central_offset == u32::MAX as u64
@@ -609,17 +619,17 @@ fn inspect_index(
         if header[..4] != *b"PK\x01\x02" {
             return Err(ArchiveError::InvalidArchive);
         }
-        let flags = u16_at(&header, 8);
-        let compression = u16_at(&header, 10);
-        let mode = u32_at(&header, 38) >> 16;
+        let flags = u16_at(&header, 8)?;
+        let compression = u16_at(&header, 10)?;
+        let mode = u32_at(&header, 38)? >> 16;
         if flags & (1 | 0x40 | 0x2000) != 0
             || ![0, 8].contains(&compression)
-            || u16_at(&header, 34) != 0
+            || u16_at(&header, 34)? != 0
             || (mode & 0o170000 != 0 && ![0o100000, 0o040000].contains(&(mode & 0o170000)))
         {
             return Err(ArchiveError::Unsupported);
         }
-        let name_length = u16_at(&header, 28) as usize;
+        let name_length = u16_at(&header, 28)? as usize;
         if name_length == 0 || name_length > 4097 {
             return Err(ArchiveError::UnsafeEntry);
         }
@@ -645,20 +655,20 @@ fn inspect_index(
             })?;
         // Reject advertised bombs before inflating; transfer enforces the same
         // cap on actual bytes because these sizes are untrusted.
-        let compressed_bytes = u32_at(&header, 20) as u64;
-        let inflated_bytes = u32_at(&header, 24) as u64;
+        let compressed_bytes = u32_at(&header, 20)? as u64;
+        let inflated_bytes = u32_at(&header, 24)? as u64;
         if inflated_bytes > ratio_limit(compressed_bytes) {
             return Err(ArchiveError::CompressionRatio);
         }
-        let extra_end = file.stream_position()? + u16_at(&header, 30) as u64;
+        let extra_end = file.stream_position()? + u16_at(&header, 30)? as u64;
         if extra_end > central_offset + central_size {
             return Err(ArchiveError::InvalidArchive);
         }
-        let mut extra = vec![0; u16_at(&header, 30) as usize];
+        let mut extra = vec![0; u16_at(&header, 30)? as usize];
         file.read_exact(&mut extra)?;
         validate_extra_field(&extra, &header)?;
         validate_local_header(file, &header, &raw_name, central_offset)?;
-        file.seek(SeekFrom::Current(u16_at(&header, 32) as i64))?;
+        file.seek(SeekFrom::Current(u16_at(&header, 32)? as i64))?;
         if file.stream_position()? > central_offset + central_size {
             return Err(ArchiveError::InvalidArchive);
         }
@@ -669,7 +679,7 @@ fn inspect_index(
             compressed_bytes,
             inflated_bytes,
             central_header_offset,
-            local_header_offset: u32_at(&header, 42) as u64,
+            local_header_offset: u32_at(&header, 42)? as u64,
         });
     }
     if file.stream_position()? != central_offset + central_size {
@@ -690,7 +700,7 @@ fn validate_local_header(
     central_offset: u64,
 ) -> Result<()> {
     let next = file.stream_position()?;
-    let local_offset = u32_at(central, 42) as u64;
+    let local_offset = u32_at(central, 42)? as u64;
     if local_offset >= central_offset {
         return Err(ArchiveError::InvalidArchive);
     }
@@ -698,24 +708,24 @@ fn validate_local_header(
     let mut local = [0u8; 30];
     file.read_exact(&mut local)?;
     if local[..4] != *b"PK\x03\x04"
-        || u16_at(&local, 6) != u16_at(central, 8)
-        || u16_at(&local, 8) != u16_at(central, 10)
-        || u16_at(&local, 26) as usize != name.len()
+        || u16_at(&local, 6)? != u16_at(central, 8)?
+        || u16_at(&local, 8)? != u16_at(central, 10)?
+        || u16_at(&local, 26)? as usize != name.len()
     {
         return Err(ArchiveError::InvalidArchive);
     }
-    if u16_at(&local, 6) & 8 == 0
-        && (u32_at(&local, 14) != u32_at(central, 16)
-            || u32_at(&local, 18) != u32_at(central, 20)
-            || u32_at(&local, 22) != u32_at(central, 24))
+    if u16_at(&local, 6)? & 8 == 0
+        && (u32_at(&local, 14)? != u32_at(central, 16)?
+            || u32_at(&local, 18)? != u32_at(central, 20)?
+            || u32_at(&local, 22)? != u32_at(central, 24)?)
     {
         return Err(ArchiveError::InvalidArchive);
     }
     let payload_end = local_offset
         + 30
         + name.len() as u64
-        + u16_at(&local, 28) as u64
-        + u32_at(central, 20) as u64;
+        + u16_at(&local, 28)? as u64
+        + u32_at(central, 20)? as u64;
     if payload_end > central_offset {
         return Err(ArchiveError::InvalidArchive);
     }
@@ -812,5 +822,31 @@ mod tests {
             validate_extra_field(&[1, 0], &[0; 46]),
             Err(ArchiveError::MalformedExtraField)
         ));
+    }
+
+    #[test]
+    fn zip64_requirements_follow_values_replaced_by_earlier_records() {
+        let zip64 = |values: &[u64]| {
+            let mut record = Vec::from([1, 0]);
+            record.extend_from_slice(&(values.len() as u16 * 8).to_le_bytes());
+            values
+                .iter()
+                .for_each(|v| record.extend_from_slice(&v.to_le_bytes()));
+            record
+        };
+        let header = |size: u32| <[u8; 46]>::try_from(&central(size, &[])[..46]).unwrap();
+        // zip resolves the saturated sizes with the first record, so an empty
+        // second record is as parsable as it is for any unsaturated header.
+        let saturated = [zip64(&[7, 7]), zip64(&[])].concat();
+        assert!(validate_extra_field(&saturated, &header(u32::MAX)).is_ok());
+        // A full record can replace the sizes with the saturated marker,
+        // which obliges the next record to carry them again.
+        let remarked = [zip64(&[u32::MAX.into(); 3]), zip64(&[])].concat();
+        assert!(matches!(
+            validate_extra_field(&remarked, &header(10)),
+            Err(ArchiveError::MalformedExtraField)
+        ));
+        let repeated = [zip64(&[u32::MAX.into(); 3]), zip64(&[1, 2, 3])].concat();
+        assert!(validate_extra_field(&repeated, &header(10)).is_ok());
     }
 }

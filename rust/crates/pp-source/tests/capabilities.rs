@@ -4,6 +4,7 @@ use pp_source::{
 };
 use std::{
     fs,
+    os::unix::fs::PermissionsExt,
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -21,6 +22,10 @@ impl Fixture {
         fs::create_dir(path.join("repos")).unwrap();
         fs::create_dir(path.join("input")).unwrap();
         fs::write(path.join("input/part.stl"), b"solid bytes").unwrap();
+        // Pin modes so root ancestor checks do not depend on the caller's umask.
+        for dir in [path.clone(), path.join("repos"), path.join("input")] {
+            fs::set_permissions(dir, fs::Permissions::from_mode(0o755)).unwrap();
+        }
         Self(fs::canonicalize(path).unwrap())
     }
     fn repos(&self) -> TenantRepos {
@@ -53,8 +58,6 @@ fn budget() -> ArtifactBudget {
 
 #[test]
 fn searchable_ancestor_without_read_access_allows_publication_and_reuse() {
-    use std::os::unix::fs::PermissionsExt;
-
     let fixture = Fixture::new();
     struct RestorePermissions<'a>(&'a std::path::Path, fs::Permissions);
     impl Drop for RestorePermissions<'_> {
