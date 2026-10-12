@@ -17,6 +17,7 @@ import { getIntegrationConfig } from "../integrations/store.js";
 import { loadFleet } from "../services/printer-fleet.js";
 import { parsePrinterUploadMultipart } from "../services/printer-upload-multipart.js";
 import { cleanupPrinterUploadArtifactDir } from "../services/printer-upload-job.js";
+import { reconcileMissingPrinterUploadJob } from "../services/printer-send-queue.js";
 import { ACCEPTED_PLATE_EXPORT_LIMITS } from "../services/accepted-plate-export-delivery.js";
 import {
   AcceptedOperationalExportPublicError,
@@ -367,7 +368,10 @@ export async function registerJobRoutes(
   app.get("/jobs/:id", async (request, reply) => {
     const id = (request.params as { id: string }).id;
     const snap = await jobs.get(id, request.tenantId);
-    if (!snap) return reply.status(404).send({ detail: "Job not found" });
+    if (!snap) {
+      reconcileMissingPrinterUploadJob(jobs.getRepo(), id);
+      return reply.status(404).send({ detail: "Job not found" });
+    }
     return snap;
   });
 }

@@ -16,6 +16,8 @@ import {
 import {
   dispatchPrinterSendQueueItem,
   drainPrinterSendQueue,
+  reconcilePrinterSendsAfterProcessStart,
+  reconcilePrinterSendsAgainstLiveJobs,
 } from "../services/printer-send-queue.js";
 import { computePrinterQueueSuggestions } from "../services/printer-queue-suggestions.js";
 import { parsePrinterUploadMultipart } from "../services/printer-upload-multipart.js";
@@ -32,6 +34,14 @@ export async function registerPrinterSendQueueRoutes(
   app: FastifyInstance,
   deps: RouteDeps,
 ): Promise<void> {
+  reconcilePrinterSendsAfterProcessStart(deps.repo);
+
+  const reconcileLiveSends = (tenantId: string) =>
+    reconcilePrinterSendsAgainstLiveJobs(deps.repo, async (jobId) => {
+      const snap = await deps.jobs.get(jobId, tenantId);
+      return snap != null;
+    });
+
   const makeStartJob = (tenantId: string) => async (payload: {
     printer_id: string;
     artifact_path: string;
@@ -53,6 +63,7 @@ export async function registerPrinterSendQueueRoutes(
   const getStatus = (integrationId: string) => deps.integrations.getStatus(integrationId);
 
   app.get("/printer-send-queue", async (request) => {
+    await reconcileLiveSends(request.tenantId);
     const query = request.query as { active?: string };
     if (query.active === "1" || query.active === "true") {
       return { items: listActivePrinterSendQueue(deps.repo) };
@@ -196,6 +207,7 @@ export async function registerPrinterSendQueueRoutes(
       const id = String((request.params as { id: string }).id ?? "").trim();
       const body = (request.body ?? {}) as { force?: boolean };
       if (!id) return sendProblem(reply, 400, "Bad Request", "id is required");
+      await reconcileLiveSends(request.tenantId);
       const result = await dispatchPrinterSendQueueItem(
         deps.repo,
         deps.jobs.getExportsDir(request.tenantId),
@@ -243,6 +255,7 @@ export async function registerPrinterSendQueueRoutes(
       }
       const printerId =
         typeof rawPrinterId === "string" ? rawPrinterId.trim() : undefined;
+      await reconcileLiveSends(request.tenantId);
       const results = await drainPrinterSendQueue(
         deps.repo,
         deps.jobs.getExportsDir(request.tenantId),
