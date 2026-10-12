@@ -28,6 +28,8 @@ permissions:
   contents: read
 
 env:
+  # Snapshot baselines must be committed; CI must never accept or create them.
+  INSTA_UPDATE: 'no'
   # Linux-only sccache + mold for the Rust jobs (GRE-533). Set repository variable
   # FLEET_RUST_ACCEL=off to disable both without a workflow change.
   FLEET_RUST_ACCEL: ${{ vars.FLEET_RUST_ACCEL || 'on' }}
@@ -216,6 +218,9 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: rust -> target
+      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        with:
+          tool: nextest
       - name: Verify source Unicode and case regressions on macOS
         shell: bash
         run: |
@@ -233,7 +238,7 @@ jobs:
           trap 'hdiutil detach "$fixture_mount"' EXIT
           df -h "$fixture_mount"
           mkdir "$fixture_mount/tmp"
-          TMPDIR="$fixture_mount/tmp" cargo test --locked --manifest-path rust/Cargo.toml -p pp-source
+          TMPDIR="$fixture_mount/tmp" cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-source
       - name: Install locked dependencies and build measured desktop assets
         shell: bash
         env:

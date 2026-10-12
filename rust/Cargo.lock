@@ -2939,6 +2939,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "proptest",
 ]
 
 [[package]]
@@ -2962,12 +2963,14 @@ dependencies = [
  "caseless",
  "fs2",
  "hex",
+ "insta",
  "libc",
  "proptest",
  "rustix",
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
  "unicode-normalization",
  "zip",
 ]
