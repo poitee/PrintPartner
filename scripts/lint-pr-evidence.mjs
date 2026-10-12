@@ -1792,7 +1792,7 @@ function readCommandSubstitution(value, start) {
     else if (ch === ")") depth -= 1;
     index += 1;
   }
-  return { text: value.slice(start, index), end: index };
+  return { text: value.slice(start, index), end: index, closed: depth === 0 };
 }
 
 function shellWords(value, { commandTokens = false } = {}) {
@@ -1802,6 +1802,7 @@ function shellWords(value, { commandTokens = false } = {}) {
   let braceText = "";
   let wordStarted = false;
   let wordUnresolved = false;
+  let substitutionBodies = [];
   const append = (text, protectedText = false) => {
     wordStarted = true;
     word += text;
@@ -1809,12 +1810,13 @@ function shellWords(value, { commandTokens = false } = {}) {
   };
   const flush = () => {
     if (word || (commandTokens && wordStarted)) {
-      words.push(commandTokens ? { text: word, braceText, unresolved: wordUnresolved } : word);
+      words.push(commandTokens ? { text: word, braceText, unresolved: wordUnresolved, substitutionBodies } : word);
     }
     word = "";
     braceText = "";
     wordStarted = false;
     wordUnresolved = false;
+    substitutionBodies = [];
   };
   for (let index = 0; index < value.length; index += 1) {
     const ch = value[index];
@@ -1825,10 +1827,14 @@ function shellWords(value, { commandTokens = false } = {}) {
       index = expansion.end - 1;
       continue;
     }
-    if (quote !== "'" && ch === "$" && value[index + 1] === "(" && (wordStarted || quote !== null)) {
+    // A leading $(...) stays in this word so a curl or wget operand is not split off.
+    // The body is not executed. It is scanned later so a nested client stays visible.
+    if (quote !== "'" && ch === "$" && value[index + 1] === "(") {
       const substitution = readCommandSubstitution(value, index);
       append(substitution.text, true);
       wordUnresolved = true;
+      const inner = substitution.text.slice(2);
+      substitutionBodies.push(substitution.closed ? inner.slice(0, -1) : inner);
       index = substitution.end - 1;
       continue;
     }
@@ -2686,6 +2692,12 @@ function curlCommandTargets(value) {
   let budget = false;
   let unresolved = false;
   let substitution = false;
+  const bodies = [];
+  const markUnresolved = (text) => {
+    const rest = text.replace(/\$\(\(/g, "");
+    if (/\$\(\(/.test(text) || !/\$\(/.test(text)) unresolved = true;
+    if (/\$\(/.test(rest)) substitution = true;
+  };
   let command = [];
   const flush = () => {
     const located = effectiveCurlStart(command);
@@ -2721,9 +2733,7 @@ function curlCommandTargets(value) {
       for (const item of tagged) {
         if (!item.unresolved || !unresolvedOperand(item.text, operand)) continue;
         found = true;
-        const rest = item.text.replace(/\$\(\(/g, "");
-        if (/\$\(\(/.test(item.text) || !/\$\(/.test(item.text)) unresolved = true;
-        if (/\$\(/.test(rest)) substitution = true;
+        markUnresolved(item.text);
       }
       return found;
     };
@@ -2758,6 +2768,10 @@ function curlCommandTargets(value) {
         const parsed = curlExpandedOption(arg, args, i, variables, expandBudget);
         i = parsed.index;
         if (parsed.budget) budget = true;
+        if (tagged[i]?.unresolved && (parsed.url !== undefined || parsed.endpoints)) {
+          markUnresolved(tagged[i].text);
+          continue;
+        }
         if (parsed.url !== undefined) urls.push(parsed.url);
         if (parsed.endpoints) urls.push(...parsed.endpoints);
         continue;
@@ -2769,7 +2783,10 @@ function curlCommandTargets(value) {
             const inline = arg.slice(at + 1);
             const operand = inline === "" ? args[i + 1] : inline;
             if (inline === "") i += 1;
-            if (arg[at] === "x" && operand !== undefined) urls.push(operand);
+            if (arg[at] === "x" && operand !== undefined) {
+              if (tagged[i]?.unresolved) markUnresolved(tagged[i].text);
+              else urls.push(operand);
+            }
             break;
           }
         }
@@ -2782,9 +2799,20 @@ function curlCommandTargets(value) {
   };
   for (const token of shellWords(value, { commandTokens: true })) {
     if (token === null) flush();
-    else command.push(token);
+    else {
+      command.push(token);
+      if (token.substitutionBodies.length > 0) bodies.push(...token.substitutionBodies);
+    }
   }
   flush();
+  for (const body of bodies) {
+    const inner = curlCommandTargets(body);
+    targets.push(...inner.targets);
+    overflow ||= inner.overflow;
+    budget ||= inner.budget;
+    unresolved ||= inner.unresolved;
+    substitution ||= inner.substitution;
+  }
   return { targets, overflow, budget, unresolved, substitution };
 }
 
