@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { join } from "node:path";
+import { z } from "zod";
 import { resolvedFileUnderRoot } from "../lib/secure-path.js";
 import type {
   AcceptedProfileProgress,
@@ -54,6 +55,11 @@ import { sendAcceptedFilamentFailure } from "./accepted-filament-failure.js";
 import { readBuildWorkflowWorkspace } from "../services/build-workflow.js";
 import { MAX_BULK_JSON_BODY_BYTES } from "../services/upload-limits.js";
 import { SOURCE_PHASE_MANIFEST_FILENAME } from "../services/source-workspace.js";
+
+const variantSelectionBody = z.object({
+  selection: z.record(z.string(), z.string()).default({}),
+  source_id: z.number().int().positive().optional(),
+});
 
 type RouteDeps = { repo: AppRepository; dataDir: string; reposDir: string; thumbsDir: string };
 export type PlanSummaryContract = "accepted" | "legacy-v1";
@@ -947,7 +953,6 @@ export async function registerPlanRoutes(
     return { ok: true, needs_sync: restored.needs_sync, layers: restored.layers, snapshot: snap };
   });
 
-  /** GET /plans/:id/variant-dimensions — read variant_dimensions from the base source manifest. */
   app.get("/plans/:id/variant-dimensions", async (request, reply) => {
     const id = Number((request.params as { id: string }).id);
     if (!deps.repo.getOwnedProfileIdentity(id)) return reply.status(404).send({ detail: "Profile not found" });
@@ -962,17 +967,17 @@ export async function registerPlanRoutes(
     return { profile_id: id, source_id: sourceId, dimensions, selection };
   });
 
-  /** POST /plans/:id/variant-selection — apply variant choice to base source import rules. */
   app.post("/plans/:id/variant-selection", async (request, reply) => {
     const id = Number((request.params as { id: string }).id);
     if (!deps.repo.getOwnedProfileIdentity(id)) {
       return reply.status(404).send({ detail: "Profile not found" });
     }
-    const body = (request.body ?? {}) as { selection?: Record<string, string>; source_id?: number };
-    const selection = body.selection ?? {};
+    const parsed = variantSelectionBody.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.status(400).send({ detail: "Invalid variant selection" });
+    const { selection, source_id } = parsed.data;
     const layers = deps.repo.getProfileLayers(id);
     const baseLayer = layers.find((l) => l.layer_type === "base");
-    const sourceId = body.source_id ?? baseLayer?.project_id ?? null;
+    const sourceId = source_id ?? baseLayer?.project_id ?? null;
     if (sourceId == null) return reply.status(400).send({ detail: "No base source on plan" });
     try {
       const { applyPlanVariantSelection } = await import("../services/variant-dimensions.js");

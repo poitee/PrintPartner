@@ -31,6 +31,8 @@ curl --fail \
 
 All current API keys have administrator authority. Store them as secrets and issue separate keys when independent revocation matters.
 
+The curl example above uses the open self-host deployment key, `PRINT_PARTNER_API_KEY`. With `MULTI_USER=1`, send the login session as well. A bearer key on its own is rejected. The administrator creates Settings keys for the signed-in tenant. That stored key is separate from `PRINT_PARTNER_API_KEY`.
+
 ## Back up data
 
 Create a server-side backup:
