@@ -3,6 +3,14 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::process::Command;
 use std::sync::mpsc;
+
+fn exited_true_pid() -> u32 {
+    let mut prior = Command::new("/bin/true").spawn().unwrap();
+    let pid = prior.id();
+    prior.wait().unwrap();
+    pid
+}
+
 fn directory(name: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!(
         "pp-storage-{name}-{}",
@@ -547,9 +555,7 @@ fn wal_only_unsupported_versions_preserve_every_input_file() {
                 }
                 std::fs::write(target.join("retain-user-file"), b"untouched").unwrap();
                 if stale_marker {
-                    let mut prior = std::process::Command::new("/bin/true").spawn().unwrap();
-                    let pid = prior.id();
-                    prior.wait().unwrap();
+                    let pid = exited_true_pid();
                     std::fs::write(
                         target.join(".desktop-owner.json"),
                         serde_json::json!({"storage_protocol_version": 1, "pid": pid}).to_string(),
@@ -602,9 +608,7 @@ fn public_open_recovers_dead_writer_marker_and_atomic_lease() {
         .unwrap();
     assert!(WriterOwner::open(&path, Limits::default()).is_err());
     owner.shutdown().unwrap();
-    let mut prior = Command::new("/bin/true").spawn().unwrap();
-    let pid = prior.id();
-    prior.wait().unwrap();
+    let pid = exited_true_pid();
     let marker = serde_json::json!({"storage_protocol_version": 1, "pid": pid, "process_identity": "prior-process", "instance": "ab".repeat(16)});
     std::fs::write(path.join(".desktop-owner.json"), marker.to_string()).unwrap();
     std::fs::create_dir(path.join(".desktop-lease")).unwrap();
@@ -1595,4 +1599,345 @@ fn ticket_t_7_migrations_preserves_refused_inputs() {
         "{error}"
     );
     assert_eq!(tree_hashes(&corrupt), before);
+}
+
+#[test]
+fn ticket_t_7_writer_reads_wal_full_and_rejects_reader_writes() {
+    let (path, owner, client) = fixture("t7-pragma");
+    set(&client, "durable", "kept")
+        .unwrap()
+        .recv()
+        .unwrap()
+        .unwrap();
+    assert!(path.join("print-partner.db-wal").metadata().unwrap().len() > 32);
+    let read = client.reader(Duration::ZERO).unwrap();
+    let conn = read.connection.as_ref().unwrap();
+    assert_eq!(
+        conn.query_row("PRAGMA journal_mode", [], |row| row.get::<_, String>(0))
+            .unwrap(),
+        "wal"
+    );
+    assert_eq!(pragma_value(conn, "foreign_keys"), 1);
+    assert_eq!(pragma_value(conn, "busy_timeout"), 5000);
+    assert_eq!(pragma_value(conn, "synchronous"), 2);
+    assert_eq!(pragma_value(conn, "query_only"), 1);
+    conn.execute_batch("PRAGMA query_only=OFF; PRAGMA foreign_keys=OFF; PRAGMA busy_timeout=0;")
+        .unwrap();
+    let write_error = conn
+        .execute("INSERT INTO app_settings VALUES('test','escape','no')", [])
+        .unwrap_err()
+        .to_string();
+    assert!(
+        write_error.to_lowercase().contains("readonly"),
+        "{write_error}"
+    );
+    drop(read);
+    let read = client.reader(Duration::ZERO).unwrap();
+    let conn = read.connection.as_ref().unwrap();
+    assert_eq!(
+        conn.query_row("PRAGMA journal_mode", [], |row| row.get::<_, String>(0))
+            .unwrap(),
+        "wal"
+    );
+    assert_eq!(pragma_value(conn, "foreign_keys"), 1);
+    assert_eq!(pragma_value(conn, "busy_timeout"), 5000);
+    assert_eq!(pragma_value(conn, "synchronous"), 2);
+    assert_eq!(pragma_value(conn, "query_only"), 1);
+    assert_eq!(
+        read.snapshot("test", "durable").unwrap(),
+        SettingSnapshot::Stored {
+            value: "kept".into()
+        }
+    );
+    assert_eq!(
+        read.snapshot("test", "escape").unwrap(),
+        SettingSnapshot::Missing
+    );
+    drop(read);
+    owner.shutdown().unwrap();
+    let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
+    let read = owner.client().reader(Duration::ZERO).unwrap();
+    assert_eq!(
+        read.snapshot("test", "durable").unwrap(),
+        SettingSnapshot::Stored {
+            value: "kept".into()
+        }
+    );
+    drop(read);
+    owner.shutdown().unwrap();
+}
+
+fn pragma_value(connection: &Connection, name: &str) -> i64 {
+    connection
+        .pragma_query_value(None, name, |row| row.get(0))
+        .unwrap()
+}
+
+#[test]
+fn ticket_t_7_writer_rolls_back_and_refuses_a_second_runtime() {
+    let (path, owner, client) = fixture("t7-rollback");
+    let second = match WriterOwner::open(&path, Limits::default()) {
+        Ok(_) => panic!("second runtime opened the same directory"),
+        Err(error) => error.to_string(),
+    };
+    assert!(second.contains("Data directory already owned"), "{second}");
+    let raw = Connection::open(path.join("print-partner.db")).unwrap();
+    raw.execute_batch("CREATE TRIGGER reject_partial BEFORE INSERT ON app_settings WHEN NEW.key='reject' BEGIN INSERT INTO app_settings VALUES('test','partial','leaked'); SELECT RAISE(ABORT,'injected failure'); END;").unwrap();
+    let rejected = set(&client, "reject", "no")
+        .unwrap()
+        .recv()
+        .unwrap()
+        .unwrap_err()
+        .to_string();
+    assert!(rejected.contains("injected failure"), "{rejected}");
+    set(&client, "stable", "v1")
+        .unwrap()
+        .recv()
+        .unwrap()
+        .unwrap();
+    let mismatched = client
+        .submit(
+            SettingCommand::CompareAndSet {
+                setting: Setting {
+                    tenant: "test".into(),
+                    key: "stable".into(),
+                    value: "v2".into(),
+                },
+                expected: SettingSnapshot::Missing,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    assert!(!mismatched.recv().unwrap().unwrap());
+    let matched = client
+        .submit(
+            SettingCommand::CompareAndSet {
+                setting: Setting {
+                    tenant: "test".into(),
+                    key: "stable".into(),
+                    value: "v2".into(),
+                },
+                expected: SettingSnapshot::Stored { value: "v1".into() },
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    assert!(matched.recv().unwrap().unwrap());
+    drop(raw);
+    owner.shutdown().unwrap();
+    let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
+    let read = owner.client().reader(Duration::ZERO).unwrap();
+    assert_eq!(
+        read.snapshot("test", "partial").unwrap(),
+        SettingSnapshot::Missing
+    );
+    assert_eq!(
+        read.snapshot("test", "reject").unwrap(),
+        SettingSnapshot::Missing
+    );
+    assert_eq!(
+        read.snapshot("test", "stable").unwrap(),
+        SettingSnapshot::Stored { value: "v2".into() }
+    );
+    drop(read);
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn ticket_t_7_writer_bounds_queue_contention_and_cancellation() {
+    let (path, owner, client) = fixture("t7-queue");
+    let raw = Connection::open(path.join("print-partner.db")).unwrap();
+    raw.execute_batch("BEGIN IMMEDIATE;").unwrap();
+    let blocking = set(&client, "blocking", "yes").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !client.shared.queue.lock().unwrap().pending.is_empty() {
+        assert!(Instant::now() < deadline, "writer never reached the lock");
+        thread::yield_now();
+    }
+    let hidden = client.reader(Duration::ZERO).unwrap();
+    assert_eq!(
+        hidden.snapshot("test", "blocking").unwrap(),
+        SettingSnapshot::Missing
+    );
+    drop(hidden);
+    let admitted = set(&client, "admitted", "once").unwrap();
+    let overflow = set(&client, "overflow", "no").unwrap_err().to_string();
+    assert!(overflow.contains("Writer queue full"), "{overflow}");
+    let cancel = Arc::new(AtomicBool::new(false));
+    let waiting_client = client.clone();
+    let waiting_cancel = cancel.clone();
+    let waiting = thread::spawn(move || {
+        waiting_client
+            .submit(
+                SettingCommand::Set(Setting {
+                    tenant: "test".into(),
+                    key: "cancelled".into(),
+                    value: "no".into(),
+                }),
+                &waiting_cancel,
+                Duration::from_secs(5),
+            )
+            .unwrap_err()
+            .to_string()
+    });
+    cancel.store(true, Ordering::Release);
+    let cancelled = waiting.join().unwrap();
+    assert!(
+        cancelled.contains("Cancelled before admission"),
+        "{cancelled}"
+    );
+    raw.execute_batch("COMMIT").unwrap();
+    assert!(blocking.recv().unwrap().unwrap());
+    assert!(admitted.recv().unwrap().unwrap());
+    drop(raw);
+    owner.shutdown().unwrap();
+    let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
+    let read = owner.client().reader(Duration::ZERO).unwrap();
+    assert_eq!(
+        read.snapshot("test", "blocking").unwrap(),
+        SettingSnapshot::Stored {
+            value: "yes".into()
+        }
+    );
+    assert_eq!(
+        read.snapshot("test", "admitted").unwrap(),
+        SettingSnapshot::Stored {
+            value: "once".into()
+        }
+    );
+    for key in ["overflow", "cancelled"] {
+        assert_eq!(
+            read.snapshot("test", key).unwrap(),
+            SettingSnapshot::Missing
+        );
+    }
+    drop(read);
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn ticket_t_7_writer_denies_managed_alias_backups_and_reopens() {
+    use fs2::FileExt;
+    use std::os::unix::fs::{MetadataExt, symlink};
+    let (path, owner, client) = fixture("t7-backup");
+    set(&client, "kept-a", "committed")
+        .unwrap()
+        .recv()
+        .unwrap()
+        .unwrap();
+    set(&client, "kept-b", "committed")
+        .unwrap()
+        .recv()
+        .unwrap()
+        .unwrap();
+    assert!(path.join("print-partner.db-wal").metadata().unwrap().len() > 32);
+    let lock = path.join(".desktop.lock");
+    let inode = std::fs::metadata(&lock).unwrap().ino();
+    let marker = std::fs::read(path.join(".desktop-owner.json")).unwrap();
+    let aliases = directory("t7-aliases");
+    symlink(path.join("print-partner.db-wal"), aliases.join("wal-alias")).unwrap();
+    symlink(&path, aliases.join("data")).unwrap();
+    for target in [
+        path.join("print-partner.db"),
+        path.join("print-partner.db-wal"),
+        path.join(".desktop.lock"),
+        path.join(".desktop-owner.json"),
+        aliases.join("wal-alias"),
+        aliases.join("data/print-partner.db"),
+    ] {
+        let error = owner.backup(&target).unwrap_err().to_string();
+        assert!(
+            error.contains("managed storage") || error.contains("must be a new file"),
+            "{target:?} {error}"
+        );
+        assert_eq!(std::fs::metadata(&lock).unwrap().ino(), inode);
+        assert_eq!(
+            std::fs::read(path.join(".desktop-owner.json")).unwrap(),
+            marker
+        );
+        assert!(
+            std::fs::File::open(&lock)
+                .unwrap()
+                .try_lock_exclusive()
+                .is_err()
+        );
+    }
+    let exported = aliases.join("offline.db");
+    owner.backup(&exported).unwrap();
+    owner.shutdown().unwrap();
+    let backup = Connection::open_with_flags(&exported, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
+    let read = owner.client().reader(Duration::ZERO).unwrap();
+    for key in ["kept-a", "kept-b"] {
+        let expected = SettingSnapshot::Stored {
+            value: "committed".into(),
+        };
+        assert_eq!(read.snapshot("test", key).unwrap(), expected);
+        assert_eq!(snapshot(&backup, "test", key).unwrap(), expected);
+    }
+    drop(read);
+    drop(backup);
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn ticket_t_7_writer_retains_ownership_when_cleanup_fails() {
+    use fs2::FileExt;
+    let (path, owner, client) = fixture("t7-cleanup");
+    set(&client, "kept", "yes")
+        .unwrap()
+        .recv()
+        .unwrap()
+        .unwrap();
+    let marker = std::fs::read(path.join(".desktop-owner.json")).unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&marker).unwrap();
+    let runtime = PathBuf::from(value["runtime_dir"].as_str().unwrap());
+    std::fs::write(runtime.join("block-release"), b"retain").unwrap();
+    let error = owner.shutdown().unwrap_err().to_string();
+    assert!(
+        error.contains(
+            "Storage cleanup failed; ownership retained until explicit retry or process exit"
+        ),
+        "{error}"
+    );
+    assert_eq!(
+        std::fs::read(path.join(".desktop-owner.json")).unwrap(),
+        marker
+    );
+    let blocked = match WriterOwner::open(&path, Limits::default()) {
+        Ok(_) => panic!("cleanup failure released ownership"),
+        Err(error) => error.to_string(),
+    };
+    assert!(
+        blocked.contains("already owned") || blocked.contains("may still be alive"),
+        "{blocked}"
+    );
+    assert!(
+        std::fs::File::open(path.join(".desktop.lock"))
+            .unwrap()
+            .try_lock_exclusive()
+            .is_err()
+    );
+    let retained = lease::StorageLease::retry_failed_release(&path).unwrap();
+    assert!(retained.ownership_retained);
+    assert!(!retained.marker_removed);
+    assert!(!retained.lock_released);
+    std::fs::remove_file(runtime.join("block-release")).unwrap();
+    let released = lease::StorageLease::retry_failed_release(&path).unwrap();
+    assert!(released.marker_removed);
+    assert!(released.runtime_removed);
+    assert!(released.lock_released);
+    assert!(!released.ownership_retained);
+    let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
+    let read = owner.client().reader(Duration::ZERO).unwrap();
+    assert_eq!(
+        read.snapshot("test", "kept").unwrap(),
+        SettingSnapshot::Stored {
+            value: "yes".into()
+        }
+    );
+    drop(read);
+    owner.shutdown().unwrap();
 }
