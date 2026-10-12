@@ -38,7 +38,7 @@ Transitive packages are recorded in `web/package-lock.json` and remain subject t
 | @radix-ui/react-tooltip | 1.2.16 | MIT | https://radix-ui.com/primitives |
 | @sentry/react | 10.75.1 | MIT | https://github.com/getsentry/sentry-javascript/tree/master/packages/react |
 | @tailwindcss/vite | 4.3.3 | MIT | https://tailwindcss.com |
-| @tanstack/react-query | 5.103.2 | MIT | https://tanstack.com/query |
+| @tanstack/react-query | 5.104.0 | MIT | https://tanstack.com/query |
 | adm-zip | 0.6.1 | MIT | https://github.com/cthackers/adm-zip |
 | better-sqlite3 | 13.0.3 | MIT | https://github.com/WiseLibs/better-sqlite3 |
 | chokidar | 4.0.3 | MIT | https://github.com/paulmillr/chokidar |
@@ -53,7 +53,7 @@ Transitive packages are recorded in `web/package-lock.json` and remain subject t
 | jszip | 3.10.2 | (MIT OR GPL-3.0-or-later) | https://github.com/Stuk/jszip |
 | lucide-react | 1.34.0 | ISC | https://lucide.dev |
 | mqtt | 5.15.2 | MIT | https://github.com/mqttjs/MQTT.js |
-| nodemailer | 10.0.12 | MIT-0 | https://nodemailer.com/ |
+| nodemailer | 10.0.13 | MIT-0 | https://nodemailer.com/ |
 | pdf-parse | 2.4.5 | Apache-2.0 | https://mehmet-kozan.github.io/pdf-parse/ |
 | pg | 8.23.0 | MIT | https://github.com/brianc/node-postgres |
 | pino | 10.3.1 | MIT | https://getpino.io |
@@ -61,7 +61,7 @@ Transitive packages are recorded in `web/package-lock.json` and remain subject t
 | react-dom | 19.2.8 | MIT | https://react.dev/ |
 | react-router-dom | 7.18.3 | MIT | https://github.com/remix-run/react-router |
 | sonner | 2.0.8 | MIT | https://sonner.emilkowal.ski/ |
-| tailwind-merge | 3.6.0 | MIT | https://github.com/dcastil/tailwind-merge |
+| tailwind-merge | 3.7.0 | MIT | https://github.com/dcastil/tailwind-merge |
 | tar | 7.5.22 | BlueOak-1.0.0 | https://github.com/isaacs/node-tar |
 | three | 0.186.1 | MIT | https://threejs.org/ |
 | undici | 7.29.1 | MIT | https://undici.nodejs.org |
