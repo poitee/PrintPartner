@@ -6097,3 +6097,18 @@ test("r32-explicitly-disabled-local-hook-is-data", () => {
   assertSafeCommand('ssh -o PermitLocalCommand=no -o PermitLocalCommand=yes -o "LocalCommand=curl 3232235856" example.test');
   assertBannedCommand('ssh -o PermitLocalCommand=yes -o PermitLocalCommand=no -o "LocalCommand=curl 3232235856" example.test');
 });
+
+test("r32-ssh-hook-external-client-and-shell-inputs-refuse", () => {
+  for (const text of [
+    "curl --config config.txt", "curl --conf=config.txt", "curl -vKconfig.txt", "curl -K -",
+    "wget --config=config.txt", "wget --input-file=urls.txt", "wget -iurls.txt",
+    "wget -e input_file=urls.txt", "bash --rcfile config.txt -c 'curl example.test'",
+    "bash -ic 'curl example.test'", "sh script.sh",
+  ]) {
+    const result = lintPrEvidence(commandEvidence(`ssh -o "ProxyCommand=${text}" example.test`));
+    assert.equal(result.ok, false, text);
+    assert.match(result.errors.join("\n"), /SSH connection options/);
+  }
+  assertSafeCommand('ssh -o "ProxyCommand=curl -H --config=literal example.test" example.test');
+  assertSafeCommand('ssh -o "ProxyCommand=wget -U --config=literal example.test" example.test');
+});

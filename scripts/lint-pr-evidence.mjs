@@ -3726,6 +3726,32 @@ function sshDestinations(args) {
   return { hosts, commands, sshUnresolved };
 }
 
+function staticSshClientOptions(client, args) {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--") break;
+    if (arg.startsWith("--")) {
+      const equal = arg.indexOf("=");
+      const raw = arg.slice(2, equal === -1 ? undefined : equal);
+      const name = client === "wget" ? resolveWgetLongOption(raw) ?? raw : raw;
+      if (client === "curl" && raw && "config".startsWith(raw)) return false;
+      if (client === "wget" && ["config", "input-file", "input-metalink", "execute"].includes(name)) return false;
+      const values = client === "curl" ? CURL_VALUE_OPTIONS : WGET_VALUE_OPTIONS;
+      if (equal === -1 && (values.has(name) || (client === "wget" && WGET_URL_OPTIONS.has(name)))) index += 1;
+    } else if (arg.startsWith("-") && arg !== "-") {
+      for (let at = 1; at < arg.length; at += 1) {
+        const flag = arg[at];
+        if (client === "curl" ? flag === "K" : flag === "i" || flag === "e") return false;
+        const takes = client === "curl" ? CURL_SHORT_VALUE_OPTIONS.has(flag) : WGET_SHORT_VALUE.has(flag);
+        if (!takes) continue;
+        if (at + 1 === arg.length) index += 1;
+        break;
+      }
+    }
+  }
+  return true;
+}
+
 const SSH_INERT_COMMANDS = new Set(["cat", "echo", "printf", "true", "false", ":"]);
 
 function staticSshCommand(text, depth = 0) {
@@ -3746,10 +3772,20 @@ function staticSshCommand(text, depth = 0) {
     const program = command[opened.index].text;
     const name = program.slice(program.lastIndexOf("/") + 1);
     if (STATIC_SHELLS.has(name) || name === "eval") {
+      for (const word of command.slice(opened.index + 1)) {
+        if (word.text.startsWith("--rcfile") || word.text.startsWith("--init-file")) return false;
+        if (!word.text.startsWith("-") || word.text.startsWith("--")) continue;
+        for (const flag of word.text.slice(1)) {
+          if (flag === "c") break;
+          if (flag === "i" || flag === "l") return false;
+        }
+      }
       const shell = staticShellOperand(command.slice(opened.index));
       return Boolean(shell) && !shell.reject && staticSshCommand(shell.text, depth + 1);
     }
-    return true;
+    const client = transferClientName(program);
+    return client !== "curl" && client !== "wget"
+      ? true : staticSshClientOptions(client, command.slice(opened.index + 1).map((word) => word.text));
   };
   for (const token of shellWords(text, { commandTokens: true })) {
     if (token === null || token.fence) {
