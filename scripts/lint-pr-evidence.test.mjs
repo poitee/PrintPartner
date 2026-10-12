@@ -5481,6 +5481,7 @@ test("r25-name-only-export-publishes-static-proxy", () => {
     "http_proxy=3232235856; export http_proxy; http_proxy=3232235855 curl http://example.test/; curl http://example.test/a",
     "bash -c 'http_proxy=3232235856; export http_proxy; curl http://example.test/'",
     "http_proxy+=3232235856; export http_proxy; curl http://example.test/",
+    "http_proxy=$((3232235856)); export http_proxy; curl http://example.test/",
     "export http_proxy=3232235856; http_proxy=3232235855; curl http://example.test/",
   ]) {
     r19Expect(commandEvidence(command), 1, "", LAN_STDERR);
@@ -5499,7 +5500,7 @@ test("r25-name-only-export-publishes-static-proxy", () => {
     r19Expect(commandEvidence(command), 0, OK_LINE, "");
   }
   r19Expect(commandEvidence("http_proxy=$(printf 3232235856); export http_proxy; curl http://example.test/"), 1, "", R20_SUBSTITUTION_STDERR);
-  r19Expect(commandEvidence("http_proxy=$((3232235856)); export http_proxy; curl http://example.test/"), 1, "", R19_ARITHMETIC_STDERR);
+  r19Expect(commandEvidence("http_proxy=$((nope)); export http_proxy; curl http://example.test/"), 1, "", R19_ARITHMETIC_STDERR);
   r19Expect(r25Fences("http_proxy=3232235856", "export http_proxy; curl http://example.test/"), 0, OK_LINE, "");
 });
 
@@ -5509,6 +5510,7 @@ test("r25-curl-stdin-config-fails-closed", () => {
     "printf 'url = http://example.test/\\n' | curl --config -",
     "curl --config -",
     "curl --config=-",
+    "curl --config='-'",
     "curl -K -",
     "curl -K-",
     "curl -sK - http://example.test/",

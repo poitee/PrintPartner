@@ -1944,10 +1944,10 @@ function shellWords(value, { commandTokens = false } = {}) {
       index = substitution.end - 1;
       continue;
     }
-    // A fence line is three or more backticks. Those ticks stay separators.
+    // A fence line is three or more backticks. Those ticks stay separators, and the marker tells the caller to drop retained assignments.
     if (quote === null && ch === "`" && fenceAt(index)) {
       flush();
-      if (commandTokens) words.push(null);
+      if (commandTokens) words.push({ fence: true });
       continue;
     }
     if (quote !== "'" && ch === "`") {
@@ -2618,6 +2618,16 @@ function assignmentName(text) {
   return name;
 }
 
+function assignmentFlags(word, assigned) {
+  const rest = word.text.replace(/\$\(\(/g, "");
+  const substitution = Boolean(word.substitution) || /\$\(/.test(rest);
+  return {
+    substitution,
+    arithmetic: Boolean(word.unresolved) && (/\$\(\(/.test(word.text) || (!substitution && !/\$\(/.test(word.text))),
+    parameter: (word.parameters ?? []).some((name) => assigned?.has(name)),
+  };
+}
+
 function noteProxyAssignment(proxies, word, assigned) {
   if (!word?.text) return;
   if (assigned && word.assignable) {
@@ -2626,14 +2636,13 @@ function noteProxyAssignment(proxies, word, assigned) {
   }
   const value = proxyAssignmentValue(word.text);
   if (value == null) return;
-  const rest = word.text.replace(/\$\(\(/g, "");
-  const commandSubstitution = Boolean(word.substitution) || /\$\(/.test(rest);
+  const flags = assignmentFlags(word, assigned);
   const entry = {
     name: proxyAssignmentName(word.text),
     value,
-    arithmetic: Boolean(word.unresolved) && (/\$\(\(/.test(word.text) || (!commandSubstitution && !/\$\(/.test(word.text))),
-    substitution: commandSubstitution,
-    parameter: (word.parameters ?? []).some((name) => assigned?.has(name)),
+    arithmetic: flags.arithmetic,
+    substitution: flags.substitution,
+    parameter: flags.parameter,
   };
   if (!Array.isArray(proxies)) {
     if (entry.name) proxies.set(entry.name, entry);
@@ -2932,7 +2941,43 @@ function staticShellOperand(command) {
   return null;
 }
 
-function noteShellExport(command, exported, assigned) {
+// A standalone assignment stays available to a later name-only export. A prefix assignment does not.
+function rememberAssignment(word, shellVars, assigned) {
+  if (!word?.text) return;
+  const name = assignmentName(word.text);
+  if (!name) return;
+  if (assigned && word.assignable) assigned.add(name);
+  const eq = word.text.indexOf("=");
+  const flags = assignmentFlags(word, assigned);
+  shellVars.set(name, {
+    value: word.text.slice(eq + 1),
+    arithmetic: flags.arithmetic,
+    substitution: flags.substitution,
+    parameter: flags.parameter,
+  });
+}
+
+function rememberStandalone(command, shellVars, assigned) {
+  if (command.length === 0) return false;
+  if (!command.every((word) => /^[a-zA-Z_][\w]*\+?=/.test(word?.text ?? ""))) return false;
+  for (const word of command) rememberAssignment(word, shellVars, assigned);
+  return true;
+}
+
+function publishExportedName(name, exported, shellVars) {
+  if (!PROXY_URL_NAMES.has(name)) return;
+  const binding = shellVars.get(name);
+  if (!binding) return;
+  exported.set(name, {
+    name,
+    value: binding.value,
+    arithmetic: binding.arithmetic,
+    substitution: binding.substitution,
+    parameter: binding.parameter,
+  });
+}
+
+function noteShellExport(command, exported, assigned, shellVars) {
   const start = commandProgramIndex(command);
   if (command[start]?.text !== "export") return false;
   for (const word of command.slice(0, start)) {
@@ -2942,10 +2987,16 @@ function noteShellExport(command, exported, assigned) {
     }
   }
   for (let index = start + 1; index < command.length; index += 1) {
-    const text = command[index].text;
+    const word = command[index];
+    const text = word.text;
     if (text === "--") continue;
     if (text.startsWith("-") && text !== "-" && !text.includes("=")) continue;
-    noteProxyAssignment(exported, command[index], assigned);
+    if (text.includes("=")) {
+      noteProxyAssignment(exported, word, assigned);
+      rememberAssignment(word, shellVars, assigned);
+      continue;
+    }
+    if (/^[A-Za-z_][\w]*$/.test(text)) publishExportedName(text, exported, shellVars);
   }
   return true;
 }
@@ -2958,7 +3009,7 @@ function mergedProxies(exported, local) {
 
 function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), depth = 0) {
   if (depth > 8) {
-    return { targets: [], overflow: false, budget: false, unresolved: false, substitution: true, parameter: false };
+    return { targets: [], overflow: false, budget: false, unresolved: false, substitution: true, parameter: false, stdinConfig: false };
   }
   const targets = [];
   let overflow = false;
@@ -2966,6 +3017,8 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
   let unresolved = false;
   let substitution = false;
   let parameter = false;
+  let stdinConfig = false;
+  const shellVars = new Map();
   const bodies = [];
   const exported = new Map(inherited);
   const markUnresolved = (item) => {
@@ -2979,7 +3032,11 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
   };
   let command = [];
   const flush = () => {
-    if (noteShellExport(command, exported, assigned)) {
+    if (noteShellExport(command, exported, assigned, shellVars)) {
+      command = [];
+      return;
+    }
+    if (rememberStandalone(command, shellVars, assigned)) {
       command = [];
       return;
     }
@@ -2997,6 +3054,7 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
         unresolved ||= inner.unresolved;
         substitution ||= inner.substitution;
         parameter ||= inner.parameter;
+        stdinConfig ||= inner.stdinConfig;
       }
       command = [];
       return;
@@ -3068,6 +3126,13 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
       if (arg === "--globoff") { globoff = true; continue; }
       if (arg === "--no-globoff") { globoff = false; continue; }
       if (arg.startsWith("--")) {
+        const equal = arg.indexOf("=");
+        const optionName = arg.slice(2, equal === -1 ? undefined : equal);
+        // --config - can supply a transfer URL. A config path stays unread.
+        if (optionName === "config") {
+          const operand = equal === -1 ? args[i + 1] : arg.slice(equal + 1);
+          if (operand === "-") stdinConfig = true;
+        }
         const parsed = curlExpandedOption(arg, args, i, variables, expandBudget);
         i = parsed.index;
         if (parsed.budget) budget = true;
@@ -3087,6 +3152,7 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
             const inline = arg.slice(at + 1);
             const operand = inline === "" ? args[i + 1] : inline;
             if (inline === "") i += 1;
+            if (arg[at] === "K" && operand === "-") stdinConfig = true;
             if (arg[at] === "x" && operand !== undefined) {
               const referencesAssigned = (tagged[i]?.parameters ?? []).some((name) => assigned.has(name));
               if (tagged[i]?.unresolved || referencesAssigned) markUnresolved(tagged[i]);
@@ -3103,8 +3169,10 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
     command = [];
   };
   for (const token of shellWords(value, { commandTokens: true })) {
-    if (token === null) flush();
-    else {
+    if (token === null || token.fence) {
+      flush();
+      if (token !== null) shellVars.clear();
+    } else {
       command.push(token);
       if (token.substitutionBodies.length > 0) {
         const seen = new Map(exported);
@@ -3121,8 +3189,9 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
     unresolved ||= inner.unresolved;
     substitution ||= inner.substitution;
     parameter ||= inner.parameter;
+    stdinConfig ||= inner.stdinConfig;
   }
-  return { targets, overflow, budget, unresolved, substitution, parameter };
+  return { targets, overflow, budget, unresolved, substitution, parameter, stdinConfig };
 }
 
 function joinShellContinuations(value) {
@@ -3188,6 +3257,7 @@ function targetsBannedLan(sectionText, definitions, literalText = []) {
   let unresolved = false;
   let substitution = false;
   let parameter = false;
+  let stdinConfig = false;
   const verification = withoutFencePayload(withoutFields(sectionText, [FIELD_LABELS.reason], {
     keepLazy: true,
   }).replace(
@@ -3203,6 +3273,7 @@ function targetsBannedLan(sectionText, definitions, literalText = []) {
     if (curl.unresolved) unresolved = true;
     if (curl.substitution) substitution = true;
     if (curl.parameter) parameter = true;
+    if (curl.stdinConfig) stdinConfig = true;
     if (curl.overflow) return true;
     const decoded = shellVisible(joined);
     const targets = [...decoded.matchAll(/(?:https?:|\/\/)[^\s<>()"'`]+/gi)]
@@ -3235,7 +3306,7 @@ function targetsBannedLan(sectionText, definitions, literalText = []) {
     // Malformed links render as raw text. Unlike artifact validation, the LAN
     // scan must retain their suffix so later reference uses cannot disappear.
     || (definitions.size > 0 && [...referenceUses(verification, { keepMalformed: true })].some((label) => bannedTarget(definitions.get(label) ?? "")));
-  return { banned, budget, unresolved, substitution, parameter };
+  return { banned, budget, unresolved, substitution, parameter, stdinConfig };
 }
 
 function documentReferences(body) {
@@ -3339,6 +3410,11 @@ export function lintPrEvidence(body) {
   if (directLan.parameter || conservativeLan.parameter) {
     errors.push(
       "Evidence contains a curl or wget target with a shell variable this static check could not resolve. Rewrite that operand without variable expansion.",
+    );
+  }
+  if (directLan.stdinConfig || conservativeLan.stdinConfig) {
+    errors.push(
+      "Evidence contains a curl --config or -K stdin source this static check does not read. Put the transfer URL on the curl command line.",
     );
   }
 
