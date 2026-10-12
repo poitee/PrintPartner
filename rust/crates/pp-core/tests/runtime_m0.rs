@@ -5,7 +5,7 @@ use axum::{
 use http_body_util::BodyExt;
 use hyper_util::rt::TokioIo;
 use pp_core::{CoreRuntime, CoreStatus, DesktopLaunch, SupervisorConfig, VerifiedBundle};
-use std::{path::PathBuf, time::Duration};
+use std::{os::unix::fs::PermissionsExt, path::PathBuf, time::Duration};
 
 fn launch(data: PathBuf) -> DesktopLaunch {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -956,8 +956,17 @@ fn sha256_hex(path: &std::path::Path) -> String {
     "unavailable".into()
 }
 
+fn line_carries_setup_secret(line: &str) -> bool {
+    let trimmed = line.trim();
+    line.contains("\"lease\"")
+        || line.contains("\"key\"")
+        || line.contains("\"generation\"")
+        || trimmed.starts_with("generation=")
+        || trimmed.starts_with("generation:")
+}
+
 fn eprint_redacted_line(line: &str) {
-    if line.contains("\"lease\"") || line.contains("\"key\"") {
+    if line_carries_setup_secret(line) {
         eprintln!("[redacted]");
     } else {
         eprintln!("{line}");
@@ -1003,7 +1012,13 @@ fn eprint_core_start_failure(data: &std::path::Path, error: &dyn std::fmt::Displ
         }
     }
     if let Some(path) = std::env::var_os("PP_COMPAT_STARTUP_DIAGNOSTIC") {
-        let path = PathBuf::from(path);
+        let mut path = PathBuf::from(path);
+        if std::fs::symlink_metadata(&path)
+            .map(|meta| meta.is_dir())
+            .unwrap_or(false)
+        {
+            path.push("startup-diagnostic.txt");
+        }
         eprintln!("diagnostic_path={}", path.display());
         match std::fs::read_to_string(&path) {
             Ok(text) => {
@@ -1454,13 +1469,13 @@ fn core_death_with_live_child_refuses_standalone_node() {
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
     let data = temporary("core-death-live-child");
+    let diagnostic_dir = temporary("core-death-diagnostic");
+    std::fs::create_dir(&diagnostic_dir).unwrap();
+    std::fs::set_permissions(&diagnostic_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
     let mut core = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "core_process_fixture", "--nocapture"])
         .env("PP_CORE_DEATH_FIXTURE", &data)
-        .env(
-            "PP_COMPAT_STARTUP_DIAGNOSTIC",
-            data.join("startup-diagnostic.txt"),
-        )
+        .env("PP_COMPAT_STARTUP_DIAGNOSTIC", &diagnostic_dir)
         .stdout(Stdio::piped())
         .spawn()
         .unwrap();
@@ -1477,14 +1492,19 @@ fn core_death_with_live_child_refuses_standalone_node() {
                 .any(|line| line.unwrap().contains("PP_CORE_READY"))
         );
         let diagnostic_text =
-            std::fs::read_to_string(data.join("startup-diagnostic.txt")).unwrap_or_default();
+            std::fs::read_to_string(diagnostic_dir.join("startup-diagnostic.txt"))
+                .unwrap_or_default();
         assert!(
             diagnostic_text.contains("node="),
             "startup diagnostic missing node identity"
         );
         assert!(
-            !diagnostic_text.contains("\"lease\"") && !diagnostic_text.contains("\"key\""),
-            "startup diagnostic contained a setup field"
+            !diagnostic_text.contains("\"lease\"")
+                && !diagnostic_text.contains("\"key\"")
+                && !diagnostic_text.contains("\"generation\"")
+                && !diagnostic_text.contains("generation=")
+                && !diagnostic_text.contains("generation:"),
+            "startup diagnostic contained a setup field: {diagnostic_text}"
         );
         let marker_path = data.join(".desktop-owner.json");
         let contents = std::fs::read(&marker_path).unwrap();

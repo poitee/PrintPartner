@@ -14,7 +14,7 @@ use sha2::Sha256;
 use std::{
     io::Write,
     os::fd::{AsRawFd, FromRawFd, OwnedFd},
-    os::unix::{fs::OpenOptionsExt, process::ExitStatusExt},
+    os::unix::process::ExitStatusExt,
     path::{Path, PathBuf},
     pin::Pin,
     process::{ExitStatus, Stdio},
@@ -479,6 +479,7 @@ fn configure_child(
 }
 
 const STARTUP_DIAGNOSTIC_LIMIT: u64 = 16 * 1024;
+const STARTUP_DIAGNOSTIC_NAME: &str = "startup-diagnostic.txt";
 
 fn startup_diagnostic_target() -> Option<PathBuf> {
     let value = std::env::var_os("PP_COMPAT_STARTUP_DIAGNOSTIC")?;
@@ -488,9 +489,43 @@ fn startup_diagnostic_target() -> Option<PathBuf> {
     Some(PathBuf::from(value))
 }
 
-fn redact_diagnostic_line(line: &[u8]) -> Vec<u8> {
+fn managed_component(name: &std::ffi::OsStr) -> bool {
+    let Some(text) = name.to_str() else {
+        return true;
+    };
+    matches!(
+        text,
+        "print-partner.db"
+            | "print-partner.db-wal"
+            | "print-partner.db-shm"
+            | "print-partner.db-journal"
+            | ".desktop.lock"
+            | ".desktop-owner.json"
+            | ".desktop-lease"
+            | "owner.json"
+    ) || text.ends_with(".sock")
+}
+
+fn path_allows_diagnostic(path: &Path) -> bool {
+    path.components().all(|component| match component {
+        std::path::Component::RootDir | std::path::Component::CurDir => true,
+        std::path::Component::Normal(name) => !managed_component(name),
+        _ => false,
+    })
+}
+
+fn line_carries_setup_secret(line: &[u8]) -> bool {
     let text = String::from_utf8_lossy(line);
-    if text.contains("\"lease\"") || text.contains("\"key\"") {
+    let trimmed = text.trim();
+    text.contains("\"lease\"")
+        || text.contains("\"key\"")
+        || text.contains("\"generation\"")
+        || trimmed.starts_with("generation=")
+        || trimmed.starts_with("generation:")
+}
+
+fn redact_diagnostic_line(line: &[u8]) -> Vec<u8> {
+    if line_carries_setup_secret(line) {
         return b"[redacted]".to_vec();
     }
     if line.len() > 1024 {
@@ -501,48 +536,182 @@ fn redact_diagnostic_line(line: &[u8]) -> Vec<u8> {
     line.to_vec()
 }
 
-fn write_startup_diagnostic(path: &Path, label: &str, bytes: &[u8]) {
-    let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .mode(0o600)
-        .open(path)
-    else {
+struct HeldDiagnostic {
+    file: std::fs::File,
+    written: u64,
+}
+
+enum DiagnosticSlot {
+    Closed,
+    Refused,
+    Open(HeldDiagnostic),
+}
+
+fn diagnostic_slot() -> &'static Mutex<DiagnosticSlot> {
+    static SLOT: Mutex<DiagnosticSlot> = Mutex::new(DiagnosticSlot::Closed);
+    &SLOT
+}
+
+fn diagnostic_roots() -> &'static Mutex<Vec<PathBuf>> {
+    static ROOTS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+    &ROOTS
+}
+
+fn remember_diagnostic_roots(data_dir: &Path, runtime_dir: &Path) {
+    let Ok(mut roots) = diagnostic_roots().lock() else {
         return;
     };
-    if file
-        .metadata()
-        .map(|meta| meta.len())
-        .unwrap_or(STARTUP_DIAGNOSTIC_LIMIT)
-        >= STARTUP_DIAGNOSTIC_LIMIT
+    roots.clear();
+    roots.push(data_dir.to_path_buf());
+    roots.push(runtime_dir.to_path_buf());
+}
+
+fn path_is_forbidden(path: &Path) -> bool {
+    let Ok(roots) = diagnostic_roots().lock() else {
+        return true;
+    };
+    roots
+        .iter()
+        .any(|root| path == root || path.starts_with(root))
+}
+
+fn directory_identity(fd: std::os::fd::RawFd) -> Option<PathBuf> {
+    #[cfg(target_os = "linux")]
     {
+        std::fs::read_link(format!("/proc/self/fd/{fd}")).ok()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let mut buf = vec![0u8; 4096];
+        let rc = unsafe { libc::fcntl(fd, libc::F_GETPATH, buf.as_mut_ptr()) };
+        if rc != 0 {
+            return None;
+        }
+        let end = buf.iter().position(|byte| *byte == 0).unwrap_or(buf.len());
+        Some(PathBuf::from(std::ffi::OsStr::from_bytes(&buf[..end])))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = fd;
+        None
+    }
+}
+
+fn open_private_diagnostic(dir: &Path) -> Option<HeldDiagnostic> {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::PermissionsExt;
+    if !path_allows_diagnostic(dir) || path_is_forbidden(dir) {
+        return None;
+    }
+    let meta = std::fs::symlink_metadata(dir).ok()?;
+    if !meta.file_type().is_dir()
+        || meta.file_type().is_symlink()
+        || meta.permissions().mode() & 0o077 != 0
+    {
+        return None;
+    }
+    let bytes = dir.as_os_str().as_bytes();
+    if bytes.contains(&0) {
+        return None;
+    }
+    let c_dir = std::ffi::CString::new(bytes).ok()?;
+    let dir_fd = unsafe {
+        libc::open(
+            c_dir.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if dir_fd < 0 {
+        return None;
+    }
+    let dir_owned = unsafe { OwnedFd::from_raw_fd(dir_fd) };
+    let identity = directory_identity(dir_owned.as_raw_fd())?;
+    if path_is_forbidden(&identity) || !path_allows_diagnostic(&identity) {
+        return None;
+    }
+    let name = std::ffi::CString::new(STARTUP_DIAGNOSTIC_NAME).ok()?;
+    let file_fd = unsafe {
+        libc::openat(
+            dir_owned.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_CREAT | libc::O_EXCL | libc::O_WRONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0o600,
+        )
+    };
+    if file_fd < 0 {
+        return None;
+    }
+    Some(HeldDiagnostic {
+        file: std::fs::File::from(unsafe { OwnedFd::from_raw_fd(file_fd) }),
+        written: 0,
+    })
+}
+
+fn write_held(held: &mut HeldDiagnostic, label: &str, bytes: &[u8]) {
+    if held.written >= STARTUP_DIAGNOSTIC_LIMIT {
         return;
     }
-    let _ = file.write_all(format!("[{label}]\n").as_bytes());
+    let mut record = format!("[{label}]\n").into_bytes();
     let mut start = 0;
     for (index, byte) in bytes.iter().enumerate() {
         if *byte != b'\n' {
             continue;
         }
-        let _ = file.write_all(&redact_diagnostic_line(&bytes[start..index]));
-        let _ = file.write_all(b"\n");
+        record.extend_from_slice(&redact_diagnostic_line(&bytes[start..index]));
+        record.push(b'\n');
         start = index + 1;
     }
     if start < bytes.len() {
-        let _ = file.write_all(&redact_diagnostic_line(&bytes[start..]));
-        let _ = file.write_all(b"\n");
+        record.extend_from_slice(&redact_diagnostic_line(&bytes[start..]));
+        record.push(b'\n');
+    }
+    let room = (STARTUP_DIAGNOSTIC_LIMIT - held.written) as usize;
+    let take = record.len().min(room);
+    if held.file.write_all(&record[..take]).is_ok() {
+        held.written += take as u64;
     }
 }
 
 fn note_startup_diagnostic(label: &str, bytes: &[u8]) {
-    let Some(path) = startup_diagnostic_target() else {
+    let Some(dir) = startup_diagnostic_target() else {
         return;
     };
-    static LOCK: Mutex<()> = Mutex::new(());
-    let Ok(_guard) = LOCK.lock() else {
+    let Ok(mut slot) = diagnostic_slot().lock() else {
         return;
     };
-    write_startup_diagnostic(&path, label, bytes);
+    if matches!(*slot, DiagnosticSlot::Closed) {
+        *slot = match open_private_diagnostic(&dir) {
+            Some(held) => DiagnosticSlot::Open(held),
+            None => DiagnosticSlot::Refused,
+        };
+    }
+    let DiagnosticSlot::Open(held) = &mut *slot else {
+        return;
+    };
+    write_held(held, label, bytes);
+}
+
+#[cfg(test)]
+fn close_startup_diagnostic_slot() {
+    if let Ok(mut slot) = diagnostic_slot().lock() {
+        *slot = DiagnosticSlot::Closed;
+    }
+}
+
+#[cfg(test)]
+fn reset_startup_diagnostic() {
+    close_startup_diagnostic_slot();
+    if let Ok(mut roots) = diagnostic_roots().lock() {
+        roots.clear();
+    }
+}
+
+#[cfg(test)]
+fn forbid_diagnostic_roots(paths: &[PathBuf]) {
+    if let Ok(mut roots) = diagnostic_roots().lock() {
+        *roots = paths.to_vec();
+    }
 }
 
 struct DiagnosticCopy<R> {
@@ -602,6 +771,7 @@ impl<R: AsyncRead + Unpin> AsyncRead for DiagnosticCopy<R> {
 
 impl Process {
     async fn spawn(spec: &SpawnSpec, capture: &logs::Logs) -> Result<Self> {
+        remember_diagnostic_roots(&spec.data_dir, &spec.runtime_dir);
         release::verify_backend(&spec.bundle)?;
         let package_root = release::package_root(&spec.bundle)?;
         let preload = spec
@@ -1393,56 +1563,97 @@ mod tests {
         );
     }
 
+    fn private_dir(label: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("pp-diag-{label}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        dir
+    }
+
+    fn mode_bits(path: &std::path::Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::symlink_metadata(path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777
+    }
+
+    struct ClearDiagnosticEnv;
+    impl Drop for ClearDiagnosticEnv {
+        fn drop(&mut self) {
+            // SAFETY: this test owns the variable and clears the process slot on every exit.
+            unsafe {
+                std::env::remove_var("PP_COMPAT_STARTUP_DIAGNOSTIC");
+            }
+            super::reset_startup_diagnostic();
+        }
+    }
+
+    fn arm_diagnostic(dir: &std::path::Path) -> ClearDiagnosticEnv {
+        super::close_startup_diagnostic_slot();
+        // SAFETY: the variable is private to this test and Drop removes it.
+        unsafe {
+            std::env::set_var("PP_COMPAT_STARTUP_DIAGNOSTIC", dir);
+        }
+        ClearDiagnosticEnv
+    }
+
+    fn sample_setup() -> (Vec<u8>, String) {
+        let lease = "c0ffee-lease-value";
+        let key = "c0ffee-key-value";
+        let generation = "c0ffee-generation-value";
+        let input = format!(
+            "{{\"version\":1,\"lease\":\"{lease}\",\"key\":\"{key}\"}}\n\"generation\":\"{generation}\"\ngeneration={generation}\n{{\n\"lease\": \"{lease}\",\n\"key\": \"{key}\",\n\"generation\": \"{generation}\"\n}}\nready check failed: ENOENT desktop.js\n"
+        );
+        let expected = "\
+[stderr]
+[redacted]
+[redacted]
+[redacted]
+{
+[redacted]
+[redacted]
+[redacted]
+}
+ready check failed: ENOENT desktop.js
+";
+        (input.into_bytes(), expected.to_string())
+    }
+
     #[test]
     fn startup_diagnostic_redacts_setup_and_keeps_the_reason() {
-        let dir = std::env::temp_dir().join(format!("pp-diag-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("diag.txt");
-        super::write_startup_diagnostic(
-            &path,
-            "stderr",
-            b"{\"version\":1,\"lease\":\"secret-lease\",\"key\":\"secret-key\"}\nready check failed: ENOENT desktop.js\n",
-        );
-        let text = std::fs::read_to_string(&path).unwrap();
-        assert!(
-            text.contains("ready check failed: ENOENT desktop.js"),
-            "{text}"
-        );
-        assert!(!text.contains("secret-lease"), "{text}");
-        assert!(!text.contains("secret-key"), "{text}");
-        assert!(text.contains("[redacted]"), "{text}");
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = private_dir("redact");
+        let _guard = arm_diagnostic(&dir);
+        let (input, expected) = sample_setup();
+        super::note_startup_diagnostic("stderr", &input);
+        let text = std::fs::read_to_string(dir.join("startup-diagnostic.txt")).unwrap();
+        assert_eq!(text, expected);
+        let raw = String::from_utf8(input).unwrap();
+        for secret in [
+            "c0ffee-lease-value",
+            "c0ffee-key-value",
+            "c0ffee-generation-value",
+        ] {
+            assert!(!text.contains(secret), "{secret} remained in {text}");
+            assert!(raw.contains(secret));
+        }
+        assert!(text.contains("ready check failed: ENOENT desktop.js"));
     }
 
     #[tokio::test]
     async fn startup_diagnostic_tee_forwards_bytes_and_records_stderr() {
         use tokio::io::AsyncWriteExt;
-        let dir = std::env::temp_dir().join(format!("pp-diag-tee-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("diag.txt");
-        struct ClearDiagnosticEnv;
-        impl Drop for ClearDiagnosticEnv {
-            fn drop(&mut self) {
-                // SAFETY: the variable belongs to this test, and Drop removes it on every exit.
-                unsafe {
-                    std::env::remove_var("PP_COMPAT_STARTUP_DIAGNOSTIC");
-                }
-            }
-        }
-        let _clear = ClearDiagnosticEnv;
-        // SAFETY: the test sets one private variable and Drop removes it before other tests continue.
-        unsafe {
-            std::env::set_var("PP_COMPAT_STARTUP_DIAGNOSTIC", &path);
-        }
-        let (mut writer, reader) = tokio::io::duplex(256);
+        let dir = private_dir("tee");
+        let _guard = arm_diagnostic(&dir);
+        let (input, _) = sample_setup();
+        let (mut writer, reader) = tokio::io::duplex(1024);
         let mut tee = super::DiagnosticCopy::new(reader, "stderr");
-        let write = async {
-            writer
-                .write_all(b"{\"lease\":\"secret-lease\"}\nmodule missing\n")
-                .await
-                .unwrap();
+        let write_input = input.clone();
+        let write = async move {
+            writer.write_all(&write_input).await.unwrap();
             drop(writer);
         };
         let read = async {
@@ -1453,10 +1664,200 @@ mod tests {
             got
         };
         let ((), got) = tokio::join!(write, read);
-        assert_eq!(got, b"{\"lease\":\"secret-lease\"}\nmodule missing\n");
-        let text = std::fs::read_to_string(&path).unwrap();
-        assert!(text.contains("module missing"), "{text}");
-        assert!(!text.contains("secret-lease"), "{text}");
-        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(got, input);
+        let text = std::fs::read_to_string(dir.join("startup-diagnostic.txt")).unwrap();
+        let expected = "\
+[stderr]
+[redacted]
+[stderr]
+[redacted]
+[stderr]
+[redacted]
+[stderr]
+{
+[stderr]
+[redacted]
+[stderr]
+[redacted]
+[stderr]
+[redacted]
+[stderr]
+}
+[stderr]
+ready check failed: ENOENT desktop.js
+";
+        assert_eq!(text, expected);
+        assert!(!text.contains("c0ffee-lease-value"), "{text}");
+        assert!(!text.contains("c0ffee-key-value"), "{text}");
+        assert!(!text.contains("c0ffee-generation-value"), "{text}");
+    }
+
+    #[test]
+    fn startup_diagnostic_unset_and_empty_do_not_create_a_file() {
+        let dir = private_dir("noop");
+        super::reset_startup_diagnostic();
+        // SAFETY: the variable is removed before this test returns.
+        unsafe {
+            std::env::remove_var("PP_COMPAT_STARTUP_DIAGNOSTIC");
+        }
+        super::note_startup_diagnostic("stderr", b"should-not-write");
+        assert!(!dir.join("startup-diagnostic.txt").exists());
+        unsafe {
+            std::env::set_var("PP_COMPAT_STARTUP_DIAGNOSTIC", "");
+        }
+        super::note_startup_diagnostic("stderr", b"should-not-write");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        unsafe {
+            std::env::remove_var("PP_COMPAT_STARTUP_DIAGNOSTIC");
+        }
+    }
+
+    fn assert_unchanged(path: &std::path::Path, bytes: &[u8], mode: u32) {
+        assert_eq!(std::fs::read(path).unwrap(), bytes);
+        assert_eq!(mode_bits(path), mode);
+    }
+
+    #[test]
+    fn startup_diagnostic_refuses_existing_file_symlink_and_preexisting_name() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = private_dir("refuse");
+        let victim = dir.join("victim-existing.txt");
+        std::fs::write(&victim, b"MANAGED_HEADER_DO_NOT_TOUCH").unwrap();
+        std::fs::set_permissions(&victim, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let _guard = arm_diagnostic(&victim);
+        super::note_startup_diagnostic("artifact", b"node=/tmp/evil\n");
+        assert_unchanged(&victim, b"MANAGED_HEADER_DO_NOT_TOUCH", 0o640);
+        drop(_guard);
+
+        let target = dir.join("symlink-target.txt");
+        std::fs::write(&target, b"TARGET_ORIGINAL").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let link = dir.join("diag-symlink");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let _guard = arm_diagnostic(&link);
+        super::note_startup_diagnostic("stderr", b"via symlink\n");
+        assert_unchanged(&target, b"TARGET_ORIGINAL", 0o640);
+        assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+        drop(_guard);
+
+        let linked_dir = private_dir("linked-real");
+        std::fs::write(linked_dir.join("marker"), b"keep-marker").unwrap();
+        let dir_link = dir.join("dir-link");
+        std::os::unix::fs::symlink(&linked_dir, &dir_link).unwrap();
+        let _guard = arm_diagnostic(&dir_link);
+        super::note_startup_diagnostic("stderr", b"through-dir-link\n");
+        assert!(!linked_dir.join("startup-diagnostic.txt").exists());
+        assert_eq!(
+            std::fs::read(linked_dir.join("marker")).unwrap(),
+            b"keep-marker"
+        );
+        drop(_guard);
+
+        let occupied = private_dir("occupied");
+        let existing = occupied.join("startup-diagnostic.txt");
+        std::fs::write(&existing, b"PREFIX").unwrap();
+        std::fs::set_permissions(&existing, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let _guard = arm_diagnostic(&occupied);
+        super::note_startup_diagnostic("stderr", b"must-not-append\n");
+        assert_unchanged(&existing, b"PREFIX", 0o640);
+    }
+
+    #[test]
+    fn startup_diagnostic_refuses_database_runtime_and_lease_targets() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = private_dir("managed");
+        let cases = [
+            ("print-partner.db", b"db-bytes".as_slice()),
+            ("print-partner.db-wal", b"wal-bytes"),
+            (".desktop.lock", b"lock-bytes"),
+            (".desktop-owner.json", b"owner-bytes"),
+            ("owner.json", b"lease-owner-bytes"),
+            ("runtime.sock", b"sock-bytes"),
+        ];
+        for (name, bytes) in cases {
+            let path = root.join(name);
+            std::fs::write(&path, bytes).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+            let _guard = arm_diagnostic(&path);
+            super::note_startup_diagnostic("artifact", b"node=/tmp/evil\n");
+            assert_unchanged(&path, bytes, 0o640);
+            drop(_guard);
+        }
+        let lease = root.join(".desktop-lease");
+        std::fs::create_dir(&lease).unwrap();
+        std::fs::set_permissions(&lease, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::write(lease.join("owner.json"), b"lease-file").unwrap();
+        let _guard = arm_diagnostic(&lease);
+        super::note_startup_diagnostic("artifact", b"node=/tmp/evil\n");
+        assert!(!lease.join("startup-diagnostic.txt").exists());
+        assert_eq!(
+            std::fs::read(lease.join("owner.json")).unwrap(),
+            b"lease-file"
+        );
+        drop(_guard);
+
+        let data = private_dir("data-root");
+        let database = data.join("print-partner.db");
+        std::fs::write(&database, b"live-db").unwrap();
+        std::fs::set_permissions(&database, std::fs::Permissions::from_mode(0o640)).unwrap();
+        super::forbid_diagnostic_roots(&[data.clone()]);
+        let _guard = arm_diagnostic(&data);
+        super::note_startup_diagnostic("artifact", b"node=/tmp/evil\n");
+        assert!(!data.join("startup-diagnostic.txt").exists());
+        assert_unchanged(&database, b"live-db", 0o640);
+        drop(_guard);
+
+        let runtime = private_dir("runtime-root");
+        let sock = runtime.join("abcd1234abcd.sock");
+        std::fs::write(&sock, b"sock").unwrap();
+        std::fs::set_permissions(&sock, std::fs::Permissions::from_mode(0o600)).unwrap();
+        super::forbid_diagnostic_roots(&[runtime.clone()]);
+        let _guard = arm_diagnostic(&runtime);
+        super::note_startup_diagnostic("artifact", b"node=/tmp/evil\n");
+        assert!(!runtime.join("startup-diagnostic.txt").exists());
+        assert_unchanged(&sock, b"sock", 0o600);
+    }
+
+    #[test]
+    fn startup_diagnostic_keeps_the_original_inode_after_path_replacement() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = private_dir("replace");
+        let _guard = arm_diagnostic(&dir);
+        super::note_startup_diagnostic("stderr", b"first-line\n");
+        let created = dir.join("startup-diagnostic.txt");
+        assert_eq!(mode_bits(&created), 0o600);
+        let kept = dir.join("kept");
+        std::fs::rename(&created, &kept).unwrap();
+        let victim = dir.join("victim");
+        std::fs::write(&victim, b"VICTIM").unwrap();
+        std::fs::set_permissions(&victim, std::fs::Permissions::from_mode(0o640)).unwrap();
+        std::os::unix::fs::symlink(&victim, &created).unwrap();
+        super::note_startup_diagnostic("stderr", b"second-line\n");
+        assert_unchanged(&victim, b"VICTIM", 0o640);
+        let kept_text = std::fs::read_to_string(&kept).unwrap();
+        assert_eq!(kept_text, "[stderr]\nfirst-line\n[stderr]\nsecond-line\n");
+        assert!(!kept_text.contains("VICTIM"));
+    }
+
+    #[test]
+    fn startup_diagnostic_stops_at_sixteen_kibibytes() {
+        let dir = private_dir("cap");
+        let _guard = arm_diagnostic(&dir);
+        super::note_startup_diagnostic("stderr", b"visible-reason\n");
+        for _ in 0..40 {
+            super::note_startup_diagnostic("stderr", &[b'A'; 4000]);
+        }
+        super::note_startup_diagnostic("stderr", b"TAIL_SHOULD_NOT_APPEAR\n");
+        let bytes = std::fs::read(dir.join("startup-diagnostic.txt")).unwrap();
+        assert!(bytes.len() <= 16 * 1024, "{}", bytes.len());
+        assert!(
+            bytes.starts_with(b"[stderr]\nvisible-reason\n"),
+            "{bytes:?}"
+        );
+        assert!(
+            !bytes
+                .windows(22)
+                .any(|window| window == b"TAIL_SHOULD_NOT_APPEAR")
+        );
     }
 }
