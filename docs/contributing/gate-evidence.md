@@ -21,8 +21,10 @@ hosts. Those removed requirements are tracked in
 
 `.github/workflows/pr-evidence.yml` runs the tests and body lint on
 `pull_request_target` events, including body edits. It executes the protected
-base SHA's checker with read-only permissions, so enforcement starts after
-the workflow and checker land on the base branch.
+default branch's checker with read-only permissions. This keeps the same
+repository evidence policy for stacked PRs whose base branches predate the
+checker. The PR body enters the checker through an environment variable;
+the workflow never checks out or executes the PR head.
 
 ```sh
 node --test scripts/lint-pr-evidence.test.mjs
