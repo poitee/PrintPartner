@@ -2867,6 +2867,16 @@ test("r6-option-curl", () => {
   const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nprintf curl 3232235856\n```\n");
   assert.equal(result.ok, true, result.errors.join("; "));
 });
+test("r6-one-slash-glob", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl \"http:/192.168.1.{82,80}/\"\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r6-three-slash-glob", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl \"http:///192.168.1.{82,80}/\"\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
 test("r6-empty-data-target", () => {
   const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl --data \"\" 3232235856\n```\n");
   assert.equal(result.ok, false, result.errors.join("; "));
