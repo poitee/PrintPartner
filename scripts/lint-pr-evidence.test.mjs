@@ -4364,3 +4364,373 @@ test("r15-stdin-percent-at-stays-unread", () => {
 test("r15-stdin-percent-eq-stays-banned", () => {
   assertStdinBanned('curl --variable %url=3232286800 --expand-url "{{url}}"');
 });
+
+const R16_ARTIFACT = "- Screenshot / recording / verify-skill output or trace:";
+
+function r16None(steps, result, artifact, trailer = "") {
+  return bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: ${steps}
+- Result observed: ${result}
+${R16_ARTIFACT} ${artifact}
+${trailer}`);
+}
+
+function r16Ok(body) {
+  const result = lintPrEvidence(body);
+  assert.equal(result.ok, true, result.errors.join("; "));
+}
+
+function r16Incomplete(body) {
+  const result = lintPrEvidence(body);
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /Evidence is incomplete/);
+}
+
+function r16Missing(body) {
+  const result = lintPrEvidence(body);
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /Missing "## Evidence" section/);
+}
+
+function r16Lan(body) {
+  const result = lintPrEvidence(body);
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /LAN instances/);
+}
+
+function r16OneExemption(body) {
+  const result = lintPrEvidence(body);
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /exactly one Exemption/);
+}
+
+test("r16-shortcut-ref-before-evidence", () => {
+  r16Ok(`[shot]: evidence/shot.png\n\n${r16None("ran npm test", "10 tests passed", "[shot]")}`);
+});
+
+test("r16-shortcut-ref-after-heading", () => {
+  r16Ok(bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: ran npm test
+- Result observed: 10 tests passed
+${R16_ARTIFACT} [shot]
+
+## Notes
+
+[shot]: evidence/shot.png
+`));
+});
+
+test("r16-shortcut-ref-inside-evidence", () => {
+  r16Ok(r16None("ran npm test", "10 tests passed", "[shot]", "\n[shot]: evidence/shot.png\n"));
+});
+
+test("r16-full-ref-outside-evidence", () => {
+  r16Ok(`[proof]: https://example.test/shot.png\n\n${r16None("ran npm test", "10 tests passed", "[screenshot][proof]")}`);
+});
+
+test("r16-collapsed-ref-outside-evidence", () => {
+  r16Ok(`[proof]: https://example.test/shot.png\n\n${r16None("ran npm test", "10 tests passed", "[proof][]")}`);
+});
+
+test("r16-cd-and-command", () => {
+  r16Ok(r16None("ran npm test", "10 tests passed", "`cd web && npm run quality`"));
+});
+
+test("r16-command-without-cd", () => {
+  r16Ok(r16None("ran npm test", "10 tests passed", "`npm run quality`"));
+});
+
+test("r16-cd-without-recognized-command", () => {
+  r16Incomplete(r16None("ran npm test", "10 tests passed", "`cd web && echo hi`"));
+});
+
+test("r16-closing-hashes", () => {
+  r16Ok(`## Evidence ##\n\nExemption: none\n- Steps followed to produce the evidence: ran npm test\n- Result observed: 10 tests passed\n${R16_ARTIFACT} evidence/trace.json\n`);
+});
+
+test("r16-closing-hashes-docs-only", () => {
+  r16Ok("## Evidence ##\n\nExemption: docs-only\n- Exemption reason: Updated the gate docs.\n");
+});
+
+test("r16-closing-hashes-need-space", () => {
+  r16Missing("## Evidence##\n\nExemption: docs-only\n- Exemption reason: Updated the gate docs.\n");
+});
+
+test("r16-artifact-after-reference-definition", () => {
+  r16Ok(bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: ran npm test
+- Result observed: 10 tests passed
+${R16_ARTIFACT}
+
+[unused]: /target
+evidence/trace.json
+`));
+});
+
+test("r16-artifact-after-blank-definition", () => {
+  r16Ok(bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: ran npm test
+- Result observed: 10 tests passed
+${R16_ARTIFACT}
+
+[unused]: /target
+
+evidence/trace.json
+`));
+});
+
+test("r16-failed-upload-is-not-artifact", () => {
+  r16Incomplete(r16None("ran npm test", "10 tests passed", "[screenshot](evidence/shot.png) failed to upload"));
+});
+
+test("r16-bare-link-remains-artifact", () => {
+  r16Ok(r16None("ran npm test", "10 tests passed", "[screenshot](evidence/shot.png)"));
+});
+
+test("r16-denial-does-not-suppress-other-clause", () => {
+  r16Ok(r16None("ran npm test", "10 tests passed", "[screenshot](https://example.test/shot.png); recording not provided"));
+});
+
+test("r16-same-clause-denial", () => {
+  r16Incomplete(r16None("ran npm test", "10 tests passed", "[screenshot](https://example.test/shot.png) not provided"));
+});
+
+test("r16-html-anchor-href", () => {
+  r16Ok(r16None("ran npm test", "10 tests passed", '<a href="https://example.test/shot.png">screenshot</a>'));
+});
+
+test("r16-html-anchor-href-with-class", () => {
+  r16Ok(r16None("ran npm test", "10 tests passed", '<a class="shot" data-id="1" href="https://example.test/shot.png">screenshot</a>'));
+});
+
+test("r16-html-img-src", () => {
+  r16Ok(r16None("ran npm test", "10 tests passed", '<img src="evidence/shot.png" alt="shot">'));
+});
+
+test("r16-javascript-href-is-not-artifact", () => {
+  r16Incomplete(r16None("ran npm test", "10 tests passed", '<a href="javascript:alert(1)">screenshot</a>'));
+});
+
+test("r16-data-src-is-not-artifact", () => {
+  r16Incomplete(r16None("ran npm test", "10 tests passed", '<img data-src="evidence/shot.png" alt="shot">'));
+});
+
+test("r16-data-href-is-not-artifact", () => {
+  r16Incomplete(r16None("ran npm test", "10 tests passed", '<a data-href="https://example.test/shot.png">screenshot</a>'));
+});
+
+test("r16-class-only-anchor-is-not-artifact", () => {
+  r16Incomplete(r16None("ran npm test", "10 tests passed", '<a class="shot">screenshot</a>'));
+});
+
+test("r16-steps-not-run", () => {
+  r16Incomplete(r16None("Not run", "10 tests passed", "evidence/trace.json"));
+});
+
+test("r16-result-not-tested", () => {
+  r16Incomplete(r16None("ran npm test", "Not tested", "evidence/trace.json"));
+});
+
+test("r16-result-no-tests-run", () => {
+  r16Incomplete(r16None("ran npm test", "no tests run", "evidence/trace.json"));
+});
+
+test("r16-prose-not-is-not-a-placeholder", () => {
+  r16Ok(r16None("ran npm test, not a full GUI pass", "10 tests passed", "evidence/trace.json"));
+});
+
+test("r16-emphasis-strong-path", () => {
+  r16Ok(r16None("ran npm test", "10 tests passed", "**evidence/trace.json**"));
+});
+
+test("r16-emphasis-em-path", () => {
+  r16Ok(r16None("ran npm test", "10 tests passed", "_evidence/trace.json_"));
+});
+
+test("r16-emphasis-del-path", () => {
+  r16Ok(r16None("ran npm test", "10 tests passed", "~~evidence/trace.json~~"));
+});
+
+test("r16-newline-does-not-join-octets", () => {
+  for (const [prefix, tail] of [
+    ["http://192.168.1.", "80 checks passed"],
+    ["http://192.168.200.", "81 checks passed"],
+  ]) {
+    r16Ok(r16None("ran npm test", "10 tests passed", "evidence/trace.json", `\n\`\`\`text\nserver prefix: ${prefix}\n${tail}\n\`\`\`\n`));
+  }
+});
+
+test("r16-real-split-host-stays-banned", () => {
+  for (const host of ["http://192.168.1.80/status", "http://192.168.200.81/status"]) {
+    r16Lan(r16None("ran npm test", "10 tests passed", "evidence/trace.json", `\n\`\`\`text\ncurl ${host}\n\`\`\`\n`));
+  }
+});
+
+test("r16-shell-continuation-stays-banned", () => {
+  r16Lan(r16None("ran npm test", "10 tests passed", "evidence/trace.json", "\n```sh\ncurl http://192.168.1.\\\n80/status\n```\n"));
+});
+
+test("r16-fenced-field-values", () => {
+  r16Ok(bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence:
+  \`\`\`sh
+  npm test
+  \`\`\`
+- Result observed:
+  \`\`\`text
+  10 tests passed
+  \`\`\`
+${R16_ARTIFACT} evidence/trace.json
+`));
+});
+
+test("r16-fence-does-not-declare-exemption", () => {
+  r16Ok(bodyWithEvidence(`Exemption: docs-only
+- Exemption reason: Updated the gate docs.
+- Steps followed to produce the evidence:
+  \`\`\`text
+  Exemption: none
+  ## Evidence
+  \`\`\`
+`));
+});
+
+test("r16-entity-slash-destination", () => {
+  r16Ok(r16None("ran npm test", "10 tests passed", "[shot](evidence&#47;shot.png)"));
+});
+
+test("r16-entity-colon-destination", () => {
+  r16Ok(r16None("ran npm test", "10 tests passed", "[shot](https&#58;//example.test/shot.png)"));
+});
+
+test("r16-semicolonless-entity-is-not-artifact", () => {
+  r16Incomplete(r16None("ran npm test", "10 tests passed", "[shot](evidence&#47shot.png)"));
+});
+
+test("r16-five-label-host-is-not-lan", () => {
+  for (const host of [
+    "https://192.168.1.2.80.example.test/status",
+    "https://192.168.200.2.81.example.test/status",
+  ]) {
+    r16Ok(r16None("ran npm test", "10 tests passed", "evidence/trace.json", `\n\`\`\`sh\ncurl ${host}\n\`\`\`\n`));
+  }
+});
+
+test("r16-four-octet-hosts-stay-banned", () => {
+  for (const host of ["http://192.168.1.80/status", "http://192.168.200.81/status"]) {
+    r16Lan(r16None("ran npm test", "10 tests passed", "evidence/trace.json", `\n\`\`\`sh\ncurl ${host}\n\`\`\`\n`));
+  }
+});
+
+test("r16-decimal-hosts-stay-banned", () => {
+  for (const host of ["http://3232235856/", "http://3232286800/"]) {
+    r16Lan(r16None("ran npm test", "10 tests passed", "evidence/trace.json", `\n\`\`\`sh\ncurl ${host}\n\`\`\`\n`));
+  }
+});
+
+test("r16-quoted-backslash-is-not-lan", () => {
+  for (const command of [
+    String.raw`curl "http://192.168.1.8\0/"`,
+    String.raw`curl "http://192.168.200.8\0/"`,
+  ]) {
+    r16Ok(r16None("ran npm test", "10 tests passed", "evidence/trace.json", `\n\`\`\`sh\n${command}\n\`\`\`\n`));
+  }
+});
+
+test("r16-unquoted-backslash-stays-banned", () => {
+  for (const command of [
+    String.raw`curl http://192.168.1.8\0/`,
+    String.raw`curl http://192.168.200.8\0/`,
+  ]) {
+    r16Lan(r16None("ran npm test", "10 tests passed", "evidence/trace.json", `\n\`\`\`sh\n${command}\n\`\`\`\n`));
+  }
+});
+
+test("r16-unterminated-title-scan-stays-bounded", () => {
+  const lines = Array.from({ length: 7000 }, () => "[x]:/ (");
+  const body = `## Evidence\nExemption: docs-only\n- Exemption reason: Updated the gate docs.\n\n${lines.join("\n")}\n`;
+  assert.ok(body.length > 50000);
+  const started = performance.now();
+  const result = lintPrEvidence(body);
+  const elapsed = performance.now() - started;
+  assert.equal(result.ok, true, result.errors.join("; "));
+  assert.ok(elapsed < 2000, String(elapsed));
+});
+
+test("r16-four-space-fence-does-not-hide-heading", () => {
+  r16Ok("paragraph\n\n    ```\n## Evidence\nExemption: docs-only\n- Exemption reason: Updated the gate docs.\n");
+});
+
+test("r16-three-space-fence-hides-heading", () => {
+  r16Missing("paragraph\n\n   ```\n## Evidence\nExemption: docs-only\n- Exemption reason: Updated the gate docs.\n");
+});
+
+test("r16-list-marker-needs-whitespace", () => {
+  r16Incomplete(bodyWithEvidence(`Exemption: none
+-Steps followed to produce the evidence: ran npm test
+-Result observed: passed
+-Screenshot / recording / verify-skill output or trace: evidence/a.png
+`));
+});
+
+test("r16-spaced-list-markers-remain-fields", () => {
+  r16Ok(r16None("ran npm test", "passed", "evidence/a.png"));
+});
+
+test("r16-nested-list-heading-is-not-evidence", () => {
+  r16Missing("- Summary\n\n  ## Evidence\n  Exemption: docs-only\n  - Exemption reason: Updated the gate docs.\n");
+});
+
+test("r16-top-level-evidence-heading", () => {
+  r16Ok("## Evidence\nExemption: docs-only\n- Exemption reason: Updated the gate docs.\n");
+});
+
+test("r16-indented-exemption-continuation", () => {
+  r16Ok(bodyWithEvidence(`Exemption: docs-only
+- Exemption reason: The template line is \`Exemption: none\` for normal PRs.
+  Exemption: none
+  The docs change does not exercise the app.
+`));
+});
+
+test("r16-two-exemption-declarations", () => {
+  r16OneExemption(bodyWithEvidence(`Exemption: docs-only
+Exemption: none
+- Exemption reason: Updated the gate docs.
+`));
+});
+
+test("r16-exemption-after-blank-counts", () => {
+  r16OneExemption(bodyWithEvidence(`Exemption: docs-only
+- Exemption reason: Updated the gate docs.
+
+  Exemption: none
+`));
+});
+
+test("r16-task-todo-is-placeholder", () => {
+  r16Incomplete(bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence:
+  - [ ] TODO
+- Result observed: 10 tests passed
+${R16_ARTIFACT} evidence/trace.json
+`));
+});
+
+test("r16-ordered-todo-is-placeholder", () => {
+  r16Incomplete(bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence:
+  1. TODO
+- Result observed: 10 tests passed
+${R16_ARTIFACT} evidence/trace.json
+`));
+});
+
+test("r16-checked-task-is-substantive", () => {
+  r16Ok(bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence:
+  - [x] ran npm test
+- Result observed: 10 tests passed
+${R16_ARTIFACT} evidence/trace.json
+`));
+});
