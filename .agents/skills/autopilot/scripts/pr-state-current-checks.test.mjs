@@ -385,6 +385,10 @@ function runLiveFixture(context, mode = "pages") {
   if (mode === "head-merge-unknown" || mode === "head-confirm-fail" || mode === "head-confirm-auth") {
     data.greenChecks = [latestCheck()];
   }
+  if (mode === "head-retry-view-fail") {
+    data.greenChecks = [latestCheck()];
+    data.contextPage = "single";
+  }
   if (mode === "latest-superseded" || mode === "latest-next-error" || mode === "latest-absent" || mode === "latest-malformed" || mode === "latest-stall" || mode === "latest-cycle" || mode === "latest-unbounded" || mode === "latest-wrong-commit") {
     data.statusCheckRollup = membershipPair({
       staleId: "stale-failure",
@@ -859,6 +863,60 @@ function runLiveFixture(context, mode = "pages") {
     data.contextPage = "single";
     data.mode = "pages";
   }
+  if (mode === "walk-error-green" || mode === "walk-malformed-green" || mode === "walk-cycle-green" || mode === "walk-error-replaced" || mode === "walk-error-keeps-failure") {
+    const success = latestCheck();
+    success.id = "green-member";
+    success.name = "Green member";
+    success.conclusion = "SUCCESS";
+    success.detailsUrl = currentSuccessUrl;
+    success.startedAt = "2026-10-12T04:00:00Z";
+    success.checkSuite.id = "suite-walk";
+    const totalCount = mode === "walk-cycle-green" ? 201 : 101;
+    success.checkSuite.currentRuns = {
+      totalCount,
+      pageInfo: { hasNextPage: true, endCursor: "suite-2" },
+      nodes: Array.from({ length: 100 }, (_, index) => ({ id: `latest-${index + 1}` })),
+    };
+    const known = latestCheck();
+    known.id = "known-failure";
+    known.name = "Known requirement";
+    known.conclusion = "FAILURE";
+    known.detailsUrl = staleFailureUrl;
+    known.startedAt = "2026-10-12T02:00:00Z";
+    known.checkSuite.id = "suite-known";
+    known.checkSuite.currentRuns = {
+      totalCount: 1,
+      pageInfo: { hasNextPage: false, endCursor: null },
+      nodes: [{ id: known.id }],
+    };
+    data.statusCheckRollup = mode === "walk-error-keeps-failure" ? [known, success] : [success];
+    data.totalCount = totalCount;
+    data.contextPage = "single";
+    data.mode = "pages";
+    data.suiteBehavior = {
+      "walk-error-green": "error",
+      "walk-error-replaced": "error",
+      "walk-error-keeps-failure": "error",
+      "walk-malformed-green": "malformed",
+      "walk-cycle-green": "cycle-same-count",
+    }[mode];
+    if (mode === "walk-error-replaced") {
+      const replaced = latestCheck();
+      replaced.id = "rerun-failure";
+      replaced.name = "Green member";
+      replaced.conclusion = "FAILURE";
+      replaced.detailsUrl = laterFailureUrl;
+      replaced.startedAt = "2026-10-12T06:00:00Z";
+      replaced.checkSuite.id = "suite-walk";
+      replaced.checkSuite.currentRuns = {
+        totalCount: 1,
+        pageInfo: { hasNextPage: false, endCursor: null },
+        nodes: [{ id: replaced.id }],
+      };
+      data.replacementRollup = [replaced];
+      data.shiftAfterReads = 1;
+    }
+  }
   const statePath = join(dir, "state.json");
   writeFileSync(statePath, JSON.stringify({
     prViews: 0, checkOids: [], prOids: [], suiteCalls: 0, suiteOids: [], suiteCursors: [],
@@ -891,6 +949,18 @@ else if (args[0] === "pr") {
       process.exit(4);
     }
     process.stderr.write("head reread failed");
+    process.exit(1);
+  } else if (data.mode === "head-retry-view-fail") {
+    if (state.prViews === 1) headRefOid = data.oldHead;
+    else if (state.prViews === 2) headRefOid = data.newHead;
+    else {
+      save();
+      process.stderr.write("transient api failure");
+      process.exit(1);
+    }
+  } else if (data.mode === "missing-pr") {
+    save();
+    process.stderr.write("no pull requests found");
     process.exit(1);
   }
   response = { ...data.pr, headRefOid, mergeable, mergeStateStatus };
@@ -936,6 +1006,11 @@ else if (args[0] === "pr") {
         hasNextPage = true;
         endCursor = state.suiteCalls === 1 ? "suite-3" : "suite-2";
         totalCount = 1000;
+        ids = ["cycle-" + state.suiteCalls];
+      } else if (behavior === "cycle-same-count") {
+        hasNextPage = true;
+        endCursor = state.suiteCalls === 1 ? "suite-3" : "suite-2";
+        totalCount = data.totalCount;
         ids = ["cycle-" + state.suiteCalls];
       } else if (behavior === "unbounded") {
         hasNextPage = true;
@@ -1014,7 +1089,7 @@ else if (args[0] === "pr") {
     }
     let rollup = data.statusCheckRollup;
     if (data.mode === "head-moved" || data.mode === "head-during-suite") rollup = oid === data.oldHead ? data.oldChecks : data.newChecks;
-    if (data.mode === "head-unstable" || data.mode === "head-merge-unknown" || data.mode === "head-confirm-fail" || data.mode === "head-confirm-auth") {
+    if (data.mode === "head-unstable" || data.mode === "head-merge-unknown" || data.mode === "head-confirm-fail" || data.mode === "head-confirm-auth" || data.mode === "head-retry-view-fail") {
       rollup = data.greenChecks;
     }
     if (data.replacementRollup && state.checkReads > 1 && data.shiftAfterReads == null) rollup = data.replacementRollup;
@@ -1701,4 +1776,78 @@ test("live CLI keeps a later-page failure when that page also contains a null no
   assert.equal(report.nextAction, "ci");
   assert.deepEqual(report.failingChecks.map((check) => check.url), [staleFailureUrl]);
   assert.equal(report.passedCheckCount, 1);
+});
+
+test("live CLI rechecks a green unpaged rollup when the latest-run page errors", (context) => {
+  const result = runLiveFixture(context, "walk-error-green");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "recheck");
+  assert.deepEqual(report.failingChecks, []);
+  assert.equal(report.passedCheckCount, 1);
+  const state = JSON.parse(readFileSync(result.statePath, "utf8"));
+  assert.equal(state.suiteCalls, 1);
+});
+
+test("live CLI rechecks a green unpaged rollup when the latest-run page is malformed", (context) => {
+  const result = runLiveFixture(context, "walk-malformed-green");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "recheck");
+  assert.deepEqual(report.failingChecks, []);
+  assert.equal(report.passedCheckCount, 1);
+  const state = JSON.parse(readFileSync(result.statePath, "utf8"));
+  assert.equal(state.suiteCalls, 1);
+});
+
+test("live CLI rechecks a green unpaged rollup when the latest-run cursor cycles", (context) => {
+  const result = runLiveFixture(context, "walk-cycle-green");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "recheck");
+  assert.deepEqual(report.failingChecks, []);
+  assert.equal(report.passedCheckCount, 1);
+  const state = JSON.parse(readFileSync(result.statePath, "utf8"));
+  assert.equal(state.suiteCalls, 2);
+});
+
+test("live CLI keeps a failure that replaces a green check during a failed latest-run walk", (context) => {
+  const result = runLiveFixture(context, "walk-error-replaced");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "ci");
+  assert.deepEqual(report.failingChecks.map((check) => check.url), [laterFailureUrl]);
+  assert.equal(report.passedCheckCount, 0);
+});
+
+test("live CLI keeps a known failure when a paginated membership walk errors", (context) => {
+  const result = runLiveFixture(context, "walk-error-keeps-failure");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "ci");
+  assert.deepEqual(report.failingChecks.map((check) => check.url), [staleFailureUrl]);
+  assert.equal(report.passedCheckCount, 1);
+});
+
+test("live CLI rechecks when the head moves and the next pull request view fails", (context) => {
+  const result = runLiveFixture(context, "head-retry-view-fail");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "recheck");
+  assert.equal(report.pr.number, 263);
+  assert.equal(report.mergeable, "UNKNOWN");
+  assert.deepEqual(report.failingChecks, []);
+  const state = JSON.parse(readFileSync(result.statePath, "utf8"));
+  assert.equal(state.prViews, 3);
+  assert.deepEqual(state.prOids, [oldHead, newHead]);
+});
+
+test("live CLI still reports no-pr when the first pull request view fails", (context) => {
+  const result = runLiveFixture(context, "missing-pr");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "no-pr");
+  assert.equal(report.pr, null);
+  const state = JSON.parse(readFileSync(result.statePath, "utf8"));
+  assert.equal(state.prViews, 1);
 });
