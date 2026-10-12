@@ -1263,7 +1263,7 @@ async fn ticket_t_5_staged_release_reuses_the_persisted_desktop_identity() {
     assert_eq!(health["version"], "3.3.0-web");
     let persisted = std::fs::read(data.join("desktop.toml")).unwrap();
     assert!(runtime.shutdown().await.complete());
-    let mut reopened = CoreRuntime::start(staged_launch()).await.unwrap();
+    let reopened = CoreRuntime::start(staged_launch()).await.unwrap();
     assert_eq!(reopened.origin(), origin);
     assert_eq!(std::fs::read(data.join("desktop.toml")).unwrap(), persisted);
     assert!(reopened.shutdown().await.complete());

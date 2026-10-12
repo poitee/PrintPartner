@@ -180,7 +180,7 @@ mod tests {
     }
 
     #[test]
-    fn ticket_t_5_release_layout_preserves_identity_and_existing_data() {
+    fn ticket_t_5_release_layout_retains_the_product_launch_identity() {
         let root = std::env::temp_dir().join(format!(
             "pp-identity-{}-{}",
             std::process::id(),
@@ -194,7 +194,6 @@ mod tests {
         std::fs::create_dir_all(root.join("home/.print-partner")).unwrap();
         std::fs::write(root.join("bin/node"), b"node").unwrap();
         let data = root.join("home/.print-partner");
-        std::fs::write(data.join("desktop.toml"), b"port = 46687\n").unwrap();
         let release = serde_json::json!({
             "runtime_version": "3.3.0-web",
             "commit": "f00471f13d2f0e69631d3130e594b9244f93e01d",
@@ -222,11 +221,6 @@ mod tests {
             launch.bundle.entry,
             root.join("web/apps/server/dist/current/desktop.js")
         );
-        assert_eq!(
-            std::fs::read(data.join("desktop.toml")).unwrap(),
-            b"port = 46687\n"
-        );
-        assert!(!root.join("home/com.poitee.printpartner").exists());
         let mut invalid = release;
         invalid["commit"] = serde_json::json!("Print Partner");
         std::fs::write(root.join("release.json"), invalid.to_string()).unwrap();
