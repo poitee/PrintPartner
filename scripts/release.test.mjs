@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -210,4 +211,159 @@ test("release check ignores commented versions and validates the active Docker a
   execFileSync("git", ["commit", "-qm", "fixture"], { cwd: root });
 
   assert.throws(() => checkRelease({ repoRoot: root }), /Dockerfile PP_APP_VERSION/);
+});
+
+const ROOT_NOTICE = "THIRD_PARTY_NOTICES.md";
+const SERVER_NOTICE = "web/apps/server/src/data/legal/THIRD_PARTY_NOTICES.md";
+const STALE_NOTICE = `# Third-party notices
+
+| Package | Version | License | URL |
+|---------|---------|---------|-----|
+| widget | 1.0.0 | MIT | https://example.test/widget |
+
+Versions reflect the installed packages.
+`;
+const FRESH_NOTICE = `# Third-party notices
+
+| Package | Version | License | URL |
+|---------|---------|---------|-----|
+| widget | 2.0.0 | MIT | https://example.test/widget |
+
+Versions reflect the installed packages.
+`;
+
+function noticesRepo(context) {
+  const root = mkdtempSync(join(tmpdir(), "print-partner-notices-"));
+  context.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, "scripts"));
+  cpSync(
+    join(REPO_ROOT, "scripts/update-third-party-notices.mjs"),
+    join(root, "scripts/update-third-party-notices.mjs"),
+  );
+  write(root, "web/package.json", '{"name":"notices-fixture","private":true}\n');
+  write(
+    root,
+    "web/package-lock.json",
+    '{"name":"notices-fixture","lockfileVersion":3,"requires":true,"packages":{"":{"name":"notices-fixture"},"node_modules/widget":{"version":"2.0.0","license":"MIT"}}}\n',
+  );
+  write(root, "web/apps/server/package.json", '{"dependencies":{"widget":"2.0.0"}}\n');
+  write(root, "web/apps/web/package.json", '{"dependencies":{}}\n');
+  write(root, "web/packages/contracts/package.json", '{"dependencies":{}}\n');
+  write(root, "web/packages/domain/package.json", '{"dependencies":{}}\n');
+  write(
+    root,
+    "web/node_modules/widget/package.json",
+    '{"name":"widget","version":"2.0.0","license":"MIT","homepage":"https://example.test/widget"}\n',
+  );
+  mkdirSync(join(root, "web/apps/server/src/data/legal"), { recursive: true });
+  return root;
+}
+
+function noticeSnapshot(root, relativePath) {
+  const absolute = join(root, relativePath);
+  if (!existsSync(absolute)) return { absent: true };
+  return {
+    absent: false,
+    sha256: createHash("sha256").update(readFileSync(absolute)).digest("hex"),
+    mtimeNs: statSync(absolute, { bigint: true }).mtimeNs.toString(),
+  };
+}
+
+function pinNotice(root, relativePath) {
+  const absolute = join(root, relativePath);
+  const frozen = new Date("2020-01-01T00:00:00.000Z");
+  utimesSync(absolute, frozen, frozen);
+  return noticeSnapshot(root, relativePath);
+}
+
+function runNotices(root, args) {
+  return spawnSync(
+    process.execPath,
+    [join(root, "scripts/update-third-party-notices.mjs"), ...args],
+    { cwd: root, encoding: "utf8" },
+  );
+}
+
+test("notices --check rejects a stale root copy without writing either file", (context) => {
+  const root = noticesRepo(context);
+  write(root, ROOT_NOTICE, STALE_NOTICE);
+  write(root, SERVER_NOTICE, FRESH_NOTICE);
+  const beforeRoot = pinNotice(root, ROOT_NOTICE);
+  const beforeServer = pinNotice(root, SERVER_NOTICE);
+  const legalDir = statSync(join(root, "web/apps/server/src/data/legal"), { bigint: true }).mtimeNs.toString();
+
+  const result = runNotices(root, ["--check"]);
+
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(beforeRoot.sha256, createHash("sha256").update(STALE_NOTICE).digest("hex"));
+  assert.deepEqual(noticeSnapshot(root, ROOT_NOTICE), beforeRoot);
+  assert.deepEqual(noticeSnapshot(root, SERVER_NOTICE), beforeServer);
+  assert.equal(statSync(join(root, "web/apps/server/src/data/legal"), { bigint: true }).mtimeNs.toString(), legalDir);
+});
+
+test("notices --check rejects a stale server copy without writing either file", (context) => {
+  const root = noticesRepo(context);
+  write(root, ROOT_NOTICE, FRESH_NOTICE);
+  write(root, SERVER_NOTICE, STALE_NOTICE);
+  const beforeRoot = pinNotice(root, ROOT_NOTICE);
+  const beforeServer = pinNotice(root, SERVER_NOTICE);
+
+  const result = runNotices(root, ["--check"]);
+
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(beforeServer.sha256, createHash("sha256").update(STALE_NOTICE).digest("hex"));
+  assert.deepEqual(noticeSnapshot(root, ROOT_NOTICE), beforeRoot);
+  assert.deepEqual(noticeSnapshot(root, SERVER_NOTICE), beforeServer);
+});
+
+test("notices --check rejects a missing root copy without creating it", (context) => {
+  const root = noticesRepo(context);
+  write(root, SERVER_NOTICE, FRESH_NOTICE);
+  const beforeServer = pinNotice(root, SERVER_NOTICE);
+
+  const result = runNotices(root, ["--check"]);
+
+  assert.equal(result.status, 1, result.stderr);
+  assert.deepEqual(noticeSnapshot(root, ROOT_NOTICE), { absent: true });
+  assert.deepEqual(noticeSnapshot(root, SERVER_NOTICE), beforeServer);
+});
+
+test("notices --check rejects a missing server copy without creating it", (context) => {
+  const root = noticesRepo(context);
+  write(root, ROOT_NOTICE, FRESH_NOTICE);
+  const beforeRoot = pinNotice(root, ROOT_NOTICE);
+  const legalDir = statSync(join(root, "web/apps/server/src/data/legal"), { bigint: true }).mtimeNs.toString();
+
+  const result = runNotices(root, ["--check"]);
+
+  assert.equal(result.status, 1, result.stderr);
+  assert.deepEqual(noticeSnapshot(root, ROOT_NOTICE), beforeRoot);
+  assert.deepEqual(noticeSnapshot(root, SERVER_NOTICE), { absent: true });
+  assert.equal(statSync(join(root, "web/apps/server/src/data/legal"), { bigint: true }).mtimeNs.toString(), legalDir);
+});
+
+test("notices --check accepts two copies that match the installed table", (context) => {
+  const root = noticesRepo(context);
+  write(root, ROOT_NOTICE, FRESH_NOTICE);
+  write(root, SERVER_NOTICE, FRESH_NOTICE);
+  const beforeRoot = pinNotice(root, ROOT_NOTICE);
+  const beforeServer = pinNotice(root, SERVER_NOTICE);
+
+  const result = runNotices(root, ["--check"]);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(beforeRoot.sha256, createHash("sha256").update(FRESH_NOTICE).digest("hex"));
+  assert.deepEqual(noticeSnapshot(root, ROOT_NOTICE), beforeRoot);
+  assert.deepEqual(noticeSnapshot(root, SERVER_NOTICE), beforeServer);
+});
+
+test("notices generation writes the installed table to both copies", (context) => {
+  const root = noticesRepo(context);
+  write(root, ROOT_NOTICE, STALE_NOTICE);
+
+  const result = runNotices(root, []);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(readFileSync(join(root, ROOT_NOTICE), "utf8"), FRESH_NOTICE);
+  assert.equal(readFileSync(join(root, SERVER_NOTICE), "utf8"), FRESH_NOTICE);
 });
