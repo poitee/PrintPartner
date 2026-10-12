@@ -27,7 +27,7 @@ const PLACEHOLDER_EXEMPTION =
   /^<?\s*none\s*\|\s*docs-only\s*\|\s*ci-only\s*\|\s*dependency-only\s*\|\s*internal refactor\s*>?$/i;
 
 /** Chad's LAN instances (.x.80 / .x.81) must never be verification targets. */
-const BANNED_LAN_IP = /\b192\.168(?:\.\d+){1,2}\.(?:80|81)\b/;
+const BANNED_LAN_IP = /\b192\.168\.\d{1,3}\.(?:80|81)\b(?!\.)/;
 
 const FIELD_LABELS = Object.freeze({
   journey: "Journey exercised",
@@ -165,7 +165,12 @@ function stripHiddenMarkdown(text, { inlineMultiline = true, includeRawHtml = fa
         fence = null;
       }
       onLiteralLine?.(lineIndex, raw, { boundary: !fence, delimiter: !fence });
-      kept.push("");
+      // Fence payload stays field prose. The marker keeps it from becoming a heading,
+      // an exemption declaration, or an artifact citation.
+      if (fence && content != null) {
+        const lead = content.match(/^[ \t]*/)[0];
+        kept.push(`${lead}\u0000${content.slice(lead.length)}`);
+      } else kept.push("");
       continue;
     }
     if (!inComment) {
@@ -312,7 +317,30 @@ function normalizeWs(text) {
   return text.replace(/\r\n/g, "\n").trim();
 }
 
-const EVIDENCE_HEADING = /^[ ]{0,3}##[ \t]+Evidence[ \t]*$/gim;
+const EVIDENCE_HEADING = /^[ ]{0,3}##[ \t]+Evidence(?:[ \t]+#+[ \t]*)?$/;
+
+function listContentColumn(line) {
+  const match = line.match(/^([ \t]*)([-*+]|\d{1,9}[.)])([ \t]+)/);
+  if (!match) return null;
+  return indentWidth(match[1] + match[2]) + indentWidth(match[3]);
+}
+
+function evidenceHeadingSpans(text) {
+  const spans = [];
+  let listColumn = null;
+  let offset = 0;
+  for (const line of text.split("\n")) {
+    const indent = indentWidth(line.match(/^[ \t]*/)[0]);
+    const opened = listContentColumn(line);
+    if (opened != null && (listColumn == null || indent < listColumn)) listColumn = opened;
+    else if (line.trim() && listColumn != null && indent < listColumn) listColumn = null;
+    if ((listColumn == null || indent < listColumn) && EVIDENCE_HEADING.test(line)) {
+      spans.push({ index: offset, length: line.length });
+    }
+    offset += line.length + 1;
+  }
+  return spans;
+}
 
 function evidenceSectionEnd(text) {
   let offset = 0;
@@ -353,9 +381,9 @@ export function extractEvidenceSection(body, options) {
   const metadata = structuralMetadataView(body);
   const visible = stripHiddenMarkdown(metadata, options?.includeRawHtml ? undefined : options);
   const headings = referenceHeadingView(inlineCodeHeadingView(visible));
-  const match = [...headings.matchAll(EVIDENCE_HEADING)][0];
-  if (!match || match.index == null) return null;
-  const start = match.index + match[0].length;
+  const match = evidenceHeadingSpans(headings)[0];
+  if (!match) return null;
+  const start = match.index + match.length;
   const end = start + evidenceSectionEnd(headings.slice(start));
   if (options?.includeRawHtml) {
     // Both stripped views retain one output line per metadata input line.
@@ -431,7 +459,7 @@ function fieldLabelPattern(label) {
 const LIST_MARKER = "(?:[-*+]|\\d{1,9}[.)])";
 
 const LABEL_LINE = new RegExp(
-  `^([ \\t]*)(${LIST_MARKER})([ \\t]*)(${Object.values(FIELD_LABELS).map(fieldLabelPattern).join("|")})[ \\t]*:[ \\t]*(.*)$`,
+  `^([ \\t]*)(${LIST_MARKER})([ \\t]+)(${Object.values(FIELD_LABELS).map(fieldLabelPattern).join("|")})[ \\t]*:[ \\t]*(.*)$`,
   "i",
 );
 
@@ -532,10 +560,9 @@ function parseFields(cleaned, literalBoundaries) {
       continue;
     }
     const outer = indent < current.contentIndent;
-    if (
-      EXEMPTION_START.test(line) ||
-      (outer && (blankSeen || !lazyOk || BLOCK_START.test(line) || literalBoundaries?.has(lineStart)))
-    ) {
+    if ((EXEMPTION_START.test(line) && (outer || blankSeen)) || (outer && (
+      blankSeen || !lazyOk || BLOCK_START.test(line) || literalBoundaries?.has(lineStart)
+    ))) {
       current = null;
       continue;
     }
@@ -641,7 +668,7 @@ function hasSubstantiveCodeSpan(value) {
       !PLACEHOLDER_WORD.test(content) &&
       (hasConcreteHttpUrl(content)
         || /^(?:[\w.-]+\/)+[\w.-]+$/.test(content)
-        || /^(?:\$\s*)?(?:node\s+(?:--test\b|\S+\.m?[jc]s\b)|cargo\s+(?:test|nextest|check|build|fmt|clippy)\b|(?:pnpm|npm)\s+(?:test|run|exec|check|build)\b|python3?\s+\S+\.py\b|curl\s+(?:-\S+\s+)*https?:\/\/)/i.test(content)
+        || /^(?:\$\s*)?(?:cd\s+\S+\s+&&\s+)?(?:node\s+(?:--test\b|\S+\.m?[jc]s\b)|cargo\s+(?:test|nextest|check|build|fmt|clippy)\b|(?:pnpm|npm)\s+(?:test|run|exec|check|build)\b|python3?\s+\S+\.py\b|curl\s+(?:-\S+\s+)*https?:\/\/)/i.test(content)
         || /\b(?:tests?|pass(?:ed)?|fail(?:ed)?|exit(?: status)?|status(?: code)?|assertions?)\s*[:=]?\s*\d+\b/i.test(content))
     );
   });
@@ -692,7 +719,7 @@ function hasConcreteHttpUrl(text) {
 
 /** A link destination that identifies something: a web URL or a file path. */
 function isConcreteTarget(destination) {
-  const target = destination.replace(/^<|>$/g, "").replace(/\\(.)/g, "$1").trim();
+  const target = decodeCharacterReferences(destination.replace(/^<|>$/g, "").replace(/\\(.)/g, "$1")).trim();
   if (/^https?:/i.test(target)) return isHttpTarget(target);
   // Relative paths only: no anchors, queries, or other schemes (mailto:, javascript:).
   if (!target || /^[#?]/.test(target) || /^[a-z][a-z0-9+.-]*:/i.test(target)) return false;
@@ -777,6 +804,41 @@ function referenceOpening(lines, index) {
 
 const REFERENCE_DESTINATION = /^(<(?:[^>\\\n]|\\.)*>|\S+)/;
 
+const lineScanCache = new WeakMap();
+
+function lineScanIndex(lines) {
+  const cached = lineScanCache.get(lines);
+  if (cached) return cached;
+  const positions = lines.map((line) => {
+    const found = { '"': [], "'": [], ")": [] };
+    for (let i = 0; i < line.length; i += 1) {
+      if (line[i] === "\\") { i += 1; continue; }
+      if (Object.hasOwn(found, line[i])) found[line[i]].push(i);
+    }
+    return found;
+  });
+  const blankAt = new Array(lines.length);
+  let nextBlank = lines.length;
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (!lines[i].trim()) nextBlank = i;
+    blankAt[i] = nextBlank;
+  }
+  const nextLine = {};
+  for (const closer of ['"', "'", ")"]) {
+    const next = new Array(lines.length + 1);
+    let at = lines.length;
+    next[lines.length] = lines.length;
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      if (positions[i][closer].length) at = i;
+      next[i] = at;
+    }
+    nextLine[closer] = next;
+  }
+  const scan = { blankAt, nextLine };
+  lineScanCache.set(lines, scan);
+  return scan;
+}
+
 /** Validate a complete destination and optional title, including continuation
  * lines. A prefix followed by unquoted garbage is not a Markdown definition. */
 function referenceDestination(lines, index) {
@@ -795,6 +857,8 @@ function referenceDestination(lines, index) {
   if (title) {
     const closer = { '"': '"', "'": "'", "(": ")" }[title[0]];
     if (!closer) return null;
+    const scan = lineScanIndex(lines);
+    if (scan.nextLine[closer][index] >= scan.blankAt[index]) return null;
     const parts = [title];
     let closed = false;
     for (let at = 1; ; at = 0) {
@@ -992,14 +1056,18 @@ function stripReferenceDefinitions(value, references, { keepMalformed = false } 
         else kept.push(line);
         continue;
       }
-      dropping = true;
-      const label = normalizeReferenceLabel(definition.label);
-      const referenced = references.has(label);
-      const destination = referenceDestination(referenceLines, index)?.destination;
-      if (destination && !defined.has(label)) {
-        defined.add(label);
-        if (referenced && isConcreteTarget(destination)) concrete = true;
+      const parsed = referenceDestination(referenceLines, index);
+      if (parsed) {
+        const label = normalizeReferenceLabel(parsed.label);
+        const referenced = references.has(label);
+        if (parsed.destination && !defined.has(label)) {
+          defined.add(label);
+          if (referenced && isConcreteTarget(parsed.destination)) concrete = true;
+        }
+        index = parsed.end;
+        continue;
       }
+      dropping = true;
       continue;
     }
     if (dropping) {
@@ -1033,7 +1101,7 @@ function linkTextStart(text, close, floor) {
  * as an artifact. Each character is scanned a bounded number of times, so the
  * pass is linear.
  */
-function stripLinks(value, references, { keepMalformed = false } = {}) {
+function stripLinks(value, references, { keepMalformed = false, markConcrete = false } = {}) {
   const definitions = stripReferenceDefinitions(value, references, { keepMalformed });
   let concrete = definitions.concrete;
   const text = definitions.text;
@@ -1047,7 +1115,10 @@ function stripLinks(value, references, { keepMalformed = false } = {}) {
     if (!tail) return { rest: rest + (keepMalformed ? text.slice(open) : ""), concrete };
     const image = open > 0 && text[open - 1] === "!" && !isEscaped(text, open - 1);
     if (isConcreteTarget(tail.destination)
-      && (image || visibleFieldText(text.slice(open + 1, at)).replace(/[\p{Default_Ignorable_Code_Point}\p{Mark}]/gu, "").trim())) concrete = true;
+      && (image || visibleFieldText(text.slice(open + 1, at)).replace(/[\p{Default_Ignorable_Code_Point}\p{Mark}]/gu, "").trim())) {
+      concrete = true;
+      if (markConcrete) rest += "\u0001";
+    }
     cursor = tail.end;
   }
   return { rest: rest + text.slice(cursor), concrete };
@@ -1092,30 +1163,74 @@ function stripRawHtmlTags(value, { keepMalformed = false } = {}) {
   return kept + (hidden.length ? "" : value.slice(cursor));
 }
 
-function looksLikeArtifact(value, references) {
+function withoutFencePayload(text) {
+  return text.split("\n").filter((line) => !line.includes("\u0000")).join("\n");
+}
+
+function splitClauses(text) {
+  const masked = text.replace(/&(?:#[xX][\da-fA-F]+|#\d+|[a-zA-Z][a-zA-Z\d]*);/g, (match) => match.replaceAll(";", "\u0002"));
+  return masked.split(/[;\n]/).map((clause) => clause.replaceAll("\u0002", ";"));
+}
+
+function stripEmphasis(token) {
+  let text = token;
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const mark of ["**", "~~", "__", "*", "_"]) {
+      if (text.length > mark.length * 2 && text.startsWith(mark) && text.endsWith(mark)) {
+        text = text.slice(mark.length, -mark.length);
+        changed = true;
+        break;
+      }
+    }
+  }
+  return text;
+}
+
+function htmlConcreteMarker(value) {
+  return value.replace(/<(a|img)\b[^>]*>/gi, (tag, name) => {
+    const attr = name.toLowerCase() === "img" ? "src" : "href";
+    const found = tag.match(new RegExp(`(?<![\\w-])${attr}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'=<>\x60]+))`, "i"));
+    const destination = found ? (found[1] ?? found[2] ?? found[3] ?? "") : "";
+    return destination && isConcreteTarget(destination) ? "\u0001" : "";
+  });
+}
+
+function referenceClauseConcrete(text, definitions) {
+  if (!definitions?.size) return false;
+  for (const label of referenceUses(text, { requireVisible: true })) {
+    const destination = definitions.get(label);
+    if (destination && isConcreteTarget(destination)) return true;
+  }
+  return false;
+}
+
+function looksLikeArtifact(value, references, definitions = new Map()) {
   if (!value) return false;
-  value = stripRawHtmlTags(value);
+  value = value.split("\n").filter((line) => !line.includes("\u0000")).join("\n");
+  if (!value.trim()) return false;
+  value = stripRawHtmlTags(htmlConcreteMarker(value));
   // Parse markup before evaluating prose: a placeholder link's title cannot
   // escape into a later clause, and filenames may contain placeholder words.
   if (/^\s*`?(?:TODO|TBD|FIXME|placeholder)(?:[ :]|$)/i.test(value)) return false;
-  const { rest, concrete } = stripLinks(value, references);
-  // A link is concrete by its destination. Explicit denial outside its markup
-  // still cannot claim it as proof.
-  const denial = /\b(?:not|no|without|never|missing|absent|unavailable|unable|omitted|n\/a)\b/i;
+  const { rest, concrete } = stripLinks(value, references, { markConcrete: true });
+  const denial = /\b(?:not|no|without|never|missing|absent|unavailable|unable|omitted|failed to|n\/a)\b/i;
   const prose = (text) => text.split(/\s+/).filter((token) =>
-    !hasConcreteHttpUrl(token) && !isArtifactPath(trimToken(token)),
+    !hasConcreteHttpUrl(token) && !isArtifactPath(trimToken(stripEmphasis(token))),
   ).join(" ");
-  if (concrete && !denial.test(prose(rest))) return true;
-  for (const clause of rest.split(/[;\n]/)) {
-    const text = clause.trim();
-    if (!text) continue;
+  if (concrete && !denial.test(prose(rest.replaceAll("\u0001", "")))) return true;
+  for (const clause of splitClauses(rest)) {
+    const text = clause.replaceAll("\u0001", "").trim();
+    if (!text && !clause.includes("\u0001")) continue;
     // A denied clause cannot suppress another independently cited artifact.
     if (denial.test(prose(text))) continue;
+    if (clause.includes("\u0001") || referenceClauseConcrete(text, definitions)) return true;
     if (hasConcreteHttpUrl(text) || hasSubstantiveCodeSpan(text)) return true;
     // Bare paths count only as a citation, not as incidental prose about a
     // missing file. Prose can use a Markdown link or an explicit citation.
     const citation = text.replace(/^(?:see|artifact(?: at|:)?|attached|saved(?: at| to)?|captured(?: at| to)?|output(?: at|:)?)\s+/i, "");
-    const tokens = citation.split(/\s+/).map(trimToken);
+    const tokens = citation.split(/\s+/).map((token) => trimToken(stripEmphasis(token))).filter(Boolean);
     if (tokens.length && tokens.every(isArtifactPath)) return true;
   }
   return false;
@@ -1235,7 +1350,7 @@ function referenceUses(value, { requireVisible = false, keepMalformed = false } 
 /** Visible inline text for required fields: destinations and HTML attributes
  * cannot turn a placeholder label into a substantive explanation. */
 function visibleFieldText(value) {
-  value = referenceHeadingView(value);
+  value = referenceHeadingView(String(value).replaceAll("\u0000", ""));
   let text = "";
   let cursor = 0;
   for (let at = value.indexOf("]("); at !== -1; at = value.indexOf("](", cursor)) {
@@ -1263,15 +1378,21 @@ function visibleFieldText(value) {
   return decodeCharacterReferences(text).replace(/[*_`~]/g, "").trim();
 }
 
-function decodeCharacterReferences(text, { htmlNumeric = false } = {}) {
+function decodeCharacterReferences(text, { htmlNumeric = false, dropBreaks = false } = {}) {
   const pattern = htmlNumeric
     ? /&(#[xX][\da-fA-F]+;?|#\d+;?|[a-zA-Z][a-zA-Z\d]*;)/g
     : /&(#[xX][\da-fA-F]+;|#\d+;|[a-zA-Z][a-zA-Z\d]*;)/g;
   return text.replace(pattern, (match, rawEntity) => {
     const entity = rawEntity.replace(/;$/, "");
-    if (entity[0] !== "#") return Object.hasOwn(NAMED_CHARACTER_REFERENCES, entity) ? NAMED_CHARACTER_REFERENCES[entity] : match;
-    const code = entity[1].toLowerCase() === "x" ? Number.parseInt(entity.slice(2), 16) : Number(entity.slice(1));
-    return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "\ufffd";
+    let decoded = match;
+    if (entity[0] !== "#") {
+      if (Object.hasOwn(NAMED_CHARACTER_REFERENCES, entity)) decoded = NAMED_CHARACTER_REFERENCES[entity];
+    } else {
+      const code = entity[1].toLowerCase() === "x" ? Number.parseInt(entity.slice(2), 16) : Number(entity.slice(1));
+      decoded = code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "\ufffd";
+    }
+    if (dropBreaks && decoded !== match && /^[\t\n\r]+$/.test(decoded)) return "";
+    return decoded;
   });
 }
 
@@ -1284,12 +1405,17 @@ const PLACEHOLDER_LOOKALIKES = new Map([
   ["p", "ρр"], ["s", "ѕ"], ["t", "τт"], ["x", "χх"], ["y", "υу"],
 ].flatMap(([ascii, letters]) => [...letters].map((letter) => [letter, ascii])));
 
+function stripLeadingListMarkers(text) {
+  return text.split("\n").map((line) => line.replace(/^(?:[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]*)?)+/, "")).join("\n").trim();
+}
+
 function isPlaceholderField(value) {
-  const visible = visibleFieldText(value).normalize("NFKD").toLowerCase()
+  const visible = stripLeadingListMarkers(visibleFieldText(value)).normalize("NFKD").toLowerCase()
     .replace(/[\p{Default_Ignorable_Code_Point}\p{Mark}]/gu, "");
   const plain = [...visible].map((letter) => PLACEHOLDER_LOOKALIKES.get(letter) ?? letter).join("").trim();
   return !/[\p{Letter}\p{Number}]/u.test(plain) || /^(?:todo|tbd|fixme|placeholder)\b/i.test(plain)
-    || /^(?:n\/?a|none|pending|not provided)[.!?]*$/i.test(plain);
+    || /^(?:n\/?a|none|pending|not provided)[.!?]*$/i.test(plain)
+    || /^(?:not[\s-]+(?:run|tested|executed)|no tests?(?:[\s-]+(?:run|were run|executed))?|did(?:n't| not)[\s-]+(?:test|run)|untested|tests?[\s-]+not[\s-]+(?:run|executed))[.!?]*$/i.test(plain);
 }
 
 /**
@@ -1297,16 +1423,17 @@ function isPlaceholderField(value) {
  * artifact field or freeform text outside the template fields. A journey name,
  * a bare category word, or exemption-reason text cannot pass.
  */
-export function hasEvidenceContent(sectionText) {
+export function hasEvidenceContent(sectionText, definitions = new Map()) {
   const steps = readField(sectionText, FIELD_LABELS.steps);
   const result = readField(sectionText, FIELD_LABELS.result);
   const artifact = findField(sectionText, FIELD_LABELS.artifact)?.text ?? "";
   if (isPlaceholderField(steps) || isPlaceholderField(result)) return false;
   // Count reference destinations only for visible reference uses in verification
   // content, never for definitions or labels inside the exemption reason.
-  const verification = withoutFields(sectionText, [FIELD_LABELS.reason]);
+  const verification = withoutFencePayload(withoutFields(sectionText, [FIELD_LABELS.reason]));
   const references = referenceUses(verification, { requireVisible: true });
-  return looksLikeArtifact(artifact, references) || looksLikeArtifact(freeformText(sectionText), references);
+  return looksLikeArtifact(artifact, references, definitions)
+    || looksLikeArtifact(freeformText(sectionText), references, definitions);
 }
 
 const ANSI_C_ESCAPES = {
@@ -2261,23 +2388,42 @@ function joinShellContinuations(value) {
  * exemption. Mentions only in the Exemption reason or Exemption line are allowed;
  * reason lines must sit in its content column (lazy lines stay checked).
  */
+function shellVisible(value) {
+  let quote = null;
+  let out = "";
+  for (let index = 0; index < value.length; index += 1) {
+    const ch = value[index];
+    if (ch === "\\" && quote !== "'") {
+      const next = value[index + 1];
+      if (next === undefined) { out += ch; break; }
+      if (quote === null || /[\\"$`]/.test(next)) { out += next; index += 1; continue; }
+      out += ch;
+      continue;
+    }
+    if (ch === quote) quote = null;
+    else if (quote === null && (ch === "'" || ch === '"')) quote = ch;
+    out += ch;
+  }
+  return out;
+}
+
 function targetsBannedLan(sectionText, definitions, literalText = []) {
   let budget = false;
-  const verification = withoutFields(sectionText, [FIELD_LABELS.reason], {
+  const verification = withoutFencePayload(withoutFields(sectionText, [FIELD_LABELS.reason], {
     keepLazy: true,
   }).replace(
     EXEMPTION_LINE,
     "",
-  );
+  ));
   const bannedTarget = (value) => {
     if (BANNED_LAN_IP.test(value)) return true;
-    const joined = joinShellContinuations(decodeCharacterReferences(value, { htmlNumeric: true }));
+    const joined = joinShellContinuations(decodeCharacterReferences(value, { htmlNumeric: true, dropBreaks: true }));
     const words = shellWords(joined);
     const curl = curlCommandTargets(joined);
     if (curl.budget) budget = true;
     if (curl.overflow) return true;
-    const decoded = joined.replace(/\\(.)/g, "$1");
-    const targets = [...decoded.replace(/[\t\n\r]/g, "").matchAll(/(?:https?:|\/\/)[^\s<>()"'`]+/gi)]
+    const decoded = shellVisible(joined);
+    const targets = [...decoded.matchAll(/(?:https?:|\/\/)[^\s<>()"'`]+/gi)]
       .map((match) => trimToken(match[0]));
     targets.push(...curl.targets);
     targets.push(...words.filter((word) => /^(?:https?:|\/\/)/i.test(word)).map(trimToken));
@@ -2327,6 +2473,20 @@ function documentReferences(body) {
  * @param {string | null | undefined} body
  * @returns {{ ok: boolean, errors: string[], exemption: string | null, hasEvidence: boolean }}
  */
+function exemptionDeclarationCount(section) {
+  const fields = parseFields(section);
+  let count = 0;
+  let offset = 0;
+  for (const line of section.split("\n")) {
+    const start = offset;
+    offset += line.length + 1;
+    if (!EXEMPTION_START.test(line)) continue;
+    if (fields.some((field) => start >= field.start && start < field.end)) continue;
+    count += 1;
+  }
+  return count;
+}
+
 export function lintPrEvidence(body) {
   const errors = [];
   if (typeof body !== "string" || !normalizeWs(body)) {
@@ -2350,17 +2510,17 @@ export function lintPrEvidence(body) {
     };
   }
 
+  const definitions = documentReferences(body);
   const { raw, value, unknown } = parseExemption(section);
   const reason = extractExemptionReason(section);
-  const hasEvidence = hasEvidenceContent(section);
+  const hasEvidence = hasEvidenceContent(section, definitions);
 
-  if ([...referenceHeadingView(inlineCodeMetadataView(stripHiddenMarkdown(structuralMetadataView(body)))).matchAll(EVIDENCE_HEADING)].length > 1) {
+  if (evidenceHeadingSpans(referenceHeadingView(inlineCodeMetadataView(stripHiddenMarkdown(structuralMetadataView(body))))).length > 1) {
     errors.push("PR body must contain exactly one visible Evidence section.");
   }
 
   // Preserve the selected section boundaries even for the conservative LAN view.
   // Also scan the visible section so commented decoy headings cannot redirect it.
-  const definitions = documentReferences(body);
   const literalText = [];
   let previousLiteralLine = -2;
   const conservativeSection = extractEvidenceSection(body, {
@@ -2385,7 +2545,7 @@ export function lintPrEvidence(body) {
     );
   }
 
-  if ([...section.matchAll(EXEMPTION_LINE)].length > 1) {
+  if (exemptionDeclarationCount(section) > 1) {
     errors.push("Evidence must contain exactly one Exemption declaration.");
   }
 
