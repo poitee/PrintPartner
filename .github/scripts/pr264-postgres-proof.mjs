@@ -245,8 +245,11 @@ async function main() {
       if (health.body?.db?.driver !== "postgres" || health.body?.db?.connected !== true) {
         throw new Error("health db not connected postgres");
       }
-      if (health.body?.build?.commit !== PRODUCT_SHA) {
-        throw new Error(`health build.commit ${health.body?.build?.commit} != ${PRODUCT_SHA}`);
+      const expectedCommitShort = PRODUCT_SHA.slice(0, 7);
+      if (health.body?.build?.commit !== expectedCommitShort) {
+        throw new Error(
+          `health build.commit ${health.body?.build?.commit} != ${expectedCommitShort} (from PP_COMMIT)`,
+        );
       }
 
       const unauthPlans = await httpJson(listenPort, "GET", "/plans");
