@@ -59,6 +59,10 @@ jobs:
           mkdir -p "$PP_EVIDENCE"
           uname -a > "$PP_EVIDENCE/runner.txt"
           git rev-parse HEAD > "$PP_EVIDENCE/head.txt"
+      - name: Run rust/scripts self-tests
+        run: |
+          python3 rust/scripts/gateway-operations.py rust/crates/pp-gateway/operations.json --self-test 2>&1 | tee "$PP_EVIDENCE/gateway-operations-self-tests.log"
+          python3 rust/scripts/native-process-probe.py --self-test 2>&1 | tee "$PP_EVIDENCE/native-process-probe-self-tests.log"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.21.0'
@@ -146,6 +150,13 @@ jobs:
             --node "$(command -v node)" \
             --node-snapshot web/apps/server/dist/current/services/local-source-snapshot.js \
             --binary rust/target/debug/pp-source
+      - name: Verify source archive extraction, limits and crash recovery
+        run: |
+          python3 rust/tests/source-archive/verify.py \
+            --output "$RUNNER_TEMP/source-archive-evidence" \
+            --node "$(command -v node)" \
+            --node-archive web/apps/server/dist/current/services/archive-import.js \
+            --binary rust/target/debug/pp-source-archive
       - name: Replay SourcePath corpus through Node
         if: ${{ !cancelled() && steps.source_artifacts_build.outcome == 'success' }}
         run: |
@@ -167,6 +178,8 @@ jobs:
             ${{ runner.temp }}/source-artifacts-evidence/source-path-corpus.json
             ${{ runner.temp }}/source-artifacts-evidence/*.strace
             ${{ runner.temp }}/source-artifacts-evidence/*.stderr
+            ${{ runner.temp }}/source-archive-evidence/checks.json
+            ${{ runner.temp }}/source-archive-evidence/*.strace
           if-no-files-found: warn
           retention-days: 14
 
@@ -203,7 +216,7 @@ jobs:
           sudo iptables -N PP_LAN_GUARD
           sudo iptables -A PP_LAN_GUARD -j REJECT
           sudo iptables -I OUTPUT -d 192.168.0.0/16 -m conntrack --ctstate NEW -j PP_LAN_GUARD
-          sudo iptables -L OUTPUT -n -v > "$PP_EVIDENCE/egress-guard-before.txt"
+          sudo iptables -L OUTPUT -n -v | tee "$PP_EVIDENCE/egress-guard-before.txt"
       - name: Run Rust gateway verify.py end to end
         run: |
           python3 .cursor/skills/verify-print-partner-rust/helpers/verify.py 2>&1 | tee "$PP_EVIDENCE/verify.log"
@@ -212,7 +225,7 @@ jobs:
       - name: Assert no LAN egress was attempted
         if: always()
         run: |
-          sudo iptables -L OUTPUT -n -v -x > "$PP_EVIDENCE/egress-guard-after.txt"
+          sudo iptables -L OUTPUT -n -v -x | tee "$PP_EVIDENCE/egress-guard-after.txt"
           blocked="$(sudo iptables -L PP_LAN_GUARD -n -v -x | awk 'NR>2 {sum+=$1} END {print sum+0}')"
           echo "blocked_lan_packets=$blocked" | tee "$PP_EVIDENCE/egress-guard-result.txt"
           test "$blocked" -eq 0

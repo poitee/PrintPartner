@@ -1,0 +1,7 @@
+{
+  "status": 401,
+  "headers": {
+    "www-authenticate": "Digest realm=\"Printer API\", nonce=\"fixture-nonce\", qop=\"auth\", algorithm=MD5"
+  },
+  "body": null
+}

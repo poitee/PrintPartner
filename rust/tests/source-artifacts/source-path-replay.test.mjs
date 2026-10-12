@@ -15,6 +15,15 @@ const corpusOf = (...cases) => ({
 });
 const run = (corpus, validator = sourceRelativePath) => replayCorpus(corpus, validator, manifest);
 
+test('a different Unicode patch version fails the version guard', () => {
+  const [major, minor = 0, patch = 0] = process.versions.unicode.split('.').map(Number);
+  const report = run({
+    ...corpusOf({ path: 'part.stl', rustNfc: 'part.stl', rustAccepts: true }),
+    rust_unicode_version: [major, minor, patch + 1],
+  });
+  assert.equal(report.unicodeVersionsMatch, false);
+});
+
 test('colon difference is retained with the complete path and documented rule', () => {
   const report = run(corpusOf({ path: 'a:b.stl', rustNfc: 'a:b.stl', rustAccepts: false }));
   assert.equal(report.mismatches, 1);

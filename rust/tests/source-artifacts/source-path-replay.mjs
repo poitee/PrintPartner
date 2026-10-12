@@ -37,8 +37,8 @@ function sharedStructureAccepts(path, manifest) {
 
 // Node reports "major.minor"; unicode-normalization reports (major, minor, patch).
 function unicodeVersionsMatch(rustVersion, nodeVersion = process.versions.unicode) {
-  const [major, minor] = nodeVersion.split('.').map(Number);
-  return rustVersion[0] === major && rustVersion[1] === (minor ?? 0);
+  const [major, minor = 0, patch = 0] = nodeVersion.split('.').map(Number);
+  return rustVersion[0] === major && rustVersion[1] === minor && rustVersion[2] === patch;
 }
 
 export function replayCorpus(corpus, sourceRelativePath, manifest) {

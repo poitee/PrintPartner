@@ -1,0 +1,12 @@
+{
+  "method": "POST",
+  "path": "/api/webhook/{webhook_id}",
+  "content_type": "multipart/form-data",
+  "fields": {
+    "file": {
+      "filename": "part.gcode",
+      "content": "; fixture gcode\n"
+    },
+    "filename": "part.gcode"
+  }
+}
