@@ -133,6 +133,21 @@ impl Directory {
         Ok(file)
     }
 
+    pub(crate) fn file_read_write(&self, path: &str) -> Result<File> {
+        let (parent, name) = self.parent(path, false)?;
+        let flags = OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK | OFlags::RDWR;
+        let file = File::from(fs::openat(
+            &parent.0,
+            name.as_str(),
+            flags,
+            Mode::RUSR | Mode::WUSR,
+        )?);
+        if !file.metadata()?.is_file() {
+            return Err(Error::UnsafePath);
+        }
+        Ok(file)
+    }
+
     pub(crate) fn entries(&self) -> Result<Vec<String>> {
         let mut entries = Vec::new();
         for entry in fs::Dir::read_from(&self.0)? {
@@ -333,7 +348,7 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     fn chmod(args: &[&str], path: &std::path::Path) {
-        let status = std::process::Command::new("/bin/chmod")
+        let status = crate::test_process::command("/bin/chmod")
             .args(args)
             .arg(path)
             .status()
@@ -354,7 +369,7 @@ mod tests {
         }
 
         fn me() -> String {
-            let out = std::process::Command::new("/usr/bin/id")
+            let out = crate::test_process::command("/usr/bin/id")
                 .arg("-un")
                 .output()
                 .unwrap();

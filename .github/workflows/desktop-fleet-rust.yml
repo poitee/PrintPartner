@@ -66,6 +66,17 @@ jobs:
         if: steps.workspace.outputs.manifest != ''
         with:
           tool: nextest
+      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        if: steps.workspace.outputs.manifest != '' && env.PARTITION == '1'
+        with:
+          tool: ast-grep@0.50.0
+      - name: Check Rust ast-grep ratchet
+        if: steps.workspace.outputs.manifest != '' && env.PARTITION == '1'
+        run: |
+          git fetch --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main
+          ast-grep test --config rust/sgconfig.yml --skip-snapshot-tests
+          python3 -m unittest discover -s rust/scripts -p 'test_ast_grep.py' -v
+          python3 rust/scripts/check-ast-grep.py
       - name: Install Linux desktop dependencies
         if: steps.workspace.outputs.manifest != ''
         shell: bash
@@ -85,7 +96,7 @@ jobs:
         run: sudo apt-get install -y --no-install-recommends mold
       - name: Restore sccache directory
         if: steps.workspace.outputs.manifest != '' && env.FLEET_RUST_ACCEL == 'on'
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/sccache
           key: sccache-${{ runner.os }}-${{ github.job }}-${{ hashFiles('rust/Cargo.lock') }}-${{ github.run_id }}
@@ -96,10 +107,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
-          echo "SCCACHE_DIR=$RUNNER_TEMP/sccache" >> "$GITHUB_ENV"
-          echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
-          echo "RUSTFLAGS=-C link-arg=-fuse-ld=mold" >> "$GITHUB_ENV"
+          {
+            echo "RUSTC_WRAPPER=sccache"
+            echo "SCCACHE_DIR=$RUNNER_TEMP/sccache"
+            echo "CARGO_INCREMENTAL=0"
+            echo "RUSTFLAGS=-C link-arg=-fuse-ld=mold"
+          } >> "$GITHUB_ENV"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         if: steps.workspace.outputs.manifest != ''
         with:
@@ -141,12 +154,22 @@ jobs:
         run: |
           set -euo pipefail
           start=$SECONDS
-          cargo nextest run --workspace --locked --manifest-path "$MANIFEST" --partition "count:${PARTITION}/2"
+          status=0
+          cargo nextest run --workspace --locked --profile ci --manifest-path "$MANIFEST" --partition "count:${PARTITION}/2" || status=$?
           elapsed=$((SECONDS - start))
           {
             echo "Rust nextest partition ${PARTITION}/2: ${elapsed}s"
             echo 'Target: warm Rust build + nextest <=90s per partition. Compare a cold run and warm rerun of the same commit and inputs.'
           } | tee -a "$GITHUB_STEP_SUMMARY"
+          python3 rust/scripts/nextest-junit-summary.py --junit rust/target/nextest/ci/junit.xml --partition "$PARTITION"
+          exit "$status"
+      - name: Upload nextest JUnit report
+        if: always() && steps.workspace.outputs.manifest != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nextest-junit-partition-${{ env.PARTITION }}-${{ github.run_attempt }}
+          path: rust/target/nextest/ci/junit.xml
+          if-no-files-found: warn
       - name: Report sccache stats
         if: always() && steps.workspace.outputs.manifest != '' && env.FLEET_RUST_ACCEL == 'on'
         shell: bash
@@ -185,6 +208,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '24.21.0'
