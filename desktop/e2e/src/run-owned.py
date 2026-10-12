@@ -54,6 +54,8 @@ def main():
         signal.signal(sig, lambda received, _frame: interrupted.append(received))
     child = subprocess.Popen([node, "--import", "tsx", "src/run.ts"], start_new_session=True)
     acquired = {child.pid: identity(child.pid)}
+    history = []
+    refusals = []
     reaped = []
     signals = []
     result = None
@@ -61,10 +63,24 @@ def main():
     def observe():
         # Only descendants of this subreaper can enter the owned set.
         for pid in descendants(os.getpid()):
-            acquired.setdefault(pid, identity(pid))
+            start = identity(pid)
+            if start and acquired.get(pid) != start:
+                history.append({"pid": pid, "previous_identity": acquired.get(pid),
+                                "start_identity": start})
+                acquired[pid] = start
 
     def live():
-        return [pid for pid, start in acquired.items() if start and identity(pid) == start]
+        found = []
+        for pid, start in acquired.items():
+            current = identity(pid)
+            if start and current == start:
+                found.append(pid)
+            elif current and current != start:
+                refusal = {"pid": pid, "acquired_identity": start,
+                           "current_identity": current, "signal": "census-refused"}
+                if refusal not in refusals:
+                    refusals.append(refusal)
+        return found
 
     def reap():
         nonlocal result
@@ -83,7 +99,10 @@ def main():
     def send(sig):
         for pid in live():
             # Recheck the start identity immediately before each positive-PID signal.
-            if identity(pid) != acquired[pid]:
+            current = identity(pid)
+            if current != acquired[pid]:
+                refusals.append({"pid": pid, "acquired_identity": acquired[pid],
+                                 "current_identity": current, "signal": sig.name})
                 continue
             try:
                 os.kill(pid, sig)
@@ -108,10 +127,12 @@ def main():
                 reap()
                 time.sleep(0.02)
         reap()
+        observe()
         survivors = live()
         receipt = {"runner_pid": child.pid, "runner_exit": result,
                    "owned_start_identities": acquired, "reaped": reaped,
-                   "signals": signals, "survivors": survivors}
+                   "signals": signals, "identity_history": history,
+                   "signal_refusals": refusals, "survivors": survivors}
         (output / "subreaper.json").write_text(json.dumps(receipt, indent=2) + "\n")
         if survivors:
             raise RuntimeError(f"owned automation processes survived: {survivors}")
