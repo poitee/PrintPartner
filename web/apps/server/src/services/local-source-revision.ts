@@ -348,7 +348,7 @@ function registerAndActivateSnapshot(input: {
   }, "immediate");
 }
 
-export type ActivatedSourceDocsIndex =
+type ActivatedSourceDocsIndex =
   | { outcome: "indexed"; docCount: number; pendingPdfs: number }
   | { outcome: "cleared"; revisionId: number; reason: string }
   | { outcome: "unchanged"; revisionId: number; activeRevisionId: number | null };
