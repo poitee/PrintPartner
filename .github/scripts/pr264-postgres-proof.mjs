@@ -4,6 +4,7 @@
  * CI-only. Runtime acceptance, ticket Done, and publication atomicity stay unclaimed.
  * In-process server lifecycle (no manual signals).
  */
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
@@ -201,6 +202,26 @@ async function importAppPg(report) {
   return Pool;
 }
 
+function assertUnchangedState(beforeDb, afterDb, fsBefore, fsAfter) {
+  assert.deepStrictEqual(
+    afterDb.projectCount,
+    beforeDb.projectCount,
+    "projects row count changed after unsupported ops",
+  );
+  assert.deepStrictEqual(afterDb.projects, beforeDb.projects, "projects rows changed after unsupported ops");
+  assert.deepStrictEqual(
+    afterDb.revisionCount,
+    beforeDb.revisionCount,
+    "source_revisions row count changed after unsupported ops",
+  );
+  assert.deepStrictEqual(
+    afterDb.revisions,
+    beforeDb.revisions,
+    "source_revisions rows changed after unsupported ops",
+  );
+  assert.deepStrictEqual(fsAfter, fsBefore, "repos filesystem tree changed after unsupported ops");
+}
+
 async function pgSnapshot(databaseUrl, Pool) {
   const pool = new Pool({ connectionString: databaseUrl });
   try {
@@ -322,8 +343,13 @@ async function main() {
 
       const unauthPlans = await httpJson(listenPort, "GET", "/plans");
       report.http.push(unauthPlans);
-      if (unauthPlans.status === 503) {
-        throw new Error("unauthenticated /plans must not be blanket 503");
+      if (unauthPlans.status !== 401) {
+        throw new Error(`unauthenticated /plans expected 401 got ${unauthPlans.status}`);
+      }
+      if (unauthPlans.body?.detail !== "Authentication required") {
+        throw new Error(
+          `unauthenticated /plans detail ${JSON.stringify(unauthPlans.body?.detail)} != Authentication required`,
+        );
       }
 
       const email = `pr264-pg-proof-${runSalt}@example.com`;
@@ -353,7 +379,7 @@ async function main() {
       if (listPlans.status !== 200) throw new Error(`list plans ${listPlans.status}`);
 
       const createSource = await httpJson(listenPort, "POST", "/sources", {
-        body: { name: `pg-proof-source-${runSalt}`, source_kind: "local" },
+        body: { name: `pg-proof-source-${runSalt}`, source_kind: "archive" },
         cookies,
       });
       report.http.push(createSource);
@@ -404,13 +430,11 @@ async function main() {
       report.dbAfter = afterDb;
       report.fsAfter = treeDigest(reposDir);
 
-      if (afterDb.revisionCount !== beforeDb.revisionCount) {
-        throw new Error("source_revisions mutated after unsupported ops");
-      }
+      assertUnchangedState(beforeDb, afterDb, fsBefore, report.fsAfter);
 
       report.pass = true;
       report.summary =
-        "Live hosted Postgres HTTP: health connected, register/plan/list controls OK, repo-manifest and upload routes return 503 with publication-unavailable detail, DB revision count unchanged.";
+        "Live hosted Postgres HTTP: health connected, unauthenticated /plans 401, register/plan/list controls OK, archive source created, repo-manifest and upload routes return 503 with publication-unavailable detail, projects/revisions rows and repos filesystem unchanged.";
     } finally {
       await started.app.close();
       await started.ports.db.close();
