@@ -5359,13 +5359,13 @@ test("r24-wgetrc-proxy-names-normalize", () => {
     "wget --execute=HTTPS_PROXY=3232235856 http://example.test/",
     "wget -e Http_Proxy=3232235857 http://example.test/",
     "wget -e ftp-proxy=3232235856 http://example.test/",
+    "wget -e 'HTTP_PROXY = 3232235856' http://example.test/",
   ]) {
     r19Expect(commandEvidence(command), 1, "", LAN_STDERR);
   }
   for (const command of [
     "wget -e HTTP_PROXY=3232235855 http://example.test/",
     "wget -e HTTP_PROXY=3232235858 http://example.test/",
-    "wget -e 'HTTP_PROXY = 3232235856' http://example.test/",
     "wget -e NO_PROXY=3232235856 http://example.test/",
     "wget -e use_proxy=on http://example.test/",
     "curl -e HTTP_PROXY=3232235856 http://example.test/",
@@ -5715,6 +5715,164 @@ test("r28-eval-command-binding", () => {
     "cmd=curl; eval '$cmd 3232235855'",
     "cmd='curl 3232235856'; bash -c '$cmd'",
     "eval '$cmd'",
+  ]) {
+    r19Expect(commandEvidence(command), 0, OK_LINE, "");
+  }
+});
+
+const R29_PROCESS_STDERR = "PR evidence lint FAILED:\n- Evidence contains a curl --config or wget --input-file process substitution this static check does not read. Put the transfer URL on the command line.\n";
+
+function r29Reason(command) {
+  return `## Evidence
+Exemption: docs-only
+- Exemption reason: Document the prohibited host.
+  ${command}
+`;
+}
+
+function r29CiFence(command) {
+  return `## Evidence
+Exemption: ci-only
+- Exemption reason: Evidence checker verification only.
+- Steps followed to produce the evidence: Execute the local verifier.
+- Result observed: The verifier returned its expected result.
+- Screenshot / recording / verify-skill output or trace: evidence/a.png
+
+\`\`\`sh
+${command}
+\`\`\`
+`;
+}
+
+test("r29-wgetrc-whitespace", () => {
+  for (const command of [
+    "wget -e 'http_proxy = 3232235856' http://example.test/",
+    "wget -e 'http_proxy =3232235856' http://example.test/",
+    "wget -e 'http_proxy= 3232235856' http://example.test/",
+    "wget -e 'http_proxy\t=\t3232235856' http://example.test/",
+    "wget --execute='https_proxy = 3232235856' http://example.test/",
+    "wget -e 'ftp-proxy = 3232235856' http://example.test/",
+  ]) {
+    r19Expect(commandEvidence(command), 1, "", LAN_STDERR);
+    r19Expect(r29CiFence(command), 1, "", LAN_STDERR);
+  }
+  r19Expect(r29Reason("wget -e 'http_proxy = 3232235856' http://example.test/"), 0, "PR evidence lint OK (exemption=docs-only, hasEvidence=false)\n", "");
+  for (const command of [
+    "wget -e 'http_proxy = 3232235855' http://example.test/",
+    "wget -e 'http_proxy=3232235858' http://example.test/",
+    "wget -e 'output = 3232235856' http://example.test/",
+    "curl -e 'http_proxy = 3232235856' http://example.test/",
+    "curl http://example.test/",
+  ]) {
+    r19Expect(commandEvidence(command), 0, OK_LINE, "");
+  }
+});
+
+test("r29-parameter-fallback", () => {
+  for (const command of [
+    "curl ${HOST:-3232235856}",
+    "curl ${HOST-3232235856}",
+    "HOST=; curl ${HOST:-3232235856}",
+    "curl ${HOST:-${PORT:-3232235856}}",
+    "curl http://192.168.1.${OCTET:-80}/",
+    "HOST=3232235856; curl ${HOST:-3232235855}",
+    'curl "${HOST:-3232235856}"',
+    "eval 'curl ${HOST:-3232235856}'",
+  ]) {
+    r19Expect(commandEvidence(command), 1, "", LAN_STDERR);
+  }
+  r19Expect(r29CiFence("curl ${HOST:-3232235856}"), 1, "", LAN_STDERR);
+  r19Expect(r29Reason("curl ${HOST:-3232235856}"), 0, "PR evidence lint OK (exemption=docs-only, hasEvidence=false)\n", "");
+  for (const command of [
+    "curl ${HOST:-3232235855}",
+    "curl ${HOST:-http://example.test/}",
+    "HOST=3232235855; curl ${HOST:-3232235856}",
+    "HOST=; curl ${HOST-3232235856}",
+    "curl '${HOST:-3232235856}'",
+    "PORT=3232235855; curl ${HOST:-${PORT:-3232235856}}",
+    "curl http://example.test/",
+  ]) {
+    r19Expect(commandEvidence(command), 0, OK_LINE, "");
+  }
+});
+
+test("r29-launcher-before-shell", () => {
+  for (const command of [
+    "env bash -c 'curl 3232235856'",
+    "sudo bash -c 'curl 3232235856'",
+    "command bash -c 'curl 3232235856'",
+    "nice bash -c 'curl 3232235856'",
+    "env eval 'curl 3232235856'",
+    "command env bash -c 'curl 3232235856'",
+  ]) {
+    r19Expect(commandEvidence(command), 1, "", LAN_STDERR);
+  }
+  r19Expect(r29CiFence("env bash -c 'curl 3232235856'"), 1, "", LAN_STDERR);
+  r19Expect(r29Reason("env bash -c 'curl 3232235856'"), 0, "PR evidence lint OK (exemption=docs-only, hasEvidence=false)\n", "");
+  for (const command of [
+    "env bash -c 'curl 3232235855'",
+    "sudo bash -c 'curl http://example.test/'",
+    "command bash -c 'printf %s 3232235856'",
+    "env eval 'curl 3232235855'",
+    "env curl 3232235855",
+    "bash -c 'curl 3232235855'",
+    "curl http://example.test/",
+  ]) {
+    r19Expect(commandEvidence(command), 0, OK_LINE, "");
+  }
+});
+
+test("r29-process-substitution", () => {
+  for (const command of [
+    "curl -K <(printf 'url=3232235856\\n')",
+    "curl --config <(printf 'url=3232235856\\n')",
+    "wget -i <(printf '3232235856\\n')",
+    "wget --input-file <(printf '3232235856\\n')",
+    "bash -c \"curl -K <(printf 'url=3232235856\\n')\"",
+  ]) {
+    r19Expect(commandEvidence(command), 1, "", R29_PROCESS_STDERR);
+  }
+  r19Expect(r29CiFence("curl -K <(printf 'url=3232235856\\n')"), 1, "", R29_PROCESS_STDERR);
+  r19Expect(r29Reason("curl -K <(printf 'url=3232235856\\n')"), 0, "PR evidence lint OK (exemption=docs-only, hasEvidence=false)\n", "");
+  for (const command of [
+    "curl -K /no/such/gre583-r29",
+    "curl --config /no/such/gre583-r29 http://example.test/",
+    "wget -i /no/such/gre583-r29 http://example.test/",
+    "wget --input-file=/no/such/gre583-r29 http://example.test/",
+    "echo <(printf '3232235856\\n')",
+    "curl http://example.test/",
+  ]) {
+    r19Expect(commandEvidence(command), 0, OK_LINE, "");
+  }
+});
+
+test("r29-allexport", () => {
+  for (const command of [
+    "set -a; http_proxy=3232235856; curl http://example.test/",
+    "set -o allexport; http_proxy=3232235856; curl http://example.test/",
+    "set -oallexport; http_proxy=3232235856; curl http://example.test/",
+    "set -a; http_proxy=3232235856; set +a; curl http://example.test/",
+    "set -a; http_proxy=3232235855; set +a; http_proxy=3232235856; curl http://example.test/",
+    "set -o allexport; http_proxy=3232235856; set +o allexport; curl http://example.test/",
+    "export http_proxy=3232235856; set +a; curl http://example.test/",
+    "set -a; http_proxy=3232235856; bash -c 'curl http://example.test/'",
+    "eval 'set -a; http_proxy=3232235856'; curl http://example.test/",
+  ]) {
+    r19Expect(commandEvidence(command), 1, "", LAN_STDERR);
+  }
+  r19Expect(r29CiFence("set -a; http_proxy=3232235856; curl http://example.test/"), 1, "", LAN_STDERR);
+  r19Expect(r29Reason("set -a; http_proxy=3232235856; curl http://example.test/"), 0, "PR evidence lint OK (exemption=docs-only, hasEvidence=false)\n", "");
+  for (const command of [
+    "set -a; http_proxy=3232235855; curl http://example.test/",
+    "set +a; http_proxy=3232235856; curl http://example.test/",
+    "set +o allexport; http_proxy=3232235856; curl http://example.test/",
+    "set -a; http_proxy=3232235856; set +a; http_proxy=3232235855; curl http://example.test/",
+    "http_proxy=3232235856; set -a; curl http://example.test/",
+    "set -e; http_proxy=3232235856; curl http://example.test/",
+    "set -a; HTTP_PROXY=3232235856; curl http://example.test/",
+    "bash -c 'set -a; http_proxy=3232235856'; curl http://example.test/",
+    "set -a; curl http://example.test/",
+    "curl http://example.test/",
   ]) {
     r19Expect(commandEvidence(command), 0, OK_LINE, "");
   }

@@ -1843,39 +1843,66 @@ function readBacktickSubstitution(value, start) {
   return { text: value.slice(start, index), end: index, closed: false };
 }
 
-// A parameter expansion is not evaluated. A curl or wget target fails closed only when this shell text assigned that name.
+// A plain parameter stays unresolved unless this shell assigned it. A static fallback word is the value when that operator says so.
 function readParameterExpansion(value, start) {
   const next = value[start + 1];
   if (next === undefined || next === "(" || next === "'") return null;
-  if (next === "{") {
-    let name = null;
-    let nameAt = start + 2;
-    if (/[A-Za-z_]/.test(value[nameAt] ?? "")) {
-      const nameStart = nameAt;
-      while (/[A-Za-z0-9_]/.test(value[nameAt] ?? "")) nameAt += 1;
-      name = value.slice(nameStart, nameAt);
-    }
-    const limit = Math.min(value.length, start + 256);
+  if (next !== "{") {
+    if (/[0-9*@#?!$\-]/.test(next)) return { end: start + 2, name: null, op: null, fallback: null };
+    if (!/[A-Za-z_]/.test(next)) return null;
     let index = start + 2;
-    let depth = 1;
-    while (index < limit && depth > 0) {
-      const ch = value[index];
-      if (ch === "\\" && index + 1 < limit) {
+    while (index < value.length && /[A-Za-z0-9_]/.test(value[index])) index += 1;
+    return { end: index, name: value.slice(start + 1, index), op: null, fallback: null };
+  }
+  let name = null;
+  let nameAt = start + 2;
+  if (/[A-Za-z_]/.test(value[nameAt] ?? "")) {
+    const nameStart = nameAt;
+    while (/[A-Za-z0-9_]/.test(value[nameAt] ?? "")) nameAt += 1;
+    name = value.slice(nameStart, nameAt);
+  }
+  const limit = Math.min(value.length, start + 256);
+  let index = start + 2;
+  let depth = 1;
+  let op = null;
+  let fallbackAt = -1;
+  while (index < limit && depth > 0) {
+    const ch = value[index];
+    if (ch === "\\" && index + 1 < limit) {
+      index += 2;
+      continue;
+    }
+    if (ch === "{") {
+      depth += 1;
+      index += 1;
+      continue;
+    }
+    if (ch === "}") {
+      depth -= 1;
+      index += 1;
+      if (depth === 0) break;
+      continue;
+    }
+    if (depth === 1 && (ch === "\n" || ch === ";" || ch === "|" || ch === "&" || ch === "`")) break;
+    if (depth === 1 && op === null && name && index >= nameAt) {
+      if (ch === ":" && /[-+=?]/.test(value[index + 1] ?? "")) {
+        op = ch + value[index + 1];
+        fallbackAt = index + 2;
         index += 2;
         continue;
       }
-      if (ch === "{") depth += 1;
-      else if (ch === "}") depth -= 1;
-      else if (depth === 1 && (ch === "\n" || ch === ";" || ch === "|" || ch === "&" || ch === "`")) break;
-      index += 1;
+      if ("-+=?".includes(ch)) {
+        op = ch;
+        fallbackAt = index + 1;
+        index += 1;
+        continue;
+      }
+      op = "";
     }
-    return { end: index, name };
+    index += 1;
   }
-  if (/[0-9*@#?!$\-]/.test(next)) return { end: start + 2, name: null };
-  if (!/[A-Za-z_]/.test(next)) return null;
-  let index = start + 2;
-  while (index < value.length && /[A-Za-z0-9_]/.test(value[index])) index += 1;
-  return { end: index, name: value.slice(start + 1, index) };
+  if (depth !== 0 || !op) return { end: index, name, op: null, fallback: null };
+  return { end: index, name, op, fallback: value.slice(fallbackAt, index - 1) };
 }
 
 function shellWords(value, { commandTokens = false } = {}) {
@@ -1887,6 +1914,7 @@ function shellWords(value, { commandTokens = false } = {}) {
   let wordUnresolved = false;
   let wordSubstitution = false;
   let wordParameters = [];
+  let wordFallbacks = [];
   let nameQuoted = false;
   let sawUnquotedEquals = false;
   let substitutionBodies = [];
@@ -1911,7 +1939,7 @@ function shellWords(value, { commandTokens = false } = {}) {
   const flush = () => {
     if (word || (commandTokens && wordStarted)) {
       const assignable = !nameQuoted && /^[A-Za-z_][\w]*\+?=/.test(word);
-      words.push(commandTokens ? { text: word, braceText, unresolved: wordUnresolved, substitution: wordSubstitution, parameters: wordParameters, assignable, substitutionBodies } : word);
+      words.push(commandTokens ? { text: word, braceText, unresolved: wordUnresolved, substitution: wordSubstitution, parameters: wordParameters, assignable, substitutionBodies, fallbacks: wordFallbacks, processFile: false } : word);
     }
     word = "";
     braceText = "";
@@ -1919,6 +1947,7 @@ function shellWords(value, { commandTokens = false } = {}) {
     wordUnresolved = false;
     wordSubstitution = false;
     wordParameters = [];
+    wordFallbacks = [];
     nameQuoted = false;
     sawUnquotedEquals = false;
     substitutionBodies = [];
@@ -1961,6 +1990,25 @@ function shellWords(value, { commandTokens = false } = {}) {
       index = substitution.end - 1;
       continue;
     }
+    if (quote === null && (ch === "<" || ch === ">") && value[index + 1] === "(") {
+      const substitution = readCommandSubstitution(value, index);
+      flush();
+      if (commandTokens) {
+        words.push({
+          text: value.slice(index, substitution.end),
+          braceText: "",
+          unresolved: false,
+          substitution: false,
+          parameters: [],
+          assignable: false,
+          substitutionBodies: [],
+          fallbacks: [],
+          processFile: true,
+        });
+      }
+      index = Math.max(substitution.end, index + 2) - 1;
+      continue;
+    }
     if (quote === null && /[\s;|&<>()]/.test(ch)) {
       flush();
       if (commandTokens && /[\n\r;|&<>()]/.test(ch)) words.push(null);
@@ -1982,8 +2030,10 @@ function shellWords(value, { commandTokens = false } = {}) {
     if (quote !== "'" && ch === "$") {
       const parameter = readParameterExpansion(value, index);
       if (parameter) {
+        const at = word.length;
         append(value.slice(index, parameter.end), true);
         if (parameter.name) wordParameters.push(parameter.name);
+        if (parameter.op) wordFallbacks.push({ start: at, end: word.length, name: parameter.name, op: parameter.op, fallback: parameter.fallback });
         index = parameter.end - 1;
         continue;
       }
@@ -2604,9 +2654,10 @@ const WGETRC_PROXY_NAMES = new Set(["httpproxy", "httpsproxy", "ftpproxy"]);
 function wgetrcProxyValue(text) {
   const eq = text.indexOf("=");
   if (eq <= 0) return null;
-  const name = text.slice(0, eq).toLowerCase().replace(/[_-]/g, "");
+  const name = text.slice(0, eq).trim().toLowerCase().replace(/[_-]/g, "");
   if (!WGETRC_PROXY_NAMES.has(name)) return null;
-  return text.slice(eq + 1);
+  const value = text.slice(eq + 1).trim();
+  return value || null;
 }
 
 function assignmentName(text) {
@@ -2657,7 +2708,7 @@ function transferClientName(program) {
   return folded === "curl" || folded === "wget" ? folded : null;
 }
 
-function effectiveCurlStart(command, assigned) {
+function resolveCommand(command, assigned) {
   const proxies = [];
   const miss = () => ({ index: -1, proxies });
   let start = 0;
@@ -2682,7 +2733,7 @@ function effectiveCurlStart(command, assigned) {
       mode = next.shell ? "shell" : "executable";
       continue;
     }
-    if (!Object.hasOwn(COMMAND_LAUNCHERS, name)) return miss();
+    if (!Object.hasOwn(COMMAND_LAUNCHERS, name)) return { index: mode === "builtin" ? -1 : start, proxies };
     const shellBuiltin = SHELL_COMMAND_LAUNCHERS.has(name);
     if ((shellBuiltin && (mode === "executable" || program !== name))
       || (!shellBuiltin && mode === "builtin")) return miss();
@@ -2836,13 +2887,15 @@ function connectionEndpoints(kind, value) {
   return addresses.map(httpHostTarget);
 }
 
-function collectWgetUrls(args, urls) {
+function collectWgetUrls(args, urls, tagged = []) {
   let stdinList = false;
+  let processFile = false;
+  const finish = () => ({ stdinList, processFile });
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === "--") {
       for (const url of args.slice(i + 1)) urls.push(url);
-      return stdinList;
+      return finish();
     }
     if (arg.startsWith("--")) {
       const equal = arg.indexOf("=");
@@ -2860,6 +2913,7 @@ function collectWgetUrls(args, urls) {
         if (proxy) urls.push(proxy);
       }
       if (name === "input-file" && operand === "-") stdinList = true;
+      if (name === "input-file" && tagged[i]?.processFile) processFile = true;
       continue;
     }
     if (arg.startsWith("-") && arg !== "-") {
@@ -2874,13 +2928,14 @@ function collectWgetUrls(args, urls) {
           if (proxy) urls.push(proxy);
         }
         if (arg[at] === "i" && operand === "-") stdinList = true;
+        if (arg[at] === "i" && tagged[i]?.processFile) processFile = true;
         break;
       }
       continue;
     }
     urls.push(arg);
   }
-  return stdinList;
+  return finish();
 }
 
 function unresolvedOperand(arg, operand) {
@@ -2935,8 +2990,90 @@ function sameBinding(left, right) {
     && left.exported === right.exported;
 }
 
+function bindingDynamic(binding) {
+  if (!binding) return null;
+  const resolved = staticBindingText(binding);
+  return resolved.reject ? resolved : null;
+}
+
+function bindingEmpty(binding) {
+  return Boolean(binding) && binding.value === "" && !binding.substitution && !binding.arithmetic && !binding.parameter;
+}
+
+function staticFallbackValue(raw, shellVars, depth) {
+  if (depth > 8) return { reject: true, parameter: true, substitution: false };
+  if (raw.includes("`")) return { reject: true, substitution: true };
+  if (/\$\(/.test(raw.replace(/\$\(\(/g, ""))) return { reject: true, substitution: true };
+  const expanded = expandSameShellWords(raw, shellVars, depth + 1);
+  if (expanded.reject) return expanded;
+  if (expanded.parameter) return { reject: true, parameter: true, substitution: false };
+  let text = expanded.text;
+  if (/^\$\(\([\s\S]*\)\)$/.test(text)) {
+    const arithmetic = readStaticArithmetic(text, 0, null);
+    if (!arithmetic.resolved) return { reject: true, unresolved: true, substitution: false };
+    text = arithmetic.text;
+  } else if (/\$\(\(/.test(text)) {
+    return { reject: true, unresolved: true, substitution: false };
+  }
+  const words = shellWords(text);
+  if (words.some((word) => word.includes("$") || word.includes("`"))) {
+    return { reject: true, parameter: true, substitution: false };
+  }
+  return { text: words.join(" ") };
+}
+
+function chooseFallback(item, shellVars, depth) {
+  if (depth > 8) return { reject: true, parameter: true, substitution: false };
+  const binding = item.name ? shellVars.get(item.name) : undefined;
+  const unset = !binding;
+  const empty = bindingEmpty(binding);
+  const op = item.op;
+  const useWord = op === "-" || op === "=" ? unset
+    : op === ":-" || op === ":=" ? unset || empty
+    : op === "+" ? !unset
+    : op === ":+" ? !unset && !empty
+    : op === "?" ? unset
+    : op === ":?" ? unset || empty
+    : false;
+  if ((op === "?" || op === ":?") && useWord) return { reject: true, parameter: true, substitution: false };
+  if ((op === "+" || op === ":+") && !useWord) return { text: "" };
+  if (useWord) {
+    const resolved = staticFallbackValue(item.fallback ?? "", shellVars, depth + 1);
+    if (!resolved.reject && (op === "=" || op === ":=") && item.name) {
+      const prior = shellVars.get(item.name);
+      shellVars.set(item.name, {
+        value: resolved.text,
+        arithmetic: false,
+        substitution: false,
+        parameter: false,
+        exported: shellVars.allexport === true || prior?.exported === true,
+      });
+    }
+    return resolved;
+  }
+  const dynamic = bindingDynamic(binding);
+  if (dynamic) return dynamic;
+  return { text: binding?.value ?? "" };
+}
+
+function applyWordFallbacks(word, shellVars) {
+  if (!word?.fallbacks?.length) return word;
+  const chosen = word.fallbacks.map((item) => chooseFallback(item, shellVars, 0));
+  const rejected = chosen.find((item) => item.reject);
+  if (rejected) return { ...word, fallbackReject: rejected };
+  let text = word.text;
+  const parameters = word.parameters.slice();
+  for (let i = word.fallbacks.length - 1; i >= 0; i -= 1) {
+    const item = word.fallbacks[i];
+    text = text.slice(0, item.start) + (chosen[i].text ?? "") + text.slice(item.end);
+    const at = parameters.indexOf(item.name);
+    if (at >= 0) parameters.splice(at, 1);
+  }
+  return { ...word, text, parameters, fallbacks: [], fallbacksApplied: true };
+}
+
 // A whole-word parameter is replaced with its static text. A parameter inside a word stays in place.
-function expandSameShellWords(value, shellVars) {
+function expandSameShellWords(value, shellVars, depth = 0) {
   let out = "";
   let quote = null;
   let unresolvedParameter = false;
@@ -2962,6 +3099,13 @@ function expandSameShellWords(value, shellVars) {
     }
     if (quote !== "'" && ch === "$") {
       const parameter = readParameterExpansion(value, index);
+      if (parameter?.op) {
+        const chosen = chooseFallback(parameter, shellVars, depth);
+        if (chosen.reject) return chosen;
+        out += chosen.text ?? "";
+        index = parameter.end - 1;
+        continue;
+      }
       if (parameter?.name && shellVars.has(parameter.name)) {
         const whole = quote !== '"'
           && simpleParameter(value, index, parameter)
@@ -3094,7 +3238,35 @@ function rememberAssignment(word, shellVars, assigned, markExported = false) {
 function rememberStandalone(command, shellVars, assigned) {
   if (command.length === 0) return false;
   if (!command.every((word) => /^[a-zA-Z_][\w]*\+?=/.test(word?.text ?? ""))) return false;
-  for (const word of command) rememberAssignment(word, shellVars, assigned);
+  for (const word of command) rememberAssignment(word, shellVars, assigned, shellVars.allexport === true);
+  return true;
+}
+
+function noteShellSet(command, shellVars) {
+  const start = commandProgramIndex(command);
+  if (command[start]?.text !== "set") return false;
+  let index = start + 1;
+  while (index < command.length) {
+    const text = command[index].text;
+    if (text === "--" || text === "-") {
+      index += 1;
+      break;
+    }
+    if (!/^[-+][A-Za-z]+$/.test(text)) break;
+    const enable = text[0] === "-";
+    for (let at = 1; at < text.length; at += 1) {
+      const flag = text[at];
+      if (flag === "o") {
+        const inline = text.slice(at + 1);
+        const name = inline || command[index + 1]?.text;
+        if (!inline && name !== undefined) index += 1;
+        if (name === "allexport") shellVars.allexport = enable;
+        break;
+      }
+      if (flag === "a") shellVars.allexport = enable;
+    }
+    index += 1;
+  }
   return true;
 }
 
@@ -3176,7 +3348,7 @@ function copyExported(source) {
 
 function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), depth = 0, state = null) {
   if (depth > 8) {
-    return { targets: [], overflow: false, budget: false, unresolved: false, substitution: true, parameter: false, stdinConfig: false, wgetStdin: false };
+    return { targets: [], overflow: false, budget: false, unresolved: false, substitution: true, parameter: false, stdinConfig: false, wgetStdin: false, processFile: false };
   }
   const targets = [];
   let overflow = false;
@@ -3186,6 +3358,7 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
   let parameter = false;
   let stdinConfig = false;
   let wgetStdin = false;
+  let processFile = false;
   const shellVars = state ?? copyExported(inherited);
   const bodies = [];
   const markUnresolved = (item) => {
@@ -3199,7 +3372,12 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
   };
   let command = [];
   const flush = () => {
+    command = command.map((word) => applyWordFallbacks(word, shellVars));
     if (noteShellExport(command, assigned, shellVars)) {
+      command = [];
+      return;
+    }
+    if (noteShellSet(command, shellVars)) {
       command = [];
       return;
     }
@@ -3207,14 +3385,14 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
       command = [];
       return;
     }
-    const programAt = commandProgramIndex(command);
-    const shell = staticShellOperand(command.slice(programAt));
+    const resolved = resolveCommand(command, assigned);
+    const shell = resolved.index >= 0 ? staticShellOperand(command.slice(resolved.index)) : null;
     if (shell) {
-      const prefixes = [];
-      for (const word of command.slice(0, programAt)) noteProxyAssignment(prefixes, word, assigned);
+      const prefixes = resolved.proxies;
       if (shell.sameShell) {
         const fork = new Map();
         for (const [name, binding] of shellVars) fork.set(name, { ...binding });
+        fork.allexport = shellVars.allexport === true;
         const applied = new Map();
         for (const proxy of prefixes) {
           const prior = fork.get(proxy.name);
@@ -3245,6 +3423,7 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
           if (overlay && sameBinding(binding, overlay)) continue;
           shellVars.set(name, { ...binding });
         }
+        shellVars.allexport = fork.allexport === true;
         targets.push(...inner.targets);
         overflow ||= inner.overflow;
         budget ||= inner.budget;
@@ -3253,6 +3432,7 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
         parameter ||= inner.parameter;
         stdinConfig ||= inner.stdinConfig;
         wgetStdin ||= inner.wgetStdin;
+        processFile ||= inner.processFile;
         command = [];
         return;
       }
@@ -3271,11 +3451,14 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
         parameter ||= inner.parameter;
         stdinConfig ||= inner.stdinConfig;
         wgetStdin ||= inner.wgetStdin;
+        processFile ||= inner.processFile;
       }
       command = [];
       return;
     }
-    const located = effectiveCurlStart(command, assigned);
+    const located = resolved.index >= 0 && transferClientName(command[resolved.index].text)
+      ? resolved
+      : { index: -1, proxies: resolved.proxies };
     if (located.index === -1) { command = []; return; }
     const start = located.index;
     for (const proxy of commandProxies(shellVars, located.proxies).values()) {
@@ -3293,11 +3476,20 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
     const expandBudget = { used: 0 };
     const tagged = [];
     for (const word of command.slice(start + 1)) {
+      if (word.processFile) {
+        tagged.push({ text: word.text, unresolved: false, parameters: word.parameters, processFile: true });
+        continue;
+      }
+      if (word.fallbackReject) {
+        tagged.push({ text: word.text, unresolved: true, substitution: Boolean(word.fallbackReject.substitution), parameters: word.parameters, fallbackReject: word.fallbackReject });
+        continue;
+      }
       if (word.unresolved) {
         tagged.push({ text: word.text, unresolved: true, substitution: word.substitution, parameters: word.parameters });
         continue;
       }
-      const expanded = expandTargetGlobs(word.braceText, { shell: true });
+      const source = word.fallbacksApplied ? word.text.replace(/[\\{},.]/g, (ch) => "\\" + ch) : word.braceText;
+      const expanded = expandTargetGlobs(source, { shell: true });
       overflow ||= expanded.overflow;
       for (const text of expanded.values) {
         tagged.push({ text: text.replace(/\\([\\{},.])/g, "$1"), unresolved: false, parameters: word.parameters });
@@ -3307,6 +3499,13 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
     const fromUnresolved = (operand) => {
       let found = false;
       for (const item of tagged) {
+        if (item.fallbackReject && unresolvedOperand(item.text, operand)) {
+          found = true;
+          if (item.fallbackReject.unresolved) unresolved = true;
+          if (item.fallbackReject.substitution) substitution = true;
+          if (item.fallbackReject.parameter) parameter = true;
+          continue;
+        }
         const referencesAssigned = (item.parameters ?? []).some((name) => assigned.has(name));
         if (!(item.unresolved || referencesAssigned) || !unresolvedOperand(item.text, operand)) continue;
         found = true;
@@ -3329,7 +3528,9 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
     };
     const client = transferClientName(command[start].text);
     if (client === "wget") {
-      if (collectWgetUrls(args, urls)) wgetStdin = true;
+      const listed = collectWgetUrls(args, urls, tagged);
+      if (listed.stdinList) wgetStdin = true;
+      if (listed.processFile) processFile = true;
       transfer();
       command = [];
       return;
@@ -3347,7 +3548,9 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
         // --config - can supply a transfer URL. A config path stays unread.
         if (optionName === "config") {
           const operand = equal === -1 ? args[i + 1] : arg.slice(equal + 1);
+          const operandAt = equal === -1 ? i + 1 : i;
           if (operand === "-") stdinConfig = true;
+          if (tagged[operandAt]?.processFile) processFile = true;
         }
         const parsed = curlExpandedOption(arg, args, i, variables, expandBudget);
         i = parsed.index;
@@ -3369,6 +3572,7 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
             const operand = inline === "" ? args[i + 1] : inline;
             if (inline === "") i += 1;
             if (arg[at] === "K" && operand === "-") stdinConfig = true;
+            if (arg[at] === "K" && tagged[i]?.processFile) processFile = true;
             if (arg[at] === "x" && operand !== undefined) {
               const referencesAssigned = (tagged[i]?.parameters ?? []).some((name) => assigned.has(name));
               if (tagged[i]?.unresolved || referencesAssigned) markUnresolved(tagged[i]);
@@ -3387,7 +3591,10 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
   for (const token of shellWords(value, { commandTokens: true })) {
     if (token === null || token.fence) {
       flush();
-      if (token !== null) shellVars.clear();
+      if (token !== null) {
+        shellVars.clear();
+        shellVars.allexport = false;
+      }
     } else {
       command.push(token);
       if (token.substitutionBodies.length > 0) {
@@ -3407,8 +3614,9 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
     parameter ||= inner.parameter;
     stdinConfig ||= inner.stdinConfig;
     wgetStdin ||= inner.wgetStdin;
+    processFile ||= inner.processFile;
   }
-  return { targets, overflow, budget, unresolved, substitution, parameter, stdinConfig, wgetStdin };
+  return { targets, overflow, budget, unresolved, substitution, parameter, stdinConfig, wgetStdin, processFile };
 }
 
 function joinShellContinuations(value) {
@@ -3476,6 +3684,7 @@ function targetsBannedLan(sectionText, definitions, literalText = []) {
   let parameter = false;
   let stdinConfig = false;
   let wgetStdin = false;
+  let processFile = false;
   const verification = withoutFencePayload(withoutFields(sectionText, [FIELD_LABELS.reason], {
     keepLazy: true,
   }).replace(
@@ -3493,6 +3702,7 @@ function targetsBannedLan(sectionText, definitions, literalText = []) {
     if (curl.parameter) parameter = true;
     if (curl.stdinConfig) stdinConfig = true;
     if (curl.wgetStdin) wgetStdin = true;
+    if (curl.processFile) processFile = true;
     if (curl.overflow) return true;
     const decoded = shellVisible(joined);
     const targets = [...decoded.matchAll(/(?:https?:|\/\/)[^\s<>()"'`]+/gi)]
@@ -3525,7 +3735,7 @@ function targetsBannedLan(sectionText, definitions, literalText = []) {
     // Malformed links render as raw text. Unlike artifact validation, the LAN
     // scan must retain their suffix so later reference uses cannot disappear.
     || (definitions.size > 0 && [...referenceUses(verification, { keepMalformed: true })].some((label) => bannedTarget(definitions.get(label) ?? "")));
-  return { banned, budget, unresolved, substitution, parameter, stdinConfig, wgetStdin };
+  return { banned, budget, unresolved, substitution, parameter, stdinConfig, wgetStdin, processFile };
 }
 
 function documentReferences(body) {
@@ -3639,6 +3849,11 @@ export function lintPrEvidence(body) {
   if (directLan.wgetStdin || conservativeLan.wgetStdin) {
     errors.push(
       "Evidence contains a wget -i or --input-file stdin source this static check does not read. Put the transfer URL on the wget command line.",
+    );
+  }
+  if (directLan.processFile || conservativeLan.processFile) {
+    errors.push(
+      "Evidence contains a curl --config or wget --input-file process substitution this static check does not read. Put the transfer URL on the command line.",
     );
   }
 
