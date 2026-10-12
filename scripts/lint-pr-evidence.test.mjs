@@ -5136,3 +5136,62 @@ test("r21-substitution-literals-and-nested-clients-stay-distinct", () => {
   r19Expect(commandEvidence("curl 3232235857"), 1, "", LAN_STDERR);
   r19Expect(commandEvidence("curl http://192.168.1.$((80))/"), 1, "", LAN_STDERR);
 });
+
+test("r22-backtick-operands-fail-closed", () => {
+  for (const command of [
+    "curl `printf 3232235856`",
+    "wget `printf 3232235856`",
+    "curl `printf 323223585`6",
+    "curl `printf 3232235856`/",
+    'curl "`printf 3232235856`"',
+    "curl http://192.168.1.`printf 80`/",
+    "curl http://192.168.200.`printf 81`/",
+    "wget http://192.168.1.`printf 80`/",
+    "curl `printf 3232235855`",
+    "curl `printf 3232235858`",
+    "curl --proxy `printf 3232235856` http://example.test/",
+    "curl -x `printf 3232235856` http://example.test/",
+    "curl --resolve `printf example.test:80:3232235856` http://example.test/",
+    "curl --connect-to `printf ::3232235856:` http://example.test/",
+    "wget --base `printf 3232235856`",
+    "wget --quiet `printf 3232235856`",
+    "env curl `printf 3232235856`",
+    "sudo curl `printf 3232235856`",
+    "curl --url=`printf 3232235856`",
+    "http_proxy=`printf 3232235856` curl http://example.test/",
+    "http_proxy=`printf 3232235855` curl http://example.test/",
+  ]) {
+    r19Expect(commandEvidence(command), 1, "", R20_SUBSTITUTION_STDERR);
+  }
+});
+
+test("r22-backtick-literals-and-nested-clients-stay-distinct", () => {
+  r19Expect(commandEvidence("curl '`printf 3232235856`'"), 0, OK_LINE, "");
+  r19Expect(commandEvidence("curl \\`printf 3232235856\\`"), 0, OK_LINE, "");
+  r19Expect(commandEvidence('curl "\\`printf 3232235856\\`"'), 0, OK_LINE, "");
+  r19Expect(commandEvidence("printf '%s' 'curl `printf 3232235856`'"), 0, OK_LINE, "");
+  r19Expect(commandEvidence("echo `printf 3232235856`"), 0, OK_LINE, "");
+  r19Expect(commandEvidence("curl --data `printf 3232235856` http://example.test/"), 0, OK_LINE, "");
+  r19Expect(commandEvidence("curl --output `printf out.bin` http://example.test/"), 0, OK_LINE, "");
+  r19Expect(commandEvidence("wget -O `printf out.bin` http://example.test/a"), 0, OK_LINE, "");
+  r19Expect(commandEvidence("curl -H `printf 'X-Test: 1'` http://example.test/"), 0, OK_LINE, "");
+  r19Expect(commandEvidence("`printf curl` 3232235856"), 0, OK_LINE, "");
+  r19Expect(commandEvidence("`curl 3232235855`"), 0, OK_LINE, "");
+  r19Expect(commandEvidence("curl 3232235855"), 0, OK_LINE, "");
+  r19Expect(commandEvidence("curl 3232235858"), 0, OK_LINE, "");
+  r19Expect(commandEvidence("curl '$(printf 3232235856)'"), 0, OK_LINE, "");
+  r19Expect(commandEvidence("curl http://192.168.1.$((79))/"), 0, OK_LINE, "");
+  const inline = commandEvidence("curl http://example.test/file").replace(
+    "- Result observed: passed",
+    "- Result observed: the log mentioned `printf 3232235856`",
+  );
+  r19Expect(inline, 0, OK_LINE, "");
+  r19Expect(commandEvidence("`curl 3232235856`"), 1, "", LAN_STDERR);
+  r19Expect(commandEvidence("`curl 3232235857`"), 1, "", LAN_STDERR);
+  r19Expect(commandEvidence("echo `curl 3232235856`"), 1, "", LAN_STDERR);
+  r19Expect(commandEvidence("curl --data `curl 3232235856` http://example.test/"), 1, "", LAN_STDERR);
+  r19Expect(commandEvidence("curl 3232235856"), 1, "", LAN_STDERR);
+  r19Expect(commandEvidence("curl 3232235857"), 1, "", LAN_STDERR);
+  r19Expect(commandEvidence("curl $(printf 3232235856)"), 1, "", R20_SUBSTITUTION_STDERR);
+  r19Expect(commandEvidence("curl http://192.168.1.$((80))/"), 1, "", LAN_STDERR);
+});
