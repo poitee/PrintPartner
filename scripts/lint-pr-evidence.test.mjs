@@ -5385,7 +5385,8 @@ test("r24-static-shell-c-operands", () => {
     "bash -c \"bash -c 'curl 3232235856'\"",
     "octet=80; bash -c 'curl http://192.168.1.$octet/'",
   ]) {
-    const stderr = command.includes("$octet") ? R23_VARIABLE_STDERR : LAN_STDERR;
+    const stderr = command.includes("$octet") ? R23_VARIABLE_STDERR
+      : command.includes("bash -lc") ? LAN_STDERR + R29_PROCESS_STDERR.replace("PR evidence lint FAILED:\n", "") : LAN_STDERR;
     r19Expect(commandEvidence(command), 1, "", stderr);
   }
   for (const command of [
@@ -5394,7 +5395,6 @@ test("r24-static-shell-c-operands", () => {
     "bash -c 'curl --data 3232235856 http://example.test/'",
     "sh -c 'printf %s 3232235856'",
     "bash -c 'curl http://192.168.1.$HOST:8080/'",
-    "bash ./verify.sh",
     "bash -c '$cmd'",
   ]) {
     r19Expect(commandEvidence(command), 0, OK_LINE, "");
@@ -6100,7 +6100,7 @@ test("r32-ssh-hook-external-client-and-shell-inputs-refuse", () => {
   for (const text of [
     "curl --config config.txt", "curl --conf=config.txt", "curl -vKconfig.txt", "curl -K -",
     "wget --config=config.txt", "wget --input-file=urls.txt", "wget -iurls.txt",
-    "wget -e input_file=urls.txt", "bash --rcfile config.txt -c 'curl example.test'",
+    "wget -e input_file=urls.txt",
     "bash -ic 'curl example.test'", "sh script.sh",
   ]) {
     const result = lintPrEvidence(commandEvidence(`ssh -o "ProxyCommand=${text}" example.test`));
@@ -6263,4 +6263,113 @@ for (const command of [
 test('r35-env-split-wrapper-bound-refuses', () => {
   const command = `BASH_ENV+=startup.sh ${'env '.repeat(4096)}-S "bash -c true"`;
   assert.equal(lintPrEvidence(commandEvidence(command)).ok, false);
+});
+
+for (const [option, value] of [
+  ['doh-url', 'https://$D/dns-query'], ['dns-servers', '$D'], ['ipfs-gateway', 'https://$D'],
+]) test(`r36-missing-curl-endpoint-${option}`, () => {
+  assert.equal(lintPrEvidence(commandEvidence(`D=3232235856; curl --${option} "${value}" http://example.test`)).ok, false);
+  assertBannedCommand(`curl --${option} "${value.replace('$D', '3232235856')}" http://example.test`);
+  assertSafeCommand(`curl --${option} "${value.replace('$D', 'example.test')}" http://example.test`);
+});
+
+for (const option of ['data', 'data-ascii', 'data-binary', 'data-raw', 'data-urlencode', 'header', 'proxy-header', 'cookie', 'referer', 'url-query', 'request-target', 'output', 'upload-file', 'config', 'interface', 'dns-interface', 'dns-ipv4-addr', 'haproxy-clientip']) {
+  test(`r36-non-endpoint-fallback-${option}`, () => {
+    assertSafeCommand(`curl --${option} "\${PAYLOAD:-3232235856}" http://example.test`);
+    assertSafeCommand(`curl --${option}=\${PAYLOAD:-3232235856} http://example.test`);
+  });
+}
+
+test('r36-request-data-quote-and-dynamic-controls', () => {
+  assertSafeCommand("curl --data '${PAYLOAD:-3232235856}' http://example.test");
+  assertSafeCommand('curl --data ${PAYLOAD:-3232235856} http://example.test');
+  assertSafeCommand('curl -d${PAYLOAD:-3232235856} -H "${HEADER:-3232235856}" -b${COOKIE:-3232235856} -o${FILE:-3232235856} http://example.test');
+  assertSafeCommand('curl --data "${PAYLOAD:-$OTHER}" http://example.test');
+  assertSafeCommand('curl --variable GW=3232235856 --expand-data "{{GW}}" http://example.test');
+  assertBannedCommand('curl --variable GW=3232235856 --expand-doh-url "https://{{GW}}/dns-query" http://example.test');
+});
+
+for (const command of [
+  "bash <(printf 'curl 3232235856\\n')", 'bash script.sh', 'sh -- script.sh',
+  'bash -', 'bash -s', 'bash -ic true', 'bash -lc true', 'bash --debugger -c true',
+]) test(`r36-unread-shell-invocation-${command}`, () => {
+  const result = lintPrEvidence(commandEvidence(command));
+  assert.equal(result.ok, false, command);
+  assert.match(result.errors.join('\n'), /shell startup source|external process/);
+});
+
+for (const command of [
+  'bash -c true', 'bash --norc -ic true', 'bash --rcfile script.sh -c true',
+  'bash -n script.sh', 'bash --help', 'bash --version', "printf '%s' 'bash script.sh'",
+  'bash -c true unused-script.sh', 'bash -nc "curl 3232235856"',
+]) test(`r36-known-or-inert-shell-${command}`, () => assertSafeCommand(command));
+
+test('r36-corrected-historical-shell-file-and-ignored-rcfile', () => {
+  const script = lintPrEvidence(commandEvidence('bash ./verify.sh'));
+  assert.equal(script.ok, false);
+  assert.match(script.errors.join('\n'), /shell startup source/);
+  assertSafeCommand('ssh -o "ProxyCommand=bash --rcfile config.txt -c \'curl example.test\'" example.test');
+});
+
+test('r36-shell-options-after-command-flag', () => {
+  assertBannedCommand("bash -c -o posix 'curl 3232235856'");
+  assertBannedCommand("bash -co posix 'curl 3232235856'");
+  for (const command of ['bash -ci true', 'bash -cl true']) {
+    const result = lintPrEvidence(commandEvidence(command));
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join('\n'), /shell startup source/);
+  }
+  assertSafeCommand("bash -cn 'curl 3232235856'");
+  assertSafeCommand('bash --norc -ci true');
+});
+
+test('r36-proxy10-endpoint-and-local-role-family', () => {
+  assert.equal(lintPrEvidence(commandEvidence('D=3232235856; curl --proxy1.0 "$D" http://example.test')).ok, false);
+  assertBannedCommand('curl --proxy1.0 ${PROXY:-3232235856} http://example.test');
+  for (const option of ['ftp-port', 'unix-socket', 'abstract-unix-socket', 'user-agent', 'proxy-user', 'user', 'write-out', 'etag-save', 'trace', 'dump-header']) {
+    assertSafeCommand(`curl --${option} "\${VALUE:-3232235856}" http://example.test`);
+  }
+});
+
+test('r36-login-argv0-boundary-and-wrapper-data', () => {
+  for (const command of ['env --argv0=-bash bash -c true', 'exec -a -bash bash -c true']) {
+    const result = lintPrEvidence(commandEvidence(command));
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join('\n'), /shell startup source/);
+  }
+  assertSafeCommand('env --argv0=verification bash -c true');
+  assertSafeCommand("env --argv0='$NAME' bash -c true");
+  assert.equal(lintPrEvidence(commandEvidence('env --argv0="${NAME:--bash}" bash -c true')).ok, false);
+  assertSafeCommand('env --argv0=-bash env bash -c true');
+  assertSafeCommand('export BASH_ENV=script.sh; env --argv0=sh bash -c true');
+});
+
+test('r36-shell-source-adapters-and-data', () => {
+  for (const command of ["source <(printf 'curl 3232235856\\n')", ". <(printf 'curl 3232235856\\n')", 'command source script.sh', 'builtin . script.sh']) {
+    const result = lintPrEvidence(commandEvidence(command));
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join('\n'), /shell startup source/);
+  }
+  assertSafeCommand("printf '%s' 'source script.sh'");
+});
+
+test('r36-executed-producers-are-not-request-data', () => {
+  assertBannedCommand('curl --data "${PAYLOAD:-$(curl 3232235856)}" http://example.test');
+  assertBannedCommand('curl --data <(curl 3232235856) http://example.test');
+  assertSafeCommand('curl --data "${PAYLOAD:-$(printf 3232235856)}" http://example.test');
+  assertSafeCommand("curl --data '<(curl 3232235856)' http://example.test");
+});
+
+test('r36-endpoint-server-list-bound', () => {
+  const command = `curl --dns-servers "${Array(4097).fill('example.test').join(',')}" http://example.test`;
+  const result = lintPrEvidence(commandEvidence(command));
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join('\n'), /budget/);
+  assertBannedCommand('curl --dns-servers "[::1]:53,3232235856:53" http://example.test');
+});
+
+test('r36-fallback-endpoint-after-shell-glob-and-in-data', () => {
+  assertBannedCommand('curl {32322358,32322359}${TAIL:-56}');
+  assertSafeCommand('curl {32322358,32322359}${TAIL:-55}');
+  assertSafeCommand('curl --data "${PAYLOAD:-{3232235856,3232235857}}" http://example.test');
 });

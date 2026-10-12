@@ -1989,16 +1989,18 @@ function readParameterExpansion(value, start) {
       index += 1;
     }
     let fallback = null;
+    let fallbackSource = null;
     let dynamicFallback = false;
     if (name && wordAt !== -1) {
       if (depth !== 0) dynamicFallback = true;
       else {
-        const parsed = staticParameterFallback(value.slice(wordAt, index - 1));
+        fallbackSource = value.slice(wordAt, index - 1);
+        const parsed = staticParameterFallback(fallbackSource);
         if (parsed.dynamic) dynamicFallback = true;
         else fallback = parsed.text;
       }
     }
-    return { end: index, name, fallback, dynamicFallback };
+    return { end: index, name, fallback, fallbackSource, dynamicFallback };
   }
   if (/[0-9]/.test(next)) return { end: start + 2, name: next };
   if (/[*@#?!$\-]/.test(next)) return { end: start + 2, name: null };
@@ -2120,6 +2122,8 @@ function shellWords(value, { commandTokens = false } = {}) {
       const group = readParenGroup(value, index + 1);
       append(value.slice(index, group.end), true);
       wordProcessSource = true;
+      const body = value.slice(index + 2, group.closed ? group.end - 1 : group.end);
+      if (/\S/.test(body)) substitutionBodies.push(body);
       index = group.end - 1;
       continue;
     }
@@ -2151,9 +2155,17 @@ function shellWords(value, { commandTokens = false } = {}) {
       if (parameter) {
         const slice = value.slice(index, parameter.end);
         if (parameter.fallback != null) {
-          wordReplacements.push({ from: word.length, length: slice.length, fallback: parameter.fallback });
+          const protectedFallback = parameter.fallback.replace(/[\\{},.]/g, (ch) => "\\" + ch);
+          wordReplacements.push({ from: word.length, length: slice.length, fallback: parameter.fallback,
+            braceFrom: braceText.length, braceLength: slice.replace(/[\\{},.]/g, (ch) => "\\" + ch).length,
+            braceFallback: protectedFallback });
         }
         if (parameter.dynamicFallback) wordDynamicFallback = true;
+        if (parameter.fallbackSource && /\$\(|`|<\(/.test(parameter.fallbackSource)) {
+          for (const inner of shellWords(parameter.fallbackSource, { commandTokens: true })) {
+            if (inner?.substitutionBodies) substitutionBodies.push(...inner.substitutionBodies);
+          }
+        }
         if (parameter.indirect) wordIndirect = parameter.indirect;
         append(slice, true);
         if (parameter.name) wordParameters.push(parameter.name);
@@ -2196,7 +2208,7 @@ const CURL_VALUE_OPTIONS = new Set([
   "key-type knownhosts krb libcurl limit-rate local-port login-options mail-auth",
   "mail-from mail-rcpt max-filesize max-redirs max-time netrc-file noproxy oauth2-bearer",
   "output output-dir parallel-max parallel-max-host pass pinnedpubkey preproxy proto",
-  "proto-default proto-redir proxy proxy-cacert proxy-capath proxy-cert proxy-cert-type proxy-ciphers",
+  "proto-default proto-redir proxy proxy1.0 proxy-cacert proxy-capath proxy-cert proxy-cert-type proxy-ciphers",
   "proxy-crlfile proxy-header proxy-key proxy-key-type proxy-pass proxy-pinnedpubkey proxy-service-name proxy-tls13-ciphers",
   "proxy-tlsauthtype proxy-tlspassword proxy-tlsuser proxy-user pubkey quote random-file range",
   "rate referer request request-target resolve retry retry-delay retry-max-time",
@@ -2743,7 +2755,8 @@ function curlExpandedOption(arg, args, index, variables, budget) {
   }
   if (name === "url" && !expanded.dynamic) return { index: next, url: expanded.text };
   if (!expanded.dynamic && CURL_CONNECTION_OPTIONS.has(name)) {
-    return { index: next, endpoints: connectionEndpoints(CURL_CONNECTION_OPTIONS.get(name), expanded.text) };
+    const endpoints = connectionEndpoints(CURL_CONNECTION_OPTIONS.get(name), expanded.text);
+    return endpoints.length > MAX_STATIC_CURL_TARGETS ? { index: next, budget: true } : { index: next, endpoints };
   }
   return { index: next };
 }
@@ -2811,7 +2824,7 @@ function noteProxyAssignment(proxies, word, assigned) {
     const name = assignmentName(word.text);
     if (name) assigned.add(name);
   }
-  const value = proxyAssignmentValue(word.text);
+  const value = proxyAssignmentValue(applyReplacements(word.text, word.replacements) ?? word.text);
   if (value == null) return;
   const flags = assignmentFlags(word, assigned);
   const eq = word.text.indexOf("=");
@@ -2821,7 +2834,7 @@ function noteProxyAssignment(proxies, word, assigned) {
     append: eq > 0 && word.text[eq - 1] === "+",
     arithmetic: flags.arithmetic,
     substitution: flags.substitution,
-    parameter: flags.parameter,
+    parameter: flags.parameter || Boolean(word.dynamicFallback),
   };
   proxies.push(entry);
 }
@@ -2867,6 +2880,12 @@ function commandEnvironmentAssignment(environment, word, shellAssignment) {
   environment.bindings.set(name, { ...binding, exported: true });
 }
 
+function commandArgv0(environment, word, attached) {
+  if (!environment) return;
+  environment.argv0 = attached ?? word?.text;
+  environment.argv0Dynamic = Boolean(word?.unresolved || word?.substitution || word?.dynamicFallback || word?.parameters?.length);
+}
+
 function effectiveCurlStart(command, assigned, stop = (program) => Boolean(transferClientName(program)), environment = null) {
   const proxies = [];
   const miss = () => ({ index: -1, proxies });
@@ -2883,6 +2902,7 @@ function effectiveCurlStart(command, assigned, stop = (program) => Boolean(trans
     if (stop(program, name)) {
       return { index: mode === "builtin" && transferClientName(program) ? -1 : start, proxies };
     }
+    if (environment) { environment.argv0 = null; environment.argv0Dynamic = false; }
     if (name === "sudo" || name === "sudoedit") {
       if (mode === "builtin") return miss();
       const from = start;
@@ -2917,6 +2937,7 @@ function effectiveCurlStart(command, assigned, stop = (program) => Boolean(trans
         if (launcher.optionalValues?.includes(flag)) continue;
         if (name === "env" && flag === "ignore-environment" && equal === -1) environment?.bindings.clear();
         if (name === "env" && flag === "unset") environment?.bindings.delete(equal === -1 ? command[start]?.text : option.slice(equal + 1));
+        if (name === "env" && flag === "argv0") commandArgv0(environment, equal === -1 ? command[start] : command[start - 1], equal === -1 ? undefined : option.slice(equal + 1));
         if (launcher.longFlags.includes(flag) && equal === -1) continue;
         if (!launcher.longValues.includes(flag)) return miss();
         if (equal === -1) {
@@ -2928,6 +2949,7 @@ function effectiveCurlStart(command, assigned, stop = (program) => Boolean(trans
           const flag = option[at];
           if ((name === "env" && flag === "i") || (name === "exec" && flag === "c")) environment?.bindings.clear();
           if (name === "env" && flag === "u") environment?.bindings.delete(at + 1 === option.length ? command[start]?.text : option.slice(at + 1));
+          if ((name === "env" || name === "exec") && flag === "a") commandArgv0(environment, at + 1 === option.length ? command[start] : command[start - 1], at + 1 === option.length ? undefined : option.slice(at + 1));
           if (launcher.flags.includes(flag)) continue;
           if (!launcher.values.includes(flag)) return miss();
           if (at + 1 === option.length) {
@@ -2955,7 +2977,11 @@ function effectiveCurlStart(command, assigned, stop = (program) => Boolean(trans
 
 const CURL_CONNECTION_OPTIONS = new Map([
   ["proxy", "endpoint"],
+  ["proxy1.0", "endpoint"],
   ["preproxy", "endpoint"],
+  ["doh-url", "endpoint"],
+  ["ipfs-gateway", "endpoint"],
+  ["dns-servers", "endpoint-list"],
   ["connect-to", "connect-to"],
   ["resolve", "resolve"],
   ["socks4", "endpoint"],
@@ -3022,6 +3048,7 @@ function splitColons(value) {
 function connectionEndpoints(kind, value) {
   if (!value) return [];
   if (kind === "endpoint") return [httpHostTarget(value)];
+  if (kind === "endpoint-list") return value.split(",", MAX_STATIC_CURL_TARGETS + 1).map(httpHostTarget);
   if (kind === "connect-to") {
     const fields = splitColons(value);
     if (fields.length !== 4) return [];
@@ -3048,6 +3075,7 @@ function connectionEndpoints(kind, value) {
     else if (ch === "]" && depth > 0) depth -= 1;
     else if (ch === "," && depth === 0) {
       if (current) addresses.push(current);
+      if (addresses.length > MAX_STATIC_CURL_TARGETS) return addresses;
       current = "";
       continue;
     }
@@ -3117,6 +3145,7 @@ function unresolvedOperand(arg, operand) {
 }
 
 const STATIC_SHELLS = new Set(["ash", "bash", "dash", "ksh", "sh"]);
+const SHELL_SOURCE_BUILTINS = new Set(["source", "."]);
 const SHELL_LONG_FLAGS = new Set([
   "debug", "debugger", "dump-po-strings", "dump-strings", "help", "login",
   "noediting", "noprofile", "norc", "posix", "protected", "restricted", "verbose", "version",
@@ -3127,10 +3156,6 @@ function commandProgramIndex(command) {
   let start = 0;
   while (/^[a-zA-Z_][\w]*\+?=/.test(command[start]?.text ?? "")) start += 1;
   return start;
-}
-
-function shellCommandLater(command, index) {
-  return command.slice(index).some((word) => word.text === "-c" || /^-[^-]*c/.test(word.text));
 }
 
 function wordBoundary(ch) {
@@ -3286,44 +3311,75 @@ function staticShellOperand(command) {
   const program = command[0]?.text ?? "";
   const name = program.slice(program.lastIndexOf("/") + 1);
   if (name === "eval") return staticEvalOperand(command);
+  if (program === name && SHELL_SOURCE_BUILTINS.has(name)) return { reject: true, externalSource: true, substitution: false };
   if (!STATIC_SHELLS.has(name)) return null;
   let index = 1;
+  let commandString = false;
+  let interactive = false;
+  let login = false;
+  let noexec = false;
+  let norc = false;
+  let posix = false;
+  let debuggerMode = false;
+  const mode = () => ({ interactive, posix,
+    externalSource: login || debuggerMode || (interactive && (name !== "bash" || !norc || posix)) });
+  const unread = () => noexec && !interactive ? { inert: true }
+    : { ...mode(), reject: true, externalSource: true, substitution: false };
+  const known = (script, after, text = script.text) => {
+    if (text.length > MAX_CURL_EXPAND_TOTAL) return { reject: true };
+    if (noexec && !interactive) return { inert: true };
+    return { ...mode(), text, word: script, positionals: command.slice(after) };
+  };
   while (index < command.length) {
     const word = command[index];
     const option = word.text;
-    if (option === "--" || option === "-" || !option.startsWith("-")) return null;
+    if (option === "--") {
+      index += 1;
+      return commandString && command[index] ? known(command[index], index + 1) : unread();
+    }
+    if (option === "-" || !/^[-+]/.test(option)) return commandString ? known(word, index + 1) : unread();
     if (option.startsWith("--")) {
       const equal = option.indexOf("=");
       const flag = option.slice(2, equal === -1 ? undefined : equal);
       index += 1;
+      if (flag === "help" || flag === "version") return { inert: true };
+      if (flag === "login") login = true;
+      if (flag === "norc") norc = true;
+      if (flag === "posix") posix = true;
+      if (flag === "debugger") debuggerMode = true;
       if (SHELL_LONG_VALUES.has(flag)) {
         if (equal === -1) index += 1;
         continue;
       }
-      if (!SHELL_LONG_FLAGS.has(flag)) return shellCommandLater(command, index) ? { reject: true } : null;
+      if (!SHELL_LONG_FLAGS.has(flag)) return unread();
       continue;
     }
-    let skipIncrement = false;
+    const enable = option.startsWith("-");
+    let next = index + 1;
     for (let at = 1; at < option.length; at += 1) {
       const flag = option[at];
-      if (flag === "c") {
+      if (flag === "i") interactive = enable;
+      if (flag === "l") login = enable;
+      if (flag === "n") noexec = enable;
+      if (flag === "c" && enable) {
+        commandString = true;
         const inline = option.slice(at + 1);
-        const script = inline !== "" ? word : command[index + 1];
-        if (!script) return null;
-        const text = inline !== "" ? inline : script.text;
-        if (text.length > MAX_CURL_EXPAND_TOTAL) return { reject: true };
-        const after = inline !== "" ? index + 1 : index + 2;
-        return { text, word: script, positionals: command.slice(after) };
+        // Retain the supported attached command-text alias, while normal flag
+        // clusters defer the -c operand until all invocation options are parsed.
+        if (inline && !/^[abefhkmnptuvxBCEHPTisrlcDoO]+$/.test(inline)) return known(word, index + 1, inline);
       }
       if (flag === "o" || flag === "O") {
-        index += option.slice(at + 1) === "" ? 2 : 1;
-        skipIncrement = true;
+        const setting = option.slice(at + 1) || command[index + 1]?.text;
+        if (flag === "o" && setting === "noexec") noexec = enable;
+        if (flag === "o" && setting === "posix") posix = enable;
+        if (flag === "O" && setting === "extdebug") debuggerMode = enable;
+        next += option.slice(at + 1) === "" ? 1 : 0;
         break;
       }
     }
-    if (!skipIncrement) index += 1;
+    index = next;
   }
-  return null;
+  return unread();
 }
 
 // Export is a mark on one binding. A later assignment updates that same value.
@@ -3351,12 +3407,13 @@ function rememberAssignment(word, shellVars, assigned, markExported = false) {
   const eq = word.text.indexOf("=");
   const flags = assignmentFlags(word, assigned);
   const prior = shellVars.get(name);
+  const proxy = PROXY_URL_NAMES.has(name);
   const combined = staticAppend(prior, {
-    value: word.text.slice(eq + 1),
+    value: proxy ? proxyAssignmentValue(applyReplacements(word.text, word.replacements) ?? word.text) : word.text.slice(eq + 1),
     append: word.text[eq - 1] === "+",
     arithmetic: flags.arithmetic,
     substitution: flags.substitution,
-    parameter: flags.parameter,
+    parameter: flags.parameter || (proxy && Boolean(word.dynamicFallback)),
   });
   shellVars.set(name, {
     ...combined,
@@ -3388,11 +3445,6 @@ function noteSetAllexport(command) {
     else if (/^-[A-Za-z]+$/.test(text) && text.includes("a")) allexport = true;
   }
   return { allexport };
-}
-
-function fallbackTarget(text) {
-  if (!text || /\s/.test(text)) return null;
-  return /^(?:[a-z][\w+.-]*:|\/\/)/i.test(text) ? text : `http://${text}`;
 }
 
 function applyReplacements(text, replacements) {
@@ -3884,16 +3936,8 @@ function staticSshCommand(text, depth = 0) {
     const program = command[opened.index].text;
     const name = program.slice(program.lastIndexOf("/") + 1);
     if (STATIC_SHELLS.has(name) || name === "eval") {
-      for (const word of command.slice(opened.index + 1)) {
-        if (word.text.startsWith("--rcfile") || word.text.startsWith("--init-file")) return false;
-        if (!word.text.startsWith("-") || word.text.startsWith("--")) continue;
-        for (const flag of word.text.slice(1)) {
-          if (flag === "c") break;
-          if (flag === "i" || flag === "l") return false;
-        }
-      }
       const shell = staticShellOperand(command.slice(opened.index));
-      return Boolean(shell) && !shell.reject && staticSshCommand(shell.text, depth + 1);
+      return Boolean(shell) && (shell.inert || (!shell.reject && !shell.externalSource && staticSshCommand(shell.text, depth + 1)));
     }
     const client = transferClientName(program);
     return client !== "curl" && client !== "wget"
@@ -3945,7 +3989,7 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
   const shellVars = state ?? copyExported(inherited);
   const bodies = [];
   const markUnresolved = (item) => {
-    if ((item.parameters ?? []).some((name) => assigned.has(name))) parameter = true;
+    if (item.dynamicFallback || (item.parameters ?? []).some((name) => assigned.has(name))) parameter = true;
     if (!item.unresolved && !item.substitution) return;
     const text = item.text;
     const rest = text.replace(/\$\(\(/g, "");
@@ -3994,12 +4038,16 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
     const environment = { bindings: copyExported(shellVars), shellVars, assigned };
     const opened = effectiveCurlStart(command, assigned, (program, name) => (
       Boolean(transferClientName(program)) || STATIC_SHELLS.has(name) || name === "eval"
+        || (program === name && SHELL_SOURCE_BUILTINS.has(name))
     ), environment);
     const programAt = opened.index === -1 ? commandProgramIndex(command) : opened.index;
     const shell = staticShellOperand(command.slice(programAt));
     if (shell) {
+      if (shell.inert) { command = []; return; }
+      if (shell.externalSource || environment.argv0Dynamic || environment.argv0?.startsWith("-")) processSource = true;
       const shellName = command[programAt]?.text.split("/").at(-1);
-      if (!shell.sameShell && shellName === "bash") {
+      if (!shell.sameShell && shellName === "bash" && !shell.interactive && !shell.posix
+        && environment.argv0?.split("/").at(-1) !== "sh") {
         const startup = environment.bindings.get("BASH_ENV");
         if (startup && (startup.value || startup.substitution || startup.parameter || startup.arithmetic)) processSource = true;
       }
@@ -4057,7 +4105,8 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
       const startup = environment.bindings.get("BASH_ENV");
       if (startup) local.set("BASH_ENV", startup);
       if (shell.reject) {
-        if (shell.unresolved) unresolved = true;
+        if (shell.externalSource) processSource = true;
+        else if (shell.unresolved) unresolved = true;
         if (shell.substitution !== false) substitution = true;
       }
       else if (shell.word) {
@@ -4110,10 +4159,15 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
           substitution: word.substitution,
           parameters: word.parameters,
           processSource: word.processSource,
+          dynamicFallback: word.dynamicFallback,
         });
         continue;
       }
-      const expanded = expandTargetGlobs(word.braceText, { shell: true });
+      const braceReplacements = word.replacements.map((replacement) => ({
+        from: replacement.braceFrom, length: replacement.braceLength, fallback: replacement.braceFallback,
+      }));
+      const fallbackText = applyReplacements(word.braceText, braceReplacements) ?? word.braceText;
+      const expanded = expandTargetGlobs(fallbackText, { shell: true });
       overflow ||= expanded.overflow;
       for (const text of expanded.values) {
         tagged.push({
@@ -4121,6 +4175,7 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
           unresolved: false,
           parameters: word.parameters,
           processSource: word.processSource,
+          dynamicFallback: word.dynamicFallback,
         });
       }
     }
@@ -4129,7 +4184,7 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
       let found = false;
       for (const item of tagged) {
         const referencesAssigned = (item.parameters ?? []).some((name) => assigned.has(name));
-        if (!(item.unresolved || referencesAssigned) || !unresolvedOperand(item.text, operand)) continue;
+        if (!(item.unresolved || item.dynamicFallback || referencesAssigned) || !unresolvedOperand(item.text, operand)) continue;
         found = true;
         markUnresolved(item);
       }
@@ -4148,14 +4203,6 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
       urls = [];
       globoff = false;
     };
-    for (const word of command) {
-      if (word.dynamicFallback) parameter = true;
-      const replaced = applyReplacements(word.text, word.replacements);
-      if (!replaced || replaced === word.text) continue;
-      const proxy = proxyAssignmentValue(replaced);
-      const target = fallbackTarget(proxy ?? replaced);
-      if (target) targets.push(target);
-    }
     const client = transferClientName(command[start].text);
     if (["ssh", "scp", "sftp"].includes(client)) {
       const destinations = client === "ssh" ? sshDestinations(args) : sshTransferDestinations(client, args);
@@ -4198,7 +4245,7 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
         i = parsed.index;
         if (parsed.budget) budget = true;
         const referencesAssigned = (tagged[i]?.parameters ?? []).some((name) => assigned.has(name));
-        if ((tagged[i]?.unresolved || referencesAssigned) && (parsed.url !== undefined || parsed.endpoints)) {
+        if ((tagged[i]?.unresolved || tagged[i]?.dynamicFallback || referencesAssigned) && (parsed.url !== undefined || parsed.endpoints)) {
           markUnresolved(tagged[i]);
           continue;
         }
@@ -4217,7 +4264,7 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
             if (arg[at] === "K" && operand?.startsWith("<(")) processSource = true;
             if (arg[at] === "x" && operand !== undefined) {
               const referencesAssigned = (tagged[i]?.parameters ?? []).some((name) => assigned.has(name));
-              if (tagged[i]?.unresolved || referencesAssigned) markUnresolved(tagged[i]);
+              if (tagged[i]?.unresolved || tagged[i]?.dynamicFallback || referencesAssigned) markUnresolved(tagged[i]);
               else urls.push(operand);
             }
             break;
