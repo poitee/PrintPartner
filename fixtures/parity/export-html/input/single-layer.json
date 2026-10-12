@@ -1,0 +1,120 @@
+{
+  "profile": {
+    "id": 847,
+    "name": "Single <layer> & \"frame\"",
+    "orderNumber": null,
+    "specialRequest": null,
+    "archivedAt": null
+  },
+  "generatedAt": "2026-10-11T06:18:04.720Z",
+  "parts": [
+    {
+      "revisionPartId": 101,
+      "projectionPartId": 201,
+      "partKey": "base:Frame:frame/bracket.stl",
+      "relativePath": "frame/bracket.stl",
+      "filename": "bracket.stl",
+      "sourceLayer": "base:Frame",
+      "status": "ok",
+      "role": "primary",
+      "filamentColorId": "abs-matte::black-pantone-7c",
+      "filamentCustomHex": null,
+      "spoolmanSpoolId": null,
+      "quantityInferred": 2,
+      "quantityOverride": null,
+      "quantityEffective": 2,
+      "included": true,
+      "notes": "Use <left> & \"right\"",
+      "geometrySame": null,
+      "requirement": null,
+      "optionGroupId": null,
+      "manifestSource": null,
+      "artifact": {
+        "kind": "unavailable",
+        "reason": "legacy"
+      },
+      "units": [
+        {
+          "token": "random-token-0",
+          "unitIndex": 0,
+          "completed": false,
+          "assembled": false
+        },
+        {
+          "token": "random-token-1",
+          "unitIndex": 1,
+          "completed": false,
+          "assembled": false
+        }
+      ]
+    },
+    {
+      "revisionPartId": 102,
+      "projectionPartId": 202,
+      "partKey": "base:Frame:frame/cover.stl",
+      "relativePath": "frame/cover.stl",
+      "filename": "cover.stl",
+      "sourceLayer": "base:Frame",
+      "status": "ok",
+      "role": "accent",
+      "filamentColorId": null,
+      "filamentCustomHex": "#AABBCC",
+      "spoolmanSpoolId": null,
+      "quantityInferred": 1,
+      "quantityOverride": null,
+      "quantityEffective": 1,
+      "included": true,
+      "notes": "",
+      "geometrySame": null,
+      "requirement": null,
+      "optionGroupId": null,
+      "manifestSource": null,
+      "artifact": {
+        "kind": "unavailable",
+        "reason": "legacy"
+      },
+      "units": [
+        {
+          "token": "random-token-0",
+          "unitIndex": 0,
+          "completed": false,
+          "assembled": false
+        }
+      ]
+    },
+    {
+      "revisionPartId": 103,
+      "projectionPartId": 203,
+      "partKey": "base:Frame:frame/excluded.stl",
+      "relativePath": "frame/excluded.stl",
+      "filename": "excluded.stl",
+      "sourceLayer": "base:Frame",
+      "status": "ok",
+      "role": "primary",
+      "filamentColorId": null,
+      "filamentCustomHex": null,
+      "spoolmanSpoolId": null,
+      "quantityInferred": 1,
+      "quantityOverride": null,
+      "quantityEffective": 1,
+      "included": false,
+      "notes": "",
+      "geometrySame": null,
+      "requirement": null,
+      "optionGroupId": null,
+      "manifestSource": null,
+      "artifact": {
+        "kind": "unavailable",
+        "reason": "legacy"
+      },
+      "units": [
+        {
+          "token": "random-token-0",
+          "unitIndex": 0,
+          "completed": false,
+          "assembled": false
+        }
+      ]
+    }
+  ]
+}
