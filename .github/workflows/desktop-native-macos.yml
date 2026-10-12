@@ -3,9 +3,9 @@ name: Native macOS bundle
 on:
   workflow_dispatch:
   # No workflow-level paths filter: a PR-level `paths:` skip leaves the
-  # "bundle (...)" checks absent, which blocks any required check. The
-  # `changes` job decides instead, and `bundle` is skipped (a passing status)
-  # when no native inputs changed.
+  # "bundle (...)" checks absent and pending if required. The `changes` job
+  # decides instead: both architecture jobs conclude `skipped` when no native
+  # inputs changed. GitHub accepts this conclusion for required status checks.
   pull_request:
   push:
     branches: [main, master]
@@ -38,22 +38,10 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
-          # Keep in sync with the desktop-fleet-rust.yml web inputs: the bundle
-          # builds web/apps and web/packages plus the root npm and TS config.
-          NATIVE_PATHS: '^(rust/|rust-toolchain\.toml$|web/apps/|web/packages/|web/package(-lock)?\.json$|web/tsconfig\.base\.json$|web/scripts/atomic-package-build\.mjs$|\.github/workflows/desktop-native-macos\.yml$)'
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
         run: |
-          set -euo pipefail
-          # Fail open: manual runs, new branches, and unknown bases always build.
-          native=true
-          if [[ "$EVENT_NAME" != workflow_dispatch ]] && [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]] && git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
-            changed_files=$(git diff --name-only --no-renames "$BASE_SHA" "$GITHUB_SHA")
-            native=false
-            if grep -Eq "$NATIVE_PATHS" <<< "$changed_files"; then
-              native=true
-            fi
-          fi
-          echo "Native inputs changed: $native" | tee -a "$GITHUB_STEP_SUMMARY"
-          echo "native=$native" >> "$GITHUB_OUTPUT"
+          python3 -m unittest discover -s scripts -p test_macos_bundle_path_filter.py
+          python3 scripts/macos-bundle-path-filter.py
 
   server-smoke:
     needs: changes
@@ -113,41 +101,28 @@ jobs:
           retention-days: 14
 
   bundle:
+    # Explicit architecture jobs keep both check names present even when skipped.
+    name: bundle (macos-26, arm64, arm64, aarch64-apple-darwin, ee35ee364a0c626df7852d9a5bc0c5394b6440772e9...
     needs: changes
-    # Expand the matrix so every bundle check reports. Only an explicit
-    # native=false skips the work; a failed changes job builds. !cancelled()
-    # lets a superseded run honor concurrency cancellation.
-    if: ${{ !cancelled() }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-26
-            arch: arm64
-            node_arch: arm64
-            rust_host: aarch64-apple-darwin
-            tauri_cli_sha256: ee35ee364a0c626df7852d9a5bc0c5394b6440772e9864cfb9b11dcb8d33f527
-          - runner: macos-26-intel
-            arch: x86_64
-            node_arch: x64
-            rust_host: x86_64-apple-darwin
-            tauri_cli_sha256: e5386ba6dadc3fbbdcf46c1f95b700f28caf03db979de50a29adb872022b4a57
-    # Skipped variants run on a cheap runner so every matrix check still reports.
-    runs-on: ${{ needs.changes.outputs.native != 'false' && matrix.runner || 'ubuntu-24.04' }}
+    # Fail open if selection fails; honor concurrency cancellation.
+    if: ${{ !cancelled() && needs.changes.outputs.native != 'false' }}
+    runs-on: macos-26
     timeout-minutes: 90
     env:
+      ARCH: arm64
+      NODE_ARCH: arm64
+      RUST_HOST: aarch64-apple-darwin
+      TAURI_CLI_SHA256: ee35ee364a0c626df7852d9a5bc0c5394b6440772e9864cfb9b11dcb8d33f527
       MACOSX_DEPLOYMENT_TARGET: '13.5'
       VITE_PRINT_PARTNER_DESKTOP: '1'
       CARGO_INCREMENTAL: '0'
       CARGO_PROFILE_RELEASE_DEBUG: '0'
       npm_config_build_from_source: 'true'
-    steps:
+    steps: &bundle-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: needs.changes.outputs.native != 'false'
         with:
           persist-credentials: false
       - name: Record runner and check parser controls
-        if: needs.changes.outputs.native != 'false'
         run: |
           export PP_EVIDENCE="$RUNNER_TEMP/desktop-evidence"
           echo "PP_EVIDENCE=$PP_EVIDENCE" >> "$GITHUB_ENV"
@@ -159,23 +134,21 @@ jobs:
             df -h
             xcodebuild -version
           } > "$PP_EVIDENCE/runner.txt"
-          test "$(uname -m)" = '${{ matrix.arch }}'
+          test "$(uname -m)" = '${{ env.ARCH }}'
           python3 rust/scripts/check-macos-bundle.py --self-test 2>&1 | tee "$PP_EVIDENCE/self-tests.log"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        if: needs.changes.outputs.native != 'false'
         with:
           node-version: '24.21.0'
-          architecture: ${{ matrix.node_arch }}
+          architecture: ${{ env.NODE_ARCH }}
       - name: Install pinned Rust and Tauri CLI
-        if: needs.changes.outputs.native != 'false'
         run: |
           rustup toolchain install 1.99.0 --profile minimal
           rustc --version --verbose | tee "$PP_EVIDENCE/rust-version.txt"
-          test "$(rustc --version --verbose | sed -n 's/^host: //p')" = '${{ matrix.rust_host }}'
+          test "$(rustc --version --verbose | sed -n 's/^host: //p')" = '${{ env.RUST_HOST }}'
           cli_archive="$RUNNER_TEMP/cargo-tauri.zip"
           curl --fail --location --retry 3 --output "$cli_archive" \
-            'https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v2.12.1/cargo-tauri-${{ matrix.rust_host }}.zip'
-          printf '%s  %s\n' '${{ matrix.tauri_cli_sha256 }}' "$cli_archive" \
+            'https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v2.12.1/cargo-tauri-${{ env.RUST_HOST }}.zip'
+          printf '%s  %s\n' '${{ env.TAURI_CLI_SHA256 }}' "$cli_archive" \
             | shasum -a 256 -c - | tee "$PP_EVIDENCE/tauri-install.log"
           mkdir -p "$RUNNER_TEMP/tauri-cli/bin"
           unzip -q "$cli_archive" -d "$RUNNER_TEMP/tauri-cli/bin"
@@ -185,10 +158,9 @@ jobs:
           grep -Fx 'tauri-cli 2.12.1' "$PP_EVIDENCE/tauri-version.txt"
           echo "$RUNNER_TEMP/tauri-cli/bin" >> "$GITHUB_PATH"
       - name: Build desktop React and target-native production modules
-        if: needs.changes.outputs.native != 'false'
         run: |
           node -p 'JSON.stringify({node:process.version,abi:process.versions.modules,os:process.platform,arch:process.arch})' | tee "$PP_EVIDENCE/node-version.json"
-          test "$(node -p process.arch)" = '${{ matrix.node_arch }}'
+          test "$(node -p process.arch)" = '${{ env.NODE_ARCH }}'
           test "$(node -p process.version)" = v24.21.0
           test "$(node -p process.versions.modules)" = 137
           npm --version > "$PP_EVIDENCE/npm-version.txt"
@@ -196,7 +168,6 @@ jobs:
           npm --prefix web run build 2>&1 | tee "$PP_EVIDENCE/react-build.log"
           git diff --exit-code -- web/package-lock.json
       - name: Measure completed native stage
-        if: needs.changes.outputs.native != 'false'
         run: |
           python3 rust/scripts/stage-desktop.py --web web --node "$(command -v node)" --output "$PP_DESKTOP_STAGE" --commit "$GITHUB_SHA" 2>&1 | tee "$PP_EVIDENCE/stage.log"
           cp "$PP_DESKTOP_STAGE/bundle-manifest.json" "$PP_EVIDENCE/bundle-manifest.json"
@@ -204,7 +175,6 @@ jobs:
           cp "$PP_DESKTOP_STAGE/Resources/desktop-runtime/release.json" "$PP_EVIDENCE/release.json"
           shasum -a 256 "$PP_EVIDENCE/bundle-manifest.json" > "$PP_EVIDENCE/manifest.sha256"
       - name: Assemble one unsigned app with the measured inventory
-        if: needs.changes.outputs.native != 'false'
         run: |
           cargo tauri --version | tee "$PP_EVIDENCE/tauri-version.txt"
           cargo fetch --manifest-path rust/Cargo.toml --locked 2>&1 | tee "$PP_EVIDENCE/cargo-fetch.log"
@@ -212,7 +182,6 @@ jobs:
           cmp "$PP_EVIDENCE/bundle-manifest.json" "$PP_DESKTOP_STAGE/bundle-manifest.json"
           git diff --exit-code -- rust/Cargo.lock
       - name: Verify bundled compatibility lifecycle
-        if: needs.changes.outputs.native != 'false'
         run: |
           set -o pipefail
           app="$GITHUB_WORKSPACE/rust/target/release/bundle/macos/Print Partner.app"
@@ -239,24 +208,23 @@ jobs:
               raise SystemExit('Compatibility lifecycle cleanup is incomplete')
           PY
       - name: Verify installed app and relocated copy
-        if: needs.changes.outputs.native != 'false'
         run: |
           app="$GITHUB_WORKSPACE/rust/target/release/bundle/macos/Print Partner.app"
-          python3 rust/scripts/check-macos-bundle.py --app "$app" --manifest "$PP_EVIDENCE/bundle-manifest.json" --arch '${{ matrix.arch }}' --receipt "$PP_EVIDENCE/bundle-verifier.json" 2>&1 | tee "$PP_EVIDENCE/bundle-verifier.log"
+          python3 rust/scripts/check-macos-bundle.py --app "$app" --manifest "$PP_EVIDENCE/bundle-manifest.json" --arch '${{ env.ARCH }}' --receipt "$PP_EVIDENCE/bundle-verifier.json" 2>&1 | tee "$PP_EVIDENCE/bundle-verifier.log"
           mkdir -p "$RUNNER_TEMP/relocated app"
           relocated="$RUNNER_TEMP/relocated app/Print Partner.app"
           ditto "$app" "$relocated"
-          python3 rust/scripts/check-macos-bundle.py --app "$relocated" --manifest "$PP_EVIDENCE/bundle-manifest.json" --arch '${{ matrix.arch }}' --receipt "$PP_EVIDENCE/relocation-verifier.json" 2>&1 | tee "$PP_EVIDENCE/relocation-verifier.log"
+          python3 rust/scripts/check-macos-bundle.py --app "$relocated" --manifest "$PP_EVIDENCE/bundle-manifest.json" --arch '${{ env.ARCH }}' --receipt "$PP_EVIDENCE/relocation-verifier.json" 2>&1 | tee "$PP_EVIDENCE/relocation-verifier.log"
           cmp "$PP_EVIDENCE/bundle-manifest.json" "$PP_DESKTOP_STAGE/bundle-manifest.json"
       - name: Preserve available bundle and receipts
-        if: ${{ !cancelled() && needs.changes.outputs.native != 'false' }}
+        if: ${{ !cancelled() }}
         run: |
           export PP_EVIDENCE="$RUNNER_TEMP/desktop-evidence"
           export PP_DESKTOP_STAGE="$RUNNER_TEMP/desktop-stage"
           mkdir -p "$PP_EVIDENCE"
           app="$GITHUB_WORKSPACE/rust/target/release/bundle/macos/Print Partner.app"
           if test -d "$app"; then
-            tar -czf "$PP_EVIDENCE/Print-Partner-${{ matrix.arch }}-unsigned.app.tar.gz" -C "$(dirname "$app")" "$(basename "$app")"
+            tar -czf "$PP_EVIDENCE/Print-Partner-${{ env.ARCH }}-unsigned.app.tar.gz" -C "$(dirname "$app")" "$(basename "$app")"
           fi
           if test -f "$PP_DESKTOP_STAGE/bundle-manifest.json"; then
             cp "$PP_DESKTOP_STAGE/bundle-manifest.json" "$PP_EVIDENCE/stage-manifest-after-build.json"
@@ -264,10 +232,28 @@ jobs:
           git diff -- rust/Cargo.lock web/package-lock.json > "$PP_EVIDENCE/lockfile-diff.patch"
           df -h > "$PP_EVIDENCE/storage-after.txt"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: ${{ !cancelled() && needs.changes.outputs.native != 'false' }}
+        if: ${{ !cancelled() }}
         with:
-          name: native-macos-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: native-macos-${{ env.ARCH }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/desktop-evidence/
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
+
+  bundle-intel:
+    name: bundle (macos-26-intel, x86_64, x64, x86_64-apple-darwin, e5386ba6dadc3fbbdcf46c1f95b700f28caf03d...
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.native != 'false' }}
+    runs-on: macos-26-intel
+    timeout-minutes: 90
+    env:
+      ARCH: x86_64
+      NODE_ARCH: x64
+      RUST_HOST: x86_64-apple-darwin
+      TAURI_CLI_SHA256: e5386ba6dadc3fbbdcf46c1f95b700f28caf03db979de50a29adb872022b4a57
+      MACOSX_DEPLOYMENT_TARGET: '13.5'
+      VITE_PRINT_PARTNER_DESKTOP: '1'
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_RELEASE_DEBUG: '0'
+      npm_config_build_from_source: 'true'
+    steps: *bundle-steps
