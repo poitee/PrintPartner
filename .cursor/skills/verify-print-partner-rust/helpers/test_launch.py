@@ -1315,5 +1315,138 @@ class SeparateGroupNodeTest(unittest.TestCase):
             temporary.cleanup()
 
 
+# Not a live pid. The spy records the attempt and does not deliver a signal.
+SUBSTITUTED_GROUP = 2147483001
+
+GUARD_SPY = r"""
+import json, os, sys
+attempts = []
+
+def spy_kill(pid, sig, *_rest):
+    attempts.append(["kill", int(pid), int(sig)])
+
+def spy_killpg(pgid, sig, *_rest):
+    attempts.append(["killpg", int(pgid), int(sig)])
+
+os.kill = spy_kill
+os.killpg = spy_killpg
+result_fd = int(sys.argv[1])
+source_path = sys.argv[2]
+sys.argv = [sys.argv[0], sys.argv[3], sys.argv[4]]
+try:
+    exec(compile(open(source_path, encoding="utf-8").read(), source_path, "exec"), {"__name__": "__main__"})
+finally:
+    os.write(result_fd, json.dumps(attempts).encode() + b"\n")
+"""
+
+
+class GuardReleaseTest(unittest.TestCase):
+    def watch(self, release):
+        verify = load_verify()
+        read_fd, write_fd = os.pipe()
+        done_fd, done_write = os.pipe()
+        result_fd, result_write = os.pipe()
+        child = None
+        try:
+            with tempfile.TemporaryDirectory(prefix="pp-guard-release-") as temporary:
+                root = Path(temporary)
+                source = root / "guard_source.py"
+                source.write_text(verify.GUARD_SOURCE)
+                driver = root / "guard_spy.py"
+                driver.write_text(GUARD_SPY)
+                child = subprocess.Popen(
+                    [sys.executable, "-I", str(driver), str(result_write), str(source),
+                     str(read_fd), str(SUBSTITUTED_GROUP)],
+                    pass_fds=(read_fd, result_write),
+                    stdin=subprocess.DEVNULL,
+                    stdout=done_write,
+                    stderr=subprocess.PIPE,
+                )
+                os.close(read_fd)
+                os.close(done_write)
+                os.close(result_write)
+                read_fd = done_write = result_write = -1
+                if release:
+                    self.release(verify, done_fd, write_fd, child)
+                    write_fd = done_fd = -1
+                else:
+                    os.close(write_fd)
+                    write_fd = -1
+                    while os.read(done_fd, 4096):
+                        pass
+                    os.close(done_fd)
+                    done_fd = -1
+                stderr = child.stderr.read()
+                returncode = child.wait(timeout=10)
+                child = None
+            raw = os.read(result_fd, 65536)
+        finally:
+            if child is not None and child.poll() is None:
+                child.kill()
+                child.wait(timeout=5)
+            for fd in (read_fd, write_fd, done_fd, done_write, result_fd, result_write):
+                if fd >= 0:
+                    os.close(fd)
+        self.assertEqual(returncode, 0, stderr)
+        try:
+            attempts = json.loads(raw.decode())
+        except json.JSONDecodeError as error:
+            self.fail(f"signal-attempt unreadable: {raw!r} stderr={stderr!r} ({error})")
+        label = "normal-release" if release else "abrupt-eof"
+        print(f"signal-attempt {label}: {attempts!r}")
+        return attempts
+
+    def release(self, verify, done_fd, write_fd, child):
+        box = {}
+
+        def call():
+            try:
+                verify.release_guard((done_fd, write_fd))
+            except BaseException as error:
+                box["error"] = error
+
+        thread = threading.Thread(target=call)
+        thread.start()
+        thread.join(10)
+        if thread.is_alive():
+            child.kill()
+            thread.join(5)
+            self.fail("release_guard did not return")
+        if "error" in box:
+            raise box["error"]
+
+    def test_normal_release_does_not_signal_substituted_group(self):
+        attempts = self.watch(release=True)
+        self.assertEqual(attempts, [], f"signal-attempt normal-release: {attempts!r}")
+
+    def test_abrupt_eof_signals_substituted_group(self):
+        attempts = self.watch(release=False)
+        self.assertEqual(attempts, [
+            ["kill", SUBSTITUTED_GROUP, int(signal.SIGSTOP)],
+            ["kill", SUBSTITUTED_GROUP, 0],
+            ["killpg", SUBSTITUTED_GROUP, int(signal.SIGKILL)],
+        ], f"signal-attempt abrupt-eof: {attempts!r}")
+
+    def test_watcher_setup_failure_does_not_exec_server(self):
+        verify = load_verify()
+        with tempfile.TemporaryDirectory(prefix="pp-guard-create-") as temporary:
+            root = Path(temporary)
+            marker = root / "server-started"
+            entered = root / "watcher-entered"
+            binary = root / "server"
+            write_executable(binary, f"#!/bin/sh\ntouch '{marker}'\n")
+
+            def fail(*_args, **_kwargs):
+                entered.write_text(str(os.getpid()))
+                raise RuntimeError("watcher setup failed")
+
+            with mock.patch.object(verify, "guard_group", fail):
+                with self.assertRaisesRegex(subprocess.SubprocessError, "preexec_fn"):
+                    verify.guarded_popen([str(binary)])
+            child = int(entered.read_text())
+            self.assertFalse(process_alive(child), f"watcher child {child} still alive")
+            self.assertFalse(marker.exists(), "server ran after watcher setup failed")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
