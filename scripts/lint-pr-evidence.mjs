@@ -1795,6 +1795,28 @@ function readCommandSubstitution(value, start) {
   return { text: value.slice(start, index), end: index, closed: depth === 0 };
 }
 
+function shellFenceLine(value, index) {
+  const start = value.lastIndexOf("\n", index - 1) + 1;
+  const end = value.indexOf("\n", index);
+  return /^[ ]{0,3}`{3,}[^`]*$/.test(value.slice(start, end === -1 ? value.length : end));
+}
+
+// A backslash keeps the next character only before $, `, or \. The body is not run.
+function readBacktickSubstitution(value, start) {
+  const limit = value.length;
+  let index = start + 1;
+  while (index < limit) {
+    const ch = value[index];
+    if (ch === "\\" && index + 1 < limit && /[$`\\]/.test(value[index + 1])) {
+      index += 2;
+      continue;
+    }
+    if (ch === "`") return { text: value.slice(start, index + 1), end: index + 1, closed: true };
+    index += 1;
+  }
+  return { text: value.slice(start, index), end: index, closed: false };
+}
+
 function shellWords(value, { commandTokens = false } = {}) {
   const words = [];
   let word = "";
@@ -1802,7 +1824,21 @@ function shellWords(value, { commandTokens = false } = {}) {
   let braceText = "";
   let wordStarted = false;
   let wordUnresolved = false;
+  let wordSubstitution = false;
   let substitutionBodies = [];
+  let fenceFrom = -1;
+  let fenceTo = -1;
+  let fenceHit = false;
+  const fenceAt = (index) => {
+    if (index >= fenceFrom && index < fenceTo) return fenceHit;
+    fenceHit = shellFenceLine(value, index);
+    const start = value.lastIndexOf("\n", index - 1) + 1;
+    let end = value.indexOf("\n", index);
+    if (end === -1) end = value.length;
+    fenceFrom = start;
+    fenceTo = end + 1;
+    return fenceHit;
+  };
   const append = (text, protectedText = false) => {
     wordStarted = true;
     word += text;
@@ -1810,12 +1846,13 @@ function shellWords(value, { commandTokens = false } = {}) {
   };
   const flush = () => {
     if (word || (commandTokens && wordStarted)) {
-      words.push(commandTokens ? { text: word, braceText, unresolved: wordUnresolved, substitutionBodies } : word);
+      words.push(commandTokens ? { text: word, braceText, unresolved: wordUnresolved, substitution: wordSubstitution, substitutionBodies } : word);
     }
     word = "";
     braceText = "";
     wordStarted = false;
     wordUnresolved = false;
+    wordSubstitution = false;
     substitutionBodies = [];
   };
   for (let index = 0; index < value.length; index += 1) {
@@ -1827,20 +1864,38 @@ function shellWords(value, { commandTokens = false } = {}) {
       index = expansion.end - 1;
       continue;
     }
-    // A leading $(...) stays in this word so a curl or wget operand is not split off.
-    // The body is not executed. It is scanned later so a nested client stays visible.
+    // $(...) and backticks stay in this word, including at its start, so a curl or wget
+    // operand is not split off. The body is not executed. A later scan keeps a nested client visible.
     if (quote !== "'" && ch === "$" && value[index + 1] === "(") {
       const substitution = readCommandSubstitution(value, index);
       append(substitution.text, true);
       wordUnresolved = true;
+      wordSubstitution = true;
       const inner = substitution.text.slice(2);
       substitutionBodies.push(substitution.closed ? inner.slice(0, -1) : inner);
       index = substitution.end - 1;
       continue;
     }
-    if (quote === null && /[\s;|&<>()`]/.test(ch)) {
+    // A fence line is three or more backticks. Those ticks stay separators.
+    if (quote === null && ch === "`" && fenceAt(index)) {
       flush();
-      if (commandTokens && /[\n\r;|&<>()`]/.test(ch)) words.push(null);
+      if (commandTokens) words.push(null);
+      continue;
+    }
+    if (quote !== "'" && ch === "`") {
+      const substitution = readBacktickSubstitution(value, index);
+      append(substitution.text, true);
+      wordUnresolved = true;
+      wordSubstitution = true;
+      const inner = substitution.text.slice(1);
+      const body = substitution.closed ? inner.slice(0, -1) : inner;
+      if (/\S/.test(body)) substitutionBodies.push(body);
+      index = substitution.end - 1;
+      continue;
+    }
+    if (quote === null && /[\s;|&<>()]/.test(ch)) {
+      flush();
+      if (commandTokens && /[\n\r;|&<>()]/.test(ch)) words.push(null);
       continue;
     }
     if (quote === null && ch === "#" && !wordStarted) {
@@ -2457,10 +2512,11 @@ function noteProxyAssignment(proxies, word) {
   const value = proxyAssignmentValue(word.text);
   if (value == null) return;
   const rest = word.text.replace(/\$\(\(/g, "");
+  const commandSubstitution = Boolean(word.substitution) || /\$\(/.test(rest);
   proxies.push({
     value,
-    arithmetic: Boolean(word.unresolved) && (/\$\(\(/.test(word.text) || !/\$\(/.test(word.text)),
-    substitution: /\$\(/.test(rest),
+    arithmetic: Boolean(word.unresolved) && (/\$\(\(/.test(word.text) || (!commandSubstitution && !/\$\(/.test(word.text))),
+    substitution: commandSubstitution,
   });
 }
 
@@ -2683,7 +2739,7 @@ function unresolvedOperand(arg, operand) {
   const equal = arg.indexOf("=");
   if (arg.startsWith("--") && equal !== -1 && arg.slice(equal + 1) === operand) return true;
   if (arg.startsWith("-") && !arg.startsWith("--") && arg.slice(2) === operand) return true;
-  return operand.includes("$(") && arg.includes(operand);
+  return (operand.includes("$(") || operand.includes("`")) && arg.includes(operand);
 }
 
 function curlCommandTargets(value) {
@@ -2693,10 +2749,12 @@ function curlCommandTargets(value) {
   let unresolved = false;
   let substitution = false;
   const bodies = [];
-  const markUnresolved = (text) => {
+  const markUnresolved = (item) => {
+    const text = item.text;
     const rest = text.replace(/\$\(\(/g, "");
-    if (/\$\(\(/.test(text) || !/\$\(/.test(text)) unresolved = true;
-    if (/\$\(/.test(rest)) substitution = true;
+    const commandSubstitution = Boolean(item.substitution) || /\$\(/.test(rest);
+    if (/\$\(\(/.test(text) || (!commandSubstitution && !/\$\(/.test(text))) unresolved = true;
+    if (commandSubstitution) substitution = true;
   };
   let command = [];
   const flush = () => {
@@ -2718,7 +2776,7 @@ function curlCommandTargets(value) {
     const tagged = [];
     for (const word of command.slice(start + 1)) {
       if (word.unresolved) {
-        tagged.push({ text: word.text, unresolved: true });
+        tagged.push({ text: word.text, unresolved: true, substitution: word.substitution });
         continue;
       }
       const expanded = expandTargetGlobs(word.braceText, { shell: true });
@@ -2733,7 +2791,7 @@ function curlCommandTargets(value) {
       for (const item of tagged) {
         if (!item.unresolved || !unresolvedOperand(item.text, operand)) continue;
         found = true;
-        markUnresolved(item.text);
+        markUnresolved(item);
       }
       return found;
     };
@@ -2769,7 +2827,7 @@ function curlCommandTargets(value) {
         i = parsed.index;
         if (parsed.budget) budget = true;
         if (tagged[i]?.unresolved && (parsed.url !== undefined || parsed.endpoints)) {
-          markUnresolved(tagged[i].text);
+          markUnresolved(tagged[i]);
           continue;
         }
         if (parsed.url !== undefined) urls.push(parsed.url);
@@ -2784,7 +2842,7 @@ function curlCommandTargets(value) {
             const operand = inline === "" ? args[i + 1] : inline;
             if (inline === "") i += 1;
             if (arg[at] === "x" && operand !== undefined) {
-              if (tagged[i]?.unresolved) markUnresolved(tagged[i].text);
+              if (tagged[i]?.unresolved) markUnresolved(tagged[i]);
               else urls.push(operand);
             }
             break;
