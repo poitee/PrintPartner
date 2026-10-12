@@ -201,7 +201,7 @@ fn response(profile: NamingProfile, use_defaults: bool, override_value: Value) -
         json!({"use_defaults":use_defaults,"override":override_value,"effective":profile,"effective_digest":digest}),
     )
 }
-pub(super) fn get(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<Value> {
+pub(crate) fn get(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<Value> {
     let source = require(tx, tenant, id)?;
     let m = source.metadata.unwrap_or_default();
     let global = global(tx, tenant)?;

@@ -200,3 +200,18 @@ pub(super) fn execute(connection: &mut Connection, command: Command) -> Result<B
     tx.commit()?;
     Ok(Batch { builds })
 }
+pub(crate) fn reusable_draft_base(
+    tx: &rusqlite::Transaction<'_>,
+    tenant: &str,
+    profile: i64,
+    repos: &std::path::Path,
+) -> Result<bool> {
+    let mut budget = graph::Budget::default();
+    if !context::draft_freshness_current(tx, tenant, profile, &mut budget)? {
+        return Ok(false);
+    }
+    Ok(matches!(
+        graph::read(tx, tenant, profile, repos, &mut budget)?,
+        AcceptedRead::Ready { .. }
+    ))
+}

@@ -2,6 +2,7 @@ pub mod archive;
 mod directory;
 pub mod local_selection;
 pub mod media;
+pub mod observation;
 mod path_policy;
 
 use directory::Directory;

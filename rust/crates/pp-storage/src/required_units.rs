@@ -514,7 +514,7 @@ fn part_view(p: &Value) -> Value {
 fn reference(p: &Value) -> Value {
     json!({"revision_part_id":p["id"],"filename":p["filename"],"relative_path":p["relativePath"],"source_layer":p["sourceLayer"]})
 }
-fn workspace(
+pub(crate) fn workspace(
     tx: &Transaction<'_>,
     tenant: &str,
     profile: &Value,
@@ -763,7 +763,31 @@ pub(super) fn execute(connection: &mut Connection, command: Command) -> Result<O
 }
 fn transact(tx: &Transaction<'_>, command: Command) -> Result<Outcome> {
     let c = command.input;
-    let (tenant, actor) = auth::reconciliation_actor(tx, c.credential, command.policy)?;
+    reconcile_in_transaction(
+        tx,
+        BorrowedCommand {
+            credential: &c.credential,
+            policy: command.policy,
+            profile_id: c.profile_id,
+            draft_id: c.draft_id,
+            request: &c.request,
+            idempotency_key: &c.idempotency_key,
+        },
+    )
+}
+pub(crate) struct BorrowedCommand<'a> {
+    pub credential: &'a Credential,
+    pub policy: auth::AuthPolicy,
+    pub profile_id: PositiveId,
+    pub draft_id: PositiveId,
+    pub request: &'a ReconciliationRequest,
+    pub idempotency_key: &'a str,
+}
+pub(crate) fn reconcile_in_transaction(
+    tx: &Transaction<'_>,
+    c: BorrowedCommand<'_>,
+) -> Result<Outcome> {
+    let (tenant, actor) = auth::reconciliation_actor_ref(tx, c.credential, c.policy)?;
     let profile = c.profile_id.get() as i64;
     let id = c.draft_id.get() as i64;
     let expected = c.request.expected_snapshot_digest().as_str();
