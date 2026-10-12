@@ -12,7 +12,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { Transform, type Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { fileChunks } from "../lib/byte-chunks.js";
@@ -107,15 +107,16 @@ function processZipFile(
     }
     let entryName: string;
     let target: string;
+    let folded: string;
     try {
       entryName = sanitizeRelativeEntryPath(file.name);
       target = resolveSafeTarget(base, entryName);
+      folded = caseFoldedCanonicalTarget(base, target);
     } catch (error) {
       failure = error instanceof Error ? new Error(`Archive entry escapes extraction directory: ${file.name}`) : new Error("Unsafe archive entry");
       file.terminate();
       return;
     }
-    const folded = caseFoldedArchivePath(entryName);
     if (targets.has(target) || foldedTargets.has(folded)) {
       throw new Error(`Archive has duplicate path: ${entryName}`);
     }
@@ -212,8 +213,19 @@ export async function streamSourceUpload(
   return written;
 }
 
-function caseFoldedArchivePath(entryName: string): string {
-  return entryName.replace(/\/+$/, "").toLocaleLowerCase("en-US");
+/** Case-fold the resolved relative path, after separators, extra slashes, and "." segments collapse. */
+function caseFoldedCanonicalTarget(base: string, target: string): string {
+  const canonical = relative(base, target).split(sep).join("/");
+  if (
+    canonical === "" ||
+    canonical === "." ||
+    canonical.startsWith("../") ||
+    canonical === ".." ||
+    canonical.startsWith("/")
+  ) {
+    throw new Error(`File path escapes extraction directory: ${canonical || target}`);
+  }
+  return canonical.toLocaleLowerCase("en-US");
 }
 
 function sanitizeRelativeEntryPath(relativePath: string): string {
@@ -334,7 +346,7 @@ export function writeUploadedFiles(
   try {
     for (const file of staged) {
       const target = resolveSafeTarget(base, file.relativePath);
-      const folded = caseFoldedArchivePath(sanitizeRelativeEntryPath(file.relativePath));
+      const folded = caseFoldedCanonicalTarget(base, target);
       if (targets.has(target) || foldedTargets.has(folded)) {
         throw new Error(`Duplicate uploaded file path: ${file.relativePath}`);
       }

@@ -36,6 +36,18 @@ function addMaliciousEntry(zip: AdmZip, name: string, data: Buffer): void {
   entry.entryName = name;
 }
 
+function zipWithForcedNames(entries: ReadonlyArray<readonly [string, Buffer]>): AdmZip {
+  const zip = new AdmZip();
+  for (const [index, [name, data]] of entries.entries()) {
+    const placeholder = `placeholder-entry-${index}`;
+    zip.addFile(placeholder, data);
+    const entry = zip.getEntries().find((item) => item.entryName === placeholder);
+    if (!entry) throw new Error(`ZIP placeholder was not stored: ${placeholder}`);
+    entry.entryName = name;
+  }
+  return zip;
+}
+
 describe("archive extraction hardening", () => {
   it.each(["zip", "files"])("shares validation bytes between outer content and nested packages in a %s upload", (kind) => {
     const root = tempRoot();
@@ -156,6 +168,72 @@ describe("archive extraction hardening", () => {
         ? writeUploadedZip(stagedFile(zip.toBuffer()), staging, { maxUncompressedBytes: limit })
         : writeUploadedFiles([staged("a.3mf", bytes), staged("b.3mf", bytes)], staging, { maxUncompressedBytes: limit })
       ).toThrow("Nested 3MF uncompressed size exceeds limit");
+      expect(existsSync(join(staging, "files"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["zip", "files"])("writes one %s spelling at the canonical path", (kind) => {
+    const root = tempRoot();
+    const body = Buffer.from("canonical part");
+    const staging = createSourceUploadStaging(root, "default");
+    try {
+      const extractDir = kind === "zip"
+        ? writeUploadedZip(stagedFile(zipWithForcedNames([["Kit//part.stl", body]]).toBuffer()), staging)
+        : writeUploadedFiles([staged("Kit//part.stl", body)], staging).extractDir;
+      expect(readdirSync(extractDir)).toEqual(["Kit"]);
+      expect(readFileSync(join(extractDir, "Kit/part.stl"))).toEqual(body);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["zip", "redundant separators", "Kit//part.stl", "kit/part.stl"],
+    ["files", "redundant separators", "Kit//part.stl", "kit/part.stl"],
+    ["zip", "dot segments", "Kit/./part.stl", "kit/part.stl"],
+    ["files", "dot segments", "kit/./Part.stl", "KIT/part.stl"],
+    ["zip", "separators and dot segments", "Kit\\sub//./Part.stl", "kit/sub/part.stl"],
+    ["files", "separators and dot segments", "Kit\\sub//./Part.stl", "kit/sub/part.stl"],
+  ] as const)("rejects %s %s before the second spelling can replace the canonical file", (kind, _label, left, right) => {
+    const root = tempRoot();
+    const first = Buffer.from("first spelling");
+    const second = Buffer.from("second spelling");
+    const staging = createSourceUploadStaging(root, "default");
+    try {
+      if (kind === "zip") {
+        const zip = zipWithForcedNames([[left, first], [right, second]]);
+        expect(() => writeUploadedZip(stagedFile(zip.toBuffer()), staging)).toThrow(/Archive has duplicate path/);
+      } else {
+        const twin = staged(right, second);
+        expect(() => writeUploadedFiles([staged(left, first), twin], staging)).toThrow(/Duplicate uploaded file path/);
+        expect(readFileSync(twin.path)).toEqual(second);
+      }
+      expect(existsSync(join(staging, "files"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["zip", "files"])("rejects %s dot-dot segments before they can canonicalize inside the archive", (kind) => {
+    const root = tempRoot();
+    const staging = createSourceUploadStaging(root, "default");
+    try {
+      if (kind === "zip") {
+        const zip = zipWithForcedNames([
+          ["kit/part.stl", Buffer.from("kept")],
+          ["kit/nested/../part.stl", Buffer.from("collapsed")],
+        ]);
+        expect(() => writeUploadedZip(stagedFile(zip.toBuffer()), staging)).toThrow(/escapes extraction directory/);
+      } else {
+        const collapsed = staged("kit/nested/../part.stl", Buffer.from("collapsed"));
+        expect(() => writeUploadedFiles([
+          staged("kit/part.stl", Buffer.from("kept")),
+          collapsed,
+        ], staging)).toThrow(/escapes extraction directory/);
+        expect(readFileSync(collapsed.path)).toEqual(Buffer.from("collapsed"));
+      }
       expect(existsSync(join(staging, "files"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
