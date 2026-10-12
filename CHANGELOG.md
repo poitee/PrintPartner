@@ -36,6 +36,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the Working Plan is built, and unchecked files remain outside the Plan.
 - **Large local folders** - Browser folder imports now accept up to 10,000 files,
   matching the existing archive-entry limit instead of failing after 100 files.
+- **Failed Source uploads** - A rejected ZIP or file upload no longer deletes the
+  Source's previous working files. The upload is extracted and published from a
+  staging directory, and `data/sources/<id>` changes only after the new revision
+  activates. Files that are not a complete ZIP archive are refused, and an upload
+  that loses a race to the same Source returns 409 instead of replacing files.
 
 ### Changed
 

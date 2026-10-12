@@ -8,7 +8,7 @@ import {
 } from "@print-partner/domain";
 import { HOSTED_TENANT_DISK_QUOTA_BYTES, isHostedLibrarySourceKind, normalizeCategoryPath } from "@print-partner/contracts";
 import type { JobSnapshot } from "@print-partner/contracts";
-import type { AppRepository } from "../db/repository.js";
+import { SourceActivationConflictError, type AppRepository } from "../db/repository.js";
 import {
   createReadStreamUnderRoot,
   openRepoStlMeshStream,
@@ -22,13 +22,13 @@ import {
 } from "../services/github-sync.js";
 import {
   createSourceUploadStaging,
-  finalizeUploadedSource,
   MAX_SOURCE_UPLOAD_FILES,
   MAX_SOURCE_UPLOAD_PARTS,
+  publishStagedSource,
   SourceUploadTooLargeError,
+  stageUploadedFiles,
+  stageUploadedZip,
   streamSourceUpload,
-  writeUploadedFiles,
-  writeUploadedZip,
 } from "../services/archive-import.js";
 import {
   MAX_BULK_JSON_BODY_BYTES,
@@ -45,7 +45,6 @@ import {
 } from "../services/source-docs-index.js";
 import { PDF_BG_EXTRACT_BYTES } from "../services/pdf-text-extract.js";
 import { sourcePdfTextStorage } from "../services/source-workspace.js";
-import { publishLocalSourceWorkingTree } from "../services/local-source-revision.js";
 import { scanSourceArtifacts } from "../services/source-artifacts.js";
 import { sendIfTenantDiskQuotaExceeded, runWithTenantDiskQuota, TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
 
@@ -63,6 +62,12 @@ function hostedSourceKindBlocked(
   kind: string | null | undefined,
 ): boolean {
   return hostedPlanning && !hostedLibraryKindAllowed((kind ?? "github").toLowerCase());
+}
+
+function uploadFailureStatus(error: unknown): number {
+  if (error instanceof TenantDiskQuotaError) return 413;
+  if (error instanceof SourceActivationConflictError) return 409;
+  return 400;
 }
 
 async function refuseIfHostedQuotaExceeded(
@@ -410,30 +415,22 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
         }, async () => {
           if (!deps.repo.getProjectRow(id)) return reply.status(404).send({ detail: "Source not found" });
           try {
-            const extractDir = writeUploadedZip(stagedZip, deps.sourcesDir, id);
-            const { suggestedImportRules, stlCount } = finalizeUploadedSource(extractDir);
-            const existingRules = deps.repo.getProjectRow(id)?.importedPaths;
-            const hasRules =
-              existingRules != null &&
-              existingRules.trim() !== "" &&
-              existingRules.trim() !== "[]";
-            if (!hasRules && suggestedImportRules.length > 0) {
-              deps.repo.updateImportRules(id, suggestedImportRules);
-            }
-            const updated = await publishLocalSourceWorkingTree({
+            const staged = stageUploadedZip(stagedZip, staging);
+            const { source: updated, workingFiles } = await publishStagedSource({
               repo: deps.repo,
               reposDir: deps.reposDir,
+              sourcesDir: deps.sourcesDir,
               sourceId: id,
-              workingTree: extractDir,
+              staged,
             });
-            indexSourceDocsFromDisk(deps.repo, id, updated.local_path ?? extractDir);
+            indexSourceDocsFromDisk(deps.repo, id, updated.local_path ?? workingFiles);
             void prefetchSourceCover(deps, id);
             return {
               ...deps.repo.sourceSummaryForClient(updated),
               imported_files: uploadedBytes,
-              stl_count: stlCount,
-              artifacts: scanSourceArtifacts(updated.local_path ?? extractDir),
-              suggested_import_rules: suggestedImportRules,
+              stl_count: staged.stlCount,
+              artifacts: scanSourceArtifacts(updated.local_path ?? workingFiles),
+              suggested_import_rules: staged.suggestedImportRules,
             };
           } finally {
             if (deps.hostedPlanning) {
@@ -442,7 +439,7 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
           }
         });
       } catch (error) {
-        return reply.status(error instanceof TenantDiskQuotaError ? 413 : 400)
+        return reply.status(uploadFailureStatus(error))
           .send({ detail: error instanceof Error ? error.message : String(error) });
       }
     } finally {
@@ -530,31 +527,22 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
         }, async () => {
           if (!deps.repo.getProjectRow(id)) return reply.status(404).send({ detail: "Source not found" });
           try {
-            const result = writeUploadedFiles(uploads, deps.sourcesDir, id);
-
-            const existingRules = deps.repo.getProjectRow(id)?.importedPaths;
-            const hasRules =
-              existingRules != null &&
-              existingRules.trim() !== "" &&
-              existingRules.trim() !== "[]";
-            if (!hasRules && result.suggestedImportRules.length > 0) {
-              deps.repo.updateImportRules(id, result.suggestedImportRules);
-            }
-
-            const updated = await publishLocalSourceWorkingTree({
+            const staged = stageUploadedFiles(uploads, staging);
+            const { source: updated, workingFiles } = await publishStagedSource({
               repo: deps.repo,
               reposDir: deps.reposDir,
+              sourcesDir: deps.sourcesDir,
               sourceId: id,
-              workingTree: result.extractDir,
+              staged,
             });
-            indexSourceDocsFromDisk(deps.repo, id, updated.local_path ?? result.extractDir);
+            indexSourceDocsFromDisk(deps.repo, id, updated.local_path ?? workingFiles);
             void prefetchSourceCover(deps, id);
             return {
               ...deps.repo.sourceSummaryForClient(updated),
-              imported_files: result.fileCount,
-              stl_count: result.stlCount,
-              artifacts: scanSourceArtifacts(updated.local_path ?? result.extractDir),
-              suggested_import_rules: result.suggestedImportRules,
+              imported_files: uploads.length,
+              stl_count: staged.stlCount,
+              artifacts: scanSourceArtifacts(updated.local_path ?? workingFiles),
+              suggested_import_rules: staged.suggestedImportRules,
             };
           } finally {
             if (deps.hostedPlanning) {
@@ -563,7 +551,7 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
           }
         });
       } catch (error) {
-        return reply.status(error instanceof TenantDiskQuotaError ? 413 : 400)
+        return reply.status(uploadFailureStatus(error))
           .send({ detail: error instanceof Error ? error.message : String(error) });
       }
     } finally {

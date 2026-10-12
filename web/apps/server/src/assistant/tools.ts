@@ -93,11 +93,10 @@ import {
   buildPlanOptionGroups,
 } from "../services/plan-manifest-builder.js";
 import { PlanDraftWorkspaceService } from "../services/plan-draft-workspace.js";
-import { createSourceUploadStaging, finalizeUploadedSource, writeUploadedFiles, writeUploadedZip } from "../services/archive-import.js";
+import { createSourceUploadStaging, publishStagedSource, stageUploadedFiles, stageUploadedZip, type StagedSource } from "../services/archive-import.js";
 import { MAX_MCP_INLINE_FILE_BYTES, MCP_INLINE_UPLOAD_TOO_LARGE_DETAIL } from "../services/upload-limits.js";
 import { indexSourceDocsFromDisk } from "../services/source-docs-index.js";
 import { resolvedFileUnderRoot } from "../lib/secure-path.js";
-import { publishLocalSourceWorkingTree } from "../services/local-source-revision.js";
 import { addCustomFilament, listCustomFilaments } from "../services/custom-filaments.js";
 import { extractThreeMfMeshes } from "../services/three-mf-import.js";
 import { bufferChunks } from "../lib/byte-chunks.js";
@@ -3303,10 +3302,8 @@ export async function applyAssistantAction(
         const rawFiles = Array.isArray(action.params.files) ? action.params.files : [];
         if ((!archive && rawFiles.length === 0) || (archive && rawFiles.length > 0)) return { ok: false, detail: "provide exactly one of archive_base64 or files" };
         const sourcesDir = deps.sourcesDir ?? (deps.dataDir ? join(deps.dataDir, "sources") : join(deps.repo.reposDir, "..", "sources"));
-        let workingTree: string;
+        let staged: StagedSource;
         let importedFiles = 0;
-        let stlCount = 0;
-        let suggestedRules: string[] = [];
         const staging = createSourceUploadStaging(sourcesDir);
         try {
           if (archive) {
@@ -3314,11 +3311,8 @@ export async function applyAssistantAction(
             if (buffer.length > MAX_MCP_INLINE_FILE_BYTES) return { ok: false, detail: MCP_INLINE_UPLOAD_TOO_LARGE_DETAIL };
             const stagedZip = join(staging, "upload.zip");
             writeFileSync(stagedZip, buffer);
-            workingTree = writeUploadedZip(stagedZip, sourcesDir, sourceId);
-            const finalized = finalizeUploadedSource(workingTree);
+            staged = stageUploadedZip(stagedZip, staging);
             importedFiles = 1;
-            stlCount = finalized.stlCount;
-            suggestedRules = finalized.suggestedImportRules;
           } else {
             const files: Array<{ relativePath: string; path: string }> = [];
             let totalBytes = 0;
@@ -3336,24 +3330,19 @@ export async function applyAssistantAction(
               writeFileSync(path, buffer);
               files.push({ relativePath, path });
             }
-            const written = writeUploadedFiles(files, sourcesDir, sourceId);
-            workingTree = written.extractDir;
-            importedFiles = written.fileCount;
-            stlCount = written.stlCount;
-            suggestedRules = written.suggestedImportRules;
+            staged = stageUploadedFiles(files, staging);
+            importedFiles = files.length;
           }
-          const updated = await publishLocalSourceWorkingTree({ repo: deps.repo, reposDir: deps.repo.reposDir, sourceId, workingTree });
-          const existingRules = deps.repo.getProjectRow(sourceId)?.importedPaths;
-          if ((!existingRules || existingRules === "[]") && suggestedRules.length > 0) deps.repo.updateImportRules(sourceId, suggestedRules);
-          indexSourceDocsFromDisk(deps.repo, sourceId, updated.local_path ?? workingTree);
+          const { source: updated, workingFiles } = await publishStagedSource({ repo: deps.repo, reposDir: deps.repo.reposDir, sourcesDir, sourceId, staged });
+          indexSourceDocsFromDisk(deps.repo, sourceId, updated.local_path ?? workingFiles);
           outcome = {
             ok: true,
             result: {
               source: deps.repo.sourceSummaryForClient(updated),
               imported_files: importedFiles,
-              stl_count: stlCount,
+              stl_count: staged.stlCount,
               artifacts: updated.local_path ? scanSourceArtifacts(updated.local_path) : [],
-              suggested_import_rules: suggestedRules,
+              suggested_import_rules: staged.suggestedImportRules,
             },
           };
         } catch (error) {

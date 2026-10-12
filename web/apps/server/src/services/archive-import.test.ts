@@ -8,7 +8,12 @@ import {
   runWithTenantDiskQuota,
   TenantDiskQuotaError,
 } from "../lib/tenant-disk-quota.js";
-import { extractZipFile, writeUploadedFiles, writeUploadedZip, discoverImportRules } from "./archive-import.js";
+import {
+  discoverImportRules,
+  extractZipFile,
+  stageUploadedFiles,
+  stageUploadedZip,
+} from "./archive-import.js";
 
 function tempRoot(): string {
   return mkdtempSync(join(tmpdir(), "pp-archive-"));
@@ -29,6 +34,34 @@ const triangle: StlMesh = {
   faces: [[0, 1, 2]],
   bounds: { minX: 0, minY: 0, minZ: 0, maxX: 10, maxY: 5, maxZ: 0, widthMm: 10, depthMm: 5, heightMm: 0 },
 };
+
+/** Re-terminate an archive with ZIP64 records and saturated classic counts, as large-archive writers do. */
+function withZip64EndRecords(zip: Buffer): Buffer {
+  const eocd = zip.length - 22;
+  const entries = zip.readUInt16LE(eocd + 10);
+  const centralSize = zip.readUInt32LE(eocd + 12);
+  const centralOffset = zip.readUInt32LE(eocd + 16);
+  const record = Buffer.alloc(56);
+  record.writeUInt32LE(0x06064b50, 0);
+  record.writeBigUInt64LE(44n, 4);
+  record.writeUInt16LE(45, 12);
+  record.writeUInt16LE(45, 14);
+  record.writeBigUInt64LE(BigInt(entries), 24);
+  record.writeBigUInt64LE(BigInt(entries), 32);
+  record.writeBigUInt64LE(BigInt(centralSize), 40);
+  record.writeBigUInt64LE(BigInt(centralOffset), 48);
+  const locator = Buffer.alloc(20);
+  locator.writeUInt32LE(0x07064b50, 0);
+  locator.writeBigUInt64LE(BigInt(eocd), 8);
+  locator.writeUInt32LE(1, 16);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(0xffff, 8);
+  end.writeUInt16LE(0xffff, 10);
+  end.writeUInt32LE(0xffffffff, 12);
+  end.writeUInt32LE(0xffffffff, 16);
+  return Buffer.concat([zip.subarray(0, eocd), record, locator, end]);
+}
 
 /** adm-zip sanitizes names in addFile, so force a hostile entry name afterwards. */
 function addMaliciousEntry(zip: AdmZip, name: string, data: Buffer): void {
@@ -117,26 +150,70 @@ describe("archive extraction hardening", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  it("rejects bytes that are not a ZIP archive", () => {
+    const root = tempRoot();
+    expect(() => extractZipFile(stagedFile(Buffer.from("not a zip archive")), join(root, "files"))).toThrow(
+      "Upload is not a complete ZIP archive",
+    );
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("rejects an archive truncated before its central directory", () => {
+    const root = tempRoot();
+    const zip = new AdmZip();
+    zip.addFile("parts/a.stl", Buffer.from("solid a"));
+    zip.addFile("parts/b.stl", Buffer.from("solid b"));
+    const bytes = zip.toBuffer();
+    const centralOffset = bytes.readUInt32LE(bytes.length - 22 + 16);
+
+    expect(() => extractZipFile(stagedFile(bytes.subarray(0, centralOffset)), join(root, "files"))).toThrow(
+      "Upload is not a complete ZIP archive",
+    );
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("rejects an archive with no files", () => {
+    const root = tempRoot();
+    const zip = new AdmZip();
+    zip.addFile("empty/", Buffer.alloc(0));
+
+    expect(() => extractZipFile(stagedFile(zip.toBuffer()), join(root, "files"))).toThrow(
+      "ZIP archive contains no files",
+    );
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("extracts an archive whose entry count lives in the ZIP64 end record", () => {
+    const root = tempRoot();
+    const zip = new AdmZip();
+    zip.addFile("parts/a.stl", Buffer.from("solid a"));
+
+    const dest = join(root, "files");
+    expect(extractZipFile(stagedFile(withZip64EndRecords(zip.toBuffer())), dest)).toBe(1);
+    expect(existsSync(join(dest, "parts/a.stl"))).toBe(true);
+    rmSync(root, { recursive: true, force: true });
+  });
+
   it("uploads multiple files with relative paths", () => {
     const root = tempRoot();
-    const result = writeUploadedFiles(
+    const result = stageUploadedFiles(
       [
         staged("parts/a.stl", Buffer.from("solid a")),
         staged("parts/b.stl", Buffer.from("solid b")),
       ],
       root,
-      42,
     );
-    expect(result.fileCount).toBe(2);
+    expect(existsSync(join(result.extractDir, "parts/b.stl"))).toBe(true);
     expect(result.stlCount).toBe(2);
     expect(existsSync(join(result.extractDir, "parts/a.stl"))).toBe(true);
     expect(result.suggestedImportRules).toEqual(["parts/"]);
     rmSync(root, { recursive: true, force: true });
   });
 
-  it("cleans uploaded file staging when quota blocks a file write", async () => {
+  it("leaves the Source directory untouched when quota blocks a staged file write", async () => {
     const root = tempRoot();
     const sourcesDir = join(root, "sources");
+    const staging = mkdtempSync(join(root, "staging-"));
 
     await expect(
       runWithTenantDiskQuota(
@@ -148,21 +225,19 @@ describe("archive extraction hardening", () => {
           sourceIds: () => [42],
         },
         async () =>
-          writeUploadedFiles(
+          stageUploadedFiles(
             [staged("parts/a.stl", Buffer.from("solid a"))],
-            sourcesDir,
-            42,
+            staging,
           ),
       ),
     ).rejects.toBeInstanceOf(TenantDiskQuotaError);
 
-    expect(existsSync(join(sourcesDir, "42", "files"))).toBe(false);
+    expect(existsSync(join(sourcesDir, "42"))).toBe(false);
     rmSync(root, { recursive: true, force: true });
   });
 
   it("leaves source upload writers unlimited when hosted quota is disabled", async () => {
     const root = tempRoot();
-    const sourcesDir = join(root, "sources");
     const result = await runWithTenantDiskQuota(
       {
         dataDir: root,
@@ -172,10 +247,9 @@ describe("archive extraction hardening", () => {
         sourceIds: () => [42],
       },
       async () =>
-        writeUploadedFiles(
+        stageUploadedFiles(
           [staged("parts/a.stl", Buffer.from("solid a"))],
-          sourcesDir,
-          42,
+          mkdtempSync(join(root, "staging-")),
         ),
     );
 
@@ -188,10 +262,9 @@ describe("archive extraction hardening", () => {
     const threeMf = encodeAcceptedPlate3mf([
       { token: "bracket", objectName: "Bracket", xUm: 0, yUm: 0, mesh: triangle },
     ]);
-    const result = writeUploadedFiles(
+    const result = stageUploadedFiles(
       [staged("project.3mf", Buffer.from(threeMf))],
       root,
-      43,
     );
     expect(result.stlCount).toBe(1);
     expect(existsSync(join(result.extractDir, "_3mf/project/bracket.stl"))).toBe(true);
@@ -207,7 +280,7 @@ describe("archive extraction hardening", () => {
     const zip = new AdmZip();
     zip.addFile("models/assembly.3mf", Buffer.from(threeMf));
 
-    const extractDir = writeUploadedZip(stagedFile(zip.toBuffer()), root, 44);
+    const { extractDir } = stageUploadedZip(stagedFile(zip.toBuffer()), root);
 
     expect(existsSync(join(extractDir, "models/assembly.3mf"))).toBe(true);
     expect(existsSync(join(extractDir, "_3mf/assembly/clip.stl"))).toBe(true);
@@ -217,10 +290,9 @@ describe("archive extraction hardening", () => {
   it("rejects path traversal in uploaded file names", () => {
     const root = tempRoot();
     expect(() =>
-      writeUploadedFiles(
+      stageUploadedFiles(
         [staged("../evil.stl", Buffer.from("solid"))],
         root,
-        1,
       ),
     ).toThrow(/escapes extraction directory/);
     rmSync(root, { recursive: true, force: true });

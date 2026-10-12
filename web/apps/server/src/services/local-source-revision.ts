@@ -312,7 +312,7 @@ function registerAndActivateSnapshot(input: {
   return activated;
 }
 
-export async function publishLocalSourceWorkingTree(input: {
+type LocalSourcePublication = {
   repo: AppRepository;
   reposDir: string;
   sourceId: number;
@@ -320,7 +320,16 @@ export async function publishLocalSourceWorkingTree(input: {
   maxStlFiles?: number;
   maxDocumentationBytes?: number;
   maxTotalBytes?: number;
-}): Promise<SourceSummary> {
+};
+
+export async function publishLocalSourceWorkingTree(input: LocalSourcePublication): Promise<SourceSummary> {
+  const activate = await prepareLocalSourcePublication(input);
+  return activate();
+}
+
+export async function prepareLocalSourcePublication(
+  input: LocalSourcePublication,
+): Promise<() => SourceSummary> {
   const observed = input.repo.getSourceActivationObservation(input.sourceId);
   if (!observed) throw new Error("Source not found");
 
@@ -335,7 +344,7 @@ export async function publishLocalSourceWorkingTree(input: {
     maxDocumentationBytes,
     maxTotalBytes,
   });
-  return registerAndActivateSnapshot({
+  return () => registerAndActivateSnapshot({
     repo: input.repo,
     sourceId: input.sourceId,
     observed,
