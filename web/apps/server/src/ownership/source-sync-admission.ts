@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -66,18 +66,20 @@ function resourceName(resource: string): string | null {
   return null;
 }
 
+/** Path shipped beside this module in source and in `dist/current`. */
+export function packagedSourceSyncManifestPath(moduleUrl: string = import.meta.url): string {
+  return resolve(dirname(fileURLToPath(moduleUrl)), "../data/source-sync-ownership.json");
+}
+
 export function defaultSourceSyncManifestPath(): string {
   const override = process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST;
   if (override) return override;
-  let dir = dirname(fileURLToPath(import.meta.url));
-  for (let depth = 0; depth < 12; depth += 1) {
-    const candidate = resolve(dir, "rust/crates/pp-gateway/source-sync-ownership.json");
-    if (existsSync(candidate)) return candidate;
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return fail("malformed", "malformed ownership manifest: source sync ownership manifest is missing");
+  const packaged = packagedSourceSyncManifestPath();
+  if (existsSync(packaged)) return packaged;
+  return fail(
+    "malformed",
+    "malformed ownership manifest: packaged source sync ownership manifest is missing",
+  );
 }
 
 export function admitSourceSyncManifest(text: string): {
@@ -207,6 +209,66 @@ export function requireSourceSyncParticipant(id: string): void {
   if (!admitted.participantIds.includes(id)) {
     fail("participant_set_mismatch", `participant set mismatch missing=${JSON.stringify([id])} unexpected=[]`);
   }
+}
+
+export type SourceSyncAdmissionReceipt = {
+  operation: "source.sync";
+  owner: "node";
+  worker_pid: number;
+  admission_count: number;
+  participant_count: number;
+  manifest_sha256: string;
+};
+
+export function sourceSyncAdmissionReceiptPath(dataDir: string): string {
+  return resolve(dataDir, "source-sync-admission.json");
+}
+
+/** Admit the bundled manifest and persist one receipt. A later boot reuses it. */
+export function beginSourceSyncAdmission(dataDir: string): SourceSyncAdmissionReceipt {
+  const admitted = admitSourceSyncManifest(readFileSync(defaultSourceSyncManifestPath(), "utf8"));
+  const receiptPath = sourceSyncAdmissionReceiptPath(dataDir);
+  if (existsSync(receiptPath)) {
+    let existing: SourceSyncAdmissionReceipt;
+    try {
+      existing = JSON.parse(readFileSync(receiptPath, "utf8")) as SourceSyncAdmissionReceipt;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      return fail("malformed", `malformed ownership manifest: admission receipt ${detail}`);
+    }
+    if (
+      existing.operation !== SOURCE_SYNC_OPERATION
+      || existing.owner !== "node"
+      || existing.admission_count !== 1
+      || !(existing.participant_count > 0)
+      || existing.manifest_sha256 !== admitted.manifestSha256
+    ) {
+      if (existing.manifest_sha256 !== admitted.manifestSha256) {
+        return fail("restart_manifest_changed", "restart manifest does not match the admitted record");
+      }
+      return fail("malformed", "malformed ownership manifest: admission receipt is not a single Node admission");
+    }
+    return existing;
+  }
+  const receipt: SourceSyncAdmissionReceipt = {
+    operation: SOURCE_SYNC_OPERATION,
+    owner: "node",
+    worker_pid: process.pid,
+    admission_count: 1,
+    participant_count: admitted.participantIds.length,
+    manifest_sha256: admitted.manifestSha256,
+  };
+  const temporary = `${receiptPath}.tmp`;
+  const payload = JSON.stringify(receipt, null, 2);
+  const fd = openSync(temporary, "w");
+  try {
+    writeSync(fd, payload);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  renameSync(temporary, receiptPath);
+  return receipt;
 }
 
 function runningAsCli(): boolean {

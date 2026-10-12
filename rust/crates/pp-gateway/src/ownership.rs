@@ -216,7 +216,7 @@ struct ParsedParticipant<'a> {
 
 pub fn admit_bundled_source_sync() -> Result<AdmittedOperation, AdmissionError> {
     admit_observed(
-        include_str!("../source-sync-ownership.json"),
+        include_str!("../../../../web/apps/server/src/data/source-sync-ownership.json"),
         SOURCE_SYNC_PARTICIPANTS,
     )
 }
@@ -485,6 +485,10 @@ pub fn admit_planted_sections(document: &serde_json::Value) -> Result<(), Admiss
     Ok(())
 }
 
+/// Persists one receipt for a caller that already owns `runtime_dir`.
+/// `Gateway::start` does not call this. The Node server startup does, via
+/// `beginSourceSyncAdmission`, because that process owns the data directory
+/// and the Source Sync watcher.
 pub fn boot_source_sync(
     runtime_dir: &Path,
     manifest: &str,

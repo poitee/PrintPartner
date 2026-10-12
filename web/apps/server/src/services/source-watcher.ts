@@ -17,6 +17,13 @@ type SourceWatcherSettings = {
   autoSyncUpdates: boolean;
 };
 
+let sourceSyncWatcherInstallations = 0;
+
+/** Watchers that passed admission and installed startup timers. */
+export function installedSourceSyncWatchers(): number {
+  return sourceSyncWatcherInstallations;
+}
+
 const STARTUP_SYNC_DELAY_MS = 2_000;
 const STARTUP_SYNC_WAIT_MS = 5_000;
 const SCHEDULE_POLL_MS = 60_000;
@@ -414,6 +421,7 @@ export function startSourceWatcher(input: {
   });
 
   void coordinator.runScheduledChecks();
+  sourceSyncWatcherInstallations += 1;
   const startupTimer = setTimeout(() => {
     void coordinator.runStartup();
   }, STARTUP_SYNC_WAIT_MS);
@@ -425,6 +433,7 @@ export function startSourceWatcher(input: {
     stop(): void {
       clearTimeout(startupTimer);
       clearInterval(schedulePoller);
+      sourceSyncWatcherInstallations = Math.max(0, sourceSyncWatcherInstallations - 1);
       logger.log("info", "[source-watcher] Stopped");
     },
   };

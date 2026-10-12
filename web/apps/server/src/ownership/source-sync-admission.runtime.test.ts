@@ -1,0 +1,419 @@
+import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join, relative, sep } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { buildApp, createPorts } from "../app.js";
+import { loadConfig } from "../config.js";
+import { installedSourceSyncWatchers } from "../services/source-watcher.js";
+import { OwnershipAdmissionError, sourceSyncAdmissionReceiptPath } from "./source-sync-admission.js";
+
+const proofRoot = "/persist/worktrees/printpartner-merge-20261012/wave-2/gre402-runtime-admission-proof";
+mkdirSync(proofRoot, { recursive: true });
+const sourceDir = dirname(fileURLToPath(import.meta.url));
+
+const packagedManifest = join(sourceDir, "../data/source-sync-ownership.json");
+
+type AppHandle = {
+  app: Awaited<ReturnType<typeof buildApp>>;
+  ports: ReturnType<typeof createPorts>;
+  dataDir: string;
+};
+
+const openApps: AppHandle[] = [];
+const scratchDirs: string[] = [];
+const previousEnv = {
+  dataDir: process.env.PRINT_PARTNER_DATA_DIR,
+  apiKey: process.env.PRINT_PARTNER_API_KEY,
+  host: process.env.HOST,
+  deploy: process.env.DEPLOY_MODE,
+  manifest: process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST,
+};
+
+afterEach(async () => {
+  for (const handle of openApps.splice(0)) {
+    await handle.app.close();
+    await handle.ports.db.close();
+  }
+  for (const dir of scratchDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  restoreEnv("PRINT_PARTNER_DATA_DIR", previousEnv.dataDir);
+  restoreEnv("PRINT_PARTNER_API_KEY", previousEnv.apiKey);
+  restoreEnv("HOST", previousEnv.host);
+  restoreEnv("DEPLOY_MODE", previousEnv.deploy);
+  restoreEnv("PP_SOURCE_SYNC_OWNERSHIP_MANIFEST", previousEnv.manifest);
+});
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
+
+function scratch(name: string): string {
+  const dir = mkdtempSync(join(proofRoot, `${name}-`));
+  scratchDirs.push(dir);
+  return dir;
+}
+
+function writeManifest(
+  dir: string,
+  name: string,
+  mutate?: (manifest: Record<string, unknown>) => void,
+): string {
+  const manifest = JSON.parse(readFileSync(packagedManifest, "utf8")) as Record<string, unknown>;
+  mutate?.(manifest);
+  const path = join(dir, name);
+  writeFileSync(path, JSON.stringify(manifest, null, 2));
+  return path;
+}
+
+function useManifest(path: string, dataDir: string): void {
+  process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST = path;
+  process.env.PRINT_PARTNER_DATA_DIR = dataDir;
+  process.env.PRINT_PARTNER_API_KEY = "test-mcp-key";
+  process.env.HOST = "127.0.0.1";
+  process.env.DEPLOY_MODE = "self-host";
+}
+
+async function boot(dataDir: string): Promise<AppHandle> {
+  const ports = createPorts(loadConfig());
+  await ports.db.connect();
+  const app = await buildApp(loadConfig(), ports);
+  const handle = { app, ports, dataDir };
+  openApps.push(handle);
+  return handle;
+}
+
+function fingerprint(dir: string): string {
+  const files: string[] = [];
+  const visit = (current: string): void => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const path = join(current, entry.name);
+      if (entry.isSymbolicLink()) throw new Error(`unexpected symlink ${path}`);
+      if (entry.isDirectory()) visit(path);
+      else if (entry.isFile()) files.push(path);
+    }
+  };
+  if (existsSync(dir)) visit(dir);
+  files.sort();
+  const hash = createHash("sha256");
+  for (const path of files) {
+    hash.update(relative(dir, path).split(sep).join("/"));
+    hash.update(readFileSync(path));
+  }
+  return hash.digest("hex");
+}
+
+async function waitJob(app: AppHandle["app"], jobId: string): Promise<{ status?: string; result?: { synced?: number } }> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const response = await app.inject({ method: "GET", url: `/jobs/${jobId}` });
+    const job = response.json() as { status?: string; result?: { synced?: number } };
+    if (job.status === "done" || job.status === "error" || job.status === "cancelled") return job;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`job ${jobId} did not finish`);
+}
+
+function jsonObjects(body: string): unknown[] {
+  const values: unknown[] = [];
+  const whole = body.trim();
+  if (whole.startsWith("{") || whole.startsWith("[")) {
+    try {
+      values.push(JSON.parse(whole));
+    } catch {
+      // Streamed frames are parsed line by line below.
+    }
+  }
+  for (const line of body.split("\n")) {
+    const trimmed = line.trim();
+    const payload = trimmed.startsWith("data:") ? trimmed.slice(5).trim() : trimmed;
+    if (!payload.startsWith("{")) continue;
+    try {
+      values.push(JSON.parse(payload));
+    } catch {
+      // Non-JSON stream frames are ignored.
+    }
+  }
+  return values;
+}
+
+function toolText(body: string): string {
+  for (const value of jsonObjects(body)) {
+    if (!value || typeof value !== "object" || !("result" in value)) continue;
+    const result = (value as { result?: unknown }).result;
+    if (!result || typeof result !== "object" || !("content" in result)) continue;
+    const content = (result as { content?: unknown }).content;
+    if (!Array.isArray(content)) continue;
+    for (const entry of content) {
+      if (entry && typeof entry === "object" && "text" in entry && typeof entry.text === "string") {
+        return entry.text;
+      }
+    }
+  }
+  return body;
+}
+
+describe("Source Sync Fastify admission", () => {
+  it("rejects a conflicting manifest before timers or data changes", async () => {
+    const dir = scratch("conflict");
+    const manifest = writeManifest(dir, "conflict.json", (value) => {
+      const participants = value.participants as Array<Record<string, unknown>>;
+      const worker = participants.find((item) => item.id === "worker.startSourceWatcher");
+      if (!worker) throw new Error("missing worker participant");
+      worker.owner = "rust";
+    });
+    useManifest(manifest, dir);
+    const ports = createPorts(loadConfig());
+    await ports.db.connect();
+    const before = fingerprint(dir);
+    const watchers = installedSourceSyncWatchers();
+    let rejected: unknown;
+    try {
+      await buildApp(loadConfig(), ports);
+    } catch (error) {
+      rejected = error;
+    }
+    expect(rejected).toBeInstanceOf(OwnershipAdmissionError);
+    expect((rejected as Error).message).toMatch(/conflicting ownership/);
+    expect(fingerprint(dir)).toBe(before);
+    expect(existsSync(sourceSyncAdmissionReceiptPath(dir))).toBe(false);
+    expect(installedSourceSyncWatchers()).toBe(watchers);
+    await ports.db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("rejects a missing watcher participant before installing timers", async () => {
+    const dir = scratch("missing");
+    const manifest = writeManifest(dir, "missing.json", (value) => {
+      value.participants = (value.participants as Array<{ id: string }>).filter(
+        (item) => item.id !== "startup.startSourceWatcher",
+      );
+    });
+    useManifest(manifest, dir);
+    const ports = createPorts(loadConfig());
+    await ports.db.connect();
+    const before = fingerprint(dir);
+    const watchers = installedSourceSyncWatchers();
+    await expect(buildApp(loadConfig(), ports)).rejects.toThrow(/participant set mismatch/);
+    expect(fingerprint(dir)).toBe(before);
+    expect(existsSync(sourceSyncAdmissionReceiptPath(dir))).toBe(false);
+    expect(installedSourceSyncWatchers()).toBe(watchers);
+    await ports.db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("admits HTTP aliases, source create, MCP confirm, and one restart receipt", async () => {
+    const dir = scratch("valid");
+    const manifest = writeManifest(dir, "admitted.json");
+    useManifest(manifest, dir);
+    const started = await boot(dir);
+    const receiptPath = sourceSyncAdmissionReceiptPath(dir);
+    const firstReceipt = readFileSync(receiptPath, "utf8");
+    const firstParsed = JSON.parse(firstReceipt) as {
+      operation: string;
+      owner: string;
+      admission_count: number;
+      participant_count: number;
+      worker_pid: number;
+    };
+    expect(firstParsed).toMatchObject({
+      operation: "source.sync",
+      owner: "node",
+      admission_count: 1,
+    });
+    expect(firstParsed.participant_count).toBeGreaterThan(0);
+    expect(firstParsed.worker_pid).toBe(process.pid);
+    expect(installedSourceSyncWatchers()).toBe(1);
+
+    const created = await started.app.inject({
+      method: "POST",
+      url: "/sources",
+      payload: { name: "Local fixture", source_kind: "local" },
+    });
+    expect(created.statusCode).toBe(200);
+    const source = created.json() as { id: number; local_path: string | null };
+    expect(source.local_path).toBeTruthy();
+    const fixture = join(source.local_path!, "fixture.txt");
+    mkdirSync(source.local_path!, { recursive: true });
+    writeFileSync(fixture, "owned-local-fixture");
+    const fixtureHash = createHash("sha256").update(readFileSync(fixture)).digest("hex");
+
+    const direct = await started.app.inject({
+      method: "POST",
+      url: "/jobs/sync",
+      payload: { project_ids: [source.id] },
+    });
+    expect(direct.statusCode).toBe(200);
+    const directJob = (direct.json() as { job_id: string }).job_id;
+    const alias = await started.app.inject({
+      method: "POST",
+      url: "/api/v1/jobs/sync",
+      headers: { authorization: "Bearer test-mcp-key" },
+      payload: { project_ids: [source.id] },
+    });
+    expect(alias.statusCode).toBe(200);
+    const aliasJob = (alias.json() as { job_id: string }).job_id;
+
+    const headers = {
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      authorization: "Bearer test-mcp-key",
+    };
+    const initialized = await started.app.inject({
+      method: "POST",
+      url: "/api/v1/mcp",
+      headers,
+      payload: {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2024-11-05",
+          capabilities: {},
+          clientInfo: { name: "gre402", version: "0" },
+        },
+      },
+    });
+    expect(initialized.statusCode).toBe(200);
+    const session = initialized.headers["mcp-session-id"];
+    expect(typeof session).toBe("string");
+    const sessionHeaders = { ...headers, "mcp-session-id": String(session) };
+    await started.app.inject({
+      method: "POST",
+      url: "/api/v1/mcp",
+      headers: sessionHeaders,
+      payload: { jsonrpc: "2.0", method: "notifications/initialized" },
+    });
+    const proposed = await started.app.inject({
+      method: "POST",
+      url: "/api/v1/mcp",
+      headers: sessionHeaders,
+      payload: {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "start_sync", arguments: { source_name: "Local fixture" } },
+      },
+    });
+    expect(proposed.statusCode).toBe(200);
+    const proposedBody = JSON.parse(toolText(proposed.body)) as { action?: { id?: string } };
+    expect(proposedBody.action?.id).toBeTruthy();
+    const confirmed = await started.app.inject({
+      method: "POST",
+      url: "/api/v1/mcp",
+      headers: sessionHeaders,
+      payload: {
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: { name: "confirm_apply", arguments: { action_id: proposedBody.action!.id } },
+      },
+    });
+    expect(confirmed.statusCode).toBe(200);
+    const confirmedBody = JSON.parse(toolText(confirmed.body)) as { ok?: boolean; job_id?: string };
+    expect(confirmedBody.ok).toBe(true);
+    expect(confirmedBody.job_id).toBeTruthy();
+
+    for (const jobId of [directJob, aliasJob, confirmedBody.job_id!]) {
+      const job = await waitJob(started.app, jobId);
+      expect(job.status).toBe("done");
+      expect(job.result?.synced).toBeGreaterThan(0);
+    }
+    const listed = await started.app.inject({ method: "GET", url: `/sources/${source.id}` });
+    expect(listed.statusCode).toBe(200);
+    expect((listed.json() as { last_synced_at: string | null }).last_synced_at).toBeTruthy();
+    expect(createHash("sha256").update(readFileSync(fixture)).digest("hex")).toBe(fixtureHash);
+
+    const conflicted = writeManifest(dir, "conflict.json", (value) => {
+      const participants = value.participants as Array<Record<string, unknown>>;
+      const worker = participants.find((item) => item.id === "worker.startSourceWatcher");
+      if (!worker) throw new Error("missing worker participant");
+      worker.owner = "rust";
+    });
+    process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST = conflicted;
+    const refused = await started.app.inject({
+      method: "POST",
+      url: "/sources",
+      payload: { name: "Should not exist", source_kind: "local" },
+    });
+    expect(refused.statusCode).toBe(400);
+    expect(refused.body).toMatch(/conflicting ownership/);
+    const sources = (await started.app.inject({ method: "GET", url: "/sources" })).json() as {
+      sources: Array<{ name: string }>;
+    };
+    expect(sources.sources.map((item) => item.name)).toEqual(["Local fixture"]);
+    expect(readFileSync(receiptPath, "utf8")).toBe(firstReceipt);
+    expect(createHash("sha256").update(readFileSync(fixture)).digest("hex")).toBe(fixtureHash);
+
+    await started.app.close();
+    await started.ports.db.close();
+    openApps.splice(openApps.indexOf(started), 1);
+    expect(installedSourceSyncWatchers()).toBe(0);
+    process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST = manifest;
+    const restarted = await boot(dir);
+    expect(readFileSync(receiptPath, "utf8")).toBe(firstReceipt);
+    expect(JSON.parse(readFileSync(receiptPath, "utf8")).admission_count).toBe(1);
+    expect(installedSourceSyncWatchers()).toBe(1);
+    await restarted.app.close();
+    await restarted.ports.db.close();
+    openApps.splice(openApps.indexOf(restarted), 1);
+    rmSync(dir, { recursive: true, force: true });
+  }, 30_000);
+
+  it("loads the manifest from a web-only dist layout and reuses one receipt", () => {
+    const built = join(sourceDir, "../../dist/current");
+    const modulePath = join(built, "ownership/source-sync-admission.js");
+    expect(existsSync(modulePath), "server package has not been built").toBe(true);
+    const layout = scratch("layout");
+    const serverRoot = join(layout, "apps/server");
+    const current = join(serverRoot, "dist/current");
+    mkdirSync(serverRoot, { recursive: true });
+    writeFileSync(join(serverRoot, "package.json"), JSON.stringify({ type: "module" }));
+    cpSync(built, current, { recursive: true, dereference: true });
+    expect(existsSync(join(layout, "rust"))).toBe(false);
+    const manifest = join(current, "data/source-sync-ownership.json");
+    expect(statSync(manifest).isFile()).toBe(true);
+    const proof = join(current, "prove-layout.mjs");
+    const dataDir = join(layout, "data");
+    mkdirSync(dataDir);
+    writeFileSync(
+      proof,
+      [
+        'import { readFileSync } from "node:fs";',
+        'import { beginSourceSyncAdmission, defaultSourceSyncManifestPath } from "./ownership/source-sync-admission.js";',
+        "const manifest = defaultSourceSyncManifestPath();",
+        'if (!manifest.endsWith("/data/source-sync-ownership.json")) { console.error(manifest); process.exit(2); }',
+        'if (manifest.includes("/rust/")) process.exit(3);',
+        "const dir = process.argv[2];",
+        "const first = beginSourceSyncAdmission(dir);",
+        'const bytes = readFileSync(dir + "/source-sync-admission.json");',
+        "const second = beginSourceSyncAdmission(dir);",
+        'const again = readFileSync(dir + "/source-sync-admission.json");',
+        "if (first.admission_count !== 1 || second.admission_count !== 1 || first.owner !== \"node\") process.exit(4);",
+        "if (!bytes.equals(again)) process.exit(5);",
+        "console.log(JSON.stringify({ manifest, owner: first.owner, admission_count: first.admission_count }));",
+      ].join("\n"),
+    );
+    const admitted = spawnSync(process.execPath, [proof, dataDir], { encoding: "utf8" });
+    expect(admitted.status, `${admitted.stdout}\n${admitted.stderr}`).toBe(0);
+    expect(admitted.stdout).toMatch(/"admission_count":1/);
+    renameSync(manifest, `${manifest}.hidden`);
+    const missing = spawnSync(process.execPath, [proof, join(layout, "missing-data")], { encoding: "utf8" });
+    expect(missing.status).not.toBe(0);
+    expect(`${missing.stdout}\n${missing.stderr}`).toMatch(/packaged source sync ownership manifest is missing/);
+    rmSync(layout, { recursive: true, force: true });
+  });
+});

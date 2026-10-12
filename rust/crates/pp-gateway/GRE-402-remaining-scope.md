@@ -11,3 +11,4 @@ Still open:
 - A Rust failure must produce its own error and reconciliation result. It must not fall back into a Node mutation.
 - GRE-400 and GRE-401 stay open. Their merged storage proofs are not application cutover.
 - Parent GRE-339 stays open. This unit does not mark GRE-402 Done.
+- Rust `Gateway::start` admits the compiled manifest in memory and does not persist or reuse `source-sync-admission.json`. The Node server startup writes that receipt. A Rust owner still has to persist its own receipt when the cutover replaces the Node watcher.

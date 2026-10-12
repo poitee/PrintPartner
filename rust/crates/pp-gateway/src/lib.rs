@@ -109,6 +109,7 @@ impl Gateway {
                 "Invalid operation ownership manifest"
             );
         }
+        // In-memory check only. The Node server persists the restart receipt.
         ownership::admit_bundled_source_sync()
             .map_err(|error| anyhow::anyhow!("Source Sync ownership admission failed: {error}"))?;
         sort_routes(&mut manifest.routes);

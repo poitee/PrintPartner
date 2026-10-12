@@ -21,7 +21,7 @@ fn repo_root() -> PathBuf {
 }
 
 fn bundled_text() -> &'static str {
-    include_str!("../source-sync-ownership.json")
+    include_str!("../../../../web/apps/server/src/data/source-sync-ownership.json")
 }
 
 fn bundled_value() -> serde_json::Value {
@@ -423,7 +423,8 @@ fn ticket_t_7_ownership_node_runtime_rejects_conflict_and_unknown_owner() {
 #[test]
 fn ticket_t_7_ownership_node_runtime_admits_bundled_manifest() {
     let script = repo_root().join("web/apps/server/src/ownership/source-sync-admission.ts");
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("source-sync-ownership.json");
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../web/apps/server/src/data/source-sync-ownership.json");
     let output = node_admit(&script, &manifest, "worker.startSourceWatcher");
     assert!(output.status.success(), "{}", command_text(&output));
 }
@@ -440,6 +441,8 @@ fn ticket_t_7_ownership_call_sites_match_manifest() {
     let workspace = read(&root.join("web/apps/server/src/services/source-workspace.ts"));
     let aliases = read(&root.join("web/apps/server/src/routes/api-v1.ts"));
     let gateway = read(&root.join("rust/crates/pp-gateway/src/lib.rs"));
+    let app = read(&root.join("web/apps/server/src/app.ts"));
+    let admission = read(&root.join("web/apps/server/src/ownership/source-sync-admission.ts"));
 
     let jobs_route = &jobs[jobs.find("app.post(\"/jobs/sync\"").unwrap()..];
     let start_job = jobs_route.find("jobs.start(\"sync\"").unwrap();
@@ -490,6 +493,12 @@ fn ticket_t_7_ownership_call_sites_match_manifest() {
     assert!(schema.contains("\"source_revisions\""));
     assert!(workspace.contains("function sourceWorkspaceRoot"));
     assert!(gateway.contains("ownership::admit_bundled_source_sync()"));
+    assert!(!gateway.contains("boot_source_sync("));
+    let admit_at = app.find("beginSourceSyncAdmission(").unwrap();
+    let watcher_at = app.find("startSourceWatcher(").unwrap();
+    assert!(admit_at < watcher_at);
+    assert!(admission.contains("../data/source-sync-ownership.json"));
+    assert!(!admission.contains("rust/crates/pp-gateway/source-sync-ownership.json"));
 
     let manifest = bundled_value();
     let mut tables = Vec::new();
