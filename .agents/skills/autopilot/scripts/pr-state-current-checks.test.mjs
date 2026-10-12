@@ -272,6 +272,43 @@ test("a missing workflow creation time still orders by check start", () => {
 const oldHead = "1111111111111111111111111111111111111111";
 const newHead = "2222222222222222222222222222222222222222";
 const movedFailureUrl = "https://github.com/poitee/PrintPartner/actions/runs/9001/job/2";
+const staleFailureUrl = "https://github.com/poitee/PrintPartner/actions/runs/9100/job/1";
+const currentSuccessUrl = "https://github.com/poitee/PrintPartner/actions/runs/9100/job/101";
+const laterFailureUrl = "https://github.com/poitee/PrintPartner/actions/runs/9100/job/102";
+
+function membershipPair({
+  staleId,
+  staleConclusion,
+  staleUrl,
+  currentId,
+  currentConclusion,
+  currentUrl,
+  endCursor = "suite-2",
+}) {
+  const stale = latestCheck();
+  const current = latestCheck();
+  Object.assign(stale, {
+    id: staleId,
+    conclusion: staleConclusion,
+    status: "COMPLETED",
+    detailsUrl: staleUrl,
+    startedAt: "2026-10-12T03:00:00Z",
+  });
+  Object.assign(current, {
+    id: currentId,
+    conclusion: currentConclusion,
+    status: "COMPLETED",
+    detailsUrl: currentUrl,
+    startedAt: "2026-10-12T04:00:00Z",
+  });
+  const currentRuns = {
+    totalCount: 101,
+    pageInfo: { hasNextPage: true, endCursor },
+    nodes: Array.from({ length: 100 }, (_, index) => ({ id: `latest-${index + 1}` })),
+  };
+  for (const check of [stale, current]) check.checkSuite.currentRuns = structuredClone(currentRuns);
+  return [stale, current];
+}
 
 function runLiveFixture(context, mode = "pages") {
   const dir = mkdtempSync(join(tmpdir(), "pr-state-current-"));
@@ -334,8 +371,65 @@ function runLiveFixture(context, mode = "pages") {
   if (mode === "head-merge-unknown" || mode === "head-confirm-fail" || mode === "head-confirm-auth") {
     data.greenChecks = [latestCheck()];
   }
+  if (mode === "latest-superseded" || mode === "latest-next-error" || mode === "latest-absent" || mode === "latest-malformed" || mode === "latest-stall" || mode === "latest-cycle" || mode === "latest-unbounded" || mode === "latest-wrong-commit") {
+    data.statusCheckRollup = membershipPair({
+      staleId: "stale-failure",
+      staleConclusion: "FAILURE",
+      staleUrl: staleFailureUrl,
+      currentId: "latest-101",
+      currentConclusion: "SUCCESS",
+      currentUrl: currentSuccessUrl,
+      endCursor: mode === "latest-absent" ? null : "suite-2",
+    });
+    data.page2Ids = ["latest-101"];
+    data.totalCount = 101;
+    data.suiteBehavior = {
+      "latest-next-error": "error",
+      "latest-malformed": "malformed",
+      "latest-stall": "stall",
+      "latest-cycle": "cycle",
+      "latest-unbounded": "unbounded",
+      "latest-wrong-commit": "wrong-commit",
+    }[mode] ?? "page2";
+  }
+  if (mode === "latest-later-failure") {
+    data.statusCheckRollup = membershipPair({
+      staleId: "stale-success",
+      staleConclusion: "SUCCESS",
+      staleUrl: currentSuccessUrl,
+      currentId: "latest-101",
+      currentConclusion: "FAILURE",
+      currentUrl: laterFailureUrl,
+    });
+    data.page2Ids = ["latest-101"];
+    data.totalCount = 101;
+    data.suiteBehavior = "page2";
+  }
+  if (mode === "head-during-suite") {
+    data.oldChecks = membershipPair({
+      staleId: "stale-failure",
+      staleConclusion: "FAILURE",
+      staleUrl: staleFailureUrl,
+      currentId: "latest-101",
+      currentConclusion: "SUCCESS",
+      currentUrl: currentSuccessUrl,
+    });
+    const failure = latestCheck();
+    failure.conclusion = "FAILURE";
+    failure.detailsUrl = movedFailureUrl;
+    failure.checkSuite.currentRuns = {
+      pageInfo: { hasNextPage: false },
+      nodes: [{ id: failure.id }],
+    };
+    data.newChecks = [failure];
+    data.page2Ids = ["latest-101"];
+    data.totalCount = 101;
+    data.suiteBehavior = "page2";
+  }
   const statePath = join(dir, "state.json");
-  writeFileSync(statePath, JSON.stringify({ prViews: 0, checkOids: [], prOids: [] }));
+  writeFileSync(statePath, JSON.stringify({
+    prViews: 0, checkOids: [], prOids: [], suiteCalls: 0, suiteOids: [], suiteCursors: [],
+  }));
   writeFileSync(join(dir, "data.json"), JSON.stringify(data));
   writeFileSync(join(dir, "gh"), `#!/usr/bin/env node
 import { readFileSync, writeFileSync } from "node:fs";
@@ -351,7 +445,7 @@ else if (args[0] === "pr") {
   let headRefOid = data.pinnedHead;
   let mergeable = data.pr.mergeable;
   let mergeStateStatus = data.pr.mergeStateStatus;
-  if (data.mode === "head-moved") headRefOid = state.prViews === 1 ? data.oldHead : data.newHead;
+  if (data.mode === "head-moved" || data.mode === "head-during-suite") headRefOid = state.prViews === 1 ? data.oldHead : data.newHead;
   else if (data.mode === "head-unstable") headRefOid = data.oids[state.prViews - 1];
   else if (data.mode === "head-merge-unknown" && state.prViews > 1) {
     mergeable = "UNKNOWN";
@@ -374,20 +468,73 @@ else if (args[0] === "pr") {
     reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } },
   } } } };
 } else if (args[1] === "graphql") {
-  if (data.mode === "auth") { process.stderr.write("authentication required"); process.exit(4); }
-  if (data.mode === "errors") response = { errors: [{ message: "checks unavailable" }] };
+  const query = args.find((arg) => arg.startsWith("query=")) ?? "";
+  if (query.includes("node(id: $suiteId)")) {
+    const oid = args.find((arg) => arg.startsWith("oid="))?.slice(4);
+    const cursor = args.find((arg) => arg.startsWith("cursor="))?.slice(7);
+    const suiteId = args.find((arg) => arg.startsWith("suiteId="))?.slice(8);
+    state.suiteCalls += 1;
+    state.suiteOids.push(oid);
+    state.suiteCursors.push(cursor);
+    save();
+    if (state.suiteCalls > 25) {
+      process.stderr.write("suite pagination did not stop");
+      process.exit(1);
+    }
+    const behavior = data.suiteBehavior;
+    if (behavior === "error") {
+      process.stderr.write("latest runs page failed");
+      process.exit(1);
+    }
+    if (behavior === "malformed") {
+      response = { data: { repository: { object: { oid } }, node: null } };
+    } else {
+      let hasNextPage = false;
+      let endCursor = null;
+      let totalCount = data.totalCount;
+      let ids = data.page2Ids;
+      if (behavior === "stall") {
+        hasNextPage = true;
+        endCursor = cursor;
+        totalCount = 1000;
+        ids = ["stall-" + state.suiteCalls];
+      } else if (behavior === "cycle") {
+        hasNextPage = true;
+        endCursor = state.suiteCalls === 1 ? "suite-3" : "suite-2";
+        totalCount = 1000;
+        ids = ["cycle-" + state.suiteCalls];
+      } else if (behavior === "unbounded") {
+        hasNextPage = true;
+        endCursor = "suite-" + (state.suiteCalls + 2);
+        totalCount = 5000;
+        ids = ["extra-" + state.suiteCalls];
+      }
+      response = { data: {
+        repository: { object: { oid } },
+        node: {
+          id: suiteId,
+          commit: { oid: behavior === "wrong-commit" ? "3333333333333333333333333333333333333333" : oid },
+          checkRuns: {
+            totalCount,
+            pageInfo: { hasNextPage, endCursor },
+            nodes: ids.map((id) => ({ id })),
+          },
+        },
+      } };
+    }
+  } else if (data.mode === "auth") { process.stderr.write("authentication required"); process.exit(4); }
+  else if (data.mode === "errors") response = { errors: [{ message: "checks unavailable" }] };
   else {
     const oid = args.find((arg) => arg.startsWith("oid="))?.slice(4);
     state.checkOids.push(oid);
     save();
     const allowed = new Set([data.pinnedHead, data.oldHead, data.newHead, ...(data.oids ?? [])]);
     if (!allowed.has(oid)) process.exit(1);
-    const query = args.find((arg) => arg.startsWith("query="));
-    if (!query?.includes("runAttempt") || !query.includes("startedAt")) {
+    if (!query.includes("runAttempt") || !query.includes("startedAt")) {
       process.stderr.write("missing attempt timing query fields"); process.exit(1);
     }
     let rollup = data.statusCheckRollup;
-    if (data.mode === "head-moved") rollup = oid === data.oldHead ? data.oldChecks : data.newChecks;
+    if (data.mode === "head-moved" || data.mode === "head-during-suite") rollup = oid === data.oldHead ? data.oldChecks : data.newChecks;
     if (data.mode === "head-unstable" || data.mode === "head-merge-unknown" || data.mode === "head-confirm-fail" || data.mode === "head-confirm-auth") {
       rollup = data.greenChecks;
     }
@@ -521,4 +668,108 @@ test("live CLI does not turn a failed head reread authentication into readiness"
   assert.equal(result.status, 4);
   assert.equal(result.stdout, "");
   assert.match(result.stderr, /authentication required/);
+});
+
+test("live CLI drops a superseded same-suite failure after the second latest-run page", { timeout: 20000 }, (context) => {
+  const result = runLiveFixture(context, "latest-superseded");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "ready");
+  assert.deepEqual(report.failingChecks.map((check) => check.url), []);
+  assert.deepEqual(report.pendingChecks, []);
+  assert.equal(report.passedCheckCount, 1);
+  const state = JSON.parse(readFileSync(result.statePath, "utf8"));
+  assert.equal(state.suiteCalls, 1);
+  assert.deepEqual(state.suiteCursors, ["suite-2"]);
+});
+
+test("live CLI keeps a current failure listed only on the second latest-run page", { timeout: 20000 }, (context) => {
+  const result = runLiveFixture(context, "latest-later-failure");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "ci");
+  assert.deepEqual(report.failingChecks.map((check) => check.url), [laterFailureUrl]);
+  assert.equal(report.passedCheckCount, 0);
+  const state = JSON.parse(readFileSync(result.statePath, "utf8"));
+  assert.equal(state.suiteCalls, 1);
+});
+
+test("live CLI keeps the stale failure when the next latest-run page errors", (context) => {
+  const result = runLiveFixture(context, "latest-next-error");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "ci");
+  assert.deepEqual(report.failingChecks.map((check) => check.url), [staleFailureUrl]);
+  assert.equal(report.passedCheckCount, 1);
+});
+
+test("live CLI keeps the stale failure when the latest-run cursor is absent", (context) => {
+  const result = runLiveFixture(context, "latest-absent");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "ci");
+  assert.deepEqual(report.failingChecks.map((check) => check.url), [staleFailureUrl]);
+  assert.equal(report.passedCheckCount, 1);
+  const state = JSON.parse(readFileSync(result.statePath, "utf8"));
+  assert.equal(state.suiteCalls, 0);
+});
+
+test("live CLI keeps the stale failure when the latest-run page is malformed", (context) => {
+  const result = runLiveFixture(context, "latest-malformed");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "ci");
+  assert.deepEqual(report.failingChecks.map((check) => check.url), [staleFailureUrl]);
+  assert.equal(report.passedCheckCount, 1);
+});
+
+test("live CLI keeps the stale failure when a latest-run page names another commit", (context) => {
+  const result = runLiveFixture(context, "latest-wrong-commit");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "ci");
+  assert.deepEqual(report.failingChecks.map((check) => check.url), [staleFailureUrl]);
+  assert.equal(report.passedCheckCount, 1);
+});
+
+test("live CLI keeps the stale failure when the latest-run cursor stalls", { timeout: 20000 }, (context) => {
+  const result = runLiveFixture(context, "latest-stall");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "ci");
+  assert.deepEqual(report.failingChecks.map((check) => check.url), [staleFailureUrl]);
+  assert.equal(report.passedCheckCount, 1);
+  const state = JSON.parse(readFileSync(result.statePath, "utf8"));
+  assert.ok(state.suiteCalls <= 2);
+});
+
+test("live CLI keeps the stale failure when the latest-run cursor cycles", { timeout: 20000 }, (context) => {
+  const result = runLiveFixture(context, "latest-cycle");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "ci");
+  assert.deepEqual(report.failingChecks.map((check) => check.url), [staleFailureUrl]);
+  assert.equal(report.passedCheckCount, 1);
+  const state = JSON.parse(readFileSync(result.statePath, "utf8"));
+  assert.ok(state.suiteCalls <= 3);
+});
+
+test("live CLI keeps the stale failure when latest-run cursors do not end", { timeout: 20000 }, (context) => {
+  const result = runLiveFixture(context, "latest-unbounded");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "ci");
+  assert.deepEqual(report.failingChecks.map((check) => check.url), [staleFailureUrl]);
+  assert.equal(report.passedCheckCount, 1);
+  const state = JSON.parse(readFileSync(result.statePath, "utf8"));
+  assert.ok(state.suiteCalls <= 20);
+});
+
+test("live CLI does not keep an old head that finishes paging after the head moves", { timeout: 20000 }, (context) => {
+  const result = runLiveFixture(context, "head-during-suite");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "ci");
+  assert.deepEqual(report.failingChecks.map((check) => check.url), [movedFailureUrl]);
+  assert.equal(report.passedCheckCount, 0);
 });
