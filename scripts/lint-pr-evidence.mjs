@@ -1109,8 +1109,9 @@ function linkTextStart(text, close, floor) {
 
 /**
  * Remove links (`[text](…)`, images, and reference definitions), noting
- * whether any destination is concrete. A link counts only by its destination:
- * its text and title are dropped. A `](` that does not form a link tail hides
+ * whether any destination is concrete. A link counts by its destination.
+ * markConcrete keeps the visible label so placeholder and denial checks still
+ * see it. Titles stay dropped. A `](` that does not form a link tail hides
  * the rest of the value (fail closed), so a malformed title can never surface
  * as an artifact. Each character is scanned a bounded number of times, so the
  * pass is linear.
@@ -1128,10 +1129,12 @@ function stripLinks(value, references, { keepMalformed = false, markConcrete = f
     const tail = parseLinkTail(text, at + 1);
     if (!tail) return { rest: rest + (keepMalformed ? text.slice(open) : ""), concrete };
     const image = open > 0 && text[open - 1] === "!" && !isEscaped(text, open - 1);
-    if (isConcreteTarget(tail.destination)
-      && (image || visibleFieldText(text.slice(open + 1, at)).replace(/[\p{Default_Ignorable_Code_Point}\p{Mark}]/gu, "").trim())) {
+    const visible = visibleFieldText(text.slice(open + 1, at))
+      .replace(/[\p{Default_Ignorable_Code_Point}\p{Mark}]/gu, "")
+      .trim();
+    if (isConcreteTarget(tail.destination) && (image || visible)) {
       concrete = true;
-      if (markConcrete) rest += "\u0001";
+      if (markConcrete) rest += `\u0001${visible}`;
     }
     cursor = tail.end;
   }
@@ -1202,13 +1205,86 @@ function stripEmphasis(token) {
   return text;
 }
 
+function htmlAttribute(tag, name) {
+  const found = tag.match(new RegExp(`(?<![\\w-])${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'=<>\x60]+))`, "i"));
+  return found ? (found[1] ?? found[2] ?? found[3] ?? "") : "";
+}
+
+function htmlTagEnd(value, index, closing, name) {
+  if (value[index] !== "<") return -1;
+  let at = index + 1;
+  if (closing) {
+    if (value[at] !== "/") return -1;
+    at += 1;
+  } else if (value[at] === "/") return -1;
+  if (value.slice(at, at + name.length).toLowerCase() !== name) return -1;
+  at += name.length;
+  if (/[A-Za-z0-9-]/.test(value[at] ?? "")) return -1;
+  let quote = null;
+  const limit = Math.min(value.length, index + 2048);
+  for (; at < limit; at += 1) {
+    const ch = value[at];
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") quote = ch;
+    else if (ch === ">") return at + 1;
+    else if (ch === "<") return -1;
+  }
+  return -1;
+}
+
+function anchorContentEnd(value, from) {
+  let depth = 1;
+  const limit = Math.min(value.length, from + 8192);
+  for (let index = from; index < limit && depth > 0; index += 1) {
+    if (value[index] !== "<") continue;
+    const close = htmlTagEnd(value, index, true, "a");
+    if (close !== -1) {
+      depth -= 1;
+      if (depth === 0) return index;
+      index = close - 1;
+      continue;
+    }
+    const open = htmlTagEnd(value, index, false, "a");
+    if (open !== -1) {
+      depth += 1;
+      index = open - 1;
+    }
+  }
+  return -1;
+}
+
+function anchorVisible(inner) {
+  const images = inner.match(/<img\b[^>]*>/gi) ?? [];
+  if (images.some((tag) => htmlAttribute(tag, "src").trim())) return true;
+  const text = decodeCharacterReferences(inner.replace(/<!--[\s\S]*?-->/g, "").replace(/<[^>]*>/g, " "))
+    .replace(/[\p{Default_Ignorable_Code_Point}\p{Mark}]/gu, "")
+    .replace(/\u00a0/g, " ")
+    .trim();
+  return text.length > 0;
+}
+
 function htmlConcreteMarker(value) {
-  return value.replace(/<(a|img)\b[^>]*>/gi, (tag, name) => {
-    const attr = name.toLowerCase() === "img" ? "src" : "href";
-    const found = tag.match(new RegExp(`(?<![\\w-])${attr}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'=<>\x60]+))`, "i"));
-    const destination = found ? (found[1] ?? found[2] ?? found[3] ?? "") : "";
-    return destination && isConcreteTarget(destination) ? "\u0001" : "";
-  });
+  let out = "";
+  let cursor = 0;
+  for (const match of value.matchAll(/<(a|img)\b[^>]*>/gi)) {
+    const tag = match[0];
+    const name = match[1].toLowerCase();
+    out += value.slice(cursor, match.index);
+    if (name === "img") {
+      const destination = htmlAttribute(tag, "src");
+      out += destination && isConcreteTarget(destination) ? "\u0001" : "";
+    } else {
+      const destination = htmlAttribute(tag, "href");
+      const contentEnd = anchorContentEnd(value, match.index + tag.length);
+      const inner = contentEnd === -1 ? "" : value.slice(match.index + tag.length, contentEnd);
+      if (destination && isConcreteTarget(destination) && anchorVisible(inner)) out += "\u0001";
+    }
+    cursor = match.index + tag.length;
+  }
+  return out + value.slice(cursor);
 }
 
 function referenceClauseConcrete(text, definitions) {
@@ -1233,12 +1309,22 @@ function looksLikeArtifact(value, references, definitions = new Map()) {
   const prose = (text) => text.split(/\s+/).filter((token) =>
     !hasConcreteHttpUrl(token) && !isArtifactPath(trimToken(stripEmphasis(token))),
   ).join(" ");
-  if (concrete && !denial.test(prose(rest.replaceAll("\u0001", "")))) return true;
+  const deniesConcrete = (text) => {
+    const proseText = prose(text).trim();
+    if (!proseText) return false;
+    if (denial.test(proseText)) return true;
+    const decoded = decodeCharacterReferences(proseText)
+      .replace(/[\p{Default_Ignorable_Code_Point}\p{Mark}]/gu, "")
+      .trim();
+    if (!/[\p{Letter}\p{Number}]/u.test(decoded)) return false;
+    return isPlaceholderField(decoded);
+  };
+  if (concrete && !deniesConcrete(rest.replaceAll("\u0001", ""))) return true;
   for (const clause of splitClauses(rest)) {
     const text = clause.replaceAll("\u0001", "").trim();
     if (!text && !clause.includes("\u0001")) continue;
     // A denied clause cannot suppress another independently cited artifact.
-    if (denial.test(prose(text))) continue;
+    if (deniesConcrete(text)) continue;
     if (clause.includes("\u0001") || referenceClauseConcrete(text, definitions)) return true;
     if (hasConcreteHttpUrl(text) || hasSubstantiveCodeSpan(text) || hasCommandPlusRunnerOutput(text)) return true;
     // Bare paths count only as a citation, not as incidental prose about a
@@ -1486,25 +1572,148 @@ function ansiCFragment(value, start) {
   return null;
 }
 
+const ARITHMETIC_INT64_MIN = -9223372036854775808n;
+const ARITHMETIC_INT64_MAX = 9223372036854775807n;
+
+/**
+ * Decimal integers, parentheses, and + - * / % only. No eval.
+ * Leading zeros, bases, variables, assignments, ++/--, and other operators
+ * stay unresolved. An unresolved expansion inside a curl or wget URL operand
+ * is rejected without naming a host. Single quotes and escaped dollars stay literal.
+ */
+function evaluateArithmetic(body) {
+  if (body.length > 128) return null;
+  let index = 0;
+  const skip = () => {
+    while (index < body.length && /[ \t\n\r]/.test(body[index])) index += 1;
+  };
+  const fit = (value) => (value < ARITHMETIC_INT64_MIN || value > ARITHMETIC_INT64_MAX ? null : value);
+  const parseExpr = (depth) => {
+    if (depth > 32) return null;
+    let left = parseTerm(depth);
+    if (left == null) return null;
+    for (;;) {
+      skip();
+      const op = body[index];
+      if (op !== "+" && op !== "-") break;
+      index += 1;
+      const right = parseTerm(depth);
+      if (right == null) return null;
+      left = fit(op === "+" ? left + right : left - right);
+      if (left == null) return null;
+    }
+    return left;
+  };
+  const parseTerm = (depth) => {
+    let left = parseUnary(depth);
+    if (left == null) return null;
+    for (;;) {
+      skip();
+      const op = body[index];
+      if (op !== "*" && op !== "/" && op !== "%") break;
+      if (op === "*" && body[index + 1] === "*") return null;
+      index += 1;
+      const right = parseUnary(depth);
+      if (right == null || ((op === "/" || op === "%") && right === 0n)) return null;
+      left = fit(op === "*" ? left * right : op === "/" ? left / right : left % right);
+      if (left == null) return null;
+    }
+    return left;
+  };
+  const parseUnary = (depth) => {
+    skip();
+    const op = body[index];
+    if (op !== "+" && op !== "-") return parsePrimary(depth);
+    if (body[index + 1] === op) return null;
+    index += 1;
+    const value = parseUnary(depth);
+    if (value == null) return null;
+    return fit(op === "-" ? -value : value);
+  };
+  const parsePrimary = (depth) => {
+    skip();
+    if (body[index] === "(") {
+      index += 1;
+      const value = parseExpr(depth + 1);
+      skip();
+      if (value == null || body[index] !== ")") return null;
+      index += 1;
+      return value;
+    }
+    if (!/\d/.test(body[index] ?? "")) return null;
+    if (body[index] === "0" && /\d/.test(body[index + 1] ?? "")) return null;
+    const start = index;
+    while (/\d/.test(body[index] ?? "")) index += 1;
+    if (index - start > 19) return null;
+    return fit(BigInt(body.slice(start, index)));
+  };
+  const value = parseExpr(0);
+  skip();
+  return value == null || index !== body.length ? null : value;
+}
+
+function readStaticArithmetic(value, start, quote) {
+  const limit = Math.min(value.length, start + 256);
+  let index = start + 3;
+  let depth = 0;
+  while (index < limit) {
+    const ch = value[index];
+    if (ch === "(") {
+      depth += 1;
+      index += 1;
+      continue;
+    }
+    if (ch === ")") {
+      if (depth === 0) {
+        if (value[index + 1] !== ")") return { resolved: false, text: value.slice(start, index + 1), end: index + 1 };
+        const end = index + 2;
+        const evaluated = evaluateArithmetic(value.slice(start + 3, index));
+        return evaluated == null
+          ? { resolved: false, text: value.slice(start, end), end }
+          : { resolved: true, text: evaluated.toString(), end };
+      }
+      depth -= 1;
+      index += 1;
+      continue;
+    }
+    if (depth === 0 && (ch === quote || ch === "\n" || ch === "\r" || ch === ";" || ch === "|" || ch === "&" || ch === "<" || ch === ">" || ch === "`")) {
+      return { resolved: false, text: value.slice(start, index), end: index };
+    }
+    index += 1;
+  }
+  return { resolved: false, text: value.slice(start, index), end: index };
+}
+
 function shellWords(value, { commandTokens = false } = {}) {
   const words = [];
   let word = "";
   let quote = null;
   let braceText = "";
   let wordStarted = false;
+  let wordUnresolved = false;
   const append = (text, protectedText = false) => {
     wordStarted = true;
     word += text;
     braceText += protectedText ? text.replace(/[\\{},.]/g, (ch) => "\\" + ch) : text;
   };
   const flush = () => {
-    if (word || (commandTokens && wordStarted)) words.push(commandTokens ? { text: word, braceText } : word);
+    if (word || (commandTokens && wordStarted)) {
+      words.push(commandTokens ? { text: word, braceText, unresolved: wordUnresolved } : word);
+    }
     word = "";
     braceText = "";
     wordStarted = false;
+    wordUnresolved = false;
   };
   for (let index = 0; index < value.length; index += 1) {
     const ch = value[index];
+    if (quote !== "'" && ch === "$" && value[index + 1] === "(" && value[index + 2] === "(") {
+      const expansion = readStaticArithmetic(value, index, quote);
+      append(expansion.text, true);
+      if (!expansion.resolved) wordUnresolved = true;
+      index = expansion.end - 1;
+      continue;
+    }
     if (quote === null && /[\s;|&<>()`]/.test(ch)) {
       flush();
       if (commandTokens && /[\n\r;|&<>()`]/.test(ch)) words.push(null);
@@ -2303,10 +2512,20 @@ function collectWgetUrls(args, urls) {
   }
 }
 
+function unresolvedOperand(arg, operand) {
+  if (!operand) return false;
+  if (arg === operand) return true;
+  const equal = arg.indexOf("=");
+  if (arg.startsWith("--") && equal !== -1 && arg.slice(equal + 1) === operand) return true;
+  if (arg.startsWith("-") && !arg.startsWith("--") && arg.slice(2) === operand) return true;
+  return operand.includes("$((") && arg.includes(operand);
+}
+
 function curlCommandTargets(value) {
   const targets = [];
   let overflow = false;
   let budget = false;
+  let unresolved = false;
   let command = [];
   const flush = () => {
     const start = effectiveCurlStart(command);
@@ -2316,8 +2535,26 @@ function curlCommandTargets(value) {
     let urls = [];
     const variables = new Map();
     const expandBudget = { used: 0 };
+    const tagged = [];
+    for (const word of command.slice(start + 1)) {
+      if (word.unresolved) {
+        tagged.push({ text: word.text, unresolved: true });
+        continue;
+      }
+      const expanded = expandTargetGlobs(word.braceText, { shell: true });
+      overflow ||= expanded.overflow;
+      for (const text of expanded.values) {
+        tagged.push({ text: text.replace(/\\([\\{},.])/g, "$1"), unresolved: false });
+      }
+    }
+    const args = tagged.map((item) => item.text);
+    const fromUnresolved = (operand) => tagged.some((item) => item.unresolved && unresolvedOperand(item.text, operand));
     const transfer = () => {
       for (const url of urls) {
+        if (fromUnresolved(url)) {
+          unresolved = true;
+          continue;
+        }
         const expanded = globoff ? { values: [url], overflow: false } : expandTargetGlobs(url);
         overflow ||= expanded.overflow;
         for (const target of expanded.values) {
@@ -2328,12 +2565,6 @@ function curlCommandTargets(value) {
       urls = [];
       globoff = false;
     };
-    const args = [];
-    for (const word of command.slice(start + 1)) {
-      const expanded = expandTargetGlobs(word.braceText, { shell: true });
-      overflow ||= expanded.overflow;
-      args.push(...expanded.values.map((text) => text.replace(/\\([\\{},.])/g, "$1")));
-    }
     const client = command[start].text.slice(command[start].text.lastIndexOf("/") + 1);
     if (client === "wget") {
       collectWgetUrls(args, urls);
@@ -2379,7 +2610,7 @@ function curlCommandTargets(value) {
     else command.push(token);
   }
   flush();
-  return { targets, overflow, budget };
+  return { targets, overflow, budget, unresolved };
 }
 
 function joinShellContinuations(value) {
@@ -2442,6 +2673,7 @@ function shellVisible(value) {
 
 function targetsBannedLan(sectionText, definitions, literalText = []) {
   let budget = false;
+  let unresolved = false;
   const verification = withoutFencePayload(withoutFields(sectionText, [FIELD_LABELS.reason], {
     keepLazy: true,
   }).replace(
@@ -2454,6 +2686,7 @@ function targetsBannedLan(sectionText, definitions, literalText = []) {
     const words = shellWords(joined);
     const curl = curlCommandTargets(joined);
     if (curl.budget) budget = true;
+    if (curl.unresolved) unresolved = true;
     if (curl.overflow) return true;
     const decoded = shellVisible(joined);
     const targets = [...decoded.matchAll(/(?:https?:|\/\/)[^\s<>()"'`]+/gi)]
@@ -2486,7 +2719,7 @@ function targetsBannedLan(sectionText, definitions, literalText = []) {
     // Malformed links render as raw text. Unlike artifact validation, the LAN
     // scan must retain their suffix so later reference uses cannot disappear.
     || (definitions.size > 0 && [...referenceUses(verification, { keepMalformed: true })].some((label) => bannedTarget(definitions.get(label) ?? "")));
-  return { banned, budget };
+  return { banned, budget, unresolved };
 }
 
 function documentReferences(body) {
@@ -2575,6 +2808,11 @@ export function lintPrEvidence(body) {
   if (directLan.budget || conservativeLan.budget) {
     errors.push(
       "Evidence curl expansion exceeded the static verifier budget before the URL target could be checked. Shorten repeated functions, templates, or assignments.",
+    );
+  }
+  if (directLan.unresolved || conservativeLan.unresolved) {
+    errors.push(
+      "Evidence contains a curl or wget target with shell arithmetic this static check could not resolve. Rewrite that operand without arithmetic expansion.",
     );
   }
 
