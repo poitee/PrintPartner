@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { URL, fileURLToPath } from "node:url";
 import { sha256, verifyFreshness } from "../desktop-contracts/freshness.mjs";
+import { sourcePaths } from "./sources.mjs";
 
 const repo = fileURLToPath(new URL("../../../", import.meta.url));
 const web = join(repo, "web");
@@ -22,13 +23,7 @@ function run(name, executable, args, cwd = repo, expectedExit = 0) {
   writeFileSync(join(receipts, "checks.json"), JSON.stringify(checks, null, 2) + "\n");
   assert.equal(result.status, expectedExit, `${name}: ${result.stderr}`);
 }
-const sourcePaths = [
-  "rust/Cargo.lock", "rust/crates/pp-domain/Cargo.toml", "rust/crates/pp-domain/src/lib.rs", "rust/crates/pp-domain/src/schema.rs",
-  "rust/crates/pp-api-types/tests/ticket_t_63_contracts.rs", "rust/crates/pp-api-types/Cargo.toml", "rust/crates/pp-api-types/src/autosave.rs", "rust/crates/pp-api-types/src/contracts.rs", "rust/crates/pp-api-types/src/bin/export-rust-contracts.rs",
-  "web/package-lock.json", "web/packages/contracts/test-fixtures/t9/semantics.json", "web/packages/contracts/test-fixtures/desktop/autosave-v1.json",
-  ...readdirSync(join(web, "scripts/rust-contracts")).map((name) => `web/scripts/rust-contracts/${name}`),
-];
-const sourceHashes = () => Object.fromEntries(sourcePaths.map((path) => [join(repo, path), sha256(readFileSync(join(repo, path)))]));
+const sourceHashes = () => Object.fromEntries(sourcePaths(repo).map((path) => [join(repo, path), sha256(readFileSync(join(repo, path)))]));
 let sources = mode === "--check" ? sourceHashes() : null;
 
 const cargo = process.env.CARGO ?? "cargo";
@@ -47,12 +42,12 @@ if (mode === "--check") {
   const frozen = JSON.parse(readFileSync(join(web, "scripts/rust-contracts/supplemental.json"), "utf8")).cases;
   assert.equal(original.length, 50);
   assert.deepEqual(frozen, original.map(({name, parser, raw_input, input, outcome}) => ({name, parser, ...(raw_input ? {raw_input} : {input}), outcome})), "Shared T9 supplemental corpus drift");
-  run("generated-parity-controls", process.execPath, ["--conditions=development", "--import", "tsx", "--test", "scripts/rust-contracts/semantics.test.mjs"], web);
+  run("generated-parity-controls", process.execPath, ["--conditions=development", "--import", "tsx", "--test", "scripts/rust-contracts/semantics.test.mjs", "scripts/rust-contracts/receipts.test.mjs"], web);
   run("generated-typecheck", process.execPath, ["node_modules/typescript/bin/tsc", "--noEmit", "--strict", "--skipLibCheck", "--target", "es2023", "--lib", "es2024", "--module", "nodenext", "--moduleResolution", "nodenext", "scripts/rust-contracts/generated.ts"], web);
   run("native-independent-parity", cargo, ["test", "--locked", "--manifest-path", "rust/Cargo.toml", "-p", "pp-api-types", "--features", "codegen", "--test", "ticket_t_63_contracts", "--", "ticket_t_63_contracts"]);
   const nativeLog = readFileSync(join(receipts, "native-independent-parity.log"), "utf8");
   const counts = /test result: ok\. (\d+) passed; 0 failed/.exec(nativeLog);
-  assert(counts && Number(counts[1]) >= 7, "Reverse native parity must execute every named test with nonzero coverage");
+  assert(counts && Number(counts[1]) >= 8, "Reverse native parity must execute every named test with nonzero coverage");
 }
 sources ??= sourceHashes();
 const artifacts = Object.fromEntries(readdirSync(receipts).filter((name) => name !== "manifest.json").map((name) => [name, sha256(readFileSync(join(receipts, name)))]));

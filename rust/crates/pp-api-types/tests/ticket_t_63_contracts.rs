@@ -31,6 +31,31 @@ fn check(cases: &[Value], probe: bool) {
     }
 }
 #[test]
+fn ticket_t_63_contracts_duplicate_keys_match_node_and_production_boundary() {
+    let corpus: Value = serde_json::from_str(include_str!(
+        "../../../../web/scripts/rust-contracts/wire-cases.json"
+    ))
+    .unwrap();
+    let cases = corpus["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 4);
+    check(cases, false);
+    for case in cases {
+        let result = pp_api_types::parse_request(case["raw_input"].as_str().unwrap());
+        assert_eq!(
+            result.is_ok(),
+            case["outcome"]["kind"] == "accepted",
+            "{}: {result:?}",
+            case["name"]
+        );
+        if let Ok(value) = result {
+            assert_eq!(
+                serde_json::to_value(value).unwrap(),
+                case["outcome"]["parsed"]
+            );
+        }
+    }
+}
+#[test]
 fn ticket_t_63_contracts_native_semantic_corpus() {
     let corpus: Value = serde_json::from_str(include_str!(
         "../../../../web/packages/contracts/test-fixtures/t9/semantics.json"

@@ -76,7 +76,7 @@ impl schemars::JsonSchema for CalendarDate {
 }
 impl SemanticFixture {
     pub fn parse(text: &str) -> Result<Self, String> {
-        let value: Self = serde_json::from_str(text).map_err(|error| error.to_string())?;
+        let value: Self = crate::autosave::parse(text).map_err(|error| error.detail)?;
         if matches!(value.mode, Mode::Write) && value.defaulted == 0 {
             return Err("write_requires_positive_default".into());
         }
@@ -90,7 +90,7 @@ pub fn parse_native(parser: &str, text: &str) -> Result<serde_json::Value, Strin
     fn parse<T: serde::de::DeserializeOwned + Serialize>(
         text: &str,
     ) -> Result<serde_json::Value, String> {
-        let value: T = serde_json::from_str(text).map_err(|error| error.to_string())?;
+        let value: T = crate::autosave::parse(text).map_err(|error| error.detail)?;
         serde_json::to_value(value).map_err(|error| error.to_string())
     }
     match parser {

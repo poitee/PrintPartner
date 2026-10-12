@@ -162,7 +162,19 @@ pub struct BoundaryError {
     pub detail: String,
 }
 
-fn parse<T: de::DeserializeOwned>(text: &str) -> Result<T, BoundaryError> {
+/// Match JSON.parse before DTO validation: repeated object keys keep the last
+/// value. DTO unknown-field, required-field and domain checks still run after it.
+pub(crate) fn parse<T: de::DeserializeOwned>(text: &str) -> Result<T, BoundaryError> {
+    let input: serde_json::Value = deserialize(text)?;
+    let normalized = serde_json::to_string(&input).map_err(|error| BoundaryError {
+        category: "invalid_json".into(),
+        field: "$".into(),
+        detail: error.to_string(),
+    })?;
+    deserialize(&normalized)
+}
+
+fn deserialize<T: de::DeserializeOwned>(text: &str) -> Result<T, BoundaryError> {
     let mut deserializer = serde_json::Deserializer::from_str(text);
     let value = serde_path_to_error::deserialize(&mut deserializer).map_err(|error| {
         let detail = error.inner().to_string();

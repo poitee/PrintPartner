@@ -48,6 +48,9 @@ and validates their semantics independently.
 The reverse lane reuses all 34 T9 semantic cases, 41 frozen autosave cases and
 50 supplemental cases. It compares acceptance and exact accepted JSON values.
 `raw_input` is preserved for integral float lexemes and UTF-16 surrogate cases.
+Additional raw wire cases verify that repeated JSON object keys keep the last
+value before DTO validation, matching Node JSON.parse. Invalid final values
+still fail, and duplicate target-field decisions remain invalid.
 The frozen supplemental file is compared with the original oracle on every
 verification run, so narrowing or changing that corpus fails the check.
 
@@ -65,6 +68,9 @@ Unsupported schema/refinement declarations fail generation. A modified generated
 file must fail the actual CLI drift checker. Verification saves commands, exit
 codes and logs in a fresh receipt directory; a second run checks restart-safe
 reproducibility without rewriting artifacts.
+Standalone receipts hash the imported oracle scripts, transitive contract
+sources, native crate sources and build manifests. Drift controls modify
+isolated copies of executable inputs and require freshness verification to fail.
 
 This proof does not establish route/worker cutover, failure/restart recovery of
 an operation, WS/MCP protocol parity or dependency completion. Node retains

@@ -1,17 +1,20 @@
 import process from "node:process";
 import assert from "node:assert/strict";
-import { readFileSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { readFileSync, mkdtempSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { URL, pathToFileURL, fileURLToPath } from "node:url";
 import test from "node:test";
 import { spawnSync } from "node:child_process";
 import { generate } from "./generate.mjs";
 import * as generated from "./generated.ts";
+import { parseSavePlanChoicesRequest } from "../../packages/contracts/src/plan-drafts.ts";
 
 const load = (path) => JSON.parse(readFileSync(new URL(path, import.meta.url), "utf8"));
 const probe = load("../../packages/contracts/test-fixtures/t9/semantics.json").cases;
 const autosave = load("../../packages/contracts/test-fixtures/desktop/autosave-v1.json").normalized.schema_cases;
 const supplemental = load("./supplemental.json").cases;
+const wireCases = load("./wire-cases.json").cases;
 assert.equal(probe.length, 34);
 assert.equal(autosave.length, 41);
 assert.equal(supplemental.length, 50);
@@ -23,8 +26,14 @@ const parsers = (module) => ({
 });
 const rows = [
   ...probe.map((item) => ({...item, parser: "semanticFixtureSchema", expected: item.accepted, output: item.output})),
-  ...[...autosave, ...supplemental].map((item) => ({...item, expected: item.outcome.kind === "accepted", output: item.outcome.parsed})),
+  ...[...autosave, ...supplemental, ...wireCases].map((item) => ({...item, expected: item.outcome.kind === "accepted", output: item.outcome.parsed})),
 ];
+assert.equal(wireCases.length, 4);
+for (const row of wireCases) test(`ticket_t_63_contracts_node_wire_boundary: ${row.name}`, () => {
+  const input = JSON.parse(row.raw_input);
+  if (row.outcome.kind === "accepted") assert.deepEqual(parseSavePlanChoicesRequest(input), row.outcome.parsed);
+  else assert.throws(() => parseSavePlanChoicesRequest(input));
+});
 function mismatchCount(module) {
   const schemas = parsers(module);
   return rows.filter((row) => {
@@ -51,7 +60,7 @@ const schemas = load("./schemas.json");
 test("ticket_t_63_contracts_generated_artifact_rejects_drift", () => {
   const actual = readFileSync(new URL("./generated.ts", import.meta.url), "utf8");
   assert.equal(actual, generate(schemas));
-  const dir = mkdtempSync(fileURLToPath(new URL("./.control-", import.meta.url)));
+  const dir = mkdtempSync(join(tmpdir(), "pp-rust-contract-drift-"));
   try {
     const path = join(dir, "drift.ts");
     writeFileSync(path, actual + "// planted drift\n");
@@ -73,7 +82,9 @@ test("ticket_t_63_contracts_generator_fails_closed", () => {
 });
 async function mutatedModule(change) {
   const doc = globalThis.structuredClone(schemas); change(doc);
-  const dir = mkdtempSync(fileURLToPath(new URL("./.control-", import.meta.url)));
+  const dir = mkdtempSync(join(tmpdir(), "pp-rust-contract-mutation-"));
+  writeFileSync(join(dir, "package.json"), '{"type":"module"}\n');
+  symlinkSync(fileURLToPath(new URL("../../node_modules", import.meta.url)), join(dir, "node_modules"), "dir");
   const output = join(dir, "generated.ts");
   writeFileSync(output, generate(doc));
   try { return await import(pathToFileURL(output).href); } finally { rmSync(dir, {recursive: true}); }
