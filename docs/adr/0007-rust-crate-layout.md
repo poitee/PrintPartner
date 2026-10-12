@@ -15,7 +15,7 @@ As of 2026-10-12, main contains 13 workspace crates. `pp-storage` landed through
 | `pp-contracts` | Compatibility facade: re-exports the contract surface used by parity binaries and external consumers; owns parity tooling. |
 | `pp-net` | Checked outbound connection helpers (gateway target canonicalization today). |
 | `pp-drivers` | Reserved for printer and provider adapters that use `pp-net`. Stub on main (`Move deferred until after #171`). |
-| `pp-services` | Reserved for use cases that depend on domain ports, not concrete storage/network/driver crates. Stub on main (`Move deferred until after #171`). |
+| `pp-services` | Native Orca/Bambu slicer discovery. Broader use cases on domain ports remain planned; the crate has no workspace dependency. |
 | `pp-storage` | SQLite owner, migrations, bounded settings writer, read-only pool, storage lease, and safe backups. Node still owns application SQL operations. |
 | `pp-source` | Immutable local Source snapshot materialization and bounded ZIP extraction (filesystem bytes and manifest). Does not own SQL, catalog activation, or HTTP routes. |
 | `pp-gateway` | Loopback listeners, session/bootstrap policy, route ownership, and proxy to the Node compatibility child. |
