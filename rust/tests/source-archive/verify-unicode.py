@@ -79,7 +79,7 @@ accepted = root / 'repos/42/revisions/unicode-revision'
 before = inventory(accepted)
 snapshot_command['snapshot']['files'] = []
 code, result = invoke(args.bin_dir / 'pp-source', snapshot_command, 'legacy-reuse-reject')
-assert code == 1 and result['error'] == 'duplicate-path'
+assert code == 1 and result['error'].startswith('ambiguous-revision: published revision unicode-revision '), result
 assert inventory(accepted) == before
 
 root, archive_command, snapshot_command = fixture('ordinary-unicode', ['深い/café.stl', '深い/二.stl', '\U00010000.stl', '\ue000.stl', 'İ.stl', 'ı.stl', 'I.stl'])

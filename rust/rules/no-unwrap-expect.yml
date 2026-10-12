@@ -1,0 +1,239 @@
+id: no-unwrap-expect
+language: Rust
+severity: warning
+message: Propagate or handle errors instead of unwrap()/expect() outside tests.
+files:
+  - crates/**/*.rs
+ignores:
+  - crates/*/tests/**
+  # Out-of-line unit tests follow the src/**/tests.rs or src/**/tests/** convention.
+  - crates/*/src/**/tests.rs
+  - crates/*/src/**/tests/**
+utils:
+  macro-path-prefix:
+    any:
+      - kind: identifier
+      - kind: self
+      - kind: super
+      - kind: crate
+  test-cfg-any:
+    has:
+      kind: attribute
+      has:
+        kind: identifier
+        regex: '^(r#)?cfg$'
+      all:
+        - has:
+            field: arguments
+            has:
+              kind: token_tree
+              follows:
+                kind: identifier
+                regex: '^(r#)?any$'
+                stopBy:
+                  matches: non-comment
+              has:
+                kind: identifier
+                regex: '^(r#)?test$'
+              not:
+                has:
+                  all:
+                    - matches: non-comment
+                    - not:
+                        regex: '^(r#)?test$|^[(),]$'
+  stringify-macro-name:
+    any:
+      - regex: '^(::)?(r#)?stringify$'
+      - kind: scoped_identifier
+        has:
+          field: name
+          regex: '^(r#)?stringify$'
+        all:
+          - has:
+              field: path
+              any:
+                - kind: identifier
+                  regex: '^(r#)?(std|core)$'
+                - kind: scoped_identifier
+                  has:
+                    field: name
+                    regex: '^(r#)?(std|core)$'
+                  not:
+                    has:
+                      field: path
+                      regex: '.'
+  test-attribute:
+    has:
+      kind: attribute
+      not:
+        has:
+          field: value
+          regex: '.'
+      has:
+        any:
+          - kind: identifier
+            regex: '^(r#)?test$'
+          - kind: scoped_identifier
+            has:
+              field: name
+              regex: '^(r#)?test$'
+  test-cfg-direct:
+    has:
+      kind: attribute
+      has:
+        kind: identifier
+        regex: '^(r#)?cfg$'
+      all:
+        - has:
+            field: arguments
+            has:
+              kind: identifier
+              regex: '^(r#)?test$'
+              not:
+                precedes:
+                  regex: '^=$'
+                  stopBy:
+                    matches: non-comment
+  test-cfg-all:
+    has:
+      kind: attribute
+      has:
+        kind: identifier
+        regex: '^(r#)?cfg$'
+      all:
+        - has:
+            field: arguments
+            has:
+              kind: token_tree
+              follows:
+                kind: identifier
+                regex: '^(r#)?all$'
+                stopBy:
+                  matches: non-comment
+              has:
+                kind: identifier
+                regex: '^(r#)?test$'
+                not:
+                  precedes:
+                    regex: '^=$'
+                    stopBy:
+                      matches: non-comment
+  non-comment:
+    not:
+      any:
+        - kind: line_comment
+        - kind: block_comment
+rule:
+  all:
+    - any:
+        - pattern: $VALUE.unwrap()
+        - pattern: $VALUE.expect($$$ARGS)
+        - pattern: $TYPE::unwrap($$$ARGS)
+        - pattern: $TYPE::expect($$$ARGS)
+        - pattern: $VALUE.r#unwrap()
+        - pattern: $VALUE.r#expect($$$ARGS)
+        - pattern: $TYPE::r#unwrap($$$ARGS)
+        - pattern: $TYPE::r#expect($$$ARGS)
+        - pattern: ($TYPE::unwrap)($$$ARGS)
+        - pattern: ($TYPE::expect)($$$ARGS)
+        - pattern: ($TYPE::r#unwrap)($$$ARGS)
+        - pattern: ($TYPE::r#expect)($$$ARGS)
+        # Macro arguments are token trees, not parsed call expressions. Match
+        # the method-name token between a dot and its argument list instead.
+        - all:
+            - kind: identifier
+            - regex: '^(r#)?(unwrap|expect)$'
+            - inside:
+                kind: token_tree
+            - follows:
+                regex: '^(\.|::)$'
+                stopBy:
+                  not:
+                    any:
+                      - kind: line_comment
+                      - kind: block_comment
+            - precedes:
+                kind: token_tree
+                regex: '^\('
+                stopBy:
+                  not:
+                    any:
+                      - kind: line_comment
+                      - kind: block_comment
+    # stringify! returns the argument tokens without evaluating any calls.
+    - not:
+        inside:
+          any:
+            - kind: macro_invocation
+              has:
+                field: macro
+                matches: stringify-macro-name
+            # Nested invocations in another macro are token trees too.
+            - kind: token_tree
+              follows:
+                regex: '^!$'
+                stopBy:
+                  matches: non-comment
+                follows:
+                  kind: identifier
+                  regex: '^(r#)?stringify$'
+                  stopBy:
+                    matches: non-comment
+                  any:
+                    - not:
+                        follows:
+                          regex: '^::$'
+                          stopBy:
+                            matches: non-comment
+                    - follows:
+                        regex: '^::$'
+                        stopBy:
+                          matches: non-comment
+                        follows:
+                          kind: identifier
+                          stopBy:
+                            matches: non-comment
+                          regex: '^(r#)?(std|core)$'
+                          not:
+                            follows:
+                              regex: '^::$'
+                              stopBy:
+                                matches: non-comment
+                              follows:
+                                matches: macro-path-prefix
+                                stopBy:
+                                  matches: non-comment
+          stopBy: end
+    # Inner cfg attributes apply to the containing file, module, or block.
+    - not:
+        inside:
+          any:
+            - kind: source_file
+            - kind: declaration_list
+            - kind: block
+          has:
+            kind: inner_attribute_item
+            any:
+              - matches: test-cfg-any
+              - matches: test-cfg-direct
+              - matches: test-cfg-all
+          stopBy: end
+    - not:
+        inside:
+          stopBy: end
+          follows:
+            kind: attribute_item
+            any:
+              - matches: test-cfg-any
+              - matches: test-attribute
+              - matches: test-cfg-direct
+              # A direct test term in all(...) makes every build test-only.
+              - matches: test-cfg-all
+            # Attributes apply only to the next item, including other attributes
+            # and comments between them; never exempt subsequent production code.
+            stopBy:
+              not:
+                any:
+                  - kind: attribute_item
+                  - kind: line_comment
+                  - kind: block_comment

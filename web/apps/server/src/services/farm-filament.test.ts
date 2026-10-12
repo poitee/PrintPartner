@@ -1,3 +1,4 @@
+import { readFileSync, readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   LOW_FILAMENT_THRESHOLD_G,
@@ -37,6 +38,52 @@ const slot = (n: number, colorId: string | null, label = "") => ({
   slot: n,
   filament_color_id: colorId,
   label,
+});
+
+type SlotStateGolden = {
+  case: string;
+  context: { configured: boolean; physically_empty: boolean };
+  input: {
+    machine: Parameters<typeof printerFilamentStatus>[0];
+    spools_by_color_id: Record<string, SpoolSummary[] | null>;
+  };
+  expected: ReturnType<typeof printerFilamentStatus>;
+};
+
+const slotStateGoldenDirectory = new URL(
+  "../../../../../fixtures/parity/farm-filament/",
+  import.meta.url,
+);
+const slotStateGoldens = readdirSync(slotStateGoldenDirectory)
+  .filter((name) => name.endsWith(".json"))
+  .sort()
+  .map((name): SlotStateGolden => JSON.parse(
+    readFileSync(new URL(name, slotStateGoldenDirectory), "utf8"),
+  ));
+
+describe("farm-filament slot-state TS goldens (GRE-575)", () => {
+  it("includes every required slot-state case", () => {
+    expect(slotStateGoldens.map((golden) => golden.case).sort()).toEqual([
+      "blank-filament-color-id",
+      "empty-slot",
+      "loaded-matched",
+      "loaded-no-spoolman-match",
+      "no-slot-config",
+    ]);
+  });
+
+  it.each(slotStateGoldens)("records current TS output: $case", ({ input, expected }) => {
+    const lookup: SpoolLookup = (colorId) => {
+      // Missing keys are a fixture error; null explicitly means unavailable.
+      expect(Object.hasOwn(input.spools_by_color_id, colorId)).toBe(true);
+      return input.spools_by_color_id[colorId];
+    };
+    // Configuration/physical-state context is intentionally not passed: the TS
+    // API cannot distinguish unconfigured from configured-but-empty (GRE-488).
+    expect(printerFilamentStatus(input.machine, lookup)).toEqual(expected);
+    expect(input.machine.loaded_filaments.map((loaded) => slotFilamentStatus(loaded, lookup)))
+      .toEqual(expected.slots);
+  });
 });
 
 describe("slotFilamentStatus", () => {

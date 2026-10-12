@@ -1,0 +1,42 @@
+{
+  "source": [
+    "web/apps/server/src/services/gcode-object-parser.ts",
+    "web/packages/domain/src/sliced-object-matching.ts"
+  ],
+  "origin": "test: returns all duplicate basename candidates instead of guessing",
+  "input": {
+    "names": [
+      "bracket.stl"
+    ],
+    "libraryFilenames": [
+      "kit-a/bracket.stl",
+      "kit-b/bracket.stl"
+    ]
+  },
+  "expected": {
+    "groups": [
+      {
+        "key": "bracket.stl",
+        "stlBasename": "bracket.stl",
+        "count": 1,
+        "objects": [
+          {
+            "name": "bracket.stl",
+            "stlBasename": "bracket.stl",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      }
+    ],
+    "matches": [
+      {
+        "key": "bracket.stl",
+        "filenames": [
+          "kit-a/bracket.stl",
+          "kit-b/bracket.stl"
+        ]
+      }
+    ]
+  }
+}

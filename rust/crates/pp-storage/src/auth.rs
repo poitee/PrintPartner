@@ -237,7 +237,10 @@ impl Pool {
             let receiver = receiver.clone();
             thread::spawn(move || {
                 loop {
-                    let job = receiver.lock().expect("Auth pool poisoned").recv();
+                    let job = match receiver.lock() {
+                        Ok(receiver) => receiver.recv(),
+                        Err(_) => break,
+                    };
                     let Ok(job) = job else {
                         break;
                     };

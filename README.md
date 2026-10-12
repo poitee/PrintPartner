@@ -168,7 +168,7 @@ Setup guides:
 
 ## MCP access
 
-Print Partner exposes product tools over streamable HTTP MCP at `/api/v1/mcp`. Set `PRINT_PARTNER_API_KEY` before connecting from another machine. Write operations require a separate confirmation call.
+Print Partner exposes product tools over streamable HTTP MCP at `/api/v1/mcp`. On a single-tenant host, set `PRINT_PARTNER_API_KEY` before connecting from another machine. `MULTI_USER=1` requires a login session, and a bearer key on its own is rejected. Write operations require a separate confirmation call.
 
 See [MCP setup](docs/assistant-mcp.md) for Cursor, Claude, and other MCP clients. A packaged Cursor plugin is available in [`cursor-plugin/print-partner`](cursor-plugin/print-partner).
 
