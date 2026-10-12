@@ -1504,6 +1504,356 @@ const COMMAND_LAUNCHERS = {
 };
 const SHELL_COMMAND_LAUNCHERS = new Set(["command", "exec", "builtin"]);
 
+const SUDO_SHORT = {
+  A: { kind: "flag", flag: "askpass" }, a: { kind: "value", key: "auth-type" },
+  B: { kind: "flag" }, b: { kind: "flag", flag: "background" },
+  C: { kind: "value", key: "close-from" }, c: { kind: "value", key: "login-class" },
+  D: { kind: "value", key: "chdir" }, E: { kind: "flag", flag: "preserveEnv" },
+  e: { kind: "mode", mode: "edit" }, g: { kind: "value", key: "group" },
+  H: { kind: "flag", flag: "setHome" }, h: { kind: "optional" },
+  i: { kind: "flag", flag: "login" }, K: { kind: "mode", mode: "kill" },
+  k: { kind: "flag" }, l: { kind: "mode", mode: "list" }, N: { kind: "flag" },
+  n: { kind: "flag", flag: "noninteractive" }, P: { kind: "flag", flag: "preserveGroups" },
+  p: { kind: "value", key: "prompt" }, R: { kind: "value", key: "chroot" },
+  r: { kind: "value", key: "role" }, S: { kind: "flag", flag: "stdin" },
+  s: { kind: "flag", flag: "shell" }, T: { kind: "value", key: "command-timeout" },
+  t: { kind: "value", key: "type" }, U: { kind: "value", key: "other-user" },
+  u: { kind: "value", key: "user" }, V: { kind: "mode", mode: "version" },
+  v: { kind: "mode", mode: "validate" },
+};
+const SUDOEDIT_SHORT = {
+  A: SUDO_SHORT.A, a: SUDO_SHORT.a, B: SUDO_SHORT.B, C: SUDO_SHORT.C, c: SUDO_SHORT.c,
+  D: SUDO_SHORT.D, g: SUDO_SHORT.g, h: SUDO_SHORT.h, K: SUDO_SHORT.K, k: SUDO_SHORT.k,
+  N: SUDO_SHORT.N, n: SUDO_SHORT.n, p: SUDO_SHORT.p, R: SUDO_SHORT.R, r: SUDO_SHORT.r,
+  S: SUDO_SHORT.S, T: SUDO_SHORT.T, t: SUDO_SHORT.t, u: SUDO_SHORT.u, V: SUDO_SHORT.V,
+};
+const SUDO_LONG = {
+  background: { kind: "flag", flag: "background" },
+  "preserve-env": { kind: "optional-env" },
+  edit: { kind: "mode", mode: "edit" },
+  "set-home": { kind: "flag", flag: "setHome" },
+  login: { kind: "flag", flag: "login" },
+  "remove-timestamp": { kind: "mode", mode: "kill" },
+  list: { kind: "mode", mode: "list" },
+  "preserve-groups": { kind: "flag", flag: "preserveGroups" },
+  shell: { kind: "flag", flag: "shell" },
+  "other-user": { kind: "value", key: "other-user" },
+  validate: { kind: "mode", mode: "validate" },
+  askpass: { kind: "flag", flag: "askpass" },
+  "auth-type": { kind: "value", key: "auth-type" },
+  bell: { kind: "flag" },
+  "close-from": { kind: "value", key: "close-from" },
+  "login-class": { kind: "value", key: "login-class" },
+  chdir: { kind: "value", key: "chdir" },
+  group: { kind: "value", key: "group" },
+  help: { kind: "mode", mode: "help" },
+  host: { kind: "value", key: "host" },
+  "reset-timestamp": { kind: "flag" },
+  "no-update": { kind: "flag" },
+  "non-interactive": { kind: "flag", flag: "noninteractive" },
+  prompt: { kind: "value", key: "prompt" },
+  chroot: { kind: "value", key: "chroot" },
+  role: { kind: "value", key: "role" },
+  stdin: { kind: "flag", flag: "stdin" },
+  "command-timeout": { kind: "value", key: "command-timeout" },
+  type: { kind: "value", key: "type" },
+  user: { kind: "value", key: "user" },
+  version: { kind: "mode", mode: "version" },
+};
+const SUDOEDIT_LONG = Object.fromEntries(Object.entries(SUDO_LONG).filter(([name]) => [
+  "askpass", "auth-type", "bell", "close-from", "login-class", "chdir", "group", "help", "host",
+  "reset-timestamp", "no-update", "non-interactive", "prompt", "chroot", "role", "stdin",
+  "command-timeout", "type", "user", "version",
+].includes(name)));
+const SUDO_RUN_FLAGS = new Set(["background", "preserveEnv", "setHome", "login", "noninteractive", "preserveGroups", "shell"]);
+
+function sudoAssignment(text) {
+  return text.length > 0 && text[0] !== "/" && text[0] !== "=" && !text.startsWith("-") && text.includes("=");
+}
+
+function sudoCommandIndex(command, index) {
+  const base = command[index].text.slice(command[index].text.lastIndexOf("/") + 1);
+  const editInvoked = base === "sudoedit";
+  const shortKind = editInvoked ? SUDOEDIT_SHORT : SUDO_SHORT;
+  const longKind = editInvoked ? SUDOEDIT_LONG : SUDO_LONG;
+  const flag = {};
+  const once = new Set();
+  let mode = editInvoked ? "edit" : "";
+  let sawEnvar = false;
+  let askpass = false;
+  let stdin = false;
+  let cursor = index + 1;
+  const raise = (name) => {
+    if (name === "askpass") askpass = true;
+    else if (name === "stdin") stdin = true;
+    else if (name) flag[name] = true;
+  };
+  const setMode = (spec) => {
+    if (spec.mode === "list" && mode === "list") { flag.longList = true; return true; }
+    if (mode && mode !== spec.mode) return false;
+    mode = spec.mode;
+    return true;
+  };
+  const takeValue = (key, value) => {
+    if (value === undefined || value === "--") return false;
+    if (value === "" && key !== "prompt" && key !== "command-timeout") return false;
+    if (once.has(key)) return false;
+    if (key === "close-from") {
+      const number = Number(value);
+      if (!/^\d+$/.test(value) || !Number.isSafeInteger(number) || number < 3 || number > 2147483647) return false;
+    }
+    once.add(key);
+    return true;
+  };
+  const consumeShort = (option) => {
+    let next = cursor + 1;
+    for (let at = 1; at < option.length; at += 1) {
+      const spec = shortKind[option[at]];
+      if (!spec) return -1;
+      if (spec.kind === "flag") { raise(spec.flag); continue; }
+      if (spec.kind === "mode") {
+        if (!setMode(spec)) return -1;
+        raise(spec.flag);
+        continue;
+      }
+      if (spec.kind === "optional") {
+        const inline = option.slice(at + 1);
+        if (inline) return takeValue("host", inline) ? next : -1;
+        const host = command[next]?.text;
+        if (option === "-h" && host !== undefined && !host.startsWith("-") && !sudoAssignment(host)) {
+          return takeValue("host", host) ? next + 1 : -1;
+        }
+        return setMode({ mode: "help" }) ? next : -1;
+      }
+      const inline = option.slice(at + 1);
+      if (inline) return takeValue(spec.key, inline) ? next : -1;
+      return takeValue(spec.key, command[next]?.text) ? next + 1 : -1;
+    }
+    return next;
+  };
+
+  while (cursor < command.length) {
+    const option = command[cursor].text;
+    if (option === "--") { cursor += 1; break; }
+    if (sudoAssignment(option)) {
+      if (editInvoked || mode === "edit") return -1;
+      sawEnvar = true;
+      cursor += 1;
+      continue;
+    }
+    if (option === "-" || !option.startsWith("-")) break;
+    if (option.startsWith("--")) {
+      const eq = option.indexOf("=", 2);
+      const spec = longKind[option.slice(2, eq === -1 ? undefined : eq)];
+      if (!spec) return -1;
+      if (spec.kind === "flag" || spec.kind === "mode") {
+        if (spec.kind === "mode" && !setMode(spec)) return -1;
+        raise(spec.flag);
+        cursor += 1;
+        continue;
+      }
+      if (spec.kind === "optional-env") {
+        if (eq === -1) raise("preserveEnv");
+        cursor += 1;
+        continue;
+      }
+      if (eq !== -1) {
+        if (!takeValue(spec.key, option.slice(eq + 1))) return -1;
+        cursor += 1;
+        continue;
+      }
+      if (!takeValue(spec.key, command[cursor + 1]?.text)) return -1;
+      cursor += 2;
+      continue;
+    }
+    cursor = consumeShort(option);
+    if (cursor < 0) return -1;
+  }
+
+  if (!mode) mode = "run";
+  if (mode === "list" && cursor < command.length) mode = "check";
+  if (flag.login && flag.shell) return -1;
+  if (flag.login && flag.preserveEnv) return -1;
+  if ((mode === "edit" || editInvoked) && (flag.preserveEnv || sawEnvar)) return -1;
+  if (askpass && stdin) return -1;
+  const allowedByMode = {
+    run: SUDO_RUN_FLAGS,
+    edit: new Set(["noninteractive"]),
+    list: new Set(["noninteractive", "longList"]),
+    check: new Set(["noninteractive", "longList"]),
+    validate: new Set(["noninteractive"]),
+  };
+  const allowed = allowedByMode[mode] ?? new Set();
+  if (Object.keys(flag).some((name) => !allowed.has(name))) return -1;
+  if (cursor < command.length && mode !== "run" && mode !== "edit" && mode !== "check") return -1;
+  if (mode !== "run" || cursor >= command.length) return -1;
+  return cursor;
+}
+
+function curlJsonEscape(value) {
+  let out = "";
+  for (const ch of value) {
+    const code = ch.codePointAt(0);
+    if (ch === "\\") out += "\\\\";
+    else if (ch === "\"") out += "\\\"";
+    else if (ch === "\b") out += "\\b";
+    else if (ch === "\f") out += "\\f";
+    else if (ch === "\n") out += "\\n";
+    else if (ch === "\r") out += "\\r";
+    else if (ch === "\t") out += "\\t";
+    else if (code < 32) out += `\\u${code.toString(16).padStart(4, "0")}`;
+    else out += ch;
+  }
+  return out;
+}
+
+function curlEscape(value) {
+  let out = "";
+  for (const ch of value) {
+    if (/[A-Za-z0-9\-_.~]/.test(ch)) out += ch;
+    else out += Buffer.from(ch, "utf8").toString("hex").toUpperCase().replace(/../g, "%$&");
+  }
+  return out;
+}
+
+function curlBase64Decode(value) {
+  if (value.length === 0) return "";
+  if (value.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(value)) return "[64dec-fail]";
+  const decoded = Buffer.from(value, "base64");
+  if (decoded.toString("base64").replace(/=+$/, "") !== value.replace(/=+$/, "")) return "[64dec-fail]";
+  if (decoded.includes(0)) return null;
+  return decoded.toString("utf8");
+}
+
+function applyCurlFunctions(value, funcs) {
+  let rest = funcs;
+  while (rest.startsWith(":")) {
+    rest = rest.slice(1);
+    const match = /^(trim|json|url|b64|64dec)(?=:|$)/.exec(rest);
+    if (!match) return null;
+    if (match[1] === "trim") value = value.replace(/^[\t\n\v\f\r ]+/, "").replace(/[\t\n\v\f\r ]+$/, "");
+    else if (match[1] === "json") value = curlJsonEscape(value);
+    else if (match[1] === "url") value = curlEscape(value);
+    else if (match[1] === "b64") value = Buffer.from(value, "utf8").toString("base64");
+    else {
+      value = curlBase64Decode(value);
+      if (value === null) return null;
+    }
+    rest = rest.slice(match[1].length);
+  }
+  return rest.length === 0 ? value : null;
+}
+
+function expandCurlTemplate(input, variables) {
+  let line = input;
+  let out = "";
+  let added = false;
+  while (line.includes("{{")) {
+    const at = line.indexOf("{{");
+    if (at > 0 && line[at - 1] === "\\") {
+      out += `${line.slice(0, at - 1)}{{`;
+      line = line.slice(at + 2);
+      continue;
+    }
+    const close = line.indexOf("}}", at + 2);
+    if (close === -1) break;
+    const expr = line.slice(at + 2, close);
+    const colon = expr.indexOf(":");
+    const name = colon === -1 ? expr : expr.slice(0, colon);
+    out += line.slice(0, at);
+    if (name.length === 0 || name.length >= 128 || !/^[A-Za-z0-9_]+$/.test(name)) {
+      out += line.slice(at, close + 2);
+      line = line.slice(close + 2);
+      continue;
+    }
+    const binding = variables.get(name);
+    let value = binding?.dynamic ? "" : (binding?.text ?? "");
+    if (colon !== -1) {
+      value = applyCurlFunctions(value, expr.slice(colon));
+      if (value === null) return { ok: false };
+    }
+    if (binding?.dynamic) return { dynamic: true };
+    out += value;
+    added = true;
+    line = line.slice(close + 2);
+  }
+  return added ? { ok: true, text: out + line } : { ok: true, text: input };
+}
+
+function curlVariableName(input) {
+  const body = input.startsWith("%") ? input.slice(1) : input;
+  const name = /^[A-Za-z0-9_]*/.exec(body)?.[0] ?? "";
+  if (name.length === 0 || name.length >= 128) return null;
+  return name;
+}
+
+function assignCurlVariable(variables, input) {
+  let line = input;
+  if (line.startsWith("%")) {
+    const imported = curlVariableName(line);
+    if (imported) variables.set(imported, { dynamic: true });
+    return;
+  }
+  const name = curlVariableName(line);
+  if (!name) return;
+  line = line.slice(name.length);
+  let start = 0;
+  let end = Infinity;
+  let ranged = false;
+  if (line.startsWith("[") && /\d/.test(line[1] ?? "")) {
+    const range = /^\[(\d+)-(\d*)\]/.exec(line);
+    if (!range) return;
+    start = Number(range[1]);
+    end = range[2] === "" ? Infinity : Number(range[2]);
+    if (!Number.isSafeInteger(start) || (range[2] !== "" && !Number.isSafeInteger(end)) || start > end) return;
+    line = line.slice(range[0].length);
+    ranged = true;
+  }
+  if (line.startsWith("@")) {
+    variables.set(name, { dynamic: true });
+    return;
+  }
+  if (!line.startsWith("=")) return;
+  let content = line.slice(1);
+  if (ranged) {
+    if (start >= content.length) content = "";
+    else {
+      const last = end === Infinity ? content.length - 1 : Math.min(end, content.length - 1);
+      content = content.slice(start, last + 1);
+    }
+  }
+  variables.set(name, { text: content });
+}
+
+function curlExpandedOption(arg, args, index, variables) {
+  const equal = arg.indexOf("=");
+  let name = arg.slice(2, equal === -1 ? undefined : equal);
+  const expand = name.startsWith("expand-");
+  if (expand) name = name.slice("expand-".length);
+  const takesValue = CURL_VALUE_OPTIONS.has(name);
+  if (expand && !takesValue) return { index };
+  let next = index;
+  let operand;
+  if (equal === -1) {
+    if (takesValue) {
+      next = index + 1;
+      operand = args[next];
+    }
+  } else operand = arg.slice(equal + 1);
+  if (!takesValue || operand === undefined) return { index: next };
+  const expanded = expand ? expandCurlTemplate(operand, variables) : { ok: true, text: operand };
+  if (!expanded.ok) return { index: next };
+  if (name === "variable") {
+    if (expanded.dynamic) {
+      const dynamicName = curlVariableName(operand);
+      if (dynamicName) variables.set(dynamicName, { dynamic: true });
+    } else assignCurlVariable(variables, expanded.text);
+    return { index: next };
+  }
+  if (name === "url" && !expanded.dynamic) return { index: next, url: expanded.text };
+  return { index: next };
+}
+
 function effectiveCurlStart(command) {
   let start = 0;
   let mode = "shell";
@@ -1512,6 +1862,14 @@ function effectiveCurlStart(command) {
     const program = command[start].text;
     const name = program.slice(program.lastIndexOf("/") + 1);
     if (name === "curl") return mode === "builtin" ? -1 : start;
+    if (name === "sudo" || name === "sudoedit") {
+      if (mode === "builtin") return -1;
+      const next = sudoCommandIndex(command, start);
+      if (next <= start) return -1;
+      start = next;
+      mode = "executable";
+      continue;
+    }
     if (!Object.hasOwn(COMMAND_LAUNCHERS, name)) return -1;
     const shellBuiltin = SHELL_COMMAND_LAUNCHERS.has(name);
     if ((shellBuiltin && (mode === "executable" || program !== name))
@@ -1569,6 +1927,7 @@ function curlCommandTargets(value) {
     let globoff = false;
     let options = true;
     let urls = [];
+    const variables = new Map();
     const transfer = () => {
       for (const url of urls) {
         const expanded = globoff ? { values: [url], overflow: false } : expandTargetGlobs(url);
@@ -1595,10 +1954,9 @@ function curlCommandTargets(value) {
       if (arg === "--globoff") { globoff = true; continue; }
       if (arg === "--no-globoff") { globoff = false; continue; }
       if (arg.startsWith("--")) {
-        const equal = arg.indexOf("=");
-        const name = arg.slice(2, equal === -1 ? undefined : equal);
-        const operand = equal === -1 ? (CURL_VALUE_OPTIONS.has(name) ? args[++i] : undefined) : arg.slice(equal + 1);
-        if (name === "url" && operand !== undefined) urls.push(operand);
+        const parsed = curlExpandedOption(arg, args, i, variables);
+        i = parsed.index;
+        if (parsed.url !== undefined) urls.push(parsed.url);
         continue;
       }
       if (arg.startsWith("-") && arg !== "-") {
