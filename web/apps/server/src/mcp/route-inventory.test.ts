@@ -50,6 +50,12 @@ const allModes = Object.keys(expectedByMode);
 const missingModes = (route: InventoryRoute): string[] =>
   allModes.filter((mode) => !route.authByMode?.[mode]);
 
+const incompleteRoutes = (routes: InventoryRoute[]) =>
+  routes
+    .filter((route) => route.authRequired === "mode-dependent")
+    .map((route) => ({ route: `${route.method} ${route.path}`, modes: missingModes(route) }))
+    .filter((entry) => entry.modes.length > 0);
+
 describe("golden route inventory: /api/v1/mcp auth per mode", () => {
   for (const method of ["GET", "DELETE"]) {
     it(`${method} records each auth mode's observed status`, () => {
@@ -69,26 +75,27 @@ describe("golden route inventory: /api/v1/mcp auth per mode", () => {
   });
 
   it("every mode-dependent route records a real probe for every auth mode", () => {
-    const incomplete = inventory.routes
-      .filter((route) => route.authRequired === "mode-dependent")
-      .map((route) => ({ route: `${route.method} ${route.path}`, modes: missingModes(route) }))
-      .filter((entry) => entry.modes.length > 0);
-    expect(incomplete).toEqual([]);
+    expect(incompleteRoutes(inventory.routes)).toEqual([]);
   });
 
-  it("flags a planted entry whose mode is absent or null, so incomplete maps cannot pass as uniform", () => {
-    const withoutApiKey: Record<string, ModeProbe> = { ...expectedByMode };
-    delete withoutApiKey["self-host/api-key"];
-    const absentMode: InventoryRoute = { method: "GET", path: "/planted", authRequired: "mode-dependent", authByMode: withoutApiKey };
-    const nullMode: InventoryRoute = {
-      method: "GET",
-      path: "/planted",
-      authRequired: "mode-dependent",
-      authByMode: { ...expectedByMode, "saas/multi-user": null },
-    };
-    expect(missingModes(absentMode)).toEqual(["self-host/api-key"]);
-    expect(missingModes(nullMode)).toEqual(["saas/multi-user"]);
-  });
+  for (const path of ["/printers", "/api/v1/mcp"]) {
+    it.each(["absent", "null"])(`rejects %s mode observations on GET ${path}`, (mutation) => {
+      const route = inventory.routes.find((candidate) => candidate.method === "GET" && candidate.path === path);
+      if (!route) throw new Error(`Missing inventory entry: GET ${path}`);
+      const authByMode: Record<string, ModeProbe> = route.authByMode
+        ? { ...route.authByMode }
+        : Object.fromEntries(allModes.map((mode) => [mode, gated(401)]));
+      const planted = inventory.routes.map((candidate) =>
+        candidate === route ? { ...route, authByMode } : candidate,
+      );
+      expect(incompleteRoutes(planted)).toEqual([]);
+      if (mutation === "absent") delete authByMode["self-host/api-key"];
+      else authByMode["self-host/api-key"] = null;
+      expect(incompleteRoutes(planted)).toEqual([
+        { route: `GET ${path}`, modes: ["self-host/api-key"] },
+      ]);
+    });
+  }
 
   it("HEAD is session-gated in every mode (MCP transport does not serve HEAD)", () => {
     const route = mcpRoute("HEAD");
