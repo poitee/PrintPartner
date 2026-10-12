@@ -1201,3 +1201,65 @@ async fn desktop_marker_with_both_processes_dead_allows_start() {
     assert!(runtime.shutdown().await.complete());
     std::fs::remove_dir_all(data).unwrap();
 }
+
+#[tokio::test]
+async fn ticket_t_5_staged_release_reuses_the_persisted_desktop_identity() {
+    let manifest = PathBuf::from(std::env::var_os("PP_DESKTOP_RELEASE_MANIFEST").unwrap());
+    let stage = manifest.parent().unwrap();
+    let release: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(stage.join("release.json")).unwrap()).unwrap();
+    let data =
+        std::env::temp_dir().join(format!("pp-t-5-{}", hex::encode(rand::random::<[u8; 8]>())));
+    let staged_launch = || DesktopLaunch {
+        data_dir: data.clone(),
+        assets: stage
+            .join(release["web"].as_str().unwrap())
+            .join("apps/web/dist"),
+        bundle: VerifiedBundle {
+            node: stage.join(release["node"].as_str().unwrap()),
+            entry: stage
+                .join(release["web"].as_str().unwrap())
+                .join("apps/server/dist/current/desktop.js"),
+            web_root: stage.join(release["web"].as_str().unwrap()),
+            runtime_version: release["runtime_version"].as_str().unwrap().into(),
+            commit: release["commit"].as_str().unwrap().into(),
+        },
+    };
+    let mut runtime = CoreRuntime::start(staged_launch()).await.unwrap();
+    let origin = runtime.origin().to_owned();
+    let target = runtime.take_launch_target().unwrap().into_url();
+    let (status, headers, _) = request(
+        &origin,
+        target.strip_prefix(&origin).unwrap(),
+        "GET",
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let cookie = headers
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    let (status, _, body) =
+        request(&origin, "/health", "GET", Some(cookie), None, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let health: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(health["ok"], true);
+    assert_eq!(health["version"], "3.3.0-web");
+    let persisted = std::fs::read(data.join("desktop.toml")).unwrap();
+    assert!(runtime.shutdown().await.complete());
+    let mut reopened = CoreRuntime::start(staged_launch()).await.unwrap();
+    assert_eq!(reopened.origin(), origin);
+    assert_eq!(std::fs::read(data.join("desktop.toml")).unwrap(), persisted);
+    assert!(reopened.shutdown().await.complete());
+    assert!(!data.join(".desktop-owner.json").exists());
+    assert!(!data.join(".desktop-lease").exists());
+    std::fs::remove_dir_all(data).unwrap();
+}
