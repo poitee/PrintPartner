@@ -34,11 +34,11 @@ impl StoredKey {
         }
     }
 }
-fn digest(raw: &str) -> String {
+pub(super) fn digest(raw: &str) -> Result<String> {
     let mut mac = Hmac::<Sha256>::new_from_slice(b"print-partner:settings-api-key:v1")
-        .expect("HMAC accepts context");
+        .map_err(|_| anyhow!("API key digest rejected its fixed context"))?;
     mac.update(raw.as_bytes());
-    hex::encode(mac.finalize().into_bytes())
+    Ok(hex::encode(mac.finalize().into_bytes()))
 }
 fn is_digest(value: &str) -> bool {
     value.len() == 64
@@ -46,7 +46,7 @@ fn is_digest(value: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
-fn migrate(value: &str) -> String {
+fn migrate(value: &str) -> Result<String> {
     let decoded = STANDARD
         .decode(value)
         .ok()
@@ -83,7 +83,7 @@ fn load(tx: &Transaction<'_>, tenant: &str) -> Result<(Vec<StoredKey>, bool)> {
             "Corrupt API key collection"
         );
         if !is_digest(&key.key_hash) {
-            key.key_hash = migrate(&key.key_hash);
+            key.key_hash = migrate(&key.key_hash)?;
             migrated = true;
         }
     }
@@ -100,7 +100,7 @@ fn create(keys: &mut Vec<StoredKey>) -> Result<Outcome> {
     let raw = Secret(format!("ppk_{}", hex::encode(crypto::random::<32>()?)));
     let key = StoredKey {
         id: format!("key_{}", hex::encode(crypto::random::<8>()?)),
-        key_hash: digest(raw.expose()),
+        key_hash: digest(raw.expose())?,
         created_at: timestamp(0),
         last_used_at: None,
         expires_at: None,
@@ -184,7 +184,7 @@ pub(super) fn resolve(tx: &Transaction<'_>, tenant: &str, raw: Secret) -> Result
         });
     }
     let (mut keys, mut changed) = load(tx, tenant)?;
-    let hash = digest(raw.expose());
+    let hash = digest(raw.expose())?;
     let found = keys.iter_mut().find(|key| {
         key.is_active
             && unexpired(&key.expires_at)
