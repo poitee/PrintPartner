@@ -1486,14 +1486,86 @@ function expandTargetGlobs(value, { shell = false } = {}) {
   return { values: [], overflow: true };
 }
 
+const COMMAND_LAUNCHERS = {
+  env: {
+    mode: "executable", flags: "iv", values: "uCa",
+    longFlags: ["ignore-environment", "debug", "list-signal-handling"],
+    longValues: ["unset", "chdir", "argv0"], optionalValues: ["ignore-signal", "default-signal", "block-signal"],
+  },
+  command: { mode: "shell", flags: "p", values: "", longFlags: [], longValues: [] },
+  exec: { mode: "executable", flags: "cl", values: "a", longFlags: [], longValues: [] },
+  builtin: { mode: "builtin", flags: "", values: "", longFlags: [], longValues: [] },
+  nice: { mode: "executable", flags: "", values: "n", longFlags: [], longValues: ["adjustment"] },
+  nohup: { mode: "executable", flags: "", values: "", longFlags: [], longValues: [] },
+  timeout: {
+    mode: "executable", flags: "v", values: "sk",
+    longFlags: ["foreground", "preserve-status", "verbose"], longValues: ["signal", "kill-after"],
+  },
+};
+const SHELL_COMMAND_LAUNCHERS = new Set(["command", "exec", "builtin"]);
+
+function effectiveCurlStart(command) {
+  let start = 0;
+  let mode = "shell";
+  while (/^[a-zA-Z_][\w]*=/.test(command[start]?.text ?? "")) start += 1;
+  while (start < command.length) {
+    const program = command[start].text;
+    const name = program.slice(program.lastIndexOf("/") + 1);
+    if (name === "curl") return mode === "builtin" ? -1 : start;
+    if (!Object.hasOwn(COMMAND_LAUNCHERS, name)) return -1;
+    const shellBuiltin = SHELL_COMMAND_LAUNCHERS.has(name);
+    if ((shellBuiltin && (mode === "executable" || program !== name))
+      || (!shellBuiltin && mode === "builtin")) return -1;
+    const launcher = COMMAND_LAUNCHERS[name];
+    start += 1;
+    while (start < command.length) {
+      const option = command[start].text;
+      if (option === "--") { start += 1; break; }
+      if (name === "env" && option === "-") { start += 1; break; }
+      if (name === "nice" && /^-\d+$/.test(option)) { start += 1; continue; }
+      if (!option.startsWith("-") || option === "-") break;
+      start += 1;
+      if (option.startsWith("--")) {
+        const equal = option.indexOf("=");
+        const flag = option.slice(2, equal === -1 ? undefined : equal);
+        if (launcher.optionalValues?.includes(flag)) continue;
+        if (launcher.longFlags.includes(flag) && equal === -1) continue;
+        if (!launcher.longValues.includes(flag)) return -1;
+        if (equal === -1) {
+          if (start === command.length) return -1;
+          start += 1;
+        }
+      } else {
+        for (let at = 1; at < option.length; at += 1) {
+          const flag = option[at];
+          if (launcher.flags.includes(flag)) continue;
+          if (!launcher.values.includes(flag)) return -1;
+          if (at + 1 === option.length) {
+            if (start === command.length) return -1;
+            start += 1;
+          }
+          break;
+        }
+      }
+    }
+    if (name === "env") {
+      while (/^[^=]*=/.test(command[start]?.text ?? "")) start += 1;
+    } else if (name === "timeout") {
+      if (!/^(?:\d+(?:\.\d*)?|\.\d+)[smhd]?$/.test(command[start]?.text ?? "")) return -1;
+      start += 1;
+    }
+    mode = launcher.mode;
+  }
+  return -1;
+}
+
 function curlCommandTargets(value) {
   const targets = [];
   let overflow = false;
   let command = [];
   const flush = () => {
-    let start = 0;
-    while (/^[a-zA-Z_][\w]*=/.test(command[start]?.text ?? "")) start += 1;
-    if (!/^(?:.*\/)?curl$/.test(command[start]?.text ?? "")) { command = []; return; }
+    const start = effectiveCurlStart(command);
+    if (start === -1) { command = []; return; }
     let globoff = false;
     let options = true;
     let urls = [];
