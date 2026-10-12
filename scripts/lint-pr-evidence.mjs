@@ -2909,7 +2909,88 @@ function shellCommandLater(command, index) {
   return command.slice(index).some((word) => word.text === "-c" || /^-[^-]*c/.test(word.text));
 }
 
-// eval joins its arguments into one command. The text is parsed again and not executed.
+function wordBoundary(ch) {
+  return ch === undefined || /[\s;|&<>()]/.test(ch);
+}
+
+function simpleParameter(value, index, parameter) {
+  if (!parameter?.name) return false;
+  const raw = value.slice(index, parameter.end);
+  return raw === "$" + parameter.name || raw === "${" + parameter.name + "}";
+}
+
+function staticBindingText(binding) {
+  if (binding.substitution) return { reject: true, substitution: true };
+  if (binding.arithmetic) return { reject: true, unresolved: true, substitution: false };
+  if (binding.parameter) return { reject: true, parameter: true, substitution: false };
+  if (/['"`$\\\n]/.test(binding.value ?? "")) return { reject: true, parameter: true, substitution: false };
+  return { text: binding.value };
+}
+
+function sameBinding(left, right) {
+  return left.value === right.value
+    && left.arithmetic === right.arithmetic
+    && left.substitution === right.substitution
+    && left.parameter === right.parameter
+    && left.exported === right.exported;
+}
+
+// A whole-word parameter is replaced with its static text. A parameter inside a word stays in place.
+function expandSameShellWords(value, shellVars) {
+  let out = "";
+  let quote = null;
+  let unresolvedParameter = false;
+  for (let index = 0; index < value.length; index += 1) {
+    const ch = value[index];
+    if (quote !== "'" && ch === "$" && value[index + 1] === "(" && value[index + 2] === "(") {
+      const expansion = readStaticArithmetic(value, index, quote);
+      out += value.slice(index, expansion.end);
+      index = expansion.end - 1;
+      continue;
+    }
+    if (quote !== "'" && ch === "$" && value[index + 1] === "(") {
+      const substitution = readCommandSubstitution(value, index);
+      out += value.slice(index, substitution.end);
+      index = substitution.end - 1;
+      continue;
+    }
+    if (quote !== "'" && ch === "`") {
+      const substitution = readBacktickSubstitution(value, index);
+      out += value.slice(index, substitution.end);
+      index = substitution.end - 1;
+      continue;
+    }
+    if (quote !== "'" && ch === "$") {
+      const parameter = readParameterExpansion(value, index);
+      if (parameter?.name && shellVars.has(parameter.name)) {
+        const whole = quote !== '"'
+          && simpleParameter(value, index, parameter)
+          && wordBoundary(value[index - 1])
+          && wordBoundary(value[parameter.end]);
+        if (whole) {
+          const replacement = staticBindingText(shellVars.get(parameter.name));
+          if (replacement.reject) return replacement;
+          out += replacement.text;
+          index = parameter.end - 1;
+          continue;
+        }
+        unresolvedParameter = true;
+      }
+    }
+    if (ch === "\\" && quote !== "'") {
+      out += ch;
+      if (value[index + 1] !== undefined) out += value[++index];
+      continue;
+    }
+    if (ch === quote) quote = null;
+    else if (quote === null && (ch === "'" || ch === '"')) quote = ch;
+    out += ch;
+  }
+  if (out.length > MAX_CURL_EXPAND_TOTAL) return { reject: true };
+  return { text: out, parameter: unresolvedParameter };
+}
+
+// eval joins its arguments and parses them in this shell. The text is not executed.
 function staticEvalOperand(command) {
   const args = command.slice(1);
   if (args.length === 0) return null;
@@ -2926,7 +3007,7 @@ function staticEvalOperand(command) {
   }
   if (substitution) return { reject: true, substitution: true };
   if (unresolved) return { reject: true, unresolved: true, substitution: false };
-  return { text, word: args[0] };
+  return { text, word: args[0], sameShell: true };
 }
 
 // The -c operand is the next argument. It is parsed again and not executed.
@@ -3093,7 +3174,7 @@ function copyExported(source) {
   return copy;
 }
 
-function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), depth = 0) {
+function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), depth = 0, state = null) {
   if (depth > 8) {
     return { targets: [], overflow: false, budget: false, unresolved: false, substitution: true, parameter: false, stdinConfig: false, wgetStdin: false };
   }
@@ -3105,7 +3186,7 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
   let parameter = false;
   let stdinConfig = false;
   let wgetStdin = false;
-  const shellVars = copyExported(inherited);
+  const shellVars = state ?? copyExported(inherited);
   const bodies = [];
   const markUnresolved = (item) => {
     if ((item.parameters ?? []).some((name) => assigned.has(name))) parameter = true;
@@ -3131,6 +3212,50 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
     if (shell) {
       const prefixes = [];
       for (const word of command.slice(0, programAt)) noteProxyAssignment(prefixes, word, assigned);
+      if (shell.sameShell) {
+        const fork = new Map();
+        for (const [name, binding] of shellVars) fork.set(name, { ...binding });
+        const applied = new Map();
+        for (const proxy of prefixes) {
+          const prior = fork.get(proxy.name);
+          const combined = staticAppend(prior, proxy);
+          const next = {
+            value: combined.value,
+            arithmetic: combined.arithmetic,
+            substitution: combined.substitution,
+            parameter: combined.parameter,
+            exported: true,
+          };
+          applied.set(proxy.name, { ...next });
+          fork.set(proxy.name, next);
+        }
+        const expanded = expandSameShellWords(shell.text, fork);
+        let scanText = shell.text;
+        if (expanded.reject) {
+          if (expanded.unresolved) unresolved = true;
+          if (expanded.parameter) parameter = true;
+          if (expanded.substitution !== false) substitution = true;
+        } else {
+          scanText = expanded.text;
+          if (expanded.parameter) parameter = true;
+        }
+        const inner = curlCommandTargets(scanText, assigned, fork, depth + 1, fork);
+        for (const [name, binding] of fork) {
+          const overlay = applied.get(name);
+          if (overlay && sameBinding(binding, overlay)) continue;
+          shellVars.set(name, { ...binding });
+        }
+        targets.push(...inner.targets);
+        overflow ||= inner.overflow;
+        budget ||= inner.budget;
+        unresolved ||= inner.unresolved;
+        substitution ||= inner.substitution;
+        parameter ||= inner.parameter;
+        stdinConfig ||= inner.stdinConfig;
+        wgetStdin ||= inner.wgetStdin;
+        command = [];
+        return;
+      }
       const local = commandProxies(shellVars, prefixes);
       if (shell.reject) {
         if (shell.unresolved) unresolved = true;
