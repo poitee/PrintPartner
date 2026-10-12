@@ -1690,94 +1690,190 @@ function sudoCommandIndex(command, index) {
   return cursor;
 }
 
-function curlJsonEscape(value) {
-  let out = "";
+const MAX_CURL_EXPAND_BYTES = 4096;
+const MAX_CURL_EXPAND_TOTAL = 65536;
+
+function chargeCurlExpand(budget, bytes) {
+  if (bytes > MAX_CURL_EXPAND_BYTES || budget.used > MAX_CURL_EXPAND_TOTAL - bytes) return false;
+  budget.used += bytes;
+  return true;
+}
+
+function utf8ByteLength(code) {
+  if (code < 0x80) return 1;
+  if (code < 0x800) return 2;
+  if (code < 0x10000) return 3;
+  return 4;
+}
+
+function curlUnreservedByte(byte) {
+  return (byte >= 48 && byte <= 57)
+    || (byte >= 65 && byte <= 90)
+    || (byte >= 97 && byte <= 122)
+    || byte === 45 || byte === 46 || byte === 95 || byte === 126;
+}
+
+function curlJsonEscape(value, budget) {
+  if (Buffer.byteLength(value, "utf8") > MAX_CURL_EXPAND_BYTES) return null;
+  const parts = [];
+  let bytes = 0;
   for (const ch of value) {
     const code = ch.codePointAt(0);
-    if (ch === "\\") out += "\\\\";
-    else if (ch === "\"") out += "\\\"";
-    else if (ch === "\b") out += "\\b";
-    else if (ch === "\f") out += "\\f";
-    else if (ch === "\n") out += "\\n";
-    else if (ch === "\r") out += "\\r";
-    else if (ch === "\t") out += "\\t";
-    else if (code < 32) out += `\\u${code.toString(16).padStart(4, "0")}`;
-    else out += ch;
+    let piece;
+    if (ch === "\\") piece = "\\\\";
+    else if (ch === "\"") piece = "\\\"";
+    else if (ch === "\b") piece = "\\b";
+    else if (ch === "\f") piece = "\\f";
+    else if (ch === "\n") piece = "\\n";
+    else if (ch === "\r") piece = "\\r";
+    else if (ch === "\t") piece = "\\t";
+    else if (code < 32) piece = `\\u${code.toString(16).padStart(4, "0")}`;
+    else piece = ch;
+    bytes += piece === ch ? utf8ByteLength(code) : piece.length;
+    if (bytes > MAX_CURL_EXPAND_BYTES) return null;
+    parts.push(piece);
   }
-  return out;
+  if (!chargeCurlExpand(budget, bytes)) return null;
+  return parts.join("");
 }
 
-function curlEscape(value) {
-  let out = "";
-  for (const ch of value) {
-    if (/[A-Za-z0-9\-_.~]/.test(ch)) out += ch;
-    else out += Buffer.from(ch, "utf8").toString("hex").toUpperCase().replace(/../g, "%$&");
+function curlEscape(value, budget) {
+  const inputBytes = Buffer.byteLength(value, "utf8");
+  if (inputBytes > MAX_CURL_EXPAND_BYTES) return null;
+  const input = Buffer.from(value, "utf8");
+  let outLen = 0;
+  for (let i = 0; i < input.length; i += 1) {
+    outLen += curlUnreservedByte(input[i]) ? 1 : 3;
+    if (outLen > MAX_CURL_EXPAND_BYTES) return null;
   }
-  return out;
+  if (!chargeCurlExpand(budget, outLen)) return null;
+  const out = Buffer.allocUnsafe(outLen);
+  let at = 0;
+  for (let i = 0; i < input.length; i += 1) {
+    const byte = input[i];
+    if (curlUnreservedByte(byte)) out[at++] = byte;
+    else {
+      const hex = byte.toString(16).toUpperCase().padStart(2, "0");
+      out[at++] = 37;
+      out[at++] = hex.charCodeAt(0);
+      out[at++] = hex.charCodeAt(1);
+    }
+  }
+  return out.toString("ascii");
 }
 
-function curlBase64Decode(value) {
-  if (value.length === 0) return "";
-  if (value.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(value)) return "[64dec-fail]";
+function curlBase64Decode(value, budget) {
+  if (value.length === 0) return { text: "" };
+  const outLen = Math.floor(value.length / 4) * 3;
+  if (outLen > MAX_CURL_EXPAND_BYTES) return { budget: true };
+  if (value.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(value)) return { text: "[64dec-fail]" };
+  if (!chargeCurlExpand(budget, outLen)) return { budget: true };
   const decoded = Buffer.from(value, "base64");
-  if (decoded.toString("base64").replace(/=+$/, "") !== value.replace(/=+$/, "")) return "[64dec-fail]";
-  if (decoded.includes(0)) return null;
-  return decoded.toString("utf8");
+  if (decoded.toString("base64").replace(/=+$/, "") !== value.replace(/=+$/, "")) return { text: "[64dec-fail]" };
+  if (decoded.includes(0)) return { invalid: true };
+  return { text: decoded.toString("utf8") };
 }
 
-function applyCurlFunctions(value, funcs) {
+function applyCurlFunctions(value, funcs, budget) {
   let rest = funcs;
   while (rest.startsWith(":")) {
     rest = rest.slice(1);
     const match = /^(trim|json|url|b64|64dec)(?=:|$)/.exec(rest);
-    if (!match) return null;
-    if (match[1] === "trim") value = value.replace(/^[\t\n\v\f\r ]+/, "").replace(/[\t\n\v\f\r ]+$/, "");
-    else if (match[1] === "json") value = curlJsonEscape(value);
-    else if (match[1] === "url") value = curlEscape(value);
-    else if (match[1] === "b64") value = Buffer.from(value, "utf8").toString("base64");
-    else {
-      value = curlBase64Decode(value);
-      if (value === null) return null;
+    if (!match) return { ok: false };
+    if (match[1] === "trim") {
+      let start = 0;
+      let end = value.length;
+      const whitespace = "\t\n\v\f\r ";
+      while (start < end && whitespace.includes(value[start])) start += 1;
+      while (end > start && whitespace.includes(value[end - 1])) end -= 1;
+      if (end - start > MAX_CURL_EXPAND_BYTES) return { budget: true };
+      value = value.slice(start, end);
+      if (Buffer.byteLength(value, "utf8") > MAX_CURL_EXPAND_BYTES) return { budget: true };
+    } else if (match[1] === "json") {
+      const escaped = curlJsonEscape(value, budget);
+      if (escaped === null) return { budget: true };
+      value = escaped;
+    } else if (match[1] === "url") {
+      const escaped = curlEscape(value, budget);
+      if (escaped === null) return { budget: true };
+      value = escaped;
+    } else if (match[1] === "b64") {
+      const bytes = Buffer.byteLength(value, "utf8");
+      const outLen = 4 * Math.ceil(bytes / 3);
+      if (outLen > MAX_CURL_EXPAND_BYTES || !chargeCurlExpand(budget, outLen)) return { budget: true };
+      value = outLen === 0 ? "" : Buffer.from(value, "utf8").toString("base64");
+    } else {
+      const decoded = curlBase64Decode(value, budget);
+      if (decoded.budget) return { budget: true };
+      if (decoded.invalid) return { ok: false };
+      value = decoded.text;
     }
     rest = rest.slice(match[1].length);
   }
-  return rest.length === 0 ? value : null;
+  return rest.length === 0 ? { ok: true, text: value } : { ok: false };
 }
 
-function expandCurlTemplate(input, variables) {
-  let line = input;
-  let out = "";
+function expandCurlTemplate(input, variables, budget) {
+  const parts = [];
   let added = false;
-  while (line.includes("{{")) {
-    const at = line.indexOf("{{");
-    if (at > 0 && line[at - 1] === "\\") {
-      out += `${line.slice(0, at - 1)}{{`;
-      line = line.slice(at + 2);
+  let bytes = 0;
+  let over = false;
+  const push = (text) => {
+    if (over) return;
+    const n = Buffer.byteLength(text, "utf8");
+    if (n > MAX_CURL_EXPAND_BYTES || bytes > MAX_CURL_EXPAND_BYTES - n) {
+      over = true;
+      return;
+    }
+    bytes += n;
+    parts.push(text);
+  };
+  let cursor = 0;
+  while (cursor < input.length) {
+    const at = input.indexOf("{{", cursor);
+    if (at === -1) {
+      push(input.slice(cursor));
+      break;
+    }
+    if (at > cursor && input[at - 1] === "\\") {
+      push(input.slice(cursor, at - 1));
+      push("{{");
+      cursor = at + 2;
       continue;
     }
-    const close = line.indexOf("}}", at + 2);
-    if (close === -1) break;
-    const expr = line.slice(at + 2, close);
+    const close = input.indexOf("}}", at + 2);
+    if (close === -1) {
+      push(input.slice(cursor));
+      break;
+    }
+    push(input.slice(cursor, at));
+    const expr = input.slice(at + 2, close);
     const colon = expr.indexOf(":");
     const name = colon === -1 ? expr : expr.slice(0, colon);
-    out += line.slice(0, at);
     if (name.length === 0 || name.length >= 128 || !/^[A-Za-z0-9_]+$/.test(name)) {
-      out += line.slice(at, close + 2);
-      line = line.slice(close + 2);
+      push(input.slice(at, close + 2));
+      cursor = close + 2;
       continue;
     }
     const binding = variables.get(name);
+    if (binding?.budget) return { budget: true };
+    if (!binding?.dynamic && over) return { budget: true };
     let value = binding?.dynamic ? "" : (binding?.text ?? "");
     if (colon !== -1) {
-      value = applyCurlFunctions(value, expr.slice(colon));
-      if (value === null) return { ok: false };
+      const applied = applyCurlFunctions(value, expr.slice(colon), budget);
+      if (applied.budget) return { budget: true };
+      if (!applied.ok) return { ok: false };
+      value = applied.text;
     }
     if (binding?.dynamic) return { dynamic: true };
-    out += value;
+    push(value);
     added = true;
-    line = line.slice(close + 2);
+    if (over) return { budget: true };
+    cursor = close + 2;
   }
-  return added ? { ok: true, text: out + line } : { ok: true, text: input };
+  if (!added) return { ok: true, text: input };
+  if (over || !chargeCurlExpand(budget, bytes)) return { budget: true };
+  return { ok: true, text: parts.join("") };
 }
 
 function curlVariableName(input) {
@@ -1825,7 +1921,7 @@ function assignCurlVariable(variables, input) {
   variables.set(name, { text: content });
 }
 
-function curlExpandedOption(arg, args, index, variables) {
+function curlExpandedOption(arg, args, index, variables, budget) {
   const equal = arg.indexOf("=");
   let name = arg.slice(2, equal === -1 ? undefined : equal);
   const expand = name.startsWith("expand-");
@@ -1841,7 +1937,15 @@ function curlExpandedOption(arg, args, index, variables) {
     }
   } else operand = arg.slice(equal + 1);
   if (!takesValue || operand === undefined) return { index: next };
-  const expanded = expand ? expandCurlTemplate(operand, variables) : { ok: true, text: operand };
+  if (expand && name !== "url" && name !== "variable") return { index: next };
+  const expanded = expand ? expandCurlTemplate(operand, variables, budget) : { ok: true, text: operand };
+  if (expanded.budget) {
+    if (name === "variable") {
+      const varName = curlVariableName(operand);
+      if (varName) variables.set(varName, { budget: true });
+    }
+    return { index: next, budget: name === "url" };
+  }
   if (!expanded.ok) return { index: next };
   if (name === "variable") {
     if (expanded.dynamic) {
@@ -1853,7 +1957,6 @@ function curlExpandedOption(arg, args, index, variables) {
   if (name === "url" && !expanded.dynamic) return { index: next, url: expanded.text };
   return { index: next };
 }
-
 function effectiveCurlStart(command) {
   let start = 0;
   let mode = "shell";
@@ -1920,6 +2023,7 @@ function effectiveCurlStart(command) {
 function curlCommandTargets(value) {
   const targets = [];
   let overflow = false;
+  let budget = false;
   let command = [];
   const flush = () => {
     const start = effectiveCurlStart(command);
@@ -1928,6 +2032,7 @@ function curlCommandTargets(value) {
     let options = true;
     let urls = [];
     const variables = new Map();
+    const expandBudget = { used: 0 };
     const transfer = () => {
       for (const url of urls) {
         const expanded = globoff ? { values: [url], overflow: false } : expandTargetGlobs(url);
@@ -1954,8 +2059,9 @@ function curlCommandTargets(value) {
       if (arg === "--globoff") { globoff = true; continue; }
       if (arg === "--no-globoff") { globoff = false; continue; }
       if (arg.startsWith("--")) {
-        const parsed = curlExpandedOption(arg, args, i, variables);
+        const parsed = curlExpandedOption(arg, args, i, variables, expandBudget);
         i = parsed.index;
+        if (parsed.budget) budget = true;
         if (parsed.url !== undefined) urls.push(parsed.url);
         continue;
       }
@@ -1979,7 +2085,7 @@ function curlCommandTargets(value) {
     else command.push(token);
   }
   flush();
-  return { targets, overflow };
+  return { targets, overflow, budget };
 }
 
 function joinShellContinuations(value) {
@@ -2022,6 +2128,7 @@ function joinShellContinuations(value) {
  * reason lines must sit in its content column (lazy lines stay checked).
  */
 function targetsBannedLan(sectionText, definitions, literalText = []) {
+  let budget = false;
   const verification = withoutFields(sectionText, [FIELD_LABELS.reason], {
     keepLazy: true,
   }).replace(
@@ -2033,6 +2140,7 @@ function targetsBannedLan(sectionText, definitions, literalText = []) {
     const joined = joinShellContinuations(decodeCharacterReferences(value, { htmlNumeric: true }));
     const words = shellWords(joined);
     const curl = curlCommandTargets(joined);
+    if (curl.budget) budget = true;
     if (curl.overflow) return true;
     const decoded = joined.replace(/\\(.)/g, "$1");
     const targets = [...decoded.replace(/[\t\n\r]/g, "").matchAll(/(?:https?:|\/\/)[^\s<>()"'`]+/gi)]
@@ -2060,11 +2168,12 @@ function targetsBannedLan(sectionText, definitions, literalText = []) {
       catch { return false; }
     });
   };
-  return bannedTarget(verification)
+  const banned = bannedTarget(verification)
     || literalText.some(bannedTarget)
     // Malformed links render as raw text. Unlike artifact validation, the LAN
     // scan must retain their suffix so later reference uses cannot disappear.
     || (definitions.size > 0 && [...referenceUses(verification, { keepMalformed: true })].some((label) => bannedTarget(definitions.get(label) ?? "")));
+  return { banned, budget };
 }
 
 function documentReferences(body) {
@@ -2129,9 +2238,16 @@ export function lintPrEvidence(body) {
       previousLiteralLine = lineIndex;
     },
   }) ?? section;
-  if (targetsBannedLan(section, definitions) || targetsBannedLan(conservativeSection, definitions, literalText)) {
+  const directLan = targetsBannedLan(section, definitions);
+  const conservativeLan = targetsBannedLan(conservativeSection, definitions, literalText);
+  if (directLan.banned || conservativeLan.banned) {
     errors.push(
       "Evidence must not target Chad's LAN instances (.80/.81). Use a disposable local verify instance instead. (To mention these hosts in the Exemption reason, indent every reason line under its bullet.)",
+    );
+  }
+  if (directLan.budget || conservativeLan.budget) {
+    errors.push(
+      "Evidence curl expansion exceeded the static verifier budget before the URL target could be checked. Shorten repeated functions, templates, or assignments.",
     );
   }
 

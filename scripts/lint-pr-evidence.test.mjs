@@ -3728,17 +3728,18 @@ function doublingCommand(steps) {
 function headerDataThenBanned() {
   const parts = ["curl", "--variable", "a=x"];
   let name = "a";
-  for (let step = 0; step < 12; step += 1) {
-    const next = step === 11 ? "big" : `d${step}`;
+  for (let step = 0; step < 10; step += 1) {
+    const next = step === 9 ? "big" : `d${step}`;
     parts.push(`--expand-variable ${next}={{${name}}}{{${name}}}`);
     name = next;
   }
   parts.push("--variable ip=3232235856");
+  parts.push("--variable pad=" + "a".repeat(2000));
   for (let copy = 0; copy < 40; copy += 1) {
     parts.push("--expand-header '{{big}}'");
     parts.push("--expand-data '{{big}}'");
   }
-  parts.push("--expand-url '{{ip}}'");
+  parts.push("--expand-url 'http://{{ip}}/{{pad}}'");
   return parts.join(" ");
 }
 
