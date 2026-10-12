@@ -64,6 +64,25 @@ jobs:
           set -euo pipefail
           npm ci
           npm run build
+      - name: Prepare proof evidence directory
+        run: |
+          set -euo pipefail
+          out="${{ github.workspace }}/proof/.github/scripts/out/pr264-postgres-proof"
+          mkdir -p "$out"
+          node_path="$(command -v node)"
+          {
+            printf 'productGitSha=%s\n' 'f6d4e394376031dd8da18995aa27154f0ea76483'
+            printf 'proofGitSha=%s\n' '${{ github.event.pull_request.head.sha }}'
+            printf 'nodeVersion=%s\n' "$(node -p 'process.version')"
+            printf 'nodeAbi=%s\n' "$(node -p 'process.versions.modules')"
+            printf 'nodeExec=%s\n' "$(readlink -f "$node_path")"
+            printf 'nodeFile=%s\n' "$(file -b "$node_path")"
+            printf 'appCheckout=%s\n' "${{ github.workspace }}/app"
+            printf 'webRoot=%s\n' "${{ github.workspace }}/app/web"
+            printf 'appRoot=%s\n' "${{ github.workspace }}/app/web/apps/server"
+            printf 'proofRoot=%s\n' "${{ github.workspace }}/proof"
+            printf 'githubRunId=%s\n' '${{ github.run_id }}'
+          } > "$out/bootstrap-identity.txt"
       - name: Run hosted Postgres HTTP proof
         working-directory: app/web
         env:
@@ -81,7 +100,15 @@ jobs:
           SESSION_COOKIE_SECURE: "0"
           NODE_ENV: production
           GITHUB_RUN_ID: ${{ github.run_id }}
-        run: node "${{ github.workspace }}/proof/.github/scripts/pr264-postgres-proof.mjs"
+        run: |
+          set -euo pipefail
+          out="${{ github.workspace }}/proof/.github/scripts/out/pr264-postgres-proof"
+          node "${{ github.workspace }}/proof/.github/scripts/pr264-postgres-proof.mjs" 2>&1 \
+            | sed -E \
+              -e 's#(postgres(ql)?://[^:/[:space:]]+:)[^@[:space:]]*@#\1[REDACTED]@#g' \
+              -e 's/([Cc]ookie:[[:space:]]*)[^[:cntrl:]]*/\1[REDACTED]/g' \
+              -e 's/([Aa]uthorization:[[:space:]]*)[^[:cntrl:]]*/\1[REDACTED]/g' \
+            | tee "$out/driver.log"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:

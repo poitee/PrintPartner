@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 /**
  * Hosted Postgres HTTP proof for PR264 P2 repo-manifest 503 at product f6.
+ * CI-only. Runtime acceptance, ticket Done, and publication atomicity stay unclaimed.
  * In-process server lifecycle (no manual signals).
  */
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { join, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 import http from "node:http";
-import pg from "pg";
 
 const EXPECTED_DETAIL =
   "Source revision publication is unavailable on experimental PostgreSQL because atomic publication transactions are not supported.";
@@ -51,7 +52,8 @@ function redact(value) {
     return value
       .replace(/set-cookie:[^\n]*/gi, "set-cookie: [REDACTED]")
       .replace(/("password"\s*:\s*")[^"]*"/gi, '$1[REDACTED]"')
-      .replace(/(session=)[^;\s"]+/gi, "$1[REDACTED]");
+      .replace(/(session=)[^;\s"]+/gi, "$1[REDACTED]")
+      .replace(/(postgres(?:ql)?:\/\/)[^:\s/]+:[^@\s/]+@/gi, "$1[REDACTED]@");
   }
   if (Array.isArray(value)) return value.map(redact);
   if (typeof value === "object") {
@@ -142,8 +144,65 @@ function mergeCookies(existing, setCookieHeader) {
   return [...jar.entries()].map(([k, v]) => `${k}=${v}`).join("; ");
 }
 
-async function pgSnapshot(databaseUrl) {
-  const pool = new pg.Pool({ connectionString: databaseUrl });
+async function importAppPg(report) {
+  const dependencyRoot = join(WEB_ROOT, "package.json");
+  const lockPath = join(WEB_ROOT, "package-lock.json");
+  const webPkg = JSON.parse(readFileSync(dependencyRoot, "utf8"));
+  const serverPkgPath = join(WEB_ROOT, "apps/server/package.json");
+  const serverPkg = JSON.parse(readFileSync(serverPkgPath, "utf8"));
+  const webRange = webPkg.dependencies?.pg ?? webPkg.devDependencies?.pg;
+  const serverRange = serverPkg.dependencies?.pg;
+  if (typeof webRange !== "string" && typeof serverRange !== "string") {
+    throw new Error(`app dependency root ${dependencyRoot} does not declare pg`);
+  }
+  const declaredRange = typeof serverRange === "string" ? serverRange : webRange;
+  const lock = JSON.parse(readFileSync(lockPath, "utf8"));
+  const locked = lock.packages?.["node_modules/pg"];
+  if (!locked?.version) {
+    throw new Error(`${lockPath} is missing packages["node_modules/pg"]`);
+  }
+  const requireFromApp = createRequire(dependencyRoot);
+  let resolvedPath;
+  try {
+    resolvedPath = realpathSync(requireFromApp.resolve("pg"));
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Cannot resolve pg from app dependency root ${dependencyRoot} (declared ${declaredRange}, lock ${locked.version}). ${detail}`,
+    );
+  }
+  const packageDir = realpathSync(join(WEB_ROOT, "node_modules", "pg"));
+  if (resolvedPath !== packageDir && !resolvedPath.startsWith(`${packageDir}/`)) {
+    throw new Error(`resolved pg ${resolvedPath} is outside app package ${packageDir}`);
+  }
+  const installed = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
+  if (installed.name !== "pg" || installed.version !== locked.version) {
+    throw new Error(
+      `installed ${installed.name}@${installed.version} at ${packageDir} != lock pg@${locked.version}`,
+    );
+  }
+  const loaded = await import(pathToFileURL(resolvedPath).href);
+  const Pool = loaded.Pool ?? loaded.default?.Pool;
+  if (typeof Pool !== "function" || typeof Pool.prototype?.query !== "function") {
+    throw new Error(`pg at ${resolvedPath} did not export the real Pool`);
+  }
+  report.pgResolution = {
+    dependencyRoot,
+    declaredRange,
+    serverRange: typeof serverRange === "string" ? serverRange : null,
+    webRange: typeof webRange === "string" ? webRange : null,
+    lockVersion: locked.version,
+    lockResolved: locked.resolved ?? null,
+    installedVersion: installed.version,
+    resolvedPath,
+    packageDir,
+    pool: Pool.name,
+  };
+  return Pool;
+}
+
+async function pgSnapshot(databaseUrl, Pool) {
+  const pool = new Pool({ connectionString: databaseUrl });
   try {
     const projects = await pool.query(
       "select id, name, local_path, current_source_revision_id from projects order by id",
@@ -204,11 +263,14 @@ async function main() {
     },
     atomicPublicationProven: false,
     ticketDoneClaimed: false,
+    runtimeAcceptanceClaimed: false,
     http: [],
+    httpRequestCount: 0,
     errors: [],
   };
 
   try {
+    const Pool = await importAppPg(report);
     assertFingerprints(report);
 
     const runSalt = Number(process.env.GITHUB_RUN_ID ?? "0") % 20000;
@@ -223,7 +285,7 @@ async function main() {
     const databaseUrl = process.env.DATABASE_URL;
     if (!databaseUrl) throw new Error("DATABASE_URL is required");
 
-    const beforeDb = await pgSnapshot(databaseUrl);
+    const beforeDb = await pgSnapshot(databaseUrl, Pool);
     report.dbBefore = beforeDb;
 
     const { startServer } = await import(pathToFileURL(join(APP_ROOT, "dist/current/app.js")).href);
@@ -330,7 +392,7 @@ async function main() {
         }
       }
 
-      const afterDb = await pgSnapshot(databaseUrl);
+      const afterDb = await pgSnapshot(databaseUrl, Pool);
       report.dbAfter = afterDb;
       report.fsAfter = treeDigest(reposDir);
 
@@ -351,12 +413,14 @@ async function main() {
     report.errors.push(error instanceof Error ? error.message : String(error));
     throw error;
   } finally {
+    report.httpRequestCount = report.http?.length ?? 0;
     writeJson("report.json", report);
-    writeJson("http-transcript.json", report.http ?? []);
+    if (report.httpRequestCount > 0) writeJson("http-transcript.json", report.http);
   }
 }
 
 main().catch((err) => {
-  console.error(err);
+  const text = err instanceof Error ? (err.stack ?? err.message) : String(err);
+  console.error(redact(text));
   process.exit(1);
 });
