@@ -94,6 +94,8 @@ jobs:
           fi
       - name: Audit high-severity vulnerabilities
         run: npm audit --audit-level=high
+      - name: Check dependency notices
+        run: node ../scripts/update-third-party-notices.mjs --check
       - name: Full quality suite
         env:
           PLAYWRIGHT_CHROMIUM_EXECUTABLE: /usr/bin/google-chrome
