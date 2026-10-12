@@ -5,7 +5,7 @@ use std::process::Command;
 use std::sync::mpsc;
 
 fn exited_true_pid() -> u32 {
-    let mut prior = Command::new("/bin/true").spawn().unwrap();
+    let mut prior = Command::new("/usr/bin/true").spawn().unwrap();
     let pid = prior.id();
     prior.wait().unwrap();
     pid
@@ -631,7 +631,7 @@ fn public_open_recovers_dead_writer_marker_and_atomic_lease() {
 
 #[test]
 fn unowned_preflight_rejects_live_and_invalid_markers_without_changes() {
-    let mut prior = Command::new("/bin/true").spawn().unwrap();
+    let mut prior = Command::new("/usr/bin/true").spawn().unwrap();
     let pid = prior.id();
     prior.wait().unwrap();
     let child = lease::current_process_identity();
