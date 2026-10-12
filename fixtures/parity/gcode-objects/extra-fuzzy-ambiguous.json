@@ -1,0 +1,149 @@
+{
+  "source": [
+    "web/apps/server/src/services/gcode-object-parser.ts",
+    "web/packages/domain/src/sliced-object-matching.ts"
+  ],
+  "origin": "extra: fuzzy near-ties, semantic guards and unmatched names",
+  "input": {
+    "names": [
+      "extruder_mount_b",
+      "z_tensionr_left.stl",
+      "z_tensioner_rght.stl",
+      "spacer_m3x10",
+      "lid",
+      "Belt-Clamp"
+    ],
+    "libraryFilenames": [
+      "extruder_mount_a.stl",
+      "extruder_mount_c.stl",
+      "Extruder_Mount_D.stl",
+      "z_tensioner_left.stl",
+      "z_tensioner_right.stl",
+      "spacer_m3x12.stl",
+      "lid.stl",
+      "belt_clamp.stl",
+      "belt-clamp.stl"
+    ]
+  },
+  "expected": {
+    "groups": [
+      {
+        "key": "extruder_mount_b",
+        "stlBasename": "extruder_mount_b",
+        "count": 1,
+        "objects": [
+          {
+            "name": "extruder_mount_b",
+            "stlBasename": "extruder_mount_b",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      },
+      {
+        "key": "z_tensionr_left.stl",
+        "stlBasename": "z_tensionr_left.stl",
+        "count": 1,
+        "objects": [
+          {
+            "name": "z_tensionr_left.stl",
+            "stlBasename": "z_tensionr_left.stl",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      },
+      {
+        "key": "z_tensioner_rght.stl",
+        "stlBasename": "z_tensioner_rght.stl",
+        "count": 1,
+        "objects": [
+          {
+            "name": "z_tensioner_rght.stl",
+            "stlBasename": "z_tensioner_rght.stl",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      },
+      {
+        "key": "spacer_m3x10",
+        "stlBasename": "spacer_m3x10",
+        "count": 1,
+        "objects": [
+          {
+            "name": "spacer_m3x10",
+            "stlBasename": "spacer_m3x10",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      },
+      {
+        "key": "lid",
+        "stlBasename": "lid",
+        "count": 1,
+        "objects": [
+          {
+            "name": "lid",
+            "stlBasename": "lid",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      },
+      {
+        "key": "belt-clamp",
+        "stlBasename": "belt-clamp",
+        "count": 1,
+        "objects": [
+          {
+            "name": "Belt-Clamp",
+            "stlBasename": "Belt-Clamp",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      }
+    ],
+    "matches": [
+      {
+        "key": "extruder_mount_b",
+        "filenames": [
+          "extruder_mount_a.stl",
+          "extruder_mount_c.stl",
+          "Extruder_Mount_D.stl"
+        ]
+      },
+      {
+        "key": "z_tensionr_left.stl",
+        "filenames": [
+          "z_tensioner_left.stl"
+        ]
+      },
+      {
+        "key": "z_tensioner_rght.stl",
+        "filenames": []
+      },
+      {
+        "key": "spacer_m3x10",
+        "filenames": [
+          "spacer_m3x12.stl"
+        ]
+      },
+      {
+        "key": "lid",
+        "filenames": [
+          "lid.stl"
+        ]
+      },
+      {
+        "key": "belt-clamp",
+        "filenames": [
+          "belt_clamp.stl",
+          "belt-clamp.stl"
+        ]
+      }
+    ]
+  }
+}

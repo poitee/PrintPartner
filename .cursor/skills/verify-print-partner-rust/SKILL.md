@@ -32,6 +32,12 @@ startup. The helper exchanges its private bootstrap credential for a session.
 
 The helper checks `/health` returns `{ "ok": true }` and `/__runtime` reports
 `compat.state == "ready"` on that owned origin before driving the feature.
+It also compares the exact recursive keys and JSON types of the 401 and
+authenticated `/health` responses and `/__runtime` against
+`helpers/health-runtime-shape.json`. Array element types are checked; lengths and
+scalar values (including versions, paths, ports and process IDs) are not frozen.
+The fixture describes the isolated desktop SQLite runtime. Intentional contract
+changes require reviewing and updating the fixture.
 Rerun the command with fresh disposable data if those checks fail.
 
 ## Drive
@@ -73,3 +79,24 @@ python3 .cursor/skills/verify-print-partner-rust/helpers/verify.py --repo /path/
 
 The transcript records that checkout's commit. Keep the distinction explicit in
 the PR; this smoke run does not cover the full desk-loop browser journey.
+
+### Long-running launch
+
+`verify.py launch` builds the same binary, starts `pp-server` on loopback and
+stays up. It prints one line with the origin, port and pid:
+
+```text
+PP_SERVER_URL=http://127.0.0.1:<port> PP_SERVER_PORT=<port> PP_SERVER_PID=<pid>
+```
+
+Pass `--credential-file <path>` to receive the one-use bootstrap credential
+(0600) there. Delete it after use. SIGTERM or SIGINT stops the server cleanly
+and exits 0 after the same shutdown checks as `verify`. `verify` (the default)
+is unchanged.
+
+The proof test starts `launch`, bootstraps a session, checks `/health` returns
+200, sends SIGTERM and asserts a zero exit and no surviving pp-server pid:
+
+```bash
+python3 .cursor/skills/verify-print-partner-rust/helpers/test_launch.py
+```

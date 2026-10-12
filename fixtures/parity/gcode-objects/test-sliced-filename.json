@@ -1,0 +1,40 @@
+{
+  "source": [
+    "web/apps/server/src/services/gcode-object-parser.ts",
+    "web/packages/domain/src/sliced-object-matching.ts"
+  ],
+  "origin": "test: matches a sliced filename to the corresponding source STL",
+  "input": {
+    "names": [
+      "cable_frame_anchor.bgcode"
+    ],
+    "libraryFilenames": [
+      "cable_frame_anchor.stl"
+    ]
+  },
+  "expected": {
+    "groups": [
+      {
+        "key": "cable_frame_anchor.bgcode",
+        "stlBasename": "cable_frame_anchor.bgcode",
+        "count": 1,
+        "objects": [
+          {
+            "name": "cable_frame_anchor.bgcode",
+            "stlBasename": "cable_frame_anchor.bgcode",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      }
+    ],
+    "matches": [
+      {
+        "key": "cable_frame_anchor.bgcode",
+        "filenames": [
+          "cable_frame_anchor.stl"
+        ]
+      }
+    ]
+  }
+}

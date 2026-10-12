@@ -14,6 +14,9 @@ parser.add_argument('--node', type=Path, required=True)
 parser.add_argument('--node-snapshot', type=Path, required=True)
 parser.add_argument('--binary', type=Path, required=True)
 args = parser.parse_args()
+# pp-source rejects group/world-writable root ancestors, so fixture modes
+# must not depend on the caller's umask.
+os.umask(0o022)
 args.output.mkdir(parents=True, exist_ok=False)
 args.output = args.output.resolve()
 args.binary = args.binary.resolve()

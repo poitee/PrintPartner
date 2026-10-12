@@ -5,7 +5,10 @@ use axum::{
 use http_body_util::BodyExt;
 use hyper_util::rt::TokioIo;
 use pp_core::{CoreRuntime, CoreStatus, DesktopLaunch, SupervisorConfig, VerifiedBundle};
-use std::{path::PathBuf, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 fn launch(data: PathBuf) -> DesktopLaunch {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -15,16 +18,44 @@ fn launch(data: PathBuf) -> DesktopLaunch {
     let manifest = std::env::var_os("PP_DESKTOP_RELEASE_MANIFEST")
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join("rust/bundle-manifest.json"));
-    let release: serde_json::Value =
+    launch_from_manifest(data, &manifest)
+}
+
+fn launch_from_manifest(data: PathBuf, manifest: &Path) -> DesktopLaunch {
+    let inventory: serde_json::Value =
         serde_json::from_slice(&std::fs::read(manifest).unwrap()).unwrap();
-    let web = root.join("web");
+    let (web, node, release) = if inventory["dependencies"]["web_path"] == "." {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../..")
+            .canonicalize()
+            .unwrap();
+        (
+            root.join("web"),
+            std::env::var_os("PP_TEST_NODE")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("/usr/bin/node")),
+            inventory,
+        )
+    } else {
+        let stage = manifest.parent().unwrap().canonicalize().unwrap();
+        let identity = if stage.join("release.json").is_file() {
+            stage.join("release.json")
+        } else {
+            stage.join("Resources/desktop-runtime/release.json")
+        };
+        let release: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(identity).unwrap()).unwrap();
+        (
+            stage.join(release["web"].as_str().unwrap()),
+            stage.join(release["node"].as_str().unwrap()),
+            release,
+        )
+    };
     DesktopLaunch {
         data_dir: data,
         assets: web.join("apps/web/dist"),
         bundle: VerifiedBundle {
-            node: std::env::var_os("PP_TEST_NODE")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("/usr/bin/node")),
+            node,
             entry: web.join("apps/server/dist/current/desktop.js"),
             web_root: web,
             runtime_version: release["runtime_version"].as_str().unwrap().into(),
@@ -667,6 +698,47 @@ async fn unexpected_marker_directory_is_preserved_and_reported() {
     );
 }
 
+#[tokio::test]
+async fn same_process_restart_retries_failed_storage_release_without_double_ownership() {
+    use fs2::FileExt;
+
+    let data = temporary("restart-after-failed-release");
+    let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    let marker = data.join(".desktop-owner.json");
+    std::fs::remove_file(&marker).unwrap();
+    std::fs::create_dir(&marker).unwrap();
+    let blocker = marker.join("retain");
+    std::fs::write(&blocker, b"must not delete").unwrap();
+    let lease = data.join(".desktop-lease/owner.json");
+    let owner = std::fs::read(&lease).unwrap();
+    let lock = std::fs::File::open(data.join(".desktop.lock")).unwrap();
+
+    let receipt = runtime.shutdown().await;
+    assert!(receipt.compat_reaped && receipt.gateway_stopped && receipt.runtime_removed);
+    assert!(!receipt.storage_released && !receipt.marker_removed && !receipt.complete());
+    assert!(receipt.errors.contains(&"storage_ownership_retained"));
+    assert!(lock.try_lock_exclusive().is_err());
+
+    assert!(CoreRuntime::start(launch(data.clone())).await.is_err());
+    assert_eq!(std::fs::read(&lease).unwrap(), owner);
+    assert_eq!(std::fs::read(&blocker).unwrap(), b"must not delete");
+    assert!(lock.try_lock_exclusive().is_err());
+
+    std::fs::remove_file(blocker).unwrap();
+    std::fs::remove_dir(&marker).unwrap();
+    let restarted = CoreRuntime::start(launch(data.clone()))
+        .await
+        .expect("same-process restart retries the retained failed release");
+    assert_ne!(std::fs::read(&lease).unwrap(), owner);
+    assert!(lock.try_lock_exclusive().is_err());
+    assert!(CoreRuntime::start(launch(data.clone())).await.is_err());
+    assert!(restarted.shutdown().await.complete());
+    assert!(!marker.exists() && !data.join(".desktop-lease").exists());
+    lock.try_lock_exclusive().unwrap();
+    FileExt::unlock(&lock).unwrap();
+    std::fs::remove_dir_all(data).unwrap();
+}
+
 #[test]
 fn drop_after_caller_runtime_teardown_reaps_writer_and_descendant() {
     use fs2::FileExt;
@@ -784,6 +856,11 @@ async fn compatibility_cleanup_failure_reports_failed_instead_of_ready() {
     assert!(receipt.errors.contains(&"compat_cleanup_unproved"));
     assert!(matches!(*state.borrow(), CoreStatus::Failed));
     std::fs::remove_dir_all(runtime_dir).unwrap();
+    let error = CoreRuntime::start(launch(data.clone()))
+        .await
+        .err()
+        .expect("unproved child closure must prevent same-process restart");
+    assert!(error.to_string().contains("Closure was not proved"));
     std::fs::remove_dir_all(data).unwrap();
 }
 
@@ -1154,4 +1231,133 @@ async fn desktop_marker_with_both_processes_dead_allows_start() {
     let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
     assert!(runtime.shutdown().await.complete());
     std::fs::remove_dir_all(data).unwrap();
+}
+
+#[tokio::test]
+async fn ticket_t_5_staged_release_reuses_the_persisted_desktop_identity() {
+    let data =
+        std::env::temp_dir().join(format!("pp-t-5-{}", hex::encode(rand::random::<[u8; 8]>())));
+    let selected = launch(data.clone());
+    let expected_version = selected.bundle.runtime_version.clone();
+    let mut runtime = CoreRuntime::start(selected).await.unwrap();
+    let origin = runtime.origin().to_owned();
+    let target = runtime.take_launch_target().unwrap().into_url();
+    let (status, headers, _) = request(
+        &origin,
+        target.strip_prefix(&origin).unwrap(),
+        "GET",
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let cookie = headers
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    let (status, _, body) =
+        request(&origin, "/health", "GET", Some(cookie), None, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let health: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(health["ok"], true);
+    assert_eq!(health["version"], expected_version);
+    let persisted = std::fs::read(data.join("desktop.toml")).unwrap();
+    assert!(runtime.shutdown().await.complete());
+    let reopened = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    assert_eq!(reopened.origin(), origin);
+    assert_eq!(std::fs::read(data.join("desktop.toml")).unwrap(), persisted);
+    assert!(reopened.shutdown().await.complete());
+    assert!(!data.join(".desktop-owner.json").exists());
+    assert!(!data.join(".desktop-lease").exists());
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+#[test]
+fn identity_manifest_selects_staged_paths_and_current_version() {
+    let root = temporary("identity-manifest");
+    std::fs::create_dir_all(&root).unwrap();
+    let root = root.canonicalize().unwrap();
+    let manifest = root.join("bundle-manifest.json");
+    for (identity, node, web) in [
+        ("release.json", "bin/node", "web"),
+        (
+            "Resources/desktop-runtime/release.json",
+            "MacOS/printpartner-node",
+            "Resources/desktop-runtime/web",
+        ),
+    ] {
+        let identity = root.join(identity);
+        std::fs::create_dir_all(identity.parent().unwrap()).unwrap();
+        std::fs::write(
+            &manifest,
+            serde_json::json!({"dependencies": {"web_path": web}}).to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            &identity,
+            serde_json::json!({
+                "node": node,
+                "web": web,
+                "runtime_version": "4.2.1-web",
+                "commit": "f00471f13d2f0e69631d3130e594b9244f93e01d"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let selected = launch_from_manifest(root.join("data"), &manifest);
+        assert_eq!(selected.bundle.node, root.join(node));
+        assert_eq!(selected.bundle.web_root, root.join(web));
+        assert_eq!(selected.assets, root.join(web).join("apps/web/dist"));
+        assert_eq!(
+            selected.bundle.entry,
+            root.join(web).join("apps/server/dist/current/desktop.js")
+        );
+        assert_eq!(selected.bundle.runtime_version, "4.2.1-web");
+        assert_eq!(
+            selected.bundle.commit,
+            "f00471f13d2f0e69631d3130e594b9244f93e01d"
+        );
+        std::fs::write(&identity, b"invalid json").unwrap();
+        assert!(
+            std::panic::catch_unwind(|| launch_from_manifest(root.join("data"), &manifest))
+                .is_err()
+        );
+        std::fs::remove_file(identity).unwrap();
+        assert!(
+            std::panic::catch_unwind(|| launch_from_manifest(root.join("data"), &manifest))
+                .is_err()
+        );
+    }
+    std::fs::write(
+        &manifest,
+        serde_json::json!({
+            "dependencies": {"web_path": "."},
+            "runtime_version": "4.2.1-web",
+            "commit": "f00471f13d2f0e69631d3130e594b9244f93e01d"
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let selected = launch_from_manifest(root.join("data"), &manifest);
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../web")
+        .canonicalize()
+        .unwrap();
+    assert_eq!(selected.bundle.web_root, source);
+    assert_eq!(selected.bundle.runtime_version, "4.2.1-web");
+    std::fs::write(&manifest, b"invalid json").unwrap();
+    assert!(
+        std::panic::catch_unwind(|| launch_from_manifest(root.join("data"), &manifest)).is_err()
+    );
+    std::fs::remove_file(&manifest).unwrap();
+    assert!(
+        std::panic::catch_unwind(|| launch_from_manifest(root.join("data"), &manifest)).is_err()
+    );
+    std::fs::remove_dir_all(root).unwrap();
 }
