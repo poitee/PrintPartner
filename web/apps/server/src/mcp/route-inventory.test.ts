@@ -52,7 +52,7 @@ const missingModes = (route: InventoryRoute): string[] =>
 
 const incompleteRoutes = (routes: InventoryRoute[]) =>
   routes
-    .filter((route) => route.authRequired === "mode-dependent")
+    .filter((route) => route.authRequired === "mode-dependent" || route.authByMode !== undefined)
     .map((route) => ({ route: `${route.method} ${route.path}`, modes: missingModes(route) }))
     .filter((entry) => entry.modes.length > 0);
 
@@ -74,7 +74,7 @@ describe("golden route inventory: /api/v1/mcp auth per mode", () => {
     });
   });
 
-  it("every mode-dependent route records a real probe for every auth mode", () => {
+  it("every authByMode map records a real probe for every auth mode", () => {
     expect(incompleteRoutes(inventory.routes)).toEqual([]);
   });
 
