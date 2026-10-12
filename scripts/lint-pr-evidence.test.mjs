@@ -3545,3 +3545,126 @@ test("r7-nice-plus-operand", () => {
   const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nnice +0 curl 3232235856\n```\n");
   assert.equal(result.ok, true, result.errors.join("; "));
 });
+
+function commandEvidence(command) {
+  return "## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\n" + command + "\n```\n";
+}
+
+function assertBannedCommand(command) {
+  const result = lintPrEvidence(commandEvidence(command));
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+}
+
+function assertSafeCommand(command) {
+  const result = lintPrEvidence(commandEvidence(command));
+  assert.equal(result.ok, true, result.errors.join("; "));
+}
+
+test("r11-sudo-decimal", () => {
+  assertBannedCommand("sudo curl 3232235856");
+});
+
+test("r11-sudo-safe", () => {
+  assertSafeCommand("sudo curl 3232235858");
+});
+
+test("r11-sudo-user-option", () => {
+  assertBannedCommand("sudo -u root curl 3232235856");
+});
+
+test("r11-sudo-user-value", () => {
+  assertSafeCommand("sudo -u 3232235856 curl 3232235858");
+});
+
+test("r11-sudo-list", () => {
+  assertSafeCommand("sudo -l curl 3232235856");
+});
+
+test("r11-sudo-help", () => {
+  assertSafeCommand("sudo --help curl 3232235856");
+});
+
+test("r11-sudo-env", () => {
+  assertBannedCommand("sudo env curl 3232235856");
+});
+
+test("r11-env-sudo", () => {
+  assertBannedCommand("env sudo curl 3232235856");
+});
+
+test("r11-sudo-terminator", () => {
+  assertBannedCommand("sudo -- curl 3232235856");
+});
+
+test("r11-sudo-host-word", () => {
+  assertSafeCommand("sudo -h curl 3232235856");
+});
+
+test("r11-sudo-reset-timestamp", () => {
+  assertBannedCommand("sudo -k curl 3232235856");
+});
+
+test("r11-sudo-shell", () => {
+  assertBannedCommand("sudo -s curl 3232235856");
+});
+
+test("r11-sudo-login-and-shell", () => {
+  assertSafeCommand("sudo -is curl 3232235856");
+});
+
+test("r11-sudo-noninteractive", () => {
+  assertBannedCommand("sudo -n -- curl 3232235856");
+});
+
+test("r11-variable-decimal", () => {
+  assertBannedCommand("curl --variable url=3232235856 --expand-url '{{url}}'");
+});
+
+test("r11-variable-safe", () => {
+  assertSafeCommand("curl --variable url=3232235858 --expand-url '{{url}}'");
+});
+
+test("r11-variable-plain-url", () => {
+  assertSafeCommand("curl --variable url=3232235856 --url '{{url}}'");
+});
+
+test("r11-variable-header", () => {
+  assertSafeCommand("curl --variable url=3232235856 --expand-header '{{url}}' http://127.0.0.1/");
+});
+
+test("r11-variable-data", () => {
+  assertSafeCommand("curl --variable url=3232235856 --expand-data '{{url}}' http://127.0.0.1/");
+});
+
+test("r11-variable-overwrite-banned", () => {
+  assertBannedCommand("curl --variable url=3232235858 --variable url=3232235856 --expand-url '{{url}}'");
+});
+
+test("r11-variable-overwrite-safe", () => {
+  assertSafeCommand("curl --variable url=3232235856 --variable url=3232235858 --expand-url '{{url}}'");
+});
+
+test("r11-variable-next", () => {
+  assertBannedCommand("curl --variable url=3232235856 http://127.0.0.1/ --next --expand-url '{{url}}'");
+});
+
+test("r11-variable-expand-assignment", () => {
+  assertBannedCommand("curl --variable host=3232235856 --expand-variable 'url={{host}}' --expand-url '{{url}}'");
+});
+
+test("r11-variable-trim", () => {
+  assertBannedCommand("curl --variable 'url= 3232235856' --expand-url '{{url:trim}}'");
+});
+
+test("r11-variable-attached", () => {
+  assertBannedCommand("curl --variable=url=3232235856 --expand-url={{url}}");
+});
+
+test("r11-variable-file-unread", () => {
+  assertSafeCommand("curl --variable url@/no/such/gre583-r11-file --expand-url '{{url}}'");
+});
+
+test("r11-variable-late", () => {
+  assertSafeCommand("curl --expand-url '{{url}}' --variable url=3232235856");
+});
