@@ -1,8 +1,10 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import AdmZip from "adm-zip";
 import { HOSTED_PLANNING_CAPABILITY, INVITE_BOARD_CAPABILITY, HOSTED_TENANT_DISK_QUOTA_BYTES } from "@print-partner/contracts";
+import { SourceActivationConflictError, AppRepository } from "./db/repository.js";
 import { createSaasPorts } from "./adapters/saas/index.js";
 import { buildApp } from "./app.js";
 import { loadConfig } from "./config.js";
@@ -354,6 +356,91 @@ it("cleans hosted upload staging and refuses snapshot expansion before activatio
     expect(existsSync(join(dataDir, "sources", String(id)))).toBe(false);
     expect(await measureTenantDiskUsage({ dataDir, reposDir: ports.reposDir, tenantId: user.user_id, sourceIds: [id] }))
       .toBeLessThanOrEqual(HOSTED_TENANT_DISK_QUOTA_BYTES);
+  } finally {
+    await app.close();
+    await ports.db.close();
+  }
+});
+
+it("removes an obsolete hosted working tree only after upload publication succeeds", async () => {
+  const { app, ports } = await hostedApp();
+  try {
+    const registration = await app.inject({ method: "POST", url: "/auth/register", payload: {
+      email: "legacy@example.com", password: "correct-horse-battery",
+    } });
+    const user = registration.json<{ user: { user_id: string } }>().user;
+    const cookie = String(registration.headers["set-cookie"]).split(";")[0]!;
+    const source = await app.inject({ method: "POST", url: "/sources", headers: { cookie },
+      payload: { name: "Legacy upload", source_kind: "archive" } });
+    expect(source.statusCode).toBe(200);
+    const id = source.json<{ id: number }>().id;
+    const dataDir = ports.dataDir;
+    const legacy = join(dataDir, "sources", String(id));
+    mkdirSync(join(legacy, "files"), { recursive: true });
+    writeFileSync(join(legacy, "files", "legacy.stl"), "legacy bytes");
+    const { measureTenantDiskUsage } = await import("./lib/tenant-disk-quota.js");
+    const usage = () => measureTenantDiskUsage({
+      dataDir, reposDir: ports.reposDir, tenantId: user.user_id, sourceIds: [id],
+    });
+    const planted = await usage();
+    const repo = ports.getRepository(user.user_id);
+    const beforePath = repo.getSource(id)?.local_path ?? null;
+    const rejected = await app.inject({
+      method: "POST",
+      url: `/sources/${id}/upload-zip`,
+      headers: { cookie, "content-type": "multipart/form-data; boundary=legacy-boundary" },
+      payload: Buffer.from("--legacy-boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"upload.zip\"\r\nContent-Type: application/octet-stream\r\n\r\nnot-a-zip\r\n--legacy-boundary--\r\n"),
+    });
+    expect(rejected.statusCode).toBe(400);
+    expect(readFileSync(join(legacy, "files", "legacy.stl"), "utf8")).toBe("legacy bytes");
+    expect(repo.getSource(id)?.local_path ?? null).toBe(beforePath);
+    expect(await usage()).toBe(planted);
+
+    const conflict = vi.spyOn(AppRepository.prototype, "activateSourceRevision").mockImplementation(() => {
+      throw new SourceActivationConflictError();
+    });
+    const conflicted = await app.inject({
+      method: "POST",
+      url: `/sources/${id}/upload-files`,
+      headers: { cookie, "content-type": "multipart/form-data; boundary=conflict-boundary" },
+      payload: Buffer.from("--conflict-boundary\r\nContent-Disposition: form-data; name=\"files\"; filename=\"part.stl\"\r\nContent-Type: application/octet-stream\r\n\r\nsolid conflict\nendsolid conflict\n\r\n--conflict-boundary--\r\n"),
+    });
+    conflict.mockRestore();
+    expect(conflicted.statusCode).toBe(409);
+    expect(readFileSync(join(legacy, "files", "legacy.stl"), "utf8")).toBe("legacy bytes");
+    expect(repo.getSource(id)?.local_path ?? null).toBe(beforePath);
+    expect(await usage()).toBe(planted);
+
+    const published = await app.inject({
+      method: "POST",
+      url: `/sources/${id}/upload-files`,
+      headers: { cookie, "content-type": "multipart/form-data; boundary=publish-boundary" },
+      payload: Buffer.from("--publish-boundary\r\nContent-Disposition: form-data; name=\"files\"; filename=\"part.stl\"\r\nContent-Type: application/octet-stream\r\n\r\nsolid published\nendsolid published\n\r\n--publish-boundary--\r\n"),
+    });
+    expect(published.statusCode).toBe(200);
+    expect(existsSync(legacy)).toBe(false);
+    const after = await usage();
+    mkdirSync(join(legacy, "files"), { recursive: true });
+    writeFileSync(join(legacy, "files", "legacy.stl"), "legacy bytes");
+    expect(await usage()).toBe(after + Buffer.byteLength("legacy bytes"));
+    rmSync(legacy, { recursive: true, force: true });
+
+    mkdirSync(join(legacy, "files"), { recursive: true });
+    writeFileSync(join(legacy, "files", "legacy.stl"), "legacy bytes");
+    const zip = new AdmZip();
+    zip.addFile("zipped.stl", Buffer.from("solid zipped\nendsolid zipped\n"));
+    const zipped = await app.inject({
+      method: "POST",
+      url: `/sources/${id}/upload-zip`,
+      headers: { cookie, "content-type": "multipart/form-data; boundary=zip-boundary" },
+      payload: Buffer.concat([
+        Buffer.from("--zip-boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"upload.zip\"\r\nContent-Type: application/octet-stream\r\n\r\n"),
+        zip.toBuffer(),
+        Buffer.from("\r\n--zip-boundary--\r\n"),
+      ]),
+    });
+    expect(zipped.statusCode).toBe(200);
+    expect(existsSync(legacy)).toBe(false);
   } finally {
     await app.close();
     await ports.db.close();

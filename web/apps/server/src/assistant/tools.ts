@@ -18,7 +18,7 @@ import {
   findSourceCategoryPath,
   moveSourceCategoryPath,
 } from "@print-partner/domain";
-import type { AppRepository } from "../db/repository.js";
+import { SourceActivationConflictError, type AppRepository } from "../db/repository.js";
 import { AcceptedPlanOperationalIntegrityError } from "../db/accepted-plan-operational.js";
 import { acceptedPlanBasis, acceptedProgressSummary } from "../db/accepted-plan-progress.js";
 import type { IntegrationPort } from "../integrations/store.js";
@@ -95,7 +95,7 @@ import {
 import { PlanDraftWorkspaceService } from "../services/plan-draft-workspace.js";
 import { createSourceUploadStaging, finalizeUploadedSource, writeUploadedFiles, writeUploadedZip } from "../services/archive-import.js";
 import { MAX_MCP_INLINE_FILE_BYTES, MCP_INLINE_UPLOAD_TOO_LARGE_DETAIL } from "../services/upload-limits.js";
-import { indexDocsForActivatedRevision, publishLocalSourceWorkingTree, SOURCE_PUBLICATION_UNAVAILABLE_DETAIL } from "../services/local-source-revision.js";
+import { indexDocsForActivatedRevision, publishLocalSourceWorkingTree, removeObsoleteHostedWorkingTree, SOURCE_PUBLICATION_UNAVAILABLE_DETAIL } from "../services/local-source-revision.js";
 import { resolvedFileUnderRoot } from "../lib/secure-path.js";
 import { addCustomFilament, listCustomFilaments } from "../services/custom-filaments.js";
 import { extractThreeMfMeshes } from "../services/three-mf-import.js";
@@ -3367,6 +3367,13 @@ export async function applyAssistantAction(
           if (indexedDocs?.outcome === "cleared") {
             getLogger().log("warn", "Uploaded Source documentation indexing failed", { sourceId, revisionId, error: indexedDocs.reason });
           }
+          if (deps.hostedPlanning) {
+            await removeObsoleteHostedWorkingTree({
+              sourcesDir,
+              sourceId,
+              activePath: updated.local_path,
+            });
+          }
           outcome = {
             ok: true,
             result: {
@@ -3379,6 +3386,9 @@ export async function applyAssistantAction(
           };
         } catch (error) {
           if (error instanceof TenantDiskQuotaError) throw error;
+          if (error instanceof SourceActivationConflictError) {
+            return { ok: false, status: 409, detail: error.message };
+          }
           return { ok: false, detail: error instanceof Error ? error.message : String(error) };
         } finally {
           try {

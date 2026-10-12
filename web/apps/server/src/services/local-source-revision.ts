@@ -556,3 +556,17 @@ export async function publishSourceManifestRevision(input: {
     recordLegacyManifestCutover: true,
   });
 }
+
+/** Drop a pre-snapshot hosted working tree after activation. Never removes the active path. */
+export async function removeObsoleteHostedWorkingTree(input: {
+  sourcesDir: string;
+  sourceId: number;
+  activePath: string | null | undefined;
+}): Promise<void> {
+  const legacy = resolve(join(input.sourcesDir, String(input.sourceId)));
+  if (input.activePath) {
+    const active = resolve(input.activePath);
+    if (active === legacy || active.startsWith(legacy + sep)) return;
+  }
+  await rm(legacy, { recursive: true, force: true });
+}

@@ -27,6 +27,7 @@ import {
   indexDocsForActivatedRevision,
   publishLocalSourceWorkingTree,
   publishSourceManifestRevision,
+  removeObsoleteHostedWorkingTree,
 } from "./local-source-revision.js";
 
 vi.mock("node:fs/promises", { spy: true });
@@ -764,6 +765,29 @@ async function expectSharedDigestRace(order: "creator-first" | "reuser-first") {
     sqlite.close();
   }
 }
+
+describe("removeObsoleteHostedWorkingTree", () => {
+  it("keeps the active path and deletes only an obsolete hosted working tree", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pp-hosted-tree-"));
+    roots.push(root);
+    const sources = join(root, "sources");
+    const legacy = join(sources, "7");
+    mkdirSync(join(legacy, "files"), { recursive: true });
+    writeFileSync(join(legacy, "files", "keep.stl"), "keep");
+    const activeChild = join(legacy, "still-active");
+    mkdirSync(activeChild, { recursive: true });
+    await removeObsoleteHostedWorkingTree({ sourcesDir: sources, sourceId: 7, activePath: activeChild });
+    expect(readFileSync(join(legacy, "files", "keep.stl"), "utf8")).toBe("keep");
+    await removeObsoleteHostedWorkingTree({ sourcesDir: sources, sourceId: 7, activePath: legacy });
+    expect(existsSync(join(legacy, "files", "keep.stl"))).toBe(true);
+    await removeObsoleteHostedWorkingTree({
+      sourcesDir: sources,
+      sourceId: 7,
+      activePath: join(root, "repos", "7", "revisions", "abc"),
+    });
+    expect(existsSync(legacy)).toBe(false);
+  });
+});
 
 async function waitForCount(releases: Array<() => void>, count: number) {
   const started = Date.now();

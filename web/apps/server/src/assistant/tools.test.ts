@@ -1,10 +1,16 @@
 import { acceptPlanForTest } from "../test/accept-plan.js";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import Fastify from "fastify";
+import rateLimit from "@fastify/rate-limit";
 import { createSelfHostPorts } from "../adapters/self-host/index.js";
+import { loadConfig } from "../config.js";
+import { SourceActivationConflictError } from "../db/repository.js";
+import { measureTenantDiskUsage } from "../lib/tenant-disk-quota.js";
+import { registerAssistantRoutes } from "../routes/assistant.js";
 import { InProcessJobRunner } from "../services/job-runner.js";
 import { encodeAcceptedPlate3mf, type StlMesh } from "@print-partner/domain";
 import { ASSISTANT_TOOL_SPECS } from "./tool-specs.js";
@@ -484,6 +490,92 @@ option_groups:
     expect(repo.getSourceActivationObservation(source.id)).toEqual(before);
     expect(readFileSync(join(working, "files", "keep.stl"), "utf8")).toBe("previous STL");
     expect(readFileSync(join(working, "upload.zip"), "utf8")).toBe("previous ZIP");
+  });
+
+  it("returns 409 when a confirmed import loses activation and the assistant route keeps that status", async () => {
+    const source = repo.createSource({ name: "Stale import", source_kind: "local" });
+    const working = join(dataDir, "sources", String(source.id));
+    mkdirSync(join(working, "files"), { recursive: true });
+    writeFileSync(join(working, "files", "keep.stl"), "previous STL");
+    const before = repo.getSource(source.id);
+    const proposal = await invokeAssistantTool("propose_import_source_files", {
+      source_id: source.id,
+      files: [{ path: "parts/uploaded.stl", content_base64: Buffer.from("solid uploaded").toString("base64") }],
+    }, { repo });
+    const conflict = vi.spyOn(repo, "activateSourceRevision").mockImplementation(() => {
+      throw new SourceActivationConflictError();
+    });
+    const applied = await applyAssistantAction(proposal.proposedAction!, {
+      repo, dataDir, jobs: { start: async () => "unused" } as never,
+    });
+    expect(applied).toMatchObject({
+      ok: false,
+      status: 409,
+      detail: "Source changed during sync; revision was not activated",
+    });
+    expect(repo.getSource(source.id)?.local_path).toBe(before?.local_path ?? null);
+    expect(readFileSync(join(working, "files", "keep.stl"), "utf8")).toBe("previous STL");
+
+    const app = Fastify();
+    await app.register(rateLimit, { global: false });
+    app.decorateRequest("tenantId", "");
+    app.addHook("onRequest", async (request: { tenantId: string }) => {
+      request.tenantId = "default";
+    });
+    await registerAssistantRoutes(app, {
+      repo,
+      config: { ...loadConfig(), dataDir },
+      jobs: { start: async () => "unused" } as never,
+    });
+    const response = await app.inject({
+      method: "POST",
+      url: "/assistant/actions/apply",
+      payload: { action: { ...proposal.proposedAction, plan_id: proposal.proposedAction?.plan_id ?? 1 } },
+    });
+    conflict.mockRestore();
+    await app.close();
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      status: 409,
+      title: "Conflict",
+      detail: "Source changed during sync; revision was not activated",
+    });
+    expect(readFileSync(join(working, "files", "keep.stl"), "utf8")).toBe("previous STL");
+  });
+
+  it("removes an obsolete hosted working tree only after a confirmed import activates", async () => {
+    const source = repo.createSource({ name: "Hosted legacy", source_kind: "local" });
+    const legacy = join(dataDir, "sources", String(source.id));
+    mkdirSync(join(legacy, "files"), { recursive: true });
+    writeFileSync(join(legacy, "files", "legacy.stl"), "legacy bytes");
+    const reposDir = join(dataDir, "repos");
+    const usage = () => measureTenantDiskUsage({
+      dataDir, reposDir, tenantId: "default", sourceIds: [source.id],
+    });
+    const planted = await usage();
+    const rejected = await invokeAssistantTool("propose_import_source_files", {
+      source_id: source.id, archive_base64: Buffer.from("not-a-zip").toString("base64"),
+    }, { repo });
+    const failed = await applyAssistantAction(rejected.proposedAction!, {
+      repo, dataDir, hostedPlanning: true, jobs: { start: async () => "unused" } as never,
+    });
+    expect(failed.ok).toBe(false);
+    expect(readFileSync(join(legacy, "files", "legacy.stl"), "utf8")).toBe("legacy bytes");
+    expect(await usage()).toBe(planted);
+
+    const proposal = await invokeAssistantTool("propose_import_source_files", {
+      source_id: source.id,
+      files: [{ path: "parts/uploaded.stl", content_base64: Buffer.from("solid uploaded").toString("base64") }],
+    }, { repo });
+    const applied = await applyAssistantAction(proposal.proposedAction!, {
+      repo, dataDir, hostedPlanning: true, jobs: { start: async () => "unused" } as never,
+    });
+    expect(applied.ok).toBe(true);
+    expect(existsSync(legacy)).toBe(false);
+    const after = await usage();
+    mkdirSync(join(legacy, "files"), { recursive: true });
+    writeFileSync(join(legacy, "files", "legacy.stl"), "legacy bytes");
+    expect(await usage()).toBe(after + Buffer.byteLength("legacy bytes"));
   });
 
   it("refuses MCP file imports above the 64 MiB inline limit", async () => {

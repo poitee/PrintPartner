@@ -45,7 +45,7 @@ import {
 } from "../services/source-docs-index.js";
 import { PDF_BG_EXTRACT_BYTES } from "../services/pdf-text-extract.js";
 import { findSourceManifestPath, sourcePdfTextStorage } from "../services/source-workspace.js";
-import { indexDocsForActivatedRevision, publishLocalSourceWorkingTree, SOURCE_PUBLICATION_UNAVAILABLE_DETAIL } from "../services/local-source-revision.js";
+import { indexDocsForActivatedRevision, publishLocalSourceWorkingTree, removeObsoleteHostedWorkingTree, SOURCE_PUBLICATION_UNAVAILABLE_DETAIL } from "../services/local-source-revision.js";
 import { scanSourceArtifacts } from "../services/source-artifacts.js";
 import { sendIfTenantDiskQuotaExceeded, runWithTenantDiskQuota, TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
 
@@ -434,6 +434,13 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
           if (indexedDocs?.outcome === "cleared") {
             request.log.warn({ err: indexedDocs.reason, sourceId: id, revisionId: updated.current_source_revision_id }, "Uploaded Source documentation indexing failed");
           }
+          if (deps.hostedPlanning) {
+            await removeObsoleteHostedWorkingTree({
+              sourcesDir: deps.sourcesDir,
+              sourceId: id,
+              activePath: updated.local_path,
+            });
+          }
           void prefetchSourceCover(deps, id);
           return {
             ...deps.repo.sourceSummaryForClient(updated),
@@ -559,6 +566,13 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
             });
           if (indexedDocs?.outcome === "cleared") {
             request.log.warn({ err: indexedDocs.reason, sourceId: id, revisionId: updated.current_source_revision_id }, "Uploaded Source documentation indexing failed");
+          }
+          if (deps.hostedPlanning) {
+            await removeObsoleteHostedWorkingTree({
+              sourcesDir: deps.sourcesDir,
+              sourceId: id,
+              activePath: updated.local_path,
+            });
           }
           void prefetchSourceCover(deps, id);
           return {
