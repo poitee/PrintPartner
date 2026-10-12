@@ -142,13 +142,12 @@ function stripHiddenMarkdownCompute(text, { inlineMultiline = true, includeRawHt
     const indent = indentWidth(raw.match(/^[ \t]*/)[0]);
     if (htmlBlock && !insideFenceContainer(raw, htmlBlock)) htmlBlock = null;
     if (htmlBlock) {
-      if (includeRawHtml) {
-        const visible = stripHtmlComments(raw, htmlBlock.commentOpen);
-        htmlBlock.commentOpen = visible.open;
-        onLiteralLine?.(lineIndex, visible.visible);
-      }
+      const visible = stripHtmlComments(raw, htmlBlock.commentOpen);
+      htmlBlock.commentOpen = visible.open;
+      if (includeRawHtml) onLiteralLine?.(lineIndex, visible.visible);
+      const marker = !htmlBlock.rawTag && htmlConcreteMarker(visible.visible).includes("\u0001");
       if (htmlBlock.end.test(quoteContent(raw, htmlBlock.quote))) htmlBlock = null;
-      kept.push("");
+      kept.push(marker ? "\u0001" : "");
       paragraphOpen = false;
       continue;
     }
@@ -208,13 +207,11 @@ function stripHiddenMarkdownCompute(text, { inlineMultiline = true, includeRawHt
           : content.startsWith("<![CDATA[") ? /\]\]>/
           : /^<![A-Za-z]/.test(content) ? />/
           : /^\s*$/;
-        htmlBlock = { end, quote: prefix.quote,
+        htmlBlock = { end, rawTag: Boolean(rawTag), quote: prefix.quote,
           column: hasList ? containerPrefix(quoteLine).column : (prefix.quote ? 0 : listColumn) };
-        if (includeRawHtml) {
-          const visible = stripHtmlComments(raw);
-          htmlBlock.commentOpen = visible.open;
-          onLiteralLine?.(lineIndex, visible.visible, { boundary: true });
-        }
+        const visible = stripHtmlComments(raw);
+        htmlBlock.commentOpen = visible.open;
+        if (includeRawHtml) onLiteralLine?.(lineIndex, visible.visible, { boundary: true });
         if (end.test(content)) htmlBlock = null;
         // A complete image or anchor is an artifact, but its attributes are not metadata.
         let keptLine = "";
@@ -230,6 +227,7 @@ function stripHiddenMarkdownCompute(text, { inlineMultiline = true, includeRawHt
             keptLine = `${lead}${destination}`;
           }
         }
+        if (!rawTag && htmlConcreteMarker(visible.visible).includes("\u0001")) keptLine = "\u0001";
         kept.push(keptLine);
         paragraphOpen = false;
         continue;
@@ -2768,6 +2766,7 @@ function assignmentName(text) {
   if (eq <= 0) return null;
   let name = text.slice(0, eq);
   if (name.endsWith("+")) name = name.slice(0, -1);
+  name = name.replace(/\[[^\]]*\]$/, "");
   if (!/^[A-Za-z_][\w]*$/.test(name)) return null;
   return name;
 }
@@ -2824,7 +2823,7 @@ function transferClientName(program) {
   let base = slash < 0 ? program : program.slice(slash + 1);
   if (base.length > 4 && base.slice(-4).toLowerCase() === ".exe") base = base.slice(0, -4);
   const folded = base.toLowerCase();
-  return folded === "curl" || folded === "wget" || folded === "ssh" ? folded : null;
+  return ["curl", "wget", "ssh", "scp", "sftp"].includes(folded) ? folded : null;
 }
 
 function effectiveCurlStart(command, assigned, stop = (program) => Boolean(transferClientName(program))) {
@@ -3298,7 +3297,7 @@ function rememberAssignment(word, shellVars, assigned, markExported = false) {
   if (!word?.text) return;
   const name = assignmentName(word.text);
   if (!name) return;
-  if (assigned && word.assignable) assigned.add(name);
+  if (assigned) assigned.add(name);
   const eq = word.text.indexOf("=");
   const flags = assignmentFlags(word, assigned);
   const prior = shellVars.get(name);
@@ -3317,7 +3316,7 @@ function rememberAssignment(word, shellVars, assigned, markExported = false) {
 
 function rememberStandalone(command, shellVars, assigned) {
   if (command.length === 0) return false;
-  if (!command.every((word) => /^[a-zA-Z_][\w]*\+?=/.test(word?.text ?? ""))) return false;
+  if (!command.every((word) => assignmentName(word?.text ?? ""))) return false;
   for (const word of command) rememberAssignment(word, shellVars, assigned, Boolean(shellVars.allexport));
   return true;
 }
@@ -3361,11 +3360,11 @@ function noteShellExport(command, assigned, shellVars) {
   const start = commandProgramIndex(command);
   const program = command[start]?.text;
   // declare -x and typeset -x set the same export mark. +x does not clear it.
-  const builtin = program === "declare" || program === "typeset";
+  const builtin = ["declare", "typeset", "readonly", "local"].includes(program);
   if (program !== "export" && !builtin) return false;
   let namesAt = start + 1;
+  let exporting = !builtin;
   if (builtin) {
-    let exporting = false;
     for (let index = start + 1; index < command.length; index += 1) {
       const option = command[index].text;
       if (option === "--") {
@@ -3374,9 +3373,9 @@ function noteShellExport(command, assigned, shellVars) {
       }
       if (!/^[-+][A-Za-z]+$/.test(option)) break;
       namesAt = index + 1;
+      if (option.startsWith("-") && /[pfF]/.test(option)) return true;
       if (option.startsWith("-") && option.includes("x")) exporting = true;
     }
-    if (!exporting) return false;
   }
   for (const word of command.slice(0, start)) {
     if (assigned && word.assignable) {
@@ -3390,12 +3389,13 @@ function noteShellExport(command, assigned, shellVars) {
     if (text === "--") continue;
     if (text.startsWith("-") && text !== "-" && !text.includes("=")) continue;
     if (text.includes("=")) {
-      rememberAssignment(word, shellVars, assigned, true);
+      rememberAssignment(word, shellVars, assigned, exporting);
       continue;
     }
     if (/^[A-Za-z_][\w]*$/.test(text)) {
       const binding = shellVars.get(text);
-      if (binding) binding.exported = true;
+      if (binding && exporting) binding.exported = true;
+      if (assigned) assigned.add(text);
     }
   }
   return true;
@@ -3660,9 +3660,10 @@ function sshDestinations(args) {
     }
     return true;
   };
-  const finish = (arg) => {
+  const finish = (arg, remote = []) => {
     const host = arg ? sshHostToken(arg) : null;
     if (host) hostValue(host);
+    if (remote.length) commands.push(remote.join(" "));
     return {
       hosts,
       commands: permitLocalCommand === false ? commands : [...commands, ...localCommands],
@@ -3677,7 +3678,7 @@ function sshDestinations(args) {
   };
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
-    if (arg === "--") return finish(args[index + 1]);
+    if (arg === "--") return finish(args[index + 1], args.slice(index + 2));
     if (arg.startsWith("-") && arg !== "-") {
       if (arg.startsWith("--")) return { hosts, commands, sshUnresolved, reject: true };
       const cluster = arg.slice(1);
@@ -3699,7 +3700,7 @@ function sshDestinations(args) {
               if (scalar === null) sshUnresolved = true;
               else if (key === "hostname") hostValue(scalar);
               else if (!jumpHosts(scalar)) sshUnresolved = true;
-            } else if (["proxycommand", "localcommand", "knownhostscommand"].includes(key)) {
+            } else if (["proxycommand", "localcommand", "knownhostscommand", "remotecommand"].includes(key)) {
               if (option[2].trim().toLowerCase() !== "none") {
                 if (commands.length + localCommands.length >= MAX_STATIC_CURL_TARGETS) sshUnresolved = true;
                 else (key === "localcommand" ? localCommands : commands).push(option[2]);
@@ -3723,9 +3724,60 @@ function sshDestinations(args) {
       }
       continue;
     }
-    return finish(arg);
+    return finish(arg, args.slice(index + 1));
   }
   return { hosts, commands, sshUnresolved };
+}
+
+function sshTransferDestinations(client, args) {
+  const options = [];
+  const hosts = [];
+  let sshUnresolved = false;
+  let operands = false;
+  const flags = client === "scp" ? "346ABCOpqRrsTv" : "46aCfpqrNv";
+  const values = client === "scp" ? "cDFiJlopPSX" : "bBcDFiJloPRsSX";
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (hosts.length + options.length > MAX_STATIC_CURL_TARGETS) { sshUnresolved = true; break; }
+    if (!operands && arg === "--") { operands = true; continue; }
+    if (!operands && arg.startsWith("-") && arg !== "-") {
+      for (let at = 1; at < arg.length; at += 1) {
+        const flag = arg[at];
+        if (flags.includes(flag)) continue;
+        if (!values.includes(flag)) { sshUnresolved = true; break; }
+        const value = at + 1 < arg.length ? arg.slice(at + 1) : args[++index];
+        if (value === undefined) { sshUnresolved = true; break; }
+        if (["J", "o", "F"].includes(flag)) options.push(`-${flag}`, value);
+        if (["S", "D"].includes(flag) || (client === "sftp" && ["b", "s"].includes(flag))) sshUnresolved = true;
+        break;
+      }
+      continue;
+    }
+    if (client === "sftp") {
+      if (/^sftp:\/\//i.test(arg)) {
+        try { hosts.push(new URL(arg).hostname); } catch { sshUnresolved = true; }
+      } else {
+        const remote = /^(?:[^@]+@)?(\[[^\]]+\]|[^:]+)(?::.*)?$/.exec(arg);
+        const host = remote && sshHostToken(remote[1]);
+        if (host) hosts.push(host); else sshUnresolved = true;
+      }
+    } else {
+      if (/^scp:\/\//i.test(arg)) {
+        try { hosts.push(new URL(arg).hostname); } catch { sshUnresolved = true; }
+      } else {
+        const colon = arg.indexOf(":");
+        // A slash before the colon makes an scp operand a local file.
+        if (colon !== -1 && !arg.slice(0, colon).includes("/")) {
+          const remote = /^(?:[^@]+@)?(\[[^\]]+\]|[^:]+):/.exec(arg);
+          const host = remote && sshHostToken(remote[1]);
+          if (host) hosts.push(host); else sshUnresolved = true;
+        }
+      }
+    }
+  }
+  const checked = sshDestinations([...options, "example.test"]);
+  return { hosts: [...hosts, ...checked.hosts], commands: checked.commands,
+    sshUnresolved: sshUnresolved || checked.sshUnresolved || checked.reject };
 }
 
 function staticSshClientOptions(client, args) {
@@ -3881,6 +3933,14 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
     const programAt = opened.index === -1 ? commandProgramIndex(command) : opened.index;
     const shell = staticShellOperand(command.slice(programAt));
     if (shell) {
+      const shellName = command[programAt]?.text.split("/").at(-1);
+      if (!shell.sameShell && shellName === "bash") {
+        let startup = shellVars.get("BASH_ENV");
+        for (const word of command.slice(0, programAt)) {
+          if (word.text.startsWith("BASH_ENV=")) startup = { value: word.text.slice(9), exported: true };
+        }
+        if (startup?.exported && (startup.value || startup.substitution || startup.parameter || startup.arithmetic)) processSource = true;
+      }
       const prefixes = [];
       for (const word of command.slice(0, programAt)) noteProxyAssignment(prefixes, word, assigned);
       if (shell.sameShell) {
@@ -4033,8 +4093,8 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
       if (target) targets.push(target);
     }
     const client = transferClientName(command[start].text);
-    if (client === "ssh") {
-      const destinations = sshDestinations(args);
+    if (["ssh", "scp", "sftp"].includes(client)) {
+      const destinations = client === "ssh" ? sshDestinations(args) : sshTransferDestinations(client, args);
       if (destinations.reject) parameter = true;
       sshUnresolved ||= destinations.sshUnresolved;
       urls.push(...destinations.hosts);
@@ -4223,10 +4283,10 @@ function targetsBannedLan(sectionText, definitions, literalText = []) {
     if (curl.sshUnresolved) sshUnresolved = true;
     if (curl.overflow) return true;
     const decoded = shellVisible(joined);
-    const targets = [...decoded.matchAll(/(?:https?:|\/\/)[^\s<>()"'`]+/gi)]
+    const targets = [...decoded.matchAll(/(?:(?:https?|ftp|wss?):|\/\/)[^\s<>()"'`]+/gi)]
       .map((match) => trimToken(match[0]));
     targets.push(...curl.targets);
-    targets.push(...words.filter((word) => /^(?:https?:|\/\/)/i.test(word)).map(trimToken));
+    targets.push(...words.filter((word) => /^(?:(?:https?|ftp|wss?):|\/\/)/i.test(word)).map(trimToken));
     for (const token of [...decoded.split(/[\s<>()"'`]+/), ...words]) {
       const target = trimToken(token);
       if (/[.:/?#]/.test(target)
@@ -4236,7 +4296,7 @@ function targetsBannedLan(sectionText, definitions, literalText = []) {
     }
     return targets.some((target) => {
       try {
-        let host = new URL(target, /^https?:/i.test(target) ? undefined : "https://example.test/").hostname;
+        let host = new URL(target, /^(?:https?|ftp|wss?):/i.test(target) ? undefined : "https://example.test/").hostname;
         const mapped = host.match(/^\[::ffff:([\da-f]{1,4}):([\da-f]{1,4})\]$/i);
         if (mapped) {
           const high = parseInt(mapped[1], 16);

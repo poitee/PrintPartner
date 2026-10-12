@@ -5969,7 +5969,7 @@ test("r31-ssh-jump-data-and-disabled-jumps", () => {
   for (const command of [
     "ssh -J none example.test", "ssh -o ProxyJump=none example.test",
     "ssh -J example.test other.test", "ssh -o User=3232235856 example.test",
-    "ssh -i 3232235856 example.test", "ssh example.test -J 3232235856",
+    "ssh -i 3232235856 example.test",
   ]) assertSafeCommand(command);
 });
 
@@ -6071,8 +6071,6 @@ test("r32-ssh-benign-flags-hosts-listeners-and-command-data", () => {
     'ssh -D 127.0.0.1:8080 example.test', 'ssh -R 127.0.0.1:8080 example.test',
     'ssh -L 8080:/tmp/socket example.test', 'ssh -R 8080:/tmp/socket example.test',
     'ssh -W [::1]:22 example.test', 'ssh -F none -o CanonicalizeHostname=no example.test',
-    'ssh example.test -o HostName=3232235856',
-    'ssh -o RemoteCommand="curl 3232235856" example.test',
     "printf %s 'ssh -o HostName=3232235856 example.test'",
   ]) assertSafeCommand(command);
 });
@@ -6142,5 +6140,72 @@ for (const flag of ["L", "R"]) {
 test("r33-unix-listener-reported-cases-through-cli", () => {
   for (const flag of ["L", "R"]) {
     r19Expect(commandEvidence(`ssh -${flag} /tmp/listener.sock:3232235856:22 example.test`), 1, "", LAN_STDERR);
+  }
+});
+
+for (const command of [
+  'scp artifact.txt 3232235856:/tmp/', 'scp user@3232235856:/tmp/a artifact.txt',
+  'sftp 3232235856', 'sftp user@3232235856:/tmp/',
+  'scp -J 3232235856 artifact.txt public.test:/tmp/', 'sftp -o HostName=3232235856 public.test',
+  'scp -o "ProxyCommand=curl 3232235856" artifact.txt public.test:/tmp/',
+  'ssh example.test curl 3232235856', 'ssh example.test "curl 3232235856"',
+  'ssh -o "RemoteCommand=curl 3232235856" example.test',
+]) test(`r34-banned-${command}`, () => assertBannedCommand(command));
+
+for (const command of [
+  'declare HOST=3232235856; curl "$HOST"', 'typeset HOST=3232235856; wget "$HOST"',
+  'HOST[0]=3232235856; curl "${HOST[0]}"', 'declare -a HOST; HOST[0]=3232235856; curl "$HOST"',
+  "BASH_ENV=<(printf 'curl 3232235856\\n') bash -c true",
+  'export BASH_ENV=startup.sh; bash -c true', 'env BASH_ENV=startup.sh bash -c true',
+  'ssh example.test "$(generate_command)"', 'scp -S wrapper artifact.txt example.test:/tmp/',
+  'sftp -b commands.txt example.test',
+]) test(`r34-refuse-${command}`, () => assert.equal(lintPrEvidence(commandEvidence(command)).ok, false));
+
+for (const command of [
+  'scp artifact.txt example.test:/tmp/', 'scp ./3232235856:file artifact.txt',
+  'scp -i 3232235856 artifact.txt user@example.test:/tmp/', 'sftp example.test',
+  'scp -J public.test artifact.txt other.test:/tmp/',
+  'declare HOST=example.test; curl example.test', 'typeset HOST=example.test; curl example.test',
+  'ssh example.test "curl example.test"', 'ssh example.test printf 3232235856',
+  'BASH_ENV= bash -c true', 'printf %s "BASH_ENV=startup.sh bash -c true"',
+]) test(`r34-safe-${command}`, () => assertSafeCommand(command));
+
+for (const scheme of ['ftp', 'ws', 'wss']) test(`r34-special-${scheme}`, () => {
+  assertBannedCommand(`[server](${scheme}:3232235856)`);
+  assertSafeCommand(`[server](${scheme}:example.test)`);
+});
+
+test('r34-nested-html-artifact-preserved', () => {
+  const artifact = '<details>\n<summary>Screenshot</summary>\n<img src="evidence/shot.png">\n</details>';
+  const body = bodyWithEvidence(`Exemption: none\n- Journey exercised: Settings saved\n- Steps followed to produce the evidence: Open settings and save\n- Result observed: Settings persisted\n- Screenshot / recording / verify-skill output or trace:\n${artifact}`);
+  const result = lintPrEvidence(body);
+  assert.equal(result.ok, true, result.errors.join('\n'));
+});
+
+for (const command of [
+  'scp scp://user@3232235856/tmp/a artifact.txt', 'sftp sftp://user@3232235856/tmp/',
+  'scp artifact.txt [::ffff:c0a8:150]:/tmp/', 'sftp [::ffff:c0a8:150]:/tmp/',
+]) test(`r34-uri-and-ipv6-${command}`, () => assertBannedCommand(command));
+
+for (const command of [
+  'readonly HOST=3232235856; curl "$HOST"', 'declare -a HOST=(3232235856); curl "${HOST[0]}"',
+  'sftp -s custom-subsystem example.test', 'ssh example.test -J 3232235856',
+  'ssh example.test -o HostName=3232235856',
+]) test(`r34-failclosed-additional-${command}`, () => assert.equal(lintPrEvidence(commandEvidence(command)).ok, false));
+
+test('r34-benign-startup-and-scp-bandwidth-options', () => {
+  assertSafeCommand('scp -l 3232235856 artifact.txt example.test:/tmp/');
+  assertSafeCommand('BASH_ENV=startup.sh sh -c true');
+  assertSafeCommand('export BASH_ENV=startup.sh; BASH_ENV= bash -c true');
+});
+
+test('r34-html-hidden-image-does-not-count', () => {
+  for (const artifact of [
+    '<details>\n<!--\n<img src="evidence/shot.png">\n-->\n</details>',
+    '<details><!-- <img src="evidence/shot.png"> --></details>',
+    '<script>\n<img src="evidence/shot.png">\n</script>',
+  ]) {
+    const body = bodyWithEvidence(`Exemption: none\n- Journey exercised: Settings saved\n- Steps followed to produce the evidence: Open settings and save\n- Result observed: Settings persisted\n- Screenshot / recording / verify-skill output or trace:\n${artifact}`);
+    assert.equal(lintPrEvidence(body).ok, false);
   }
 });
