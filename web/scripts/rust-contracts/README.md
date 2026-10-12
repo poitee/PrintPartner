@@ -75,3 +75,5 @@ isolated copies of executable inputs and require freshness verification to fail.
 This proof does not establish route/worker cutover, failure/restart recovery of
 an operation, WS/MCP protocol parity or dependency completion. Node retains
 production authority throughout this unit.
+
+Generated integer parsers normalize negative zero to zero after validation, matching native unsigned serialization. Raw-input controls cover zero-allowed root and nested DTO fields and reject negative zero for positive receipt and array decision quantities. A planted emitter regression must fail exact-output parity.

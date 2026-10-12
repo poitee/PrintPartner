@@ -76,6 +76,7 @@ export function generate(document) {
         result = "z.number()" + (schema.type === "integer" ? ".int()" : "");
         if (schema.minimum !== undefined) result += `.min(${schema.minimum})`;
         if (schema.maximum !== undefined) result += `.max(${schema.maximum})`;
+        if (schema.type === "integer") result += ".transform((value) => value === 0 ? 0 : value)";
         break;
       case "string":
         assert(!schema.format || schema.format === "date", `Unsupported format ${schema.format}`);

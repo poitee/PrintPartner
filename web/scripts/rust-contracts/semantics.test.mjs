@@ -14,6 +14,7 @@ const load = (path) => JSON.parse(readFileSync(new URL(path, import.meta.url), "
 const probe = load("../../packages/contracts/test-fixtures/t9/semantics.json").cases;
 const autosave = load("../../packages/contracts/test-fixtures/desktop/autosave-v1.json").normalized.schema_cases;
 const supplemental = load("./supplemental.json").cases;
+const zeroCases = load("./negative-zero-cases.json").cases;
 const wireCases = load("./wire-cases.json").cases;
 assert.equal(probe.length, 34);
 assert.equal(autosave.length, 41);
@@ -26,7 +27,7 @@ const parsers = (module) => ({
 });
 const rows = [
   ...probe.map((item) => ({...item, parser: "semanticFixtureSchema", expected: item.accepted, output: item.output})),
-  ...[...autosave, ...supplemental, ...wireCases].map((item) => ({...item, expected: item.outcome.kind === "accepted", output: item.outcome.parsed})),
+  ...[...autosave, ...supplemental, ...wireCases, ...zeroCases].map((item) => ({...item, expected: item.outcome.kind === "accepted", output: item.outcome.parsed})),
 ];
 assert.equal(wireCases.length, 4);
 for (const row of wireCases) test(`ticket_t_63_contracts_node_wire_boundary: ${row.name}`, () => {
@@ -80,13 +81,13 @@ test("ticket_t_63_contracts_generator_fails_closed", () => {
     assert.throws(() => generate(doc), /Unsupported|Missing Rust refinement/);
   }
 });
-async function mutatedModule(change) {
+async function mutatedModule(change, changeOutput = (source) => source) {
   const doc = globalThis.structuredClone(schemas); change(doc);
   const dir = mkdtempSync(join(tmpdir(), "pp-rust-contract-mutation-"));
   writeFileSync(join(dir, "package.json"), '{"type":"module"}\n');
   symlinkSync(fileURLToPath(new URL("../../node_modules", import.meta.url)), join(dir, "node_modules"), "dir");
   const output = join(dir, "generated.ts");
-  writeFileSync(output, generate(doc));
+  writeFileSync(output, changeOutput(generate(doc)));
   try { return await import(pathToFileURL(output).href); } finally { rmSync(dir, {recursive: true}); }
 }
 for (const [name, change] of [
@@ -98,4 +99,13 @@ for (const [name, change] of [
 ]) test(`ticket_t_63_contracts_planted_wrong_${name}`, async () => {
   const module = await mutatedModule(change);
   assert(mismatchCount(module) > 0, `${name} mutation escaped full corpus`);
+});
+
+test("ticket_t_63_contracts_planted_wrong_negative_zero_output", async () => {
+  const module = await mutatedModule(() => {}, (source) => {
+    const changed = source.replaceAll(".transform((value) => value === 0 ? 0 : value)", "");
+    assert.notEqual(changed, source);
+    return changed;
+  });
+  assert(mismatchCount(module) >= 3, "Removed scalar normalization escaped raw-input DTO corpus");
 });

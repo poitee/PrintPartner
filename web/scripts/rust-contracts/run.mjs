@@ -47,7 +47,7 @@ if (mode === "--check") {
   run("native-independent-parity", cargo, ["test", "--locked", "--manifest-path", "rust/Cargo.toml", "-p", "pp-api-types", "--features", "codegen", "--test", "ticket_t_63_contracts", "--", "ticket_t_63_contracts"]);
   const nativeLog = readFileSync(join(receipts, "native-independent-parity.log"), "utf8");
   const counts = /test result: ok\. (\d+) passed; 0 failed/.exec(nativeLog);
-  assert(counts && Number(counts[1]) >= 8, "Reverse native parity must execute every named test with nonzero coverage");
+  assert(counts && Number(counts[1]) >= 9, "Reverse native parity must execute every named test with nonzero coverage");
 }
 sources ??= sourceHashes();
 const artifacts = Object.fromEntries(readdirSync(receipts).filter((name) => name !== "manifest.json").map((name) => [name, sha256(readFileSync(join(receipts, name)))]));

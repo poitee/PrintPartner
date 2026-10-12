@@ -56,6 +56,39 @@ fn ticket_t_63_contracts_duplicate_keys_match_node_and_production_boundary() {
     }
 }
 #[test]
+fn ticket_t_63_contracts_negative_zero_matches_production_boundary() {
+    let corpus: Value = serde_json::from_str(include_str!(
+        "../../../../web/scripts/rust-contracts/negative-zero-cases.json"
+    ))
+    .unwrap();
+    let cases = corpus["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 5);
+    check(cases, false);
+    for case in cases {
+        let text = case["raw_input"].as_str().unwrap();
+        assert!(text.contains("-0"));
+        let result =
+            match case["parser"].as_str().unwrap() {
+                "parseSavePlanChoicesRequest" => pp_api_types::parse_request(text)
+                    .map(|value| serde_json::to_value(value).unwrap()),
+                "parsePlanDraftIdentity" => pp_api_types::parse_identity(text)
+                    .map(|value| serde_json::to_value(value).unwrap()),
+                "parseApplyPlanDraftReceipt" => pp_api_types::parse_receipt(text)
+                    .map(|value| serde_json::to_value(value).unwrap()),
+                other => panic!("Unexpected production parser {other}"),
+            };
+        assert_eq!(
+            result.is_ok(),
+            case["outcome"]["kind"] == "accepted",
+            "{}: {result:?}",
+            case["name"]
+        );
+        if let Ok(value) = result {
+            assert_eq!(value, case["outcome"]["parsed"]);
+        }
+    }
+}
+#[test]
 fn ticket_t_63_contracts_native_semantic_corpus() {
     let corpus: Value = serde_json::from_str(include_str!(
         "../../../../web/packages/contracts/test-fixtures/t9/semantics.json"
