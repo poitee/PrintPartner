@@ -1,5 +1,5 @@
 {
-  "evidence": "Fastify onRoute union probed without credentials per auth mode (self-host/single-user-auth, self-host/multi-user, saas/multi-user, self-host/api-key, self-host/non-loopback); authRequired=true for 401/403/503, mode-dependent routes carry authByMode with observed status; static build assets excluded",
+  "evidence": "Fastify onRoute union probed without credentials per auth mode (self-host/single-user-auth, self-host/multi-user, saas/multi-user, self-host/api-key, self-host/non-loopback); authRequired=true for 401/403/503 where the route is registered, mode-dependent routes carry authByMode with observed status, registeredByMode records onRoute registration and observed status when any mode did not register the route; static build assets excluded",
   "routes": [
     {
       "method": "OPTIONS",
@@ -202,56 +202,232 @@
       "path": "/api/v1/board/comments/:id",
       "owner": "web/apps/server/src/routes/board.ts",
       "websocket": false,
-      "authRequired": true
+      "authRequired": true,
+      "registeredByMode": {
+        "self-host/single-user-auth": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/multi-user": {
+          "registered": false,
+          "status": 401
+        },
+        "saas/multi-user": {
+          "registered": true,
+          "status": 401
+        },
+        "self-host/api-key": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/non-loopback": {
+          "registered": false,
+          "status": 401
+        }
+      }
     },
     {
       "method": "GET",
       "path": "/api/v1/board/posts",
       "owner": "web/apps/server/src/routes/board.ts",
       "websocket": false,
-      "authRequired": true
+      "authRequired": true,
+      "registeredByMode": {
+        "self-host/single-user-auth": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/multi-user": {
+          "registered": false,
+          "status": 401
+        },
+        "saas/multi-user": {
+          "registered": true,
+          "status": 401
+        },
+        "self-host/api-key": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/non-loopback": {
+          "registered": false,
+          "status": 401
+        }
+      }
     },
     {
       "method": "HEAD",
       "path": "/api/v1/board/posts",
       "owner": "web/apps/server/src/routes/board.ts",
       "websocket": false,
-      "authRequired": true
+      "authRequired": true,
+      "registeredByMode": {
+        "self-host/single-user-auth": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/multi-user": {
+          "registered": false,
+          "status": 401
+        },
+        "saas/multi-user": {
+          "registered": true,
+          "status": 401
+        },
+        "self-host/api-key": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/non-loopback": {
+          "registered": false,
+          "status": 401
+        }
+      }
     },
     {
       "method": "POST",
       "path": "/api/v1/board/posts",
       "owner": "web/apps/server/src/routes/board.ts",
       "websocket": false,
-      "authRequired": true
+      "authRequired": true,
+      "registeredByMode": {
+        "self-host/single-user-auth": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/multi-user": {
+          "registered": false,
+          "status": 401
+        },
+        "saas/multi-user": {
+          "registered": true,
+          "status": 401
+        },
+        "self-host/api-key": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/non-loopback": {
+          "registered": false,
+          "status": 401
+        }
+      }
     },
     {
       "method": "GET",
       "path": "/api/v1/board/posts/:id",
       "owner": "web/apps/server/src/routes/board.ts",
       "websocket": false,
-      "authRequired": true
+      "authRequired": true,
+      "registeredByMode": {
+        "self-host/single-user-auth": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/multi-user": {
+          "registered": false,
+          "status": 401
+        },
+        "saas/multi-user": {
+          "registered": true,
+          "status": 401
+        },
+        "self-host/api-key": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/non-loopback": {
+          "registered": false,
+          "status": 401
+        }
+      }
     },
     {
       "method": "HEAD",
       "path": "/api/v1/board/posts/:id",
       "owner": "web/apps/server/src/routes/board.ts",
       "websocket": false,
-      "authRequired": true
+      "authRequired": true,
+      "registeredByMode": {
+        "self-host/single-user-auth": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/multi-user": {
+          "registered": false,
+          "status": 401
+        },
+        "saas/multi-user": {
+          "registered": true,
+          "status": 401
+        },
+        "self-host/api-key": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/non-loopback": {
+          "registered": false,
+          "status": 401
+        }
+      }
     },
     {
       "method": "POST",
       "path": "/api/v1/board/posts/:id/comments",
       "owner": "web/apps/server/src/routes/board.ts",
       "websocket": false,
-      "authRequired": true
+      "authRequired": true,
+      "registeredByMode": {
+        "self-host/single-user-auth": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/multi-user": {
+          "registered": false,
+          "status": 401
+        },
+        "saas/multi-user": {
+          "registered": true,
+          "status": 401
+        },
+        "self-host/api-key": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/non-loopback": {
+          "registered": false,
+          "status": 401
+        }
+      }
     },
     {
       "method": "POST",
       "path": "/api/v1/board/posts/:id/hide",
       "owner": "web/apps/server/src/routes/board.ts",
       "websocket": false,
-      "authRequired": true
+      "authRequired": true,
+      "registeredByMode": {
+        "self-host/single-user-auth": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/multi-user": {
+          "registered": false,
+          "status": 401
+        },
+        "saas/multi-user": {
+          "registered": true,
+          "status": 401
+        },
+        "self-host/api-key": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/non-loopback": {
+          "registered": false,
+          "status": 401
+        }
+      }
     },
     {
       "method": "GET",
@@ -1339,7 +1515,29 @@
       "path": "/api/v1/plans/:id/shares",
       "owner": "web/apps/server/src/routes/shares.ts",
       "websocket": false,
-      "authRequired": true
+      "authRequired": true,
+      "registeredByMode": {
+        "self-host/single-user-auth": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/multi-user": {
+          "registered": true,
+          "status": 401
+        },
+        "saas/multi-user": {
+          "registered": true,
+          "status": 403
+        },
+        "self-host/api-key": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/non-loopback": {
+          "registered": false,
+          "status": 401
+        }
+      }
     },
     {
       "method": "GET",
@@ -2081,28 +2279,116 @@
       "path": "/api/v1/shares/:id",
       "owner": "web/apps/server/src/routes/shares.ts",
       "websocket": false,
-      "authRequired": true
+      "authRequired": true,
+      "registeredByMode": {
+        "self-host/single-user-auth": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/multi-user": {
+          "registered": true,
+          "status": 401
+        },
+        "saas/multi-user": {
+          "registered": true,
+          "status": 403
+        },
+        "self-host/api-key": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/non-loopback": {
+          "registered": false,
+          "status": 401
+        }
+      }
     },
     {
       "method": "POST",
       "path": "/api/v1/shares/:token/accept",
       "owner": "web/apps/server/src/routes/shares.ts",
       "websocket": false,
-      "authRequired": true
+      "authRequired": true,
+      "registeredByMode": {
+        "self-host/single-user-auth": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/multi-user": {
+          "registered": true,
+          "status": 401
+        },
+        "saas/multi-user": {
+          "registered": true,
+          "status": 403
+        },
+        "self-host/api-key": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/non-loopback": {
+          "registered": false,
+          "status": 401
+        }
+      }
     },
     {
       "method": "GET",
       "path": "/api/v1/shares/incoming",
       "owner": "web/apps/server/src/routes/shares.ts",
       "websocket": false,
-      "authRequired": true
+      "authRequired": true,
+      "registeredByMode": {
+        "self-host/single-user-auth": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/multi-user": {
+          "registered": true,
+          "status": 401
+        },
+        "saas/multi-user": {
+          "registered": true,
+          "status": 403
+        },
+        "self-host/api-key": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/non-loopback": {
+          "registered": false,
+          "status": 401
+        }
+      }
     },
     {
       "method": "HEAD",
       "path": "/api/v1/shares/incoming",
       "owner": "web/apps/server/src/routes/shares.ts",
       "websocket": false,
-      "authRequired": true
+      "authRequired": true,
+      "registeredByMode": {
+        "self-host/single-user-auth": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/multi-user": {
+          "registered": true,
+          "status": 401
+        },
+        "saas/multi-user": {
+          "registered": true,
+          "status": 401
+        },
+        "self-host/api-key": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/non-loopback": {
+          "registered": false,
+          "status": 401
+        }
+      }
     },
     {
       "method": "GET",
@@ -3607,56 +3893,232 @@
       "path": "/board/comments/:id",
       "owner": "web/apps/server/src/routes/board.ts",
       "websocket": false,
-      "authRequired": true
+      "authRequired": true,
+      "registeredByMode": {
+        "self-host/single-user-auth": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/multi-user": {
+          "registered": false,
+          "status": 401
+        },
+        "saas/multi-user": {
+          "registered": true,
+          "status": 401
+        },
+        "self-host/api-key": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/non-loopback": {
+          "registered": false,
+          "status": 401
+        }
+      }
     },
     {
       "method": "GET",
       "path": "/board/posts",
       "owner": "web/apps/server/src/routes/board.ts",
       "websocket": false,
-      "authRequired": true
+      "authRequired": true,
+      "registeredByMode": {
+        "self-host/single-user-auth": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/multi-user": {
+          "registered": false,
+          "status": 401
+        },
+        "saas/multi-user": {
+          "registered": true,
+          "status": 401
+        },
+        "self-host/api-key": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/non-loopback": {
+          "registered": false,
+          "status": 401
+        }
+      }
     },
     {
       "method": "HEAD",
       "path": "/board/posts",
       "owner": "web/apps/server/src/routes/board.ts",
       "websocket": false,
-      "authRequired": true
+      "authRequired": true,
+      "registeredByMode": {
+        "self-host/single-user-auth": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/multi-user": {
+          "registered": false,
+          "status": 401
+        },
+        "saas/multi-user": {
+          "registered": true,
+          "status": 401
+        },
+        "self-host/api-key": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/non-loopback": {
+          "registered": false,
+          "status": 401
+        }
+      }
     },
     {
       "method": "POST",
       "path": "/board/posts",
       "owner": "web/apps/server/src/routes/board.ts",
       "websocket": false,
-      "authRequired": true
+      "authRequired": true,
+      "registeredByMode": {
+        "self-host/single-user-auth": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/multi-user": {
+          "registered": false,
+          "status": 401
+        },
+        "saas/multi-user": {
+          "registered": true,
+          "status": 401
+        },
+        "self-host/api-key": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/non-loopback": {
+          "registered": false,
+          "status": 401
+        }
+      }
     },
     {
       "method": "GET",
       "path": "/board/posts/:id",
       "owner": "web/apps/server/src/routes/board.ts",
       "websocket": false,
-      "authRequired": true
+      "authRequired": true,
+      "registeredByMode": {
+        "self-host/single-user-auth": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/multi-user": {
+          "registered": false,
+          "status": 401
+        },
+        "saas/multi-user": {
+          "registered": true,
+          "status": 401
+        },
+        "self-host/api-key": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/non-loopback": {
+          "registered": false,
+          "status": 401
+        }
+      }
     },
     {
       "method": "HEAD",
       "path": "/board/posts/:id",
       "owner": "web/apps/server/src/routes/board.ts",
       "websocket": false,
-      "authRequired": true
+      "authRequired": true,
+      "registeredByMode": {
+        "self-host/single-user-auth": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/multi-user": {
+          "registered": false,
+          "status": 401
+        },
+        "saas/multi-user": {
+          "registered": true,
+          "status": 401
+        },
+        "self-host/api-key": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/non-loopback": {
+          "registered": false,
+          "status": 401
+        }
+      }
     },
     {
       "method": "POST",
       "path": "/board/posts/:id/comments",
       "owner": "web/apps/server/src/routes/board.ts",
       "websocket": false,
-      "authRequired": true
+      "authRequired": true,
+      "registeredByMode": {
+        "self-host/single-user-auth": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/multi-user": {
+          "registered": false,
+          "status": 401
+        },
+        "saas/multi-user": {
+          "registered": true,
+          "status": 401
+        },
+        "self-host/api-key": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/non-loopback": {
+          "registered": false,
+          "status": 401
+        }
+      }
     },
     {
       "method": "POST",
       "path": "/board/posts/:id/hide",
       "owner": "web/apps/server/src/routes/board.ts",
       "websocket": false,
-      "authRequired": true
+      "authRequired": true,
+      "registeredByMode": {
+        "self-host/single-user-auth": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/multi-user": {
+          "registered": false,
+          "status": 401
+        },
+        "saas/multi-user": {
+          "registered": true,
+          "status": 401
+        },
+        "self-host/api-key": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/non-loopback": {
+          "registered": false,
+          "status": 401
+        }
+      }
     },
     {
       "method": "GET",
@@ -4608,7 +5070,29 @@
       "path": "/plans/:id/shares",
       "owner": "web/apps/server/src/routes/shares.ts",
       "websocket": false,
-      "authRequired": true
+      "authRequired": true,
+      "registeredByMode": {
+        "self-host/single-user-auth": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/multi-user": {
+          "registered": true,
+          "status": 401
+        },
+        "saas/multi-user": {
+          "registered": true,
+          "status": 403
+        },
+        "self-host/api-key": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/non-loopback": {
+          "registered": false,
+          "status": 401
+        }
+      }
     },
     {
       "method": "GET",
@@ -5455,28 +5939,116 @@
       "path": "/shares/:id",
       "owner": "web/apps/server/src/routes/shares.ts",
       "websocket": false,
-      "authRequired": true
+      "authRequired": true,
+      "registeredByMode": {
+        "self-host/single-user-auth": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/multi-user": {
+          "registered": true,
+          "status": 401
+        },
+        "saas/multi-user": {
+          "registered": true,
+          "status": 403
+        },
+        "self-host/api-key": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/non-loopback": {
+          "registered": false,
+          "status": 401
+        }
+      }
     },
     {
       "method": "POST",
       "path": "/shares/:token/accept",
       "owner": "web/apps/server/src/routes/shares.ts",
       "websocket": false,
-      "authRequired": true
+      "authRequired": true,
+      "registeredByMode": {
+        "self-host/single-user-auth": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/multi-user": {
+          "registered": true,
+          "status": 401
+        },
+        "saas/multi-user": {
+          "registered": true,
+          "status": 403
+        },
+        "self-host/api-key": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/non-loopback": {
+          "registered": false,
+          "status": 401
+        }
+      }
     },
     {
       "method": "GET",
       "path": "/shares/incoming",
       "owner": "web/apps/server/src/routes/shares.ts",
       "websocket": false,
-      "authRequired": true
+      "authRequired": true,
+      "registeredByMode": {
+        "self-host/single-user-auth": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/multi-user": {
+          "registered": true,
+          "status": 401
+        },
+        "saas/multi-user": {
+          "registered": true,
+          "status": 403
+        },
+        "self-host/api-key": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/non-loopback": {
+          "registered": false,
+          "status": 401
+        }
+      }
     },
     {
       "method": "HEAD",
       "path": "/shares/incoming",
       "owner": "web/apps/server/src/routes/shares.ts",
       "websocket": false,
-      "authRequired": true
+      "authRequired": true,
+      "registeredByMode": {
+        "self-host/single-user-auth": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/multi-user": {
+          "registered": true,
+          "status": 401
+        },
+        "saas/multi-user": {
+          "registered": true,
+          "status": 401
+        },
+        "self-host/api-key": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/non-loopback": {
+          "registered": false,
+          "status": 401
+        }
+      }
     },
     {
       "method": "GET",
@@ -6008,14 +6580,58 @@
       "path": "/ws/profile-sync",
       "owner": "web/apps/server/src/services/profile-sync-broadcast.ts",
       "websocket": true,
-      "authRequired": true
+      "authRequired": true,
+      "registeredByMode": {
+        "self-host/single-user-auth": {
+          "registered": true,
+          "status": 401
+        },
+        "self-host/multi-user": {
+          "registered": false,
+          "status": 401
+        },
+        "saas/multi-user": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/api-key": {
+          "registered": true,
+          "status": 401
+        },
+        "self-host/non-loopback": {
+          "registered": true,
+          "status": 401
+        }
+      }
     },
     {
       "method": "HEAD",
       "path": "/ws/profile-sync",
       "owner": "web/apps/server/src/services/profile-sync-broadcast.ts",
       "websocket": true,
-      "authRequired": true
+      "authRequired": true,
+      "registeredByMode": {
+        "self-host/single-user-auth": {
+          "registered": true,
+          "status": 401
+        },
+        "self-host/multi-user": {
+          "registered": false,
+          "status": 401
+        },
+        "saas/multi-user": {
+          "registered": false,
+          "status": 401
+        },
+        "self-host/api-key": {
+          "registered": true,
+          "status": 401
+        },
+        "self-host/non-loopback": {
+          "registered": true,
+          "status": 401
+        }
+      }
     }
   ]
 }
