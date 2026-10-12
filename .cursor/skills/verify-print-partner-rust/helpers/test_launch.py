@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Proof for `verify.py launch`: start, reach /health, SIGTERM, clean exit."""
 import contextlib
+import fcntl
 import importlib.util
 import inspect
 import io
@@ -1022,6 +1023,273 @@ class ForceKillTest(unittest.TestCase):
                     if pid is not None and process_alive(pid):
                         with contextlib.suppress(ProcessLookupError):
                             os.kill(pid, signal.SIGKILL)
+
+
+def staged_node_binary():
+    candidate = os.environ.get("PP_TEST_NODE")
+    if not candidate:
+        fallback = "/opt/agent-fleet/artifacts/.local/share/mise/installs/node/24.21.0/bin/node"
+        candidate = fallback if os.path.isfile(fallback) else shutil.which("node")
+    if not candidate:
+        raise AssertionError("node binary not found")
+    path = Path(candidate).resolve()
+    header = path.read_bytes()[:4]
+    macho = {
+        b"\xfe\xed\xfa\xce",
+        b"\xfe\xed\xfa\xcf",
+        b"\xcf\xfa\xed\xfe",
+        b"\xce\xfa\xed\xfe",
+        b"\xca\xfe\xba\xbe",
+    }
+    if header != b"\x7fELF" and header not in macho:
+        raise AssertionError(f"{path} is not an ELF or Mach-O node ({header!r})")
+    return path
+
+
+REAL_NODE_SERVER = r'''#!/usr/bin/env python3
+import fcntl, json, os, pathlib, signal, subprocess, sys
+args = sys.argv[1:]
+data = None
+for index, arg in enumerate(args):
+    if arg == "--data" and index + 1 < len(args):
+        data = pathlib.Path(args[index + 1])
+if data is None:
+    sys.exit("missing --data")
+node = os.environ["PP_REAL_NODE"]
+node_proc = subprocess.Popen(
+    [node, "-e", "setInterval(() => {}, 1000000)"],
+    start_new_session=True,
+    stdin=subprocess.DEVNULL,
+)
+pathlib.Path(os.environ["PP_NODE_PIDFILE"]).write_text(str(node_proc.pid))
+same = subprocess.Popen(["sleep", "600"], stdin=subprocess.DEVNULL)
+pathlib.Path(os.environ["PP_SAME_GROUP_PIDFILE"]).write_text(str(same.pid))
+if os.environ.get("PP_HOLD_BEFORE_ORIGIN") == "1":
+    signal.pause()
+runtime = pathlib.Path(os.environ["PP_TEST_RUNTIME"])
+runtime.mkdir(parents=True, exist_ok=True)
+data.mkdir(parents=True, exist_ok=True)
+(data / ".desktop-owner.json").write_text(json.dumps({"runtime_dir": str(runtime)}))
+desktop_lock = (data / ".desktop.lock").open("a+")
+fcntl.flock(desktop_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+external = os.environ.get("PP_LOCK_PATH")
+external_handle = None
+if external:
+    external_handle = open(external, "a+")
+    fcntl.flock(external_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+def stop(_signum, _frame):
+    for proc in (node_proc, same):
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=5)
+    marker = data / ".desktop-owner.json"
+    if marker.exists():
+        marker.unlink()
+    if runtime.exists():
+        runtime.rmdir()
+    sys.exit(0)
+
+if os.environ.get("PP_GRACEFUL") == "1":
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    signal.signal(signal.SIGHUP, stop)
+print("http://127.0.0.1:49152", flush=True)
+while True:
+    signal.pause()
+'''
+
+
+class SeparateGroupNodeTest(unittest.TestCase):
+    def launch(self, *, hold=False, graceful=False):
+        node = staged_node_binary()
+        temporary = tempfile.TemporaryDirectory(prefix="pp-launch-node-group-")
+        temp = Path(temporary.name)
+        root = make_fixture_repo(temp / "repo")
+        bin_dir = temp / "bin"
+        bin_dir.mkdir()
+        runtime = temp / "runtime"
+        runtime.mkdir()
+        server = bin_dir / "pp-server"
+        write_executable(bin_dir / "node", "#!/bin/sh\nexit 0\n")
+        write_executable(bin_dir / "npm", "#!/bin/sh\nexit 0\n")
+        write_executable(server, REAL_NODE_SERVER)
+        write_executable(
+            bin_dir / "cargo",
+            "#!/bin/sh\necho '{\"reason\":\"compiler-artifact\","
+            "\"target\":{\"name\":\"pp-server\"},"
+            f"\"executable\":\"{server}\"}}'\n",
+        )
+        (root / "rust/scripts").mkdir(parents=True)
+        (root / "rust/scripts/build-desktop-manifest.py").write_text("")
+        node_pidfile = temp / "node.pid"
+        same_pidfile = temp / "same.pid"
+        lock_path = temp / "external.lock"
+        lock_path.write_text("")
+        env = dict(
+            os.environ,
+            PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            PP_REAL_NODE=str(node),
+            PP_NODE_PIDFILE=str(node_pidfile),
+            PP_SAME_GROUP_PIDFILE=str(same_pidfile),
+            PP_TEST_RUNTIME=str(runtime),
+            PP_LOCK_PATH=str(lock_path),
+            PP_HOLD_BEFORE_ORIGIN="1" if hold else "0",
+            PP_GRACEFUL="1" if graceful else "0",
+        )
+        log = temp / "launch.log"
+        stdout = log.open("w")
+        try:
+            process = subprocess.Popen(
+                [sys.executable, str(HELPER), "launch", "--repo", str(root)],
+                env=env,
+                stdout=stdout,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+        finally:
+            stdout.close()
+        return temporary, process, log, node_pidfile, same_pidfile, lock_path, node
+
+    def wait_pid(self, pidfile):
+        deadline = time.monotonic() + 30
+        while not pidfile.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertTrue(pidfile.exists(), f"{pidfile.name} was not written")
+        pid = int(pidfile.read_text())
+        self.assertTrue(process_alive(pid), f"{pidfile.name} pid {pid} is not live")
+        return pid
+
+    def assert_groups(self, node_pid, same_pid):
+        node_group = os.getpgid(node_pid)
+        same_group = os.getpgid(same_pid)
+        node_parent = int(subprocess.check_output(
+            ["ps", "-o", "ppid=", "-p", str(node_pid)], text=True))
+        self.assertEqual(node_group, node_pid, "node does not lead its own group")
+        self.assertNotEqual(node_group, os.getpgid(node_parent), "node shares the server group")
+        self.assertEqual(same_group, os.getpgid(node_parent), "same-group child left the server group")
+        return node_parent
+
+    def test_sigkill_during_startup_reaps_separate_group_node(self):
+        temporary, process, _log, node_pidfile, same_pidfile, _lock, _node = self.launch(hold=True)
+        node_pid = same_pid = None
+        try:
+            node_pid = self.wait_pid(node_pidfile)
+            same_pid = self.wait_pid(same_pidfile)
+            self.assert_groups(node_pid, same_pid)
+            killed = time.monotonic()
+            process.kill()
+            process.wait(timeout=10)
+            self.assertTrue(wait_until_gone(node_pid, 10), "separate-group node survived launcher SIGKILL during startup")
+            self.assertTrue(wait_until_gone(same_pid, 10), "server-group child survived launcher SIGKILL during startup")
+            print(
+                f"startup SIGKILL -> node {node_pid} and same-group {same_pid} gone after "
+                f"{int((time.monotonic() - killed) * 1000)} ms; poll sleep is 50 ms, not signal latency"
+            )
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=10)
+            if process.stdout is not None:
+                process.stdout.close()
+            for pid in (node_pid, same_pid):
+                if pid is not None and process_alive(pid):
+                    with contextlib.suppress(ProcessLookupError):
+                        os.kill(pid, signal.SIGKILL)
+            temporary.cleanup()
+
+    def test_sigkill_while_serving_reaps_node_and_keeps_unrelated_peer(self):
+        temporary, process, log, node_pidfile, same_pidfile, lock_path, _node = self.launch()
+        node_pid = same_pid = server_pid = None
+        peer = None
+        try:
+            node_pid = self.wait_pid(node_pidfile)
+            same_pid = self.wait_pid(same_pidfile)
+            server_pid = self.assert_groups(node_pid, same_pid)
+            deadline = time.monotonic() + 30
+            while "PP_SERVER_URL=" not in log.read_text() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertIn("PP_SERVER_URL=", log.read_text(), "launcher did not reach the origin")
+            peer = subprocess.Popen(["sleep", "600"], start_new_session=True, stdin=subprocess.DEVNULL)
+            self.assertNotEqual(os.getpgid(peer.pid), os.getpgid(node_pid))
+            self.assertNotEqual(peer.pid, server_pid)
+            killed = time.monotonic()
+            process.kill()
+            process.wait(timeout=10)
+            self.assertTrue(wait_until_gone(node_pid, 10), "separate-group node survived launcher SIGKILL")
+            self.assertTrue(wait_until_gone(same_pid, 10), "server-group child survived launcher SIGKILL")
+            self.assertTrue(wait_until_gone(server_pid, 10), "pp-server survived launcher SIGKILL")
+            self.assertTrue(process_alive(peer.pid), "unrelated peer was killed")
+            lock = lock_path.open("a+")
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(lock, fcntl.LOCK_UN)
+            lock.close()
+            restarted = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    "import fcntl,sys; f=open(sys.argv[1],'a+'); fcntl.flock(f, fcntl.LOCK_EX|fcntl.LOCK_NB); f.write('restarted\\n'); f.flush()",
+                    str(lock_path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(restarted.returncode, 0, restarted.stderr)
+            self.assertIn("restarted", lock_path.read_text())
+            print(
+                f"SIGKILL -> node {node_pid} server {server_pid} same-group {same_pid} gone; "
+                f"peer {peer.pid} live; lock reacquired after "
+                f"{int((time.monotonic() - killed) * 1000)} ms; poll sleep is 50 ms, not signal latency"
+            )
+        finally:
+            if peer is not None and peer.poll() is None:
+                peer.kill()
+                peer.wait(timeout=5)
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=10)
+            if process.stdout is not None:
+                process.stdout.close()
+            for pid in (node_pid, same_pid, server_pid):
+                if pid is not None and process_alive(pid):
+                    with contextlib.suppress(ProcessLookupError):
+                        os.kill(pid, signal.SIGKILL)
+            temporary.cleanup()
+
+    def test_sigterm_quit_reaps_separate_group_node_and_releases_lock(self):
+        temporary, process, log, node_pidfile, same_pidfile, lock_path, _node = self.launch(graceful=True)
+        node_pid = same_pid = None
+        try:
+            node_pid = self.wait_pid(node_pidfile)
+            same_pid = self.wait_pid(same_pidfile)
+            self.assert_groups(node_pid, same_pid)
+            deadline = time.monotonic() + 30
+            while "PP_SERVER_URL=" not in log.read_text() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertIn("PP_SERVER_URL=", log.read_text())
+            process.send_signal(signal.SIGTERM)
+            self.assertEqual(process.wait(timeout=30), 0)
+            output = log.read_text()
+            self.assertIn("STOP: SIGTERM received", output)
+            self.assertIn("STOP: exit=0;", output)
+            self.assertTrue(wait_until_gone(node_pid, 10), "node survived SIGTERM quit")
+            self.assertTrue(wait_until_gone(same_pid, 10), "server-group child survived SIGTERM quit")
+            lock = lock_path.open("a+")
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            lock.close()
+            print(f"SIGTERM -> exit 0; node {node_pid} gone; lock reacquired")
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=10)
+            if process.stdout is not None:
+                process.stdout.close()
+            for pid in (node_pid, same_pid):
+                if pid is not None and process_alive(pid):
+                    with contextlib.suppress(ProcessLookupError):
+                        os.kill(pid, signal.SIGKILL)
+            temporary.cleanup()
 
 
 if __name__ == "__main__":

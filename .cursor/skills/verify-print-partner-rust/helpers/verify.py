@@ -191,14 +191,73 @@ def _stop_group(process, grace):
 
 
 PR_SET_PDEATHSIG = 1
-GUARD_SOURCE = ("import os, signal, sys\n"
-                "fd, group = int(sys.argv[1]), int(sys.argv[2])\n"
-                "while os.read(fd, 1):\n"
-                "    pass\n"
-                "try:\n"
-                "    os.killpg(group, signal.SIGKILL)\n"
-                "except ProcessLookupError:\n"
-                "    pass\n")
+# The leader stays alive when the launcher's pipe hits EOF, so descendants can
+# still be enumerated. Node leads another group. Signal that pid. A peer that
+# joined the group is left for killpg of the leader.
+GUARD_SOURCE = "\n".join([
+    "import ctypes, os, signal, subprocess, sys",
+    "fd, group = int(sys.argv[1]), int(sys.argv[2])",
+    "me = os.getpid()",
+    "if sys.platform.startswith('linux'):",
+    "    ctypes.CDLL(None).prctl(1, 0)",
+    "while os.read(fd, 1):",
+    "    pass",
+    "def snapshot():",
+    "    text = subprocess.check_output(['ps', '-axo', 'pid=,ppid=,lstart='], text=True)",
+    "    rows = []",
+    "    for line in text.splitlines():",
+    "        parts = line.split(None, 2)",
+    "        if len(parts) != 3:",
+    "            continue",
+    "        rows.append((int(parts[0]), int(parts[1]), parts[2]))",
+    "    return rows",
+    "def descendants(rows):",
+    "    children, started = {}, {}",
+    "    for pid, ppid, started_at in rows:",
+    "        children.setdefault(ppid, []).append(pid)",
+    "        started[pid] = started_at",
+    "    owned, stack, seen = {}, [group], {group, me}",
+    "    while stack:",
+    "        parent = stack.pop()",
+    "        for pid in children.get(parent, ()):",
+    "            if pid in seen:",
+    "                continue",
+    "            seen.add(pid)",
+    "            owned[pid] = started[pid]",
+    "            stack.append(pid)",
+    "    return owned",
+    "def leader_alive():",
+    "    try:",
+    "        os.kill(group, 0)",
+    "    except ProcessLookupError:",
+    "        return False",
+    "    return True",
+    "try:",
+    "    os.kill(group, signal.SIGSTOP)",
+    "except ProcessLookupError:",
+    "    pass",
+    "owned = {}",
+    "try:",
+    "    if leader_alive():",
+    "        owned = descendants(snapshot())",
+    "except (OSError, subprocess.SubprocessError, ValueError):",
+    "    owned = {}",
+    "try:",
+    "    current = {pid: started for pid, _ppid, started in snapshot()}",
+    "except (OSError, subprocess.SubprocessError, ValueError):",
+    "    current = {}",
+    "for pid, started in owned.items():",
+    "    if pid <= 1 or current.get(pid) != started:",
+    "        continue",
+    "    try:",
+    "        os.kill(pid, signal.SIGKILL)",
+    "    except ProcessLookupError:",
+    "        pass",
+    "try:",
+    "    os.killpg(group, signal.SIGKILL)",
+    "except ProcessLookupError:",
+    "    pass",
+]) + "\n"
 
 
 def parent_death_signal(launcher):
@@ -234,6 +293,11 @@ def guarded_popen(args, **kwargs):
         os.close(write_fd)
         # Retain the watcher Popen until exec replaces this child.
         arm.watcher = guard_group(os.getpgrp(), read_fd, done_write)
+        # This kernel keeps the parent-death signal across exec. Once the watcher
+        # is running, drop it so launcher death leaves the leader in place for
+        # the descendant snapshot. The watcher then signals those pids and the group.
+        if death_signal is not None:
+            ctypes.CDLL(None, use_errno=True).prctl(PR_SET_PDEATHSIG, 0)
         os.close(read_fd)
         os.close(done_write)
 

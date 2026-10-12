@@ -945,7 +945,7 @@ async fn core_process_fixture() {
     std::future::pending::<()>().await;
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn process_is_live(pid: i32) -> bool {
     if unsafe { libc::kill(pid, 0) } < 0 {
         return false;
@@ -959,7 +959,7 @@ fn process_is_live(pid: i32) -> bool {
         .any(|state| !state.starts_with('Z'))
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn pid_error(pid: i32) -> Option<i32> {
     if unsafe { libc::kill(pid, 0) } == 0 {
         return None;
@@ -987,7 +987,7 @@ fn assert_stopped_node_is_separate_group_elf(pid: i32, node: &std::path::Path, o
     );
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn wait_until_reaped(pid: i32) {
     let started = std::time::Instant::now();
     let bound = Duration::from_secs(5);
@@ -1145,7 +1145,134 @@ fn assert_parent_death_releases_same_data(
     assert_eq!(pid_error(standalone_pid), Some(libc::ESRCH));
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+fn assert_macos_parent_death_releases_same_data(
+    data: &PathBuf,
+    marker_path: &PathBuf,
+    contents: &[u8],
+    stopped_pid: i32,
+    peer_pid: u32,
+    extra_pids: &mut Vec<i32>,
+) {
+    use std::process::{Command, Stdio};
+    wait_until_reaped(stopped_pid);
+    assert!(
+        process_is_live(peer_pid as i32),
+        "group peer died with the stopped child"
+    );
+    assert_eq!(
+        std::fs::read(marker_path).unwrap(),
+        contents,
+        "parent death rewrote the owner marker"
+    );
+    let caller = tokio::runtime::Runtime::new().unwrap();
+    let runtime = caller
+        .block_on(CoreRuntime::start(launch(data.clone())))
+        .unwrap();
+    assert_eq!(
+        std::fs::read(data.join(".desktop-lease/previous-marker.json")).unwrap(),
+        contents
+    );
+    let current: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(marker_path).unwrap()).unwrap();
+    assert_eq!(current["storage_protocol_version"], 1);
+    assert_eq!(current["pid"].as_u64(), Some(u64::from(std::process::id())));
+    let recovered = current["child_pid"].as_u64().unwrap() as i32;
+    assert_ne!(recovered, stopped_pid);
+    assert!(process_is_live(recovered), "recovered child is not live");
+    let command = Command::new("ps")
+        .args(["-o", "command=", "-p", &recovered.to_string()])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&command.stdout);
+    assert!(
+        text.contains("node"),
+        "recovered child command was {text:?}"
+    );
+    assert!(
+        !current["child_process_identity"]
+            .as_str()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(caller.block_on(runtime.shutdown()).complete());
+    assert!(!marker_path.exists());
+    assert_eq!(pid_error(recovered), Some(libc::ESRCH));
+
+    let input = launch(data.clone());
+    let entry = input
+        .bundle
+        .web_root
+        .join("apps/server/dist/current/index.js");
+    let spawn_server = || {
+        Command::new(&input.bundle.node)
+            .arg(&entry)
+            .current_dir(&input.bundle.web_root)
+            .env("PRINT_PARTNER_DATA_DIR", data)
+            .env("HOST", "127.0.0.1")
+            .env("PORT", "0")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap()
+    };
+    let mut standalone = spawn_server();
+    let standalone_pid = standalone.id() as i32;
+    extra_pids.push(standalone_pid);
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    let mut owned_marker = None;
+    while owned_marker.is_none() {
+        if let Some(status) = standalone.try_wait().unwrap() {
+            let output = standalone.wait_with_output().unwrap();
+            panic!(
+                "standalone exited {status} before owning the data directory: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        if marker_path.exists() {
+            let bytes = std::fs::read(marker_path).unwrap();
+            let marker: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            if marker["pid"].as_u64() == Some(u64::from(standalone.id()))
+                && marker["kind"].as_str() == Some("standalone")
+                && !marker["process_identity"].as_str().unwrap_or("").is_empty()
+            {
+                owned_marker = Some(bytes);
+            }
+        }
+        if owned_marker.is_none() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "standalone did not record ownership"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    let owned_marker = owned_marker.unwrap();
+    assert!(process_is_live(standalone_pid));
+    let mut contender = spawn_server();
+    extra_pids.push(contender.id() as i32);
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    while contender.try_wait().unwrap().is_none() {
+        if std::time::Instant::now() >= deadline {
+            let _ = contender.kill();
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let contender = contender.wait_with_output().unwrap();
+    assert!(!contender.status.success());
+    assert!(
+        String::from_utf8_lossy(&contender.stderr).contains("already owned"),
+        "{}",
+        String::from_utf8_lossy(&contender.stderr)
+    );
+    assert_eq!(std::fs::read(marker_path).unwrap(), owned_marker);
+    let _ = standalone.kill();
+    let _ = standalone.wait();
+    assert_eq!(pid_error(standalone_pid), Some(libc::ESRCH));
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn assert_live_child_refuses_standalone_node(
     data: &PathBuf,
     marker_path: &PathBuf,
@@ -1231,7 +1358,7 @@ fn core_death_with_live_child_refuses_standalone_node() {
     let mut child_pid = None;
     let mut group_peer = None;
     let mut runtime_dir = None;
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     let mut extra_pids = Vec::new();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let output = BufReader::new(core.stdout.take().unwrap());
@@ -1283,6 +1410,16 @@ fn core_death_with_live_child_refuses_standalone_node() {
             &launch(data.clone()).bundle.node,
             core.id(),
         );
+        #[cfg(target_os = "macos")]
+        {
+            let child_group = unsafe { libc::getpgid(pid) };
+            let owner_group = unsafe { libc::getpgid(core.id() as i32) };
+            assert_eq!(child_group, pid, "Node must lead its own process group");
+            assert_ne!(
+                child_group, owner_group,
+                "Node shares the owner process group"
+            );
+        }
         core.kill().unwrap();
         core.wait().unwrap();
         #[cfg(target_os = "linux")]
@@ -1294,7 +1431,16 @@ fn core_death_with_live_child_refuses_standalone_node() {
             group_peer.as_ref().unwrap().id(),
             &mut extra_pids,
         );
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "macos")]
+        assert_macos_parent_death_releases_same_data(
+            &data,
+            &marker_path,
+            &contents,
+            pid,
+            group_peer.as_ref().unwrap().id(),
+            &mut extra_pids,
+        );
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         assert_live_child_refuses_standalone_node(&data, &marker_path, &marker, &contents, pid);
     }));
     let _ = core.kill();
@@ -1308,7 +1454,7 @@ fn core_death_with_live_child_refuses_standalone_node() {
         let _ = peer.kill();
         let _ = peer.wait();
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     for pid in extra_pids {
         unsafe {
             libc::kill(pid, libc::SIGKILL);
