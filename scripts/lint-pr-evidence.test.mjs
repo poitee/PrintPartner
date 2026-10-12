@@ -3540,3 +3540,8 @@ test("r7-env-assignment-option", () => {
   const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv A=B -u UNUSED curl 3232235856\n```\n");
   assert.equal(result.ok, true, result.errors.join("; "));
 });
+
+test("r7-nice-plus-operand", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nnice +0 curl 3232235856\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
