@@ -5482,7 +5482,6 @@ test("r25-name-only-export-publishes-static-proxy", () => {
     "bash -c 'http_proxy=3232235856; export http_proxy; curl http://example.test/'",
     "http_proxy+=3232235856; export http_proxy; curl http://example.test/",
     "http_proxy=$((3232235856)); export http_proxy; curl http://example.test/",
-    "export http_proxy=3232235856; http_proxy=3232235855; curl http://example.test/",
   ]) {
     r19Expect(commandEvidence(command), 1, "", LAN_STDERR);
   }
@@ -5494,6 +5493,7 @@ test("r25-name-only-export-publishes-static-proxy", () => {
     "export http_proxy; curl http://example.test/",
     "http_proxy=3232235856 true; export http_proxy; curl http://example.test/",
     "http_proxy=3232235856; export http_proxy; http_proxy=3232235855 curl http://example.test/",
+    "export http_proxy=3232235856; http_proxy=3232235855; curl http://example.test/",
     "export http_proxy=3232235856; http_proxy=3232235855; export http_proxy; curl http://example.test/",
     "http_proxy = 3232235856; export http_proxy; curl http://example.test/",
   ]) {
@@ -5529,4 +5529,31 @@ test("r25-curl-stdin-config-fails-closed", () => {
   }
   r19Expect(commandEvidence("curl --config - 3232235856"), 1, "", R25_STDIN_AND_LAN);
   r19Expect(commandEvidence("curl --config /no/such/gre583-r25 3232235856"), 1, "", LAN_STDERR);
+});
+
+test("r26-exported-assignment-updates-the-same-binding", () => {
+  for (const command of [
+    "export http_proxy=3232235855; http_proxy=3232235856; curl http://example.test/",
+    "export http_proxy=3232235855; http_proxy=3232235856; wget http://example.test/",
+    "export https_proxy=3232235855; https_proxy=3232235856; curl http://example.test/",
+    "export http_proxy=3232235855; bash -c 'http_proxy=3232235856; curl http://example.test/'",
+    "export http_proxy=323223585; http_proxy+=6; curl http://example.test/",
+    "http_proxy=323223585; http_proxy+=6 curl http://example.test/",
+    "http_proxy=323223585 http_proxy+=6 curl http://example.test/",
+  ]) {
+    r19Expect(commandEvidence(command), 1, "", LAN_STDERR);
+  }
+  r19Expect(commandEvidence("export http_proxy=3232235856; http_proxy+=$(printf 9); curl http://example.test/"), 1, "", R20_SUBSTITUTION_STDERR);
+  for (const command of [
+    "export http_proxy=3232235856; http_proxy=3232235855; curl http://example.test/",
+    "export http_proxy=3232235856; http_proxy=3232235855; wget http://example.test/",
+    "export http_proxy=3232235856; bash -c 'http_proxy=3232235855; curl http://example.test/'",
+    "export http_proxy=3232235856; http_proxy+=9; curl http://example.test/",
+    "export http_proxy=3232235856; http_proxy+=9 curl http://example.test/",
+    "export http_proxy=323223585; http_proxy+=6 true; curl http://example.test/",
+    "http_proxy=3232235856; http_proxy=3232235857; curl http://example.test/",
+    "export http_proxy=3232235856; http_proxy=3232235855 curl http://example.test/",
+  ]) {
+    r19Expect(commandEvidence(command), 0, OK_LINE, "");
+  }
 });
