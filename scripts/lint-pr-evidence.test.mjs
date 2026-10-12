@@ -5359,13 +5359,13 @@ test("r24-wgetrc-proxy-names-normalize", () => {
     "wget --execute=HTTPS_PROXY=3232235856 http://example.test/",
     "wget -e Http_Proxy=3232235857 http://example.test/",
     "wget -e ftp-proxy=3232235856 http://example.test/",
+    "wget -e 'HTTP_PROXY = 3232235856' http://example.test/",
   ]) {
     r19Expect(commandEvidence(command), 1, "", LAN_STDERR);
   }
   for (const command of [
     "wget -e HTTP_PROXY=3232235855 http://example.test/",
     "wget -e HTTP_PROXY=3232235858 http://example.test/",
-    "wget -e 'HTTP_PROXY = 3232235856' http://example.test/",
     "wget -e NO_PROXY=3232235856 http://example.test/",
     "wget -e use_proxy=on http://example.test/",
     "curl -e HTTP_PROXY=3232235856 http://example.test/",
@@ -5715,6 +5715,42 @@ test("r28-eval-command-binding", () => {
     "cmd=curl; eval '$cmd 3232235855'",
     "cmd='curl 3232235856'; bash -c '$cmd'",
     "eval '$cmd'",
+  ]) {
+    r19Expect(commandEvidence(command), 0, OK_LINE, "");
+  }
+});
+
+const R29_PROCESS_STDERR = "PR evidence lint FAILED:\n- Evidence contains a curl --config or wget --input-file process substitution this static check does not read. Put the transfer URL on the command line.\n";
+
+test("r29-static-client-operand-gaps", () => {
+  for (const command of [
+    "wget -e 'http_proxy = 3232235856' http://example.test/",
+    "wget -e 'http_proxy= 3232235856' http://example.test/",
+    "wget -e ' http_proxy=3232235856' http://example.test/",
+    "wget --execute='http_proxy = 3232235856' http://example.test/",
+    "curl ${HOST:-3232235856}",
+    "curl http://192.168.1.${OCTET:-80}/",
+    "curl ${HOST:-http://192.168.1.80}/",
+    "env bash -c 'curl 3232235856'",
+    "env http_proxy=3232235856 bash -c 'curl http://example.test/'",
+    "set -a; http_proxy=3232235856; curl http://example.test/",
+    "set -o allexport; http_proxy=3232235856; curl http://example.test/",
+  ]) {
+    r19Expect(commandEvidence(command), 1, "", LAN_STDERR);
+  }
+  r19Expect(commandEvidence("curl -K <(printf 'url=3232235856\\n')"), 1, "", R29_PROCESS_STDERR);
+  r19Expect(commandEvidence("wget -i <(printf '3232235856\\n')"), 1, "", R29_PROCESS_STDERR);
+  for (const command of [
+    "wget -e 'http_proxy = 3232235855' http://example.test/",
+    "wget -e http_proxy=3232235855 http://example.test/",
+    "curl ${HOST:-http://example.test/}",
+    "curl ${HOST:-3232235855}",
+    "curl http://192.168.1.${OCTET:-79}/",
+    "env bash -c 'curl http://example.test/'",
+    "set -a; http_proxy=3232235855; curl http://example.test/",
+    "set +a; http_proxy=3232235856; curl http://example.test/",
+    "set -a; set +a; http_proxy=3232235856; curl http://example.test/",
+    "curl http://example.test/ <(printf 'hi')",
   ]) {
     r19Expect(commandEvidence(command), 0, OK_LINE, "");
   }
