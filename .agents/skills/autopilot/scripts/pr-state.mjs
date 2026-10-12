@@ -128,21 +128,23 @@ function currentChecks(checks) {
   const records = candidates.map((check) => {
     const suite = check.checkSuite;
     const run = suite?.workflowRun;
-    const key = check.name && suite?.app?.id && run?.workflow?.id && run?.event
+    const key = check.id && check.name && suite?.app?.id && run?.workflow?.id && run?.event
       ? JSON.stringify([suite.app.id, run.workflow.id, run.event, check.name])
       : null;
-    return {
-      check,
-      key,
-      createdAt: Date.parse(run?.createdAt),
-    };
+    let attemptTime = NaN;
+    if (run?.runAttempt === 1) attemptTime = Date.parse(run.createdAt);
+    else if (Number.isInteger(run?.runAttempt) && run.runAttempt > 1) {
+      attemptTime = Date.parse(check.startedAt);
+    }
+    return { check, key, suiteId: suite?.id, attemptTime };
   });
-  // Missing identities or ordering evidence remain visible. Completion time
-  // cannot order runs: a superseded run can finish after its replacement.
+  // Creation time orders only first attempts. Reruns keep that original time,
+  // so use their check start time and retain queued reruns without timing.
   return records.filter((record) => !records.some((other) => {
     if (!record.key || record.key !== other.key) return false;
-    if (!Number.isFinite(record.createdAt) || !Number.isFinite(other.createdAt)) return false;
-    return other.createdAt > record.createdAt;
+    if (!record.suiteId || !other.suiteId || record.suiteId === other.suiteId) return false;
+    if (!Number.isFinite(record.attemptTime) || !Number.isFinite(other.attemptTime)) return false;
+    return other.attemptTime > record.attemptTime;
   })).map(({ check }) => check);
 }
 
@@ -384,7 +386,7 @@ query($owner: String!, $name: String!, $oid: GitObjectID!, $cursor: String) {
             nodes {
               __typename
               ... on CheckRun {
-                id name status conclusion detailsUrl
+                id name status conclusion detailsUrl startedAt
                 checkSuite {
                   id
                   app { id }
@@ -392,7 +394,7 @@ query($owner: String!, $name: String!, $oid: GitObjectID!, $cursor: String) {
                     pageInfo { hasNextPage }
                     nodes { id }
                   }
-                  workflowRun { createdAt event workflow { id } }
+                  workflowRun { createdAt runAttempt event workflow { id } }
                 }
               }
               ... on StatusContext { context state targetUrl }

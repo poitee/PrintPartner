@@ -217,6 +217,13 @@ function runLiveFixture(context, mode = "pages") {
   const dir = mkdtempSync(join(tmpdir(), "pr-state-current-"));
   context.after(() => rmSync(dir, { recursive: true, force: true }));
   const data = { ...fixture, mode };
+  if (mode === "rerun" || mode === "queued-rerun") {
+    data.statusCheckRollup = [rerunCheck({
+      status: mode === "rerun" ? "COMPLETED" : "QUEUED",
+      conclusion: mode === "rerun" ? "FAILURE" : null,
+      startedAt: mode === "rerun" ? "2026-10-12T03:00:00Z" : null,
+    }), latestCheck()];
+  }
   writeFileSync(join(dir, "data.json"), JSON.stringify(data));
   writeFileSync(join(dir, "gh"), `#!/usr/bin/env node
 import { readFileSync } from "node:fs";
@@ -234,6 +241,10 @@ else if (args.some((arg) => arg.includes("reviewThreads(first:"))) {
   if (data.mode === "errors") response = { errors: [{ message: "checks unavailable" }] };
   else {
     if (!args.includes("oid=46f4b164a93ddaac910d6680dda52903dc757327")) process.exit(1);
+    const query = args.find((arg) => arg.startsWith("query="));
+    if (!query?.includes("runAttempt") || !query.includes("startedAt")) {
+      process.stderr.write("missing attempt timing query fields"); process.exit(1);
+    }
     const last = args.includes("cursor=next");
     response = { data: { repository: { object: { statusCheckRollup: { contexts: {
       nodes: last ? [data.statusCheckRollup.at(-1)] : data.statusCheckRollup.slice(0, -1),
@@ -264,5 +275,28 @@ for (const [mode, exit, message] of [["auth", 4, /authentication required/], ["e
     assert.equal(result.status, exit);
     assert.equal(result.stdout, "");
     assert.match(result.stderr, message);
+  });
+}
+
+for (const [mode, action, field] of [["rerun", "ci", "failingChecks"], ["queued-rerun", "watch-ci", "pendingChecks"]]) {
+  test(`paged live CLI fixture preserves a later ${mode} blocker`, (context) => {
+    const result = runLiveFixture(context, mode);
+    assert.equal(result.status, 0, result.stderr);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.nextAction, action);
+    assert.deepEqual(report[field].map((check) => check.url), [fixture.statusCheckRollup[0].detailsUrl]);
+    assert.equal(report.passedCheckCount, mode === "rerun" ? 0 : 1);
+  });
+}
+
+for (const identity of ["check", "suite"]) {
+  test(`a missing ${identity} ID cannot discard a cross-suite blocker`, () => {
+    const old = structuredClone(fixture.statusCheckRollup[0]);
+    if (identity === "check") delete old.id;
+    else delete old.checkSuite.id;
+    const report = evaluateSnapshot(snapshotWithChecks([old, latestCheck()]));
+    assert.equal(report.nextAction, "ci");
+    assert.deepEqual(report.failingChecks.map((check) => check.url), [old.detailsUrl]);
+    assert.equal(report.passedCheckCount, 1);
   });
 }
