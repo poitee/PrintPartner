@@ -1,0 +1,166 @@
+{
+  "profile": {
+    "id": 847,
+    "name": "Checkoff partly done",
+    "orderNumber": "SO-43",
+    "specialRequest": null,
+    "archivedAt": null
+  },
+  "generatedAt": "2026-10-11T06:18:04.720Z",
+  "parts": [
+    {
+      "revisionPartId": 101,
+      "projectionPartId": 201,
+      "partKey": "base:Frame:assembly/complete.stl",
+      "relativePath": "assembly/complete.stl",
+      "filename": "complete.stl",
+      "sourceLayer": "base:Frame",
+      "status": "ok",
+      "role": "primary",
+      "filamentColorId": null,
+      "filamentCustomHex": null,
+      "spoolmanSpoolId": null,
+      "quantityInferred": 2,
+      "quantityOverride": null,
+      "quantityEffective": 2,
+      "included": true,
+      "notes": "",
+      "geometrySame": null,
+      "requirement": null,
+      "optionGroupId": null,
+      "manifestSource": null,
+      "artifact": {
+        "kind": "unavailable",
+        "reason": "legacy"
+      },
+      "units": [
+        {
+          "token": "random-token-0",
+          "unitIndex": 0,
+          "completed": true,
+          "assembled": false
+        },
+        {
+          "token": "random-token-1",
+          "unitIndex": 1,
+          "completed": true,
+          "assembled": false
+        }
+      ]
+    },
+    {
+      "revisionPartId": 102,
+      "projectionPartId": 202,
+      "partKey": "base:Frame:assembly/partial.stl",
+      "relativePath": "assembly/partial.stl",
+      "filename": "partial.stl",
+      "sourceLayer": "base:Frame",
+      "status": "ok",
+      "role": "primary",
+      "filamentColorId": null,
+      "filamentCustomHex": null,
+      "spoolmanSpoolId": null,
+      "quantityInferred": 3,
+      "quantityOverride": null,
+      "quantityEffective": 3,
+      "included": true,
+      "notes": "2 of 3 printed",
+      "geometrySame": null,
+      "requirement": null,
+      "optionGroupId": null,
+      "manifestSource": null,
+      "artifact": {
+        "kind": "unavailable",
+        "reason": "legacy"
+      },
+      "units": [
+        {
+          "token": "random-token-0",
+          "unitIndex": 0,
+          "completed": true,
+          "assembled": false
+        },
+        {
+          "token": "random-token-1",
+          "unitIndex": 1,
+          "completed": false,
+          "assembled": false
+        },
+        {
+          "token": "random-token-2",
+          "unitIndex": 2,
+          "completed": true,
+          "assembled": false
+        }
+      ]
+    },
+    {
+      "revisionPartId": 103,
+      "projectionPartId": 203,
+      "partKey": "base:Frame:assembly/pending.stl",
+      "relativePath": "assembly/pending.stl",
+      "filename": "pending.stl",
+      "sourceLayer": "base:Frame",
+      "status": "ok",
+      "role": "primary",
+      "filamentColorId": null,
+      "filamentCustomHex": null,
+      "spoolmanSpoolId": null,
+      "quantityInferred": 1,
+      "quantityOverride": null,
+      "quantityEffective": 1,
+      "included": true,
+      "notes": "",
+      "geometrySame": null,
+      "requirement": null,
+      "optionGroupId": null,
+      "manifestSource": null,
+      "artifact": {
+        "kind": "unavailable",
+        "reason": "legacy"
+      },
+      "units": [
+        {
+          "token": "random-token-0",
+          "unitIndex": 0,
+          "completed": false,
+          "assembled": false
+        }
+      ]
+    },
+    {
+      "revisionPartId": 104,
+      "projectionPartId": 204,
+      "partKey": "base:Frame:assembly/missing-unit.stl",
+      "relativePath": "assembly/missing-unit.stl",
+      "filename": "missing-unit.stl",
+      "sourceLayer": "base:Frame",
+      "status": "ok",
+      "role": "primary",
+      "filamentColorId": null,
+      "filamentCustomHex": null,
+      "spoolmanSpoolId": null,
+      "quantityInferred": 2,
+      "quantityOverride": null,
+      "quantityEffective": 2,
+      "included": true,
+      "notes": "",
+      "geometrySame": null,
+      "requirement": null,
+      "optionGroupId": null,
+      "manifestSource": null,
+      "artifact": {
+        "kind": "unavailable",
+        "reason": "legacy"
+      },
+      "units": [
+        {
+          "token": "missing:0",
+          "unitIndex": 0,
+          "completed": true,
+          "assembled": true
+        }
+      ]
+    }
+  ]
+}

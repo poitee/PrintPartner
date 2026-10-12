@@ -76,6 +76,21 @@ def check_shape(name, actual, shapes):
     print(f"SHAPE: {name} keys and types match {SHAPE_FIXTURE.name}", flush=True)
 
 
+def default_repo_root():
+    helper_dir = Path(__file__).resolve().parent
+    try:
+        top = subprocess.check_output(
+            ["git", "-C", str(helper_dir), "rev-parse", "--show-toplevel"],
+            text=True,
+            timeout=15,
+        ).strip()
+    except subprocess.CalledProcessError as error:
+        raise SystemExit(
+            "git rev-parse --show-toplevel failed from helper checkout; pass --repo explicitly"
+        ) from error
+    return Path(top)
+
+
 def ignore_signals():
     # Once cleanup starts, further signals must not interrupt it.
     previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)
@@ -726,13 +741,14 @@ def serve(binary, root, node, commit, credentials):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", nargs="?", choices=["verify", "launch"], default="verify")
-    parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[4])
+    parser.add_argument("--repo", type=Path,
+                        help="checkout root (default: git top-level for this helper)")
     parser.add_argument("--credential-file", type=Path,
                         help="launch only: pp-server writes the one-use bootstrap credential here")
     args = parser.parse_args()
     if args.credential_file is not None and args.mode != "launch":
         parser.error("--credential-file applies only to launch")
-    root = args.repo.resolve()
+    root = args.repo.resolve() if args.repo is not None else default_repo_root()
     if args.mode == "launch":
         # Resolve the directory only: a symlink at the final component is an existing entry to refuse.
         credentials = args.credential_file.parent.resolve() / args.credential_file.name if args.credential_file else None
