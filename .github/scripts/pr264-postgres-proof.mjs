@@ -285,8 +285,14 @@ async function main() {
     const databaseUrl = process.env.DATABASE_URL;
     if (!databaseUrl) throw new Error("DATABASE_URL is required");
 
-    const beforeDb = await pgSnapshot(databaseUrl, Pool);
-    report.dbBefore = beforeDb;
+    report.proofPhases = [
+      "resolve_pg_from_app_install",
+      "startServer_bootstrap_schema_via_ports.db.connect",
+      "http_fixture_auth_plan_source",
+      "baseline_db_and_fs_before_unsupported_ops",
+      "unsupported_manifest_and_upload_routes",
+      "post_op_db_and_fs_snapshot",
+    ];
 
     const { startServer } = await import(pathToFileURL(join(APP_ROOT, "dist/current/app.js")).href);
     const { loadConfig } = await import(pathToFileURL(join(APP_ROOT, "dist/current/config.js")).href);
@@ -358,6 +364,8 @@ async function main() {
       if (!sourceId) throw new Error("missing source id");
 
       const reposDir = join(process.env.PRINT_PARTNER_DATA_DIR, "repos");
+      const beforeDb = await pgSnapshot(databaseUrl, Pool);
+      report.dbBefore = beforeDb;
       const fsBefore = treeDigest(reposDir);
       report.fsBefore = fsBefore;
 
