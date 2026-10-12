@@ -12,15 +12,18 @@ pub use release::verify_bundle;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use std::{
+    io::Write,
     os::fd::{AsRawFd, FromRawFd, OwnedFd},
-    os::unix::process::ExitStatusExt,
-    path::PathBuf,
+    os::unix::{fs::OpenOptionsExt, process::ExitStatusExt},
+    path::{Path, PathBuf},
+    pin::Pin,
     process::{ExitStatus, Stdio},
     sync::{Arc, Mutex},
+    task::Poll,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
-    io::AsyncWriteExt,
+    io::{AsyncRead, AsyncWriteExt, ReadBuf},
     net::UnixStream,
     process::{Child, ChildStdin, Command},
     sync::{mpsc, watch},
@@ -421,9 +424,7 @@ fn arm_parent_death_watcher(command: &mut Command) -> std::io::Result<ParentDeat
     }
     let read = unsafe { OwnedFd::from_raw_fd(fds[0]) };
     let write = unsafe { OwnedFd::from_raw_fd(fds[1]) };
-    if let Err(error) = set_cloexec(read.as_raw_fd()).and_then(|_| set_cloexec(write.as_raw_fd())) {
-        return Err(error);
-    }
+    set_cloexec(read.as_raw_fd()).and_then(|_| set_cloexec(write.as_raw_fd()))?;
     let read_fd = read.as_raw_fd();
     let write_fd = write.as_raw_fd();
     unsafe {
@@ -477,6 +478,128 @@ fn configure_child(
     Ok(guard)
 }
 
+const STARTUP_DIAGNOSTIC_LIMIT: u64 = 16 * 1024;
+
+fn startup_diagnostic_target() -> Option<PathBuf> {
+    let value = std::env::var_os("PP_COMPAT_STARTUP_DIAGNOSTIC")?;
+    if value.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(value))
+}
+
+fn redact_diagnostic_line(line: &[u8]) -> Vec<u8> {
+    let text = String::from_utf8_lossy(line);
+    if text.contains("\"lease\"") || text.contains("\"key\"") {
+        return b"[redacted]".to_vec();
+    }
+    if line.len() > 1024 {
+        let mut short = line[..1024].to_vec();
+        short.extend_from_slice(b"...[truncated]");
+        return short;
+    }
+    line.to_vec()
+}
+
+fn write_startup_diagnostic(path: &Path, label: &str, bytes: &[u8]) {
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(path)
+    else {
+        return;
+    };
+    if file
+        .metadata()
+        .map(|meta| meta.len())
+        .unwrap_or(STARTUP_DIAGNOSTIC_LIMIT)
+        >= STARTUP_DIAGNOSTIC_LIMIT
+    {
+        return;
+    }
+    let _ = file.write_all(format!("[{label}]\n").as_bytes());
+    let mut start = 0;
+    for (index, byte) in bytes.iter().enumerate() {
+        if *byte != b'\n' {
+            continue;
+        }
+        let _ = file.write_all(&redact_diagnostic_line(&bytes[start..index]));
+        let _ = file.write_all(b"\n");
+        start = index + 1;
+    }
+    if start < bytes.len() {
+        let _ = file.write_all(&redact_diagnostic_line(&bytes[start..]));
+        let _ = file.write_all(b"\n");
+    }
+}
+
+fn note_startup_diagnostic(label: &str, bytes: &[u8]) {
+    let Some(path) = startup_diagnostic_target() else {
+        return;
+    };
+    static LOCK: Mutex<()> = Mutex::new(());
+    let Ok(_guard) = LOCK.lock() else {
+        return;
+    };
+    write_startup_diagnostic(&path, label, bytes);
+}
+
+struct DiagnosticCopy<R> {
+    inner: R,
+    pending: Vec<u8>,
+    label: &'static str,
+}
+
+impl<R> DiagnosticCopy<R> {
+    fn new(inner: R, label: &'static str) -> Self {
+        Self {
+            inner,
+            pending: Vec::new(),
+            label,
+        }
+    }
+
+    fn flush_pending(&mut self, eof: bool) {
+        if startup_diagnostic_target().is_none() {
+            self.pending.clear();
+            return;
+        }
+        while let Some(index) = self.pending.iter().position(|byte| *byte == b'\n') {
+            let line: Vec<u8> = self.pending.drain(..=index).collect();
+            note_startup_diagnostic(self.label, &line[..line.len() - 1]);
+        }
+        if eof && !self.pending.is_empty() {
+            let line = std::mem::take(&mut self.pending);
+            note_startup_diagnostic(self.label, &line);
+        }
+    }
+}
+
+impl<R: AsyncRead + Unpin> AsyncRead for DiagnosticCopy<R> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        let start = buf.filled().len();
+        let poll = Pin::new(&mut this.inner).poll_read(cx, buf);
+        if let Poll::Ready(Ok(())) = &poll
+            && startup_diagnostic_target().is_some()
+        {
+            let fresh = buf.filled()[start..].to_vec();
+            if fresh.is_empty() {
+                this.flush_pending(true);
+            } else {
+                this.pending.extend_from_slice(&fresh);
+                this.flush_pending(false);
+            }
+        }
+        poll
+    }
+}
+
 impl Process {
     async fn spawn(spec: &SpawnSpec, capture: &logs::Logs) -> Result<Self> {
         release::verify_backend(&spec.bundle)?;
@@ -501,6 +624,15 @@ impl Process {
             connections: Arc::new(Connections::new()),
         });
         let mut command = Command::new(&spec.bundle.node);
+        note_startup_diagnostic(
+            "artifact",
+            format!(
+                "node={}\nentry={}",
+                spec.bundle.node.display(),
+                spec.bundle.entry.display()
+            )
+            .as_bytes(),
+        );
         command
             .arg("--no-global-search-paths")
             .arg("--import")
@@ -558,11 +690,15 @@ impl Process {
         let mut logs = Vec::new();
         if let Some(stdout) = child.stdout.take() {
             let capture = capture.clone();
-            logs.push(tokio::spawn(async move { capture.capture(stdout).await }));
+            logs.push(tokio::spawn(async move {
+                capture.capture(DiagnosticCopy::new(stdout, "stdout")).await
+            }));
         }
         if let Some(stderr) = child.stderr.take() {
             let capture = capture.clone();
-            logs.push(tokio::spawn(async move { capture.capture(stderr).await }));
+            logs.push(tokio::spawn(async move {
+                capture.capture(DiagnosticCopy::new(stderr, "stderr")).await
+            }));
         }
         Ok(Self {
             pid: child.id().context("Missing child PID")?,
@@ -697,6 +833,9 @@ impl Supervisor {
                 states.send_replace(Status::Starting);
                 logs.event("compat_starting", 30);
                 let process = Process::spawn(&spec, &logs).await;
+                if let Err(error) = &process {
+                    note_startup_diagnostic("spawn", format!("{error:#}").as_bytes());
+                }
                 if let Ok(mut process) = process {
                     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
                     let mut ready = false;
@@ -719,6 +858,16 @@ impl Supervisor {
                             biased;
                             _ = cancelled.cancelled() => break,
                             _ = tokio::time::sleep(Duration::from_millis(250)) => {}
+                        }
+                    }
+                    if !ready {
+                        if let Some(status) = &observed_exit {
+                            note_startup_diagnostic("child-exit", status.to_string().as_bytes());
+                        } else if !cancelled.is_cancelled() {
+                            note_startup_diagnostic(
+                                "ready-timeout",
+                                b"supervisor ready deadline exceeded",
+                            );
                         }
                     }
                     if ready {
@@ -756,6 +905,7 @@ impl Supervisor {
                     let stop_intent = match process.stop(observed_exit, &cancelled).await {
                         Ok(intent) => intent,
                         Err(error) => {
+                            note_startup_diagnostic("stop", format!("{error:#}").as_bytes());
                             states.send_replace(Status::Failed);
                             return Err(error);
                         }
@@ -777,6 +927,7 @@ impl Supervisor {
                 }
                 if crashes.len() >= 5 {
                     logs.event("compat_crash_guard", 50);
+                    note_startup_diagnostic("guarded", b"crash guard");
                     states.send_replace(Status::Guarded);
                     tokio::select! { _ = cancelled.cancelled() => break, _ = recovery.recv() => { crashes.clear(); attempt = 0; } }
                 } else {
@@ -1240,5 +1391,72 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![500, 1000, 2000, 4000, 8000, 30000, 30000, 30000]
         );
+    }
+
+    #[test]
+    fn startup_diagnostic_redacts_setup_and_keeps_the_reason() {
+        let dir = std::env::temp_dir().join(format!("pp-diag-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("diag.txt");
+        super::write_startup_diagnostic(
+            &path,
+            "stderr",
+            b"{\"version\":1,\"lease\":\"secret-lease\",\"key\":\"secret-key\"}\nready check failed: ENOENT desktop.js\n",
+        );
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("ready check failed: ENOENT desktop.js"),
+            "{text}"
+        );
+        assert!(!text.contains("secret-lease"), "{text}");
+        assert!(!text.contains("secret-key"), "{text}");
+        assert!(text.contains("[redacted]"), "{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn startup_diagnostic_tee_forwards_bytes_and_records_stderr() {
+        use tokio::io::AsyncWriteExt;
+        let dir = std::env::temp_dir().join(format!("pp-diag-tee-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("diag.txt");
+        struct ClearDiagnosticEnv;
+        impl Drop for ClearDiagnosticEnv {
+            fn drop(&mut self) {
+                // SAFETY: the variable belongs to this test, and Drop removes it on every exit.
+                unsafe {
+                    std::env::remove_var("PP_COMPAT_STARTUP_DIAGNOSTIC");
+                }
+            }
+        }
+        let _clear = ClearDiagnosticEnv;
+        // SAFETY: the test sets one private variable and Drop removes it before other tests continue.
+        unsafe {
+            std::env::set_var("PP_COMPAT_STARTUP_DIAGNOSTIC", &path);
+        }
+        let (mut writer, reader) = tokio::io::duplex(256);
+        let mut tee = super::DiagnosticCopy::new(reader, "stderr");
+        let write = async {
+            writer
+                .write_all(b"{\"lease\":\"secret-lease\"}\nmodule missing\n")
+                .await
+                .unwrap();
+            drop(writer);
+        };
+        let read = async {
+            let mut got = Vec::new();
+            tokio::io::AsyncReadExt::read_to_end(&mut tee, &mut got)
+                .await
+                .unwrap();
+            got
+        };
+        let ((), got) = tokio::join!(write, read);
+        assert_eq!(got, b"{\"lease\":\"secret-lease\"}\nmodule missing\n");
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("module missing"), "{text}");
+        assert!(!text.contains("secret-lease"), "{text}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

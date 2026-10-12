@@ -933,12 +933,117 @@ async fn desktop_manifest_and_icons_are_served_as_assets() {
 }
 
 // Run as a subprocess so SIGKILL ends the actual Rust owner, not the test runner.
+fn sha256_hex(path: &std::path::Path) -> String {
+    for (program, args) in [("sha256sum", &[][..]), ("shasum", &["-a", "256"][..])] {
+        let Ok(output) = std::process::Command::new(program)
+            .args(args)
+            .arg(path)
+            .output()
+        else {
+            continue;
+        };
+        if !output.status.success() {
+            continue;
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        if let Some(token) = text.split_whitespace().next()
+            && token.len() == 64
+            && token.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return token.to_ascii_lowercase();
+        }
+    }
+    "unavailable".into()
+}
+
+fn eprint_redacted_line(line: &str) {
+    if line.contains("\"lease\"") || line.contains("\"key\"") {
+        eprintln!("[redacted]");
+    } else {
+        eprintln!("{line}");
+    }
+}
+
+fn eprint_core_start_failure(data: &std::path::Path, error: &dyn std::fmt::Display) {
+    eprintln!("PP_CORE_START_FAILED {error}");
+    let launch = launch(data.to_path_buf());
+    let node = &launch.bundle.node;
+    eprintln!("node_path={}", node.display());
+    eprintln!("entry_path={}", launch.bundle.entry.display());
+    eprintln!("entry_exists={}", launch.bundle.entry.is_file());
+    match std::fs::metadata(node) {
+        Ok(meta) => eprintln!("node_len={}", meta.len()),
+        Err(err) => eprintln!("node_meta_error={err}"),
+    }
+    let mut magic = [0u8; 4];
+    match std::fs::File::open(node)
+        .and_then(|mut file| std::io::Read::read_exact(&mut file, &mut magic))
+    {
+        Ok(()) => eprintln!(
+            "node_magic={:02x} {:02x} {:02x} {:02x}",
+            magic[0], magic[1], magic[2], magic[3]
+        ),
+        Err(err) => eprintln!("node_magic_error={err}"),
+    }
+    eprintln!("node_sha256={}", sha256_hex(node));
+    if let Some(manifest) = std::env::var_os("PP_DESKTOP_RELEASE_MANIFEST") {
+        let path = PathBuf::from(manifest);
+        eprintln!("manifest_path={}", path.display());
+        match std::fs::read(&path) {
+            Ok(bytes) => {
+                eprintln!("manifest_sha256={}", sha256_hex(&path));
+                if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                    for key in ["commit", "node_version", "node_sha256", "runtime_version"] {
+                        let field = value.get(key).and_then(|item| item.as_str()).unwrap_or("");
+                        eprintln!("manifest_{key}={field}");
+                    }
+                }
+            }
+            Err(err) => eprintln!("manifest_read_error={err}"),
+        }
+    }
+    if let Some(path) = std::env::var_os("PP_COMPAT_STARTUP_DIAGNOSTIC") {
+        let path = PathBuf::from(path);
+        eprintln!("diagnostic_path={}", path.display());
+        match std::fs::read_to_string(&path) {
+            Ok(text) => {
+                let shown = if text.len() > 12_000 {
+                    &text[..12_000]
+                } else {
+                    text.as_str()
+                };
+                eprintln!("diagnostic_begin");
+                for line in shown.lines() {
+                    eprint_redacted_line(line);
+                }
+                eprintln!("diagnostic_end");
+            }
+            Err(err) => eprintln!("diagnostic_read_error={err}"),
+        }
+    }
+    let log_path = data.join("logs").join("desktop.jsonl");
+    if let Ok(text) = std::fs::read_to_string(&log_path) {
+        eprintln!("desktop_jsonl_begin");
+        let lines = text.lines().collect::<Vec<_>>();
+        let start = lines.len().saturating_sub(30);
+        for line in &lines[start..] {
+            eprint_redacted_line(line);
+        }
+        eprintln!("desktop_jsonl_end");
+    }
+}
+
 #[tokio::test]
 async fn core_process_fixture() {
     let Some(data) = std::env::var_os("PP_CORE_DEATH_FIXTURE") else {
         return;
     };
-    let _runtime = CoreRuntime::start(launch(data.into())).await.unwrap();
+    let data = PathBuf::from(data);
+    let started = CoreRuntime::start(launch(data.clone())).await;
+    if let Err(error) = &started {
+        eprint_core_start_failure(&data, error);
+    }
+    let _runtime = started.unwrap();
     println!("PP_CORE_READY");
     use std::io::Write;
     std::io::stdout().flush().unwrap();
@@ -1352,6 +1457,10 @@ fn core_death_with_live_child_refuses_standalone_node() {
     let mut core = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "core_process_fixture", "--nocapture"])
         .env("PP_CORE_DEATH_FIXTURE", &data)
+        .env(
+            "PP_COMPAT_STARTUP_DIAGNOSTIC",
+            data.join("startup-diagnostic.txt"),
+        )
         .stdout(Stdio::piped())
         .spawn()
         .unwrap();
@@ -1366,6 +1475,16 @@ fn core_death_with_live_child_refuses_standalone_node() {
             output
                 .lines()
                 .any(|line| line.unwrap().contains("PP_CORE_READY"))
+        );
+        let diagnostic_text =
+            std::fs::read_to_string(data.join("startup-diagnostic.txt")).unwrap_or_default();
+        assert!(
+            diagnostic_text.contains("node="),
+            "startup diagnostic missing node identity"
+        );
+        assert!(
+            !diagnostic_text.contains("\"lease\"") && !diagnostic_text.contains("\"key\""),
+            "startup diagnostic contained a setup field"
         );
         let marker_path = data.join(".desktop-owner.json");
         let contents = std::fs::read(&marker_path).unwrap();
