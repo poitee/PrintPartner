@@ -1,0 +1,56 @@
+---
+source: crates/pp-source/tests/snapshots.rs
+expression: created
+---
+{
+  "tenantId": "tenant-fixture",
+  "sourceId": 42,
+  "upstreamRevisionKey": "nested_mixed",
+  "manifestDigest": "[hash]",
+  "snapshotLocator": "42/revisions/nested_mixed",
+  "files": [
+    {
+      "path": "Parts/a.stl",
+      "kind": "stl",
+      "sizeBytes": 19,
+      "sha256": "[hash]"
+    },
+    {
+      "path": "Parts/z.stl",
+      "kind": "stl",
+      "sizeBytes": 19,
+      "sha256": "[hash]"
+    },
+    {
+      "path": "assets/preview.bin",
+      "kind": "artifact",
+      "sizeBytes": 17,
+      "sha256": "[hash]"
+    },
+    {
+      "path": "docs/README.md",
+      "kind": "readme",
+      "sizeBytes": 11,
+      "sha256": "[hash]"
+    },
+    {
+      "path": "docs/guide.md",
+      "kind": "md",
+      "sizeBytes": 20,
+      "sha256": "[hash]"
+    },
+    {
+      "path": "docs/manual.pdf",
+      "kind": "pdf",
+      "sizeBytes": 17,
+      "sha256": "[hash]"
+    }
+  ],
+  "selection": {
+    "maxStlFiles": 2,
+    "maxDocumentationBytes": 1024,
+    "omittedFiles": []
+  },
+  "publication": "created",
+  "storedBytes": 1407
+}

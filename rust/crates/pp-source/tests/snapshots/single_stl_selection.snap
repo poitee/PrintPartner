@@ -1,0 +1,9 @@
+---
+source: crates/pp-source/tests/snapshots.rs
+expression: created.selection
+---
+{
+  "maxStlFiles": 1,
+  "maxDocumentationBytes": 0,
+  "omittedFiles": []
+}
