@@ -111,10 +111,10 @@ function insideFenceContainer(line, fence) {
  * comment text cannot open a fence and fence text cannot hide a comment. A
  * closing fence uses the same character and at least the opening length; a
  * fence also ends with its container, and an unclosed top-level fence runs to
- * the end of the text. `onCodeLine` reports literal code and fence boundaries
- * separately, so code cannot impersonate Markdown metadata.
+ * the end of the text. `onLiteralLine` reports code, raw HTML, and comment
+ * suffixes with their boundaries, so payload cannot impersonate metadata.
  */
-function stripHiddenMarkdown(text, { inlineMultiline = true, includeRawHtml = false, onCodeLine } = {}) {
+function stripHiddenMarkdown(text, { inlineMultiline = true, includeRawHtml = false, onLiteralLine } = {}) {
   const kept = [];
   let fence = null;
   let inComment = false;
@@ -130,6 +130,11 @@ function stripHiddenMarkdown(text, { inlineMultiline = true, includeRawHtml = fa
     const indent = indentWidth(raw.match(/^[ \t]*/)[0]);
     if (htmlBlock && !insideFenceContainer(raw, htmlBlock)) htmlBlock = null;
     if (htmlBlock) {
+      if (includeRawHtml) {
+        const visible = stripHtmlComments(raw, htmlBlock.commentOpen);
+        htmlBlock.commentOpen = visible.open;
+        onLiteralLine?.(lineIndex, visible.visible);
+      }
       if (htmlBlock.end.test(quoteContent(raw, htmlBlock.quote))) htmlBlock = null;
       kept.push("");
       paragraphOpen = false;
@@ -137,7 +142,7 @@ function stripHiddenMarkdown(text, { inlineMultiline = true, includeRawHtml = fa
     }
     if (indentedCode != null) {
       if (!raw.trim() || indent >= indentedCode) {
-        onCodeLine?.(lineIndex, raw);
+        onLiteralLine?.(lineIndex, raw);
         kept.push("");
         continue;
       }
@@ -145,7 +150,7 @@ function stripHiddenMarkdown(text, { inlineMultiline = true, includeRawHtml = fa
     }
     if (!fence && !inComment && !paragraphOpen && indent >= listColumn + 4) {
       indentedCode = listColumn + 4;
-      onCodeLine?.(lineIndex, raw);
+      onLiteralLine?.(lineIndex, raw);
       kept.push("");
       continue;
     }
@@ -159,7 +164,7 @@ function stripHiddenMarkdown(text, { inlineMultiline = true, includeRawHtml = fa
       if (close && close[1][0] === fence.marker[0] && close[1].length >= fence.marker.length) {
         fence = null;
       }
-      onCodeLine?.(lineIndex, raw, !fence);
+      onLiteralLine?.(lineIndex, raw, { boundary: !fence, delimiter: !fence });
       kept.push("");
       continue;
     }
@@ -169,7 +174,7 @@ function stripHiddenMarkdown(text, { inlineMultiline = true, includeRawHtml = fa
       else if (raw.trim() && indentWidth(raw.match(/^[ \t]*/)[0]) < listColumn) listColumn = 0;
       fence = fenceOpener(raw, listColumn);
       if (fence) {
-        onCodeLine?.(lineIndex, raw, true);
+        onLiteralLine?.(lineIndex, raw, { boundary: true, delimiter: true });
         kept.push("");
         paragraphOpen = false;
         continue;
@@ -177,8 +182,8 @@ function stripHiddenMarkdown(text, { inlineMultiline = true, includeRawHtml = fa
       const prefix = containerPrefix(raw);
       const content = raw.slice(prefix.end);
       const rawTag = content.match(/^<(pre|script|style|textarea)(?:[ \t>]|$)/i);
-      if (!includeRawHtml && (rawTag || HTML_BLOCK_START.test(content)
-        || (!paragraphOpen && isCompleteHtmlTag(content)))) {
+      if (rawTag || HTML_BLOCK_START.test(content)
+        || (!paragraphOpen && isCompleteHtmlTag(content))) {
         const quoteLine = quoteContent(raw, prefix.quote);
         const hasList = /^[ \t]*(?:[-+*]|\d{1,9}[.)])[ \t]/.test(quoteLine);
         const end = rawTag ? new RegExp(`</${rawTag[1]}[ \\t]*>`, "i")
@@ -188,6 +193,11 @@ function stripHiddenMarkdown(text, { inlineMultiline = true, includeRawHtml = fa
           : /^\s*$/;
         htmlBlock = { end, quote: prefix.quote,
           column: hasList ? containerPrefix(quoteLine).column : (prefix.quote ? 0 : listColumn) };
+        if (includeRawHtml) {
+          const visible = stripHtmlComments(raw);
+          htmlBlock.commentOpen = visible.open;
+          onLiteralLine?.(lineIndex, visible.visible, { boundary: true });
+        }
         if (end.test(content)) htmlBlock = null;
         kept.push("");
         paragraphOpen = false;
@@ -208,6 +218,9 @@ function stripHiddenMarkdown(text, { inlineMultiline = true, includeRawHtml = fa
         line = line.slice(end + 3);
         inComment = false;
         if (blockComment) {
+          const suffix = stripHtmlComments(line);
+          inComment = suffix.open;
+          if (includeRawHtml) onLiteralLine?.(lineIndex, raw.match(/^[ \t]*/)[0] + suffix.visible.trimStart(), { boundary: true });
           kept.push("");
           paragraphOpen = false;
           continue;
@@ -224,6 +237,10 @@ function stripHiddenMarkdown(text, { inlineMultiline = true, includeRawHtml = fa
         paragraphOpen = false;
         continue;
       }
+      const suffix = stripHtmlComments(line.slice(end + 3));
+      inComment = suffix.open;
+      inlineComment = false;
+      if (includeRawHtml) onLiteralLine?.(lineIndex, raw.match(/^[ \t]*/)[0] + suffix.visible.trimStart(), { boundary: true });
       kept.push("");
       paragraphOpen = false;
       continue;
@@ -244,6 +261,22 @@ function stripHiddenMarkdown(text, { inlineMultiline = true, includeRawHtml = fa
     paragraphOpen = lineIndex > referenceEnd && Boolean(shown.trim()) && !LEAF_BLOCK_START.test(shown);
   }
   return kept.join("\n");
+}
+
+function stripHtmlComments(line, open = false) {
+  let visible = "";
+  let cursor = 0;
+  while (cursor < line.length) {
+    const marker = line.indexOf(open ? "-->" : "<!--", cursor);
+    if (marker === -1) {
+      if (!open) visible += line.slice(cursor);
+      break;
+    }
+    if (!open) visible += line.slice(cursor, marker);
+    cursor = marker + (open ? 3 : 4);
+    open = !open;
+  }
+  return { visible, open };
 }
 
 /**
@@ -313,7 +346,7 @@ function evidenceSectionEnd(text) {
  * `inlineMultiline: false` gives the view for the .80/.81 check, where an
  * inline `<!--` hides text only when it closes on the same line.
  * `includeRawHtml` selects the conservative LAN view using visible section
- * boundaries; `onCodeLine` reports verification code within those boundaries.
+ * boundaries; `onLiteralLine` reports literal payload within those boundaries.
  */
 export function extractEvidenceSection(body, options) {
   if (typeof body !== "string" || !body.trim()) return null;
@@ -329,34 +362,35 @@ export function extractEvidenceSection(body, options) {
     // Select boundaries from visible Markdown, then scan the same raw lines.
     const firstLine = visible.slice(0, start).split("\n").length;
     const lastLine = visible.slice(0, end).split("\n").length - (end < visible.length ? 1 : 0);
-    const codeLines = new Map();
+    const literalLines = new Map();
     const rawLines = stripHiddenMarkdown(metadata, {
       ...options,
-      onCodeLine: (lineIndex, raw, boundary = false) => codeLines.set(lineIndex, { raw, boundary }),
+      onLiteralLine: (lineIndex, raw, { boundary = false, delimiter = false } = {}) => literalLines.set(lineIndex, { raw, boundary, delimiter }),
     }).split("\n");
     const selected = rawLines.slice(firstLine, lastLine);
-    if (options.onCodeLine) {
-      const codeOffsets = new Map();
-      const codeBoundaries = new Set();
+    if (options.onLiteralLine) {
+      const literalOffsets = new Map();
+      const literalBoundaries = new Set();
       let offset = 0;
       const context = selected.map((line, index) => {
-        const code = codeLines.get(firstLine + index);
-        if (code !== undefined) {
-          if (code.boundary) codeBoundaries.add(offset);
-          else codeOffsets.set(offset, { lineIndex: firstLine + index, raw: code.raw });
-          // Preserve indentation and offsets without allowing literal code to create fields.
-          line = code.raw.replace(/\S/g, "x");
+        const literal = literalLines.get(firstLine + index);
+        if (literal !== undefined) {
+          if (literal.boundary) literalBoundaries.add(offset);
+          if (!literal.delimiter) literalOffsets.set(offset, { lineIndex: firstLine + index, raw: literal.raw });
+          // Preserve indentation and offsets without allowing payload to create fields.
+          line = literal.raw.replace(/\S/g, "x");
+          if (literal.boundary && !line.trim()) line += "x";
         }
         offset += line.length + 1;
         return line;
       }).join("\n");
-      const reasons = parseFields(context, codeBoundaries).filter((field) => field.label === FIELD_LABELS.reason);
+      const reasons = parseFields(context, literalBoundaries).filter((field) => field.label === FIELD_LABELS.reason);
       let reasonIndex = 0;
-      for (const [start, { lineIndex, raw }] of codeOffsets) {
+      for (const [start, { lineIndex, raw }] of literalOffsets) {
         while (reasonIndex < reasons.length && reasons[reasonIndex].end <= start) reasonIndex += 1;
         const reason = reasons[reasonIndex];
         if (!reason || start < reason.start || indentWidth(raw.match(/^[ \t]*/)[0]) < reason.contentIndent) {
-          options.onCodeLine(lineIndex, raw);
+          options.onLiteralLine(lineIndex, raw);
         }
       }
     }
@@ -460,7 +494,7 @@ function labelKey(text) {
  * Markdown renderers, so each field records them in `lazy`: they count as
  * field text, yet callers can keep them visible to the .80/.81 check.
  */
-function parseFields(cleaned, codeBoundaries) {
+function parseFields(cleaned, literalBoundaries) {
   const fields = [];
   let current = null;
   let blankSeen = false;
@@ -500,7 +534,7 @@ function parseFields(cleaned, codeBoundaries) {
     const outer = indent < current.contentIndent;
     if (
       EXEMPTION_START.test(line) ||
-      (outer && (blankSeen || !lazyOk || BLOCK_START.test(line) || codeBoundaries?.has(lineStart)))
+      (outer && (blankSeen || !lazyOk || BLOCK_START.test(line) || literalBoundaries?.has(lineStart)))
     ) {
       current = null;
       continue;
@@ -509,7 +543,7 @@ function parseFields(cleaned, codeBoundaries) {
     if (outer) current.lazy.push({ start: lineStart, end });
     current.end = end;
     blankSeen = false;
-    lazyOk = !LEAF_BLOCK_START.test(line);
+    lazyOk = !LEAF_BLOCK_START.test(line) && !literalBoundaries?.has(lineStart);
   }
   return fields.map(({ label, lines, lazy, start, end, contentIndent }) => ({
     label,
@@ -1171,12 +1205,39 @@ export function hasEvidenceContent(sectionText) {
   return looksLikeArtifact(artifact, references) || looksLikeArtifact(freeformText(sectionText), references);
 }
 
+function joinShellContinuations(value) {
+  let quote = null;
+  let joined = "";
+  for (let index = 0; index < value.length; index += 1) {
+    const ch = value[index];
+    if (ch === "#" && quote === null && (index === 0 || /[\s;|&()]/.test(value[index - 1]))) {
+      const end = value.indexOf("\n", index);
+      if (end === -1) return joined + value.slice(index);
+      joined += value.slice(index, end + 1);
+      index = end;
+      continue;
+    }
+    if (ch === "\\" && quote !== "'") {
+      const next = value[index + 1];
+      if (next === "\n") { index += 1; continue; }
+      if (next === "\r" && value[index + 2] === "\n") { index += 2; continue; }
+      joined += ch;
+      if (next !== undefined) joined += value[++index];
+      continue;
+    }
+    if (ch === quote) quote = null;
+    else if (quote === null && (ch === "'" || ch === '"')) quote = ch;
+    joined += ch;
+  }
+  return joined;
+}
+
 /**
  * Verification content must never target Chad's LAN instances, whatever the
  * exemption. Mentions only in the Exemption reason or Exemption line are allowed;
  * reason lines must sit in its content column (lazy lines stay checked).
  */
-function targetsBannedLan(sectionText, definitions, literalCode = []) {
+function targetsBannedLan(sectionText, definitions, literalText = []) {
   const verification = withoutFields(sectionText, [FIELD_LABELS.reason], {
     keepLazy: true,
   }).replace(
@@ -1185,7 +1246,7 @@ function targetsBannedLan(sectionText, definitions, literalCode = []) {
   );
   const bannedTarget = (value) => {
     if (BANNED_LAN_IP.test(value)) return true;
-    const decoded = decodeCharacterReferences(value, { htmlNumeric: true }).replace(/\\(.)/g, "$1");
+    const decoded = joinShellContinuations(decodeCharacterReferences(value, { htmlNumeric: true })).replace(/\\(.)/g, "$1");
     const targets = [...decoded.replace(/[\t\n\r]/g, "").matchAll(/(?:https?:|\/\/)[^\s<>()"'`]+/gi)]
       .map((match) => trimToken(match[0]));
     for (const token of decoded.split(/[\s<>()"'`]+/)) {
@@ -1210,7 +1271,7 @@ function targetsBannedLan(sectionText, definitions, literalCode = []) {
     });
   };
   return bannedTarget(verification)
-    || bannedTarget(literalCode.join("\n"))
+    || literalText.some(bannedTarget)
     // Malformed links render as raw text. Unlike artifact validation, the LAN
     // scan must retain their suffix so later reference uses cannot disappear.
     || (definitions.size > 0 && [...referenceUses(verification, { keepMalformed: true })].some((label) => bannedTarget(definitions.get(label) ?? "")));
@@ -1268,13 +1329,18 @@ export function lintPrEvidence(body) {
   // Preserve the selected section boundaries even for the conservative LAN view.
   // Also scan the visible section so commented decoy headings cannot redirect it.
   const definitions = documentReferences(body);
-  const literalCode = [];
+  const literalText = [];
+  let previousLiteralLine = -2;
   const conservativeSection = extractEvidenceSection(body, {
     inlineMultiline: false,
     includeRawHtml: true,
-    onCodeLine: (_lineIndex, raw) => literalCode.push(raw),
+    onLiteralLine: (lineIndex, raw) => {
+      if (lineIndex === previousLiteralLine + 1) literalText[literalText.length - 1] += "\n" + raw;
+      else literalText.push(raw);
+      previousLiteralLine = lineIndex;
+    },
   }) ?? section;
-  if (targetsBannedLan(section, definitions) || targetsBannedLan(conservativeSection, definitions, literalCode)) {
+  if (targetsBannedLan(section, definitions) || targetsBannedLan(conservativeSection, definitions, literalText)) {
     errors.push(
       "Evidence must not target Chad's LAN instances (.80/.81). Use a disposable local verify instance instead. (To mention these hosts in the Exemption reason, indent every reason line under its bullet.)",
     );
