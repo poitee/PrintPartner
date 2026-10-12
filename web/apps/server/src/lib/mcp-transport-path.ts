@@ -1,10 +1,10 @@
 /**
- * The Streamable HTTP MCP transport route.
+ * Exact Streamable HTTP MCP route. POST, GET, and DELETE on `/api/v1/mcp` qualify.
+ * Sub-paths and sibling routes do not.
  *
- * MCP clients authenticate with a bearer API key, not a browser session, so the
- * tenant middleware lets these exact requests past its session gate. The API-key
- * hook (middleware/api-key.ts) and `assertMcpHttpAllowed` (mcp/http-routes.ts)
- * remain the authoritative checks — nothing here grants access.
+ * `registerTenantMiddleware` skips its session requirement for this route only
+ * when the process is self-host single-user auth. Multi-user requests keep the
+ * session requirement. This helper does not accept or reject a credential.
  */
 
 const MCP_HTTP_PATH = "/api/v1/mcp";
