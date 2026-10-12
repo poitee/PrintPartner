@@ -1345,44 +1345,208 @@ function ansiCFragment(value, start) {
   return null;
 }
 
-function shellWords(value) {
+function shellWords(value, { commandTokens = false } = {}) {
   const words = [];
   let word = "";
   let quote = null;
+  let braceText = "";
+  const append = (text, protectedText = false) => {
+    word += text;
+    braceText += protectedText ? text.replace(/[\\{},.]/g, (ch) => "\\" + ch) : text;
+  };
+  const flush = () => {
+    if (word) words.push(commandTokens ? { text: word, braceText } : word);
+    word = "";
+    braceText = "";
+  };
   for (let index = 0; index < value.length; index += 1) {
     const ch = value[index];
     if (quote === null && /[\s;|&<>()`]/.test(ch)) {
-      if (word) words.push(word);
-      word = "";
+      flush();
+      if (commandTokens && /[\n\r;|&<>()`]/.test(ch)) words.push(null);
       continue;
     }
     if (quote === null && ch === "#" && !word) {
       const end = value.indexOf("\n", index);
       if (end === -1) break;
-      index = end;
+      index = end - 1;
       continue;
     }
     if (quote === null && ch === "$" && value[index + 1] === "'") {
       const fragment = ansiCFragment(value, index + 2);
-      if (!fragment) return words.filter((word) => !/\s/.test(word));
-      word += fragment.text;
+      if (!fragment) return commandTokens ? words : words.filter((word) => !/\s/.test(word));
+      append(fragment.text, true);
       index = fragment.end;
       continue;
     }
     if (ch === "\\" && quote !== "'") {
       const next = value[index + 1];
       if (next !== undefined && (quote === null || /[\\"$`]/.test(next))) {
-        word += next;
+        append(next, true);
         index += 1;
-      } else word += ch;
+      } else append(ch, quote !== null);
       continue;
     }
     if (ch === quote) quote = null;
     else if (quote === null && (ch === "'" || ch === '"')) quote = ch;
-    else word += ch;
+    else append(ch, quote !== null);
   }
-  if (word && quote === null) words.push(word);
-  return words.filter((word) => !/\s/.test(word));
+  if (quote === null) flush();
+  return commandTokens ? words : words.filter((word) => !/\s/.test(word));
+}
+
+// Value-taking options from curl 8.18.0 --help all.
+const CURL_VALUE_OPTIONS = new Set([
+  "abstract-unix-socket alt-svc aws-sigv4 cacert capath cert cert-type ciphers",
+  "config connect-timeout connect-to continue-at cookie cookie-jar create-file-mode crlfile",
+  "curves data data-ascii data-binary data-raw data-urlencode delegation dns-interface",
+  "dns-ipv4-addr dns-ipv6-addr dns-servers doh-url dump-header ech egd-file engine",
+  "etag-compare etag-save expect100-timeout form form-string ftp-account ftp-alternative-to-user ftp-method",
+  "ftp-port ftp-ssl-ccc-mode happy-eyeballs-timeout-ms haproxy-clientip header help hostpubmd5 hostpubsha256",
+  "hsts interface ip-tos ipfs-gateway json keepalive-cnt keepalive-time key",
+  "key-type knownhosts krb libcurl limit-rate local-port login-options mail-auth",
+  "mail-from mail-rcpt max-filesize max-redirs max-time netrc-file noproxy oauth2-bearer",
+  "output output-dir parallel-max parallel-max-host pass pinnedpubkey preproxy proto",
+  "proto-default proto-redir proxy proxy-cacert proxy-capath proxy-cert proxy-cert-type proxy-ciphers",
+  "proxy-crlfile proxy-header proxy-key proxy-key-type proxy-pass proxy-pinnedpubkey proxy-service-name proxy-tls13-ciphers",
+  "proxy-tlsauthtype proxy-tlspassword proxy-tlsuser proxy-user pubkey quote random-file range",
+  "rate referer request request-target resolve retry retry-delay retry-max-time",
+  "sasl-authzid service-name sigalgs socks4 socks4a socks5 socks5-gssapi-service socks5-hostname",
+  "speed-limit speed-time ssl-sessions stderr telnet-option tftp-blksize time-cond tls-max",
+  "tls13-ciphers tlsauthtype tlspassword tlsuser trace trace-ascii trace-config unix-socket",
+  "upload-file upload-flags url url-query user user-agent variable vlan-priority",
+  "write-out",
+].join(" ").split(" "));
+const CURL_SHORT_VALUE_OPTIONS = new Set("EKCbcdDFPHhmoxUQreXYytzTuAw");
+const MAX_STATIC_CURL_TARGETS = 4096;
+
+function expandTargetGlobs(value, { shell = false } = {}) {
+  let values = [value];
+  for (let pass = 0; pass < value.length; pass += 1) {
+    let changed = false;
+    const next = [];
+    for (const text of values) {
+      let span = null;
+      for (let at = 0; at < text.length; at += 1) {
+        if (text[at] === "\\") { at += 1; continue; }
+        if (text[at] !== "{" && (shell || text[at] !== "[")) continue;
+        const close = text[at] === "{" ? "}" : "]";
+        const end = text.indexOf(close, at + 1);
+        if (end === -1) { if (shell) continue; return { values: [], overflow: false }; }
+        const content = text.slice(at + 1, end);
+        if (!shell && text[at] === "[" && content.includes(":") && /^[\da-f:.%]+$/i.test(content)) {
+          at = end;
+          continue;
+        }
+        if (content.includes("{")) { if (shell) continue; return { values: [], overflow: false }; }
+        let items;
+        const authorityStart = /^(?:[a-z][\w+.-]*:)?\/\//i.exec(text)?.[0].length ?? 0;
+        const pathStart = text.slice(authorityStart).search(/[/?#]/);
+        const inPath = !shell && pathStart !== -1 && at >= authorityStart + pathStart;
+        const list = [""];
+        for (let index = 0; index < content.length; index += 1) {
+          if (content[index] === "\\" && index + 1 < content.length) list[list.length - 1] += content[index] + content[++index];
+          else if (content[index] === ",") list.push("");
+          else list[list.length - 1] += content[index];
+        }
+        if (text[at] === "{" && (!shell || list.length > 1)) items = list;
+        else {
+          const range = (shell ? /^(-?\d+)\.\.(-?\d+)(?:\.\.(-?\d+))?$|^([a-zA-Z])\.\.([a-zA-Z])(?:\.\.(-?\d+))?$/
+            : /^(\d+)-(\d+)(?::(\d+))?$|^([a-zA-Z])-([a-zA-Z])(?::(\d+))?$/).exec(content);
+          if (!range) { if (shell) continue; return { values: [], overflow: false }; }
+          const numeric = range[1] !== undefined;
+          const first = numeric ? Number(range[1]) : range[4].charCodeAt(0);
+          const last = numeric ? Number(range[2]) : range[5].charCodeAt(0);
+          const step = Math.abs(Number(range[3] ?? range[6] ?? 1));
+          if (!Number.isSafeInteger(first) || !Number.isSafeInteger(last) || !Number.isSafeInteger(step)
+            || step === 0 || (!shell && first > last)) return { values: [], overflow: false };
+          const count = Math.floor(Math.abs(last - first) / step) + 1;
+          if (!inPath && count > MAX_STATIC_CURL_TARGETS) return { values: [], overflow: true };
+          const width = numeric && /^-?0\d/.test(range[1]) ? range[1].replace("-", "").length : 0;
+          items = Array.from({ length: inPath ? 1 : count }, (_, i) => {
+            const n = first + i * step * (first <= last ? 1 : -1);
+            return numeric ? (n < 0 ? "-" : "") + String(Math.abs(n)).padStart(width, "0") : String.fromCharCode(n);
+          });
+        }
+        if (items.some((item) => /[{}\[\]]/.test(item))) return { values: [], overflow: false };
+        span = { at, end, items: inPath ? items.slice(0, 1) : items };
+        break;
+      }
+      if (!span) { next.push(text); continue; }
+      changed = true;
+      if (next.length + span.items.length > MAX_STATIC_CURL_TARGETS) return { values: [], overflow: true };
+      next.push(...span.items.map((item) => text.slice(0, span.at) + item + text.slice(span.end + 1)));
+    }
+    values = next;
+    if (!changed) return { values, overflow: false };
+  }
+  return { values: [], overflow: true };
+}
+
+function curlCommandTargets(value) {
+  const targets = [];
+  let overflow = false;
+  let command = [];
+  const flush = () => {
+    let start = 0;
+    while (/^[a-zA-Z_][\w]*=/.test(command[start]?.text ?? "")) start += 1;
+    if (!/^(?:.*\/)?curl$/.test(command[start]?.text ?? "")) { command = []; return; }
+    let globoff = false;
+    let options = true;
+    let urls = [];
+    const transfer = () => {
+      for (const url of urls) {
+        const expanded = globoff ? { values: [url], overflow: false } : expandTargetGlobs(url);
+        overflow ||= expanded.overflow;
+        for (const target of expanded.values) {
+          if (/\s/.test(target)) continue;
+          targets.push(/^(?:[a-z][\w+.-]*:|\/\/)/i.test(target) ? target : `http://${target}`);
+        }
+      }
+      urls = [];
+      globoff = false;
+    };
+    const args = [];
+    for (const word of command.slice(start + 1)) {
+      const expanded = expandTargetGlobs(word.braceText, { shell: true });
+      overflow ||= expanded.overflow;
+      args.push(...expanded.values.map((text) => text.replace(/\\([\\{},.])/g, "$1")));
+    }
+    for (let i = 0; i < args.length; i += 1) {
+      const arg = args[i];
+      if (!options) { urls.push(arg); continue; }
+      if (arg === "--") { options = false; continue; }
+      if (arg === "--next" || arg === "-:") { transfer(); continue; }
+      if (arg === "--globoff") { globoff = true; continue; }
+      if (arg === "--no-globoff") { globoff = false; continue; }
+      if (arg.startsWith("--")) {
+        const equal = arg.indexOf("=");
+        const name = arg.slice(2, equal === -1 ? undefined : equal);
+        const operand = equal === -1 ? (CURL_VALUE_OPTIONS.has(name) ? args[++i] : undefined) : arg.slice(equal + 1);
+        if (name === "url" && operand !== undefined) urls.push(operand);
+        continue;
+      }
+      if (arg.startsWith("-") && arg !== "-") {
+        for (let at = 1; at < arg.length; at += 1) {
+          if (arg[at] === "g") globoff = true;
+          if (CURL_SHORT_VALUE_OPTIONS.has(arg[at])) {
+            if (at + 1 === arg.length) i += 1;
+            break;
+          }
+        }
+        continue;
+      }
+      urls.push(arg);
+    }
+    transfer();
+    command = [];
+  };
+  for (const token of shellWords(value, { commandTokens: true })) {
+    if (token === null) flush();
+    else command.push(token);
+  }
+  flush();
+  return { targets, overflow };
 }
 
 function joinShellContinuations(value) {
@@ -1435,9 +1599,12 @@ function targetsBannedLan(sectionText, definitions, literalText = []) {
     if (BANNED_LAN_IP.test(value)) return true;
     const joined = joinShellContinuations(decodeCharacterReferences(value, { htmlNumeric: true }));
     const words = shellWords(joined);
+    const curl = curlCommandTargets(joined);
+    if (curl.overflow) return true;
     const decoded = joined.replace(/\\(.)/g, "$1");
     const targets = [...decoded.replace(/[\t\n\r]/g, "").matchAll(/(?:https?:|\/\/)[^\s<>()"'`]+/gi)]
       .map((match) => trimToken(match[0]));
+    targets.push(...curl.targets);
     targets.push(...words.filter((word) => /^(?:https?:|\/\/)/i.test(word)).map(trimToken));
     for (const token of [...decoded.split(/[\s<>()"'`]+/), ...words]) {
       const target = trimToken(token);
