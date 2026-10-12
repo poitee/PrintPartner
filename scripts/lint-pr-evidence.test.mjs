@@ -1801,3 +1801,55 @@ test("scheme-less host scanning preserves reasons and document reference scope",
   assert.equal(real.ok, false);
   assert.match(real.errors.join("\n"), /LAN instances/);
 });
+
+for (const suffix of ["80", "81"]) {
+  const base = "## Evidence\nExemption: docs-only\n- Exemption reason: Updated docs.\n\n";
+  const host = `http://192.168.1.${suffix}/`;
+  for (const [name, payload] of [
+    ["shell continuation", "```sh\ncurl http://192.168.1.\\\n" + suffix + ":8080/\n```"],
+    ["scheme-less shell continuation", "```sh\ncurl 192.168.\\\n" + suffix + ":8080/\n```"],
+    ["double-quoted shell continuation", '```sh\ncurl "http://192.168.1.\\\n' + suffix + '/"\n```'],
+    ["comment suffix", "<!-- note -->curl " + host],
+    ["multiline comment suffix", "<!-- note\nmore -->curl " + host],
+    ["comment suffix declaration", "<!-- note -->Exemption: curl " + host],
+    ["comment suffix reason", "<!-- note -->- Exemption reason: curl " + host],
+    ["raw pre declaration", "<pre>\nExemption: curl " + host + "\n</pre>"],
+    ["raw pre reason", "<pre>\n- Exemption reason: sample\n  curl " + host + "\n</pre>"],
+    ["raw pre indented label", "<pre>\n    Exemption: curl " + host + "\n</pre>"],
+    ["raw block declaration", "<div>\nExemption: curl " + host + "\n</div>"],
+    ["raw block fake fence reason", "<pre>\n```\n- Exemption reason: sample\n  curl " + host + "\n```\n</pre>"],
+  ]) {
+    test(`literal payload context rejects ${name} .${suffix}`, () => {
+      const result = lintPrEvidence(base + payload);
+      assert.equal(result.ok, false);
+      assert.match(result.errors.join("\n"), /LAN instances/);
+    });
+  }
+}
+
+for (const [name, payload] of [
+  ["hidden comment", "<!-- curl http://192.168.1.80/ -->curl http://localhost:8080/"],
+  ["continued local host", "```sh\ncurl http://local\\\nhost:8080/\n```"],
+  ["continued safe numeric host", "```sh\ncurl 192.168.\\\n82/\n```"],
+  ["continued safe path", "```sh\ncurl https://example.test/192.168.\\\n80/\n```"],
+  ["single-quoted literal newline", "```sh\nprintf '%s' 'http://192.168.1.\\\n80/'\n```"],
+  ["separate numeric arguments", "```sh\nprintf '%s' 192.168.1.\\\n 80/\n```"],
+  ["safe raw label", "<pre>\nExemption: curl http://localhost:8080/\n</pre>"],
+]) {
+  test(`literal payload context preserves ${name}`, () => {
+    const result = lintPrEvidence("## Evidence\nExemption: docs-only\n- Exemption reason: Updated docs.\n\n" + payload);
+    assert.equal(result.ok, true, result.errors.join("; "));
+  });
+}
+
+for (const payload of [
+  "  <pre>\n  Exemption: http://192.168.1.80/\n  </pre>",
+  "  <!-- note -->http://192.168.1.80/",
+  "  <!-- note\n  -->http://192.168.1.80/",
+  "  ```sh\n  curl http://192.168.1.\\\n  80/\n  ```",
+]) {
+  test(`literal payload context keeps actual reason ownership ${JSON.stringify(payload)}`, () => {
+    const result = lintPrEvidence("## Evidence\nExemption: docs-only\n- Exemption reason: Document the prohibited host.\n\n" + payload);
+    assert.equal(result.ok, true, result.errors.join("; "));
+  });
+}
