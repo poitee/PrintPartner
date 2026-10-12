@@ -1,6 +1,7 @@
 [workspace]
-members = ["crates/pp-storage", "crates/pp-core", "crates/pp-compat", "crates/pp-gateway", "crates/pp-server", "crates/pp-contracts", "crates/pp-source", "crates/pp-desktop", "crates/pp-domain", "crates/pp-api-types", "crates/pp-net", "crates/pp-drivers", "crates/pp-services"]
-default-members = ["crates/pp-storage", "crates/pp-core", "crates/pp-compat", "crates/pp-gateway", "crates/pp-server", "crates/pp-contracts", "crates/pp-source", "crates/pp-domain", "crates/pp-api-types", "crates/pp-net", "crates/pp-drivers", "crates/pp-services"]
+members = ["crates/pp-storage", "crates/pp-core", "crates/pp-compat", "crates/pp-gateway", "crates/pp-server", "crates/pp-contracts", "crates/pp-desktop", "crates/pp-domain", "crates/pp-api-types", "crates/pp-net", "crates/pp-drivers", "crates/pp-services", "crates/pp-source"]
+default-members = ["crates/pp-storage", "crates/pp-core", "crates/pp-compat", "crates/pp-gateway", "crates/pp-server", "crates/pp-contracts", "crates/pp-domain", "crates/pp-api-types", "crates/pp-net", "crates/pp-drivers", "crates/pp-services", "crates/pp-source"]
+exclude = ["fuzz"]
 resolver = "3"
 
 [workspace.package]
