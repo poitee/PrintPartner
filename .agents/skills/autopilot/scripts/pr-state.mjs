@@ -711,7 +711,10 @@ function completeLatestRunMembership(checks, { owner, name, oid }) {
     const seed = sameLatestPage(group);
     if (!seed) continue;
     const ids = followLatestTail({ owner, name, oid, suiteId, seed });
-    if (!ids) continue;
+    if (!ids) {
+      mixed = true;
+      continue;
+    }
     // Two full walks can still tear between pages, and the suite can change
     // after the second walk. CheckSuite.updatedAt is not a version token.
     let again = null;
@@ -893,7 +896,10 @@ export function fetchLiveSnapshot({ prNumber } = {}) {
     try {
       pr = viewPullRequest(prNumber);
     } catch (error) {
-      if (isMissingPrError(error)) return evaluateSnapshot({ pr: null });
+      if (isMissingPrError(error)) {
+        if (seen) return unknownHeadSnapshot(seen);
+        return evaluateSnapshot({ pr: null });
+      }
       throw error;
     }
     seen = pr;
