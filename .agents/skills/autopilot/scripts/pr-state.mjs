@@ -117,24 +117,46 @@ export function summarizeThreads({ reviewThreads, viewerLogin = null } = {}) {
   return { unresolved, awaitingHuman };
 }
 
-function checkIdentityKey(check) {
-  const suite = check.checkSuite;
-  const run = suite?.workflowRun;
-  if (!check.id || !check.name || !suite?.app?.id) return null;
-  if (run?.workflow?.id && run?.event) {
-    return JSON.stringify([suite.app.id, run.workflow.id, run.event, check.name]);
-  }
-  if (!run) return JSON.stringify([suite.app.id, check.name]);
-  return null;
+function orderingInput(check) {
+  const suite = check?.checkSuite ?? null;
+  const run = suite?.workflowRun ?? null;
+  return {
+    id: check?.id,
+    name: check?.name,
+    context: check?.context,
+    status: check?.status,
+    state: check?.state,
+    conclusion: check?.conclusion,
+    startedAt: check?.startedAt,
+    detailsUrl: check?.detailsUrl,
+    targetUrl: check?.targetUrl,
+    link: check?.link,
+    suiteId: suite?.id,
+    appId: suite?.app?.id,
+    hasWorkflowRun: Boolean(run),
+    workflowId: run?.workflow?.id,
+    event: run?.event,
+    runAttempt: run?.runAttempt,
+  };
 }
 
-function attemptTimeForDedupe(check) {
-  const run = check.checkSuite?.workflowRun;
-  if (Number.isInteger(run?.runAttempt) && run.runAttempt >= 1) {
-    return Date.parse(check.startedAt);
+function checkIdentityKey(input) {
+  if (!input.id || !input.name || !input.appId) return null;
+  if (input.hasWorkflowRun) {
+    if (input.workflowId && input.event) {
+      return JSON.stringify([input.appId, input.workflowId, input.event, input.name]);
+    }
+    return null;
+  }
+  return JSON.stringify([input.appId, input.name]);
+}
+
+function attemptTimeForDedupe(input) {
+  if (input.hasWorkflowRun && Number.isInteger(input.runAttempt) && input.runAttempt >= 1) {
+    return Date.parse(input.startedAt);
   }
   // gh pr checks orders non-workflow CheckRuns by start time and app/name identity.
-  if (!run && check.checkSuite?.app?.id) return Date.parse(check.startedAt);
+  if (!input.hasWorkflowRun && input.appId) return Date.parse(input.startedAt);
   return NaN;
 }
 
@@ -159,8 +181,9 @@ function suiteMembershipIncomplete(check) {
 }
 
 function orphanSupersededInMembership(check, memberKeys) {
-  const key = checkIdentityKey(check);
-  const suiteId = check.checkSuite?.id;
+  const input = orderingInput(check);
+  const key = checkIdentityKey(input);
+  const suiteId = input.suiteId;
   if (!key || !suiteId) return false;
   return Boolean(memberKeys.get(suiteId)?.has(key));
 }
@@ -204,8 +227,9 @@ function currentChecks(checks) {
   const memberKeys = new Map();
   for (const check of checks) {
     if (!checkIsFinishedLatestMember(check, cache)) continue;
-    const key = checkIdentityKey(check);
-    const suiteId = check.checkSuite?.id;
+    const input = orderingInput(check);
+    const key = checkIdentityKey(input);
+    const suiteId = input.suiteId;
     if (!key || !suiteId) continue;
     let keys = memberKeys.get(suiteId);
     if (!keys) {
@@ -215,21 +239,25 @@ function currentChecks(checks) {
     keys.add(key);
   }
   const candidates = checks.filter((check) => {
+    const input = orderingInput(check);
     const currentRuns = check.checkSuite?.currentRuns;
     const ids = finishedMemberIds(currentRuns, cache);
-    if (!check.id || !ids) return true;
-    if (ids.has(check.id)) return true;
+    if (!input.id || !ids) return true;
+    if (ids.has(input.id)) return true;
     if (currentRuns.membershipAuthoritative === true) return !orphanSupersededInMembership(check, memberKeys);
     return false;
   });
-  const records = candidates.map((check) => ({
-    check,
-    key: checkIdentityKey(check),
-    suiteId: check.checkSuite?.id,
-    attemptTime: attemptTimeForDedupe(check),
-    membershipIncomplete: suiteMembershipIncomplete(check),
-    finishedMember: checkIsFinishedLatestMember(check, cache),
-  }));
+  const records = candidates.map((check) => {
+    const input = orderingInput(check);
+    return {
+      check,
+      key: checkIdentityKey(input),
+      suiteId: input.suiteId,
+      attemptTime: attemptTimeForDedupe(input),
+      membershipIncomplete: suiteMembershipIncomplete(check),
+      finishedMember: checkIsFinishedLatestMember(check, cache),
+    };
+  });
   const bounds = suppressorBounds(records);
   return records.filter((record) => !newerSuiteSuppresses(record, bounds)).map(({ check }) => check);
 }
@@ -239,14 +267,15 @@ export function classifyChecks(statusCheckRollup) {
   const pending = [];
   const passed = [];
   for (const check of currentChecks(statusCheckRollup ?? [])) {
-    const name = check.name ?? check.context ?? "unknown";
-    const status = String(check.status ?? check.state ?? "").toUpperCase();
-    const conclusion = String(check.conclusion ?? "").toUpperCase();
+    const input = orderingInput(check);
+    const name = input.name ?? input.context ?? "unknown";
+    const status = String(input.status ?? input.state ?? "").toUpperCase();
+    const conclusion = String(input.conclusion ?? "").toUpperCase();
     const entry = {
       name,
       status: status || null,
       conclusion: conclusion || null,
-      url: check.detailsUrl ?? check.targetUrl ?? check.link ?? null,
+      url: input.detailsUrl ?? input.targetUrl ?? input.link ?? null,
     };
     if (FAILING_CONCLUSIONS.has(conclusion) || FAILING_STATUSES.has(status)) {
       failing.push(entry);
@@ -541,6 +570,10 @@ function connectionCursor(pageInfo) {
 
 function parseConnectionPage(connection, { requireCount = false, nodeIds = false } = {}) {
   if (!connection) return null;
+  if (!Array.isArray(connection.nodes)) return null;
+  for (const node of connection.nodes) {
+    if (node == null || typeof node !== "object") return null;
+  }
   const endCursor = connectionCursor(connection.pageInfo);
   if (endCursor === undefined) return null;
   if (requireCount) {
@@ -712,8 +745,9 @@ function completeLatestRunMembership(checks, { owner, name, oid }) {
 }
 
 function checkBlocks(check) {
-  const status = String(check?.status ?? check?.state ?? "").toUpperCase();
-  const conclusion = String(check?.conclusion ?? "").toUpperCase();
+  const input = orderingInput(check);
+  const status = String(input.status ?? input.state ?? "").toUpperCase();
+  const conclusion = String(input.conclusion ?? "").toUpperCase();
   if (FAILING_CONCLUSIONS.has(conclusion) || FAILING_STATUSES.has(status)) return true;
   if (PENDING_STATUSES.has(status)) return true;
   if (PASSING_CONCLUSIONS.has(conclusion) || status === "SUCCESS") return false;
@@ -726,16 +760,40 @@ function preferObservation(earlier, later) {
   return later;
 }
 
+function membershipStamp(runs, cache) {
+  if (!runs || typeof runs !== "object") return "";
+  const cached = cache.get(runs);
+  if (cached !== undefined) return cached;
+  const pageInfo = runs.pageInfo;
+  const hasNext = pageInfo && typeof pageInfo.hasNextPage === "boolean" ? String(pageInfo.hasNextPage) : "";
+  const endCursor = pageInfo && typeof pageInfo.endCursor === "string" ? pageInfo.endCursor : "";
+  const auth = runs.membershipAuthoritative === true ? "1" : "0";
+  const count = runs.totalCount == null ? "" : `${typeof runs.totalCount}:${runs.totalCount}`;
+  let stamp;
+  if (!Array.isArray(runs.nodes)) {
+    stamp = ["na", count, hasNext, endCursor, auth].join("\u0000");
+  } else {
+    const ids = exactLatestIds(runs.nodes);
+    if (!ids) stamp = ["bad", String(runs.nodes.length), count, hasNext, endCursor, auth].join("\u0000");
+    else stamp = ["ok", count, hasNext, endCursor, auth, ids.join("\u0001")].join("\u0000");
+  }
+  cache.set(runs, stamp);
+  return stamp;
+}
+
+function orderingSignature(input) {
+  return Object.values(input).map((value) => value ?? "").join("\u0000");
+}
+
+// Deduping and classification read orderingInput. The signature is that object
+// plus one membership stamp per shared currentRuns object, so a new ordering
+// field cannot stay out of the comparison.
 function rollupSignature(checks) {
-  return checks.map((check) => [
-    check?.id ?? "",
-    check?.context ?? "",
-    check?.name ?? "",
-    check?.status ?? "",
-    check?.conclusion ?? "",
-    check?.state ?? "",
-    check?.detailsUrl ?? check?.targetUrl ?? "",
-  ].join("\u0000")).join("\n");
+  const stamps = new Map();
+  return checks.map((check) => {
+    const input = orderingInput(check);
+    return `${orderingSignature(input)}\u0000${membershipStamp(check?.checkSuite?.currentRuns, stamps)}`;
+  }).join("\n");
 }
 
 function readStatusContexts({ owner, name, oid }) {
@@ -769,7 +827,11 @@ function readStatusContexts({ owner, name, oid }) {
     const conn = commit.statusCheckRollup.contexts;
     const page = parseConnectionPage(conn);
     if (!page) {
-      if (Array.isArray(conn?.nodes)) checks.push(...conn.nodes);
+      if (Array.isArray(conn?.nodes)) {
+        for (const node of conn.nodes) {
+          if (node != null && typeof node === "object") checks.push(node);
+        }
+      }
       return { checks, complete: false, paged, signature: rollupSignature(checks) };
     }
     if (Array.isArray(page.nodes)) checks.push(...page.nodes);
