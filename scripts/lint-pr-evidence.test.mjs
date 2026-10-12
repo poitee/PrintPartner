@@ -1705,3 +1705,13 @@ test("real exemption reasons retain literal code mentions", () => {
     assert.equal(result.ok, true, result.errors.join("; "));
   }
 });
+
+test("a top-level fence ends a real exemption reason before indented code", () => {
+  for (const code of ["  curl http://192.168.1.80/", "  Exemption: curl http://0xc0a80151/", "  - Exemption reason: output\n    curl http://192.168.1.81/"]) {
+    for (const gap of ["\n", "\n\n"]) {
+      const result = lintPrEvidence(bodyWithEvidence(`Exemption: docs-only\n- Exemption reason: Updated docs.${gap}\`\`\`text\n${code}\n\`\`\``));
+      assert.equal(result.ok, false, code);
+      assert.match(result.errors.join("\n"), /LAN instances/);
+    }
+  }
+});
