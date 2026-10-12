@@ -1868,3 +1868,15 @@ for (const [name, payload, ok] of [
     if (!ok) assert.match(result.errors.join("\n"), name === "suffix empty boundary" ? /exactly one Exemption/ : /LAN instances/);
   });
 }
+
+for (const [name, payload, ok] of [
+  ["comment apostrophe", "# don't run remotely\ncurl http://192.168.1.\\\n80/", false],
+  ["escaped backslash", "curl http://192.168.1.\\\\\n80/", true],
+  ["CRLF continuation", "curl http://192.168.1.\\\r\n81/", false],
+]) {
+  test(`shell continuation context handles ${name}`, () => {
+    const result = lintPrEvidence("## Evidence\nExemption: docs-only\n- Exemption reason: Updated docs.\n\n```sh\n" + payload + "\n```");
+    assert.equal(result.ok, ok, result.errors.join("; "));
+    if (!ok) assert.match(result.errors.join("\n"), /LAN instances/);
+  });
+}
