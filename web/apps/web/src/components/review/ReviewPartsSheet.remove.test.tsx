@@ -23,6 +23,7 @@ import {
   parsePersistedReviewPartsUi,
 } from "../../lib/persistedReviewPartsUi";
 import ReviewPartsSheet from "./ReviewPartsSheet";
+import PartsPage from "../../pages/PartsPage";
 
 function reviewPart(over: Partial<ReviewPart> & { id: number; match_key: string }): ReviewPart {
   return {
@@ -72,6 +73,9 @@ function draftPart(over: {
 const state = vi.hoisted(() => ({
   review: null as PlanReview | null,
   workspace: null as PlanDraftWorkspace | null,
+  selectedProfileId: 7,
+  reviewLoading: false,
+  draftLoading: false,
 }));
 
 vi.mock("../../api/endpoints/planDrafts", async (importOriginal) => {
@@ -102,11 +106,17 @@ vi.mock("../../hooks/useEngineHealth", () => ({
 }));
 
 vi.mock("../../context/ProfileContext", () => ({
-  useProfileSelection: () => ({ selectedProfileId: 7, profiles: [] }),
+  useProfileSelection: () => ({
+    selectedProfileId: state.selectedProfileId,
+    profiles: [
+      { id: 7, name: "Build A", freshness: { status: "current" } },
+      { id: 8, name: "Build B", freshness: { status: "current" } },
+    ],
+  }),
 }));
 
 vi.mock("../../queries/planReview", () => ({
-  usePlanReviewQuery: () => ({ data: state.review, isLoading: false, error: null }),
+  usePlanReviewQuery: () => ({ data: state.review, isLoading: state.reviewLoading, error: null }),
   usePatchPartMutation: () => ({ mutateAsync: vi.fn() }),
   usePatchPartProgressMutation: () => ({ mutateAsync: vi.fn() }),
   usePatchPartAssembledMutation: () => ({ mutateAsync: vi.fn() }),
@@ -124,7 +134,7 @@ vi.mock("../../queries/profiles", () => ({
 vi.mock("../../queries/planDraft", () => ({
   usePlanDraftListQuery: () => ({
     data: state.workspace ? [state.workspace.draft] : [],
-    isLoading: false,
+    isLoading: state.draftLoading,
     error: null,
   }),
   usePlanDraftWorkspaceQuery: (_p: number | null, draftId: number | null) => ({
@@ -149,11 +159,54 @@ vi.mock("../../hooks/useMediaQuery", () => ({
 }));
 
 vi.mock("../parts/PartThumbExpandButton", () => ({ default: () => null }));
+vi.mock("../../queries/planLayers", () => ({
+  usePlanLayersQuery: () => ({ data: [{ id: 1, project_id: 1, project_name: "source" }], isLoading: false }),
+}));
+vi.mock("../../api/endpoints/stlNaming", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../api/endpoints/stlNaming")>();
+  return { ...actual, fetchStlNaming: vi.fn(async () => ({ folder_rules: [] })) };
+});
+vi.mock("../KitManifestOptions", () => ({ default: () => null }));
+vi.mock("../build/PlanRolesCard", () => ({ default: () => null }));
+vi.mock("./PlanFileSelection", () => ({ default: () => null }));
+vi.mock("./PlanProgressChoices", () => ({ default: () => null }));
+vi.mock("./PendingPlanFiles", () => ({ default: () => null }));
+vi.mock("../share/ShareBuildExportDialog", () => ({ default: () => null }));
 
 /** Surfaces the value the Plan page renders as its alert (PartsPage.tsx). */
 function DraftErrorProbe() {
   const { draftError } = usePlanWorkspace();
   return <p data-testid="draft-error">{draftError ?? ""}</p>;
+}
+
+function acceptedPlan(parts: ReviewPart[]): PlanReview {
+  return {
+    ...baseReview(parts),
+    accepted_basis: {
+      profile_id: 7,
+      plan_version: 1,
+      plan_revision_id: 3,
+      plan_revision_digest: "c".repeat(64),
+      required_unit_mapping_digest: "d".repeat(64),
+    },
+  };
+}
+
+function renderPlan() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  function Harness() {
+    return (
+      <MemoryRouter>
+        <QueryClientProvider client={client}>
+          <PlanWorkspaceProvider>
+            <PartsPage />
+          </PlanWorkspaceProvider>
+        </QueryClientProvider>
+      </MemoryRouter>
+    );
+  }
+  const view = render(<Harness />);
+  return { ...view, rerender: () => view.rerender(<Harness />) };
 }
 
 function renderSheet() {
@@ -260,6 +313,9 @@ afterEach(() => {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  state.selectedProfileId = 7;
+  state.reviewLoading = false;
+  state.draftLoading = false;
   localStorage.clear();
   // Table layout is the surface with the "Proposed inclusion" column.
   localStorage.setItem(
@@ -505,4 +561,87 @@ describe("Plan sheet Working Plan edits", () => {
       expect(screen.getByTestId("draft-error").textContent).toBe("disk full"),
     );
   });
+
+  it("queues three increase clicks from the Plan page while the first save is in flight", async () => {
+    const part = draftPart({ draft_part_id: 17, base_revision_part_id: 42, part_key: "frame/bracket.stl" });
+    const initial = baseWorkspace([part]);
+    state.review = acceptedPlan([reviewPart({ id: 42, match_key: "frame/bracket.stl" })]);
+    state.workspace = null;
+    const pending = [deferred<SavePlanChoicesResponse>(), deferred<SavePlanChoicesResponse>(), deferred<SavePlanChoicesResponse>()];
+    vi.mocked(savePlanChoices)
+      .mockReturnValueOnce(pending[0].promise)
+      .mockReturnValueOnce(pending[1].promise)
+      .mockReturnValueOnce(pending[2].promise);
+    const user = userEvent.setup({ delay: null });
+    renderPlan();
+    const increase = await screen.findByRole("button", { name: "Increase quantity for bracket.stl" });
+    await user.click(increase);
+    expect((screen.getByRole("button", { name: "Remove" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Change color for bracket.stl" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Share Build" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((increase as HTMLButtonElement).disabled).toBe(false);
+    await user.click(increase);
+    await user.click(increase);
+    await waitFor(() => expect(savePlanChoices).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(savePlanChoices).mock.calls[0]?.[0]).toBe(7);
+    expect(vi.mocked(savePlanChoices).mock.calls[0]?.[1].decisions[0]?.value).toBe(2);
+    pending[0].resolve(saveResponse(workspaceWithQuantity(initial, "b", 2)));
+    await waitFor(() => expect(savePlanChoices).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(savePlanChoices).mock.calls[1]?.[1].decisions[0]?.value).toBe(3);
+    pending[1].resolve(saveResponse(workspaceWithQuantity(initial, "c", 3)));
+    await waitFor(() => expect(savePlanChoices).toHaveBeenCalledTimes(3));
+    expect(vi.mocked(savePlanChoices).mock.calls[2]?.[1].decisions[0]?.value).toBe(4);
+    pending[2].resolve(saveResponse(workspaceWithQuantity(initial, "d", 4)));
+  });
+
+  it.each([
+    ["a plan reload", "reviewLoading"],
+    ["a draft load", "draftLoading"],
+  ] as const)("blocks another quantity change when saving overlaps %s", async (_label, flag) => {
+    state.review = acceptedPlan([reviewPart({ id: 42, match_key: "frame/bracket.stl" })]);
+    state.workspace = null;
+    const pending = deferred<SavePlanChoicesResponse>();
+    vi.mocked(savePlanChoices).mockReturnValueOnce(pending.promise);
+    const user = userEvent.setup({ delay: null });
+    const view = renderPlan();
+    await user.click(await screen.findByRole("button", { name: "Increase quantity for bracket.stl" }));
+    await waitFor(() => expect(savePlanChoices).toHaveBeenCalledTimes(1));
+    state[flag] = true;
+    view.rerender();
+    expect((screen.getByRole("button", { name: "Increase quantity for bracket.stl" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(savePlanChoices).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(savePlanChoices).mock.calls[0]?.[1].decisions[0]?.value).toBe(2);
+    pending.resolve(saveResponse(workspaceWithQuantity(baseWorkspace([
+      draftPart({ draft_part_id: 17, base_revision_part_id: 42, part_key: "frame/bracket.stl" }),
+    ]), "b", 2)));
+    await waitFor(() => expect((screen.getByRole("button", { name: "Increase quantity for bracket.stl" }) as HTMLButtonElement).disabled).toBe(true));
+    expect(savePlanChoices).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends a Build B quantity click while Build A's save is still in flight", async () => {
+    const part = draftPart({ draft_part_id: 17, base_revision_part_id: 42, part_key: "frame/bracket.stl" });
+    const initial = baseWorkspace([part]);
+    state.review = acceptedPlan([reviewPart({ id: 42, match_key: "frame/bracket.stl" })]);
+    state.workspace = null;
+    const pending = deferred<SavePlanChoicesResponse>();
+    vi.mocked(savePlanChoices)
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValueOnce(saveResponse(workspaceWithQuantity(initial, "b", 2)));
+    const user = userEvent.setup({ delay: null });
+    const view = renderPlan();
+    await user.click(await screen.findByRole("button", { name: "Increase quantity for bracket.stl" }));
+    await waitFor(() => expect(savePlanChoices).toHaveBeenCalledTimes(1));
+    state.selectedProfileId = 8;
+    view.rerender();
+    const increase = screen.getByRole("button", { name: "Increase quantity for bracket.stl" });
+    expect((increase as HTMLButtonElement).disabled).toBe(false);
+    await user.click(increase);
+    await waitFor(() => expect(savePlanChoices).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(savePlanChoices).mock.calls[0]?.[0]).toBe(7);
+    expect(vi.mocked(savePlanChoices).mock.calls[0]?.[1].decisions[0]?.value).toBe(2);
+    expect(vi.mocked(savePlanChoices).mock.calls[1]?.[0]).toBe(8);
+    expect(vi.mocked(savePlanChoices).mock.calls[1]?.[1].decisions[0]?.value).toBe(2);
+    pending.resolve(saveResponse(workspaceWithQuantity(initial, "c", 2)));
+  });
+
 });
