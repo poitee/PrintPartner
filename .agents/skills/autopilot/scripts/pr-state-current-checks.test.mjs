@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import { evaluateSnapshot, main } from "./pr-state.mjs";
@@ -33,6 +36,7 @@ for (const [status, conclusion, action, field] of [
   ["QUEUED", null, "watch-ci", "pendingChecks"],
   ["IN_PROGRESS", null, "watch-ci", "pendingChecks"],
   ["COMPLETED", "FUTURE_OUTCOME", "ci", "failingChecks"],
+  ["FUTURE_STATUS", null, "ci", "failingChecks"],
 ]) {
   test(`latest ${status}/${conclusion} stays actionable regardless of input order`, () => {
     const checks = structuredClone(fixture.statusCheckRollup);
@@ -83,18 +87,31 @@ for (const ambiguity of ["identity", "creation time", "tied creation time"]) {
   });
 }
 
-test("same-suite attempts use start time and retain an unstarted pending attempt", () => {
+test("GitHub latest attempt IDs preserve queued attempts without start times", () => {
   const old = latestCheck();
-  old.startedAt = "2026-10-11T23:55:59Z";
+  old.id = "old-attempt";
   old.conclusion = "FAILURE";
-  let report = evaluateSnapshot(snapshotWithChecks([old, latestCheck()]));
-  assert.equal(report.nextAction, "ready");
   const pending = latestCheck();
   Object.assign(pending, { status: "QUEUED", conclusion: null, startedAt: null });
-  report = evaluateSnapshot(snapshotWithChecks([latestCheck(), pending]));
+  const report = evaluateSnapshot(snapshotWithChecks([old, pending]));
   assert.equal(report.nextAction, "watch-ci");
-  assert.equal(report.pendingChecks.length, 1);
+  assert.deepEqual(report.failingChecks, []);
+  assert.deepEqual(report.pendingChecks.map((check) => check.url), [currentUrl]);
 });
+
+for (const completeness of ["missing", "partial"]) {
+  test(`a ${completeness} attempt list retains ambiguous same-suite blockers`, () => {
+    const old = latestCheck();
+    old.id = "old-attempt";
+    old.conclusion = "FAILURE";
+    old.startedAt = "2026-10-11T23:55:59Z";
+    if (completeness === "missing") delete old.checkSuite.currentRuns;
+    else old.checkSuite.currentRuns.pageInfo.hasNextPage = true;
+    const report = evaluateSnapshot(snapshotWithChecks([old, latestCheck()]));
+    assert.equal(report.nextAction, "ci");
+    assert.equal(report.failingChecks.length, 1);
+  });
+}
 
 test("legacy status contexts stay visible beside an identically named check run", () => {
   const report = evaluateSnapshot(snapshotWithChecks([
@@ -104,3 +121,57 @@ test("legacy status contexts stay visible beside an identically named check run"
   assert.equal(report.failingChecks.length, 1);
   assert.equal(report.passedCheckCount, 1);
 });
+
+function runLiveFixture(context, mode = "pages") {
+  const dir = mkdtempSync(join(tmpdir(), "pr-state-current-"));
+  context.after(() => rmSync(dir, { recursive: true, force: true }));
+  const data = { ...fixture, mode };
+  writeFileSync(join(dir, "data.json"), JSON.stringify(data));
+  writeFileSync(join(dir, "gh"), `#!/usr/bin/env node
+import { readFileSync } from "node:fs";
+const data = JSON.parse(readFileSync(process.env.PR_STATE_TEST_DATA, "utf8"));
+const args = process.argv.slice(2);
+let response;
+if (args[0] === "repo") response = { nameWithOwner: "poitee/PrintPartner" };
+else if (args[0] === "pr") response = { ...data.pr, headRefOid: "46f4b164a93ddaac910d6680dda52903dc757327" };
+else if (args.some((arg) => arg.includes("reviewThreads(first:"))) {
+  response = { data: { viewer: { login: "poitee" }, repository: { pullRequest: {
+    reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } },
+  } } } };
+} else if (args[1] === "graphql") {
+  if (data.mode === "auth") { process.stderr.write("authentication required"); process.exit(4); }
+  if (data.mode === "errors") response = { errors: [{ message: "checks unavailable" }] };
+  else {
+    if (!args.includes("oid=46f4b164a93ddaac910d6680dda52903dc757327")) process.exit(1);
+    const last = args.includes("cursor=next");
+    response = { data: { repository: { object: { statusCheckRollup: { contexts: {
+      nodes: last ? [data.statusCheckRollup.at(-1)] : data.statusCheckRollup.slice(0, -1),
+      pageInfo: { hasNextPage: !last, endCursor: last ? null : "next" },
+    } } } } } };
+  }
+} else response = [];
+process.stdout.write(JSON.stringify(response));
+`, { mode: 0o755 });
+  return spawnSync(process.execPath, [new URL("./pr-state.mjs", import.meta.url).pathname, "--pr", "263"], {
+    encoding: "utf8",
+    env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, PR_STATE_TEST_DATA: join(dir, "data.json") },
+  });
+}
+
+test("live CLI includes the latest context from a later API page at the selected head", (context) => {
+  const result = runLiveFixture(context);
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "ready");
+  assert.equal(report.passedCheckCount, 1);
+  assert.deepEqual(report.failingChecks, []);
+});
+
+for (const [mode, exit, message] of [["auth", 4, /authentication required/], ["errors", 1, /checks unavailable/]]) {
+  test(`live check ${mode} errors cannot turn into readiness or no-pr`, (context) => {
+    const result = runLiveFixture(context, mode);
+    assert.equal(result.status, exit);
+    assert.equal(result.stdout, "");
+    assert.match(result.stderr, message);
+  });
+}

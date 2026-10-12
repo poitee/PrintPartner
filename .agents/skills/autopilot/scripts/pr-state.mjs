@@ -117,11 +117,40 @@ export function summarizeThreads({ reviewThreads, viewerLogin = null } = {}) {
   return { unresolved, awaitingHuman };
 }
 
+function currentChecks(checks) {
+  const candidates = checks.filter((check) => {
+    const currentRuns = check.checkSuite?.currentRuns;
+    if (!check.id || currentRuns?.pageInfo?.hasNextPage !== false || !currentRuns.nodes?.length) {
+      return true;
+    }
+    return currentRuns.nodes.some((run) => run.id === check.id);
+  });
+  const records = candidates.map((check) => {
+    const suite = check.checkSuite;
+    const run = suite?.workflowRun;
+    const key = check.name && suite?.app?.id && run?.workflow?.id && run?.event
+      ? JSON.stringify([suite.app.id, run.workflow.id, run.event, check.name])
+      : null;
+    return {
+      check,
+      key,
+      createdAt: Date.parse(run?.createdAt),
+    };
+  });
+  // Missing identities or ordering evidence remain visible. Completion time
+  // cannot order runs: a superseded run can finish after its replacement.
+  return records.filter((record) => !records.some((other) => {
+    if (!record.key || record.key !== other.key) return false;
+    if (!Number.isFinite(record.createdAt) || !Number.isFinite(other.createdAt)) return false;
+    return other.createdAt > record.createdAt;
+  })).map(({ check }) => check);
+}
+
 export function classifyChecks(statusCheckRollup) {
   const failing = [];
   const pending = [];
   const passed = [];
-  for (const check of statusCheckRollup ?? []) {
+  for (const check of currentChecks(statusCheckRollup ?? [])) {
     const name = check.name ?? check.context ?? "unknown";
     const status = String(check.status ?? check.state ?? "").toUpperCase();
     const conclusion = String(check.conclusion ?? "").toUpperCase();
@@ -344,6 +373,60 @@ function fetchReviewThreadsPaged({ owner, name, number }) {
   return { threads, viewerLogin };
 }
 
+const CHECKS_QUERY = `
+query($owner: String!, $name: String!, $oid: GitObjectID!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    object(oid: $oid) {
+      ... on Commit {
+        statusCheckRollup {
+          contexts(first: 100, after: $cursor) {
+            pageInfo { hasNextPage endCursor }
+            nodes {
+              __typename
+              ... on CheckRun {
+                id name status conclusion detailsUrl
+                checkSuite {
+                  id
+                  app { id }
+                  currentRuns: checkRuns(first: 100, filterBy: { checkType: LATEST }) {
+                    pageInfo { hasNextPage }
+                    nodes { id }
+                  }
+                  workflowRun { createdAt event workflow { id } }
+                }
+              }
+              ... on StatusContext { context state targetUrl }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+`;
+
+function fetchChecksPaged({ owner, name, oid }) {
+  const checks = [];
+  let cursor = null;
+  do {
+    const args = [
+      "api", "graphql", "-f", `query=${CHECKS_QUERY}`,
+      "-F", `owner=${owner}`, "-F", `name=${name}`, "-F", `oid=${oid}`,
+    ];
+    if (cursor) args.push("-F", `cursor=${cursor}`);
+    const data = ghJson(args);
+    if (data?.errors?.length) {
+      throw new Error(data.errors.map((item) => item.message).join("; "));
+    }
+    const commit = data?.data?.repository?.object;
+    if (!commit) throw new Error("Could not read pull request head checks");
+    const conn = commit.statusCheckRollup?.contexts;
+    checks.push(...(conn?.nodes ?? []));
+    cursor = conn?.pageInfo?.hasNextPage ? conn.pageInfo.endCursor : null;
+  } while (cursor);
+  return checks;
+}
+
 export function fetchLiveSnapshot({ prNumber } = {}) {
   // Read the repository first. A missing token, an SSO-blocked token, or an
   // unreachable repository fails here and surfaces its own message, which is
@@ -352,7 +435,7 @@ export function fetchLiveSnapshot({ prNumber } = {}) {
   const [owner, name] = String(repo.nameWithOwner).split("/");
 
   const fields =
-    "number,title,url,isDraft,baseRefName,headRefName,mergeable,mergeStateStatus,statusCheckRollup";
+    "number,title,url,isDraft,baseRefName,headRefName,mergeable,mergeStateStatus,headRefOid";
   let pr;
   try {
     pr = ghJson(
@@ -384,7 +467,7 @@ export function fetchLiveSnapshot({ prNumber } = {}) {
   return evaluateSnapshot({
     pr,
     reviewThreads: threads,
-    statusCheckRollup: pr.statusCheckRollup ?? [],
+    statusCheckRollup: fetchChecksPaged({ owner, name, oid: pr.headRefOid }),
     issueComments,
     viewerLogin,
   });
