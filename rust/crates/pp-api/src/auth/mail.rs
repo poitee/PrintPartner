@@ -61,10 +61,10 @@ impl ResetMailer {
         permit: tokio::sync::OwnedSemaphorePermit,
     ) {
         let mail = self.clone();
-        let mut deliveries = self
-            .deliveries
-            .lock()
-            .expect("reset delivery lock poisoned");
+        let mut deliveries = match self.deliveries.lock() {
+            Ok(deliveries) => deliveries,
+            Err(_) => panic!("reset delivery lock poisoned"),
+        };
         while let Some(result) = deliveries.try_join_next() {
             if result.is_err() {
                 self.failed("delivery_task");
@@ -84,10 +84,10 @@ impl ResetMailer {
     /// before shutting down the runtime. Each delivery has its original deadline.
     pub async fn drain_deliveries(&self) {
         let mut deliveries = {
-            let mut pending = self
-                .deliveries
-                .lock()
-                .expect("reset delivery lock poisoned");
+            let mut pending = match self.deliveries.lock() {
+                Ok(pending) => pending,
+                Err(_) => panic!("reset delivery lock poisoned"),
+            };
             std::mem::take(&mut *pending)
         };
         while let Some(result) = deliveries.join_next().await {
@@ -164,5 +164,5 @@ impl ResetMailer {
 }
 
 #[cfg(test)]
-#[path = "mail_tests.rs"]
+#[path = "tests/mail_tests.rs"]
 mod tests;

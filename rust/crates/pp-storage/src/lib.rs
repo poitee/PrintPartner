@@ -52,6 +52,7 @@ impl Default for Limits {
     }
 }
 pub type WriteReply = mpsc::Receiver<Result<bool>>;
+const READER_DRAIN: Duration = Duration::from_secs(5);
 enum Work {
     Setting(SettingCommand),
     Backup(PathBuf),
@@ -380,6 +381,9 @@ impl WriterOwner {
         Ok(())
     }
     fn close(&mut self) -> Result<()> {
+        if self.join.is_none() && self.lease.is_none() {
+            return Ok(());
+        }
         {
             let mut queue = self
                 .client
@@ -390,7 +394,7 @@ impl WriterOwner {
             queue.closed = true;
             self.client.shared.changed.notify_all();
         }
-        {
+        let remaining_readers = {
             let mut readers = self
                 .client
                 .readers
@@ -400,18 +404,26 @@ impl WriterOwner {
             readers.closed = true;
             readers.idle.clear();
             self.client.readers.changed.notify_all();
-            while readers.active > 0 {
+            let deadline = Instant::now() + READER_DRAIN;
+            while readers.active > 0 && Instant::now() < deadline {
                 readers = self
                     .client
                     .readers
                     .changed
-                    .wait(readers)
-                    .map_err(|_| anyhow!("Reader pool poisoned"))?;
+                    .wait_timeout(readers, deadline.saturating_duration_since(Instant::now()))
+                    .map_err(|_| anyhow!("Reader pool poisoned"))?
+                    .0;
             }
-        }
+            readers.active
+        };
         if let Some(join) = self.join.take() {
             join.join().map_err(|_| anyhow!("Writer join failed"))?;
         }
+        ensure!(
+            remaining_readers == 0,
+            "Reader checkouts still active after {}s: {remaining_readers}; ownership retained until process exit",
+            READER_DRAIN.as_secs()
+        );
         if let Some(lease) = self.lease.take() {
             let released = lease.release();
             ensure!(

@@ -1,0 +1,15 @@
+{
+  "source": "web/apps/server/src/services/custom-filaments.ts",
+  "store_file": "custom_filaments.json (per data dir, user-created)",
+  "entry_count": 0,
+  "shipped_entries": [],
+  "entry_fields": [
+    { "name": "id", "type": "string", "rule": "custom-<8 lowercase hex chars>, generated on add" },
+    { "name": "display_name", "type": "string", "rule": "trimmed, required, non-empty" },
+    { "name": "product_line", "type": "string", "rule": "trimmed input or \"Custom\"" },
+    { "name": "hex", "type": "string", "rule": "\"#\" + 6 hex digits (input may omit \"#\")" },
+    { "name": "combo_label", "type": "string", "rule": "equals display_name" }
+  ],
+  "flags": [],
+  "defaults": { "product_line": "Custom" }
+}

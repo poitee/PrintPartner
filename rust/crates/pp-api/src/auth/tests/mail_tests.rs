@@ -581,8 +581,8 @@ async fn smtp_without_canonical_origin_does_not_mint_or_send_even_in_dev() {
 async fn smtp_rustls_encrypts_data_and_rejects_untrusted_certificate() {
     use lettre::transport::smtp::client::{Certificate, Tls, TlsParameters};
     for security in [SmtpSecurity::Tls, SmtpSecurity::StartTls] {
-        let cert = include_bytes!("../../tests/fixtures/loopback-cert.der").to_vec();
-        let key = include_bytes!("../../tests/fixtures/loopback-key.der").to_vec();
+        let cert = include_bytes!("../../../tests/fixtures/loopback-cert.der").to_vec();
+        let key = include_bytes!("../../../tests/fixtures/loopback-key.der").to_vec();
         let config = rustls::ServerConfig::builder_with_provider(Arc::new(
             rustls::crypto::aws_lc_rs::default_provider(),
         ))

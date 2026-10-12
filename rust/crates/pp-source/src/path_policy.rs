@@ -14,9 +14,18 @@ fn collision_key(path: &str) -> String {
 pub(crate) struct PathCollisions {
     prefixes: BTreeMap<String, (String, bool)>,
     explicit: BTreeSet<String>,
+    merge_folder_case: bool,
 }
 
 impl PathCollisions {
+    /// Accept folder spellings that snapshot publication merges into one
+    /// canonical destination directory.
+    pub(crate) fn merging_folder_case() -> Self {
+        Self {
+            merge_folder_case: true,
+            ..Self::default()
+        }
+    }
     pub(crate) fn insert(&mut self, path: &SourcePath, directory: bool) -> Result<()> {
         if !self.explicit.insert(collision_key(path.as_str())) {
             return Err(Error::DuplicatePath);
@@ -31,7 +40,9 @@ impl PathCollisions {
             let is_dir = parts.peek().is_some() || directory;
             let key = collision_key(&prefix);
             if let Some((original, was_dir)) = self.prefixes.get(&key) {
-                if original != &prefix || !was_dir || !is_dir {
+                let same_folder = original == &prefix
+                    || (self.merge_folder_case && original.to_lowercase() == prefix.to_lowercase());
+                if !same_folder || !was_dir || !is_dir {
                     return Err(Error::DuplicatePath);
                 }
             } else {

@@ -1,0 +1,185 @@
+{
+  "source": [
+    "web/apps/server/src/services/gcode-object-parser.ts",
+    "web/packages/domain/src/sliced-object-matching.ts"
+  ],
+  "origin": "edge: names cut off mid-line by a truncated gcode file",
+  "input": {
+    "names": [
+      "'spool_holder_stl",
+      "spool_holder.stl_id_0_copy_",
+      "spool_holder.stl_id_0_cop",
+      "spool_holder.stl (Instance 2",
+      "'spool_holder_stl__Instance_",
+      "spool_holder_f%C3",
+      "spool_holder.st",
+      "'",
+      ""
+    ],
+    "libraryFilenames": [
+      "spool_holder.stl",
+      "spool_holder_foot.stl"
+    ]
+  },
+  "expected": {
+    "groups": [
+      {
+        "key": "'spool_holder.stl",
+        "stlBasename": "'spool_holder.stl",
+        "count": 1,
+        "objects": [
+          {
+            "name": "'spool_holder_stl",
+            "stlBasename": "'spool_holder.stl",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      },
+      {
+        "key": "spool_holder.stl_id_0_copy_",
+        "stlBasename": "spool_holder.stl_id_0_copy_",
+        "count": 1,
+        "objects": [
+          {
+            "name": "spool_holder.stl_id_0_copy_",
+            "stlBasename": "spool_holder.stl_id_0_copy_",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      },
+      {
+        "key": "spool_holder.stl_id_0_cop",
+        "stlBasename": "spool_holder.stl_id_0_cop",
+        "count": 1,
+        "objects": [
+          {
+            "name": "spool_holder.stl_id_0_cop",
+            "stlBasename": "spool_holder.stl_id_0_cop",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      },
+      {
+        "key": "spool_holder.stl (instance 2",
+        "stlBasename": "spool_holder.stl (instance 2",
+        "count": 1,
+        "objects": [
+          {
+            "name": "spool_holder.stl (Instance 2",
+            "stlBasename": "spool_holder.stl (Instance 2",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      },
+      {
+        "key": "'spool_holder_stl__instance_",
+        "stlBasename": "'spool_holder_stl__instance_",
+        "count": 1,
+        "objects": [
+          {
+            "name": "'spool_holder_stl__Instance_",
+            "stlBasename": "'spool_holder_stl__Instance_",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      },
+      {
+        "key": "spool_holder_f%c3",
+        "stlBasename": "spool_holder_f%c3",
+        "count": 1,
+        "objects": [
+          {
+            "name": "spool_holder_f%C3",
+            "stlBasename": "spool_holder_f%C3",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      },
+      {
+        "key": "spool_holder.st",
+        "stlBasename": "spool_holder.st",
+        "count": 1,
+        "objects": [
+          {
+            "name": "spool_holder.st",
+            "stlBasename": "spool_holder.st",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      },
+      {
+        "key": "'",
+        "stlBasename": "'",
+        "count": 1,
+        "objects": [
+          {
+            "name": "'",
+            "stlBasename": "'",
+            "copyIndex": 0,
+            "format": "exclude_object_prusa"
+          }
+        ]
+      },
+      {
+        "key": "",
+        "stlBasename": "",
+        "count": 1,
+        "objects": [
+          {
+            "name": "",
+            "stlBasename": "",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      }
+    ],
+    "matches": [
+      {
+        "key": "'spool_holder.stl",
+        "filenames": [
+          "spool_holder.stl"
+        ]
+      },
+      {
+        "key": "spool_holder.stl_id_0_copy_",
+        "filenames": []
+      },
+      {
+        "key": "spool_holder.stl_id_0_cop",
+        "filenames": []
+      },
+      {
+        "key": "spool_holder.stl (instance 2",
+        "filenames": []
+      },
+      {
+        "key": "'spool_holder_stl__instance_",
+        "filenames": []
+      },
+      {
+        "key": "spool_holder_f%c3",
+        "filenames": []
+      },
+      {
+        "key": "spool_holder.st",
+        "filenames": []
+      },
+      {
+        "key": "'",
+        "filenames": []
+      },
+      {
+        "key": "",
+        "filenames": []
+      }
+    ]
+  }
+}

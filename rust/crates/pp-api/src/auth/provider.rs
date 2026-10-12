@@ -115,7 +115,10 @@ impl ProviderClient {
         let browser = random()?;
         let verifier = random()?;
         let now = Instant::now();
-        let mut flows = self.0.flows.lock().expect("OAuth flow lock");
+        let mut flows = match self.0.flows.lock() {
+            Ok(flows) => flows,
+            Err(_) => panic!("OAuth flow lock"),
+        };
         flows.retain(|_, flow| flow.expires > now);
         if flows.len() >= 1024 {
             return Err(Failure(
@@ -132,7 +135,10 @@ impl ProviderClient {
                 verifier: verifier.clone(),
             },
         );
-        let mut url = reqwest::Url::parse(config.endpoints.authorize).expect("fixed provider URL");
+        let mut url = match reqwest::Url::parse(config.endpoints.authorize) {
+            Ok(url) => url,
+            Err(_) => panic!("fixed provider URL"),
+        };
         url.query_pairs_mut()
             .append_pair("client_id", &config.credentials.client_id)
             .append_pair("redirect_uri", callback)
@@ -155,7 +161,10 @@ impl ProviderClient {
     }
     fn consume(&self, provider: Provider, state: &str, browser: &str) -> Result<Flow, Failure> {
         let now = Instant::now();
-        let mut flows = self.0.flows.lock().expect("OAuth flow lock");
+        let mut flows = match self.0.flows.lock() {
+            Ok(flows) => flows,
+            Err(_) => panic!("OAuth flow lock"),
+        };
         flows.retain(|_, flow| flow.expires > now);
         let key = digest(state);
         if !flows
@@ -164,7 +173,10 @@ impl ProviderClient {
         {
             return Err(Failure(StatusCode::BAD_REQUEST, "Invalid OAuth state"));
         }
-        Ok(flows.remove(&key).expect("checked flow"))
+        let Some(flow) = flows.remove(&key) else {
+            panic!("checked flow");
+        };
+        Ok(flow)
     }
     async fn exchange(
         &self,
@@ -174,7 +186,9 @@ impl ProviderClient {
         callback: &str,
         flow: Flow,
     ) -> Result<Outcome, Failure> {
-        let config = self.config(provider).expect("configured provider");
+        let Some(config) = self.config(provider) else {
+            panic!("configured provider");
+        };
         let work = async {
             let credentials = &config.credentials;
             let request = self
@@ -227,7 +241,10 @@ impl ProviderClient {
                     let response = self
                         .0
                         .client
-                        .get(config.endpoints.email.as_ref().expect("GitHub email URL"))
+                        .get(match config.endpoints.email.as_ref() {
+                            Some(url) => url,
+                            None => panic!("GitHub email URL"),
+                        })
                         .bearer_auth(token)
                         .header("Accept", "application/json")
                         .send()
@@ -438,5 +455,5 @@ pub(super) async fn discord_callback(
 }
 
 #[cfg(test)]
-#[path = "provider_tests.rs"]
+#[path = "tests/provider_tests.rs"]
 mod tests;

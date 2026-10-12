@@ -68,7 +68,10 @@ impl AuthHttpConfig {
             "Cookie transport must match listener"
         );
         let origin = url.origin().ascii_serialization();
-        let host = origin.split_once("://").expect("URL scheme").1.to_owned();
+        let Some((_, host)) = origin.split_once("://") else {
+            panic!("URL scheme");
+        };
+        let host = host.to_owned();
         let public_origin = public_origin
             .map(|value| -> Result<String> {
                 let url = reqwest::Url::parse(value)?;
@@ -211,7 +214,10 @@ async fn guard(State(app): State<App>, request: axum::extract::Request, next: Ne
         request.method() == Method::POST && request.uri().path() == "/settings/api-keys";
     if credential || key_create {
         let now = Instant::now();
-        let mut rates = app.rates.lock().expect("rate lock");
+        let mut rates = match app.rates.lock() {
+            Ok(rates) => rates,
+            Err(_) => panic!("rate lock"),
+        };
         rates.retain(|_, (start, _)| now.duration_since(*start) < Duration::from_secs(60));
         let key = (peer_ip, key_create);
         if !rates.contains_key(&key) && rates.len() >= 4096 {
@@ -425,8 +431,10 @@ async fn forgot(
         )
         .await?
     {
-        let mut url =
-            reqwest::Url::parse(&format!("{origin}/reset-password")).expect("validated origin");
+        let mut url = match reqwest::Url::parse(&format!("{origin}/reset-password")) {
+            Ok(url) => url,
+            Err(_) => panic!("validated origin"),
+        };
         url.query_pairs_mut().append_pair("token", token.expose());
         Some(url.to_string())
     } else {
@@ -541,7 +549,10 @@ fn created(outcome: Outcome) -> Result<Response, Failure> {
     let Outcome::KeyCreated { info, key } = outcome else {
         return Err(Failure(StatusCode::NOT_FOUND, "API key not found"));
     };
-    let mut value = serde_json::to_value(info).expect("key info");
+    let mut value = match serde_json::to_value(info) {
+        Ok(value) => value,
+        Err(_) => panic!("key info"),
+    };
     value["key"] = json!(key.expose());
     Ok((StatusCode::CREATED, Json(value)).into_response())
 }
