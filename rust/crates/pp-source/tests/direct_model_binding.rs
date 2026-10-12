@@ -13,9 +13,12 @@ use std::{
     io::Write,
     os::unix::fs::PermissionsExt,
     path::PathBuf,
-    process::{Command, Stdio},
+    process::Stdio,
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
+
+#[path = "support/process.rs"]
+mod support;
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 const MODEL_NAME: &str = "3D/main.model";
@@ -57,7 +60,7 @@ impl Drop for Fixture {
 }
 
 fn invoke(fixture: &Fixture) -> std::process::Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_pp-source-media"))
+    let mut child = support::command(env!("CARGO_BIN_EXE_pp-source-media"))
         .current_dir(&fixture.0)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
