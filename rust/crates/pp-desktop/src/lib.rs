@@ -189,11 +189,16 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ));
-        std::fs::create_dir_all(root.join("bin")).unwrap();
-        std::fs::create_dir_all(root.join("web")).unwrap();
-        std::fs::create_dir_all(root.join("home/.print-partner")).unwrap();
-        std::fs::write(root.join("bin/node"), b"node").unwrap();
-        let data = root.join("home/.print-partner");
+        std::fs::create_dir_all(root.join("real")).unwrap();
+        std::os::unix::fs::symlink(root.join("real"), root.join("linked")).unwrap();
+        let fixture = root.join("linked/fixture");
+        std::fs::create_dir_all(&fixture).unwrap();
+        let fixture = fixture.canonicalize().unwrap();
+        std::fs::create_dir_all(fixture.join("bin")).unwrap();
+        std::fs::create_dir_all(fixture.join("web")).unwrap();
+        std::fs::create_dir_all(fixture.join("home/.print-partner")).unwrap();
+        std::fs::write(fixture.join("bin/node"), b"node").unwrap();
+        let data = fixture.join("home/.print-partner");
         let release = serde_json::json!({
             "runtime_version": "3.3.0-web",
             "commit": "f00471f13d2f0e69631d3130e594b9244f93e01d",
@@ -204,9 +209,9 @@ mod tests {
             "node_version": "v24.21.0",
             "node_abi": "137"
         });
-        std::fs::write(root.join("release.json"), release.to_string()).unwrap();
-        let selected = desktop_data_dir(&root.join("home")).unwrap();
-        let launch = ResourceLayout::read(&root)
+        std::fs::write(fixture.join("release.json"), release.to_string()).unwrap();
+        let selected = desktop_data_dir(&fixture.join("home")).unwrap();
+        let launch = ResourceLayout::read(&fixture)
             .unwrap()
             .into_launch(selected)
             .unwrap();
@@ -216,18 +221,60 @@ mod tests {
             "f00471f13d2f0e69631d3130e594b9244f93e01d"
         );
         assert_eq!(launch.bundle.runtime_version, "3.3.0-web");
-        assert_eq!(launch.bundle.node, root.join("bin/node"));
+        assert_eq!(launch.bundle.node, fixture.join("bin/node"));
         assert_eq!(
             launch.bundle.entry,
-            root.join("web/apps/server/dist/current/desktop.js")
+            fixture.join("web/apps/server/dist/current/desktop.js")
         );
         let mut invalid = release;
         invalid["commit"] = serde_json::json!("Print Partner");
-        std::fs::write(root.join("release.json"), invalid.to_string()).unwrap();
+        std::fs::write(fixture.join("release.json"), invalid.to_string()).unwrap();
         assert_eq!(
-            ResourceLayout::read(&root).err().unwrap().to_string(),
+            ResourceLayout::read(&fixture).err().unwrap().to_string(),
             "Desktop commit identity missing"
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn release_layout_accepts_macos_resource_paths_and_current_version() {
+        let root = std::env::temp_dir().join(format!(
+            "pp-macos-layout-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("MacOS")).unwrap();
+        std::fs::create_dir_all(root.join("Resources/desktop-runtime/web")).unwrap();
+        std::fs::write(root.join("MacOS/printpartner-node"), b"fixture").unwrap();
+        let root = root.canonicalize().unwrap();
+        std::fs::write(
+            root.join("Resources/desktop-runtime/release.json"),
+            serde_json::json!({
+                "runtime_version": "4.2.1-web",
+                "commit": "f00471f13d2f0e69631d3130e594b9244f93e01d",
+                "node": "MacOS/printpartner-node",
+                "web": "Resources/desktop-runtime/web",
+                "os": std::env::consts::OS,
+                "arch": std::env::consts::ARCH,
+                "node_version": "v24.21.0",
+                "node_abi": "137"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let launch = ResourceLayout::read(&root)
+            .unwrap()
+            .into_launch(root.join("data"))
+            .unwrap();
+        assert_eq!(launch.bundle.node, root.join("MacOS/printpartner-node"));
+        assert_eq!(
+            launch.bundle.web_root,
+            root.join("Resources/desktop-runtime/web")
+        );
+        assert_eq!(launch.bundle.runtime_version, "4.2.1-web");
         std::fs::remove_dir_all(root).unwrap();
     }
 
