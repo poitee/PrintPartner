@@ -3668,3 +3668,185 @@ test("r11-variable-file-unread", () => {
 test("r11-variable-late", () => {
   assertSafeCommand("curl --expand-url '{{url}}' --variable url=3232235856");
 });
+
+function rootExpansionProbe() {
+  const command = "curl --variable url=example --expand-url '{{url:" + "b64:".repeat(75).slice(0, -1) + "}}'";
+  return "## Evidence\n"
+    + "Exemption: none\n"
+    + "- Steps followed to produce the evidence: `" + command + "`\n"
+    + "- Result observed: passed\n"
+    + "- Screenshot / recording / verify-skill output or trace: trace.json\n";
+}
+
+function repeatedB64(count) {
+  return "{{url:" + "b64:".repeat(count).slice(0, -1) + "}}";
+}
+
+function boundedLint(body) {
+  return spawnSync(process.execPath, [
+    "--max-old-space-size=64",
+    fileURLToPath(new URL("./lint-pr-evidence.mjs", import.meta.url)),
+    "--stdin",
+  ], {
+    input: body,
+    encoding: "utf8",
+    timeout: 3000,
+    killSignal: "SIGKILL",
+    maxBuffer: 1024 * 1024,
+  });
+}
+
+function assertBoundedFailure(body) {
+  const run = boundedLint(body);
+  assert.equal(run.signal, null, run.stderr);
+  assert.equal(run.status, 1, run.stderr);
+  assert.match(run.stderr, /PR evidence lint FAILED:/);
+  assert.match(run.stderr, /static verifier budget/);
+  return run;
+}
+
+function assertBoundedOk(body) {
+  const run = boundedLint(body);
+  assert.equal(run.signal, null, run.stderr);
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /PR evidence lint OK \(exemption=none, hasEvidence=true\)/);
+  return run;
+}
+
+function doublingCommand(steps) {
+  const parts = ["curl", "--variable", "a=x"];
+  let name = "a";
+  for (let step = 0; step < steps; step += 1) {
+    const next = `v${step}`;
+    parts.push(`--expand-variable ${next}={{${name}}}{{${name}}}`);
+    name = next;
+  }
+  parts.push(`--expand-url {{${name}}}`);
+  return parts.join(" ");
+}
+
+function headerDataThenBanned() {
+  const parts = ["curl", "--variable", "a=x"];
+  let name = "a";
+  for (let step = 0; step < 12; step += 1) {
+    const next = step === 11 ? "big" : `d${step}`;
+    parts.push(`--expand-variable ${next}={{${name}}}{{${name}}}`);
+    name = next;
+  }
+  parts.push("--variable ip=3232235856");
+  for (let copy = 0; copy < 40; copy += 1) {
+    parts.push("--expand-header '{{big}}'");
+    parts.push("--expand-data '{{big}}'");
+  }
+  parts.push("--expand-url '{{ip}}'");
+  return parts.join(" ");
+}
+
+test("r12-root-b64-budget", () => {
+  const run = assertBoundedFailure(rootExpansionProbe());
+  assert.doesNotMatch(run.stderr, /LAN instances/);
+});
+
+test("r12-doubling-budget", () => {
+  const run = assertBoundedFailure(commandEvidence(doublingCommand(30)));
+  assert.doesNotMatch(run.stderr, /LAN instances/);
+});
+
+test("r12-header-b64-stays-safe", () => {
+  assertBoundedOk(commandEvidence(`curl --variable url=example --expand-header '${repeatedB64(75)}' http://127.0.0.1/`));
+});
+
+test("r12-data-b64-stays-safe", () => {
+  assertBoundedOk(commandEvidence(`curl --variable url=example --expand-data '${repeatedB64(75)}' http://127.0.0.1/`));
+});
+
+test("r12-budget-keeps-separate-banned-url", () => {
+  const run = assertBoundedFailure(commandEvidence(`curl --variable url=example --expand-url '${repeatedB64(75)}' 3232235856`));
+  assert.match(run.stderr, /LAN instances/);
+});
+
+test("r12-template-repeat-banned", () => {
+  assertBannedCommand("curl --variable h=3232235856 --expand-url 'http://{{h}}/{{h}}/{{h}}'");
+});
+
+test("r12-template-repeat-safe", () => {
+  assertSafeCommand("curl --variable h=127.0.0.1 --expand-url 'http://{{h}}/{{h}}/{{h}}'");
+});
+
+test("r12-template-over-cap", () => {
+  const result = lintPrEvidence(commandEvidence("curl --variable a=" + "y".repeat(200) + " --expand-url '" + "{{a}}".repeat(30) + "'"));
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /static verifier budget/);
+  assert.doesNotMatch(result.errors.join("\n"), /LAN instances/);
+});
+
+test("r12-functions-roundtrip-banned", () => {
+  assertBannedCommand("curl --variable 'url= 3232235856' --expand-url '{{url:trim:b64:64dec}}'");
+});
+
+test("r12-functions-roundtrip-safe", () => {
+  assertSafeCommand("curl --variable 'url= 3232235858' --expand-url '{{url:trim:b64:64dec}}'");
+});
+
+test("r12-trim-repeat-banned", () => {
+  assertBannedCommand("curl --variable 'url= 3232235856' --expand-url '{{url:trim:trim}}'");
+});
+
+test("r12-single-b64-safe", () => {
+  assertSafeCommand("curl --variable url=example --expand-url '{{url:b64}}'");
+});
+
+test("r12-assignment-chain-banned", () => {
+  assertBannedCommand("curl --variable a=3232235856 --expand-variable 'b={{a}}' --expand-variable 'c={{b}}' --expand-url '{{c}}'");
+});
+
+test("r12-assignment-chain-safe", () => {
+  assertSafeCommand("curl --variable a=3232235858 --expand-variable 'b={{a}}' --expand-variable 'c={{b}}' --expand-url '{{c}}'");
+});
+
+test("r12-multibyte-b64-safe", () => {
+  assertSafeCommand("curl --variable 'tail=文字' --expand-url 'http://127.0.0.1/{{tail:b64}}'");
+});
+
+test("r12-multibyte-url-safe", () => {
+  assertSafeCommand("curl --variable 'p=é' --expand-url 'http://127.0.0.1/{{p:url}}'");
+});
+
+test("r12-multibyte-path-keeps-banned-host", () => {
+  assertBannedCommand("curl --variable 'path=文字' --expand-url 'http://3232235856/{{path}}'");
+});
+
+test("r12-url-function-banned", () => {
+  assertBannedCommand("curl --variable url=3232235856 --expand-url '{{url:url}}'");
+});
+
+test("r12-stdin-unread", () => {
+  assertSafeCommand("curl --variable url@- --expand-url '{{url}}'");
+});
+
+test("r12-env-unread", () => {
+  assertSafeCommand("curl --variable %url --expand-url '{{url}}'");
+});
+
+test("r12-shell-unread", () => {
+  assertSafeCommand("sh -c 'curl 3232235856'");
+});
+
+test("r12-config-unread", () => {
+  assertSafeCommand("curl --config /no/such/gre583-r12 3232235858");
+});
+
+test("r12-invalid-function-keeps-banned", () => {
+  assertBannedCommand("curl --expand-url '{{url:nope}}' 3232235856");
+});
+
+test("r12-invalid-function-no-fabricated-url", () => {
+  assertSafeCommand("curl --variable url=3232235856 --expand-url '{{url:nope}}'");
+});
+
+test("r12-header-data-skip-preserves-url", () => {
+  const result = lintPrEvidence(commandEvidence(headerDataThenBanned()));
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+  assert.doesNotMatch(result.errors.join("\n"), /static verifier budget/);
+});
