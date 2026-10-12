@@ -55,13 +55,14 @@ for (const [status, conclusion, action, field] of [
   });
 }
 
-test("a stale pending run with a later start or completion cannot replace a newer run", () => {
+test("a delayed first attempt with a later start stays pending ahead of a newer-created success", () => {
   const checks = structuredClone(fixture.statusCheckRollup);
   Object.assign(checks[0], { status: "IN_PROGRESS", conclusion: null,
     startedAt: "2026-10-12T03:00:00Z", completedAt: "2026-10-12T04:00:00Z" });
   const report = evaluateSnapshot(snapshotWithChecks(checks));
-  assert.equal(report.nextAction, "ready");
-  assert.equal(report.passedCheckCount, 1);
+  assert.equal(report.nextAction, "watch-ci");
+  assert.deepEqual(report.pendingChecks.map((check) => check.url), [checks[0].detailsUrl]);
+  assert.equal(report.passedCheckCount, 0);
 });
 
 for (const identity of ["app", "workflow", "event", "name"]) {
@@ -78,14 +79,12 @@ for (const identity of ["app", "workflow", "event", "name"]) {
   });
 }
 
-for (const ambiguity of ["identity", "creation time", "tied creation time"]) {
+for (const ambiguity of ["identity", "start time", "tied start time"]) {
   test(`ambiguous ${ambiguity} retains the blocker`, () => {
     const old = structuredClone(fixture.statusCheckRollup[0]);
     if (ambiguity === "identity") delete old.checkSuite.app;
-    if (ambiguity === "creation time") old.checkSuite.workflowRun.createdAt = null;
-    if (ambiguity === "tied creation time") {
-      old.checkSuite.workflowRun.createdAt = latestCheck().checkSuite.workflowRun.createdAt;
-    }
+    if (ambiguity === "start time") old.startedAt = null;
+    if (ambiguity === "tied start time") old.startedAt = latestCheck().startedAt;
     const report = evaluateSnapshot(snapshotWithChecks([old, latestCheck()]));
     assert.equal(report.nextAction, "ci");
     assert.equal(report.failingChecks.length, 1);
@@ -161,7 +160,7 @@ test("a later successful rerun supersedes a newer-created failed workflow", () =
   assert.equal(report.passedCheckCount, 1);
 });
 
-for (const [label, startedAt] of [["missing", null], ["invalid", "bad-date"], ["tied", fixture.statusCheckRollup.at(-1).checkSuite.workflowRun.createdAt]]) {
+for (const [label, startedAt] of [["missing", null], ["invalid", "bad-date"], ["tied", fixture.statusCheckRollup.at(-1).startedAt]]) {
   test(`a rerun with ${label} start timing retains a queued blocker`, () => {
     const rerun = rerunCheck({ status: "QUEUED", conclusion: null, startedAt });
     const report = evaluateSnapshot(snapshotWithChecks([rerun, latestCheck()]));
@@ -213,10 +212,77 @@ for (const completeness of ["missing", "partial", "empty"]) {
   });
 }
 
+for (const conclusion of ["SUCCESS", "SKIPPED", "CANCELLED"]) {
+  test(`an earlier-starting ${conclusion} does not mask a later-starting failure`, () => {
+    const earlier = latestCheck();
+    earlier.conclusion = conclusion;
+    earlier.status = "COMPLETED";
+    earlier.startedAt = "2026-10-11T23:56:01Z";
+    earlier.checkSuite.workflowRun.createdAt = "2026-10-12T05:00:00Z";
+    const failure = structuredClone(fixture.statusCheckRollup[0]);
+    failure.conclusion = "FAILURE";
+    failure.status = "COMPLETED";
+    failure.startedAt = "2026-10-12T03:00:00Z";
+    const report = evaluateSnapshot(snapshotWithChecks([earlier, failure]));
+    assert.equal(report.nextAction, "ci");
+    assert.deepEqual(report.failingChecks.map((check) => check.url), [failure.detailsUrl]);
+    assert.equal(report.passedCheckCount, 0);
+  });
+}
+
+test("a partial rerun's late surviving start does not drop a failure that started later", () => {
+  const survivor = structuredClone(fixture.statusCheckRollup[0]);
+  survivor.checkSuite.workflowRun.runAttempt = 2;
+  Object.assign(survivor, {
+    status: "COMPLETED",
+    conclusion: "SUCCESS",
+    startedAt: "2026-10-12T03:00:00Z",
+  });
+  const failure = latestCheck();
+  failure.conclusion = "FAILURE";
+  failure.startedAt = "2026-10-12T04:00:00Z";
+  const report = evaluateSnapshot(snapshotWithChecks([survivor, failure]));
+  assert.equal(report.nextAction, "ci");
+  assert.deepEqual(report.failingChecks.map((check) => check.url), [currentUrl]);
+  assert.equal(report.passedCheckCount, 0);
+});
+
+test("a later check start beats an earlier failure from a newer workflow", () => {
+  const older = rerunCheck({ conclusion: "SUCCESS", startedAt: "2026-10-12T04:00:00Z" });
+  const newer = latestCheck();
+  newer.conclusion = "FAILURE";
+  newer.startedAt = "2026-10-12T03:00:00Z";
+  newer.checkSuite.workflowRun.createdAt = "2026-10-12T03:30:00Z";
+  const report = evaluateSnapshot(snapshotWithChecks([newer, older]));
+  assert.equal(report.nextAction, "ready");
+  assert.deepEqual(report.failingChecks, []);
+  assert.equal(report.passedCheckCount, 1);
+});
+
+test("a missing workflow creation time still orders by check start", () => {
+  const failure = structuredClone(fixture.statusCheckRollup[0]);
+  failure.startedAt = "2026-10-12T03:00:00Z";
+  failure.checkSuite.workflowRun.createdAt = null;
+  const report = evaluateSnapshot(snapshotWithChecks([failure, latestCheck()]));
+  assert.equal(report.nextAction, "ci");
+  assert.deepEqual(report.failingChecks.map((check) => check.url), [failure.detailsUrl]);
+  assert.equal(report.passedCheckCount, 0);
+});
+
+const oldHead = "1111111111111111111111111111111111111111";
+const newHead = "2222222222222222222222222222222222222222";
+const movedFailureUrl = "https://github.com/poitee/PrintPartner/actions/runs/9001/job/2";
+
 function runLiveFixture(context, mode = "pages") {
   const dir = mkdtempSync(join(tmpdir(), "pr-state-current-"));
   context.after(() => rmSync(dir, { recursive: true, force: true }));
-  const data = { ...fixture, mode };
+  const data = {
+    ...fixture,
+    mode,
+    oldHead,
+    newHead,
+    pinnedHead: "46f4b164a93ddaac910d6680dda52903dc757327",
+  };
   if (mode === "rerun" || mode === "queued-rerun") {
     data.statusCheckRollup = [rerunCheck({
       status: mode === "rerun" ? "COMPLETED" : "QUEUED",
@@ -224,15 +290,87 @@ function runLiveFixture(context, mode = "pages") {
       startedAt: mode === "rerun" ? "2026-10-12T03:00:00Z" : null,
     }), latestCheck()];
   }
+  if (mode === "delayed-first") {
+    const checks = structuredClone(fixture.statusCheckRollup);
+    Object.assign(checks[0], {
+      status: "IN_PROGRESS",
+      conclusion: null,
+      startedAt: "2026-10-12T03:00:00Z",
+      completedAt: null,
+    });
+    data.statusCheckRollup = checks;
+    data.mode = "pages";
+  }
+  if (mode === "partial-rerun") {
+    const survivor = structuredClone(fixture.statusCheckRollup[0]);
+    survivor.checkSuite.workflowRun.runAttempt = 2;
+    Object.assign(survivor, {
+      status: "COMPLETED",
+      conclusion: "SUCCESS",
+      startedAt: "2026-10-12T03:00:00Z",
+    });
+    const failure = latestCheck();
+    failure.conclusion = "FAILURE";
+    failure.startedAt = "2026-10-12T04:00:00Z";
+    data.statusCheckRollup = [survivor, failure];
+    data.mode = "pages";
+  }
+  if (mode === "head-moved") {
+    data.oldChecks = [latestCheck()];
+    const failure = latestCheck();
+    failure.id = "moved-failure";
+    failure.conclusion = "FAILURE";
+    failure.detailsUrl = movedFailureUrl;
+    data.newChecks = [failure];
+  }
+  if (mode === "head-unstable") {
+    data.oids = [
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "cccccccccccccccccccccccccccccccccccccccc",
+      "dddddddddddddddddddddddddddddddddddddddd",
+    ];
+    data.greenChecks = [latestCheck()];
+  }
+  if (mode === "head-merge-unknown" || mode === "head-confirm-fail" || mode === "head-confirm-auth") {
+    data.greenChecks = [latestCheck()];
+  }
+  const statePath = join(dir, "state.json");
+  writeFileSync(statePath, JSON.stringify({ prViews: 0, checkOids: [], prOids: [] }));
   writeFileSync(join(dir, "data.json"), JSON.stringify(data));
   writeFileSync(join(dir, "gh"), `#!/usr/bin/env node
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 const data = JSON.parse(readFileSync(process.env.PR_STATE_TEST_DATA, "utf8"));
+const statePath = process.env.PR_STATE_TEST_STATE;
+const state = JSON.parse(readFileSync(statePath, "utf8"));
+function save() { writeFileSync(statePath, JSON.stringify(state)); }
 const args = process.argv.slice(2);
 let response;
 if (args[0] === "repo") response = { nameWithOwner: "poitee/PrintPartner" };
-else if (args[0] === "pr") response = { ...data.pr, headRefOid: "46f4b164a93ddaac910d6680dda52903dc757327" };
-else if (args.some((arg) => arg.includes("reviewThreads(first:"))) {
+else if (args[0] === "pr") {
+  state.prViews += 1;
+  let headRefOid = data.pinnedHead;
+  let mergeable = data.pr.mergeable;
+  let mergeStateStatus = data.pr.mergeStateStatus;
+  if (data.mode === "head-moved") headRefOid = state.prViews === 1 ? data.oldHead : data.newHead;
+  else if (data.mode === "head-unstable") headRefOid = data.oids[state.prViews - 1];
+  else if (data.mode === "head-merge-unknown" && state.prViews > 1) {
+    mergeable = "UNKNOWN";
+    mergeStateStatus = "UNKNOWN";
+  } else if ((data.mode === "head-confirm-fail" || data.mode === "head-confirm-auth") && state.prViews > 1) {
+    state.prOids.push(headRefOid);
+    save();
+    if (data.mode === "head-confirm-auth") {
+      process.stderr.write("authentication required");
+      process.exit(4);
+    }
+    process.stderr.write("head reread failed");
+    process.exit(1);
+  }
+  response = { ...data.pr, headRefOid, mergeable, mergeStateStatus };
+  state.prOids.push(headRefOid);
+  save();
+} else if (args.some((arg) => arg.includes("reviewThreads(first:"))) {
   response = { data: { viewer: { login: "poitee" }, repository: { pullRequest: {
     reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } },
   } } } };
@@ -240,24 +378,40 @@ else if (args.some((arg) => arg.includes("reviewThreads(first:"))) {
   if (data.mode === "auth") { process.stderr.write("authentication required"); process.exit(4); }
   if (data.mode === "errors") response = { errors: [{ message: "checks unavailable" }] };
   else {
-    if (!args.includes("oid=46f4b164a93ddaac910d6680dda52903dc757327")) process.exit(1);
+    const oid = args.find((arg) => arg.startsWith("oid="))?.slice(4);
+    state.checkOids.push(oid);
+    save();
+    const allowed = new Set([data.pinnedHead, data.oldHead, data.newHead, ...(data.oids ?? [])]);
+    if (!allowed.has(oid)) process.exit(1);
     const query = args.find((arg) => arg.startsWith("query="));
     if (!query?.includes("runAttempt") || !query.includes("startedAt")) {
       process.stderr.write("missing attempt timing query fields"); process.exit(1);
     }
+    let rollup = data.statusCheckRollup;
+    if (data.mode === "head-moved") rollup = oid === data.oldHead ? data.oldChecks : data.newChecks;
+    if (data.mode === "head-unstable" || data.mode === "head-merge-unknown" || data.mode === "head-confirm-fail" || data.mode === "head-confirm-auth") {
+      rollup = data.greenChecks;
+    }
     const last = args.includes("cursor=next");
     response = { data: { repository: { object: { statusCheckRollup: { contexts: {
-      nodes: last ? [data.statusCheckRollup.at(-1)] : data.statusCheckRollup.slice(0, -1),
+      nodes: last ? [rollup.at(-1)] : rollup.slice(0, -1),
       pageInfo: { hasNextPage: !last, endCursor: last ? null : "next" },
     } } } } } };
   }
 } else response = [];
 process.stdout.write(JSON.stringify(response));
 `, { mode: 0o755 });
-  return spawnSync(process.execPath, [new URL("./pr-state.mjs", import.meta.url).pathname, "--pr", "263"], {
+  const result = spawnSync(process.execPath, [new URL("./pr-state.mjs", import.meta.url).pathname, "--pr", "263"], {
     encoding: "utf8",
-    env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, PR_STATE_TEST_DATA: join(dir, "data.json") },
+    env: {
+      ...process.env,
+      PATH: `${dir}:${process.env.PATH}`,
+      PR_STATE_TEST_DATA: join(dir, "data.json"),
+      PR_STATE_TEST_STATE: statePath,
+    },
   });
+  result.statePath = statePath;
+  return result;
 }
 
 test("live CLI includes the latest context from a later API page at the selected head", (context) => {
@@ -300,3 +454,72 @@ for (const identity of ["check", "suite"]) {
     assert.equal(report.passedCheckCount, 1);
   });
 }
+
+test("live CLI keeps a delayed first-attempt pending check", (context) => {
+  const result = runLiveFixture(context, "delayed-first");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "watch-ci");
+  assert.deepEqual(report.pendingChecks.map((check) => check.url), [fixture.statusCheckRollup[0].detailsUrl]);
+  assert.equal(report.passedCheckCount, 0);
+});
+
+test("live CLI keeps a failure that started after a partial rerun's surviving check", (context) => {
+  const result = runLiveFixture(context, "partial-rerun");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "ci");
+  assert.deepEqual(report.failingChecks.map((check) => check.url), [currentUrl]);
+  assert.equal(report.passedCheckCount, 0);
+});
+
+test("live CLI refetches checks when the head changes and does not report the old green head", (context) => {
+  const result = runLiveFixture(context, "head-moved");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "ci");
+  assert.deepEqual(report.failingChecks.map((check) => check.url), [movedFailureUrl]);
+  assert.equal(report.passedCheckCount, 0);
+  const state = JSON.parse(readFileSync(result.statePath, "utf8"));
+  assert.deepEqual(state.prOids, [oldHead, newHead, newHead, newHead]);
+  assert.equal(state.checkOids[0], oldHead);
+  assert.ok(state.checkOids.includes(newHead));
+});
+
+test("live CLI rechecks when the head keeps moving", (context) => {
+  const result = runLiveFixture(context, "head-unstable");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "recheck");
+  assert.equal(report.passedCheckCount, 0);
+  assert.deepEqual(report.failingChecks, []);
+  assert.equal(report.pr.number, 263);
+  const state = JSON.parse(readFileSync(result.statePath, "utf8"));
+  assert.equal(state.prOids.length, 4);
+  assert.equal(new Set(state.prOids).size, 4);
+});
+
+test("live CLI rechecks when the head reread fails", (context) => {
+  const result = runLiveFixture(context, "head-confirm-fail");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "recheck");
+  assert.equal(report.passedCheckCount, 0);
+  assert.equal(report.pr.number, 263);
+});
+
+test("live CLI rechecks when the confirmed mergeability is unknown", (context) => {
+  const result = runLiveFixture(context, "head-merge-unknown");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "recheck");
+  assert.equal(report.passedCheckCount, 1);
+  assert.equal(report.pr.number, 263);
+});
+
+test("live CLI does not turn a failed head reread authentication into readiness", (context) => {
+  const result = runLiveFixture(context, "head-confirm-auth");
+  assert.equal(result.status, 4);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /authentication required/);
+});
