@@ -3970,9 +3970,19 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
             if (option === "-" || option === "-i" || option === "--ignore-environment") startup = null;
             else if (option === "-u" || option === "--unset") {
               if (command[++index]?.text === "BASH_ENV") startup = null;
-            } else if (option === "-uBASH_ENV" || option === "--unset=BASH_ENV") startup = null;
-            else if (["-C", "--chdir", "--argv0"].includes(option)) index += 1;
-            else if (!option.startsWith("-")) { index -= 1; break; }
+            } else if (option === "--unset=BASH_ENV") startup = null;
+            else if (["--chdir", "--argv0"].includes(option)) index += 1;
+            else if (option.startsWith("-") && !option.startsWith("--")) {
+              for (let at = 1; at < option.length; at += 1) {
+                const flag = option[at];
+                if (flag === "i") startup = null;
+                else if ("uCa".includes(flag)) {
+                  const operand = option.slice(at + 1) || command[++index]?.text;
+                  if (flag === "u" && operand === "BASH_ENV") startup = null;
+                  break;
+                }
+              }
+            } else if (!option.startsWith("-")) { index -= 1; break; }
           }
         }
         if (startup?.exported && (startup.value || startup.substitution || startup.parameter || startup.arithmetic)) processSource = true;
