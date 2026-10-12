@@ -2,6 +2,8 @@
 
 This change admits the Node Source Sync operation before HTTP aliases, MCP `start_sync`, job execution, and watcher timers. It rejects conflicting worker/startup ownership, unknown owners, and an unsupported Rust assignment. It does not finish GRE-402.
 
+Desktop `CoreRuntime` startup persists `source-sync-admission.json` in the storage-lease data directory before bind and before the compatibility process. `Gateway::start` repeats the bundled manifest check in memory and does not choose a second directory. Source Sync execution stays on Node until the Rust executor is integrated.
+
 Still open:
 
 - The all-operation ownership manifest. Only `source.sync` is admitted here.
@@ -11,4 +13,3 @@ Still open:
 - A Rust failure must produce its own error and reconciliation result. It must not fall back into a Node mutation.
 - GRE-400 and GRE-401 stay open. Their merged storage proofs are not application cutover.
 - Parent GRE-339 stays open. This unit does not mark GRE-402 Done.
-- Rust `Gateway::start` admits the compiled manifest in memory and does not persist or reuse `source-sync-admission.json`. The Node server startup writes that receipt. A Rust owner still has to persist its own receipt when the cutover replaces the Node watcher.

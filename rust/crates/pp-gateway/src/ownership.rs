@@ -6,9 +6,10 @@
 //! participants for the same operation must agree, and a shared table or file
 //! cannot have two owners.
 //!
-//! `Gateway::start` admits the bundled manifest before it serves routes. The
-//! Node process admits the same file again before HTTP handlers, MCP
-//! `start_sync`, job execution, and watcher timers.
+//! Desktop startup persists one receipt in the lease data directory before it
+//! binds or starts the compatibility process. `Gateway::start` checks the same
+//! bundled manifest again in memory. The Node process admits that file before
+//! HTTP handlers, MCP `start_sync`, job execution, and watcher timers.
 
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -214,11 +215,20 @@ struct ParsedParticipant<'a> {
     resources: &'a [String],
 }
 
+const BUNDLED_SOURCE_SYNC_MANIFEST: &str =
+    include_str!("../../../../web/apps/server/src/data/source-sync-ownership.json");
+
 pub fn admit_bundled_source_sync() -> Result<AdmittedOperation, AdmissionError> {
-    admit_observed(
-        include_str!("../../../../web/apps/server/src/data/source-sync-ownership.json"),
-        SOURCE_SYNC_PARTICIPANTS,
-    )
+    admit_observed(BUNDLED_SOURCE_SYNC_MANIFEST, SOURCE_SYNC_PARTICIPANTS)
+}
+
+/// Admit the bundled manifest and persist one receipt in `data_dir`.
+///
+/// `data_dir` is the desktop storage lease directory, the same directory the
+/// Node child receives. A later start reuses the receipt. This does not create
+/// a second data owner.
+pub fn boot_bundled_source_sync(data_dir: &Path) -> Result<AdmissionReceipt, AdmissionError> {
+    boot_source_sync(data_dir, BUNDLED_SOURCE_SYNC_MANIFEST)
 }
 
 pub fn admit_manifest(manifest: &str) -> Result<AdmittedOperation, AdmissionError> {
@@ -485,16 +495,17 @@ pub fn admit_planted_sections(document: &serde_json::Value) -> Result<(), Admiss
     Ok(())
 }
 
-/// Persists one receipt for a caller that already owns `runtime_dir`.
-/// `Gateway::start` does not call this. The Node server startup does, via
-/// `beginSourceSyncAdmission`, because that process owns the data directory
-/// and the Source Sync watcher.
+/// Persists one receipt in a directory the caller already owns.
+///
+/// Production desktop startup calls [`boot_bundled_source_sync`] with the
+/// storage-lease data directory before bind and before the compatibility
+/// process. Node startup calls its own writer for that same directory.
 pub fn boot_source_sync(
-    runtime_dir: &Path,
+    data_dir: &Path,
     manifest: &str,
 ) -> Result<AdmissionReceipt, AdmissionError> {
     let admitted = admit_observed(manifest, SOURCE_SYNC_PARTICIPANTS)?;
-    write_or_reuse_receipt(runtime_dir, &admitted)
+    write_or_reuse_receipt(data_dir, &admitted)
 }
 
 pub fn fingerprint_tree(root: &Path) -> Result<String, AdmissionError> {
@@ -547,32 +558,90 @@ fn collect_files(
     Ok(())
 }
 
-fn write_or_reuse_receipt(
-    runtime_dir: &Path,
+fn receipt_is_single_node_admission(
+    receipt: &AdmissionReceipt,
+    admitted: &AdmittedOperation,
+) -> bool {
+    let Ok(participant_count) = u32::try_from(admitted.participant_ids.len()) else {
+        return false;
+    };
+    receipt.operation == admitted.operation
+        && receipt.owner == admitted.owner.as_str()
+        && receipt.admission_count == 1
+        && receipt.participant_count == participant_count
+        && receipt.worker_pid > 0
+        && u64::from(receipt.worker_pid) <= i32::MAX as u64
+        && receipt.manifest_sha256.len() == 64
+        && receipt
+            .manifest_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn parse_receipt(
+    text: &str,
     admitted: &AdmittedOperation,
 ) -> Result<AdmissionReceipt, AdmissionError> {
-    let receipt_path = runtime_dir.join(RECEIPT_FILE);
+    let parsed: serde_json::Value = serde_json::from_str(text)
+        .map_err(|error| AdmissionError::Malformed(format!("admission receipt {error}")))?;
+    let Some(object) = parsed.as_object() else {
+        return Err(AdmissionError::Malformed(
+            "admission receipt is not a single Node admission".into(),
+        ));
+    };
+    for key in object.keys() {
+        if !matches!(
+            key.as_str(),
+            "operation"
+                | "owner"
+                | "worker_pid"
+                | "admission_count"
+                | "participant_count"
+                | "manifest_sha256"
+        ) {
+            return Err(AdmissionError::Malformed(
+                "admission receipt is not a single Node admission".into(),
+            ));
+        }
+    }
+    let receipt: AdmissionReceipt = serde_json::from_value(parsed).map_err(|_| {
+        AdmissionError::Malformed("admission receipt is not a single Node admission".into())
+    })?;
+    if !receipt_is_single_node_admission(&receipt, admitted) {
+        return Err(AdmissionError::Malformed(
+            "admission receipt is not a single Node admission".into(),
+        ));
+    }
+    Ok(receipt)
+}
+
+fn write_or_reuse_receipt(
+    data_dir: &Path,
+    admitted: &AdmittedOperation,
+) -> Result<AdmissionReceipt, AdmissionError> {
+    let receipt_path = data_dir.join(RECEIPT_FILE);
     if receipt_path.is_file() {
         let existing = fs::read_to_string(&receipt_path)
             .map_err(|error| AdmissionError::Malformed(error.to_string()))?;
-        let receipt: AdmissionReceipt = serde_json::from_str(&existing)
-            .map_err(|error| AdmissionError::Malformed(error.to_string()))?;
+        let receipt = parse_receipt(&existing, admitted)?;
         if receipt.manifest_sha256 != admitted.manifest_sha256 {
             return Err(AdmissionError::RestartManifestChanged);
         }
         return Ok(receipt);
     }
+    let participant_count = u32::try_from(admitted.participant_ids.len())
+        .map_err(|_| AdmissionError::Malformed("participant count overflow".into()))?;
     let receipt = AdmissionReceipt {
         operation: admitted.operation.clone(),
         owner: admitted.owner.as_str().to_string(),
         worker_pid: std::process::id(),
         admission_count: 1,
-        participant_count: u32::try_from(admitted.participant_ids.len()).unwrap_or(u32::MAX),
+        participant_count,
         manifest_sha256: admitted.manifest_sha256.clone(),
     };
     let encoded = serde_json::to_vec_pretty(&receipt)
         .map_err(|error| AdmissionError::Malformed(error.to_string()))?;
-    let temporary = runtime_dir.join(format!(".{RECEIPT_FILE}.tmp"));
+    let temporary = data_dir.join(format!(".{RECEIPT_FILE}.tmp"));
     {
         let mut file = fs::File::create(&temporary)
             .map_err(|error| AdmissionError::Malformed(error.to_string()))?;

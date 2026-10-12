@@ -286,6 +286,46 @@ fn ticket_t_7_ownership_restart_manifest_changed() {
 }
 
 #[test]
+fn ticket_t_7_ownership_corrupt_receipt_preserves_bytes() {
+    let admitted = admit_bundled_source_sync().unwrap();
+    let valid = serde_json::json!({
+        "operation": "source.sync",
+        "owner": "node",
+        "worker_pid": 123,
+        "admission_count": 1,
+        "participant_count": admitted.participant_ids.len(),
+        "manifest_sha256": admitted.manifest_sha256,
+    });
+    let mut wrong_count = valid.clone();
+    wrong_count["participant_count"] = serde_json::json!(999);
+    let mut missing_pid = valid.clone();
+    missing_pid.as_object_mut().unwrap().remove("worker_pid");
+    let mut unknown = valid.clone();
+    unknown["unexpected"] = serde_json::json!(true);
+    let cases = [
+        ("count", serde_json::to_string(&wrong_count).unwrap()),
+        ("pid", serde_json::to_string(&missing_pid).unwrap()),
+        ("null", "null".to_string()),
+        ("unknown", serde_json::to_string(&unknown).unwrap()),
+    ];
+    for (name, body) in cases {
+        let dir = scratch(&format!("ticket_t_7_ownership_corrupt_{name}"));
+        plant_tree(&dir);
+        let path = dir.join("source-sync-admission.json");
+        fs::write(&path, &body).unwrap();
+        let before = fingerprint_tree(&dir).unwrap();
+        let error = boot_source_sync(&dir, bundled_text()).unwrap_err();
+        assert!(
+            matches!(error, AdmissionError::Malformed(ref detail) if detail.contains("admission receipt")),
+            "{name}: {error}"
+        );
+        assert_eq!(read(&path), body, "{name}");
+        assert!(!dir.join(".source-sync-admission.json.tmp").exists());
+        assert_eq!(fingerprint_tree(&dir).unwrap(), before, "{name}");
+    }
+}
+
+#[test]
 fn ticket_t_7_ownership_planted_sections_conflict() {
     let document = serde_json::json!({
         "routes": [],
@@ -494,6 +534,11 @@ fn ticket_t_7_ownership_call_sites_match_manifest() {
     assert!(workspace.contains("function sourceWorkspaceRoot"));
     assert!(gateway.contains("ownership::admit_bundled_source_sync()"));
     assert!(!gateway.contains("boot_source_sync("));
+    let core = read(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../pp-core/src/lib.rs"));
+    let admitted = core.find("boot_bundled_source_sync(").unwrap();
+    let bound = core.find("let listener = bind_origin(").unwrap();
+    let supervised = core.find("Supervisor::start_with_config(").unwrap();
+    assert!(admitted < bound && bound < supervised);
     let admit_at = app.find("beginSourceSyncAdmission(").unwrap();
     let watcher_at = app.find("startSourceWatcher(").unwrap();
     assert!(admit_at < watcher_at);

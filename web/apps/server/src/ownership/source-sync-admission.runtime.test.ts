@@ -80,7 +80,7 @@ function writeManifest(
   return path;
 }
 
-function useManifest(path: string, dataDir: string): void {
+function installManifest(path: string, dataDir: string): void {
   process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST = path;
   process.env.PRINT_PARTNER_DATA_DIR = dataDir;
   process.env.PRINT_PARTNER_API_KEY = "test-mcp-key";
@@ -175,7 +175,7 @@ describe("Source Sync Fastify admission", () => {
       if (!worker) throw new Error("missing worker participant");
       worker.owner = "rust";
     });
-    useManifest(manifest, dir);
+    installManifest(manifest, dir);
     const ports = createPorts(loadConfig());
     await ports.db.connect();
     const before = fingerprint(dir);
@@ -202,7 +202,7 @@ describe("Source Sync Fastify admission", () => {
         (item) => item.id !== "startup.startSourceWatcher",
       );
     });
-    useManifest(manifest, dir);
+    installManifest(manifest, dir);
     const ports = createPorts(loadConfig());
     await ports.db.connect();
     const before = fingerprint(dir);
@@ -215,10 +215,64 @@ describe("Source Sync Fastify admission", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it("rejects a corrupt startup receipt without rewriting it or installing timers", async () => {
+    const manifestText = readFileSync(packagedManifest, "utf8");
+    const participantCount = (JSON.parse(manifestText) as { participants: unknown[] }).participants.length;
+    const sha = createHash("sha256").update(manifestText).digest("hex");
+    const valid = {
+      operation: "source.sync",
+      owner: "node",
+      worker_pid: 123,
+      admission_count: 1,
+      participant_count: participantCount,
+      manifest_sha256: sha,
+    };
+    const cases: Array<{ name: string; body: string }> = [
+      {
+        name: "count",
+        body: JSON.stringify({ ...valid, participant_count: 999 }),
+      },
+      {
+        name: "pid",
+        body: JSON.stringify({
+          operation: valid.operation,
+          owner: valid.owner,
+          admission_count: valid.admission_count,
+          participant_count: valid.participant_count,
+          manifest_sha256: valid.manifest_sha256,
+        }),
+      },
+      { name: "null", body: "null" },
+      { name: "unknown", body: JSON.stringify({ ...valid, unexpected: true }) },
+    ];
+    for (const planted of cases) {
+      const dir = scratch(`corrupt-${planted.name}`);
+      const manifest = writeManifest(dir, "admitted.json");
+      installManifest(manifest, dir);
+      const receiptPath = sourceSyncAdmissionReceiptPath(dir);
+      writeFileSync(receiptPath, planted.body);
+      const ports = createPorts(loadConfig());
+      await ports.db.connect();
+      const watchers = installedSourceSyncWatchers();
+      let rejected: unknown;
+      try {
+        await buildApp(loadConfig(), ports);
+      } catch (error) {
+        rejected = error;
+      }
+      expect(rejected, planted.name).toBeInstanceOf(OwnershipAdmissionError);
+      expect(rejected, planted.name).not.toBeInstanceOf(TypeError);
+      expect((rejected as Error).message).toMatch(/admission receipt/);
+      expect(readFileSync(receiptPath, "utf8")).toBe(planted.body);
+      expect(installedSourceSyncWatchers()).toBe(watchers);
+      await ports.db.close();
+    }
+  });
+
   it("admits HTTP aliases, source create, MCP confirm, and one restart receipt", async () => {
     const dir = scratch("valid");
     const manifest = writeManifest(dir, "admitted.json");
-    useManifest(manifest, dir);
+    installManifest(manifest, dir);
     const started = await boot(dir);
     const receiptPath = sourceSyncAdmissionReceiptPath(dir);
     const firstReceipt = readFileSync(receiptPath, "utf8");

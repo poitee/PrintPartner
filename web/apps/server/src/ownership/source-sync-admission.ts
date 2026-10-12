@@ -16,6 +16,15 @@ export const SOURCE_SYNC_PARTICIPANTS = [
 ] as const;
 
 const MANIFEST_FIELDS = new Set(["operation", "owner", "live_format", "participants"]);
+const RECEIPT_FIELDS = new Set([
+  "operation",
+  "owner",
+  "worker_pid",
+  "admission_count",
+  "participant_count",
+  "manifest_sha256",
+]);
+const MAX_PROCESS_ID = 2_147_483_647;
 const LIVE_FORMAT_FIELDS = new Set(["id", "rollback"]);
 const PARTICIPANT_FIELDS = new Set(["id", "kind", "owner", "resources"]);
 const KINDS = new Set(["http", "http_alias", "mcp_action", "job", "startup_watcher", "worker"]);
@@ -224,29 +233,70 @@ export function sourceSyncAdmissionReceiptPath(dataDir: string): string {
   return resolve(dataDir, "source-sync-admission.json");
 }
 
+function isProcessId(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 && value <= MAX_PROCESS_ID;
+}
+
+/** Read a stored receipt. Structural failures are admission errors and do not repair the file. */
+export function parseSourceSyncAdmissionReceipt(
+  text: string,
+  participantCount: number,
+): SourceSyncAdmissionReceipt {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return fail("malformed", `malformed ownership manifest: admission receipt ${detail}`);
+  }
+  if (!isRecord(parsed)) {
+    return fail(
+      "malformed",
+      "malformed ownership manifest: admission receipt is not a single Node admission",
+    );
+  }
+  if (unknownFields(parsed, RECEIPT_FIELDS)) {
+    return fail(
+      "malformed",
+      "malformed ownership manifest: admission receipt is not a single Node admission",
+    );
+  }
+  const manifestSha256 = parsed.manifest_sha256;
+  if (
+    parsed.operation !== SOURCE_SYNC_OPERATION
+    || parsed.owner !== "node"
+    || !isProcessId(parsed.worker_pid)
+    || parsed.admission_count !== 1
+    || parsed.participant_count !== participantCount
+    || typeof manifestSha256 !== "string"
+    || !/^[0-9a-f]{64}$/.test(manifestSha256)
+  ) {
+    return fail(
+      "malformed",
+      "malformed ownership manifest: admission receipt is not a single Node admission",
+    );
+  }
+  return {
+    operation: SOURCE_SYNC_OPERATION,
+    owner: "node",
+    worker_pid: parsed.worker_pid,
+    admission_count: 1,
+    participant_count: participantCount,
+    manifest_sha256: manifestSha256,
+  };
+}
+
 /** Admit the bundled manifest and persist one receipt. A later boot reuses it. */
 export function beginSourceSyncAdmission(dataDir: string): SourceSyncAdmissionReceipt {
   const admitted = admitSourceSyncManifest(readFileSync(defaultSourceSyncManifestPath(), "utf8"));
   const receiptPath = sourceSyncAdmissionReceiptPath(dataDir);
   if (existsSync(receiptPath)) {
-    let existing: SourceSyncAdmissionReceipt;
-    try {
-      existing = JSON.parse(readFileSync(receiptPath, "utf8")) as SourceSyncAdmissionReceipt;
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      return fail("malformed", `malformed ownership manifest: admission receipt ${detail}`);
-    }
-    if (
-      existing.operation !== SOURCE_SYNC_OPERATION
-      || existing.owner !== "node"
-      || existing.admission_count !== 1
-      || !(existing.participant_count > 0)
-      || existing.manifest_sha256 !== admitted.manifestSha256
-    ) {
-      if (existing.manifest_sha256 !== admitted.manifestSha256) {
-        return fail("restart_manifest_changed", "restart manifest does not match the admitted record");
-      }
-      return fail("malformed", "malformed ownership manifest: admission receipt is not a single Node admission");
+    const existing = parseSourceSyncAdmissionReceipt(
+      readFileSync(receiptPath, "utf8"),
+      admitted.participantIds.length,
+    );
+    if (existing.manifest_sha256 !== admitted.manifestSha256) {
+      return fail("restart_manifest_changed", "restart manifest does not match the admitted record");
     }
     return existing;
   }
