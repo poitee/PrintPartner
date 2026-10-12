@@ -893,9 +893,41 @@ mod tests {
         );
     }
 
+    fn is_bare_program_name(path: &std::path::Path) -> bool {
+        use std::path::Component;
+        matches!(
+            path.components().next(),
+            Some(Component::Normal(_)) if path.components().count() == 1
+        )
+    }
+
+    fn is_executable_file(path: &std::path::Path) -> bool {
+        use std::os::unix::fs::PermissionsExt;
+        path.metadata()
+            .ok()
+            .filter(|meta| meta.is_file())
+            .is_some_and(|meta| meta.permissions().mode() & 0o111 != 0)
+    }
+
+    fn resolve_test_runtime_executable(path: std::path::PathBuf) -> std::path::PathBuf {
+        if !is_bare_program_name(&path) {
+            return path;
+        }
+        let Some(path_env) = std::env::var_os("PATH") else {
+            return path;
+        };
+        for dir in std::env::split_paths(&path_env) {
+            let candidate = dir.join(&path);
+            if is_executable_file(&candidate) {
+                return candidate;
+            }
+        }
+        path
+    }
+
     fn death_fixture_node() -> std::path::PathBuf {
         if let Some(path) = std::env::var_os("PP_TEST_NODE") {
-            return path.into();
+            return resolve_test_runtime_executable(path.into());
         }
         let fallback = std::path::PathBuf::from(
             "/opt/agent-fleet/artifacts/.local/share/mise/installs/node/24.21.0/bin/node",
@@ -903,7 +935,7 @@ mod tests {
         if fallback.is_file() {
             fallback
         } else {
-            std::path::PathBuf::from("node")
+            resolve_test_runtime_executable(std::path::PathBuf::from("node"))
         }
     }
 
