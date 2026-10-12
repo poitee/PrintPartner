@@ -3965,7 +3965,7 @@ test("r13-percent-fallback-safe-82", () => {
 });
 
 test("r13-percent-fallback-at", () => {
-  assertBannedCommand('curl --variable %url@3232235856 --expand-url "{{url}}"');
+  assertSafeCommand('curl --variable %url@3232235856 --expand-url "{{url}}"');
 });
 
 test("r13-percent-trim", () => {
@@ -4010,4 +4010,129 @@ test("r13-append-wget", () => {
 
 test("r13-sudo-long-shell-command", () => {
   assertBannedCommand("sudo --shell command curl 3232235856");
+});
+
+const OK_LINE = "PR evidence lint OK (exemption=none, hasEvidence=true)\n";
+const LAN_STDERR = "PR evidence lint FAILED:\n- Evidence must not target Chad's LAN instances (.80/.81). Use a disposable local verify instance instead. (To mention these hosts in the Exemption reason, indent every reason line under its bullet.)\n";
+
+function stdinLint(command, env) {
+  return spawnSync(process.execPath, [
+    fileURLToPath(new URL("./lint-pr-evidence.mjs", import.meta.url)),
+    "--stdin",
+  ], {
+    input: commandEvidence(command),
+    encoding: "utf8",
+    timeout: 3000,
+    env: env ?? process.env,
+  });
+}
+
+function assertStdinSafe(command, env) {
+  const run = stdinLint(command, env);
+  assert.equal(run.signal, null, run.stderr);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, OK_LINE);
+  assert.equal(run.stderr, "");
+}
+
+function assertStdinBanned(command) {
+  const run = stdinLint(command);
+  assert.equal(run.signal, null, run.stderr);
+  assert.equal(run.status, 1, run.stdout);
+  assert.equal(run.stdout, "");
+  assert.equal(run.stderr, LAN_STDERR);
+}
+
+test("r14-percent-at-fleet", () => {
+  assertSafeCommand('curl --variable %url@3232286800 --expand-url "{{url}}"');
+});
+
+test("r14-percent-at-range", () => {
+  assertSafeCommand('curl --variable %url[0-9]@3232235856 --expand-url "{{url}}"');
+});
+
+test("r14-percent-at-range-fleet", () => {
+  assertSafeCommand('curl --variable %url[0-9]@3232286800 --expand-url "{{url}}"');
+});
+
+test("r14-percent-at-open-range", () => {
+  assertSafeCommand('curl --variable %url[0-]@3232235856 --expand-url "{{url}}"');
+});
+
+test("r14-percent-at-stdin", () => {
+  assertSafeCommand('curl --variable %url@- --expand-url "{{url}}"');
+});
+
+test("r14-percent-at-file-contents-unread", () => {
+  const dir = mkdtempSync(join(tmpdir(), "gre583-r14-"));
+  const file = join(dir, "payload");
+  writeFileSync(file, "http://192.168.1.80/\n");
+  try {
+    assertSafeCommand(`curl --variable %url@${file} --expand-url "{{url}}"`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("r14-plain-at-decimal", () => {
+  assertSafeCommand("curl --variable url@3232235856 --expand-url '{{url}}'");
+});
+
+test("r14-percent-eq-fleet", () => {
+  assertBannedCommand('curl --variable %url=3232286800 --expand-url "{{url}}"');
+});
+
+test("r14-percent-eq-fleet-79", () => {
+  assertSafeCommand('curl --variable %url=3232286799 --expand-url "{{url}}"');
+});
+
+test("r14-percent-eq-fleet-82", () => {
+  assertSafeCommand('curl --variable %url=3232286802 --expand-url "{{url}}"');
+});
+
+test("r14-percent-eq-neighbor-79", () => {
+  assertSafeCommand('curl --variable %url=3232235855 --expand-url "{{url}}"');
+});
+
+test("r14-percent-eq-range", () => {
+  assertBannedCommand('curl --variable %url[0-9]=3232235856 --expand-url "{{url}}"');
+});
+
+test("r14-percent-at-keeps-separate-url", () => {
+  assertBannedCommand('curl --variable %url@3232235856 --expand-url "{{url}}" http://192.168.1.80/');
+});
+
+test("r14-percent-bare-ignores-env", () => {
+  assertStdinSafe('curl --variable %url --expand-url "{{url}}"', {
+    ...process.env,
+    url: "http://192.168.200.80/",
+  });
+});
+
+test("r14-stdin-percent-at", () => {
+  assertStdinSafe('curl --variable %url@3232235856 --expand-url "{{url}}"');
+});
+
+test("r14-stdin-percent-at-fleet", () => {
+  assertStdinSafe('curl --variable %url@3232286800 --expand-url "{{url}}"');
+});
+
+test("r14-stdin-percent-at-range", () => {
+  assertStdinSafe('curl --variable %url[0-9]@3232235856 --expand-url "{{url}}"');
+});
+
+test("r14-stdin-percent-eq", () => {
+  assertStdinBanned('curl --variable %url=3232235856 --expand-url "{{url}}"');
+});
+
+test("r14-stdin-percent-eq-safe", () => {
+  assertStdinSafe('curl --variable %url=3232235858 --expand-url "{{url}}"');
+});
+
+test("r14-stdin-percent-eq-fleet", () => {
+  assertStdinBanned('curl --variable %url=3232286800 --expand-url "{{url}}"');
+});
+
+test("r14-stdin-percent-eq-fleet-safe", () => {
+  assertStdinSafe('curl --variable %url=3232286799 --expand-url "{{url}}"');
 });
