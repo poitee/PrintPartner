@@ -1,0 +1,25 @@
+{
+  "name": "@print-partner/desktop-e2e",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "smoke": "node --import tsx src/run.ts",
+    "check-release": "node --import tsx assert-release-exclusion.ts"
+  },
+  "devDependencies": {
+    "@types/mocha": "10.0.10",
+    "@types/node": "22.19.1",
+    "@types/pngjs": "6.0.5",
+    "@wdio/cli": "9.31.9",
+    "@wdio/globals": "9.31.3",
+    "@wdio/local-runner": "9.31.9",
+    "@wdio/mocha-framework": "9.31.9",
+    "@wdio/spec-reporter": "9.31.2",
+    "@wdio/tauri-service": "1.5.0",
+    "pngjs": "7.0.0",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3",
+    "webdriverio": "9.31.9"
+  }
+}
