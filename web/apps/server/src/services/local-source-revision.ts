@@ -5,7 +5,6 @@ import { dirname, join, resolve, sep } from "node:path";
 import type { SourceSummary } from "@print-partner/contracts";
 import { chargeTenantDiskBytes } from "../lib/tenant-disk-quota.js";
 import {
-  SourceActivationConflictError,
   type AppRepository,
   type SourceActivationObservation,
 } from "../db/repository.js";
@@ -431,8 +430,12 @@ function activateMaterializedSnapshot(input: {
       suggestedImportRules: input.suggestedImportRules,
     });
   } catch (error) {
-    if (error instanceof SourceActivationConflictError) {
+    try {
       releaseUnreferencedSnapshot(input.repo, input.reposDir, input.sourceId, input.snapshot);
+    } catch (cleanupError) {
+      if (error instanceof Error && cleanupError instanceof Error && error.cause === undefined) {
+        error.cause = cleanupError;
+      }
     }
     throw error;
   } finally {
