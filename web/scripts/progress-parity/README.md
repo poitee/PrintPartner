@@ -1,0 +1,25 @@
+# Current Required-unit and local progress parity
+
+This is a new current-caller corpus, not the historical24 Required-unit/34 Checkoff corpus. That original corpus was not recovered from checked-in files, retained workspaces or PR135 comments. The seeds are the existing Node-origin schema34 SQLite databases and identity/request captures in `rust/crates/pp-storage/tests/fixtures`. Current Node22 callers compute every answer afresh; saved answers are never substituted.
+
+The12 Required-unit cases combine unchanged/shrink/unsafe fixtures with selection, stale draft digest, missing profile and missing draft. They execute the current `PlanDraftWorkspaceService.reconcile` and public Rust `required-unit-fixture`, comparing full workspace/replay responses and all database tables. The17 progress cases execute actual registered Fastify completion, assembly and printed-count import handlers against public Rust `checkoff-progress-fixture`. They cover prefix completion, clearing, invalid type/range, missing targets, assembly before completion, count bounds, stale basis, invalid final batch row and late SQL rollback. Each scenario executes twice. Clearing cases first execute three real completion/assembly precondition commands, proving printed count3 becomes0 and assembled count1 becomes0; clearing is not tested only against an already-empty state. This is29 scenarios with61 operations per side, not the historical24+34 cases.
+
+All table rows use complete primary-key order from `PRAGMA table_info`, or all columns when no primary key exists. All columns remain visible, including audit/settings and sqlite_sequence. SQLite integers use lossless tagged decimal strings and blobs use tagged hex; an actual SQLite control distinguishes adjacent i64 values beyond JavaScript precision and preserves blob bytes. Stored JSON text remains exact text; arrays and all scalar values, nulls, timestamps, identities, tokens and digests remain exact. Relevant repository artifacts compare relative paths and content hashes. No mutation/failure response is normalized. Selection's Node Date is frozen to the actual Rust-created row timestamp, checked against the observed Rust invocation interval; neither side's answer or timestamp is removed.
+
+This intentionally isolates domain/registered-handler behavior on the target Rust-prepared schema35. One shared seed preparation precedes cloning. Each side then performs exactly two target writer startups: first connection and orderly reopen. The Rust fixture CLIs execute these opens themselves; Node's domain fixture runs the same public preparation once before each raw Drizzle connection. CLI receipts measure each successful writer open, and the runner checks matching counts. Node raw connections are exclusive; no simultaneously running writer or mutation failover is involved.
+
+This is not Node startup parity. The actual public Node `SqliteDatabase.connect` rejects schema35, and the runner asserts this refusal. The separately rerunnable `--startup-control` deliberately omits common target startup on the Node side and preserves the original whole-state comparison failure in `startup-mismatch.json`. Rust's unconditional startup `INSERT OR IGNORE` seed writes advance SQLite autoincrement sequence state even when no domain row changes. Its repeated-startup sequence drift remains a GRE400/401 investigation; it is not excluded from comparison or fixed here.
+
+Run on Linux x64 using the official Node22.23.3 archive and executable hashes in `runtime.json`. Put that Node binary first on PATH so npm rebuilds native SQLite for the same ABI. Set CARGO_TARGET_DIR to a private directory. From `web`:
+
+```sh
+npm ci --ignore-scripts
+npm rebuild better-sqlite3
+npm run build -w @print-partner/contracts
+npm run build -w @print-partner/domain
+PP_PROGRESS_PARITY_RECEIPTS=/absolute/private/receipts npm run test:progress-parity
+```
+
+The named `ticket_t_10_fixtures_current_required_progress_domain` test builds all three actual Rust fixture binaries with `--locked`, runs the paired corpus, enforces nonzero case counts and checks restart/response/whole-state/file comparisons. Four planted controls alter a response, database graph, file graph or case count and must be rejected by the production comparator/coverage checks. The second test requires the original startup comparison to exit1 at sqlite_sequence; it preserves the actual failing graphs. Receipts bind Node and CLI binary hashes, lockfiles, workspace manifests and source trees.
+
+GRE416, GRE420 and GRE451 stay open. This corpus does not prove quantity/inclusion/reorder/source-change properties, accepted membership publication, physical verify/dismiss/unattributed/file assignment, atomic deduction/history, full authentication ingress/audit behavior, every route alias, downloads, WS, MCP, lost reply or crash recovery. Audit tables are compared in the whole graph, but these session-fixture operations are not API-key audit acceptance. Orderly reopen is not crash proof. Node startup/migration integration and original native packaging gates remain open. All production aliases and workers remain Node/Compat-owned.
