@@ -405,6 +405,46 @@ function runLiveFixture(context, mode = "pages") {
     data.totalCount = 101;
     data.suiteBehavior = "page2";
   }
+
+  if (mode === "suppressor-missing-runs" || mode === "suppressor-empty-nodes" || mode === "suppressor-orphan-nonmember") {
+    const failure = latestCheck();
+    failure.id = "current-failure";
+    failure.conclusion = "FAILURE";
+    failure.detailsUrl = staleFailureUrl;
+    failure.startedAt = "2026-10-12T02:00:00Z";
+    failure.checkSuite.id = "suite-a";
+    failure.checkSuite.currentRuns = {
+      membershipAuthoritative: true,
+      pageInfo: { hasNextPage: false },
+      nodes: [{ id: "current-failure" }],
+    };
+    const stale = latestCheck();
+    stale.id = mode === "suppressor-orphan-nonmember" ? "orphan-success" : "stale-success";
+    stale.conclusion = "SUCCESS";
+    stale.detailsUrl = currentSuccessUrl;
+    stale.startedAt = "2026-10-12T05:00:00Z";
+    stale.checkSuite.id = "suite-b";
+    if (mode === "suppressor-missing-runs") {
+      delete stale.checkSuite.currentRuns;
+    } else if (mode === "suppressor-empty-nodes") {
+      stale.checkSuite.currentRuns = {
+        totalCount: 0,
+        pageInfo: { hasNextPage: true, endCursor: null },
+        nodes: [],
+      };
+    } else {
+      stale.checkSuite.currentRuns = {
+        totalCount: 101,
+        pageInfo: { hasNextPage: true, endCursor: "suite-b-2" },
+        nodes: Array.from({ length: 100 }, (_, index) => ({ id: `b-${index + 1}` })),
+      };
+      data.page2Ids = ["unseen-b"];
+      data.totalCount = 101;
+      data.suiteBehavior = "page2";
+    }
+    data.statusCheckRollup = [failure, stale];
+    data.mode = "pages";
+  }
   if (mode === "head-during-suite") {
     data.oldChecks = membershipPair({
       staleId: "stale-failure",
@@ -867,4 +907,33 @@ test("different external apps with the same check name stay independent", () => 
   assert.equal(report.nextAction, "ci");
   assert.equal(report.failingChecks.length, 2);
   assert.equal(report.passedCheckCount, 0);
+});
+
+test("live CLI keeps a member failure when another suite success lacks currentRuns", { timeout: 20000 }, (context) => {
+  const result = runLiveFixture(context, "suppressor-missing-runs");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "ci");
+  assert.deepEqual(report.failingChecks.map((check) => check.url), [staleFailureUrl]);
+  assert.equal(report.passedCheckCount, 1);
+});
+
+test("live CLI keeps a member failure when another suite latest nodes are empty", { timeout: 20000 }, (context) => {
+  const result = runLiveFixture(context, "suppressor-empty-nodes");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "ci");
+  assert.deepEqual(report.failingChecks.map((check) => check.url), [staleFailureUrl]);
+  assert.equal(report.passedCheckCount, 1);
+});
+
+test("live CLI keeps a member failure when another suite success is not in finished latest ids", { timeout: 20000 }, (context) => {
+  const result = runLiveFixture(context, "suppressor-orphan-nonmember");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "ci");
+  assert.deepEqual(report.failingChecks.map((check) => check.url), [staleFailureUrl]);
+  assert.equal(report.passedCheckCount, 1);
+  const state = JSON.parse(readFileSync(result.statePath, "utf8"));
+  assert.equal(state.suiteCalls, 1);
 });

@@ -138,6 +138,16 @@ function attemptTimeForDedupe(check) {
   return NaN;
 }
 
+
+function checkIsFinishedLatestMember(check) {
+  const currentRuns = check.checkSuite?.currentRuns;
+  if (!check.id || !currentRuns) return false;
+  if (currentRuns.pageInfo?.hasNextPage !== false) return false;
+  const ids = (currentRuns.nodes ?? []).map((node) => node.id).filter(Boolean);
+  if (!ids.length) return false;
+  return ids.includes(check.id);
+}
+
 function suiteMembershipIncomplete(check) {
   const currentRuns = check.checkSuite?.currentRuns;
   return Boolean(currentRuns?.nodes?.length && currentRuns.pageInfo?.hasNextPage !== false);
@@ -179,6 +189,7 @@ function currentChecks(checks) {
   return records.filter((record) => !records.some((other) => {
     if (!record.key || record.key !== other.key) return false;
     if (other.membershipIncomplete) return false;
+    if (!checkIsFinishedLatestMember(other.check)) return false;
     if (!record.suiteId || !other.suiteId || record.suiteId === other.suiteId) return false;
     if (!Number.isFinite(record.attemptTime) || !Number.isFinite(other.attemptTime)) return false;
     return other.attemptTime > record.attemptTime;
