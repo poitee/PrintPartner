@@ -773,3 +773,98 @@ test("live CLI does not keep an old head that finishes paging after the head mov
   assert.deepEqual(report.failingChecks.map((check) => check.url), [movedFailureUrl]);
   assert.equal(report.passedCheckCount, 0);
 });
+
+test("authoritative membership keeps a rollup failure missing from every latest-run page", () => {
+  const failure = latestCheck();
+  failure.id = "orphan-failure";
+  failure.conclusion = "FAILURE";
+  const pass = latestCheck();
+  pass.id = "other-pass";
+  pass.name = "Other requirement";
+  pass.conclusion = "SUCCESS";
+  const currentRuns = {
+    membershipAuthoritative: true,
+    pageInfo: { hasNextPage: false },
+    nodes: [{ id: "other-pass" }],
+  };
+  for (const check of [failure, pass]) check.checkSuite.currentRuns = structuredClone(currentRuns);
+  const report = evaluateSnapshot(snapshotWithChecks([failure, pass]));
+  assert.equal(report.nextAction, "ci");
+  assert.deepEqual(report.failingChecks.map((item) => item.url), [failure.detailsUrl]);
+  assert.equal(report.passedCheckCount, 1);
+});
+
+test("incomplete membership on another suite cannot suppress a current failure", () => {
+  const failure = latestCheck();
+  failure.conclusion = "FAILURE";
+  failure.checkSuite.currentRuns = {
+    membershipAuthoritative: true,
+    pageInfo: { hasNextPage: false },
+    nodes: [{ id: failure.id }],
+  };
+  const staleSuccess = structuredClone(fixture.statusCheckRollup[0]);
+  staleSuccess.conclusion = "SUCCESS";
+  staleSuccess.startedAt = "2026-10-12T05:00:00Z";
+  staleSuccess.checkSuite.id = "suite-other";
+  staleSuccess.checkSuite.currentRuns = {
+    pageInfo: { hasNextPage: true },
+    nodes: [{ id: "stale-success" }],
+  };
+  const report = evaluateSnapshot(snapshotWithChecks([failure, staleSuccess]));
+  assert.equal(report.nextAction, "ci");
+  assert.deepEqual(report.failingChecks.map((item) => item.url), [failure.detailsUrl]);
+});
+
+test("a newer external-app success supersedes an older failure in another suite", () => {
+  const oldFail = latestCheck();
+  delete oldFail.checkSuite.workflowRun;
+  oldFail.conclusion = "FAILURE";
+  oldFail.startedAt = "2026-10-12T01:00:00Z";
+  oldFail.checkSuite.id = "suite-a";
+  oldFail.checkSuite.currentRuns = {
+    membershipAuthoritative: true,
+    pageInfo: { hasNextPage: false },
+    nodes: [{ id: oldFail.id }],
+  };
+  const newSuccess = structuredClone(oldFail);
+  newSuccess.id = "new-success";
+  newSuccess.conclusion = "SUCCESS";
+  newSuccess.startedAt = "2026-10-12T03:00:00Z";
+  newSuccess.checkSuite.id = "suite-b";
+  newSuccess.detailsUrl = "https://example.com/checks/new-success";
+  newSuccess.checkSuite.currentRuns = {
+    membershipAuthoritative: true,
+    pageInfo: { hasNextPage: false },
+    nodes: [{ id: newSuccess.id }],
+  };
+  const report = evaluateSnapshot(snapshotWithChecks([oldFail, newSuccess]));
+  assert.equal(report.nextAction, "ready");
+  assert.deepEqual(report.failingChecks, []);
+  assert.equal(report.passedCheckCount, 1);
+});
+
+test("different external apps with the same check name stay independent", () => {
+  const first = latestCheck();
+  delete first.checkSuite.workflowRun;
+  first.checkSuite.app.id = "app-one";
+  first.conclusion = "FAILURE";
+  first.checkSuite.id = "suite-one";
+  first.checkSuite.currentRuns = {
+    membershipAuthoritative: true,
+    pageInfo: { hasNextPage: false },
+    nodes: [{ id: first.id }],
+  };
+  const second = structuredClone(first);
+  second.id = "other-app-failure";
+  second.checkSuite.app.id = "app-two";
+  second.checkSuite.id = "suite-two";
+  second.checkSuite.currentRuns = {
+    membershipAuthoritative: true,
+    pageInfo: { hasNextPage: false },
+    nodes: [{ id: second.id }],
+  };
+  const report = evaluateSnapshot(snapshotWithChecks([first, second]));
+  assert.equal(report.nextAction, "ci");
+  assert.equal(report.failingChecks.length, 2);
+  assert.equal(report.passedCheckCount, 0);
+});

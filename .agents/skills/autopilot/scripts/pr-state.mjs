@@ -117,31 +117,68 @@ export function summarizeThreads({ reviewThreads, viewerLogin = null } = {}) {
   return { unresolved, awaitingHuman };
 }
 
+function checkIdentityKey(check) {
+  const suite = check.checkSuite;
+  const run = suite?.workflowRun;
+  if (!check.id || !check.name || !suite?.app?.id) return null;
+  if (run?.workflow?.id && run?.event) {
+    return JSON.stringify([suite.app.id, run.workflow.id, run.event, check.name]);
+  }
+  if (!run) return JSON.stringify([suite.app.id, check.name]);
+  return null;
+}
+
+function attemptTimeForDedupe(check) {
+  const run = check.checkSuite?.workflowRun;
+  if (Number.isInteger(run?.runAttempt) && run.runAttempt >= 1) {
+    return Date.parse(check.startedAt);
+  }
+  // gh pr checks orders non-workflow CheckRuns by start time and app/name identity.
+  if (!run && check.checkSuite?.app?.id) return Date.parse(check.startedAt);
+  return NaN;
+}
+
+function suiteMembershipIncomplete(check) {
+  const currentRuns = check.checkSuite?.currentRuns;
+  return Boolean(currentRuns?.nodes?.length && currentRuns.pageInfo?.hasNextPage !== false);
+}
+
+function orphanSupersededInMembership(check, checks, currentRuns) {
+  const ids = new Set((currentRuns.nodes ?? []).map((node) => node.id).filter(Boolean));
+  if (!ids.size || ids.has(check.id)) return false;
+  const key = checkIdentityKey(check);
+  const suiteId = check.checkSuite?.id;
+  if (!key || !suiteId) return false;
+  for (const other of checks) {
+    if (other.id === check.id || other.checkSuite?.id !== suiteId) continue;
+    if (checkIdentityKey(other) !== key || !ids.has(other.id)) continue;
+    return true;
+  }
+  return false;
+}
+
 function currentChecks(checks) {
   const candidates = checks.filter((check) => {
     const currentRuns = check.checkSuite?.currentRuns;
     if (!check.id || currentRuns?.pageInfo?.hasNextPage !== false || !currentRuns.nodes?.length) {
       return true;
     }
-    return currentRuns.nodes.some((run) => run.id === check.id);
-  });
-  const records = candidates.map((check) => {
-    const suite = check.checkSuite;
-    const run = suite?.workflowRun;
-    const key = check.id && check.name && suite?.app?.id && run?.workflow?.id && run?.event
-      ? JSON.stringify([suite.app.id, run.workflow.id, run.event, check.name])
-      : null;
-    let attemptTime = NaN;
-    // gh pr checks keeps the later check start. Workflow creation time is a
-    // different clock, and runAttempt belongs to the whole run, including a
-    // check a partial rerun did not start again. Missing and tied starts stay.
-    if (Number.isInteger(run?.runAttempt) && run.runAttempt >= 1) {
-      attemptTime = Date.parse(check.startedAt);
+    if (currentRuns.nodes.some((run) => run.id === check.id)) return true;
+    if (currentRuns.membershipAuthoritative === true) {
+      return !orphanSupersededInMembership(check, checks, currentRuns);
     }
-    return { check, key, suiteId: suite?.id, attemptTime };
+    return false;
   });
+  const records = candidates.map((check) => ({
+    check,
+    key: checkIdentityKey(check),
+    suiteId: check.checkSuite?.id,
+    attemptTime: attemptTimeForDedupe(check),
+    membershipIncomplete: suiteMembershipIncomplete(check),
+  }));
   return records.filter((record) => !records.some((other) => {
     if (!record.key || record.key !== other.key) return false;
+    if (other.membershipIncomplete) return false;
     if (!record.suiteId || !other.suiteId || record.suiteId === other.suiteId) return false;
     if (!Number.isFinite(record.attemptTime) || !Number.isFinite(other.attemptTime)) return false;
     return other.attemptTime > record.attemptTime;
@@ -536,6 +573,7 @@ function completeLatestRunMembership(checks, { owner, name, oid }) {
     }
     if (!finished || !Number.isInteger(totalCount) || ids.length !== totalCount) continue;
     const currentRuns = {
+      membershipAuthoritative: true,
       pageInfo: { hasNextPage: false },
       nodes: ids.map((id) => ({ id })),
     };
