@@ -64,6 +64,7 @@ impl<'de> Deserialize<'de> for Digest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "codegen", derive(schemars::JsonSchema))]
 pub enum DraftState {
     Open,
     Abandoned,
@@ -110,3 +111,6 @@ impl Digest {
         &self.0
     }
 }
+
+#[cfg(feature = "codegen")]
+mod schema;
