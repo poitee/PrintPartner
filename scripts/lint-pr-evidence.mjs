@@ -2637,17 +2637,15 @@ function noteProxyAssignment(proxies, word, assigned) {
   const value = proxyAssignmentValue(word.text);
   if (value == null) return;
   const flags = assignmentFlags(word, assigned);
+  const eq = word.text.indexOf("=");
   const entry = {
     name: proxyAssignmentName(word.text),
     value,
+    append: eq > 0 && word.text[eq - 1] === "+",
     arithmetic: flags.arithmetic,
     substitution: flags.substitution,
     parameter: flags.parameter,
   };
-  if (!Array.isArray(proxies)) {
-    if (entry.name) proxies.set(entry.name, entry);
-    return;
-  }
   proxies.push(entry);
 }
 
@@ -2941,19 +2939,41 @@ function staticShellOperand(command) {
   return null;
 }
 
-// A standalone assignment stays available to a later name-only export. A prefix assignment does not.
-function rememberAssignment(word, shellVars, assigned) {
+// Export is a mark on one binding. A later assignment updates that same value.
+function staticAppend(prior, record) {
+  if (!record.append || !prior) {
+    return {
+      value: record.value,
+      arithmetic: record.arithmetic,
+      substitution: record.substitution,
+      parameter: record.parameter,
+    };
+  }
+  const arithmetic = prior.arithmetic || record.arithmetic;
+  const substitution = prior.substitution || record.substitution;
+  const parameter = prior.parameter || record.parameter;
+  if (arithmetic || substitution || parameter) return { value: prior.value, arithmetic, substitution, parameter };
+  return { value: prior.value + record.value, arithmetic: false, substitution: false, parameter: false };
+}
+
+function rememberAssignment(word, shellVars, assigned, markExported = false) {
   if (!word?.text) return;
   const name = assignmentName(word.text);
   if (!name) return;
   if (assigned && word.assignable) assigned.add(name);
   const eq = word.text.indexOf("=");
   const flags = assignmentFlags(word, assigned);
-  shellVars.set(name, {
+  const prior = shellVars.get(name);
+  const combined = staticAppend(prior, {
     value: word.text.slice(eq + 1),
+    append: word.text[eq - 1] === "+",
     arithmetic: flags.arithmetic,
     substitution: flags.substitution,
     parameter: flags.parameter,
+  });
+  shellVars.set(name, {
+    ...combined,
+    exported: markExported || prior?.exported || false,
   });
 }
 
@@ -2964,20 +2984,7 @@ function rememberStandalone(command, shellVars, assigned) {
   return true;
 }
 
-function publishExportedName(name, exported, shellVars) {
-  if (!PROXY_URL_NAMES.has(name)) return;
-  const binding = shellVars.get(name);
-  if (!binding) return;
-  exported.set(name, {
-    name,
-    value: binding.value,
-    arithmetic: binding.arithmetic,
-    substitution: binding.substitution,
-    parameter: binding.parameter,
-  });
-}
-
-function noteShellExport(command, exported, assigned, shellVars) {
+function noteShellExport(command, assigned, shellVars) {
   const start = commandProgramIndex(command);
   if (command[start]?.text !== "export") return false;
   for (const word of command.slice(0, start)) {
@@ -2992,19 +2999,47 @@ function noteShellExport(command, exported, assigned, shellVars) {
     if (text === "--") continue;
     if (text.startsWith("-") && text !== "-" && !text.includes("=")) continue;
     if (text.includes("=")) {
-      noteProxyAssignment(exported, word, assigned);
-      rememberAssignment(word, shellVars, assigned);
+      rememberAssignment(word, shellVars, assigned, true);
       continue;
     }
-    if (/^[A-Za-z_][\w]*$/.test(text)) publishExportedName(text, exported, shellVars);
+    if (/^[A-Za-z_][\w]*$/.test(text)) {
+      const binding = shellVars.get(text);
+      if (binding) binding.exported = true;
+    }
   }
   return true;
 }
 
-function mergedProxies(exported, local) {
-  const active = new Map(exported);
-  for (const proxy of local) active.set(proxy.name ?? Symbol(), proxy);
-  return [...active.values()];
+function proxyBinding(name, fields) {
+  return {
+    name,
+    value: fields.value,
+    arithmetic: fields.arithmetic,
+    substitution: fields.substitution,
+    parameter: fields.parameter,
+    exported: true,
+  };
+}
+
+function commandProxies(shellVars, prefixes) {
+  const active = new Map();
+  for (const [name, binding] of shellVars) {
+    if (!binding.exported || !PROXY_URL_NAMES.has(name)) continue;
+    active.set(name, proxyBinding(name, binding));
+  }
+  for (const proxy of prefixes) {
+    const prior = active.get(proxy.name) ?? shellVars.get(proxy.name);
+    active.set(proxy.name, proxyBinding(proxy.name, staticAppend(prior, proxy)));
+  }
+  return active;
+}
+
+function copyExported(source) {
+  const copy = new Map();
+  for (const [name, binding] of source) {
+    if (binding.exported) copy.set(name, { ...binding });
+  }
+  return copy;
 }
 
 function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), depth = 0) {
@@ -3018,9 +3053,8 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
   let substitution = false;
   let parameter = false;
   let stdinConfig = false;
-  const shellVars = new Map();
+  const shellVars = copyExported(inherited);
   const bodies = [];
-  const exported = new Map(inherited);
   const markUnresolved = (item) => {
     if ((item.parameters ?? []).some((name) => assigned.has(name))) parameter = true;
     if (!item.unresolved && !item.substitution) return;
@@ -3032,7 +3066,7 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
   };
   let command = [];
   const flush = () => {
-    if (noteShellExport(command, exported, assigned, shellVars)) {
+    if (noteShellExport(command, assigned, shellVars)) {
       command = [];
       return;
     }
@@ -3043,8 +3077,9 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
     const programAt = commandProgramIndex(command);
     const shell = staticShellOperand(command.slice(programAt));
     if (shell) {
-      const local = new Map(exported);
-      for (const word of command.slice(0, programAt)) noteProxyAssignment(local, word, assigned);
+      const prefixes = [];
+      for (const word of command.slice(0, programAt)) noteProxyAssignment(prefixes, word, assigned);
+      const local = commandProxies(shellVars, prefixes);
       if (shell.reject) substitution = true;
       else if (shell.word) {
         const inner = curlCommandTargets(shell.text, new Set(assigned), local, depth + 1);
@@ -3062,7 +3097,7 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
     const located = effectiveCurlStart(command, assigned);
     if (located.index === -1) { command = []; return; }
     const start = located.index;
-    for (const proxy of mergedProxies(exported, located.proxies)) {
+    for (const proxy of commandProxies(shellVars, located.proxies).values()) {
       if (proxy.arithmetic) unresolved = true;
       if (proxy.substitution) substitution = true;
       if (proxy.parameter) parameter = true;
@@ -3175,7 +3210,7 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
     } else {
       command.push(token);
       if (token.substitutionBodies.length > 0) {
-        const seen = new Map(exported);
+        const seen = copyExported(shellVars);
         for (const text of token.substitutionBodies) bodies.push({ text, exported: seen });
       }
     }
