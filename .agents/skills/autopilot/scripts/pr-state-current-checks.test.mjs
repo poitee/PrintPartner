@@ -729,6 +729,109 @@ function runLiveFixture(context, mode = "pages") {
     data.contextPage = "missing-commit";
     data.mode = "pages";
   }
+  if (mode === "started-at-reorder") {
+    const external = (id, name, conclusion, startedAt, suiteId, appId, url) => {
+      const check = latestCheck();
+      delete check.checkSuite.workflowRun;
+      check.id = id;
+      check.name = name;
+      check.status = "COMPLETED";
+      check.conclusion = conclusion;
+      check.startedAt = startedAt;
+      check.detailsUrl = url;
+      check.checkSuite.id = suiteId;
+      check.checkSuite.app.id = appId;
+      check.checkSuite.currentRuns = {
+        totalCount: 1,
+        pageInfo: { hasNextPage: false, endCursor: null },
+        nodes: [{ id }],
+      };
+      return check;
+    };
+    const pads = Array.from({ length: 99 }, (_, index) => external(
+      `pad-${index + 1}`,
+      `Pad ${index + 1}`,
+      "SUCCESS",
+      "2026-10-12T02:00:00Z",
+      `suite-pad-${index + 1}`,
+      `app-pad-${index + 1}`,
+      currentSuccessUrl,
+    ));
+    const failure = external(
+      "ext-failure",
+      "External duplicate",
+      "FAILURE",
+      "2026-10-12T01:00:00Z",
+      "suite-ext-fail",
+      "app-external",
+      staleFailureUrl,
+    );
+    const success = external(
+      "ext-success",
+      "External duplicate",
+      "SUCCESS",
+      "2026-10-12T03:00:00Z",
+      "suite-ext-ok",
+      "app-external",
+      currentSuccessUrl,
+    );
+    const laterFailure = structuredClone(failure);
+    laterFailure.startedAt = "2026-10-12T05:00:00Z";
+    data.statusCheckRollup = [...pads, failure, success];
+    data.replacementRollup = [...pads.map((check) => structuredClone(check)), laterFailure, structuredClone(success)];
+    data.shiftAfterReads = 2;
+    data.mode = "pages";
+  }
+  if (mode === "nodes-null" || mode === "nodes-nonarray" || mode === "nodes-null-element" || mode === "nodes-empty") {
+    data.statusCheckRollup = [];
+    data.contextPage = "nodes-shape";
+    data.contextNodes = {
+      "nodes-null": null,
+      "nodes-nonarray": { id: "not-a-list" },
+      "nodes-null-element": [null],
+      "nodes-empty": [],
+    }[mode];
+    data.mode = "pages";
+  }
+  if (mode === "nodes-mixed" || mode === "nodes-later-null" || mode === "nodes-later-mixed") {
+    const success = latestCheck();
+    success.id = "page-success";
+    success.name = "Page success";
+    success.status = "COMPLETED";
+    success.conclusion = "SUCCESS";
+    success.detailsUrl = currentSuccessUrl;
+    success.checkSuite.id = "suite-page";
+    success.checkSuite.currentRuns = {
+      totalCount: 1,
+      pageInfo: { hasNextPage: false, endCursor: null },
+      nodes: [{ id: success.id }],
+    };
+    const failure = latestCheck();
+    failure.id = "kept-failure";
+    failure.name = "Kept requirement";
+    failure.status = "COMPLETED";
+    failure.conclusion = "FAILURE";
+    failure.detailsUrl = staleFailureUrl;
+    failure.checkSuite.id = "suite-kept";
+    failure.checkSuite.currentRuns = {
+      totalCount: 1,
+      pageInfo: { hasNextPage: false, endCursor: null },
+      nodes: [{ id: failure.id }],
+    };
+    data.mixedFailure = failure;
+    data.statusCheckRollup = [success];
+    data.mode = "pages";
+    if (mode === "nodes-mixed") {
+      data.contextPage = "nodes-shape";
+      data.contextNodes = [failure, null];
+    } else if (mode === "nodes-later-null") {
+      data.contextPage = "nodes-later";
+      data.laterNodes = null;
+    } else {
+      data.contextPage = "nodes-later";
+      data.laterNodes = [failure, null];
+    }
+  }
   if (mode === "large-suite" || mode === "over-max-suite") {
     const totalCount = mode === "large-suite" ? 2001 : 50001;
     const currentRuns = {
@@ -924,6 +1027,17 @@ else if (args[0] === "pr") {
       response = { data: { repository: { object: null } } };
     } else if (data.contextPage === "malformed-rollup") {
       response = { data: { repository: { object: { statusCheckRollup: { contexts: data.malformedContexts } } } } };
+    } else if (data.contextPage === "nodes-shape") {
+      response = { data: { repository: { object: { statusCheckRollup: { contexts: {
+        nodes: data.contextNodes,
+        pageInfo: { hasNextPage: false, endCursor: null },
+      } } } } } };
+    } else if (data.contextPage === "nodes-later") {
+      const later = args.includes("cursor=next");
+      response = { data: { repository: { object: { statusCheckRollup: { contexts: {
+        nodes: later ? data.laterNodes : rollup.slice(0, 1),
+        pageInfo: { hasNextPage: !later, endCursor: later ? null : "next" },
+      } } } } } };
     } else if (data.contextPage === "single") {
       response = { data: { repository: { object: { statusCheckRollup: { contexts: {
         nodes: rollup,
@@ -1525,4 +1639,66 @@ test("one shared finished membership set supersedes every older row of that iden
   assert.equal(report.nextAction, "ready");
   assert.deepEqual(report.failingChecks, []);
   assert.equal(report.passedCheckCount, 40);
+});
+
+test("live CLI keeps an external-app failure when only startedAt changes across more than 100 contexts", { timeout: 20000 }, (context) => {
+  const result = runLiveFixture(context, "started-at-reorder");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "ci");
+  assert.deepEqual(report.failingChecks.map((check) => check.url), [staleFailureUrl]);
+  assert.equal(report.passedCheckCount, 99);
+  const state = JSON.parse(readFileSync(result.statePath, "utf8"));
+  assert.equal(state.prOids.length, 2);
+  assert.equal(state.prOids[0], state.prOids[1]);
+});
+
+for (const [mode, label] of [
+  ["nodes-null", "null nodes"],
+  ["nodes-nonarray", "a non-array nodes value"],
+  ["nodes-null-element", "a null node"],
+]) {
+  test(`live CLI rechecks when a present rollup has ${label}`, (context) => {
+    const result = runLiveFixture(context, mode);
+    assert.equal(result.status, 0, result.stderr);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.nextAction, "recheck");
+    assert.deepEqual(report.failingChecks, []);
+    assert.equal(report.passedCheckCount, 0);
+  });
+}
+
+test("live CLI keeps a known failure when a rollup node is null", (context) => {
+  const result = runLiveFixture(context, "nodes-mixed");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "ci");
+  assert.deepEqual(report.failingChecks.map((check) => check.url), [staleFailureUrl]);
+});
+
+test("live CLI treats an empty context list on a present rollup as ready", (context) => {
+  const result = runLiveFixture(context, "nodes-empty");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "ready");
+  assert.equal(report.passedCheckCount, 0);
+  assert.deepEqual(report.failingChecks, []);
+});
+
+test("live CLI rechecks when a later context page has null nodes", (context) => {
+  const result = runLiveFixture(context, "nodes-later-null");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "recheck");
+  assert.equal(report.passedCheckCount, 1);
+  assert.deepEqual(report.failingChecks, []);
+});
+
+test("live CLI keeps a later-page failure when that page also contains a null node", (context) => {
+  const result = runLiveFixture(context, "nodes-later-mixed");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "ci");
+  assert.deepEqual(report.failingChecks.map((check) => check.url), [staleFailureUrl]);
+  assert.equal(report.passedCheckCount, 1);
 });
