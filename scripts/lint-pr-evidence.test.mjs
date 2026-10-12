@@ -4806,3 +4806,78 @@ ${R16_ARTIFACT} \`make test\`
   assert.equal(result.ok, false);
   assert.match(result.errors.join("\n"), /Evidence is incomplete/);
 });
+
+const R18_BANNED = ["3232235856", "3232286800", "3232286801"];
+const R18_SAFE = ["3232235855", "3232235858", "3232286799", "3232286802"];
+
+function r18Command(command) {
+  return bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: ran locally
+- Result observed: passed
+${R16_ARTIFACT} trace.json
+
+\`\`\`sh
+${command}
+\`\`\`
+`);
+}
+
+test("r18-wget-hsts-boolean-keeps-banned-numeric-urls", () => {
+  for (const option of ["--hsts", "--no-hsts"]) {
+    for (const host of R18_BANNED) r17Lan(r18Command(`wget ${option} ${host}`));
+    for (const host of R18_SAFE) r17Ok(r18Command(`wget ${option} ${host}`));
+  }
+});
+
+test("r18-wget-hsts-prefix-collisions-follow-arity", () => {
+  for (const host of R18_BANNED) {
+    r17Lan(r18Command(`wget --hs ${host}`));
+    r17Lan(r18Command(`wget --hst ${host}`));
+    r17Lan(r18Command(`wget --no-h ${host}`));
+    r17Lan(r18Command(`wget --he ${host}`));
+    r17Ok(r18Command(`wget --hsts-file ${host} https://example.test/file`));
+    r17Ok(r18Command(`wget --hsts-f ${host} https://example.test/file`));
+  }
+  r17Ok(r18Command("wget --start-p 3232235856 https://example.test/file"));
+  r17Ok(r18Command("wget --start-p 3232286800 https://example.test/file"));
+  r17Lan(r18Command("wget --proxy 3232235856"));
+  r17Lan(r18Command("wget --proxy 3232286800"));
+});
+
+test("r18-wget-optional-attached-values-still-leave-the-url", () => {
+  for (const host of ["3232235856", "3232286800"]) {
+    r17Lan(r18Command(`wget --check-certificate ${host}`));
+    r17Lan(r18Command(`wget --check-certificate=off ${host}`));
+    r17Lan(r18Command(`wget --backups ${host}`));
+    r17Lan(r18Command(`wget --backups=2 ${host}`));
+    r17Lan(r18Command(`wget --retr-symlinks ${host}`));
+    r17Lan(r18Command(`wget --retr-symlinks=on ${host}`));
+  }
+});
+
+test("r18-bare-outcome-word-is-not-an-artifact", () => {
+  for (const word of ["passed", "failed"]) {
+    const result = lintPrEvidence(bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: ran locally
+- Result observed: passed
+${R16_ARTIFACT} \`${word}\`
+`));
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join("\n"), /incomplete/i);
+  }
+});
+
+test("r18-runner-command-plus-output-stays-evidence", () => {
+  r17Ok(bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: \`gradle test\`
+- Result observed: BUILD SUCCESSFUL
+${R16_ARTIFACT} \`gradle test\`
+BUILD SUCCESSFUL
+`));
+  r17Ok(bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: \`./gradlew test\`
+- Result observed: Tests run: 4
+${R16_ARTIFACT} \`./gradlew test\`
+Tests run: 4, Failures: 0
+`));
+});
