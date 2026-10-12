@@ -1648,3 +1648,60 @@ for (const definition of ['[ref]: /target', '[ref]: /target "title\nmore title"'
 test('invalid reference prefix remains paragraph text before inline span', () => {
   assert.equal(lintPrEvidence('[ref]: /target garbage\n<span>\n## Evidence\nExemption: docs-only\n- Exemption reason: Updated docs.').ok, true);
 });
+
+test("fenced exemption-like lines cannot suppress literal LAN targets", () => {
+  for (const target of ["http://192.168.1.80/", "http://0xc0a80151/"]) {
+    for (const command of [
+      `- Exemption reason: command output\n  curl ${target}`,
+      `Exemption: curl ${target}`,
+    ]) {
+      const result = lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n\`\`\`text\n${command}\n\`\`\``));
+      assert.equal(result.ok, false, command);
+      assert.match(result.errors.join("\n"), /LAN instances/);
+    }
+  }
+});
+
+test("indented verification commands reject literal LAN targets", () => {
+  for (const target of ["http://192.168.1.80/", "http://0xc0a80151/"]) {
+    for (const command of [
+      `Verification command:\n\n    curl ${target}\n    echo done`,
+      `- Verification command:\n\n      curl ${target}\n      echo done`,
+      `Verification command:\n\n    echo start\n    curl ${target}`,
+      `Verification command:\n\n\tcurl ${target}`,
+      `Verification command:\n\n    Exemption: curl ${target}`,
+      `Verification command:\n\n    - Exemption reason: command output\n      curl ${target}`,
+    ]) {
+      const result = lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n${command}`));
+      assert.equal(result.ok, false, command);
+      assert.match(result.errors.join("\n"), /LAN instances/);
+    }
+  }
+});
+
+test("literal code labels do not resolve document-wide LAN references", () => {
+  for (const code of ["```text\n[target]\n```", "Verification command:\n\n    [target]", "- Verification command:\n\n      [target]"]) {
+    const result = lintPrEvidence("[target]: http://192.168.1.80/\n\n" + bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n${code}`));
+    assert.equal(result.ok, true, result.errors.join("; "));
+  }
+  const result = lintPrEvidence("[target]: http://192.168.1.80/\n\n" + bodyWithEvidence("Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[target]"));
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+
+test("indented LAN commands outside Evidence remain outside the scan", () => {
+  const result = lintPrEvidence(bodyWithEvidence("Exemption: docs-only\n- Exemption reason: Updated docs.") + "\nVerification command:\n\n    curl http://192.168.1.80/\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+
+test("safe indented code cannot introduce metadata or section boundaries", () => {
+  const result = lintPrEvidence(bodyWithEvidence("Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\nVerification command:\n\n    ## Evidence\n    Exemption: docs-only\n    curl http://localhost:8080/"));
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+
+test("real exemption reasons retain literal code mentions", () => {
+  for (const code of ["  ```text\n  http://192.168.1.80/\n  ```", "      http://192.168.1.80/"]) {
+    const result = lintPrEvidence(bodyWithEvidence(`Exemption: docs-only\n- Exemption reason: Document the prohibited host.\n\n${code}`));
+    assert.equal(result.ok, true, result.errors.join("; "));
+  }
+});
