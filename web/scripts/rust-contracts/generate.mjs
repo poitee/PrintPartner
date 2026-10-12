@@ -1,3 +1,4 @@
+import process from "node:process";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";

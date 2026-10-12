@@ -10,8 +10,12 @@ pub enum Mode {
     Write,
 }
 
-fn default_count() -> WireInteger<0, 10> {
-    WireInteger::new(3).expect("bounded default")
+type DefaultCount = WireInteger<0, 10>;
+fn default_count() -> u64 {
+    3
+}
+fn bounded_count<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+    DefaultCount::deserialize(deserializer).map(DefaultCount::get)
 }
 fn optional_text<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
     String::deserialize(deserializer).map(Some)
@@ -33,8 +37,9 @@ pub struct SemanticFixture {
         schemars(with = "crate::autosave::RequiredNullable<String>")
     )]
     nullable: Option<String>,
-    #[serde(default = "default_count")]
-    defaulted: WireInteger<0, 10>,
+    #[serde(default = "default_count", deserialize_with = "bounded_count")]
+    #[cfg_attr(feature = "codegen", schemars(with = "DefaultCount"))]
+    defaulted: u64,
     mode: Mode,
     integer: WireInteger<0, MAX_SAFE_INTEGER>,
     date: CalendarDate,
@@ -72,7 +77,7 @@ impl schemars::JsonSchema for CalendarDate {
 impl SemanticFixture {
     pub fn parse(text: &str) -> Result<Self, String> {
         let value: Self = serde_json::from_str(text).map_err(|error| error.to_string())?;
-        if matches!(value.mode, Mode::Write) && value.defaulted.get() == 0 {
+        if matches!(value.mode, Mode::Write) && value.defaulted == 0 {
             return Err("write_requires_positive_default".into());
         }
         Ok(value)
@@ -99,29 +104,45 @@ pub fn parse_native(parser: &str, text: &str) -> Result<serde_json::Value, Strin
 }
 
 #[cfg(feature = "codegen")]
-pub fn export() -> serde_json::Value {
+pub fn export() -> Result<serde_json::Value, serde_json::Error> {
     use serde_json::json;
     let mut roots = serde_json::Map::new();
     roots.insert(
         "basis".into(),
-        serde_json::to_value(schemars::schema_for!(crate::PlanDraftBasis)).unwrap(),
+        serde_json::to_value(schemars::schema_for!(crate::PlanDraftBasis))?,
     );
     roots.insert(
         "identity".into(),
-        serde_json::to_value(schemars::schema_for!(crate::PlanDraftIdentity)).unwrap(),
+        serde_json::to_value(schemars::schema_for!(crate::PlanDraftIdentity))?,
     );
     roots.insert(
         "request".into(),
-        serde_json::to_value(schemars::schema_for!(crate::SavePlanChoicesRequest)).unwrap(),
+        serde_json::to_value(schemars::schema_for!(crate::SavePlanChoicesRequest))?,
     );
     roots.insert(
         "receipt".into(),
-        serde_json::to_value(schemars::schema_for!(crate::ApplyPlanDraftReceipt)).unwrap(),
+        serde_json::to_value(schemars::schema_for!(crate::ApplyPlanDraftReceipt))?,
     );
     roots.insert(
         "probe".into(),
-        serde_json::to_value(schemars::schema_for!(SemanticFixture)).unwrap(),
+        serde_json::to_value(schemars::schema_for!(SemanticFixture))?,
     );
-    json!({"generator": "rust-contracts-zod/1", "schemars": "0.8.22", "dialect": "http://json-schema.org/draft-07/schema#", "roots": roots,
-      "refinements": {"PlanDraftBasis":"basis-consistency", "SavePlanChoicesRequest":"request-consistency", "SemanticFixture":"write-positive-default"}})
+    Ok(
+        json!({"generator": "rust-contracts-zod/1", "schemars": "0.8.22", "dialect": "http://json-schema.org/draft-07/schema#", "roots": roots,
+      "refinements": {"PlanDraftBasis":"basis-consistency", "SavePlanChoicesRequest":"request-consistency", "SemanticFixture":"write-positive-default"}}),
+    )
+}
+
+#[cfg(feature = "codegen")]
+pub fn schema_bytes() -> Result<String, serde_json::Error> {
+    let mut schema = export()?;
+    schema.sort_all_objects();
+    Ok(format!("{}\n", serde_json::to_string_pretty(&schema)?))
+}
+#[cfg(feature = "codegen")]
+pub fn check_schema_file(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    if std::fs::read_to_string(path)? != schema_bytes()? {
+        return Err("Rust contract schema drift".into());
+    }
+    Ok(())
 }

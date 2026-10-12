@@ -98,12 +98,12 @@ fn ticket_t_63_contracts_rust_schema_artifact_rejects_drift() {
         "../../../../web/scripts/rust-contracts/schemas.json"
     ))
     .unwrap();
-    assert_eq!(pp_api_types::contracts::export(), checked);
+    assert_eq!(pp_api_types::contracts::export().unwrap(), checked);
 }
 
 #[cfg(feature = "codegen")]
 #[test]
-fn ticket_t_63_contracts_schema_cli_rejects_planted_drift() {
+fn ticket_t_63_contracts_schema_file_rejects_planted_drift() {
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -114,21 +114,13 @@ fn ticket_t_63_contracts_schema_cli_rejects_planted_drift() {
     ));
     let bytes = include_str!("../../../../web/scripts/rust-contracts/schemas.json");
     std::fs::write(&path, bytes).unwrap();
-    let check = || {
-        std::process::Command::new(env!("CARGO_BIN_EXE_export-rust-contracts"))
-            .arg("--check")
-            .arg(&path)
-            .output()
-            .unwrap()
-    };
-    assert!(check().status.success());
+    let check = || pp_api_types::contracts::check_schema_file(&path);
+    assert!(check().is_ok());
     std::fs::write(&path, format!("{bytes}\n")).unwrap();
     let result = check();
     std::fs::remove_file(path).unwrap();
-    assert!(!result.status.success());
-    assert!(
-        String::from_utf8(result.stderr)
-            .unwrap()
-            .contains("Rust contract schema drift")
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "Rust contract schema drift"
     );
 }

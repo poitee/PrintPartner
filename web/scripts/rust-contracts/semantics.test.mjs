@@ -1,7 +1,8 @@
+import process from "node:process";
 import assert from "node:assert/strict";
 import { readFileSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { pathToFileURL, fileURLToPath } from "node:url";
+import { URL, pathToFileURL, fileURLToPath } from "node:url";
 import test from "node:test";
 import { spawnSync } from "node:child_process";
 import { generate } from "./generate.mjs";
@@ -66,12 +67,12 @@ test("ticket_t_63_contracts_generator_fails_closed", () => {
     (doc) => {delete doc.refinements.SemanticFixture;},
     (doc) => {doc.roots.probe.properties.date = {type: "string", format: "unreviewed-format"};},
   ]) {
-    const doc = structuredClone(schemas); change(doc);
+    const doc = globalThis.structuredClone(schemas); change(doc);
     assert.throws(() => generate(doc), /Unsupported|Missing Rust refinement/);
   }
 });
 async function mutatedModule(change) {
-  const doc = structuredClone(schemas); change(doc);
+  const doc = globalThis.structuredClone(schemas); change(doc);
   const dir = mkdtempSync(fileURLToPath(new URL("./.control-", import.meta.url)));
   const output = join(dir, "generated.ts");
   writeFileSync(output, generate(doc));
