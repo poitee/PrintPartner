@@ -6209,3 +6209,11 @@ test('r34-html-hidden-image-does-not-count', () => {
     assert.equal(lintPrEvidence(body).ok, false);
   }
 });
+
+test('r34-cleared-startup-and-sftp-agent-flag', () => {
+  assertSafeCommand('sftp -A example.test');
+  for (const option of ['-i', '--ignore-environment', '-u BASH_ENV', '-uBASH_ENV', '-viuBASH_ENV', '--unset=BASH_ENV']) {
+    assertSafeCommand(`export BASH_ENV=startup.sh; env ${option} bash -c true`);
+  }
+  assert.equal(lintPrEvidence(commandEvidence('export BASH_ENV=startup.sh; env -u BASH_ENV BASH_ENV=other.sh bash -c true')).ok, false);
+});

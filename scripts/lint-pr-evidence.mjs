@@ -3734,7 +3734,7 @@ function sshTransferDestinations(client, args) {
   const hosts = [];
   let sshUnresolved = false;
   let operands = false;
-  const flags = client === "scp" ? "346ABCOpqRrsTv" : "46aCfpqrNv";
+  const flags = client === "scp" ? "346ABCOpqRrsTv" : "46AaCfpqrNv";
   const values = client === "scp" ? "cDFiJlopPSX" : "bBcDFiJloPRsSX";
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -3936,8 +3936,20 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
       const shellName = command[programAt]?.text.split("/").at(-1);
       if (!shell.sameShell && shellName === "bash") {
         let startup = shellVars.get("BASH_ENV");
-        for (const word of command.slice(0, programAt)) {
+        for (let index = 0; index < programAt; index += 1) {
+          const word = command[index];
           if (word.text.startsWith("BASH_ENV=")) startup = { value: word.text.slice(9), exported: true };
+          if (word.text.split("/").at(-1) !== "env") continue;
+          for (index += 1; index < programAt; index += 1) {
+            const option = command[index].text;
+            if (option === "--") break;
+            if (option === "-" || option === "-i" || option === "--ignore-environment") startup = null;
+            else if (option === "-u" || option === "--unset") {
+              if (command[++index]?.text === "BASH_ENV") startup = null;
+            } else if (option === "-uBASH_ENV" || option === "--unset=BASH_ENV") startup = null;
+            else if (["-C", "--chdir", "--argv0"].includes(option)) index += 1;
+            else if (!option.startsWith("-")) { index -= 1; break; }
+          }
         }
         if (startup?.exported && (startup.value || startup.substitution || startup.parameter || startup.arithmetic)) processSource = true;
       }
