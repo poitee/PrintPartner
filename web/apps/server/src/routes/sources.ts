@@ -66,6 +66,15 @@ function hostedSourceKindBlocked(
   return hostedPlanning && !hostedLibraryKindAllowed((kind ?? "github").toLowerCase());
 }
 
+async function discardSourceUploadStaging(
+  staging: string,
+  warn: (error: unknown) => void,
+): Promise<void> {
+  await rm(staging, { recursive: true, force: true }).catch((error: unknown) => {
+    warn(error);
+  });
+}
+
 async function refuseIfHostedQuotaExceeded(
   reply: import("fastify").FastifyReply,
   deps: RouteDeps,
@@ -411,54 +420,60 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
           quotaBytes: deps.hostedPlanning ? HOSTED_TENANT_DISK_QUOTA_BYTES : null,
           sourceIds: () => deps.repo.listSources().map((source) => source.id),
         }, async () => {
-          if (!deps.repo.getProjectRow(id)) return reply.status(404).send({ detail: "Source not found" });
-          const extractDir = writeUploadedZip(stagedZip, staging);
-          const { suggestedImportRules, stlCount } = finalizeUploadedSource(extractDir);
-          const artifacts = scanSourceArtifacts(extractDir);
-          const updated = await publishLocalSourceWorkingTree({
-            repo: deps.repo,
-            reposDir: deps.reposDir,
-            sourceId: id,
-            workingTree: extractDir,
-            observed,
-            preserveAllFiles: true,
-            suggestedImportRules,
-          });
-          const indexedDocs = updated.current_source_revision_id == null
-            ? null
-            : indexDocsForActivatedRevision({
+          try {
+            if (!deps.repo.getProjectRow(id)) return reply.status(404).send({ detail: "Source not found" });
+            const extractDir = writeUploadedZip(stagedZip, staging);
+            const { suggestedImportRules, stlCount } = finalizeUploadedSource(extractDir);
+            const artifacts = scanSourceArtifacts(extractDir);
+            const updated = await publishLocalSourceWorkingTree({
               repo: deps.repo,
+              reposDir: deps.reposDir,
               sourceId: id,
-              localPath: updated.local_path ?? extractDir,
-              revisionId: updated.current_source_revision_id,
+              workingTree: extractDir,
+              observed,
+              preserveAllFiles: true,
+              suggestedImportRules,
             });
-          if (indexedDocs?.outcome === "cleared") {
-            request.log.warn({ err: indexedDocs.reason, sourceId: id, revisionId: updated.current_source_revision_id }, "Uploaded Source documentation indexing failed");
-          }
-          if (deps.hostedPlanning) {
-            await removeObsoleteHostedWorkingTree({
-              sourcesDir: deps.sourcesDir,
-              sourceId: id,
-              activePath: updated.local_path,
-            }).catch((error: unknown) => {
-              request.log.warn({ err: error, sourceId: id }, "Obsolete hosted working tree cleanup failed");
+            const indexedDocs = updated.current_source_revision_id == null
+              ? null
+              : indexDocsForActivatedRevision({
+                repo: deps.repo,
+                sourceId: id,
+                localPath: updated.local_path ?? extractDir,
+                revisionId: updated.current_source_revision_id,
+              });
+            if (indexedDocs?.outcome === "cleared") {
+              request.log.warn({ err: indexedDocs.reason, sourceId: id, revisionId: updated.current_source_revision_id }, "Uploaded Source documentation indexing failed");
+            }
+            if (deps.hostedPlanning) {
+              await removeObsoleteHostedWorkingTree({
+                sourcesDir: deps.sourcesDir,
+                sourceId: id,
+                activePath: updated.local_path,
+              }).catch((error: unknown) => {
+                request.log.warn({ err: error, sourceId: id }, "Obsolete hosted working tree cleanup failed");
+              });
+            }
+            void prefetchSourceCover(deps, id);
+            return {
+              ...deps.repo.sourceSummaryForClient(updated),
+              imported_files: uploadedBytes,
+              stl_count: stlCount,
+              artifacts,
+              suggested_import_rules: suggestedImportRules,
+            };
+          } finally {
+            await discardSourceUploadStaging(staging, (error) => {
+              request.log.warn({ err: error }, "Source upload staging cleanup failed");
             });
           }
-          void prefetchSourceCover(deps, id);
-          return {
-            ...deps.repo.sourceSummaryForClient(updated),
-            imported_files: uploadedBytes,
-            stl_count: stlCount,
-            artifacts,
-            suggested_import_rules: suggestedImportRules,
-          };
         });
       } catch (error) {
         return reply.status(error instanceof TenantDiskQuotaError ? 413 : error instanceof SourceActivationConflictError ? 409 : 400)
           .send({ detail: error instanceof Error ? error.message : String(error) });
       }
     } finally {
-      await rm(staging, { recursive: true, force: true }).catch((error: unknown) => {
+      await discardSourceUploadStaging(staging, (error) => {
         request.log.warn({ err: error }, "Source upload staging cleanup failed");
       });
     }
@@ -546,54 +561,60 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
           quotaBytes: deps.hostedPlanning ? HOSTED_TENANT_DISK_QUOTA_BYTES : null,
           sourceIds: () => deps.repo.listSources().map((source) => source.id),
         }, async () => {
-          if (!deps.repo.getProjectRow(id)) return reply.status(404).send({ detail: "Source not found" });
-          const result = writeUploadedFiles(uploads, staging);
+          try {
+            if (!deps.repo.getProjectRow(id)) return reply.status(404).send({ detail: "Source not found" });
+            const result = writeUploadedFiles(uploads, staging);
 
-          const artifacts = scanSourceArtifacts(result.extractDir);
-          const updated = await publishLocalSourceWorkingTree({
-            repo: deps.repo,
-            reposDir: deps.reposDir,
-            sourceId: id,
-            workingTree: result.extractDir,
-            observed,
-            preserveAllFiles: true,
-            suggestedImportRules: result.suggestedImportRules,
-          });
-          const indexedDocs = updated.current_source_revision_id == null
-            ? null
-            : indexDocsForActivatedRevision({
+            const artifacts = scanSourceArtifacts(result.extractDir);
+            const updated = await publishLocalSourceWorkingTree({
               repo: deps.repo,
+              reposDir: deps.reposDir,
               sourceId: id,
-              localPath: updated.local_path ?? result.extractDir,
-              revisionId: updated.current_source_revision_id,
+              workingTree: result.extractDir,
+              observed,
+              preserveAllFiles: true,
+              suggestedImportRules: result.suggestedImportRules,
             });
-          if (indexedDocs?.outcome === "cleared") {
-            request.log.warn({ err: indexedDocs.reason, sourceId: id, revisionId: updated.current_source_revision_id }, "Uploaded Source documentation indexing failed");
-          }
-          if (deps.hostedPlanning) {
-            await removeObsoleteHostedWorkingTree({
-              sourcesDir: deps.sourcesDir,
-              sourceId: id,
-              activePath: updated.local_path,
-            }).catch((error: unknown) => {
-              request.log.warn({ err: error, sourceId: id }, "Obsolete hosted working tree cleanup failed");
+            const indexedDocs = updated.current_source_revision_id == null
+              ? null
+              : indexDocsForActivatedRevision({
+                repo: deps.repo,
+                sourceId: id,
+                localPath: updated.local_path ?? result.extractDir,
+                revisionId: updated.current_source_revision_id,
+              });
+            if (indexedDocs?.outcome === "cleared") {
+              request.log.warn({ err: indexedDocs.reason, sourceId: id, revisionId: updated.current_source_revision_id }, "Uploaded Source documentation indexing failed");
+            }
+            if (deps.hostedPlanning) {
+              await removeObsoleteHostedWorkingTree({
+                sourcesDir: deps.sourcesDir,
+                sourceId: id,
+                activePath: updated.local_path,
+              }).catch((error: unknown) => {
+                request.log.warn({ err: error, sourceId: id }, "Obsolete hosted working tree cleanup failed");
+              });
+            }
+            void prefetchSourceCover(deps, id);
+            return {
+              ...deps.repo.sourceSummaryForClient(updated),
+              imported_files: result.fileCount,
+              stl_count: result.stlCount,
+              artifacts,
+              suggested_import_rules: result.suggestedImportRules,
+            };
+          } finally {
+            await discardSourceUploadStaging(staging, (error) => {
+              request.log.warn({ err: error }, "Source upload staging cleanup failed");
             });
           }
-          void prefetchSourceCover(deps, id);
-          return {
-            ...deps.repo.sourceSummaryForClient(updated),
-            imported_files: result.fileCount,
-            stl_count: result.stlCount,
-            artifacts,
-            suggested_import_rules: result.suggestedImportRules,
-          };
         });
       } catch (error) {
         return reply.status(error instanceof TenantDiskQuotaError ? 413 : error instanceof SourceActivationConflictError ? 409 : 400)
           .send({ detail: error instanceof Error ? error.message : String(error) });
       }
     } finally {
-      await rm(staging, { recursive: true, force: true }).catch((error: unknown) => {
+      await discardSourceUploadStaging(staging, (error) => {
         request.log.warn({ err: error }, "Source upload staging cleanup failed");
       });
     }

@@ -21,7 +21,7 @@ import {
   runWithTenantDiskQuota,
   TenantDiskQuotaError,
 } from "../lib/tenant-disk-quota.js";
-import { SOURCE_SNAPSHOT_MANIFEST_FILE } from "./local-source-snapshot.js";
+import { LocalSourceSnapshotStore, SOURCE_SNAPSHOT_MANIFEST_FILE } from "./local-source-snapshot.js";
 import {
   SOURCE_PUBLICATION_UNAVAILABLE_DETAIL,
   indexDocsForActivatedRevision,
@@ -682,6 +682,45 @@ describe("candidate publication", () => {
   it("keeps the reused digest when the reuser registers first", async () => {
     await expectSharedDigestRace("reuser-first");
   }, 20_000);
+
+  it("removes the unreferenced snapshot when the Source disappears during first materialization", async () => {
+    const { sqlite, repo, source, workingTree } = fixture();
+    const real = LocalSourceSnapshotStore.prototype.materialize;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let ready!: () => void;
+    const materialized = new Promise<void>((resolve) => { ready = resolve; });
+    let snapshotPath = "";
+    const materialize = vi.spyOn(LocalSourceSnapshotStore.prototype, "materialize").mockImplementation(async function (
+      this: LocalSourceSnapshotStore,
+      input: Parameters<LocalSourceSnapshotStore["materialize"]>[0],
+    ) {
+      const result = await real.call(this, input);
+      snapshotPath = result.absolutePath;
+      ready();
+      await gate;
+      return result;
+    });
+    const pending = publishLocalSourceWorkingTree({
+      repo, reposDir: sqlite.reposDir, sourceId: source.id, workingTree,
+    });
+    try {
+      await materialized;
+      expect(existsSync(snapshotPath)).toBe(true);
+      expect(repo.deleteSource(source.id)).toEqual({ kind: "deleted" });
+      release();
+      await expect(pending).rejects.toThrow("Source not found");
+      expect(existsSync(snapshotPath)).toBe(false);
+      const revisions = join(sqlite.reposDir, String(source.id), "revisions");
+      expect(existsSync(revisions) ? readdirSync(revisions) : []).toEqual([]);
+      expect(repo.getSource(source.id)).toBeNull();
+    } finally {
+      release();
+      materialize.mockRestore();
+      await pending.catch(() => undefined);
+      sqlite.close();
+    }
+  });
 });
 
 async function expectSharedDigestRace(order: "creator-first" | "reuser-first") {

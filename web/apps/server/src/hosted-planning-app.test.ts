@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +10,8 @@ import { buildApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { HOSTED_FEATURE_DISABLED_DETAIL, HOSTED_LAN_DISABLED_DETAIL } from "./lib/hosted-planning-deny.js";
 import { assertSafeOutboundUrl, setPrivateOutboundDenied } from "./lib/outbound-url.js";
+import { tenantSourceUploadPrefix } from "./lib/secure-path.js";
+import { SOURCE_SNAPSHOT_MANIFEST_FILE } from "./services/local-source-snapshot.js";
 
 vi.mock("./services/local-source-revision.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./services/local-source-revision.js")>();
@@ -488,6 +490,129 @@ it("keeps a published upload successful when obsolete hosted tree cleanup fails"
   } finally {
     cleanup.mockReset();
     if (original) cleanup.mockImplementation(original);
+    await app.close();
+    await ports.db.close();
+  }
+});
+
+function fileBytes(path: string): number {
+  let total = 0;
+  for (const entry of readdirSync(path, { withFileTypes: true })) {
+    const child = join(path, entry.name);
+    if (entry.isDirectory()) total += fileBytes(child);
+    else if (entry.isFile()) total += statSync(child).size;
+  }
+  return total;
+}
+
+it("drops completed upload staging before a queued tenant upload measures quota", async () => {
+  const revision = await import("./services/local-source-revision.js");
+  const quota = await import("./lib/tenant-disk-quota.js");
+  const { app, ports } = await hostedApp();
+  const dataDir = ports.dataDir;
+  const firstStaging: string[] = [];
+  const realPublish = revision.publishLocalSourceWorkingTree;
+  let releaseFirst!: () => void;
+  const gate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  let hold!: () => void;
+  const held = new Promise<void>((resolve) => { hold = resolve; });
+  let publishedPath = "";
+  const publish = vi.spyOn(revision, "publishLocalSourceWorkingTree").mockImplementation(async (...args) => {
+    const result = await realPublish(...args);
+    if (publish.mock.calls.length === 1) {
+      publishedPath = result.local_path ?? "";
+      hold();
+      await gate;
+    }
+    return result;
+  });
+  const realMeasure = quota.measureTenantDiskUsage;
+  const realCharge = quota.chargeTenantDiskBytes;
+  let countCharges = false;
+  let charged = 0;
+  const charge = vi.spyOn(quota, "chargeTenantDiskBytes").mockImplementation((amount: number) => {
+    if (countCharges) charged += amount;
+    realCharge(amount);
+  });
+  let stagingPresentAtQueuedScan: boolean | null = null;
+  let queuedUsage = 0;
+  const realRun = quota.runWithTenantDiskQuota;
+  let quotaEntries = 0;
+  let secondQueued!: () => void;
+  const secondWaiting = new Promise<void>((resolve) => { secondQueued = resolve; });
+  const run = vi.spyOn(quota, "runWithTenantDiskQuota").mockImplementation(async (input, work) => {
+    quotaEntries += 1;
+    const entry = quotaEntries;
+    if (entry === 2) queueMicrotask(() => secondQueued());
+    return realRun(input, async () => {
+      if (entry === 2) {
+        stagingPresentAtQueuedScan = firstStaging.some((name) => existsSync(join(dataDir, "sources", name)));
+        queuedUsage = await realMeasure({
+          dataDir: input.dataDir,
+          reposDir: input.reposDir,
+          tenantId: input.tenantId,
+          sourceIds: input.sourceIds(),
+        });
+        countCharges = true;
+      }
+      try {
+        return await work();
+      } finally {
+        if (entry === 2) countCharges = false;
+      }
+    });
+  });
+  try {
+    const registration = await app.inject({ method: "POST", url: "/auth/register", payload: {
+      email: "quota-race@example.com", password: "correct-horse-battery",
+    } });
+    const user = registration.json<{ user: { user_id: string } }>().user;
+    const cookie = String(registration.headers["set-cookie"]).split(";")[0]!;
+    const source = await app.inject({ method: "POST", url: "/sources", headers: { cookie },
+      payload: { name: "Quota race", source_kind: "archive" } });
+    expect(source.statusCode).toBe(200);
+    const id = source.json<{ id: number }>().id;
+    const bytes = 4096;
+    const upload = (content: Buffer) => app.inject({
+      method: "POST",
+      url: `/sources/${id}/upload-files`,
+      headers: { cookie, "content-type": "multipart/form-data; boundary=quota-race" },
+      payload: Buffer.concat([
+        Buffer.from("--quota-race\r\nContent-Disposition: form-data; name=\"files\"; filename=\"part.stl\"\r\nContent-Type: application/octet-stream\r\n\r\n"),
+        content,
+        Buffer.from("\r\n--quota-race--\r\n"),
+      ]),
+    });
+    const first = upload(Buffer.alloc(bytes, 0x61));
+    await held;
+    const prefix = tenantSourceUploadPrefix(user.user_id);
+    firstStaging.push(...readdirSync(join(dataDir, "sources")).filter((name) => name.startsWith(prefix)));
+    expect(firstStaging).toHaveLength(1);
+    const stagingPath = join(dataDir, "sources", firstStaging[0]!);
+    expect(existsSync(stagingPath)).toBe(true);
+    const stagingBytes = fileBytes(stagingPath);
+    const manifestLen = statSync(join(publishedPath, SOURCE_SNAPSHOT_MANIFEST_FILE)).size;
+    const exportDir = (await import("./lib/secure-path.js")).tenantExportDirectory(join(dataDir, "exports"), user.user_id);
+    mkdirSync(exportDir, { recursive: true });
+    const filler = join(exportDir, "quota-race");
+    writeFileSync(filler, "");
+    truncateSync(filler, HOSTED_TENANT_DISK_QUOTA_BYTES - (4 * bytes + 2 * manifestLen));
+    const second = upload(Buffer.alloc(bytes, 0x62));
+    await secondWaiting;
+    expect(stagingPresentAtQueuedScan).toBeNull();
+    releaseFirst();
+    const [firstResponse, secondResponse] = await Promise.all([first, second]);
+    expect(firstResponse.statusCode).toBe(200);
+    expect(secondResponse.statusCode).toBe(200);
+    expect(stagingPresentAtQueuedScan).toBe(false);
+    expect(charged).toBeGreaterThan(0);
+    expect(queuedUsage + charged).toBeLessThanOrEqual(HOSTED_TENANT_DISK_QUOTA_BYTES);
+    expect(queuedUsage + stagingBytes + charged).toBeGreaterThan(HOSTED_TENANT_DISK_QUOTA_BYTES);
+  } finally {
+    releaseFirst();
+    publish.mockRestore();
+    charge.mockRestore();
+    run.mockRestore();
     await app.close();
     await ports.db.close();
   }

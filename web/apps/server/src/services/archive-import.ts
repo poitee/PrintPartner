@@ -84,6 +84,7 @@ function processZipFile(
   const base = resolve(destDir ?? ".");
   if (destDir) mkdirSync(base, { recursive: true });
   const targets = new Set<string>();
+  const foldedTargets = new Set<string>();
   let completed = 0;
   let totalBytes = 0;
   let stlCount = 0;
@@ -114,8 +115,12 @@ function processZipFile(
       file.terminate();
       return;
     }
-    if (targets.has(target)) throw new Error(`Archive has duplicate path: ${entryName}`);
+    const folded = caseFoldedArchivePath(entryName);
+    if (targets.has(target) || foldedTargets.has(folded)) {
+      throw new Error(`Archive has duplicate path: ${entryName}`);
+    }
     targets.add(target);
+    foldedTargets.add(folded);
     const directory = entryName.endsWith("/");
     if (directory && destDir) mkdirSync(target, { recursive: true });
     if (file.originalSize != null && (totalBytes + file.originalSize > maxBytes || file.originalSize > budget.remainingBytes)) {
@@ -205,6 +210,10 @@ export async function streamSourceUpload(
   await pipeline(file, budget, createWriteStream(path, { flags: "wx" }));
   if (file.truncated) throw new SourceUploadTooLargeError();
   return written;
+}
+
+function caseFoldedArchivePath(entryName: string): string {
+  return entryName.replace(/\/+$/, "").toLocaleLowerCase("en-US");
 }
 
 function sanitizeRelativeEntryPath(relativePath: string): string {
@@ -320,12 +329,17 @@ export function writeUploadedFiles(
   mkdirSync(extractDir);
   const base = resolve(extractDir);
   const targets = new Set<string>();
+  const foldedTargets = new Set<string>();
   let stlCount = 0;
   try {
     for (const file of staged) {
       const target = resolveSafeTarget(base, file.relativePath);
-      if (targets.has(target)) throw new Error(`Duplicate uploaded file path: ${file.relativePath}`);
+      const folded = caseFoldedArchivePath(sanitizeRelativeEntryPath(file.relativePath));
+      if (targets.has(target) || foldedTargets.has(folded)) {
+        throw new Error(`Duplicate uploaded file path: ${file.relativePath}`);
+      }
       targets.add(target);
+      foldedTargets.add(folded);
       mkdirSync(dirname(target), { recursive: true });
       renameSync(file.path, target);
       if (file.relativePath.toLowerCase().endsWith(".stl")) stlCount += 1;

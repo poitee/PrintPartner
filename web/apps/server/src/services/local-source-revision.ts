@@ -401,9 +401,8 @@ function releaseUnreferencedSnapshot(
   if (resolve(snapshot.absolutePath) !== expected) return;
   repo.transaction(() => {
     if (sharedSnapshotHolderCount(expected) > 0) return;
-    const referenced = repo.listSourceRevisions(sourceId).some(
-      (revision) => revision.snapshot_locator === snapshot.snapshotLocator,
-    );
+    const referenced = repo.sourceRevisionSnapshotLocators(sourceId)
+      .some((locator) => locator === snapshot.snapshotLocator);
     if (referenced) return;
     if (resolve(snapshot.absolutePath) !== expected) return;
     rmSync(expected, { recursive: true, force: true });

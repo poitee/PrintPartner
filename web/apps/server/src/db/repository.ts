@@ -2914,6 +2914,21 @@ export class AppRepository {
     return row ? sourceRevision(row) : null;
   }
 
+  /** Revision locators for cleanup. A deleted Source has no row and no references. */
+  sourceRevisionSnapshotLocators(sourceId: number): string[] {
+    return this.db
+      .select({ snapshotLocator: this.schema.sourceRevisions.snapshotLocator })
+      .from(this.schema.sourceRevisions)
+      .where(
+        and(
+          eq(this.schema.sourceRevisions.tenantId, this.tenantId),
+          eq(this.schema.sourceRevisions.projectId, sourceId),
+        ),
+      )
+      .all()
+      .map((row) => row.snapshotLocator);
+  }
+
   listSourceRevisions(sourceId: number): SourceRevision[] {
     if (!this.getProjectRow(sourceId)) throw new Error("Source not found");
     return this.db

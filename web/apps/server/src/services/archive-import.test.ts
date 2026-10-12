@@ -162,6 +162,31 @@ describe("archive extraction hardening", () => {
     }
   });
 
+  it.each(["zip", "files"])("rejects case-equivalent %s targets before either name can replace the other", (kind) => {
+    const root = tempRoot();
+    const distinct = Buffer.from("distinct part");
+    const folded = Buffer.from("folded part");
+    try {
+      if (kind === "files") {
+        const staging = createSourceUploadStaging(root, "default");
+        const first = staged("Part.stl", distinct);
+        const second = staged("part.stl", folded);
+        expect(() => writeUploadedFiles([first, second], staging)).toThrow(/Duplicate uploaded file path: part\.stl/);
+        expect(existsSync(join(staging, "files"))).toBe(false);
+        expect(readFileSync(second.path)).toEqual(folded);
+      } else {
+        const zip = new AdmZip();
+        zip.addFile("Part.stl", distinct);
+        zip.addFile("part.stl", folded);
+        const staging = createSourceUploadStaging(root, "default");
+        expect(() => writeUploadedZip(stagedFile(zip.toBuffer()), staging)).toThrow(/Archive has duplicate path: part\.stl/);
+        expect(existsSync(join(staging, "files"))).toBe(false);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("extracts a normal archive and counts STL files", () => {
     const root = tempRoot();
     const zip = new AdmZip();
