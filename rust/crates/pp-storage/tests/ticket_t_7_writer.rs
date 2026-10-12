@@ -2,7 +2,7 @@ use pp_storage::{
     Limits, Setting, SettingCommand, SettingSnapshot, WriterOwner, lease::record_child,
 };
 use std::{
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::mpsc,
@@ -82,19 +82,19 @@ fn production_node() -> Option<PathBuf> {
     None
 }
 
-fn read_ready(stdout: impl std::io::Read + Send + 'static) -> String {
+fn read_ready<R: BufRead + Send + 'static>(mut stdout: R) -> (String, R) {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let mut line = String::new();
-        let result = BufReader::new(stdout).read_line(&mut line);
-        let _ = tx.send((result.map(|_| ()), line));
+        let result = stdout.read_line(&mut line);
+        let _ = tx.send((result.map(|_| ()), line, stdout));
     });
-    let (result, line) = rx
+    let (result, line, stdout) = rx
         .recv_timeout(Duration::from_secs(30))
         .expect("storage-fixture ready timed out");
     result.expect("storage-fixture stdout");
     assert!(!line.is_empty(), "storage-fixture exited before ready");
-    line
+    (line, stdout)
 }
 
 fn snapshot(dir: &Path, tenant: &str, key: &str) -> SettingSnapshot {
@@ -122,7 +122,7 @@ fn ticket_t_7_writer_reopens_after_clean_process_exit() {
         .unwrap();
     let stdout = child.stdout.take().unwrap();
     let mut process = StopProcess(Some(child));
-    let ready = read_ready(stdout);
+    let (ready, _) = read_ready(BufReader::new(stdout));
     assert!(ready.contains("\"version\""), "{ready}");
     let status = process.0.as_mut().unwrap().wait().unwrap();
     assert!(status.success(), "{status}");
@@ -156,7 +156,7 @@ fn ticket_t_7_writer_survives_kill_and_live_node_child() {
         .unwrap();
     let stdout = child.stdout.take().unwrap();
     let mut owner_process = StopProcess(Some(child));
-    let ready = read_ready(stdout);
+    let (ready, stdout) = read_ready(BufReader::new(stdout));
     assert!(ready.starts_with('{'), "{ready}");
     let live = match WriterOwner::open(&dir, Limits::default()) {
         Ok(_) => panic!("second runtime opened the held directory"),
@@ -176,8 +176,25 @@ fn ticket_t_7_writer_survives_kill_and_live_node_child() {
             .stderr(Stdio::null())
             .spawn()
             .unwrap();
-        record_child(&dir, node_child.id()).unwrap();
+        let pid = node_child.id();
         node_process = Some(StopProcess(Some(node_child)));
+        let denied = record_child(&dir, pid).unwrap_err().to_string();
+        assert!(denied.contains("belongs to another process"), "{denied}");
+        assert_eq!(
+            std::fs::read(dir.join(".desktop-owner.json")).unwrap(),
+            marker_before
+        );
+        writeln!(
+            owner_process.0.as_mut().unwrap().stdin.as_mut().unwrap(),
+            "{}",
+            serde_json::json!({"command": "record-child", "pid": pid})
+        )
+        .unwrap();
+        let (recorded, _) = read_ready(stdout);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&recorded).unwrap(),
+            serde_json::json!({"child_pid": pid})
+        );
     }
     owner_process.0.as_mut().unwrap().kill().unwrap();
     let killed = owner_process.0.as_mut().unwrap().wait().unwrap();

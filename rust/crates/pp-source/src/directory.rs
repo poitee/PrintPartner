@@ -54,11 +54,18 @@ impl Directory {
 
     fn check_ancestor(&self, uid: u32, allow_sticky: bool) -> Result<()> {
         let stat = fs::fstat(&self.0)?;
-        if ancestor_is_trusted(stat.st_uid, stat.st_mode as RawMode, uid, allow_sticky) {
-            Ok(())
-        } else {
-            Err(Error::UnsafeAncestor)
+        if !ancestor_is_trusted(stat.st_uid, stat.st_mode as RawMode, uid, allow_sticky) {
+            return Err(Error::UnsafeAncestor);
         }
+        // ACLs supplement mode bits on macOS; read them from the same handle.
+        #[cfg(target_os = "macos")]
+        {
+            use std::os::fd::AsFd;
+            if !crate::acl::entries_are_trusted(&crate::acl::read(self.0.as_fd())?, uid) {
+                return Err(Error::UnsafeAcl);
+            }
+        }
+        Ok(())
     }
 
     fn search_flags() -> OFlags {
@@ -237,6 +244,9 @@ mod tests {
     }
     impl Drop for Tree {
         fn drop(&mut self) {
+            // Deny entries can block cleanup, so strip every ACL first.
+            #[cfg(target_os = "macos")]
+            chmod(&["-R", "-N"], &self.0);
             fs::remove_dir_all(&self.0).unwrap();
         }
     }
@@ -333,6 +343,142 @@ mod tests {
         for mode in [0o1777, 0o1770, 0o1707] {
             let tree = Tree::new().dir("repos", mode);
             assert!(matches!(tree.open("repos"), Err(Error::UnsafeAncestor)));
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn chmod(args: &[&str], path: &std::path::Path) {
+        let status = crate::test_process::command("/bin/chmod")
+            .args(args)
+            .arg(path)
+            .status()
+            .unwrap();
+        assert!(status.success(), "chmod {args:?} {}", path.display());
+    }
+
+    #[cfg(target_os = "macos")]
+    mod macos_acl {
+        use super::*;
+
+        impl Tree {
+            /// Appends `entry` (chmod +a syntax) to the ACL of `name`.
+            fn acl(self, name: &str, entry: &str) -> Self {
+                chmod(&["+a", entry], &self.0.join(name));
+                self
+            }
+        }
+
+        fn me() -> String {
+            let out = crate::test_process::command("/usr/bin/id")
+                .arg("-un")
+                .output()
+                .unwrap();
+            String::from_utf8(out.stdout).unwrap().trim().to_owned()
+        }
+
+        fn unsafe_acl(result: Result<Directory>) -> bool {
+            matches!(result, Err(Error::UnsafeAcl))
+        }
+
+        #[test]
+        fn foreign_write_grant_on_0755_root_is_rejected() {
+            for rights in [
+                "add_file",
+                "add_subdirectory",
+                "delete_child",
+                "delete",
+                "writesecurity",
+                "chown",
+                "writeattr",
+                "writeextattr",
+            ] {
+                let tree = Tree::new()
+                    .dir("repos", 0o755)
+                    .acl("repos", &format!("user:nobody allow {rights}"));
+                assert!(unsafe_acl(tree.open("repos")), "{rights}");
+            }
+        }
+
+        #[test]
+        fn foreign_write_grant_on_ancestor_is_rejected() {
+            let tree = Tree::new()
+                .dir("parent", 0o755)
+                .dir("parent/repos", 0o700)
+                .acl("parent", "group:everyone allow delete_child");
+            assert!(unsafe_acl(tree.open("parent/repos")));
+            // Groups are foreign principals, even the user's own.
+            let tree = Tree::new()
+                .dir("parent", 0o755)
+                .dir("parent/repos", 0o700)
+                .acl("parent", "group:staff allow add_subdirectory");
+            assert!(unsafe_acl(tree.open("parent/repos")));
+        }
+
+        #[test]
+        fn earlier_deny_does_not_excuse_grant() {
+            let tree = Tree::new()
+                .dir("repos", 0o755)
+                .acl("repos", "user:nobody allow add_file")
+                .acl("repos", "user:nobody deny add_file");
+            assert!(unsafe_acl(tree.open("repos")));
+        }
+
+        #[test]
+        fn inheritable_and_inherited_grants_are_rejected() {
+            let tree = Tree::new().dir("parent", 0o755).acl(
+                "parent",
+                "user:nobody allow add_file,directory_inherit,only_inherit",
+            );
+            // Stricter than the kernel: inherit-only grants still count.
+            assert!(unsafe_acl(tree.open("parent")));
+            let tree = tree.dir("parent/repos", 0o700);
+            chmod(&["-N"], &tree.0.join("parent"));
+            assert!(tree.open("parent").is_ok());
+            // The child received an effective, inherited copy of the grant.
+            assert!(unsafe_acl(tree.open("parent/repos")));
+        }
+
+        #[test]
+        fn owned_roots_without_unsafe_grants_are_accepted() {
+            let tree = Tree::new().dir("repos", 0o755).dir("repos/nested", 0o700);
+            assert!(tree.open("repos").is_ok());
+            assert!(tree.open("repos/nested").is_ok());
+            let tree = tree
+                .acl(
+                    "repos",
+                    &format!(
+                        "user:{} allow add_file,delete_child,writesecurity,chown",
+                        me()
+                    ),
+                )
+                .acl("repos", "user:root allow add_file")
+                .acl(
+                    "repos",
+                    "user:nobody allow list,search,readattr,readextattr,readsecurity",
+                );
+            assert!(tree.open("repos/nested").is_ok());
+        }
+
+        #[test]
+        fn deny_only_acls_are_accepted() {
+            // Like ~/Documents: everyone is denied deleting the directory.
+            let tree = Tree::new()
+                .dir("parent", 0o755)
+                .dir("parent/repos", 0o700)
+                .acl("parent", "group:everyone deny delete")
+                .acl("parent/repos", "group:everyone deny add_file,delete_child");
+            assert!(tree.open("parent/repos").is_ok());
+        }
+
+        #[test]
+        fn sticky_intermediate_ancestors() {
+            let tree = Tree::new().dir("tmp", 0o1777).dir("tmp/repos", 0o700);
+            assert!(tree.open("tmp/repos").is_ok());
+            let tree = tree.acl("tmp", "group:everyone deny delete");
+            assert!(tree.open("tmp/repos").is_ok());
+            // Stricter than the mode check: ACL grants are not sticky-bounded.
+            let tree = tree.acl("tmp", "user:nobody allow add_file");
+            assert!(unsafe_acl(tree.open("tmp/repos")));
         }
     }
 }
