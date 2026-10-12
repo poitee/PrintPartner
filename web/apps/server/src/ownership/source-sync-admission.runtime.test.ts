@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
-  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -12,16 +11,26 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative, sep } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildApp, createPorts } from "../app.js";
+import Database from "better-sqlite3";
+import { buildApp, createPorts, startServer } from "../app.js";
 import { loadConfig } from "../config.js";
 import { installedSourceSyncWatchers } from "../services/source-watcher.js";
-import { OwnershipAdmissionError, sourceSyncAdmissionReceiptPath } from "./source-sync-admission.js";
+import {
+  SOURCE_SYNC_OPERATION,
+  SOURCE_SYNC_PARTICIPANTS,
+  admitSourceSyncManifest,
+  defaultSourceSyncManifestPath,
+  packagedSourceSyncManifestPath,
+  parseSourceSyncAdmissionReceipt,
+  OwnershipAdmissionError,
+  sourceSyncAdmissionReceiptPath,
+  type SourceSyncAdmissionReceipt,
+} from "./source-sync-admission.js";
 
-const proofRoot = "/persist/worktrees/printpartner-merge-20261012/wave-2/gre402-runtime-admission-proof";
-mkdirSync(proofRoot, { recursive: true });
 const sourceDir = dirname(fileURLToPath(import.meta.url));
 
 const packagedManifest = join(sourceDir, "../data/source-sync-ownership.json");
@@ -63,7 +72,7 @@ function restoreEnv(name: string, value: string | undefined): void {
 }
 
 function scratch(name: string): string {
-  const dir = mkdtempSync(join(proofRoot, `${name}-`));
+  const dir = mkdtempSync(join(tmpdir(), `print-partner-source-sync-${name}-`));
   scratchDirs.push(dir);
   return dir;
 }
@@ -288,7 +297,7 @@ describe("Source Sync Fastify admission", () => {
       owner: "node",
       admission_count: 1,
     });
-    expect(firstParsed.participant_count).toBeGreaterThan(0);
+    expect(firstParsed.participant_count).toBe(SOURCE_SYNC_PARTICIPANTS.length);
     expect(firstParsed.worker_pid).toBe(process.pid);
     expect(installedSourceSyncWatchers()).toBe(1);
 
@@ -300,6 +309,33 @@ describe("Source Sync Fastify admission", () => {
     expect(created.statusCode).toBe(200);
     const source = created.json() as { id: number; local_path: string | null };
     expect(source.local_path).toBeTruthy();
+    const createdAlias = await started.app.inject({
+      method: "POST",
+      url: "/api/v1/sources",
+      headers: { authorization: "Bearer test-mcp-key" },
+      payload: { name: "Local fixture alias", source_kind: "local" },
+    });
+    expect(createdAlias.statusCode, createdAlias.body).toBe(200);
+    const syncAction = {
+      type: "start_sync",
+      plan_id: 1,
+      label: "Sync",
+      summary: "Sync",
+      params: { project_ids: [source.id] },
+    };
+    const applied = await started.app.inject({
+      method: "POST",
+      url: "/assistant/actions/apply",
+      payload: { action: { ...syncAction, id: "apply-sync" } },
+    });
+    expect(applied.statusCode, applied.body).toBe(200);
+    const appliedAlias = await started.app.inject({
+      method: "POST",
+      url: "/api/v1/assistant/actions/apply",
+      headers: { authorization: "Bearer test-mcp-key" },
+      payload: { action: { ...syncAction, id: "apply-sync-v1" } },
+    });
+    expect(appliedAlias.statusCode, appliedAlias.body).toBe(200);
     const fixture = join(source.local_path!, "fixture.txt");
     mkdirSync(source.local_path!, { recursive: true });
     writeFileSync(fixture, "owned-local-fixture");
@@ -381,7 +417,11 @@ describe("Source Sync Fastify admission", () => {
     expect(confirmedBody.ok).toBe(true);
     expect(confirmedBody.job_id).toBeTruthy();
 
-    for (const jobId of [directJob, aliasJob, confirmedBody.job_id!]) {
+    const appliedJob = (applied.json() as { job_id?: string }).job_id;
+    const appliedAliasJob = (appliedAlias.json() as { job_id?: string }).job_id;
+    expect(appliedJob).toBeTruthy();
+    expect(appliedAliasJob).toBeTruthy();
+    for (const jobId of [directJob, aliasJob, confirmedBody.job_id!, appliedJob!, appliedAliasJob!]) {
       const job = await waitJob(started.app, jobId);
       expect(job.status).toBe("done");
       expect(job.result?.synced).toBeGreaterThan(0);
@@ -408,7 +448,10 @@ describe("Source Sync Fastify admission", () => {
     const sources = (await started.app.inject({ method: "GET", url: "/sources" })).json() as {
       sources: Array<{ name: string }>;
     };
-    expect(sources.sources.map((item) => item.name)).toEqual(["Local fixture"]);
+    expect(sources.sources.map((item) => item.name).sort()).toEqual([
+      "Local fixture",
+      "Local fixture alias",
+    ]);
     expect(readFileSync(receiptPath, "utf8")).toBe(firstReceipt);
     expect(createHash("sha256").update(readFileSync(fixture)).digest("hex")).toBe(fixtureHash);
 
@@ -425,18 +468,122 @@ describe("Source Sync Fastify admission", () => {
     await restarted.ports.db.close();
     openApps.splice(openApps.indexOf(restarted), 1);
     rmSync(dir, { recursive: true, force: true });
-  }, 30_000);
+  }, 60_000);
 
-  it("loads the manifest from a web-only dist layout and reuses one receipt", () => {
-    const built = join(sourceDir, "../../dist/current");
-    const modulePath = join(built, "ownership/source-sync-admission.js");
-    expect(existsSync(modulePath), "server package has not been built").toBe(true);
+  it("census admits every live source sync entry", () => {
+    const prior = process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST;
+    delete process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST;
+    try {
+      const packaged = packagedSourceSyncManifestPath();
+      expect(defaultSourceSyncManifestPath()).toBe(packaged);
+      const text = readFileSync(packaged, "utf8");
+      const admitted = admitSourceSyncManifest(text);
+      expect(admitted.operation).toBe(SOURCE_SYNC_OPERATION);
+      expect([...admitted.participantIds].sort()).toEqual([...SOURCE_SYNC_PARTICIPANTS].sort());
+      const receipt: SourceSyncAdmissionReceipt = {
+        operation: "source.sync",
+        owner: "node",
+        worker_pid: 1,
+        admission_count: 1,
+        participant_count: SOURCE_SYNC_PARTICIPANTS.length,
+        manifest_sha256: admitted.manifestSha256,
+      };
+      expect(
+        parseSourceSyncAdmissionReceipt(JSON.stringify(receipt), SOURCE_SYNC_PARTICIPANTS.length)
+          .participant_count,
+      ).toBe(SOURCE_SYNC_PARTICIPANTS.length);
+    } finally {
+      if (prior === undefined) delete process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST;
+      else process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST = prior;
+    }
+  });
+
+  it("refuses standalone startup before sqlite upgrade when the receipt is corrupt", async () => {
+    const dir = scratch("startup-corrupt");
+    const receiptPath = sourceSyncAdmissionReceiptPath(dir);
+    writeFileSync(receiptPath, "null");
+    const receiptBefore = readFileSync(receiptPath);
+    const dbPath = join(dir, "print-partner.db");
+    const sqlite = new Database(dbPath);
+    sqlite.close();
+    const dbBefore = readFileSync(dbPath);
+    installManifest(packagedManifest, dir);
+    await expect(startServer(loadConfig())).rejects.toThrow(/admission receipt/);
+    expect(existsSync(join(dir, "backups"))).toBe(false);
+    expect(existsSync(`${dbPath}-wal`)).toBe(false);
+    expect(readFileSync(dbPath)).toEqual(dbBefore);
+    expect(readFileSync(receiptPath)).toEqual(receiptBefore);
+  });
+
+  it("refuses stdio MCP before opening the database when the receipt is corrupt", () => {
+    const dir = scratch("stdio-corrupt");
+    const receiptPath = sourceSyncAdmissionReceiptPath(dir);
+    writeFileSync(receiptPath, "null");
+    const receiptBefore = readFileSync(receiptPath);
+    const tsx = join(sourceDir, "../../../../node_modules/tsx/dist/cli.mjs");
+    const started = spawnSync(
+      process.execPath,
+      [tsx, join(sourceDir, "../mcp/stdio-server.ts")],
+      {
+        encoding: "utf8",
+        timeout: 20_000,
+        input: "",
+        env: {
+          ...process.env,
+          DEPLOY_MODE: "self-host",
+          HOST: "127.0.0.1",
+          PRINT_PARTNER_DATA_DIR: dir,
+          PRINT_PARTNER_API_KEY: "test-mcp-key",
+          PP_SOURCE_SYNC_OWNERSHIP_MANIFEST: packagedManifest,
+        },
+      },
+    );
+    expect(started.status, `${started.stdout}\n${started.stderr}`).toBe(1);
+    expect(`${started.stdout}\n${started.stderr}`).toMatch(/admission receipt/);
+    expect(existsSync(join(dir, "print-partner.db"))).toBe(false);
+    expect(readFileSync(receiptPath)).toEqual(receiptBefore);
+  });
+
+  it("builds a fresh server package into a temporary directory and reuses one receipt", async () => {
+    const webRoot = join(sourceDir, "../../../..");
+    for (const [workspace, index] of [
+      ["@print-partner/contracts", join(webRoot, "packages/contracts/dist/current/index.js")],
+      ["@print-partner/domain", join(webRoot, "packages/domain/dist/current/index.js")],
+    ] as const) {
+      if (existsSync(index)) continue;
+      const dependency = spawnSync("npm", ["run", "build", "-w", workspace], {
+        cwd: webRoot,
+        encoding: "utf8",
+      });
+      expect(dependency.status, `${dependency.stdout}\n${dependency.stderr}`).toBe(0);
+    }
+
     const layout = scratch("layout");
-    const serverRoot = join(layout, "apps/server");
-    const current = join(serverRoot, "dist/current");
-    mkdirSync(serverRoot, { recursive: true });
-    writeFileSync(join(serverRoot, "package.json"), JSON.stringify({ type: "module" }));
-    cpSync(built, current, { recursive: true, dereference: true });
+    const outputDirectory = join(layout, "apps/server/dist");
+    const builder = join(webRoot, "scripts/atomic-package-build.mjs");
+    const buildScript = join(layout, "build-once.mjs");
+    writeFileSync(
+      buildScript,
+      [
+        `import { buildPackageAtomically } from ${JSON.stringify(builder)};`,
+        "await buildPackageAtomically({",
+        "  packageDirectory: process.argv[2],",
+        "  project: \"tsconfig.build.json\",",
+        "  outputDirectory: process.argv[3],",
+        "  copies: [{ source: \"src/data\", target: \"data\" }],",
+        "  requiredFiles: [\"data/source-sync-ownership.json\"],",
+        "});",
+      ].join("\n"),
+    );
+    const built = spawnSync(
+      process.execPath,
+      [buildScript, join(sourceDir, "../.."), outputDirectory],
+      { encoding: "utf8" },
+    );
+    expect(built.status, `${built.stdout}\n${built.stderr}`).toBe(0);
+    const current = join(outputDirectory, "current");
+    const modulePath = join(current, "ownership/source-sync-admission.js");
+    expect(existsSync(modulePath)).toBe(true);
     expect(existsSync(join(layout, "rust"))).toBe(false);
     const manifest = join(current, "data/source-sync-ownership.json");
     expect(statSync(manifest).isFile()).toBe(true);
@@ -461,13 +608,17 @@ describe("Source Sync Fastify admission", () => {
         "console.log(JSON.stringify({ manifest, owner: first.owner, admission_count: first.admission_count }));",
       ].join("\n"),
     );
-    const admitted = spawnSync(process.execPath, [proof, dataDir], { encoding: "utf8" });
+    const env = { ...process.env };
+    delete env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST;
+    const admitted = spawnSync(process.execPath, [proof, dataDir], { encoding: "utf8", env });
     expect(admitted.status, `${admitted.stdout}\n${admitted.stderr}`).toBe(0);
     expect(admitted.stdout).toMatch(/"admission_count":1/);
     renameSync(manifest, `${manifest}.hidden`);
-    const missing = spawnSync(process.execPath, [proof, join(layout, "missing-data")], { encoding: "utf8" });
+    const missing = spawnSync(process.execPath, [proof, join(layout, "missing-data")], {
+      encoding: "utf8",
+      env,
+    });
     expect(missing.status).not.toBe(0);
     expect(`${missing.stdout}\n${missing.stderr}`).toMatch(/packaged source sync ownership manifest is missing/);
-    rmSync(layout, { recursive: true, force: true });
-  });
+  }, 240_000);
 });

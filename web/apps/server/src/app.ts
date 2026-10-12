@@ -557,6 +557,7 @@ async function configureApp(app: FastifyInstance, config: ServerConfig, ports: R
 export async function startServer(config: ServerConfig) {
   const releaseOwner = acquireDataDirectory(config.dataDir);
   try {
+    beginSourceSyncAdmission(config.dataDir);
     validateProductionConfig(config);
     if (!config.databaseUrl) {
       const preparation = await prepareSqliteUpgrade({

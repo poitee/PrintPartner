@@ -20,6 +20,7 @@ import { loadConfig } from "../config.js";
 import { createPorts } from "../app.js";
 import { createJobRunner, type InProcessJobRunner } from "../services/job-runner.js";
 import type { AppRepository } from "../db/repository.js";
+import { beginSourceSyncAdmission } from "../ownership/source-sync-admission.js";
 import { createProductMcpServer } from "./product-mcp.js";
 import { mcpAccessEnabled } from "@print-partner/contracts";
 import { readExternalAccessSettings } from "../services/external-access.js";
@@ -50,6 +51,7 @@ async function main(): Promise<void> {
   process.once("SIGTERM", () => { void stop(); });
   process.once("SIGINT", () => { void stop(); });
   try {
+    beginSourceSyncAdmission(config.dataDir);
     await ports.db.connect();
 
     const getRepo = (): AppRepository => {

@@ -211,6 +211,7 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
         if (await refuseIfHostedQuotaExceeded(reply, deps, request.tenantId)) return;
       }
       requireSourceSyncParticipant("http.POST /sources");
+      requireSourceSyncParticipant("http.POST /api/v1/sources");
       const newSource = deps.repo.createSource({
         name: String(body.name ?? ""),
         url: githubLocation?.url ?? requestedUrl,

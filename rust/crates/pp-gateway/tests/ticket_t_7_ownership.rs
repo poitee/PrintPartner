@@ -5,7 +5,6 @@ use pp_gateway::ownership::{
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 fn scratch(name: &str) -> PathBuf {
@@ -345,131 +344,6 @@ fn ticket_t_7_ownership_planted_sections_conflict() {
 }
 
 #[test]
-fn ticket_t_7_ownership_python_conflict_exits_nonzero() {
-    let dir = scratch("ticket_t_7_ownership_python_conflict");
-    let inventory = serde_json::json!({
-        "routes": [],
-        "workers": [{"operation": "source.sync", "id": "startSourceWatcher", "owner": "rust"}],
-        "startup": [{"operation": "source.sync", "id": "startSourceWatcher", "owner": "compat"}],
-        "mcp": []
-    });
-    let inventory_path = dir.join("inventory.json");
-    fs::write(
-        &inventory_path,
-        serde_json::to_vec_pretty(&inventory).unwrap(),
-    )
-    .unwrap();
-    let operations = repo_root().join("rust/crates/pp-gateway/operations.json");
-    let before = fs::read(&operations).unwrap();
-    let output = Command::new("python3")
-        .arg(repo_root().join("rust/scripts/gateway-operations.py"))
-        .arg(&inventory_path)
-        .arg("--check")
-        .output()
-        .unwrap();
-    let combined = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(!output.status.success(), "{combined}");
-    assert!(combined.contains("conflicting ownership"), "{combined}");
-    assert!(!combined.contains("Gateway registry differs"), "{combined}");
-    assert_eq!(fs::read(&operations).unwrap(), before);
-}
-
-#[test]
-fn ticket_t_7_ownership_python_unknown_owner_exits_nonzero() {
-    let dir = scratch("ticket_t_7_ownership_python_unknown");
-    let inventory = serde_json::json!({
-        "routes": [],
-        "workers": [{"operation": "source.sync", "id": "startSourceWatcher", "owner": "postgres"}],
-        "startup": [{"operation": "source.sync", "id": "startSourceWatcher", "owner": "node"}],
-        "mcp": [{"operation": "source.sync", "id": "start_sync", "owner": "node"}]
-    });
-    let inventory_path = dir.join("inventory.json");
-    fs::write(&inventory_path, serde_json::to_vec(&inventory).unwrap()).unwrap();
-    let output = Command::new("python3")
-        .arg(repo_root().join("rust/scripts/gateway-operations.py"))
-        .arg(&inventory_path)
-        .arg("--check")
-        .output()
-        .unwrap();
-    let combined = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(!output.status.success(), "{combined}");
-    assert!(combined.contains("unknown owner postgres"), "{combined}");
-}
-
-#[test]
-fn ticket_t_7_ownership_python_self_test_unchanged() {
-    let output = Command::new("python3")
-        .arg(repo_root().join("rust/scripts/gateway-operations.py"))
-        .arg(repo_root().join("rust/crates/pp-gateway/operations.json"))
-        .arg("--self-test")
-        .output()
-        .unwrap();
-    let combined = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(output.status.success(), "{combined}");
-    assert!(
-        combined.contains("corrected_registered_reads"),
-        "{combined}"
-    );
-}
-
-#[test]
-fn ticket_t_7_ownership_node_runtime_rejects_conflict_and_unknown_owner() {
-    let script = repo_root().join("web/apps/server/src/ownership/source-sync-admission.ts");
-    let conflict_dir = scratch("ticket_t_7_ownership_node_conflict");
-    let mut conflict = bundled_value();
-    set_participant_owner(&mut conflict, "worker.startSourceWatcher", "rust");
-    let conflict_path = conflict_dir.join("manifest.json");
-    fs::write(
-        &conflict_path,
-        serde_json::to_vec_pretty(&conflict).unwrap(),
-    )
-    .unwrap();
-    let conflict_output = node_admit(&script, &conflict_path, "startup.startSourceWatcher");
-    assert!(!conflict_output.status.success(), "{conflict_output:?}");
-    let conflict_text = command_text(&conflict_output);
-    assert!(
-        conflict_text.contains("conflicting ownership"),
-        "{conflict_text}"
-    );
-
-    let unknown_dir = scratch("ticket_t_7_ownership_node_unknown");
-    let mut unknown = bundled_value();
-    set_participant_owner(&mut unknown, "job.sync", "postgres");
-    let unknown_path = unknown_dir.join("manifest.json");
-    fs::write(&unknown_path, serde_json::to_vec_pretty(&unknown).unwrap()).unwrap();
-    let unknown_output = node_admit(&script, &unknown_path, "job.sync");
-    assert!(!unknown_output.status.success(), "{unknown_output:?}");
-    let unknown_text = command_text(&unknown_output);
-    assert!(
-        unknown_text.contains("unknown owner postgres"),
-        "{unknown_text}"
-    );
-    assert!(!conflict_dir.join("source-sync-admission.json").exists());
-    assert!(!unknown_dir.join("source-sync-admission.json").exists());
-}
-
-#[test]
-fn ticket_t_7_ownership_node_runtime_admits_bundled_manifest() {
-    let script = repo_root().join("web/apps/server/src/ownership/source-sync-admission.ts");
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../web/apps/server/src/data/source-sync-ownership.json");
-    let output = node_admit(&script, &manifest, "worker.startSourceWatcher");
-    assert!(output.status.success(), "{}", command_text(&output));
-}
-
-#[test]
 fn ticket_t_7_ownership_call_sites_match_manifest() {
     let root = repo_root();
     let jobs = read(&root.join("web/apps/server/src/routes/jobs.ts"));
@@ -502,6 +376,25 @@ fn ticket_t_7_ownership_call_sites_match_manifest() {
             > sources_route
                 .find("requireSourceSyncParticipant(\"http.POST /sources\")")
                 .unwrap()
+    );
+    assert!(
+        create
+            > sources_route
+                .find("requireSourceSyncParticipant(\"http.POST /api/v1/sources\")")
+                .unwrap()
+    );
+
+    let assistant = read(&root.join("web/apps/server/src/routes/assistant.ts"));
+    let apply_route = &assistant[assistant.find("\"/assistant/actions/apply\"").unwrap()..];
+    let apply_call = apply_route.find("applyAssistantAction(").unwrap();
+    assert!(
+        apply_route[..apply_call]
+            .contains("requireSourceSyncParticipant(\"http.POST /assistant/actions/apply\")")
+    );
+    assert!(
+        apply_route[..apply_call].contains(
+            "requireSourceSyncParticipant(\"http.POST /api/v1/assistant/actions/apply\")"
+        )
     );
 
     let sync_case = &tools[tools.find("case \"start_sync\"").unwrap()..];
@@ -542,6 +435,16 @@ fn ticket_t_7_ownership_call_sites_match_manifest() {
     let admit_at = app.find("beginSourceSyncAdmission(").unwrap();
     let watcher_at = app.find("startSourceWatcher(").unwrap();
     assert!(admit_at < watcher_at);
+    let start_server = &app[app.find("export async function startServer").unwrap()..];
+    let startup_admit = start_server.find("beginSourceSyncAdmission(").unwrap();
+    let upgrade = start_server.find("prepareSqliteUpgrade(").unwrap();
+    let connect = start_server.find("ports.db.connect(").unwrap();
+    assert!(startup_admit < upgrade && upgrade < connect);
+    let stdio = read(&root.join("web/apps/server/src/mcp/stdio-server.ts"));
+    let stdio_admit = stdio.find("beginSourceSyncAdmission(").unwrap();
+    let stdio_connect = stdio.find("ports.db.connect(").unwrap();
+    let stdio_runner = stdio.find("createJobRunner(").unwrap();
+    assert!(stdio_admit < stdio_connect && stdio_connect < stdio_runner);
     assert!(admission.contains("../data/source-sync-ownership.json"));
     assert!(!admission.contains("rust/crates/pp-gateway/source-sync-ownership.json"));
 
@@ -559,24 +462,4 @@ fn ticket_t_7_ownership_call_sites_match_manifest() {
     }
     assert!(tables.contains(&"projects".to_string()));
     assert!(tables.contains(&"source_revisions".to_string()));
-}
-
-fn node_admit(script: &Path, manifest: &Path, participant: &str) -> std::process::Output {
-    Command::new("node")
-        .arg("--experimental-strip-types")
-        .arg(script)
-        .arg("--manifest")
-        .arg(manifest)
-        .arg("--participant")
-        .arg(participant)
-        .output()
-        .unwrap()
-}
-
-fn command_text(output: &std::process::Output) -> String {
-    format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    )
 }

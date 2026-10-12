@@ -25,6 +25,24 @@
       "resources": ["table:projects", "table:source_revisions"]
     },
     {
+      "id": "http.POST /api/v1/sources",
+      "kind": "http_alias",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions"]
+    },
+    {
+      "id": "http.POST /assistant/actions/apply",
+      "kind": "http",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "file:source-workspace"]
+    },
+    {
+      "id": "http.POST /api/v1/assistant/actions/apply",
+      "kind": "http_alias",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "file:source-workspace"]
+    },
+    {
       "id": "mcp.start_sync",
       "kind": "mcp_action",
       "owner": "node",
