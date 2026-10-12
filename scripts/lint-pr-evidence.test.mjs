@@ -3851,3 +3851,147 @@ test("r12-header-data-skip-preserves-url", () => {
   assert.match(result.errors.join("\n"), /LAN instances/);
   assert.doesNotMatch(result.errors.join("\n"), /static verifier budget/);
 });
+
+test("r13-append-assignment", () => {
+  assertBannedCommand("A+=B curl 3232235856");
+});
+
+test("r13-append-assignment-safe-82", () => {
+  assertSafeCommand("A+=B curl 3232235858");
+});
+
+test("r13-append-assignment-safe-79", () => {
+  assertSafeCommand("A+=B curl 3232235855");
+});
+
+test("r13-wget-decimal", () => {
+  assertBannedCommand("wget 3232235856");
+});
+
+test("r13-wget-safe-82", () => {
+  assertSafeCommand("wget 3232235858");
+});
+
+test("r13-wget-safe-79", () => {
+  assertSafeCommand("wget 3232235855");
+});
+
+test("r13-wget-output", () => {
+  assertSafeCommand("wget -O 3232235856 http://example.test/");
+});
+
+test("r13-wget-post-data", () => {
+  assertSafeCommand("wget --post-data=3232235856 http://example.test/");
+});
+
+test("r13-wget-referer", () => {
+  assertSafeCommand("wget --referer=3232235856 http://example.test/");
+});
+
+test("r13-wget-base", () => {
+  assertBannedCommand("wget --base=3232235856 http://example.test/");
+});
+
+test("r13-proxy", () => {
+  assertBannedCommand("curl --proxy 3232235856 http://example.test");
+});
+
+test("r13-proxy-safe-82", () => {
+  assertSafeCommand("curl --proxy 3232235858 http://example.test");
+});
+
+test("r13-proxy-safe-79", () => {
+  assertSafeCommand("curl --proxy 3232235855 http://example.test");
+});
+
+test("r13-proxy-short", () => {
+  assertBannedCommand("curl -x 3232235856 http://example.test");
+});
+
+test("r13-preproxy", () => {
+  assertBannedCommand("curl --preproxy 3232235856 http://example.test");
+});
+
+test("r13-connect-to", () => {
+  assertBannedCommand("curl --connect-to ::3232235856: http://example.test");
+});
+
+test("r13-connect-to-match-only", () => {
+  assertSafeCommand("curl --connect-to 3232235856::example.test: http://example.test");
+});
+
+test("r13-resolve", () => {
+  assertBannedCommand("curl --resolve example.test:80:3232235856 http://example.test");
+});
+
+test("r13-resolve-match-only", () => {
+  assertSafeCommand("curl --resolve 3232235856:80:127.0.0.1 http://example.test");
+});
+
+test("r13-socks5", () => {
+  assertBannedCommand("curl --socks5 3232235856 http://example.test");
+});
+
+test("r13-socks5-hostname", () => {
+  assertBannedCommand("curl --socks5-hostname 3232235856 http://example.test");
+});
+
+test("r13-socks4", () => {
+  assertBannedCommand("curl --socks4 3232235856 http://example.test");
+});
+
+test("r13-socks4a", () => {
+  assertBannedCommand("curl --socks4a 3232235856 http://example.test");
+});
+
+test("r13-data-not-target", () => {
+  assertSafeCommand("curl --data 3232235856 http://example.test");
+});
+
+test("r13-output-not-target", () => {
+  assertSafeCommand("curl --output 3232235856 http://example.test");
+});
+
+test("r13-noproxy-not-target", () => {
+  assertSafeCommand("curl --noproxy 3232235856 http://example.test");
+});
+
+test("r13-percent-fallback", () => {
+  assertBannedCommand('curl --variable %url=3232235856 --expand-url "{{url}}"');
+});
+
+test("r13-percent-fallback-safe-82", () => {
+  assertSafeCommand('curl --variable %url=3232235858 --expand-url "{{url}}"');
+});
+
+test("r13-percent-fallback-at", () => {
+  assertBannedCommand('curl --variable %url@3232235856 --expand-url "{{url}}"');
+});
+
+test("r13-percent-trim", () => {
+  assertBannedCommand("curl --variable '%url= 3232235856' --expand-url '{{url:trim}}'");
+});
+
+test("r13-sudo-shell-command", () => {
+  assertBannedCommand("sudo -s command curl 3232235856");
+});
+
+test("r13-sudo-login-command", () => {
+  assertBannedCommand("sudo -i command curl 3232235856");
+});
+
+test("r13-sudo-shell-exec", () => {
+  assertBannedCommand("sudo -s exec curl 3232235856");
+});
+
+test("r13-sudo-shell-builtin", () => {
+  assertSafeCommand("sudo -s builtin curl 3232235856");
+});
+
+test("r13-sudo-command-executable", () => {
+  assertSafeCommand("sudo command curl 3232235856");
+});
+
+test("r13-sudo-shell-lookup", () => {
+  assertSafeCommand("sudo -s command -v curl 3232235856");
+});
