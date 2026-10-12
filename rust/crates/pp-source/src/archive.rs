@@ -1,5 +1,5 @@
 use crate::{
-    compare_paths, Directory, LocalFiles, PathCollisions, SourceLockGuard, SourcePath, SourceRoot,
+    Directory, LocalFiles, PathCollisions, SourceLockGuard, SourcePath, SourceRoot, compare_paths,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

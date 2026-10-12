@@ -1,7 +1,7 @@
 use pp_source::{
-    archive::{ArchiveError, ArchiveLimits, ReaderMismatch, ZipInput},
     ArtifactBudget, FileKind, LocalFiles, SelectedFile, Selection, SnapshotRequest, SourcePath,
     TenantRepos,
+    archive::{ArchiveError, ArchiveLimits, ReaderMismatch, ZipInput},
 };
 use std::{
     fs::{self, File},
@@ -9,13 +9,13 @@ use std::{
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread,
     time::{Duration, Instant},
 };
-use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 struct Fixture(PathBuf);
@@ -210,15 +210,19 @@ fn input_file_and_source_roots_remain_pinned_after_path_replacement() {
         .extract_zip(input, ArchiveLimits::default(), &AtomicBool::new(false))
         .unwrap();
     assert_eq!(extracted.receipt().inflated_bytes, 65536);
-    assert!(fs::read_dir(fixture.0.join("repos"))
-        .unwrap()
-        .next()
-        .is_none());
+    assert!(
+        fs::read_dir(fixture.0.join("repos"))
+            .unwrap()
+            .next()
+            .is_none()
+    );
     extracted.discard().unwrap();
-    assert!(!fixture
-        .0
-        .join("original-repos/42/revisions/.pp-source-archives/.candidate")
-        .exists());
+    assert!(
+        !fixture
+            .0
+            .join("original-repos/42/revisions/.pp-source-archives/.candidate")
+            .exists()
+    );
 }
 
 #[test]
@@ -234,13 +238,15 @@ fn symlinked_archive_parent_cannot_redirect_output() {
         fixture.0.join("repos/42/revisions/.pp-source-archives"),
     )
     .unwrap();
-    assert!(source
-        .extract_zip(
-            fixture.input(),
-            ArchiveLimits::default(),
-            &AtomicBool::new(false)
-        )
-        .is_err());
+    assert!(
+        source
+            .extract_zip(
+                fixture.input(),
+                ArchiveLimits::default(),
+                &AtomicBool::new(false)
+            )
+            .is_err()
+    );
     assert_eq!(fs::read_dir(&outside).unwrap().count(), 1);
     assert_eq!(fs::read(outside.join("sentinel")).unwrap(), b"keep");
 }
@@ -331,11 +337,13 @@ fn input_symlink_is_rejected_before_extraction() {
     )
     .unwrap();
     let files = LocalFiles::open(&fixture.0.join("input")).unwrap();
-    assert!(ZipInput::open(
-        &files,
-        &SourcePath::try_from("alias.zip".to_owned()).unwrap()
-    )
-    .is_err());
+    assert!(
+        ZipInput::open(
+            &files,
+            &SourcePath::try_from("alias.zip".to_owned()).unwrap()
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -429,10 +437,12 @@ fn archive_and_snapshot_reject_the_same_unicode_tree_collisions() {
             ),
             "{names:?}"
         );
-        assert!(!fixture
-            .0
-            .join("repos/42/revisions/unicode-conflict")
-            .exists());
+        assert!(
+            !fixture
+                .0
+                .join("repos/42/revisions/unicode-conflict")
+                .exists()
+        );
     }
 }
 
@@ -603,10 +613,12 @@ fn high_compression_ratio_entry_is_rejected_before_inflating() {
         "compression-ratio"
     );
     assert!(!fixture.candidate().exists());
-    assert!(!fixture
-        .0
-        .join("repos/42/revisions/archive-revision")
-        .exists());
+    assert!(
+        !fixture
+            .0
+            .join("repos/42/revisions/archive-revision")
+            .exists()
+    );
 }
 
 #[test]
