@@ -2867,6 +2867,25 @@ test("r6-option-curl", () => {
   const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nprintf curl 3232235856\n```\n");
   assert.equal(result.ok, true, result.errors.join("; "));
 });
+test("r6-empty-data-target", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl --data \"\" 3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r6-empty-url-target", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl --url \"\" 3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r6-empty-data-safe", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl -d \"\" 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r6-empty-data-single", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl -d '' 0xc0a80150\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
 test("r6-url-after-next", () => {
   const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl 127.0.0.1 --next --url 3232235856\n```\n");
   assert.equal(result.ok, false, result.errors.join("; "));
