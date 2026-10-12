@@ -21,4 +21,20 @@ it("ticket_t_4 Moonraker host budget sends ids only past the cap", () => {
   expect(over?.[128]).toEqual({ id: "128", base_url: "", api_key: null, enabled: false });
   expect(over?.every((host) => host.base_url === "" && host.api_key === null)).toBe(true);
   expect(moonrakerHostSnapshot('{}')).toBeNull();
+  expect(moonrakerHostSnapshot("{")).toBeNull();
+  expect(moonrakerHostSnapshot("")).toEqual([]);
+});
+it("projects an oversized Moonraker row before the snapshot is serialized", () => {
+  const healthy = { id: "ok", type: "moonraker", config: { base_url: "http://printer", api_key: "secret" } };
+  const maxUrl = { id: "max", type: "moonraker", config: { base_url: "h".repeat(4096), api_key: "k" } };
+  const hugeUrl = { id: "big", type: "moonraker", config: { base_url: "h".repeat(4097), api_key: "secret" } };
+  const hugeKey = { id: "key", type: "moonraker", config: { base_url: "http://printer", api_key: "k".repeat(4097) } };
+  const wide = { id: "wide", type: "moonraker", config: { base_url: "é".repeat(2049), api_key: "k" } };
+  expect(moonrakerHostSnapshot(JSON.stringify([healthy, maxUrl, hugeUrl, hugeKey, wide]))).toEqual([
+    { id: "ok", base_url: "http://printer", api_key: "secret", enabled: true },
+    { id: "max", base_url: "h".repeat(4096), api_key: "k", enabled: true },
+    { id: "big", base_url: "", api_key: null, enabled: false },
+    { id: "key", base_url: "", api_key: null, enabled: false },
+    { id: "wide", base_url: "", api_key: null, enabled: false },
+  ]);
 });

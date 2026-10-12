@@ -34,10 +34,16 @@ impl Resolver for SystemResolver {
 pub fn permitted(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => {
-            let [a, b, _, _] = ip.octets();
+            let [a, b, c, _] = ip.octets();
+            // 192.0.0.0/24, 192.0.2.0/24, and 198.18.0.0/15 are special-purpose.
+            // Private (including 192.168.0.0/16) and loopback stay permitted.
+            let protocol_assignment = a == 192 && b == 0 && (c == 0 || c == 2);
+            let benchmarking = a == 198 && (b == 18 || b == 19);
             a != 0
                 && a < 224
                 && !(a == 169 && b == 254)
+                && !protocol_assignment
+                && !benchmarking
                 && ip != std::net::Ipv4Addr::new(100, 100, 100, 200)
         }
         IpAddr::V6(ip) => {
@@ -296,6 +302,12 @@ mod tests {
             "224.0.0.1",
             "255.255.255.255",
             "100.100.100.200",
+            "192.0.0.1",
+            "192.0.0.255",
+            "192.0.2.1",
+            "198.18.0.1",
+            "198.19.255.254",
+            "::ffff:192.0.2.1",
             "::",
             "fe80::1",
             "ff02::1",
@@ -327,6 +339,9 @@ mod tests {
         for ip in [
             "127.0.0.1",
             "192.168.1.4",
+            "192.0.1.1",
+            "198.17.0.1",
+            "198.20.0.1",
             "10.0.0.1",
             "::1",
             "fd12::1",

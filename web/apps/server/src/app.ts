@@ -222,7 +222,9 @@ async function configureApp(app: FastifyInstance, config: ServerConfig, ports: R
       if (!desktopPrincipal(request)) return reply.code(403).send({ detail: "Desktop principal required" });
       const raw = repository.getSetting("integrations");
       const hosts = moonrakerHostSnapshot(raw);
-      if (!hosts) return reply.code(503).send({ detail: "Host snapshot unavailable" });
+      // 4xx: malformed stored settings fail closed immediately. 5xx stays reserved
+      // for a snapshot the gateway may keep using through the grace period.
+      if (!hosts) return reply.code(400).send({ detail: "Host snapshot invalid" });
       return hosts;
     });
   }
