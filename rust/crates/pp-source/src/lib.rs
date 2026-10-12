@@ -1,6 +1,7 @@
 pub mod archive;
 mod directory;
 mod path_policy;
+mod unicode16;
 
 use directory::Directory;
 use fs2::FileExt;
@@ -17,6 +18,7 @@ use std::{
     sync::{Arc, Mutex, PoisonError},
 };
 use unicode_normalization::UnicodeNormalization;
+use unicode16::nfc16;
 
 pub const MANIFEST: &str = ".printpartner-source-snapshot.json";
 pub const MAX_CONTENT_BYTES: u64 = 1024 * 1024 * 1024;
@@ -101,23 +103,26 @@ impl From<serde_json::Error> for Error {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct SourcePath(String);
+fn source_path_structure(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 4096
+        && !value.contains(['\\', '\0', ':'])
+        && !value.starts_with('/')
+        && value.split('/').count() <= 64
+        && value.split('/').next() != Some(MANIFEST)
+        && value
+            .split('/')
+            .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
+}
 impl TryFrom<String> for SourcePath {
     type Error = Error;
     fn try_from(value: String) -> Result<Self> {
-        if value.is_empty()
-            || value.len() > 4096
-            || value.contains(['\\', '\0', ':'])
-            || value.starts_with('/')
-            || value.nfc().collect::<String>() != value
-            || value
-                .split('/')
-                .any(|s| s.is_empty() || s == "." || s == "..")
-            || value.split('/').count() > 64
-            || value.split('/').next() == Some(MANIFEST)
-        {
-            return Err(Error::UnsafePath);
+        // New requests and new publications stay on Unicode 17 NFC.
+        if source_path_structure(&value) && value.nfc().collect::<String>() == value {
+            Ok(Self(value))
+        } else {
+            Err(Error::UnsafePath)
         }
-        Ok(Self(value))
     }
 }
 impl From<SourcePath> for String {
@@ -128,6 +133,19 @@ impl From<SourcePath> for String {
 impl SourcePath {
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// A path stored before the Unicode 17 pin. Unicode 17 NFC is still
+    /// accepted. A Unicode 16 NFC spelling is accepted only here, so a new
+    /// `SnapshotRequest` cannot persist it.
+    fn from_persisted(value: String) -> Result<Self> {
+        if source_path_structure(&value)
+            && (value.nfc().collect::<String>() == value || nfc16(&value) == value)
+        {
+            Ok(Self(value))
+        } else {
+            Err(Error::UnsafePath)
+        }
     }
 }
 
@@ -183,8 +201,81 @@ pub struct SnapshotRequest {
     pub files: Vec<SelectedFile>,
     pub selection: Selection,
 }
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoredContentFile {
+    path: String,
+    kind: FileKind,
+    size_bytes: u64,
+    sha256: String,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoredOmittedFile {
+    path: String,
+    kind: FileKind,
+    size_hint_bytes: Option<u64>,
+    reason: OmissionReason,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoredSelection {
+    max_stl_files: u64,
+    max_documentation_bytes: u64,
+    omitted_files: Vec<StoredOmittedFile>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoredManifest {
+    version: u8,
+    upstream_revision_key: String,
+    manifest_digest: String,
+    selection: StoredSelection,
+    files: Vec<StoredContentFile>,
+}
+impl TryFrom<StoredManifest> for Manifest {
+    type Error = Error;
+    fn try_from(value: StoredManifest) -> Result<Self> {
+        let files = value
+            .files
+            .into_iter()
+            .map(|file| {
+                Ok(ContentFile {
+                    path: SourcePath::from_persisted(file.path)?,
+                    kind: file.kind,
+                    size_bytes: file.size_bytes,
+                    sha256: file.sha256,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let omitted_files = value
+            .selection
+            .omitted_files
+            .into_iter()
+            .map(|file| {
+                Ok(OmittedFile {
+                    path: SourcePath::from_persisted(file.path)?,
+                    kind: file.kind,
+                    size_hint_bytes: file.size_hint_bytes,
+                    reason: file.reason,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            version: value.version,
+            upstream_revision_key: value.upstream_revision_key,
+            manifest_digest: value.manifest_digest,
+            selection: Selection {
+                max_stl_files: value.selection.max_stl_files,
+                max_documentation_bytes: value.selection.max_documentation_bytes,
+                omitted_files,
+            },
+            files,
+        })
+    }
+}
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", try_from = "StoredManifest")]
 struct Manifest {
     version: u8,
     upstream_revision_key: String,
@@ -498,13 +589,18 @@ fn tree_paths(
     }
     Ok(())
 }
+fn tree_key(path: &str) -> String {
+    path.nfc().collect()
+}
 fn expected_paths(files: &[ContentFile]) -> BTreeSet<String> {
     let mut paths = BTreeSet::new();
     for file in files {
-        paths.insert(file.path.0.clone());
+        // Listings are compared in Unicode 17 NFC. A stored Unicode 16 spelling
+        // is opened by that exact name and compared as this key.
+        paths.insert(tree_key(file.path.as_str()));
         let mut parent = file.path.as_str();
         while let Some((prefix, _)) = parent.rsplit_once('/') {
-            paths.insert(format!("{prefix}/"));
+            paths.insert(format!("{}/", tree_key(prefix)));
             parent = prefix;
         }
     }
@@ -882,5 +978,120 @@ mod tests {
             Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
             Err(error) => panic!("{error}"),
         }
+    }
+
+    #[test]
+    fn unicode16_manifest_stays_readable_while_new_writes_reject_it() {
+        use sha2::Digest;
+        use std::os::unix::fs::PermissionsExt;
+
+        let legacy = "a\u{1ADD}\u{0300}.stl".to_owned();
+        let omitted = "notes\u{1ADD}\u{0300}.md".to_owned();
+        assert!(SourcePath::try_from(legacy.clone()).is_err());
+        assert!(SourcePath::try_from("\u{00E0}\u{1ADD}.stl".to_owned()).is_ok());
+        assert!(SourcePath::from_persisted("cafe\u{301}.stl".to_owned()).is_err());
+
+        let content = b"solid";
+        let files = vec![ContentFile {
+            path: SourcePath::from_persisted(legacy.clone()).unwrap(),
+            kind: FileKind::Stl,
+            size_bytes: content.len() as u64,
+            sha256: hex::encode(sha2::Sha256::digest(content)),
+        }];
+        let manifest = Manifest {
+            version: 1,
+            upstream_revision_key: "legacy-rev".into(),
+            manifest_digest: hex::encode(sha2::Sha256::digest(serde_json::to_vec(&files).unwrap())),
+            selection: Selection {
+                max_stl_files: 10,
+                max_documentation_bytes: 1000,
+                omitted_files: vec![OmittedFile {
+                    path: SourcePath::from_persisted(omitted.clone()).unwrap(),
+                    kind: FileKind::Md,
+                    size_hint_bytes: None,
+                    reason: OmissionReason::DocumentationByteBudget,
+                }],
+            },
+            files,
+        };
+        let mut encoded = serde_json::to_vec_pretty(&manifest).unwrap();
+        encoded.push(b'\n');
+        let decoded: Manifest = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(decoded.files[0].path.as_str(), legacy);
+        assert_eq!(decoded.selection.omitted_files[0].path.as_str(), omitted);
+
+        let root = std::env::temp_dir().join(format!(
+            "pp-source-unicode16-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&root).unwrap();
+        let cleanup = root.clone();
+        struct Remove(std::path::PathBuf);
+        impl Drop for Remove {
+            fn drop(&mut self) {
+                fs::remove_dir_all(&self.0).unwrap();
+            }
+        }
+        let _remove = Remove(cleanup);
+        for dir in ["repos", "input"] {
+            let path = root.join(dir);
+            fs::create_dir(&path).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+        let root = fs::canonicalize(root).unwrap();
+        let revision = root.join("repos/42/revisions/legacy-rev");
+        fs::create_dir_all(&revision).unwrap();
+        fs::write(revision.join(&legacy), content).unwrap();
+        fs::write(revision.join(MANIFEST), &encoded).unwrap();
+        let decomposed = root.join("repos/42/revisions/decomposed-rev");
+        fs::create_dir_all(&decomposed).unwrap();
+        fs::write(decomposed.join("cafe\u{301}.stl"), b"x").unwrap();
+        fs::write(
+            decomposed.join(MANIFEST),
+            br#"{"version":1,"upstreamRevisionKey":"decomposed-rev","manifestDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","selection":{"maxStlFiles":1,"maxDocumentationBytes":1,"omittedFiles":[]},"files":[{"path":"cafe\u0301.stl","kind":"stl","sizeBytes":1,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}"#,
+        )
+        .unwrap();
+
+        let input = LocalFiles::open(&root.join("input")).unwrap();
+        let mut source = TenantRepos::open("tenant".into(), &root.join("repos"))
+            .unwrap()
+            .source(42)
+            .unwrap();
+        let request = |key: &str| SnapshotRequest {
+            upstream_revision_key: key.into(),
+            files: vec![SelectedFile {
+                path: SourcePath::try_from("part.stl".to_owned()).unwrap(),
+                kind: FileKind::Stl,
+                size_hint_bytes: None,
+            }],
+            selection: Selection {
+                max_stl_files: 10,
+                max_documentation_bytes: 1000,
+                omitted_files: vec![],
+            },
+        };
+        let published = source
+            .materialize(
+                request("legacy-rev"),
+                &input,
+                ArtifactBudget::new(1024 * 1024, 1024 * 1024).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(published.publication, Publication::Reused);
+        assert_eq!(published.files[0].path.as_str(), legacy);
+        assert_eq!(published.selection.omitted_files[0].path.as_str(), omitted);
+        assert_eq!(fs::read(revision.join(&legacy)).unwrap(), content);
+        assert!(!revision.join("\u{00E0}\u{1ADD}.stl").exists());
+        assert!(
+            source
+                .materialize(
+                    request("decomposed-rev"),
+                    &input,
+                    ArtifactBudget::new(1024 * 1024, 1024 * 1024).unwrap(),
+                )
+                .is_err()
+        );
     }
 }
