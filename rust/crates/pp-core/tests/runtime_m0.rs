@@ -981,6 +981,26 @@ fn pid_is_gone(pid: i32) -> bool {
     result < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
 }
 
+fn peer_is_running(peer: &mut std::process::Child) -> bool {
+    let state = linux_proc_state(peer.id());
+    let unreaped = peer.try_wait().unwrap().is_none();
+    unreaped && state.is_none_or(|state| state != 'Z' && state != 'X')
+}
+
+fn linux_proc_state(pid: u32) -> Option<char> {
+    #[cfg(target_os = "linux")]
+    {
+        let text = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let close = text.rfind(')')?;
+        return text[close + 1..].split_whitespace().next()?.chars().next();
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
 fn canonical_node(node: &Path) -> PathBuf {
     let candidate = if node.is_absolute() || node.components().count() > 1 {
         node.to_path_buf()
@@ -1034,7 +1054,7 @@ fn core_death_reaps_stopped_node_and_allows_recovery() {
         // SIGHUP a stopped orphan group; a targeted kill must leave the peer.
         group_peer = Some(
             Command::new("sleep")
-                .arg("60")
+                .arg("600")
                 .process_group(pid)
                 .spawn()
                 .unwrap(),
@@ -1064,9 +1084,8 @@ fn core_death_reaps_stopped_node_and_allows_recovery() {
             pid_is_gone(pid),
             "stopped Node outlived the force-killed owner"
         );
-        let peer_pid = group_peer.as_ref().unwrap().id() as i32;
         assert!(
-            !pid_is_gone(peer_pid),
+            peer_is_running(group_peer.as_mut().unwrap()),
             "group peer was killed with the Node pid"
         );
         assert_eq!(std::fs::read(&marker_path).unwrap(), contents);
@@ -1106,7 +1125,10 @@ fn core_death_reaps_stopped_node_and_allows_recovery() {
             );
         }
         assert!(caller.block_on(runtime.shutdown()).complete());
-        assert!(!pid_is_gone(peer_pid), "recovery killed the old group peer");
+        assert!(
+            peer_is_running(group_peer.as_mut().unwrap()),
+            "recovery killed the old group peer"
+        );
     }));
     let _ = core.kill();
     let _ = core.wait();

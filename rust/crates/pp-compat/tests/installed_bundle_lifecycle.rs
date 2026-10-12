@@ -123,8 +123,38 @@ fn free_loopback_port() -> Result<u16> {
 
 async fn wait_for_ready(
     status: &mut tokio::sync::watch::Receiver<Status>,
+    child_readiness_started: &mut tokio::sync::watch::Receiver<bool>,
 ) -> Result<(String, u32)> {
-    tokio::time::timeout(Duration::from_secs(35), async {
+    tokio::time::timeout(pp_compat::RELEASE_PREFLIGHT, async {
+        loop {
+            if *child_readiness_started.borrow() {
+                return Ok(());
+            }
+            match status.borrow().clone() {
+                Status::Ready { .. } => return Ok(()),
+                Status::Backoff { attempt } => {
+                    bail!("Compatibility child entered backoff {attempt}")
+                }
+                Status::Guarded => bail!("Compatibility child entered crash guard"),
+                Status::Stopping => bail!("Compatibility child stopping before readiness"),
+                Status::Stopped => bail!("Compatibility child stopped before readiness"),
+                Status::Failed => bail!("Compatibility child failed before readiness"),
+                Status::Starting => {}
+            }
+            tokio::select! {
+                biased;
+                changed = child_readiness_started.changed() => {
+                    changed.context("Compatibility status channel closed")?;
+                }
+                changed = status.changed() => {
+                    changed.context("Compatibility status channel closed")?;
+                }
+            }
+        }
+    })
+    .await
+    .context("Release verification timed out")??;
+    tokio::time::timeout(pp_compat::READINESS_OBSERVATION, async {
         loop {
             match status.borrow().clone() {
                 Status::Starting => {}
@@ -207,7 +237,8 @@ async fn installed_bundle_start_health_shutdown() -> Result<()> {
         port,
     })?;
     let mut status = supervisor.handle.status.clone();
-    let (generation, ready_pid) = wait_for_ready(&mut status).await?;
+    let mut child_readiness_started = supervisor.handle.child_readiness_started.clone();
+    let (generation, ready_pid) = wait_for_ready(&mut status, &mut child_readiness_started).await?;
     ensure!(process_exists(ready_pid)?, "Ready child PID is absent");
     let socket = ownership
         .runtime_dir

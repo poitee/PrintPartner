@@ -9,7 +9,6 @@ use std::{
     net::{Ipv4Addr, SocketAddrV4},
     os::unix::fs::OpenOptionsExt,
     path::PathBuf,
-    time::Duration,
 };
 use tokio::net::TcpListener;
 
@@ -131,7 +130,20 @@ async fn start_resources(
         .assets
         .canonicalize()
         .context("React assets unavailable")?;
-    pp_compat::verify_bundle(&input.bundle, &assets)?;
+    // The inventory hash finishes, or hits its own cap, before a child or a
+    // readiness probe exists. `READINESS_OBSERVATION` stays the 30s probe
+    // window plus two seconds and starts only after that hash.
+    let bundle = input.bundle.clone();
+    let asset_path = assets.clone();
+    let verified = tokio::time::timeout(
+        pp_compat::RELEASE_PREFLIGHT,
+        tokio::task::spawn_blocking(move || pp_compat::verify_bundle(&bundle, &asset_path)),
+    )
+    .await
+    .context("Release verification exceeded its budget")?;
+    verified
+        .context("Release verification stopped")?
+        .context("Release verification failed")?;
     std::fs::create_dir_all(&input.data_dir)?;
     if let Some(released) = StorageLease::retry_failed_release_if_present(&input.data_dir)? {
         anyhow::ensure!(
@@ -158,7 +170,43 @@ async fn start_resources(
     )?;
     owner.retain_on_drop();
     let mut status = supervisor.handle.status.clone();
-    let ready = tokio::time::timeout(Duration::from_secs(32), async {
+    let mut child_readiness_started = supervisor.handle.child_readiness_started.clone();
+    let preflight = tokio::time::timeout(pp_compat::RELEASE_PREFLIGHT, async {
+        loop {
+            if *child_readiness_started.borrow() {
+                return Ok(());
+            }
+            match *status.borrow() {
+                CoreStatus::Guarded | CoreStatus::Stopped | CoreStatus::Failed => {
+                    bail!("Compatibility startup failed");
+                }
+                CoreStatus::Starting | CoreStatus::Backoff { .. } | CoreStatus::Stopping => {}
+                CoreStatus::Ready { .. } => return Ok(()),
+            }
+            tokio::select! {
+                biased;
+                changed = child_readiness_started.changed() => {
+                    changed.context("Compatibility supervisor unavailable")?;
+                }
+                changed = status.changed() => {
+                    changed.context("Compatibility supervisor unavailable")?;
+                }
+            }
+        }
+    })
+    .await;
+    if !matches!(preflight, Ok(Ok(()))) {
+        if supervisor.shutdown().await.is_ok() {
+            owner.allow_drop_cleanup();
+        } else {
+            owner.retain_until_process_exit();
+        }
+        return match preflight {
+            Ok(Err(error)) => Err(error),
+            _ => bail!("Release verification did not finish before its budget"),
+        };
+    }
+    let ready = tokio::time::timeout(pp_compat::READINESS_OBSERVATION, async {
         loop {
             match *status.borrow() {
                 CoreStatus::Ready { .. } => return Ok(()),

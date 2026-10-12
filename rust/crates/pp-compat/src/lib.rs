@@ -9,6 +9,18 @@ use hmac::{Hmac, Mac};
 use http_body_util::BodyExt;
 use hyper_util::rt::TokioIo;
 pub use release::verify_bundle;
+
+/// Hash the measured release before a child exists. This is not the probe window.
+/// `verify_backend` for this desktop inventory (41840 dependency files, Node
+/// v24.21.0) measured 31.1s. Sixty seconds is under twice that reading: a slower
+/// hash fails closed instead of consuming the 30s child probe window.
+pub const RELEASE_PREFLIGHT: Duration = Duration::from_secs(60);
+/// Health probes after the child process exists. A missing socket or a
+/// commit/version mismatch still fails this window; it is not extended for hashing.
+pub const CHILD_READINESS: Duration = Duration::from_secs(30);
+/// Core watches two seconds past [`CHILD_READINESS`] so the supervisor can
+/// finish its own deadline instead of being cancelled on the last probe.
+pub const READINESS_OBSERVATION: Duration = Duration::from_secs(32);
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use std::{
@@ -202,6 +214,9 @@ impl Endpoint {
 pub struct CompatHandle {
     endpoint: watch::Receiver<Option<Arc<Endpoint>>>,
     pub status: watch::Receiver<Status>,
+    /// Flips true only after release verification and `record_child`, when the
+    /// 30s probe window starts. Stays false while the inventory is still hashing.
+    pub child_readiness_started: watch::Receiver<bool>,
     recover: mpsc::Sender<()>,
 }
 
@@ -444,7 +459,18 @@ fn configure_child(command: &mut Command, lease_fd: RawFd) -> std::io::Result<(O
 
 impl Process {
     async fn spawn(spec: &SpawnSpec, capture: &logs::Logs) -> Result<Self> {
-        release::verify_backend(&spec.bundle)?;
+        // Verify before spawn and before the ownership marker. A slow hash must
+        // fail this budget instead of consuming the 30s probe window.
+        let bundle = spec.bundle.clone();
+        let verified = tokio::time::timeout(
+            RELEASE_PREFLIGHT,
+            tokio::task::spawn_blocking(move || release::verify_backend(&bundle)),
+        )
+        .await
+        .context("Release verification exceeded its budget")?;
+        verified
+            .context("Release verification stopped")?
+            .context("Release verification failed")?;
         let package_root = release::package_root(&spec.bundle)?;
         let preload = spec
             .bundle
@@ -643,6 +669,7 @@ impl Supervisor {
         let logs = logs::Logs::open(spec.data_dir.join("logs"))?;
         let (endpoints, endpoint) = watch::channel(None);
         let (states, status) = watch::channel(Status::Starting);
+        let (child_readiness, child_readiness_started) = watch::channel(false);
         let (recover, mut recovery) = mpsc::channel(1);
         let stop = CancellationToken::new();
         let cancelled = stop.clone();
@@ -654,10 +681,14 @@ impl Supervisor {
                     break;
                 }
                 states.send_replace(Status::Starting);
+                child_readiness.send_replace(false);
                 logs.event("compat_starting", 30);
                 let process = Process::spawn(&spec, &logs).await;
                 if let Ok(mut process) = process {
-                    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+                    // Hash and ownership record are done. Probes use the 30s child
+                    // budget from this edge, not from the start of verification.
+                    child_readiness.send_replace(true);
+                    let deadline = tokio::time::Instant::now() + CHILD_READINESS;
                     let mut ready = false;
                     let mut observed_exit = None;
                     while tokio::time::Instant::now() < deadline {
@@ -752,6 +783,7 @@ impl Supervisor {
             handle: CompatHandle {
                 endpoint,
                 status,
+                child_readiness_started,
                 recover,
             },
             stop,
@@ -876,6 +908,28 @@ mod tests {
         result < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
     }
 
+    /// `kill(pid, 0)` is true for a zombie. A preserved peer has to still be
+    /// running: `try_wait` has not reaped it, and Linux does not report `Z`.
+    fn peer_is_running(peer: &mut std::process::Child) -> bool {
+        let state = linux_proc_state(peer.id());
+        let unreaped = peer.try_wait().unwrap().is_none();
+        unreaped && state.is_none_or(|state| state != 'Z' && state != 'X')
+    }
+
+    fn linux_proc_state(pid: u32) -> Option<char> {
+        #[cfg(target_os = "linux")]
+        {
+            let text = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+            let close = text.rfind(')')?;
+            return text[close + 1..].split_whitespace().next()?.chars().next();
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = pid;
+            None
+        }
+    }
+
     #[tokio::test]
     async fn parent_death_fixture() {
         let Some(pidfile) = std::env::var_os("PP_COMPAT_DEATH_PIDFILE") else {
@@ -901,6 +955,39 @@ mod tests {
         std::fs::write(&temporary, child.id().unwrap().to_string()).unwrap();
         std::fs::rename(temporary, pidfile).unwrap();
         child.wait().await.unwrap();
+    }
+
+    #[test]
+    fn readiness_budgets_stay_split() {
+        assert_eq!(super::CHILD_READINESS, Duration::from_secs(30));
+        assert_eq!(
+            super::READINESS_OBSERVATION,
+            super::CHILD_READINESS + Duration::from_secs(2)
+        );
+        assert!(super::RELEASE_PREFLIGHT > super::CHILD_READINESS);
+        assert_ne!(super::RELEASE_PREFLIGHT, super::READINESS_OBSERVATION);
+    }
+
+    #[test]
+    fn zombie_peer_is_not_running() {
+        let mut peer = std::process::Command::new("true").spawn().unwrap();
+        let pid = peer.id() as i32;
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let mut saw_zombie = false;
+        while std::time::Instant::now() < deadline {
+            let state = linux_proc_state(peer.id());
+            let kill_sees_it = unsafe { libc::kill(pid, 0) } == 0;
+            if state == Some('Z') && kill_sees_it {
+                saw_zombie = true;
+                assert!(!peer_is_running(&mut peer));
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            saw_zombie,
+            "expected kill(pid, 0) to see a zombie before try_wait reaped it"
+        );
     }
 
     #[test]
@@ -947,7 +1034,7 @@ mod tests {
         // The peer only keeps the group from being orphaned. A targeted kill of
         // the stopped Node must leave this peer alive.
         let mut peer = std::process::Command::new("sleep")
-            .arg("60")
+            .arg("600")
             .process_group(pid)
             .spawn()
             .unwrap();
@@ -975,7 +1062,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         let node_gone = pid_is_gone(pid);
-        let peer_alive = !pid_is_gone(peer_pid);
+        let peer_alive = peer_is_running(&mut peer);
         unsafe {
             libc::kill(pid, libc::SIGKILL);
         }
