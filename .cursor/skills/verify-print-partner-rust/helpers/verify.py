@@ -206,8 +206,11 @@ def _stop_group(process, grace):
 
 
 PR_SET_PDEATHSIG = 1
-# The leader stays alive when the launcher's pipe hits EOF, so descendants can
-# still be enumerated. Node leads another group. Signal that pid. A peer that
+# One pipe, two endings. GUARD_RELEASE then EOF means the owner already stopped
+# the group. Empty EOF means the write end closed without that notice.
+GUARD_RELEASE = b"\x00"
+# After an empty EOF the leader is still alive, so descendants can still be
+# enumerated. Node leads another group. Signal that pid. A peer that
 # joined the group is left for killpg of the leader.
 GUARD_SOURCE = "\n".join([
     "import ctypes, os, signal, subprocess, sys",
@@ -215,8 +218,14 @@ GUARD_SOURCE = "\n".join([
     "me = os.getpid()",
     "if sys.platform.startswith('linux'):",
     "    ctypes.CDLL(None).prctl(1, 0)",
-    "while os.read(fd, 1):",
-    "    pass",
+    "notice = b''",
+    "while True:",
+    "    chunk = os.read(fd, 1)",
+    "    if not chunk:",
+    "        break",
+    "    notice += chunk",
+    f"if notice == {GUARD_RELEASE!r}:",
+    "    sys.exit(0)",
     "def snapshot():",
     "    text = subprocess.check_output(['ps', '-axo', 'pid=,ppid=,lstart='], text=True)",
     "    rows = []",
@@ -332,6 +341,10 @@ def guarded_popen(args, **kwargs):
 
 def release_guard(guard):
     done_fd, write_fd = guard
+    try:
+        os.write(write_fd, GUARD_RELEASE)
+    except BrokenPipeError:
+        pass
     os.close(write_fd)
     try:
         while os.read(done_fd, 1):
