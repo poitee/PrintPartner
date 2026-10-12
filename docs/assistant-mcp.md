@@ -28,6 +28,12 @@ Use one of these endpoints:
 
 The MCP endpoint refuses a non-loopback deployment without an API key. Use HTTPS or an authenticated tunnel when the client is on another machine.
 
+## Choose the credential
+
+On open self-host, or with `SINGLE_USER_AUTH=1`, connect to `/api/v1/mcp` with `PRINT_PARTNER_API_KEY` or with a Settings API key. `SINGLE_USER_AUTH=1` accepts either key on that MCP route without a browser session. Other API routes still require the administrator session.
+
+With `MULTI_USER=1`, sign in and send the session cookie. A bearer key on its own gets `401` and `{"detail":"Authentication required"}`. The administrator creates Settings keys while signed in. The key matches only that tenant. Hosted planning disables Settings API keys.
+
 ## Generic client configuration
 
 Clients that support streamable HTTP MCP can use:
