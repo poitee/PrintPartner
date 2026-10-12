@@ -66,6 +66,7 @@ fn main() -> Result<()> {
     let profiles: Vec<i64> = serde_json::from_value(input["profiles"].clone())?;
     let requests: Vec<Value> = serde_json::from_value(input["requests"].clone())?;
     let (owner, schema) = WriterOwner::open(Path::new(&args[1]), Limits::default())?;
+    let mut writer_opens = 1;
     let client = owner.checkoff_progress_with_policy(policy())?;
     let mut results = Vec::new();
     for request in requests {
@@ -83,12 +84,13 @@ fn main() -> Result<()> {
     let before = projection(&owner, &profiles)?;
     owner.shutdown()?;
     let (owner, _) = WriterOwner::open(Path::new(&args[1]), Limits::default())?;
+    writer_opens += 1;
     let reopened = projection(&owner, &profiles)?;
     ensure!(before == reopened, "Orderly reopen changed public progress");
     owner.shutdown()?;
     println!(
         "{}",
-        json!({"schema":schema,"results":results,"reopened":reopened})
+        json!({"schema":schema,"results":results,"reopened":reopened,"writer_opens":writer_opens})
     );
     Ok(())
 }

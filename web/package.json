@@ -33,6 +33,7 @@
     "fixture:storage:node-access": "node --conditions=development --import tsx scripts/storage-fixtures/node-access.mts",
     "fixture:storage:prepare": "node --conditions=development --import tsx scripts/storage-fixtures/prepare.mts",
     "test:desktop-parity": "node --conditions=development --import tsx scripts/desktop-parity/verify.mts",
+    "test:progress-parity": "tsc --project scripts/progress-parity/tsconfig.json && node --conditions=development --import tsx --test scripts/progress-parity/run.test.mts",
     "contracts:schemas": "node --conditions=development --import tsx scripts/desktop-contracts/schema-check.mjs",
     "contracts:verify": "node scripts/desktop-contracts/verify.mjs"
   },
