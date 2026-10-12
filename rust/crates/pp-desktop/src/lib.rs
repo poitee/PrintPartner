@@ -160,12 +160,81 @@ fn contained(root: &Path, relative: &Path) -> Result<PathBuf> {
 mod tests {
     use super::*;
     #[test]
-    fn upgrades_reuse_the_legacy_desktop_store() {
+    fn ticket_t_5_upgrades_reuse_the_legacy_desktop_store() {
         assert_eq!(
             desktop_data_dir(Path::new("/users/existing-owner")).unwrap(),
             PathBuf::from("/users/existing-owner/.print-partner")
         );
         assert!(desktop_data_dir(Path::new("relative-home")).is_err());
+    }
+
+    #[test]
+    fn ticket_t_5_generated_context_keeps_the_installed_product_identity() {
+        let context: tauri::Context<tauri::Wry> = tauri::generate_context!();
+        assert_eq!(context.config().identifier, "com.poitee.printpartner");
+        assert_eq!(
+            context.config().product_name.as_deref(),
+            Some("Print Partner")
+        );
+        assert_eq!(context.package_info().name, "Print Partner");
+    }
+
+    #[test]
+    fn ticket_t_5_release_layout_preserves_identity_and_existing_data() {
+        let root = std::env::temp_dir().join(format!(
+            "pp-identity-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        std::fs::create_dir_all(root.join("web")).unwrap();
+        std::fs::create_dir_all(root.join("home/.print-partner")).unwrap();
+        std::fs::write(root.join("bin/node"), b"node").unwrap();
+        let data = root.join("home/.print-partner");
+        std::fs::write(data.join("desktop.toml"), b"port = 46687\n").unwrap();
+        let release = serde_json::json!({
+            "runtime_version": "3.3.0-web",
+            "commit": "f00471f13d2f0e69631d3130e594b9244f93e01d",
+            "node": "bin/node",
+            "web": "web",
+            "os": std::env::consts::OS,
+            "arch": std::env::consts::ARCH,
+            "node_version": "v24.21.0",
+            "node_abi": "137"
+        });
+        std::fs::write(root.join("release.json"), release.to_string()).unwrap();
+        let selected = desktop_data_dir(&root.join("home")).unwrap();
+        let launch = ResourceLayout::read(&root)
+            .unwrap()
+            .into_launch(selected)
+            .unwrap();
+        assert_eq!(launch.data_dir, data);
+        assert_eq!(
+            launch.bundle.commit,
+            "f00471f13d2f0e69631d3130e594b9244f93e01d"
+        );
+        assert_eq!(launch.bundle.runtime_version, "3.3.0-web");
+        assert_eq!(launch.bundle.node, root.join("bin/node"));
+        assert_eq!(
+            launch.bundle.entry,
+            root.join("web/apps/server/dist/current/desktop.js")
+        );
+        assert_eq!(
+            std::fs::read(data.join("desktop.toml")).unwrap(),
+            b"port = 46687\n"
+        );
+        assert!(!root.join("home/com.poitee.printpartner").exists());
+        let mut invalid = release;
+        invalid["commit"] = serde_json::json!("Print Partner");
+        std::fs::write(root.join("release.json"), invalid.to_string()).unwrap();
+        assert_eq!(
+            ResourceLayout::read(&root).err().unwrap().to_string(),
+            "Desktop commit identity missing"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
