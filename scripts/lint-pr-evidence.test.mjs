@@ -4881,3 +4881,108 @@ ${R16_ARTIFACT} \`./gradlew test\`
 Tests run: 4, Failures: 0
 `));
 });
+
+const R19_ARITHMETIC_STDERR = "PR evidence lint FAILED:\n- Evidence contains a curl or wget target with shell arithmetic this static check could not resolve. Rewrite that operand without arithmetic expansion.\n";
+const R19_INCOMPLETE_STDERR = "PR evidence lint FAILED:\n- Evidence is incomplete. For Exemption: none, fill Steps followed, Result observed, and Screenshot/recording/verify-skill output or trace (a journey name alone is not enough).\n";
+
+function r19Stdin(body) {
+  return spawnSync(process.execPath, [
+    fileURLToPath(new URL("./lint-pr-evidence.mjs", import.meta.url)),
+    "--stdin",
+  ], {
+    input: body,
+    encoding: "utf8",
+    timeout: 3000,
+  });
+}
+
+function r19Artifact(artifact) {
+  return bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: ran locally
+- Result observed: passed
+- Screenshot / recording / verify-skill output or trace: ${artifact}
+`);
+}
+
+function r19Expect(body, status, stdout, stderr) {
+  const run = r19Stdin(body);
+  assert.equal(run.signal, null, run.stderr);
+  assert.equal(run.status, status, run.stderr || run.stdout);
+  assert.equal(run.stdout, stdout);
+  assert.equal(run.stderr, stderr);
+}
+
+test("r19-arithmetic-octet-follows-lan-policy", () => {
+  for (const prefix of ["192.168.1", "192.168.200"]) {
+    for (const octet of ["80", "81"]) {
+      r19Expect(commandEvidence(`curl http://${prefix}.$((${octet}))/`), 1, "", LAN_STDERR);
+      r19Expect(commandEvidence(`curl "http://${prefix}.$((${octet}))/"`), 1, "", LAN_STDERR);
+    }
+    for (const octet of ["79", "82"]) {
+      r19Expect(commandEvidence(`curl http://${prefix}.$((${octet}))/`), 0, OK_LINE, "");
+      r19Expect(commandEvidence(`curl "http://${prefix}.$((${octet}))/"`), 0, OK_LINE, "");
+    }
+  }
+  r19Expect(commandEvidence("curl http://192.168.1.$(( 80 ))/"), 1, "", LAN_STDERR);
+  r19Expect(commandEvidence("curl http://192.168.1.$((79+1))/"), 1, "", LAN_STDERR);
+  r19Expect(commandEvidence("curl http://192.168.200.$((90-9))/"), 1, "", LAN_STDERR);
+  r19Expect(commandEvidence("curl http://192.168.1.$((2*40))/"), 1, "", LAN_STDERR);
+  r19Expect(commandEvidence("curl http://192.168.1.$((160/2))/"), 1, "", LAN_STDERR);
+  r19Expect(commandEvidence("curl http://192.168.1.$((82-3))/"), 0, OK_LINE, "");
+  r19Expect(commandEvidence("curl http://192.168.200.$((81%2))/"), 0, OK_LINE, "");
+  r19Expect(commandEvidence("wget http://192.168.1.$((80))/"), 1, "", LAN_STDERR);
+  r19Expect(commandEvidence("wget http://192.168.200.$((82))/"), 0, OK_LINE, "");
+});
+
+test("r19-arithmetic-quotes-stay-literal-or-expand", () => {
+  r19Expect(commandEvidence("curl 'http://192.168.1.$((80))/'"), 0, OK_LINE, "");
+  r19Expect(commandEvidence("curl 'http://192.168.200.$((81))/'"), 0, OK_LINE, "");
+  r19Expect(commandEvidence("curl http://192.168.1.\\$((80))/"), 0, OK_LINE, "");
+  r19Expect(commandEvidence('curl "http://192.168.1.\\$((80))/"'), 0, OK_LINE, "");
+  r19Expect(commandEvidence("curl 'http://192.168.1.'$((80))/"), 1, "", LAN_STDERR);
+  r19Expect(commandEvidence('curl http://192.168.200."$((81))"/'), 1, "", LAN_STDERR);
+});
+
+test("r19-arithmetic-unresolved-operands-do-not-name-a-host", () => {
+  const commands = [
+    "curl http://192.168.1.$((x))/",
+    "curl http://192.168.200.$((host))/",
+    "curl http://192.168.1.$((80+))/",
+    "curl http://192.168.1.$((0120))/",
+    "curl http://192.168.200.$((0x50))/",
+    'curl "http://192.168.1.$((80"',
+    "curl http://192.168.1.$(( ))/",
+    "curl --url http://192.168.1.$((name))/",
+    `curl http://192.168.1.$((${"1+".repeat(80)}1))/`,
+  ];
+  for (const command of commands) r19Expect(commandEvidence(command), 1, "", R19_ARITHMETIC_STDERR);
+});
+
+test("r19-empty-anchor-is-not-an-artifact", () => {
+  r19Expect(r19Artifact('<a href="evidence/a.png"></a>'), 1, "", R19_INCOMPLETE_STDERR);
+  r19Expect(r19Artifact('<a href="evidence/a.png"> </a>'), 1, "", R19_INCOMPLETE_STDERR);
+  r19Expect(r19Artifact('<a href="evidence/a.png">&nbsp;</a>'), 1, "", R19_INCOMPLETE_STDERR);
+  r19Expect(r19Artifact('<a href="evidence/a.png"><img alt="x"></a>'), 1, "", R19_INCOMPLETE_STDERR);
+  r19Expect(r19Artifact('<a href="evidence/a.png">shot</a>'), 0, OK_LINE, "");
+  r19Expect(r19Artifact('<a href="evidence/a.png">&amp;</a>'), 0, OK_LINE, "");
+  r19Expect(r19Artifact('<a href="evidence/a.png">sh&#111;t</a>'), 0, OK_LINE, "");
+  r19Expect(r19Artifact('<a href="evidence/a.png"><img src="evidence/b.png"></a>'), 0, OK_LINE, "");
+  r19Expect(r19Artifact('<img src="evidence/a.png">'), 0, OK_LINE, "");
+  r19Expect(r19Artifact('<img src="evidence/a.png" alt="shot">'), 0, OK_LINE, "");
+});
+
+test("r19-denial-labels-stay-visible", () => {
+  r19Expect(r19Artifact("[not provided](evidence/a.png)"), 1, "", R19_INCOMPLETE_STDERR);
+  r19Expect(r19Artifact("[no screenshot](evidence/a.png)"), 1, "", R19_INCOMPLETE_STDERR);
+  r19Expect(r19Artifact("[**not provided**](evidence/a.png)"), 1, "", R19_INCOMPLETE_STDERR);
+  r19Expect(r19Artifact("[not\\ provided](evidence/a.png)"), 1, "", R19_INCOMPLETE_STDERR);
+  r19Expect(r19Artifact("[shot](evidence/a.png)"), 0, OK_LINE, "");
+  r19Expect(r19Artifact("[a [b] c](evidence/a.png)"), 0, OK_LINE, "");
+  r19Expect(r19Artifact("[screenshot](evidence/shot.png); recording not provided"), 0, OK_LINE, "");
+  r19Expect(r19Artifact("[screenshot](evidence/shot.png) not provided"), 1, "", R19_INCOMPLETE_STDERR);
+  r19Expect(r19Artifact("![shot](evidence/a.png)"), 0, OK_LINE, "");
+  const reference = `[pic]: evidence/a.png\n\n${r19Artifact("[shot][pic]")}`;
+  r19Expect(reference, 0, OK_LINE, "");
+  const deniedReference = `[pic]: evidence/a.png\n\n${r19Artifact("[not provided][pic]")}`;
+  r19Expect(deniedReference, 1, "", R19_INCOMPLETE_STDERR);
+});
