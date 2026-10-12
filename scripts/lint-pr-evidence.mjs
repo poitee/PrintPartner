@@ -896,13 +896,58 @@ function referenceDestination(lines, index) {
 }
 
 /** Mask complete definitions without moving offsets in the section view. */
+function openReferenceScan(rawLines, normalized = null) {
+  return {
+    rawLines,
+    normalized: normalized ?? rawLines.map((line) => line.slice(containerPrefix(line).end)),
+    paragraph: false,
+  };
+}
+
+function lineIsHeadingOrRule(raw) {
+  return /^[ \t]{0,3}#{1,6}(?:[ \t]|$)/.test(raw)
+    || /^[ \t]{0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$/.test(raw);
+}
+
+function lineStartsListItem(raw) {
+  return /^[ \t]*(?:>[ \t]*)*(?:[-+*]|\d{1,9}[.)])[ \t]/.test(raw);
+}
+
+function lineIsIndentedCode(raw) {
+  if (lineStartsListItem(raw) || /^[ \t]*>/.test(raw)) return false;
+  return /^(?: {4,}|\t)/.test(raw);
+}
+
+// A link reference definition cannot interrupt a paragraph, and a 4-space
+// line outside a paragraph is indented code. Callers share this scan.
+function pullReference(scan, index) {
+  const raw = scan.rawLines[index] ?? "";
+  const content = scan.normalized[index] ?? "";
+  if (!raw.trim()) {
+    scan.paragraph = false;
+    return { kind: "blank" };
+  }
+  if (lineIsHeadingOrRule(raw)) {
+    scan.paragraph = false;
+    return { kind: "block" };
+  }
+  if (lineStartsListItem(raw)) scan.paragraph = false;
+  if (!scan.paragraph && lineIsIndentedCode(raw)) return { kind: "skip" };
+  if (!scan.paragraph) {
+    const definition = referenceDestination(scan.normalized, index);
+    if (definition) return { kind: "definition", definition };
+  }
+  if (!/^[ \t]*\[/.test(content)) scan.paragraph = true;
+  return { kind: "text" };
+}
+
 function referenceHeadingView(value) {
   const lines = value.split("\n");
-  const normalized = referenceContainerLines(value);
+  const scan = openReferenceScan(lines);
   for (let index = 0; index < lines.length; index += 1) {
-    const definition = referenceDestination(normalized, index);
-    if (!definition) continue;
-    for (; index <= definition.end; index += 1) lines[index] = " ".repeat(lines[index].length);
+    const event = pullReference(scan, index);
+    if (event.kind !== "definition") continue;
+    for (; index <= event.definition.end; index += 1) lines[index] = " ".repeat(lines[index].length);
     index -= 1;
   }
   return lines.join("\n");
@@ -944,14 +989,15 @@ function inlineMetadataView(value) {
 function structuralMetadataView(value) {
   const inline = inlineHtmlMetadataView(inlineMetadataView(value));
   const lines = inline.split("\n");
-  const normalized = referenceContainerLines(stripHiddenMarkdown(inline));
+  const hidden = stripHiddenMarkdown(inline).split("\n");
+  const scan = openReferenceScan(hidden);
   for (let index = 0; index < lines.length; index += 1) {
-    const definition = referenceDestination(normalized, index);
-    if (!definition) continue;
+    const event = pullReference(scan, index);
+    if (event.kind !== "definition") continue;
     const start = index;
     const continuation = [];
-    for (index += 1; index <= definition.end; index += 1) {
-      continuation.push(normalized[index]);
+    for (index += 1; index <= event.definition.end; index += 1) {
+      continuation.push(scan.normalized[index]);
       lines[index] = "";
     }
     lines[start] += continuation.length ? " " + continuation.join(" ") : "";
@@ -1052,41 +1098,43 @@ function stripReferenceDefinitions(value, references, { keepMalformed = false } 
   const defined = new Set();
   const kept = [];
   const lines = value.split("\n");
-  const referenceLines = referenceContainerLines(value);
+  const scan = openReferenceScan(lines);
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
+    const paragraphBefore = scan.paragraph;
+    const event = pullReference(scan, index);
     if (!line.trim()) {
       dropping = false;
       kept.push(line);
       continue;
     }
-    const definition = referenceOpening(referenceLines, index);
-    if (definition) {
+    if (event.kind === "definition") {
+      if (!keepMalformed) {
+        const label = normalizeReferenceLabel(event.definition.label);
+        const referenced = references.has(label);
+        if (event.definition.destination && !defined.has(label)) {
+          defined.add(label);
+          if (referenced && isConcreteTarget(event.definition.destination)) concrete = true;
+        }
+      }
+      index = event.definition.end;
+      continue;
+    }
+    if (event.kind === "skip") {
+      kept.push(line);
+      continue;
+    }
+    if (!paragraphBefore && referenceOpening(scan.normalized, index)) {
       if (keepMalformed) {
         // Only valid definitions are hidden Markdown. A malformed opener and
         // any later labels remain raw text for conservative LAN checking.
-        const parsed = referenceDestination(referenceLines, index);
-        if (parsed) index = parsed.end;
-        else kept.push(line);
-        continue;
-      }
-      const parsed = referenceDestination(referenceLines, index);
-      if (parsed) {
-        const label = normalizeReferenceLabel(parsed.label);
-        const referenced = references.has(label);
-        if (parsed.destination && !defined.has(label)) {
-          defined.add(label);
-          if (referenced && isConcreteTarget(parsed.destination)) concrete = true;
-        }
-        index = parsed.end;
+        kept.push(line);
         continue;
       }
       dropping = true;
       continue;
     }
-    if (dropping) {
-      continue;
-    }
+    if (dropping) continue;
     kept.push(line);
   }
   return { text: kept.join("\n"), concrete };
@@ -1210,16 +1258,16 @@ function htmlAttribute(tag, name) {
   return found ? (found[1] ?? found[2] ?? found[3] ?? "") : "";
 }
 
-function htmlTagEnd(value, index, closing, name) {
-  if (value[index] !== "<") return -1;
+function readHtmlTag(value, index) {
+  if (value[index] !== "<") return null;
   let at = index + 1;
-  if (closing) {
-    if (value[at] !== "/") return -1;
-    at += 1;
-  } else if (value[at] === "/") return -1;
-  if (value.slice(at, at + name.length).toLowerCase() !== name) return -1;
-  at += name.length;
-  if (/[A-Za-z0-9-]/.test(value[at] ?? "")) return -1;
+  const closing = value[at] === "/";
+  if (closing) at += 1;
+  const nameStart = at;
+  while (/[A-Za-z0-9-]/.test(value[at] ?? "")) at += 1;
+  if (at === nameStart) return null;
+  const name = value.slice(nameStart, at).toLowerCase();
+  if (value[at] && !/[\s/>]/.test(value[at])) return null;
   let quote = null;
   const limit = Math.min(value.length, index + 2048);
   for (; at < limit; at += 1) {
@@ -1229,10 +1277,32 @@ function htmlTagEnd(value, index, closing, name) {
       continue;
     }
     if (ch === '"' || ch === "'") quote = ch;
-    else if (ch === ">") return at + 1;
-    else if (ch === "<") return -1;
+    else if (ch === ">") return { name, closing, end: at + 1, tag: value.slice(index, at + 1) };
+    else if (ch === "<") return null;
   }
-  return -1;
+  return null;
+}
+
+function htmlTagEnd(value, index, closing, name) {
+  const tag = readHtmlTag(value, index);
+  if (!tag || tag.closing !== closing || tag.name !== name.toLowerCase()) return -1;
+  return tag.end;
+}
+
+function decodeRawHtmlAttributes(value) {
+  let out = "";
+  let cursor = 0;
+  for (let index = value.indexOf("<", cursor); index !== -1; index = value.indexOf("<", cursor)) {
+    const tag = readHtmlTag(value, index);
+    if (!tag) {
+      out += value.slice(cursor, index + 1);
+      cursor = index + 1;
+      continue;
+    }
+    out += value.slice(cursor, index) + decodeCharacterReferences(tag.tag, { htmlNumeric: true, dropBreaks: true });
+    cursor = tag.end;
+  }
+  return out + value.slice(cursor);
 }
 
 function anchorContentEnd(value, from) {
@@ -1257,8 +1327,12 @@ function anchorContentEnd(value, from) {
 }
 
 function anchorVisible(inner) {
-  const images = inner.match(/<img\b[^>]*>/gi) ?? [];
-  if (images.some((tag) => htmlAttribute(tag, "src").trim())) return true;
+  for (let index = inner.indexOf("<"); index !== -1; index = inner.indexOf("<", index + 1)) {
+    const tag = readHtmlTag(inner, index);
+    if (!tag) continue;
+    if (!tag.closing && tag.name === "img" && htmlAttribute(tag.tag, "src").trim()) return true;
+    index = tag.end - 1;
+  }
   const text = decodeCharacterReferences(inner.replace(/<!--[\s\S]*?-->/g, "").replace(/<[^>]*>/g, " "))
     .replace(/[\p{Default_Ignorable_Code_Point}\p{Mark}]/gu, "")
     .replace(/\u00a0/g, " ")
@@ -1269,20 +1343,24 @@ function anchorVisible(inner) {
 function htmlConcreteMarker(value) {
   let out = "";
   let cursor = 0;
-  for (const match of value.matchAll(/<(a|img)\b[^>]*>/gi)) {
-    const tag = match[0];
-    const name = match[1].toLowerCase();
-    out += value.slice(cursor, match.index);
-    if (name === "img") {
-      const destination = htmlAttribute(tag, "src");
+  for (let index = value.indexOf("<", cursor); index !== -1; index = value.indexOf("<", cursor)) {
+    const tag = readHtmlTag(value, index);
+    if (!tag || tag.closing || (tag.name !== "a" && tag.name !== "img")) {
+      out += value.slice(cursor, tag ? tag.end : index + 1);
+      cursor = tag ? tag.end : index + 1;
+      continue;
+    }
+    out += value.slice(cursor, index);
+    if (tag.name === "img") {
+      const destination = htmlAttribute(tag.tag, "src");
       out += destination && isConcreteTarget(destination) ? "\u0001" : "";
     } else {
-      const destination = htmlAttribute(tag, "href");
-      const contentEnd = anchorContentEnd(value, match.index + tag.length);
-      const inner = contentEnd === -1 ? "" : value.slice(match.index + tag.length, contentEnd);
+      const destination = htmlAttribute(tag.tag, "href");
+      const contentEnd = anchorContentEnd(value, tag.end);
+      const inner = contentEnd === -1 ? "" : value.slice(tag.end, contentEnd);
       if (destination && isConcreteTarget(destination) && anchorVisible(inner)) out += "\u0001";
     }
-    cursor = match.index + tag.length;
+    cursor = tag.end;
   }
   return out + value.slice(cursor);
 }
@@ -1422,7 +1500,8 @@ for (const [start, end, step, offset] of [
 }
 
 function normalizeReferenceLabel(label) {
-  const normalized = label.replace(/\\(.)/g, "$1").trim().replace(/\s+/g, " ");
+  // GFM example 554 keeps backslashes. Only case and whitespace change.
+  const normalized = label.trim().replace(/\s+/g, " ");
   return [...normalized].map((ch) => REFERENCE_CASE_FOLD.get(ch) ?? ch).join("");
 }
 
@@ -1684,6 +1763,38 @@ function readStaticArithmetic(value, start, quote) {
   return { resolved: false, text: value.slice(start, index), end: index };
 }
 
+function readCommandSubstitution(value, start) {
+  const limit = Math.min(value.length, start + 256);
+  let index = start + 2;
+  let depth = 1;
+  let quote = null;
+  while (index < limit && depth > 0) {
+    const ch = value[index];
+    if (quote) {
+      if (quote === '"' && ch === "\\" && index + 1 < limit) {
+        index += 2;
+        continue;
+      }
+      if (ch === quote) quote = null;
+      index += 1;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      index += 1;
+      continue;
+    }
+    if (ch === "\\") {
+      index += index + 1 < limit ? 2 : 1;
+      continue;
+    }
+    if (ch === "(") depth += 1;
+    else if (ch === ")") depth -= 1;
+    index += 1;
+  }
+  return { text: value.slice(start, index), end: index };
+}
+
 function shellWords(value, { commandTokens = false } = {}) {
   const words = [];
   let word = "";
@@ -1712,6 +1823,13 @@ function shellWords(value, { commandTokens = false } = {}) {
       append(expansion.text, true);
       if (!expansion.resolved) wordUnresolved = true;
       index = expansion.end - 1;
+      continue;
+    }
+    if (quote !== "'" && ch === "$" && value[index + 1] === "(" && (wordStarted || quote !== null)) {
+      const substitution = readCommandSubstitution(value, index);
+      append(substitution.text, true);
+      wordUnresolved = true;
+      index = substitution.end - 1;
       continue;
     }
     if (quote === null && /[\s;|&<>()`]/.test(ch)) {
@@ -2311,26 +2429,64 @@ function curlExpandedOption(arg, args, index, variables, budget) {
   }
   return { index: next };
 }
+// Curl treats these as --proxy. http_proxy is lowercase only. HTTP_PROXY is not.
+const PROXY_URL_NAMES = new Set([
+  "http_proxy",
+  "https_proxy", "HTTPS_PROXY",
+  "ftp_proxy", "FTP_PROXY",
+  "all_proxy", "ALL_PROXY",
+]);
+
+function proxyAssignmentValue(text) {
+  const eq = text.indexOf("=");
+  if (eq <= 0) return null;
+  let name = text.slice(0, eq);
+  if (name.endsWith("+")) name = name.slice(0, -1);
+  if (!PROXY_URL_NAMES.has(name)) return null;
+  return text.slice(eq + 1);
+}
+
+function noteProxyAssignment(proxies, word) {
+  if (!word?.text) return;
+  const value = proxyAssignmentValue(word.text);
+  if (value == null) return;
+  const rest = word.text.replace(/\$\(\(/g, "");
+  proxies.push({
+    value,
+    arithmetic: Boolean(word.unresolved) && (/\$\(\(/.test(word.text) || !/\$\(/.test(word.text)),
+    substitution: /\$\(/.test(rest),
+  });
+}
+
 function effectiveCurlStart(command) {
+  const proxies = [];
+  const miss = () => ({ index: -1, proxies });
   let start = 0;
   let mode = "shell";
-  while (/^[a-zA-Z_][\w]*\+?=/.test(command[start]?.text ?? "")) start += 1;
+  while (/^[a-zA-Z_][\w]*\+?=/.test(command[start]?.text ?? "")) {
+    noteProxyAssignment(proxies, command[start]);
+    start += 1;
+  }
   while (start < command.length) {
     const program = command[start].text;
     const name = program.slice(program.lastIndexOf("/") + 1);
-    if (name === "curl" || name === "wget") return mode === "builtin" ? -1 : start;
+    if (name === "curl" || name === "wget") return { index: mode === "builtin" ? -1 : start, proxies };
     if (name === "sudo" || name === "sudoedit") {
-      if (mode === "builtin") return -1;
+      if (mode === "builtin") return miss();
+      const from = start;
       const next = sudoCommandIndex(command, start);
-      if (next === -1 || next.index <= start) return -1;
+      if (next === -1 || next.index <= start) return miss();
+      for (let at = from + 1; at < next.index; at += 1) {
+        if (sudoAssignment(command[at].text)) noteProxyAssignment(proxies, command[at]);
+      }
       start = next.index;
       mode = next.shell ? "shell" : "executable";
       continue;
     }
-    if (!Object.hasOwn(COMMAND_LAUNCHERS, name)) return -1;
+    if (!Object.hasOwn(COMMAND_LAUNCHERS, name)) return miss();
     const shellBuiltin = SHELL_COMMAND_LAUNCHERS.has(name);
     if ((shellBuiltin && (mode === "executable" || program !== name))
-      || (!shellBuiltin && mode === "builtin")) return -1;
+      || (!shellBuiltin && mode === "builtin")) return miss();
     const launcher = COMMAND_LAUNCHERS[name];
     start += 1;
     while (start < command.length) {
@@ -2345,18 +2501,18 @@ function effectiveCurlStart(command) {
         const flag = option.slice(2, equal === -1 ? undefined : equal);
         if (launcher.optionalValues?.includes(flag)) continue;
         if (launcher.longFlags.includes(flag) && equal === -1) continue;
-        if (!launcher.longValues.includes(flag)) return -1;
+        if (!launcher.longValues.includes(flag)) return miss();
         if (equal === -1) {
-          if (start === command.length) return -1;
+          if (start === command.length) return miss();
           start += 1;
         }
       } else {
         for (let at = 1; at < option.length; at += 1) {
           const flag = option[at];
           if (launcher.flags.includes(flag)) continue;
-          if (!launcher.values.includes(flag)) return -1;
+          if (!launcher.values.includes(flag)) return miss();
           if (at + 1 === option.length) {
-            if (start === command.length) return -1;
+            if (start === command.length) return miss();
             start += 1;
           }
           break;
@@ -2364,14 +2520,17 @@ function effectiveCurlStart(command) {
       }
     }
     if (name === "env") {
-      while (/^[^=]*=/.test(command[start]?.text ?? "")) start += 1;
+      while (/^[^=]*=/.test(command[start]?.text ?? "")) {
+        noteProxyAssignment(proxies, command[start]);
+        start += 1;
+      }
     } else if (name === "timeout") {
-      if (!/^(?:\d+(?:\.\d*)?|\.\d+)[smhd]?$/.test(command[start]?.text ?? "")) return -1;
+      if (!/^(?:\d+(?:\.\d*)?|\.\d+)[smhd]?$/.test(command[start]?.text ?? "")) return miss();
       start += 1;
     }
     mode = launcher.mode;
   }
-  return -1;
+  return miss();
 }
 
 const CURL_CONNECTION_OPTIONS = new Map([
@@ -2518,7 +2677,7 @@ function unresolvedOperand(arg, operand) {
   const equal = arg.indexOf("=");
   if (arg.startsWith("--") && equal !== -1 && arg.slice(equal + 1) === operand) return true;
   if (arg.startsWith("-") && !arg.startsWith("--") && arg.slice(2) === operand) return true;
-  return operand.includes("$((") && arg.includes(operand);
+  return operand.includes("$(") && arg.includes(operand);
 }
 
 function curlCommandTargets(value) {
@@ -2526,10 +2685,19 @@ function curlCommandTargets(value) {
   let overflow = false;
   let budget = false;
   let unresolved = false;
+  let substitution = false;
   let command = [];
   const flush = () => {
-    const start = effectiveCurlStart(command);
-    if (start === -1) { command = []; return; }
+    const located = effectiveCurlStart(command);
+    if (located.index === -1) { command = []; return; }
+    const start = located.index;
+    for (const proxy of located.proxies) {
+      if (proxy.arithmetic) unresolved = true;
+      if (proxy.substitution) substitution = true;
+      if (proxy.arithmetic || proxy.substitution || !proxy.value) continue;
+      const target = /^(?:[a-z][\w+.-]*:|\/\/)/i.test(proxy.value) ? proxy.value : `http://${proxy.value}`;
+      if (!/\s/.test(target)) targets.push(target);
+    }
     let globoff = false;
     let options = true;
     let urls = [];
@@ -2548,13 +2716,20 @@ function curlCommandTargets(value) {
       }
     }
     const args = tagged.map((item) => item.text);
-    const fromUnresolved = (operand) => tagged.some((item) => item.unresolved && unresolvedOperand(item.text, operand));
+    const fromUnresolved = (operand) => {
+      let found = false;
+      for (const item of tagged) {
+        if (!item.unresolved || !unresolvedOperand(item.text, operand)) continue;
+        found = true;
+        const rest = item.text.replace(/\$\(\(/g, "");
+        if (/\$\(\(/.test(item.text) || !/\$\(/.test(item.text)) unresolved = true;
+        if (/\$\(/.test(rest)) substitution = true;
+      }
+      return found;
+    };
     const transfer = () => {
       for (const url of urls) {
-        if (fromUnresolved(url)) {
-          unresolved = true;
-          continue;
-        }
+        if (fromUnresolved(url)) continue;
         const expanded = globoff ? { values: [url], overflow: false } : expandTargetGlobs(url);
         overflow ||= expanded.overflow;
         for (const target of expanded.values) {
@@ -2610,7 +2785,7 @@ function curlCommandTargets(value) {
     else command.push(token);
   }
   flush();
-  return { targets, overflow, budget, unresolved };
+  return { targets, overflow, budget, unresolved, substitution };
 }
 
 function joinShellContinuations(value) {
@@ -2674,6 +2849,7 @@ function shellVisible(value) {
 function targetsBannedLan(sectionText, definitions, literalText = []) {
   let budget = false;
   let unresolved = false;
+  let substitution = false;
   const verification = withoutFencePayload(withoutFields(sectionText, [FIELD_LABELS.reason], {
     keepLazy: true,
   }).replace(
@@ -2682,11 +2858,12 @@ function targetsBannedLan(sectionText, definitions, literalText = []) {
   ));
   const bannedTarget = (value) => {
     if (BANNED_LAN_IP.test(value)) return true;
-    const joined = joinShellContinuations(decodeCharacterReferences(value, { htmlNumeric: true, dropBreaks: true }));
+    const joined = joinShellContinuations(decodeCharacterReferences(decodeRawHtmlAttributes(value), { dropBreaks: true }));
     const words = shellWords(joined);
     const curl = curlCommandTargets(joined);
     if (curl.budget) budget = true;
     if (curl.unresolved) unresolved = true;
+    if (curl.substitution) substitution = true;
     if (curl.overflow) return true;
     const decoded = shellVisible(joined);
     const targets = [...decoded.matchAll(/(?:https?:|\/\/)[^\s<>()"'`]+/gi)]
@@ -2719,18 +2896,18 @@ function targetsBannedLan(sectionText, definitions, literalText = []) {
     // Malformed links render as raw text. Unlike artifact validation, the LAN
     // scan must retain their suffix so later reference uses cannot disappear.
     || (definitions.size > 0 && [...referenceUses(verification, { keepMalformed: true })].some((label) => bannedTarget(definitions.get(label) ?? "")));
-  return { banned, budget, unresolved };
+  return { banned, budget, unresolved, substitution };
 }
 
 function documentReferences(body) {
   const definitions = new Map();
-  const lines = referenceContainerLines(stripHiddenMarkdown(body));
-  for (let i = 0; i < lines.length; i += 1) {
-    const definition = referenceDestination(lines, i);
-    if (!definition) continue;
-    const label = normalizeReferenceLabel(definition.label);
-    if (!definitions.has(label)) definitions.set(label, definition.destination);
-    i = definition.end;
+  const scan = openReferenceScan(stripHiddenMarkdown(body).split("\n"));
+  for (let index = 0; index < scan.rawLines.length; index += 1) {
+    const event = pullReference(scan, index);
+    if (event.kind !== "definition") continue;
+    const label = normalizeReferenceLabel(event.definition.label);
+    if (!definitions.has(label)) definitions.set(label, event.definition.destination);
+    index = event.definition.end;
   }
   return definitions;
 }
@@ -2813,6 +2990,11 @@ export function lintPrEvidence(body) {
   if (directLan.unresolved || conservativeLan.unresolved) {
     errors.push(
       "Evidence contains a curl or wget target with shell arithmetic this static check could not resolve. Rewrite that operand without arithmetic expansion.",
+    );
+  }
+  if (directLan.substitution || conservativeLan.substitution) {
+    errors.push(
+      "Evidence contains a curl or wget target with a command substitution this static check could not resolve. Rewrite that operand without command substitution.",
     );
   }
 
