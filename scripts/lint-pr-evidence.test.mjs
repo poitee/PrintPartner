@@ -4986,3 +4986,103 @@ test("r19-denial-labels-stay-visible", () => {
   const deniedReference = `[pic]: evidence/a.png\n\n${r19Artifact("[not provided][pic]")}`;
   r19Expect(deniedReference, 1, "", R19_INCOMPLETE_STDERR);
 });
+
+const R20_SUBSTITUTION_STDERR = "PR evidence lint FAILED:\n- Evidence contains a curl or wget target with a command substitution this static check could not resolve. Rewrite that operand without command substitution.\n";
+
+function r20Steps(steps) {
+  return commandEvidence("true").replace(
+    "- Steps followed to produce the evidence: ran locally",
+    `- Steps followed to produce the evidence: ${steps}`,
+  );
+}
+
+test("r20-proxy-assignments-follow-lan-policy", () => {
+  for (const name of ["http_proxy", "all_proxy", "ALL_PROXY"]) {
+    r19Expect(commandEvidence(`${name}=3232235856 NO_PROXY= curl http://example.test/`), 1, "", LAN_STDERR);
+    r19Expect(commandEvidence(`${name}=3232235855 NO_PROXY= curl http://example.test/`), 0, OK_LINE, "");
+  }
+  r19Expect(commandEvidence("http_proxy=3232235857 NO_PROXY= curl http://example.test/"), 1, "", LAN_STDERR);
+  r19Expect(commandEvidence("http_proxy=3232235858 NO_PROXY= curl http://example.test/"), 0, OK_LINE, "");
+  r19Expect(commandEvidence("http_proxy=http://192.168.1.80:8080 curl http://example.test/"), 1, "", LAN_STDERR);
+  r19Expect(commandEvidence("http_proxy=http://192.168.200.82:8080 curl http://example.test/"), 0, OK_LINE, "");
+  r19Expect(commandEvidence("https_proxy=3232235856 curl https://example.test/"), 1, "", LAN_STDERR);
+  r19Expect(commandEvidence("HTTPS_PROXY=3232286800 curl https://example.test/"), 1, "", LAN_STDERR);
+  r19Expect(commandEvidence("ftp_proxy=3232235856 curl ftp://example.test/"), 1, "", LAN_STDERR);
+  r19Expect(commandEvidence("env http_proxy=3232235856 curl http://example.test/"), 1, "", LAN_STDERR);
+  r19Expect(commandEvidence("env http_proxy=3232235855 curl http://example.test/"), 0, OK_LINE, "");
+  r19Expect(commandEvidence("sudo http_proxy=3232235856 curl http://example.test/"), 1, "", LAN_STDERR);
+  r19Expect(commandEvidence("http_proxy=3232235856 wget http://example.test/"), 1, "", LAN_STDERR);
+  r19Expect(commandEvidence("http_proxy='3232235856' curl http://example.test/"), 1, "", LAN_STDERR);
+  r19Expect(commandEvidence("HTTP_PROXY=3232235856 curl http://example.test/"), 0, OK_LINE, "");
+  r19Expect(commandEvidence("COUNT=3232235856 curl http://example.test/"), 0, OK_LINE, "");
+  r19Expect(commandEvidence("NO_PROXY= curl http://example.test/"), 0, OK_LINE, "");
+  r19Expect(commandEvidence("http_proxy=192.168.1.$((80)) curl http://example.test/"), 1, "", LAN_STDERR);
+  r19Expect(commandEvidence("http_proxy=192.168.1.$((79)) curl http://example.test/"), 0, OK_LINE, "");
+  r19Expect(commandEvidence("http_proxy=192.168.1.$((x)) curl http://example.test/"), 1, "", R19_ARITHMETIC_STDERR);
+});
+
+test("r20-command-substitution-operands-fail-closed", () => {
+  for (const command of [
+    "curl http://192.168.1.$(printf 80)/",
+    "curl http://192.168.200.$(printf 81)/",
+    'curl "http://192.168.1.$(printf 80)/"',
+    "wget http://192.168.1.$(printf 80)/",
+    "curl --url http://192.168.1.$(printf 80)/",
+    "env curl http://192.168.200.$(printf 81)/",
+  ]) {
+    r19Expect(commandEvidence(command), 1, "", R20_SUBSTITUTION_STDERR);
+  }
+  r19Expect(commandEvidence("curl 'http://192.168.1.$(printf 80)/'"), 0, OK_LINE, "");
+  r19Expect(commandEvidence("curl 'http://192.168.200.$(printf 81)/'"), 0, OK_LINE, "");
+  r19Expect(commandEvidence("curl http://192.168.1.\\$(printf 80)/"), 0, OK_LINE, "");
+  r19Expect(commandEvidence('curl "http://192.168.1.\\$(printf 80)/"'), 0, OK_LINE, "");
+  r19Expect(commandEvidence("printf '%s' 'curl http://192.168.1.$(printf 80)/'"), 0, OK_LINE, "");
+  r19Expect(commandEvidence("curl http://192.168.1.$((79))/"), 0, OK_LINE, "");
+  r19Expect(commandEvidence("curl http://192.168.1.$((80))/"), 1, "", LAN_STDERR);
+  r19Expect(commandEvidence("curl http://192.168.1.$((x))/"), 1, "", R19_ARITHMETIC_STDERR);
+});
+
+test("r20-reference-labels-keep-backslashes", () => {
+  const defs = "[foo\\!]: https://example.test/safe\n\n[foo!]: http://192.168.1.80/";
+  r19Expect(`${defs}\n\n${r20Steps("[x][foo!]")}`, 1, "", LAN_STDERR);
+  r19Expect(`${defs}\n\n${r20Steps("[x][foo\\!]")}`, 0, OK_LINE, "");
+  r19Expect(`${"[foo!]: http://192.168.1.80/"}\n\n${r20Steps("[x][foo!]")}`, 1, "", LAN_STDERR);
+  r19Expect(`${"[foo\\!]: https://example.test/safe"}\n\n${r20Steps("[x][foo\\!]")}`, 0, OK_LINE, "");
+  r19Expect(`${"[foo\\!]: http://192.168.200.81/"}\n\n${r20Steps("[x][foo\\!]")}`, 1, "", LAN_STDERR);
+});
+
+test("r20-paragraph-continuations-are-not-definitions", () => {
+  const banned = "[target]: http://192.168.1.80/";
+  for (const continuation of [
+    "paragraph\n    [target]: https://example.test/safe",
+    "paragraph\n   [target]: https://example.test/safe",
+    "paragraph\n [target]: https://example.test/safe",
+    "paragraph\n[target]: https://example.test/safe",
+  ]) {
+    r19Expect(`${continuation}\n\n${banned}\n\n${r20Steps("[target]")}`, 1, "", LAN_STDERR);
+  }
+  r19Expect(`paragraph\n\n[target]: https://example.test/safe\n\n${banned}\n\n${r20Steps("[target]")}`, 0, OK_LINE, "");
+  r19Expect(`paragraph\n\n    [target]: https://example.test/safe\n\n${banned}\n\n${r20Steps("[target]")}`, 1, "", LAN_STDERR);
+  r19Expect(`${banned}\n\n${r20Steps("[target]")}`, 1, "", LAN_STDERR);
+  r19Expect(`[target]: https://example.test/safe\n\n${r20Steps("[target]")}`, 0, OK_LINE, "");
+});
+
+test("r20-markdown-numeric-references-require-semicolons", () => {
+  r19Expect(r20Steps("[x](http://192.168.1.8&#48/)"), 0, OK_LINE, "");
+  r19Expect(r20Steps("[x](http://192.168.200.8&#49/)"), 0, OK_LINE, "");
+  r19Expect(r20Steps("[x](http://192.168.1.8&#48;/)"), 1, "", LAN_STDERR);
+  r19Expect(r20Steps("[x](http://192.168.200.8&#49;/)"), 1, "", LAN_STDERR);
+  r19Expect(r20Steps("[x](http://192.168.1.7&#57;/)"), 0, OK_LINE, "");
+  r19Expect(r20Steps('<a href="http://192.168.1.8&#48/">x</a>'), 1, "", LAN_STDERR);
+  r19Expect(r20Steps('<a href="http://192.168.1.8&#48;/">x</a>'), 1, "", LAN_STDERR);
+  r19Expect(r20Steps('<a href="http://192.168.1.7&#57/">x</a>'), 0, OK_LINE, "");
+});
+
+test("r20-quoted-html-attributes-keep-the-tag", () => {
+  r19Expect(r19Artifact('<a title="1 > 0" href="evidence/a.png">shot</a>'), 0, OK_LINE, "");
+  r19Expect(r19Artifact("<a title='1 > 0' href='evidence/a.png'>shot</a>"), 0, OK_LINE, "");
+  r19Expect(r19Artifact('<img title="1 > 0" src="evidence/a.png">'), 0, OK_LINE, "");
+  r19Expect(r19Artifact('<a title="1 > 0" href="evidence/a.png"><img src="evidence/b.png"></a>'), 0, OK_LINE, "");
+  r19Expect(r19Artifact('<a title="1 > 0" href="evidence/a.png"></a>'), 1, "", R19_INCOMPLETE_STDERR);
+  r19Expect(r19Artifact('<img title="1 > 0" alt="shot">'), 1, "", R19_INCOMPLETE_STDERR);
+});
