@@ -218,6 +218,27 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: rust -> target
+      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        with:
+          tool: nextest
+      - name: Verify source Unicode and case regressions on macOS
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Intact legacy snapshots can contain names that default APFS aliases.
+          # Keep their bytes distinct so the suite exercises migration policy.
+          fixture_root=$(mktemp -d "$RUNNER_TEMP/pp-source-case.XXXXXX")
+          fixture_mount="$fixture_root/mount"
+          mkdir "$fixture_mount"
+          # One archive test retains two 256 MiB copies alongside parallel fixtures.
+          hdiutil create -size 4g -type SPARSE -fs 'Case-sensitive APFS' \
+            -volname pp-source-fixtures "$fixture_root/fixtures.sparseimage"
+          hdiutil attach -nobrowse -owners on -mountpoint "$fixture_mount" \
+            "$fixture_root/fixtures.sparseimage"
+          trap 'hdiutil detach "$fixture_mount"' EXIT
+          df -h "$fixture_mount"
+          mkdir "$fixture_mount/tmp"
+          TMPDIR="$fixture_mount/tmp" cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-source
       - name: Install locked dependencies and build measured desktop assets
         shell: bash
         env:

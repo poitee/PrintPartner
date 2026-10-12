@@ -201,6 +201,59 @@ fn changed_policy_and_bytes_reuse_original_publication() {
 }
 
 #[test]
+fn source_paths_require_nfc_for_files_and_directories() {
+    for (nfc, nfd) in [
+        ("café.stl", "cafe\u{301}.stl"),
+        ("pièces/part.stl", "pie\u{300}ces/part.stl"),
+    ] {
+        assert_eq!(SourcePath::try_from(nfc.to_owned()).unwrap().as_str(), nfc);
+        assert_eq!(
+            SourcePath::try_from(nfd.to_owned()).unwrap_err().category(),
+            "unsafe-path"
+        );
+        // Deserialization must enforce the same boundary as direct construction.
+        assert!(serde_json::from_value::<SourcePath>(serde_json::json!(nfd)).is_err());
+    }
+}
+
+#[test]
+fn filename_case_collisions_are_rejected_before_copying_in_either_order() {
+    // Request validation runs before filesystem access, including on volumes
+    // that cannot represent both spellings as separate files.
+    for paths in [["Part.stl", "part.stl"], ["CAFÉ.stl", "café.stl"]] {
+        for reverse in [false, true] {
+            let fixture = Fixture::new();
+            let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+            let mut selected = request();
+            selected.files = paths
+                .into_iter()
+                .map(|path| SelectedFile {
+                    path: SourcePath::try_from(path.to_owned()).unwrap(),
+                    kind: FileKind::Stl,
+                    size_hint_bytes: None,
+                })
+                .collect();
+            if reverse {
+                selected.files.reverse();
+            }
+            let error = fixture
+                .repos()
+                .source(42)
+                .unwrap()
+                .materialize(selected, &input, budget())
+                .unwrap_err();
+            assert_eq!(error.category(), "duplicate-path");
+            assert_eq!(
+                fs::read_dir(fixture.0.join("repos/42/revisions"))
+                    .unwrap()
+                    .count(),
+                0
+            );
+        }
+    }
+}
+
+#[test]
 fn conflicting_directory_case_is_rejected_before_copying() {
     let fixture = Fixture::new();
     let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
