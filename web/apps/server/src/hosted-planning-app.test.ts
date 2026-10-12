@@ -11,6 +11,15 @@ import { loadConfig } from "./config.js";
 import { HOSTED_FEATURE_DISABLED_DETAIL, HOSTED_LAN_DISABLED_DETAIL } from "./lib/hosted-planning-deny.js";
 import { assertSafeOutboundUrl, setPrivateOutboundDenied } from "./lib/outbound-url.js";
 
+vi.mock("./services/local-source-revision.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./services/local-source-revision.js")>();
+  return {
+    ...actual,
+    removeObsoleteHostedWorkingTree: vi.fn((...args: Parameters<typeof actual.removeObsoleteHostedWorkingTree>) =>
+      actual.removeObsoleteHostedWorkingTree(...args)),
+  };
+});
+
 const dirs: string[] = [];
 
 afterEach(() => {
@@ -442,6 +451,43 @@ it("removes an obsolete hosted working tree only after upload publication succee
     expect(zipped.statusCode).toBe(200);
     expect(existsSync(legacy)).toBe(false);
   } finally {
+    await app.close();
+    await ports.db.close();
+  }
+});
+
+it("keeps a published upload successful when obsolete hosted tree cleanup fails", async () => {
+  const revision = await import("./services/local-source-revision.js");
+  const cleanup = vi.mocked(revision.removeObsoleteHostedWorkingTree);
+  const original = cleanup.getMockImplementation();
+  cleanup.mockRejectedValueOnce(Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" }));
+  const { app, ports } = await hostedApp();
+  try {
+    const registration = await app.inject({ method: "POST", url: "/auth/register", payload: {
+      email: "cleanup-failed@example.com", password: "correct-horse-battery",
+    } });
+    const cookie = String(registration.headers["set-cookie"]).split(";")[0]!;
+    const source = await app.inject({ method: "POST", url: "/sources", headers: { cookie },
+      payload: { name: "Cleanup failure", source_kind: "archive" } });
+    const id = source.json<{ id: number }>().id;
+    const legacy = join(ports.dataDir, "sources", String(id));
+    mkdirSync(join(legacy, "files"), { recursive: true });
+    writeFileSync(join(legacy, "files", "legacy.stl"), "legacy bytes");
+    const published = await app.inject({
+      method: "POST",
+      url: `/sources/${id}/upload-files`,
+      headers: { cookie, "content-type": "multipart/form-data; boundary=kept-boundary" },
+      payload: Buffer.from("--kept-boundary\r\nContent-Disposition: form-data; name=\"files\"; filename=\"part.stl\"\r\nContent-Type: application/octet-stream\r\n\r\nsolid kept\nendsolid kept\n\r\n--kept-boundary--\r\n"),
+    });
+    expect(published.statusCode).toBe(200);
+    expect(published.json()).not.toMatchObject({ detail: "EACCES: permission denied" });
+    expect(readFileSync(join(legacy, "files", "legacy.stl"), "utf8")).toBe("legacy bytes");
+    const active = ports.getRepository(registration.json<{ user: { user_id: string } }>().user.user_id).getSource(id)?.local_path;
+    expect(active).toBeTruthy();
+    expect(readFileSync(join(active!, "part.stl"), "utf8")).toBe("solid kept\nendsolid kept\n");
+  } finally {
+    cleanup.mockReset();
+    if (original) cleanup.mockImplementation(original);
     await app.close();
     await ports.db.close();
   }

@@ -3368,11 +3368,15 @@ export async function applyAssistantAction(
             getLogger().log("warn", "Uploaded Source documentation indexing failed", { sourceId, revisionId, error: indexedDocs.reason });
           }
           if (deps.hostedPlanning) {
-            await removeObsoleteHostedWorkingTree({
-              sourcesDir,
-              sourceId,
-              activePath: updated.local_path,
-            });
+            try {
+              await removeObsoleteHostedWorkingTree({
+                sourcesDir,
+                sourceId,
+                activePath: updated.local_path,
+              });
+            } catch (error) {
+              getLogger().log("warn", "Obsolete hosted working tree cleanup failed", { sourceId, error: String(error) });
+            }
           }
           outcome = {
             ok: true,

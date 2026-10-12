@@ -82,6 +82,27 @@ describe("publishLocalSourceWorkingTree", () => {
     } finally { sqlite.close(); }
   });
 
+  it("omits a case-variant snapshot manifest at the upload root and keeps a nested one", async () => {
+    const { sqlite, repo, source, workingTree } = fixture();
+    try {
+      const variant = ".PRINTPARTNER-SOURCE-SNAPSHOT.JSON";
+      writeFileSync(join(workingTree, variant), "{\"decoy\":true}\n");
+      mkdirSync(join(workingTree, "notes"));
+      writeFileSync(join(workingTree, "notes", variant), "nested decoy");
+      const activated = await publishLocalSourceWorkingTree({
+        repo, reposDir: sqlite.reposDir, sourceId: source.id, workingTree, preserveAllFiles: true,
+      });
+      const root = activated.local_path!;
+      expect(readdirSync(root).sort()).toEqual([SOURCE_SNAPSHOT_MANIFEST_FILE, "cube.stl", "notes"].sort());
+      expect(readFileSync(join(root, "notes", variant), "utf8")).toBe("nested decoy");
+      const manifest = JSON.parse(readFileSync(join(root, SOURCE_SNAPSHOT_MANIFEST_FILE), "utf8")) as {
+        files: Array<{ path: string }>;
+      };
+      expect(manifest.files.map((file) => file.path)).toEqual(["cube.stl", "notes/.PRINTPARTNER-SOURCE-SNAPSHOT.JSON"]);
+      expect(readFileSync(join(root, "cube.stl"), "utf8")).toBe("solid cube\nendsolid cube\n");
+    } finally { sqlite.close(); }
+  });
+
   it("streams a large file while deriving its revision digest", async () => {
     const { sqlite, repo, source, workingTree } = fixture();
     const contentBytes = 32 * 1024 * 1024;

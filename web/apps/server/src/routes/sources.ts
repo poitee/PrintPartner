@@ -439,6 +439,8 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
               sourcesDir: deps.sourcesDir,
               sourceId: id,
               activePath: updated.local_path,
+            }).catch((error: unknown) => {
+              request.log.warn({ err: error, sourceId: id }, "Obsolete hosted working tree cleanup failed");
             });
           }
           void prefetchSourceCover(deps, id);
@@ -572,6 +574,8 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
               sourcesDir: deps.sourcesDir,
               sourceId: id,
               activePath: updated.local_path,
+            }).catch((error: unknown) => {
+              request.log.warn({ err: error, sourceId: id }, "Obsolete hosted working tree cleanup failed");
             });
           }
           void prefetchSourceCover(deps, id);

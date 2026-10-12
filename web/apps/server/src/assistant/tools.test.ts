@@ -18,6 +18,15 @@ import {
   invokeAssistantTool,
   applyAssistantAction,
 } from "./tools.js";
+
+vi.mock("../services/local-source-revision.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/local-source-revision.js")>();
+  return {
+    ...actual,
+    removeObsoleteHostedWorkingTree: vi.fn((...args: Parameters<typeof actual.removeObsoleteHostedWorkingTree>) =>
+      actual.removeObsoleteHostedWorkingTree(...args)),
+  };
+});
 import { inferStackPresetId, summarizeOtherBuildsAsExamples } from "./example-builds.js";
 import { hydrateBuildPlanningBrief, newBuildPlanningBrief, readBuildPlanningBrief, saveBuildPlanningBrief } from "../services/build-planning.js";
 import { loadKitManifest } from "../services/kit-manifest-store.js";
@@ -576,6 +585,35 @@ option_groups:
     mkdirSync(join(legacy, "files"), { recursive: true });
     writeFileSync(join(legacy, "files", "legacy.stl"), "legacy bytes");
     expect(await usage()).toBe(after + Buffer.byteLength("legacy bytes"));
+  });
+
+  it("reports a confirmed import as successful when obsolete hosted tree cleanup fails", async () => {
+    const revision = await import("../services/local-source-revision.js");
+    const cleanup = vi.mocked(revision.removeObsoleteHostedWorkingTree);
+    const original = cleanup.getMockImplementation();
+    cleanup.mockRejectedValueOnce(Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" }));
+    try {
+      const source = repo.createSource({ name: "Cleanup failure", source_kind: "local" });
+      const legacy = join(dataDir, "sources", String(source.id));
+      mkdirSync(join(legacy, "files"), { recursive: true });
+      writeFileSync(join(legacy, "files", "legacy.stl"), "legacy bytes");
+      const proposal = await invokeAssistantTool("propose_import_source_files", {
+        source_id: source.id,
+        files: [{ path: "parts/uploaded.stl", content_base64: Buffer.from("solid uploaded").toString("base64") }],
+      }, { repo });
+      const applied = await applyAssistantAction(proposal.proposedAction!, {
+        repo, dataDir, hostedPlanning: true, jobs: { start: async () => "unused" } as never,
+      });
+      expect(applied.ok).toBe(true);
+      if (!applied.ok) return;
+      expect(applied.result.source.current_source_revision_id).toEqual(expect.any(Number));
+      expect(readFileSync(join(legacy, "files", "legacy.stl"), "utf8")).toBe("legacy bytes");
+      const active = repo.getSource(source.id)?.local_path;
+      expect(readFileSync(join(active ?? "", "parts", "uploaded.stl"), "utf8")).toBe("solid uploaded");
+    } finally {
+      cleanup.mockReset();
+      if (original) cleanup.mockImplementation(original);
+    }
   });
 
   it("refuses MCP file imports above the 64 MiB inline limit", async () => {
