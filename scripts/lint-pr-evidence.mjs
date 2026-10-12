@@ -662,7 +662,7 @@ const VERIFICATION_COMMAND =
   /^(?:\$\s*)?(?:cd\s+\S+\s+&&\s+)?(?:node\s+(?:--test\b|\S+\.m?[jc]s\b)|cargo\s+(?:test|nextest|check|build|fmt|clippy)\b|(?:pnpm|npm)\s+(?:test|run|exec|check|build)\b|python3?\s+\S+\.py\b|(?:py\.test|pytest)\b|go\s+test\b|mvn(?:w)?\b|(?:\.\/)?gradlew(?:\.bat)?\b|gradle\s+(?:test|check|build)\b|curl\s+(?:-\S+\s+)*https?:\/\/)/i;
 
 const TEST_RUNNER_OUTPUT_LINE =
-  /^(?:ok\s+\S+\s+\d+(?:\.\d+)?s(?:\s+\([^\)]*\))?|(?:\d+\s+)?passed(?:\s|$)|(?:\d+\s+)?failed(?:\s|$)|=+\s*(?:test session starts|.*passed).*?=+|BUILD SUCCESS(?:FUL)?(?:\s|$)|Tests run:\s*\d+)/i;
+  /^(?:ok\s+\S+\s+\d+(?:\.\d+)?s(?:\s+\([^\)]*\))?|\d+\s+passed(?:\s|$)|\d+\s+failed(?:\s|$)|=+\s*(?:test session starts|.*passed).*?=+|BUILD SUCCESS(?:FUL)?(?:\s|$)|Tests run:\s*\d+)/i;
 
 function hasSubstantiveCodeSpan(value) {
   return codeSpans(value).some((span) => {
@@ -2177,9 +2177,12 @@ const CURL_CONNECTION_OPTIONS = new Map([
 ]);
 const WGET_URL_OPTIONS = new Set(["base"]);
 const WGET_VALUE_OPTIONS = new Set("execute output-file append-output report-speed input-file input-metalink metalink-index config rejected-log tries retry-on-http-error output-document start-pos progress timeout dns-timeout connect-timeout read-timeout wait waitretry quota bind-address bind-dns-address dns-servers limit-rate restrict-file-names prefer-family user password use-askpass local-encoding remote-encoding directory-prefix cut-dirs http-user http-password default-page header compression max-redirect proxy-user proxy-password referer user-agent load-cookies save-cookies post-data post-file method body-data body-file secure-protocol certificate certificate-type private-key private-key-type ca-certificate ca-directory crl-file pinnedpubkey random-file egd-file ciphers hsts-file warc-file warc-header warc-max-size warc-dedup warc-tempdir ftp-user ftp-password level accept reject accept-regex reject-regex regex-type domains exclude-domains follow-tags ignore-tags include-directories exclude-directories".split(" "));
-const WGET_LONG_NAMES = [...WGET_URL_OPTIONS, ...WGET_VALUE_OPTIONS];
+const WGET_FLAG_OPTIONS = new Set("adjust-extension ask-password auth-no-challenge background backup-converted backups cache check-certificate clobber content-disposition content-on-error continue convert-file-only convert-links cookies debug delete-after directories dns-cache follow-ftp force-directories force-html ftps-clear-data-connection ftps-fallback-to-ftp ftps-implicit ftps-resume-ssl glob help host-directories hsts http-keep-alive https-only if-modified-since ignore-case ignore-length inet4-only inet6-only iri keep-session-cookies mirror netrc no-adjust-extension no-ask-password no-auth-no-challenge no-background no-backup-converted no-backups no-cache no-check-certificate no-clobber no-config no-content-disposition no-content-on-error no-continue no-convert-file-only no-convert-links no-cookies no-debug no-delete-after no-directories no-dns-cache no-follow-ftp no-force-directories no-force-html no-ftps-clear-data-connection no-ftps-fallback-to-ftp no-ftps-implicit no-ftps-resume-ssl no-glob no-host-directories no-hsts no-http-keep-alive no-https-only no-if-modified-since no-ignore-case no-ignore-length no-inet4-only no-inet6-only no-iri no-keep-session-cookies no-mirror no-netrc no-page-requisites no-parent no-passive-ftp no-preserve-permissions no-protocol-directories no-proxy no-quiet no-random-wait no-recursive no-relative no-remove-listing no-retr-symlinks no-retry-connrefused no-retry-on-host-error no-save-headers no-server-response no-show-progress no-span-hosts no-spider no-strict-comments no-timestamping no-trust-server-names no-unlink no-use-server-timestamps no-verbose no-warc-cdx no-warc-compression no-warc-digests no-warc-keep-log no-xattr page-requisites parent passive-ftp preserve-permissions protocol-directories proxy quiet random-wait recursive relative remove-listing retr-symlinks retry-connrefused retry-on-host-error save-headers server-response show-progress span-hosts spider strict-comments timestamping trust-server-names unlink use-server-timestamps verbose version warc-cdx warc-compression warc-digests warc-keep-log xattr".split(" "));
+const WGET_LONG_NAMES = [...WGET_FLAG_OPTIONS, ...WGET_URL_OPTIONS, ...WGET_VALUE_OPTIONS];
 
 function resolveWgetLongOption(name) {
+  // Exact flags win over prefix matching, so --hsts does not consume a word as --hsts-file.
+  if (WGET_FLAG_OPTIONS.has(name)) return null;
   if (WGET_URL_OPTIONS.has(name) || WGET_VALUE_OPTIONS.has(name)) return name;
   let match = null;
   for (const option of WGET_LONG_NAMES) {
@@ -2187,6 +2190,7 @@ function resolveWgetLongOption(name) {
     if (match) return null;
     match = option;
   }
+  if (match === null || WGET_FLAG_OPTIONS.has(match)) return null;
   return match;
 }
 
