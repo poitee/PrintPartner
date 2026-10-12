@@ -1,0 +1,26 @@
+---
+source: crates/pp-source/tests/snapshots.rs
+expression: reused
+---
+{
+  "tenantId": "tenant-fixture",
+  "sourceId": 42,
+  "upstreamRevisionKey": "single_stl",
+  "manifestDigest": "[hash]",
+  "snapshotLocator": "42/revisions/single_stl",
+  "files": [
+    {
+      "path": "part.stl",
+      "kind": "stl",
+      "sizeBytes": 31,
+      "sha256": "[hash]"
+    }
+  ],
+  "selection": {
+    "maxStlFiles": 1,
+    "maxDocumentationBytes": 0,
+    "omittedFiles": []
+  },
+  "publication": "reused",
+  "storedBytes": 459
+}

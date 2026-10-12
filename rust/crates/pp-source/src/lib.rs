@@ -1,6 +1,11 @@
+mod acl;
 pub mod archive;
 mod directory;
 mod path_policy;
+
+#[cfg(all(test, target_os = "macos"))]
+#[path = "../tests/support/process.rs"]
+mod test_process;
 
 use directory::Directory;
 use fs2::FileExt;
@@ -31,6 +36,7 @@ type Result<T> = std::result::Result<T, Error>;
 pub enum Error {
     UnsafePath,
     UnsafeAncestor,
+    UnsafeAcl,
     InvalidIdentity,
     DuplicatePath,
     Limit,
@@ -72,6 +78,7 @@ impl Error {
         match self {
             Self::UnsafePath => "unsafe-path",
             Self::UnsafeAncestor => "unsafe-ancestor",
+            Self::UnsafeAcl => "unsafe-acl",
             Self::InvalidIdentity => "invalid-identity",
             Self::DuplicatePath => "duplicate-path",
             Self::Limit => "limit",
