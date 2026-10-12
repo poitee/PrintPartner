@@ -317,8 +317,8 @@ function normalizeWs(text) {
   return text.replace(/\r\n/g, "\n").trim();
 }
 
-// GitHub accepts this heading in any case. The gate docs do not require one spelling.
-const EVIDENCE_HEADING = /^[ ]{0,3}##[ \t]+Evidence(?:[ \t]+#+[ \t]*)?$/i;
+// GitHub accepts this heading in any case. Trailing spaces are not part of the heading text.
+const EVIDENCE_HEADING = /^[ ]{0,3}##[ \t]+Evidence(?:[ \t]+#+)?[ \t]*$/i;
 
 function listContentColumn(line) {
   const match = line.match(/^([ \t]*)([-*+]|\d{1,9}[.)])([ \t]+)/);
@@ -346,20 +346,26 @@ function evidenceHeadingSpans(text) {
 function evidenceSectionEnd(text) {
   let offset = 0;
   let paragraphStart = null;
+  let listColumn = null;
   const fields = parseFields(text);
   let fieldIndex = 0;
   for (const line of text.split("\n")) {
     while (fieldIndex < fields.length && fields[fieldIndex].end <= offset) fieldIndex += 1;
     const field = fields[fieldIndex];
-    const nested = field && offset >= field.start
-      && indentWidth(line.match(/^[ \t]*/)[0]) >= field.contentIndent;
+    const indent = indentWidth(line.match(/^[ \t]*/)[0]);
+    const nested = field && offset >= field.start && indent >= field.contentIndent;
     if (nested) {
       paragraphStart = null;
       offset += line.length + 1;
       continue;
     }
-    if (/^[ ]{0,3}#{1,2}(?:[ \t]+|$)/.test(line)) return offset;
-    if (paragraphStart != null && /^[ ]{0,3}(?:=+|-+)[ \t]*$/.test(line)) return paragraphStart;
+    // A heading indented into a list item stays inside that item, so it does not end Evidence.
+    const opened = listContentColumn(line);
+    if (opened != null && (listColumn == null || indent < listColumn)) listColumn = opened;
+    else if (line.trim() && listColumn != null && indent < listColumn) listColumn = null;
+    const topLevel = listColumn == null || indent < listColumn;
+    if (topLevel && /^[ ]{0,3}#{1,2}(?:[ \t]+|$)/.test(line)) return offset;
+    if (topLevel && paragraphStart != null && /^[ ]{0,3}(?:=+|-+)[ \t]*$/.test(line)) return paragraphStart;
     const paragraph = /^[ ]{0,3}\S/.test(line)
       && !/^[ ]{0,3}(?:#{1,6}(?:[ \t]+|$)|>|[-*+][ \t]|\d{1,9}[.)][ \t])/.test(line)
       && !HTML_BLOCK_START.test(line);
@@ -1328,17 +1334,35 @@ function anchorContentEnd(value, from) {
 }
 
 function anchorVisible(inner) {
-  for (let index = inner.indexOf("<"); index !== -1; index = inner.indexOf("<", index + 1)) {
+  let text = "";
+  for (let index = 0; index < inner.length; index += 1) {
+    if (inner.startsWith("<!--", index)) {
+      const end = inner.indexOf("-->", index + 4);
+      if (end === -1) {
+        text += inner.slice(index);
+        break;
+      }
+      index = end + 2;
+      continue;
+    }
+    if (inner[index] !== "<") {
+      text += inner[index];
+      continue;
+    }
     const tag = readHtmlTag(inner, index);
-    if (!tag) continue;
+    if (!tag) {
+      text += inner[index];
+      continue;
+    }
+    // A quoted > stays inside the tag. This is the same scanner that finds the tag end.
     if (!tag.closing && tag.name === "img" && htmlAttribute(tag.tag, "src").trim()) return true;
     index = tag.end - 1;
   }
-  const text = decodeCharacterReferences(inner.replace(/<!--[\s\S]*?-->/g, "").replace(/<[^>]*>/g, " "))
+  const visible = decodeCharacterReferences(text)
     .replace(/[\p{Default_Ignorable_Code_Point}\p{Mark}]/gu, "")
     .replace(/\u00a0/g, " ")
     .trim();
-  return text.length > 0;
+  return visible.length > 0;
 }
 
 // Raw HTML attributes accept a numeric character reference without a semicolon. Markdown destinations still require one.
@@ -2566,6 +2590,25 @@ function proxyAssignmentValue(text) {
   return text.slice(eq + 1);
 }
 
+function proxyAssignmentName(text) {
+  const eq = text.indexOf("=");
+  if (eq <= 0) return null;
+  let name = text.slice(0, eq);
+  if (name.endsWith("+")) name = name.slice(0, -1);
+  return PROXY_URL_NAMES.has(name) ? name : null;
+}
+
+// wgetrc command names ignore case, underscores, and hyphens. Curl environment names stay exact.
+const WGETRC_PROXY_NAMES = new Set(["httpproxy", "httpsproxy", "ftpproxy"]);
+
+function wgetrcProxyValue(text) {
+  const eq = text.indexOf("=");
+  if (eq <= 0) return null;
+  const name = text.slice(0, eq).toLowerCase().replace(/[_-]/g, "");
+  if (!WGETRC_PROXY_NAMES.has(name)) return null;
+  return text.slice(eq + 1);
+}
+
 function assignmentName(text) {
   const eq = text.indexOf("=");
   if (eq <= 0) return null;
@@ -2585,12 +2628,18 @@ function noteProxyAssignment(proxies, word, assigned) {
   if (value == null) return;
   const rest = word.text.replace(/\$\(\(/g, "");
   const commandSubstitution = Boolean(word.substitution) || /\$\(/.test(rest);
-  proxies.push({
+  const entry = {
+    name: proxyAssignmentName(word.text),
     value,
     arithmetic: Boolean(word.unresolved) && (/\$\(\(/.test(word.text) || (!commandSubstitution && !/\$\(/.test(word.text))),
     substitution: commandSubstitution,
     parameter: (word.parameters ?? []).some((name) => assigned?.has(name)),
-  });
+  };
+  if (!Array.isArray(proxies)) {
+    if (entry.name) proxies.set(entry.name, entry);
+    return;
+  }
+  proxies.push(entry);
 }
 
 function effectiveCurlStart(command, assigned) {
@@ -2789,9 +2838,9 @@ function collectWgetUrls(args, urls) {
       if (equal !== -1) operand = arg.slice(equal + 1);
       else if (takes) operand = args[++i];
       if (WGET_URL_OPTIONS.has(name) && operand !== undefined) urls.push(operand);
-      // wget -e/--execute takes one wgetrc command. A recognized proxy assignment is a connection target. The command is not run.
+      // wget -e/--execute takes one wgetrc command. The command is not run.
       if (name === "execute" && operand) {
-        const proxy = proxyAssignmentValue(operand);
+        const proxy = wgetrcProxyValue(operand);
         if (proxy) urls.push(proxy);
       }
       continue;
@@ -2804,7 +2853,7 @@ function collectWgetUrls(args, urls) {
         const operand = inline === "" ? args[++i] : inline;
         if (spec === "url" && operand !== undefined) urls.push(operand);
         if (arg[at] === "e" && operand) {
-          const proxy = proxyAssignmentValue(operand);
+          const proxy = wgetrcProxyValue(operand);
           if (proxy) urls.push(proxy);
         }
         break;
@@ -2824,7 +2873,93 @@ function unresolvedOperand(arg, operand) {
   return (operand.includes("$") || operand.includes("`")) && arg.includes(operand);
 }
 
-function curlCommandTargets(value, assigned = new Set()) {
+const STATIC_SHELLS = new Set(["ash", "bash", "dash", "ksh", "sh"]);
+const SHELL_LONG_FLAGS = new Set([
+  "debug", "debugger", "dump-po-strings", "dump-strings", "help", "login",
+  "noediting", "noprofile", "norc", "posix", "protected", "restricted", "verbose", "version",
+]);
+const SHELL_LONG_VALUES = new Set(["init-file", "rcfile"]);
+
+function commandProgramIndex(command) {
+  let start = 0;
+  while (/^[a-zA-Z_][\w]*\+?=/.test(command[start]?.text ?? "")) start += 1;
+  return start;
+}
+
+function shellCommandLater(command, index) {
+  return command.slice(index).some((word) => word.text === "-c" || /^-[^-]*c/.test(word.text));
+}
+
+// The -c operand is the next argument. It is parsed again and not executed.
+function staticShellOperand(command) {
+  const program = command[0]?.text ?? "";
+  const name = program.slice(program.lastIndexOf("/") + 1);
+  if (!STATIC_SHELLS.has(name)) return null;
+  let index = 1;
+  while (index < command.length) {
+    const word = command[index];
+    const option = word.text;
+    if (option === "--" || option === "-" || !option.startsWith("-")) return null;
+    if (option.startsWith("--")) {
+      const equal = option.indexOf("=");
+      const flag = option.slice(2, equal === -1 ? undefined : equal);
+      index += 1;
+      if (SHELL_LONG_VALUES.has(flag)) {
+        if (equal === -1) index += 1;
+        continue;
+      }
+      if (!SHELL_LONG_FLAGS.has(flag)) return shellCommandLater(command, index) ? { reject: true } : null;
+      continue;
+    }
+    let skipIncrement = false;
+    for (let at = 1; at < option.length; at += 1) {
+      const flag = option[at];
+      if (flag === "c") {
+        const inline = option.slice(at + 1);
+        if (inline !== "") return inline.length > MAX_CURL_EXPAND_TOTAL ? { reject: true } : { text: inline, word };
+        const next = command[index + 1];
+        if (!next) return null;
+        return next.text.length > MAX_CURL_EXPAND_TOTAL ? { reject: true } : { text: next.text, word: next };
+      }
+      if (flag === "o" || flag === "O") {
+        index += option.slice(at + 1) === "" ? 2 : 1;
+        skipIncrement = true;
+        break;
+      }
+    }
+    if (!skipIncrement) index += 1;
+  }
+  return null;
+}
+
+function noteShellExport(command, exported, assigned) {
+  const start = commandProgramIndex(command);
+  if (command[start]?.text !== "export") return false;
+  for (const word of command.slice(0, start)) {
+    if (assigned && word.assignable) {
+      const name = assignmentName(word.text);
+      if (name) assigned.add(name);
+    }
+  }
+  for (let index = start + 1; index < command.length; index += 1) {
+    const text = command[index].text;
+    if (text === "--") continue;
+    if (text.startsWith("-") && text !== "-" && !text.includes("=")) continue;
+    noteProxyAssignment(exported, command[index], assigned);
+  }
+  return true;
+}
+
+function mergedProxies(exported, local) {
+  const active = new Map(exported);
+  for (const proxy of local) active.set(proxy.name ?? Symbol(), proxy);
+  return [...active.values()];
+}
+
+function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), depth = 0) {
+  if (depth > 8) {
+    return { targets: [], overflow: false, budget: false, unresolved: false, substitution: true, parameter: false };
+  }
   const targets = [];
   let overflow = false;
   let budget = false;
@@ -2832,6 +2967,7 @@ function curlCommandTargets(value, assigned = new Set()) {
   let substitution = false;
   let parameter = false;
   const bodies = [];
+  const exported = new Map(inherited);
   const markUnresolved = (item) => {
     if ((item.parameters ?? []).some((name) => assigned.has(name))) parameter = true;
     if (!item.unresolved && !item.substitution) return;
@@ -2843,10 +2979,32 @@ function curlCommandTargets(value, assigned = new Set()) {
   };
   let command = [];
   const flush = () => {
+    if (noteShellExport(command, exported, assigned)) {
+      command = [];
+      return;
+    }
+    const programAt = commandProgramIndex(command);
+    const shell = staticShellOperand(command.slice(programAt));
+    if (shell) {
+      const local = new Map(exported);
+      for (const word of command.slice(0, programAt)) noteProxyAssignment(local, word, assigned);
+      if (shell.reject) substitution = true;
+      else if (shell.word) {
+        const inner = curlCommandTargets(shell.text, new Set(assigned), local, depth + 1);
+        targets.push(...inner.targets);
+        overflow ||= inner.overflow;
+        budget ||= inner.budget;
+        unresolved ||= inner.unresolved;
+        substitution ||= inner.substitution;
+        parameter ||= inner.parameter;
+      }
+      command = [];
+      return;
+    }
     const located = effectiveCurlStart(command, assigned);
     if (located.index === -1) { command = []; return; }
     const start = located.index;
-    for (const proxy of located.proxies) {
+    for (const proxy of mergedProxies(exported, located.proxies)) {
       if (proxy.arithmetic) unresolved = true;
       if (proxy.substitution) substitution = true;
       if (proxy.parameter) parameter = true;
@@ -2948,12 +3106,15 @@ function curlCommandTargets(value, assigned = new Set()) {
     if (token === null) flush();
     else {
       command.push(token);
-      if (token.substitutionBodies.length > 0) bodies.push(...token.substitutionBodies);
+      if (token.substitutionBodies.length > 0) {
+        const seen = new Map(exported);
+        for (const text of token.substitutionBodies) bodies.push({ text, exported: seen });
+      }
     }
   }
   flush();
   for (const body of bodies) {
-    const inner = curlCommandTargets(body, assigned);
+    const inner = curlCommandTargets(body.text, assigned, body.exported, depth);
     targets.push(...inner.targets);
     overflow ||= inner.overflow;
     budget ||= inner.budget;
