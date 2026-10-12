@@ -117,6 +117,41 @@ export function summarizeThreads({ reviewThreads, viewerLogin = null } = {}) {
   return { unresolved, awaitingHuman };
 }
 
+function listedInFinishedRuns(check) {
+  const currentRuns = check.checkSuite?.currentRuns;
+  return Boolean(
+    check.id
+    && currentRuns?.pageInfo?.hasNextPage === false
+    && currentRuns.nodes?.some((run) => run.id === check.id),
+  );
+}
+
+function checkClock(check) {
+  const suite = check.checkSuite;
+  const run = suite?.workflowRun;
+  const appId = suite?.app?.id;
+  if (!check.id || !check.name || !appId) return { key: null, attemptTime: NaN };
+  const workflowId = run?.workflow?.id;
+  const event = run?.event;
+  let key = null;
+  let attemptTime = NaN;
+  if (workflowId && event) {
+    key = JSON.stringify([appId, workflowId, event, check.name]);
+    // gh pr checks keeps the later check start. Workflow creation time is a
+    // different clock, and runAttempt belongs to the whole run, including a
+    // check a partial rerun did not start again. Missing and tied starts stay.
+    if (Number.isInteger(run.runAttempt) && run.runAttempt >= 1) attemptTime = Date.parse(check.startedAt);
+  } else if (!run) {
+    // A check app with no workflow run still repeats by app and name. gh
+    // dedupes that shape by name with an empty workflow and event. Another
+    // app, workflow, or event stays a different check.
+    key = JSON.stringify(["app", appId, check.name]);
+    attemptTime = Date.parse(check.startedAt);
+  }
+  if (!check.status && !check.state && !check.conclusion) attemptTime = NaN;
+  return { key, attemptTime };
+}
+
 function currentChecks(checks) {
   const candidates = checks.filter((check) => {
     const currentRuns = check.checkSuite?.currentRuns;
@@ -126,22 +161,17 @@ function currentChecks(checks) {
     return currentRuns.nodes.some((run) => run.id === check.id);
   });
   const records = candidates.map((check) => {
-    const suite = check.checkSuite;
-    const run = suite?.workflowRun;
-    const key = check.id && check.name && suite?.app?.id && run?.workflow?.id && run?.event
-      ? JSON.stringify([suite.app.id, run.workflow.id, run.event, check.name])
-      : null;
-    let attemptTime = NaN;
-    // gh pr checks keeps the later check start. Workflow creation time is a
-    // different clock, and runAttempt belongs to the whole run, including a
-    // check a partial rerun did not start again. Missing and tied starts stay.
-    if (Number.isInteger(run?.runAttempt) && run.runAttempt >= 1) {
-      attemptTime = Date.parse(check.startedAt);
-    }
-    return { check, key, suiteId: suite?.id, attemptTime };
+    const { key, attemptTime } = checkClock(check);
+    return {
+      check,
+      key,
+      suiteId: check.checkSuite?.id,
+      attemptTime,
+      authoritative: listedInFinishedRuns(check),
+    };
   });
   return records.filter((record) => !records.some((other) => {
-    if (!record.key || record.key !== other.key) return false;
+    if (!record.authoritative || !other.authoritative || !record.key || record.key !== other.key) return false;
     if (!record.suiteId || !other.suiteId || record.suiteId === other.suiteId) return false;
     if (!Number.isFinite(record.attemptTime) || !Number.isFinite(other.attemptTime)) return false;
     return other.attemptTime > record.attemptTime;
@@ -535,6 +565,12 @@ function completeLatestRunMembership(checks, { owner, name, oid }) {
       cursor = page.endCursor;
     }
     if (!finished || !Number.isInteger(totalCount) || ids.length !== totalCount) continue;
+    // Same head and the same totalCount can still join two moments. A rerun
+    // keeps the count while page 2 names a run the rollup never contained, or
+    // repeats an id so the concatenated length matches without the failure.
+    if (new Set(ids).size !== ids.length) continue;
+    const rollupIds = new Set(group.map((check) => check.id).filter((id) => typeof id === "string" && id.length > 0));
+    if (ids.slice(seed.ids.length).some((id) => !rollupIds.has(id))) continue;
     const currentRuns = {
       pageInfo: { hasNextPage: false },
       nodes: ids.map((id) => ({ id })),
