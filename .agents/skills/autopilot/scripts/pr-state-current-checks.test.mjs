@@ -9,7 +9,21 @@ import { evaluateSnapshot, main } from "./pr-state.mjs";
 
 const fixturePath = new URL("./fixtures/pr263-evidence-checks.json", import.meta.url);
 const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
-for (const check of fixture.statusCheckRollup) check.checkSuite.workflowRun.runAttempt = 1;
+for (const check of fixture.statusCheckRollup) {
+  check.checkSuite.workflowRun.runAttempt = 1;
+  const runs = check.checkSuite.currentRuns;
+  if (!runs || Object.hasOwn(runs, "totalCount") || runs.pageInfo?.hasNextPage !== false || !Array.isArray(runs.nodes)) continue;
+  const seen = new Set();
+  let exact = true;
+  for (const node of runs.nodes) {
+    if (!node || typeof node.id !== "string" || node.id.length === 0 || seen.has(node.id)) {
+      exact = false;
+      break;
+    }
+    seen.add(node.id);
+  }
+  if (exact && seen.size > 0) runs.totalCount = seen.size;
+}
 const currentUrl = "https://github.com/poitee/PrintPartner/actions/runs/38186110586/job/114608658588";
 
 function snapshotWithChecks(checks) {
@@ -415,6 +429,7 @@ function runLiveFixture(context, mode = "pages") {
     failure.checkSuite.id = "suite-a";
     failure.checkSuite.currentRuns = {
       membershipAuthoritative: true,
+      totalCount: 1,
       pageInfo: { hasNextPage: false },
       nodes: [{ id: "current-failure" }],
     };
@@ -458,6 +473,7 @@ function runLiveFixture(context, mode = "pages") {
     failure.conclusion = "FAILURE";
     failure.detailsUrl = movedFailureUrl;
     failure.checkSuite.currentRuns = {
+      totalCount: 1,
       pageInfo: { hasNextPage: false },
       nodes: [{ id: failure.id }],
     };
@@ -465,6 +481,79 @@ function runLiveFixture(context, mode = "pages") {
     data.page2Ids = ["latest-101"];
     data.totalCount = 101;
     data.suiteBehavior = "page2";
+  }
+  if (mode.startsWith("census-")) {
+    const failure = latestCheck();
+    failure.id = "current-failure";
+    failure.conclusion = "FAILURE";
+    failure.detailsUrl = staleFailureUrl;
+    failure.startedAt = "2026-10-12T02:00:00Z";
+    failure.checkSuite.id = "suite-a";
+    failure.checkSuite.currentRuns = {
+      totalCount: 1,
+      pageInfo: { hasNextPage: false },
+      nodes: [{ id: failure.id }],
+    };
+    const successId = mode === "census-duplicate-followup" ? "b-1" : "stale-success";
+    const stale = latestCheck();
+    stale.id = successId;
+    stale.conclusion = "SUCCESS";
+    stale.detailsUrl = currentSuccessUrl;
+    stale.startedAt = "2026-10-12T05:00:00Z";
+    stale.checkSuite.id = "suite-b";
+    if (mode === "census-missing-count") {
+      stale.checkSuite.currentRuns = {
+        pageInfo: { hasNextPage: false },
+        nodes: [{ id: successId }],
+      };
+    } else if (mode === "census-null-count") {
+      stale.checkSuite.currentRuns = {
+        totalCount: null,
+        pageInfo: { hasNextPage: false },
+        nodes: [{ id: successId }],
+      };
+    } else if (mode === "census-string-count") {
+      stale.checkSuite.currentRuns = {
+        totalCount: "1",
+        pageInfo: { hasNextPage: false },
+        nodes: [{ id: successId }],
+      };
+    } else if (mode === "census-mismatch-count") {
+      stale.checkSuite.currentRuns = {
+        totalCount: 5,
+        pageInfo: { hasNextPage: false },
+        nodes: [{ id: successId }],
+      };
+    } else if (mode === "census-duplicate-ids") {
+      stale.checkSuite.currentRuns = {
+        totalCount: 2,
+        pageInfo: { hasNextPage: false },
+        nodes: [{ id: successId }, { id: successId }],
+      };
+    } else if (mode === "census-duplicate-followup") {
+      stale.checkSuite.currentRuns = {
+        totalCount: 101,
+        pageInfo: { hasNextPage: true, endCursor: "suite-b-2" },
+        nodes: Array.from({ length: 100 }, (_, index) => ({ id: `b-${index + 1}` })),
+      };
+      data.page2Ids = ["b-1"];
+      data.totalCount = 101;
+      data.suiteBehavior = "page2";
+    } else if (mode === "census-null-node") {
+      stale.checkSuite.currentRuns = {
+        totalCount: 1,
+        pageInfo: { hasNextPage: false },
+        nodes: [null],
+      };
+    } else {
+      stale.checkSuite.currentRuns = {
+        totalCount: 1,
+        pageInfo: { hasNextPage: false },
+        nodes: [{ id: successId }],
+      };
+    }
+    data.statusCheckRollup = [failure, stale];
+    data.mode = "pages";
   }
   const statePath = join(dir, "state.json");
   writeFileSync(statePath, JSON.stringify({
@@ -824,6 +913,7 @@ test("authoritative membership keeps a rollup failure missing from every latest-
   pass.conclusion = "SUCCESS";
   const currentRuns = {
     membershipAuthoritative: true,
+    totalCount: 1,
     pageInfo: { hasNextPage: false },
     nodes: [{ id: "other-pass" }],
   };
@@ -839,6 +929,7 @@ test("incomplete membership on another suite cannot suppress a current failure",
   failure.conclusion = "FAILURE";
   failure.checkSuite.currentRuns = {
     membershipAuthoritative: true,
+    totalCount: 1,
     pageInfo: { hasNextPage: false },
     nodes: [{ id: failure.id }],
   };
@@ -863,6 +954,7 @@ test("a newer external-app success supersedes an older failure in another suite"
   oldFail.checkSuite.id = "suite-a";
   oldFail.checkSuite.currentRuns = {
     membershipAuthoritative: true,
+    totalCount: 1,
     pageInfo: { hasNextPage: false },
     nodes: [{ id: oldFail.id }],
   };
@@ -874,6 +966,7 @@ test("a newer external-app success supersedes an older failure in another suite"
   newSuccess.detailsUrl = "https://example.com/checks/new-success";
   newSuccess.checkSuite.currentRuns = {
     membershipAuthoritative: true,
+    totalCount: 1,
     pageInfo: { hasNextPage: false },
     nodes: [{ id: newSuccess.id }],
   };
@@ -891,6 +984,7 @@ test("different external apps with the same check name stay independent", () => 
   first.checkSuite.id = "suite-one";
   first.checkSuite.currentRuns = {
     membershipAuthoritative: true,
+    totalCount: 1,
     pageInfo: { hasNextPage: false },
     nodes: [{ id: first.id }],
   };
@@ -900,6 +994,7 @@ test("different external apps with the same check name stay independent", () => 
   second.checkSuite.id = "suite-two";
   second.checkSuite.currentRuns = {
     membershipAuthoritative: true,
+    totalCount: 1,
     pageInfo: { hasNextPage: false },
     nodes: [{ id: second.id }],
   };
@@ -936,4 +1031,46 @@ test("live CLI keeps a member failure when another suite success is not in finis
   assert.equal(report.passedCheckCount, 1);
   const state = JSON.parse(readFileSync(result.statePath, "utf8"));
   assert.equal(state.suiteCalls, 1);
+});
+
+for (const [mode, label] of [
+  ["census-missing-count", "a finished seed omits totalCount"],
+  ["census-null-count", "a finished seed has null totalCount"],
+  ["census-string-count", "a finished seed has a string totalCount"],
+  ["census-mismatch-count", "a finished seed count disagrees with its one id"],
+  ["census-duplicate-ids", "duplicate ids fill totalCount"],
+  ["census-null-node", "a finished seed node is null"],
+]) {
+  test(`live CLI keeps a member failure when ${label}`, { timeout: 20000 }, (context) => {
+    const result = runLiveFixture(context, mode);
+    assert.equal(result.status, 0, result.stderr);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.nextAction, "ci");
+    assert.deepEqual(report.failingChecks.map((check) => check.url), [staleFailureUrl]);
+    assert.equal(report.passedCheckCount, 1);
+    const state = JSON.parse(readFileSync(result.statePath, "utf8"));
+    assert.equal(state.suiteCalls, 0);
+  });
+}
+
+test("live CLI keeps a member failure when a duplicate follow-up id pads a short unique set", { timeout: 20000 }, (context) => {
+  const result = runLiveFixture(context, "census-duplicate-followup");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "ci");
+  assert.deepEqual(report.failingChecks.map((check) => check.url), [staleFailureUrl]);
+  assert.equal(report.passedCheckCount, 1);
+  const state = JSON.parse(readFileSync(result.statePath, "utf8"));
+  assert.equal(state.suiteCalls, 1);
+});
+
+test("live CLI lets a valid one-id finished seed supersede an older member failure", { timeout: 20000 }, (context) => {
+  const result = runLiveFixture(context, "census-valid-seed");
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nextAction, "ready");
+  assert.deepEqual(report.failingChecks, []);
+  assert.equal(report.passedCheckCount, 1);
+  const state = JSON.parse(readFileSync(result.statePath, "utf8"));
+  assert.equal(state.suiteCalls, 0);
 });

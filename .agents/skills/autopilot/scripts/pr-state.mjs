@@ -140,12 +140,8 @@ function attemptTimeForDedupe(check) {
 
 
 function checkIsFinishedLatestMember(check) {
-  const currentRuns = check.checkSuite?.currentRuns;
-  if (!check.id || !currentRuns) return false;
-  if (currentRuns.pageInfo?.hasNextPage !== false) return false;
-  const ids = (currentRuns.nodes ?? []).map((node) => node.id).filter(Boolean);
-  if (!ids.length) return false;
-  return ids.includes(check.id);
+  const ids = finishedLatestSet(check.checkSuite?.currentRuns);
+  return Boolean(check.id && ids?.includes(check.id));
 }
 
 function suiteMembershipIncomplete(check) {
@@ -153,15 +149,14 @@ function suiteMembershipIncomplete(check) {
   return Boolean(currentRuns?.nodes?.length && currentRuns.pageInfo?.hasNextPage !== false);
 }
 
-function orphanSupersededInMembership(check, checks, currentRuns) {
-  const ids = new Set((currentRuns.nodes ?? []).map((node) => node.id).filter(Boolean));
-  if (!ids.size || ids.has(check.id)) return false;
+function orphanSupersededInMembership(check, checks, ids) {
+  if (ids.includes(check.id)) return false;
   const key = checkIdentityKey(check);
   const suiteId = check.checkSuite?.id;
   if (!key || !suiteId) return false;
   for (const other of checks) {
     if (other.id === check.id || other.checkSuite?.id !== suiteId) continue;
-    if (checkIdentityKey(other) !== key || !ids.has(other.id)) continue;
+    if (checkIdentityKey(other) !== key || !ids.includes(other.id)) continue;
     return true;
   }
   return false;
@@ -170,12 +165,11 @@ function orphanSupersededInMembership(check, checks, currentRuns) {
 function currentChecks(checks) {
   const candidates = checks.filter((check) => {
     const currentRuns = check.checkSuite?.currentRuns;
-    if (!check.id || currentRuns?.pageInfo?.hasNextPage !== false || !currentRuns.nodes?.length) {
-      return true;
-    }
-    if (currentRuns.nodes.some((run) => run.id === check.id)) return true;
+    const ids = finishedLatestSet(currentRuns);
+    if (!check.id || !ids) return true;
+    if (ids.includes(check.id)) return true;
     if (currentRuns.membershipAuthoritative === true) {
-      return !orphanSupersededInMembership(check, checks, currentRuns);
+      return !orphanSupersededInMembership(check, checks, ids);
     }
     return false;
   });
@@ -480,44 +474,24 @@ query($owner: String!, $name: String!, $oid: GitObjectID!, $suiteId: ID!, $curso
 }
 `;
 
-function latestRunIds(nodes) {
-  if (!Array.isArray(nodes)) return null;
+function exactLatestIds(nodes) {
+  if (!Array.isArray(nodes) || nodes.length === 0) return null;
   const ids = [];
+  const seen = new Set();
   for (const node of nodes) {
-    if (!node || typeof node.id !== "string" || node.id.length === 0) return null;
+    if (!node || typeof node.id !== "string" || node.id.length === 0 || seen.has(node.id)) return null;
+    seen.add(node.id);
     ids.push(node.id);
   }
   return ids;
 }
 
-function sameLatestPage(group) {
-  const first = group[0]?.checkSuite?.currentRuns;
-  if (!first || first.pageInfo?.hasNextPage !== true) return null;
-  const cursor = first.pageInfo.endCursor;
-  if (typeof cursor !== "string" || cursor.length === 0) return null;
-  const ids = latestRunIds(first.nodes);
-  if (!ids?.length) return null;
-  for (const check of group.slice(1)) {
-    const page = check.checkSuite?.currentRuns;
-    if (page?.pageInfo?.hasNextPage !== true || page.pageInfo.endCursor !== cursor) return null;
-    const other = latestRunIds(page.nodes);
-    if (!other || other.length !== ids.length || other.some((id, index) => id !== ids[index])) return null;
-  }
-  const totalCount = Number.isInteger(first.totalCount) && first.totalCount >= 0 ? first.totalCount : null;
-  return { ids, cursor, totalCount };
-}
-
-function parseLatestRunPage(data, { oid, suiteId }) {
-  if (!data || data.errors?.length) return null;
-  const commit = data.data?.repository?.object;
-  const suite = data.data?.node;
-  if (!commit || commit.oid !== oid || !suite || suite.id !== suiteId || suite.commit?.oid !== oid) return null;
-  const connection = suite.checkRuns;
+function parseLatestConnection(connection) {
   const info = connection?.pageInfo;
   if (!connection || !info || typeof info.hasNextPage !== "boolean") return null;
   if (!Number.isInteger(connection.totalCount) || connection.totalCount < 0) return null;
   if (info.hasNextPage && (typeof info.endCursor !== "string" || info.endCursor.length === 0)) return null;
-  const ids = latestRunIds(connection.nodes);
+  const ids = exactLatestIds(connection.nodes);
   if (!ids) return null;
   return {
     ids,
@@ -525,6 +499,31 @@ function parseLatestRunPage(data, { oid, suiteId }) {
     hasNextPage: info.hasNextPage,
     endCursor: info.hasNextPage ? info.endCursor : null,
   };
+}
+
+function finishedLatestSet(connection) {
+  const page = parseLatestConnection(connection);
+  if (!page || page.hasNextPage || page.ids.length !== page.totalCount) return null;
+  return page.ids;
+}
+
+function sameLatestPage(group) {
+  const first = parseLatestConnection(group[0]?.checkSuite?.currentRuns);
+  if (!first?.hasNextPage) return null;
+  for (const check of group.slice(1)) {
+    const page = parseLatestConnection(check.checkSuite?.currentRuns);
+    if (!page?.hasNextPage || page.endCursor !== first.endCursor || page.totalCount !== first.totalCount) return null;
+    if (page.ids.length !== first.ids.length || page.ids.some((id, index) => id !== first.ids[index])) return null;
+  }
+  return first;
+}
+
+function parseLatestRunPage(data, { oid, suiteId }) {
+  if (!data || data.errors?.length) return null;
+  const commit = data.data?.repository?.object;
+  const suite = data.data?.node;
+  if (!commit || commit.oid !== oid || !suite || suite.id !== suiteId || suite.commit?.oid !== oid) return null;
+  return parseLatestConnection(suite.checkRuns);
 }
 
 function groupChecksBySuite(checks) {
@@ -554,15 +553,16 @@ function completeLatestRunMembership(checks, { owner, name, oid }) {
     const seed = sameLatestPage(group);
     if (!seed) continue;
     const ids = seed.ids.slice();
-    const seen = new Set();
-    let cursor = seed.cursor;
-    let totalCount = seed.totalCount;
+    const seenIds = new Set(ids);
+    const seenCursors = new Set();
+    let cursor = seed.endCursor;
+    const totalCount = seed.totalCount;
     let pages = 1;
     let finished = false;
     while (cursor) {
       if (pages >= MAX_LATEST_RUN_PAGES) break;
-      if (seen.has(cursor)) break;
-      seen.add(cursor);
+      if (seenCursors.has(cursor)) break;
+      seenCursors.add(cursor);
       let data;
       try {
         data = fetchSuiteLatestPage({ owner, name, oid, suiteId, cursor });
@@ -570,10 +570,10 @@ function completeLatestRunMembership(checks, { owner, name, oid }) {
         break;
       }
       const page = parseLatestRunPage(data, { oid, suiteId });
-      if (!page) break;
-      if (page.hasNextPage && (page.endCursor === cursor || seen.has(page.endCursor))) break;
-      if (totalCount === null) totalCount = page.totalCount;
-      else if (page.totalCount !== totalCount) break;
+      if (!page || page.totalCount !== totalCount) break;
+      if (page.hasNextPage && (page.endCursor === cursor || seenCursors.has(page.endCursor))) break;
+      if (page.ids.some((id) => seenIds.has(id))) break;
+      for (const id of page.ids) seenIds.add(id);
       ids.push(...page.ids);
       pages += 1;
       if (!page.hasNextPage) {
@@ -582,9 +582,10 @@ function completeLatestRunMembership(checks, { owner, name, oid }) {
       }
       cursor = page.endCursor;
     }
-    if (!finished || !Number.isInteger(totalCount) || ids.length !== totalCount) continue;
+    if (!finished || ids.length !== totalCount || seenIds.size !== ids.length) continue;
     const currentRuns = {
       membershipAuthoritative: true,
+      totalCount,
       pageInfo: { hasNextPage: false },
       nodes: ids.map((id) => ({ id })),
     };
