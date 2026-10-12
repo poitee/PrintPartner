@@ -57,7 +57,7 @@ jobs:
           file -b "$node_path" | grep -q ELF
           test "$(node -p "process.version")" = "v22.23.3"
           test "$(node -p "process.versions.modules")" = "127"
-          readlink -f "/proc/$$/exe" | grep -q node
+          readlink -f "$node_path" | grep -q node
       - name: Build product server at f6
         working-directory: app/web
         run: |
