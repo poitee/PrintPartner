@@ -5211,15 +5211,18 @@ test("r23-assigned-shell-variables-fail-closed", () => {
   for (const command of [
     "octet=80; curl http://192.168.1.$octet/",
     "octet=79; curl http://192.168.1.$octet/",
+    "octet=80 curl http://192.168.1.$octet/",
+    "octet='80'; curl http://192.168.1.$octet/",
     "octet=80; wget http://192.168.200.$octet/",
-    'curl "http://192.168.1.$octet/"',
-    "curl http://192.168.1.${octet}/",
-    "curl --url $octet",
-    "curl --proxy $octet http://example.test/",
-    "curl -x $octet http://example.test/",
-    "http_proxy=$octet curl http://example.test/",
-    "wget --base=$octet",
-    "wget -e http_proxy=$octet http://example.test/",
+    'octet=80; curl "http://192.168.1.$octet/"',
+    "octet=80; curl http://192.168.1.${octet}/",
+    "octet=3232235856; curl --url $octet",
+    "octet=3232235856; curl --proxy $octet http://example.test/",
+    "octet=3232235856; curl -x $octet http://example.test/",
+    "octet=3232235856; http_proxy=$octet curl http://example.test/",
+    "octet=3232235856; wget --base=$octet",
+    "octet=3232235856; wget -e http_proxy=$octet http://example.test/",
+    "env octet=80 curl http://192.168.1.$octet/",
   ]) {
     r19Expect(commandEvidence(command), 1, "", R23_VARIABLE_STDERR);
   }
@@ -5238,6 +5241,15 @@ test("r23-shell-variable-literals-and-data-stay-distinct", () => {
     "octet=$other; curl http://example.test/",
     "echo $octet",
     "curl -e http_proxy=3232235856 http://example.test/",
+    "curl http://192.168.1.$HOST:8080/",
+    "curl http://192.168.1.$octet/",
+    'curl "http://192.168.1.$octet/"',
+    "curl --url $octet",
+    "curl --proxy $octet http://example.test/",
+    "http_proxy=$octet curl http://example.test/",
+    "wget --base=$octet",
+    "wget -e http_proxy=$octet http://example.test/",
+    "octet=80; curl http://192.168.1.$HOST:8080/",
   ]) {
     r19Expect(commandEvidence(command), 0, OK_LINE, "");
   }
