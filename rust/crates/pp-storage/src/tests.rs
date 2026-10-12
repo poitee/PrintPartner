@@ -1,5 +1,13 @@
 use super::*;
 use std::sync::mpsc;
+
+fn exited_true_pid() -> u32 {
+    let mut prior = std::process::Command::new("/bin/true").spawn().unwrap();
+    let pid = prior.id();
+    prior.wait().unwrap();
+    pid
+}
+
 fn directory(name: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!(
         "pp-storage-{name}-{}",
@@ -544,9 +552,7 @@ fn wal_only_unsupported_versions_preserve_every_input_file() {
                 }
                 std::fs::write(target.join("retain-user-file"), b"untouched").unwrap();
                 if stale_marker {
-                    let mut prior = std::process::Command::new("/bin/true").spawn().unwrap();
-                    let pid = prior.id();
-                    prior.wait().unwrap();
+                    let pid = exited_true_pid();
                     std::fs::write(
                         target.join(".desktop-owner.json"),
                         serde_json::json!({"storage_protocol_version": 1, "pid": pid}).to_string(),
@@ -599,9 +605,7 @@ fn public_open_recovers_dead_writer_marker_and_atomic_lease() {
         .unwrap();
     assert!(WriterOwner::open(&path, Limits::default()).is_err());
     owner.shutdown().unwrap();
-    let mut prior = std::process::Command::new("/bin/true").spawn().unwrap();
-    let pid = prior.id();
-    prior.wait().unwrap();
+    let pid = exited_true_pid();
     let marker = serde_json::json!({"storage_protocol_version": 1, "pid": pid, "process_identity": "prior-process", "instance": "ab".repeat(16)});
     std::fs::write(path.join(".desktop-owner.json"), marker.to_string()).unwrap();
     std::fs::create_dir(path.join(".desktop-lease")).unwrap();
