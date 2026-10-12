@@ -1880,3 +1880,193 @@ for (const [name, payload, ok] of [
     if (!ok) assert.match(result.errors.join("\n"), /LAN instances/);
   });
 }
+
+test("r4 regression shell-double-fragment-80", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.8\"0\":8080/\n```");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r4 regression shell-single-fragment-80", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.8'0':8080/\n```");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r4 regression shell-mixed-fragments-80", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl 'http://'\"192.168.\"1.8'0':8080/\n```");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r4 regression shell-schemeless-fragment-80", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl 192.168.8\"0\":8080/\n```");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r4 regression shell-quoted-argument-80", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl \"http://192.168.1.8\"'0/' \n```");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r4 regression shell-continuation-fragment-80", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.8\\\n\"0\":8080/\n```");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r4 regression shell-double-fragment-81", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.8\"1\":8080/\n```");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r4 regression shell-single-fragment-81", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.8'1':8080/\n```");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r4 regression shell-mixed-fragments-81", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl 'http://'\"192.168.\"1.8'1':8080/\n```");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r4 regression shell-schemeless-fragment-81", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl 192.168.8\"1\":8080/\n```");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r4 regression shell-quoted-argument-81", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl \"http://192.168.1.8\"'1/' \n```");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r4 regression shell-continuation-fragment-81", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.8\\\n\"1\":8080/\n```");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r4 regression shell-safe-separate-arguments", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.8 \"0\":8080/\n```");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r4 regression shell-safe-quoted-space", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl \"http://192.168.1.8 0\":8080/\n```");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r4 regression shell-safe-prose", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nThe prefix http://192.168.1.8 and \"0\":8080/ are separate examples.\n```");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r4 regression shell-safe-quoted-prose", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nprintf '%s' 'prefix http://192.168.1.8'\"0\"\n```");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r4 regression shell-safe-escaped-quote", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.8\\\"0\\\":8080/\n```");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r4 regression shell-safe-unclosed-quote", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.8\"0:8080/\n```");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r4 regression shell-safe-safe-target", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.8\"2\":8080/\n```");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r4 regression shell-safe-single-literal-backslash", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl 'http://192.168.1.8\\0/'\n```");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r4 regression shell-safe-separate-command", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.8; echo \"0\":8080/\n```");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r4 regression title-double-80-False", () => {
+  const result = lintPrEvidence("[outer]: https://example.test/outer \"title\n[target]: https://example.test/safe\nend\"\n\n[target]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[target]");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r4 regression title-double-80-True", () => {
+  const result = lintPrEvidence("[outer]: https://example.test/outer\n\"title\n[target]: https://example.test/safe\nend\"\n\n[target]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[target]");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r4 regression title-double-81-False", () => {
+  const result = lintPrEvidence("[outer]: https://example.test/outer \"title\n[target]: https://example.test/safe\nend\"\n\n[target]: http://192.168.1.81/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[target]");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r4 regression title-double-81-True", () => {
+  const result = lintPrEvidence("[outer]: https://example.test/outer\n\"title\n[target]: https://example.test/safe\nend\"\n\n[target]: http://192.168.1.81/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[target]");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r4 regression title-single-80-False", () => {
+  const result = lintPrEvidence("[outer]: https://example.test/outer 'title\n[target]: https://example.test/safe\nend'\n\n[target]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[target]");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r4 regression title-single-80-True", () => {
+  const result = lintPrEvidence("[outer]: https://example.test/outer\n'title\n[target]: https://example.test/safe\nend'\n\n[target]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[target]");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r4 regression title-single-81-False", () => {
+  const result = lintPrEvidence("[outer]: https://example.test/outer 'title\n[target]: https://example.test/safe\nend'\n\n[target]: http://192.168.1.81/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[target]");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r4 regression title-single-81-True", () => {
+  const result = lintPrEvidence("[outer]: https://example.test/outer\n'title\n[target]: https://example.test/safe\nend'\n\n[target]: http://192.168.1.81/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[target]");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r4 regression title-parenthesized-80-False", () => {
+  const result = lintPrEvidence("[outer]: https://example.test/outer (title\n[target]: https://example.test/safe\nend)\n\n[target]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[target]");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r4 regression title-parenthesized-80-True", () => {
+  const result = lintPrEvidence("[outer]: https://example.test/outer\n(title\n[target]: https://example.test/safe\nend)\n\n[target]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[target]");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r4 regression title-parenthesized-81-False", () => {
+  const result = lintPrEvidence("[outer]: https://example.test/outer (title\n[target]: https://example.test/safe\nend)\n\n[target]: http://192.168.1.81/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[target]");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r4 regression title-parenthesized-81-True", () => {
+  const result = lintPrEvidence("[outer]: https://example.test/outer\n(title\n[target]: https://example.test/safe\nend)\n\n[target]: http://192.168.1.81/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[target]");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r4 regression title-first-safe", () => {
+  const result = lintPrEvidence("[target]: https://example.test/first\n\n[outer]: https://example.test/outer \"title\n[target]: http://192.168.1.80/\nend\"\n\n[target]: http://192.168.1.81/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[target]");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r4 regression title-first-banned", () => {
+  const result = lintPrEvidence("[target]: http://192.168.1.80/\n\n[target]: https://example.test/safe\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[target]");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r4 regression title-duplicate-outer-title", () => {
+  const result = lintPrEvidence("[outer]: https://example.test/first\n\n[outer]: https://example.test/duplicate \"title\n[target]: https://example.test/safe\nend\"\n\n[target]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[target]");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r4 regression title-invalid-title", () => {
+  const result = lintPrEvidence("[outer]: https://example.test/outer \"unterminated\n\n[target]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[target]");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r4 regression title-unused-reference", () => {
+  const result = lintPrEvidence("[outer]: https://example.test/outer \"title\n[target]: https://example.test/safe\nend\"\n\n[target]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[outer]");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r4 regression exact-shell-quote", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.8\"0\":8080/\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r4 regression exact-reference-title", () => {
+  const result = lintPrEvidence("[outer]: https://example.test/outer \"title\n[target]: https://example.test/safe\nend\"\n\n[target]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[target]\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
