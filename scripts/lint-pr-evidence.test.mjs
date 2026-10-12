@@ -2901,3 +2901,600 @@ test("r6-url-after-next", () => {
   assert.equal(result.ok, false, result.errors.join("; "));
   assert.match(result.errors.join("\n"), /LAN instances/);
 });
+
+test("r7-direct-decimal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl 3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-direct-safe", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl -d 3232235856 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-env-decimal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv curl 3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-env-safe", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv curl -d 3232235856 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-command-decimal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncommand curl 3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-command-safe", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncommand curl -d 3232235856 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-exec-decimal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nexec curl 3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-exec-safe", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nexec curl -d 3232235856 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-nice-decimal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nnice curl 3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-nice-safe", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nnice curl -d 3232235856 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-nohup-decimal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nnohup curl 3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-nohup-safe", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nnohup curl -d 3232235856 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-timeout-decimal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ntimeout 2 curl 3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-timeout-safe", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ntimeout 2 curl -d 3232235856 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-env-ignore-decimal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv -i curl 3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-env-ignore-safe", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv -i curl -d 3232235856 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-env-unset-decimal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv -u UNUSED curl 3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-env-unset-safe", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv -u UNUSED curl -d 3232235856 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-env-chdir-decimal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv -C . curl 3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-env-chdir-safe", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv -C . curl -d 3232235856 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-env-long-decimal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv --ignore-environment --unset=UNUSED --chdir=. curl 3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-env-long-safe", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv --ignore-environment --unset=UNUSED --chdir=. curl -d 3232235856 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-env-assign-decimal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv COUNT=3232235856 curl 3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-env-assign-safe", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv COUNT=3232235856 curl -d 3232235856 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-shell-assign-decimal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nCOUNT=3232235856 env curl 3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-shell-assign-safe", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nCOUNT=3232235856 env curl -d 3232235856 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-command-default-decimal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncommand -p curl 3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-command-default-safe", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncommand -p curl -d 3232235856 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-command-end-decimal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncommand -- curl 3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-command-end-safe", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncommand -- curl -d 3232235856 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-exec-options-decimal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nexec -cl -a custom curl 3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-exec-options-safe", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nexec -cl -a custom curl -d 3232235856 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-exec-attached-decimal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nexec -acustom curl 3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-exec-attached-safe", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nexec -acustom curl -d 3232235856 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-env-end-decimal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv -- COUNT=3232235856 curl 3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-env-end-safe", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv -- COUNT=3232235856 curl -d 3232235856 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-env-dash-decimal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv - curl 3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-env-dash-safe", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv - curl -d 3232235856 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-nested-decimal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncommand env -i nice -n 0 timeout --foreground 2 curl 3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-nested-safe", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncommand env -i nice -n 0 timeout --foreground 2 curl -d 3232235856 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-builtin-command-decimal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nbuiltin command curl 3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-builtin-command-safe", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nbuiltin command curl -d 3232235856 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-builtin-exec-decimal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nbuiltin exec curl 3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-builtin-exec-safe", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nbuiltin exec curl -d 3232235856 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-command-builtin-decimal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncommand builtin command curl 3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-command-builtin-safe", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncommand builtin command curl -d 3232235856 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-exec-env-decimal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nexec env curl 3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-exec-env-safe", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nexec env curl -d 3232235856 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-env-env-decimal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv env curl 3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-env-env-safe", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv env curl -d 3232235856 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-path-env-decimal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\n/usr/bin/env /usr/bin/curl 3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-path-env-safe", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\n/usr/bin/env /usr/bin/curl -d 3232235856 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-quoted-decimal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\n'env' 'curl' 3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-quoted-safe", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\n'env' 'curl' -d 3232235856 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-nice-options-decimal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nnice --adjustment=0 env curl 3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-nice-options-safe", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nnice --adjustment=0 env curl -d 3232235856 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-nohup-end-decimal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nnohup -- curl 3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-nohup-end-safe", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nnohup -- curl -d 3232235856 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-timeout-options-decimal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ntimeout -s TERM -k 1 --preserve-status 2 curl 3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-timeout-options-safe", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ntimeout -s TERM -k 1 --preserve-status 2 curl -d 3232235856 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-direct-hex", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl 0xc0a80150\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-direct-octal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl 030052000520\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-direct-glob", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl \"http://192.168.1.{82,80}/\"\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-direct-url", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl --url=3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-direct-data-glob", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl --data \"http://192.168.1.{80,82}/\" 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-env-hex", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv curl 0xc0a80150\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-env-octal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv curl 030052000520\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-env-glob", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv curl \"http://192.168.1.{82,80}/\"\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-env-url", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv curl --url=3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-env-data-glob", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv curl --data \"http://192.168.1.{80,82}/\" 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-command-hex", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncommand curl 0xc0a80150\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-command-octal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncommand curl 030052000520\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-command-glob", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncommand curl \"http://192.168.1.{82,80}/\"\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-command-url", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncommand curl --url=3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-command-data-glob", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncommand curl --data \"http://192.168.1.{80,82}/\" 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-exec-hex", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nexec curl 0xc0a80150\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-exec-octal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nexec curl 030052000520\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-exec-glob", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nexec curl \"http://192.168.1.{82,80}/\"\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-exec-url", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nexec curl --url=3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-exec-data-glob", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nexec curl --data \"http://192.168.1.{80,82}/\" 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-nice-hex", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nnice curl 0xc0a80150\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-nice-octal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nnice curl 030052000520\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-nice-glob", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nnice curl \"http://192.168.1.{82,80}/\"\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-nice-url", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nnice curl --url=3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-nice-data-glob", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nnice curl --data \"http://192.168.1.{80,82}/\" 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-nohup-hex", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nnohup curl 0xc0a80150\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-nohup-octal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nnohup curl 030052000520\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-nohup-glob", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nnohup curl \"http://192.168.1.{82,80}/\"\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-nohup-url", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nnohup curl --url=3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-nohup-data-glob", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nnohup curl --data \"http://192.168.1.{80,82}/\" 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-timeout-hex", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ntimeout 2 curl 0xc0a80150\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-timeout-octal", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ntimeout 2 curl 030052000520\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-timeout-glob", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ntimeout 2 curl \"http://192.168.1.{82,80}/\"\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-timeout-url", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ntimeout 2 curl --url=3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-timeout-data-glob", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ntimeout 2 curl --data \"http://192.168.1.{80,82}/\" 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-lookup-short", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncommand -v curl 3232235856\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-lookup-long", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncommand -V curl 3232235856\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-lookup-cluster", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncommand -pv curl 3232235856\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-env-builtin", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv command curl 3232235856\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-env-exec", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv exec curl 3232235856\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-exec-command", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nexec command curl 3232235856\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-nice-builtin", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nnice command curl 3232235856\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-timeout-builtin", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ntimeout 2 command curl 3232235856\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-builtin-curl", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nbuiltin curl 3232235856\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-builtin-env", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nbuiltin env curl 3232235856\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-path-command", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\n/usr/bin/command curl 3232235856\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-path-exec", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\n/usr/bin/exec curl 3232235856\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-echo", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\necho env curl 3232235856\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-printf", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nprintf '%s' command curl 3232235856\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-assignment-only", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv COUNT=3232235856\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-env-option-value", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv -u 3232235856 curl 2130706433\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-exec-argv0", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nexec -a curl printf 3232235856\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-command-assignment", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncommand COUNT=1 curl 3232235856\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-exec-assignment", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nexec COUNT=1 curl 3232235856\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-env-help", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv --help curl 3232235856\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-command-invalid", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncommand -x curl 3232235856\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-exec-invalid", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nexec -x curl 3232235856\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-env-null", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv -0 curl 3232235856\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-env-empty", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv \"\" curl 3232235856\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-env-split-unsupported", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv -S 'curl 3232235856'\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-unknown", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nunknown-launcher curl 3232235856\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-dynamic", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv \"$PROGRAM\" 3232235856\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-boundary", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv curl 2130706433; echo 3232235856\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-nested-lookup", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nbuiltin command -v curl 3232235856\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-external-builtin", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv builtin command curl 3232235856\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-exec-no-command", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nexec -a curl\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-env-option-curl", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv -u curl printf 3232235856\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r7-nested-quotes", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncommand env 'curl' 3232235'856'\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-after-boundary", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\necho safe; command curl 3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-url-after-data", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv curl --data 3232235856 --url 0xc0a80150\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-globoff-shell", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv curl -g http://192.168.1.{82,80}/\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-range", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncommand curl \"http://192.168.1.[80-82]/\"\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r7-deep", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncommand command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command command curl 3232235856\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
