@@ -201,6 +201,59 @@ fn changed_policy_and_bytes_reuse_original_publication() {
 }
 
 #[test]
+fn source_paths_require_nfc_for_files_and_directories() {
+    for (nfc, nfd) in [
+        ("café.stl", "cafe\u{301}.stl"),
+        ("pièces/part.stl", "pie\u{300}ces/part.stl"),
+    ] {
+        assert_eq!(SourcePath::try_from(nfc.to_owned()).unwrap().as_str(), nfc);
+        assert_eq!(
+            SourcePath::try_from(nfd.to_owned()).unwrap_err().category(),
+            "unsafe-path"
+        );
+        // Deserialization must enforce the same boundary as direct construction.
+        assert!(serde_json::from_value::<SourcePath>(serde_json::json!(nfd)).is_err());
+    }
+}
+
+#[test]
+fn filename_case_collisions_are_rejected_before_copying_in_either_order() {
+    // Request validation runs before filesystem access, including on volumes
+    // that cannot represent both spellings as separate files.
+    for paths in [["Part.stl", "part.stl"], ["CAFÉ.stl", "café.stl"]] {
+        for reverse in [false, true] {
+            let fixture = Fixture::new();
+            let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+            let mut selected = request();
+            selected.files = paths
+                .into_iter()
+                .map(|path| SelectedFile {
+                    path: SourcePath::try_from(path.to_owned()).unwrap(),
+                    kind: FileKind::Stl,
+                    size_hint_bytes: None,
+                })
+                .collect();
+            if reverse {
+                selected.files.reverse();
+            }
+            let error = fixture
+                .repos()
+                .source(42)
+                .unwrap()
+                .materialize(selected, &input, budget())
+                .unwrap_err();
+            assert_eq!(error.category(), "duplicate-path");
+            assert_eq!(
+                fs::read_dir(fixture.0.join("repos/42/revisions"))
+                    .unwrap()
+                    .count(),
+                0
+            );
+        }
+    }
+}
+
+#[test]
 fn conflicting_directory_case_is_rejected_before_copying() {
     let fixture = Fixture::new();
     let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
@@ -263,7 +316,10 @@ fn max_flat_snapshot_publishes_and_retries_cleanly() {
 #[test]
 fn cli_retry_reuses_revision_after_inputs_are_deleted() {
     use std::io::Write;
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
+
+    #[path = "support/process.rs"]
+    mod test_process;
 
     let fixture = Fixture::new();
     let command = serde_json::json!({
@@ -272,7 +328,7 @@ fn cli_retry_reuses_revision_after_inputs_are_deleted() {
         "reservedStoredBytes": 1024 * 1024, "snapshot": request(),
     });
     let invoke = || {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_pp-source"))
+        let mut child = test_process::command(env!("CARGO_BIN_EXE_pp-source"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
@@ -465,4 +521,149 @@ fn canonical_folder_overlap_is_rejected_without_publishing_and_retry_can_recover
     assert_eq!(second.publication, Publication::Reused);
     assert_eq!(second.files, first.files);
     assert_eq!(second.manifest_digest, first.manifest_digest);
+}
+
+/// Writes a revision the way the earlier lowercase path rule published it.
+fn write_legacy_revision(fixture: &Fixture, key: &str, names: &[&str]) -> PathBuf {
+    write_legacy_revision_with_omissions(fixture, key, names, serde_json::json!([]))
+}
+fn write_legacy_revision_with_omissions(
+    fixture: &Fixture,
+    key: &str,
+    names: &[&str],
+    omitted: serde_json::Value,
+) -> PathBuf {
+    use sha2::{Digest, Sha256};
+
+    let revision = fixture.0.join("repos/42/revisions").join(key);
+    let mut files: Vec<_> = names
+        .iter()
+        .map(|name| {
+            let path = revision.join(name);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, name.as_bytes()).unwrap();
+            pp_source::ContentFile {
+                path: SourcePath::try_from((*name).to_owned()).unwrap(),
+                kind: FileKind::Stl,
+                size_bytes: name.len() as u64,
+                sha256: hex::encode(Sha256::digest(name.as_bytes())),
+            }
+        })
+        .collect();
+    files.sort_by(|a, b| {
+        a.path
+            .as_str()
+            .encode_utf16()
+            .cmp(b.path.as_str().encode_utf16())
+    });
+    let manifest = serde_json::json!({
+        "version": 1,
+        "upstreamRevisionKey": key,
+        "manifestDigest": hex::encode(Sha256::digest(serde_json::to_vec(&files).unwrap())),
+        "selection": {"maxStlFiles": 500, "maxDocumentationBytes": 1000, "omittedFiles": omitted},
+        "files": files,
+    });
+    fs::write(
+        revision.join(pp_source::MANIFEST),
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    revision
+}
+
+#[test]
+fn legacy_ambiguous_revision_reports_permanent_migration_error_and_is_retained() {
+    let fixture = Fixture::new();
+    let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+    let mut source = fixture.repos().source(42).unwrap();
+    for names in [
+        &["Straße.stl", "STRASSE.stl"][..],
+        &["Straße/a.stl", "STRASSE/b.stl"][..],
+        &["Σ.stl", "ς.stl"][..],
+    ] {
+        let revision = write_legacy_revision(&fixture, "legacy-ambiguous", names);
+        let inventory = || {
+            let mut entries: Vec<_> = names
+                .iter()
+                .map(|name| fs::read(revision.join(name)).unwrap())
+                .collect();
+            entries.push(fs::read(revision.join(pp_source::MANIFEST)).unwrap());
+            entries
+        };
+        let before = inventory();
+        let mut retry = request();
+        retry.upstream_revision_key = "legacy-ambiguous".into();
+        for _ in 0..2 {
+            let error = source
+                .materialize(retry.clone(), &input, budget())
+                .unwrap_err();
+            assert!(
+                matches!(&error, pp_source::Error::AmbiguousRevision(key) if key == "legacy-ambiguous"),
+                "{names:?}: {error:?}"
+            );
+            assert_eq!(error.category(), "ambiguous-revision");
+            let message = error.to_string();
+            assert!(message.starts_with("ambiguous-revision: "), "{message}");
+            assert!(message.contains("legacy-ambiguous"), "{message}");
+            assert!(message.contains("new revision key"), "{message}");
+        }
+        assert_eq!(inventory(), before);
+        assert!(
+            !revision
+                .parent()
+                .unwrap()
+                .join(".pp-source-candidate")
+                .exists()
+        );
+        fs::remove_dir_all(&revision).unwrap();
+    }
+}
+
+#[test]
+fn ambiguous_names_keep_generic_errors_unless_the_revision_is_an_intact_legacy_publication() {
+    let fixture = Fixture::new();
+    let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+    let mut source = fixture.repos().source(42).unwrap();
+    let mut retry = request();
+    retry.upstream_revision_key = "legacy-ambiguous".into();
+    // The earlier rule also rejected this pair, so it was never a publication.
+    let revision = write_legacy_revision(&fixture, "legacy-ambiguous", &["a.stl", "A.stl"]);
+    assert!(matches!(
+        source.materialize(retry.clone(), &input, budget()),
+        Err(pp_source::Error::DuplicatePath)
+    ));
+    fs::remove_dir_all(&revision).unwrap();
+    // A tampered legacy-ambiguous revision is corruption, not a policy break.
+    let revision =
+        write_legacy_revision(&fixture, "legacy-ambiguous", &["Straße.stl", "STRASSE.stl"]);
+    fs::write(revision.join("Straße.stl"), b"tampered!!").unwrap();
+    assert!(matches!(
+        source.materialize(retry, &input, budget()),
+        Err(pp_source::Error::CorruptSnapshot)
+    ));
+}
+
+#[test]
+fn legacy_ambiguous_revision_still_enforces_the_other_manifest_constraints() {
+    let fixture = Fixture::new();
+    let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+    let mut source = fixture.repos().source(42).unwrap();
+    // Omitted STL entries are corrupt regardless of the path collision.
+    write_legacy_revision_with_omissions(
+        &fixture,
+        "legacy-ambiguous",
+        &["Straße.stl", "STRASSE.stl"],
+        serde_json::json!([{
+            "path": "notes.md",
+            "kind": "stl",
+            "sizeHintBytes": null,
+            "reason": "unknown-document-size",
+        }]),
+    );
+    let mut retry = request();
+    retry.upstream_revision_key = "legacy-ambiguous".into();
+    assert!(matches!(
+        source.materialize(retry, &input, budget()),
+        Err(pp_source::Error::CorruptSnapshot)
+    ));
 }

@@ -1,0 +1,50 @@
+{
+  "tree": {
+    "Parts/z.stl": "solid z\nendsolid z\n",
+    "Parts/a.stl": "solid a\nendsolid a\n",
+    "docs/README.md": "# Assembly\n",
+    "docs/guide.md": "Fit parts together.\n",
+    "docs/manual.pdf": "%PDF-1.4\nfixture\n",
+    "assets/preview.bin": "fixture artifact\n"
+  },
+  "request": {
+    "upstreamRevisionKey": "nested_mixed",
+    "files": [
+      {
+        "path": "Parts/z.stl",
+        "kind": "stl",
+        "sizeHintBytes": null
+      },
+      {
+        "path": "docs/manual.pdf",
+        "kind": "pdf",
+        "sizeHintBytes": 17
+      },
+      {
+        "path": "assets/preview.bin",
+        "kind": "artifact",
+        "sizeHintBytes": null
+      },
+      {
+        "path": "docs/guide.md",
+        "kind": "md",
+        "sizeHintBytes": 20
+      },
+      {
+        "path": "Parts/a.stl",
+        "kind": "stl",
+        "sizeHintBytes": 18
+      },
+      {
+        "path": "docs/README.md",
+        "kind": "readme",
+        "sizeHintBytes": 11
+      }
+    ],
+    "selection": {
+      "maxStlFiles": 2,
+      "maxDocumentationBytes": 1024,
+      "omittedFiles": []
+    }
+  }
+}

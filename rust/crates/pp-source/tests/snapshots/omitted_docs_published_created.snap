@@ -1,0 +1,45 @@
+---
+source: crates/pp-source/tests/snapshots.rs
+expression: created
+---
+{
+  "tenantId": "tenant-fixture",
+  "sourceId": 42,
+  "upstreamRevisionKey": "omitted_docs",
+  "manifestDigest": "[hash]",
+  "snapshotLocator": "42/revisions/omitted_docs",
+  "files": [
+    {
+      "path": "README.md",
+      "kind": "readme",
+      "sizeBytes": 24,
+      "sha256": "[hash]"
+    },
+    {
+      "path": "part.stl",
+      "kind": "stl",
+      "sizeBytes": 31,
+      "sha256": "[hash]"
+    }
+  ],
+  "selection": {
+    "maxStlFiles": 1,
+    "maxDocumentationBytes": 24,
+    "omittedFiles": [
+      {
+        "path": "docs/a-unknown.md",
+        "kind": "md",
+        "sizeHintBytes": null,
+        "reason": "unknown-document-size"
+      },
+      {
+        "path": "docs/z-large.pdf",
+        "kind": "pdf",
+        "sizeHintBytes": 4096,
+        "reason": "documentation-byte-budget"
+      }
+    ]
+  },
+  "publication": "created",
+  "storedBytes": 962
+}

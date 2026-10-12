@@ -2,7 +2,8 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, renderHook } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { JobSnapshot } from "@print-partner/contracts";
 import type { ReactNode } from "react";
 import { EngineHttpError } from "../api/engineTransport";
 import { fetchJob } from "../api/endpoints/jobs";
@@ -18,6 +19,246 @@ vi.mock("../api/jobWebSocket", async (importOriginal) => ({
   ...await importOriginal<typeof import("../api/jobWebSocket")>(),
   connectJobWebSocket: vi.fn(() => vi.fn()),
 }));
+
+describe("JobProvider elapsed observation deadline", () => {
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={new QueryClient()}>
+      <JobProvider>{children}</JobProvider>
+    </QueryClientProvider>
+  );
+  const running: JobSnapshot = {
+    job_id: "observed", kind: "check-source-updates", status: "running",
+    message: "Checking sources", progress: 10, result: null, error: null,
+  };
+  const completed: JobSnapshot = {
+    ...running, status: "done", message: "Complete", progress: 100,
+    result: { checked: 1 },
+  };
+  const timeoutMessage = "Lost contact with the job. It may still be running on the server. Job timed out waiting for completion";
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.mocked(fetchJob).mockReset();
+    vi.mocked(connectJobWebSocket).mockReset().mockReturnValue(vi.fn());
+  });
+
+  it.each([
+    new TypeError("Failed to fetch"),
+    new EngineHttpError("API restarting", 503),
+  ])("expires at 60 seconds despite repeated %s failures", async (failure) => {
+    vi.mocked(fetchJob).mockRejectedValue(failure);
+    const disconnect = vi.fn();
+    vi.mocked(connectJobWebSocket).mockReturnValue(disconnect);
+    const { result } = renderHook(useJobContext, { wrapper });
+    const onDone = vi.fn();
+    await act(async () => {
+      await result.current.runJob("check-source-updates", () => Promise.resolve("observed"), onDone);
+      await vi.advanceTimersByTimeAsync(59_999);
+    });
+    expect(result.current.activeJobs[0]).toMatchObject({ status: "pending", message: "Starting…" });
+    expect(result.current.isJobKindRunning("check-source-updates")).toBe(true);
+    expect(fetchJob).toHaveBeenCalledTimes(10);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(result.current.activeJobs[0]).toMatchObject({ status: "error", message: timeoutMessage });
+    expect(result.current.isJobKindRunning("check-source-updates")).toBe(false);
+    expect(onDone).toHaveBeenCalledExactlyOnceWith({
+      job_id: "observed", kind: "check-source-updates", status: "error",
+      message: timeoutMessage, error: timeoutMessage, progress: null, result: null,
+    });
+    expect(disconnect).toHaveBeenCalledOnce();
+    expect(vi.mocked(fetchJob).mock.calls[0]?.[1]?.aborted).toBe(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+    expect(fetchJob).toHaveBeenCalledTimes(10);
+    expect(onDone).toHaveBeenCalledOnce();
+  });
+
+  it.each(["sync", "extract-source-docs", "import-scan"])("keeps %s's 30-minute elapsed window", async (kind) => {
+    vi.mocked(fetchJob).mockRejectedValue(new EngineHttpError("API restarting", 502));
+    const { result } = renderHook(useJobContext, { wrapper });
+    const onDone = vi.fn();
+    await act(async () => {
+      await result.current.runJob(kind, () => Promise.resolve("observed"), onDone);
+      await vi.advanceTimersByTimeAsync(1_799_999);
+    });
+    expect(result.current.activeJobs[0]?.status).toBe("pending");
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(onDone).toHaveBeenCalledExactlyOnceWith({
+      job_id: "observed", kind, status: "error", message: timeoutMessage,
+      error: timeoutMessage, progress: null, result: null,
+    });
+  });
+
+  it("resets backoff after a successful poll without renewing the deadline", async () => {
+    vi.mocked(fetchJob).mockRejectedValue(new TypeError("Failed to fetch"));
+    const { result } = renderHook(useJobContext, { wrapper });
+    const onDone = vi.fn();
+    await act(async () => {
+      await result.current.runJob("check-source-updates", () => Promise.resolve("observed"), onDone);
+      await vi.advanceTimersByTimeAsync(12_400);
+    });
+    vi.mocked(fetchJob).mockResolvedValueOnce(running).mockRejectedValue(new TypeError("Failed to fetch"));
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(result.current.activeJobs[0]).toMatchObject({ status: "running", message: "Checking sources" });
+    expect(fetchJob).toHaveBeenCalledTimes(7);
+    await act(async () => { await vi.advanceTimersByTimeAsync(399); });
+    expect(fetchJob).toHaveBeenCalledTimes(7);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(fetchJob).toHaveBeenCalledTimes(8);
+    await act(async () => { await vi.advanceTimersByTimeAsync(37_199); });
+    expect(result.current.activeJobs[0]?.status).toBe("running");
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    const message = `${timeoutMessage} (last status: running)`;
+    expect(result.current.activeJobs[0]).toMatchObject({ status: "error", message });
+    expect(onDone).toHaveBeenCalledExactlyOnceWith({
+      job_id: "observed", kind: "check-source-updates", status: "error", message,
+      error: message, progress: null, result: null,
+    });
+  });
+
+  it("expires a stalled HTTP request and ignores its late completion", async () => {
+    let settle: ((snapshot: JobSnapshot) => void) | undefined;
+    vi.mocked(fetchJob).mockImplementation(() => new Promise((resolve) => { settle = resolve; }));
+    const disconnect = vi.fn();
+    vi.mocked(connectJobWebSocket).mockReturnValue(disconnect);
+    const { result } = renderHook(useJobContext, { wrapper });
+    const onDone = vi.fn();
+    await act(async () => {
+      await result.current.runJob("check-source-updates", () => Promise.resolve("observed"), onDone);
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(result.current.activeJobs[0]).toMatchObject({ status: "error", message: timeoutMessage });
+    expect(vi.mocked(fetchJob).mock.calls[0]?.[1]?.aborted).toBe(true);
+    expect(disconnect).toHaveBeenCalledOnce();
+    await act(async () => { settle?.(completed); });
+    expect(onDone).toHaveBeenCalledExactlyOnceWith({
+      job_id: "observed", kind: "check-source-updates", status: "error",
+      message: timeoutMessage, error: timeoutMessage, progress: null, result: null,
+    });
+  });
+
+  it("rejects a late terminal snapshot before the delayed deadline timer runs", async () => {
+    const clock = vi.spyOn(performance, "now").mockReturnValue(0);
+    try {
+      vi.mocked(fetchJob).mockRejectedValue(new TypeError("Failed to fetch"));
+      const { result } = renderHook(useJobContext, { wrapper });
+      const onDone = vi.fn();
+      await act(async () => {
+        await result.current.runJob("check-source-updates", () => Promise.resolve("observed"), onDone);
+      });
+      clock.mockReturnValue(60_000);
+      await act(async () => { vi.mocked(connectJobWebSocket).mock.calls[0]?.[1](completed); });
+      expect(result.current.activeJobs[0]).toMatchObject({ status: "error", message: timeoutMessage });
+      expect(onDone).toHaveBeenCalledExactlyOnceWith({
+        job_id: "observed", kind: "check-source-updates", status: "error", message: timeoutMessage,
+        error: timeoutMessage, progress: null, result: null,
+      });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("reports a non-transient HTTP failure immediately", async () => {
+    vi.mocked(fetchJob).mockRejectedValue(new EngineHttpError("Access denied", 403));
+    const { result } = renderHook(useJobContext, { wrapper });
+    const onDone = vi.fn();
+    await act(async () => {
+      await result.current.runJob("check-source-updates", () => Promise.resolve("observed"), onDone);
+    });
+    const message = "Lost contact with the job. It may still be running on the server. Access denied";
+    expect(result.current.activeJobs[0]).toMatchObject({ status: "error", message });
+    expect(onDone).toHaveBeenCalledExactlyOnceWith({
+      job_id: "observed", kind: "check-source-updates", status: "error", message,
+      error: message, progress: null, result: null,
+    });
+    expect(vi.mocked(fetchJob).mock.calls[0]?.[1]?.aborted).toBe(true);
+  });
+
+  it("aborts bounded observation on unmount without reporting a timeout", async () => {
+    vi.mocked(fetchJob).mockResolvedValue(running);
+    const disconnect = vi.fn();
+    vi.mocked(connectJobWebSocket).mockReturnValue(disconnect);
+    const { result, unmount } = renderHook(useJobContext, { wrapper });
+    const onDone = vi.fn();
+    await act(async () => {
+      await result.current.runJob("check-source-updates", () => Promise.resolve("observed"), onDone);
+    });
+    expect(result.current.activeJobs[0]).toMatchObject({ status: "running", message: "Checking sources" });
+    unmount();
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(vi.mocked(fetchJob).mock.calls[0]?.[1]?.aborted).toBe(true);
+    expect(disconnect).toHaveBeenCalledOnce();
+    expect(fetchJob).toHaveBeenCalledTimes(1);
+    expect(onDone).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("finishes a terminal socket event immediately even if its snapshot fetch stalls", async () => {
+    vi.mocked(fetchJob).mockRejectedValue(new TypeError("Failed to fetch"));
+    const disconnect = vi.fn();
+    vi.mocked(connectJobWebSocket).mockReturnValue(disconnect);
+    const { result } = renderHook(useJobContext, { wrapper });
+    const onDone = vi.fn();
+    await act(async () => {
+      await result.current.runJob("check-source-updates", () => Promise.resolve("observed"), onDone);
+      await vi.advanceTimersByTimeAsync(12_400);
+    });
+    vi.mocked(fetchJob).mockImplementation(() => new Promise(() => {}));
+    await act(async () => {
+      vi.mocked(connectJobWebSocket).mock.calls[0]?.[1]({
+        status: "done", message: "Complete", progress: 100, result: { checked: 1 }, error: null,
+      });
+    });
+    expect(onDone).toHaveBeenCalledExactlyOnceWith(completed);
+    expect(result.current.activeJobs[0]).toMatchObject({ status: "done", message: "Complete", progress: 100 });
+    expect(disconnect).toHaveBeenCalledOnce();
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(onDone).toHaveBeenCalledOnce();
+  });
+
+  it.each(["HTTP 404", "WS 1008"])("stops with Job not found after transient failures on %s", async (outcome) => {
+    vi.mocked(fetchJob).mockRejectedValue(new EngineHttpError("API restarting", 503));
+    const disconnect = vi.fn();
+    vi.mocked(connectJobWebSocket).mockReturnValue(disconnect);
+    const { result } = renderHook(useJobContext, { wrapper });
+    const onDone = vi.fn();
+    await act(async () => {
+      await result.current.runJob("check-source-updates", () => Promise.resolve("observed"), onDone);
+      await vi.advanceTimersByTimeAsync(12_400);
+    });
+    await act(async () => {
+      if (outcome === "HTTP 404") {
+        vi.mocked(fetchJob).mockRejectedValue(new EngineHttpError("Job not found", 404));
+        await vi.advanceTimersByTimeAsync(10_000);
+      } else {
+        vi.mocked(connectJobWebSocket).mock.calls[0]?.[2](new JobNotFoundError());
+      }
+    });
+    expect(result.current.activeJobs[0]).toMatchObject({ status: "error", message: "Job not found" });
+    expect(onDone).toHaveBeenCalledExactlyOnceWith({
+      job_id: "observed", kind: "check-source-updates", status: "error",
+      message: "Job not found", error: "Job not found", progress: null, result: null,
+    });
+    expect(disconnect).toHaveBeenCalledOnce();
+    expect(vi.mocked(fetchJob).mock.calls[0]?.[1]?.aborted).toBe(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(onDone).toHaveBeenCalledOnce();
+  });
+
+  it("keeps STL exports unbounded through failures beyond 30 minutes", async () => {
+    vi.mocked(fetchJob).mockRejectedValue(new TypeError("Failed to fetch"));
+    const { result } = renderHook(useJobContext, { wrapper });
+    const onDone = vi.fn();
+    await act(async () => {
+      await result.current.runJob("stl-export", () => Promise.resolve("observed"), onDone);
+      await vi.advanceTimersByTimeAsync(2_100_000);
+    });
+    expect(result.current.activeJobs[0]).toMatchObject({ status: "pending", message: "Starting…" });
+    expect(result.current.isJobKindRunning("stl-export")).toBe(true);
+    await act(async () => { vi.mocked(connectJobWebSocket).mock.calls[0]?.[1](completed); });
+    expect(onDone).toHaveBeenCalledExactlyOnceWith(completed);
+    expect(result.current.activeJobs[0]?.status).toBe("done");
+  });
+});
 
 afterEach(() => {
   cleanup();
