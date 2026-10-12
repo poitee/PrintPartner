@@ -130,10 +130,7 @@ function stripHiddenMarkdown(text, { inlineMultiline = true, includeRawHtml = fa
     const indent = indentWidth(raw.match(/^[ \t]*/)[0]);
     if (htmlBlock && !insideFenceContainer(raw, htmlBlock)) htmlBlock = null;
     if (htmlBlock) {
-      const closed = htmlBlock.tag
-        ? new RegExp(`</${htmlBlock.tag}[ \\t]*>`, "i").test(raw)
-        : !raw.trim();
-      if (closed) htmlBlock = null;
+      if (htmlBlock.end.test(quoteContent(raw, htmlBlock.quote))) htmlBlock = null;
       kept.push("");
       paragraphOpen = false;
       continue;
@@ -184,9 +181,14 @@ function stripHiddenMarkdown(text, { inlineMultiline = true, includeRawHtml = fa
         || (!paragraphOpen && isCompleteHtmlTag(content)))) {
         const quoteLine = quoteContent(raw, prefix.quote);
         const hasList = /^[ \t]*(?:[-+*]|\d{1,9}[.)])[ \t]/.test(quoteLine);
-        htmlBlock = { tag: rawTag?.[1], quote: prefix.quote,
+        const end = rawTag ? new RegExp(`</${rawTag[1]}[ \\t]*>`, "i")
+          : content.startsWith("<?") ? /\?>/
+          : content.startsWith("<![CDATA[") ? /\]\]>/
+          : /^<![A-Za-z]/.test(content) ? />/
+          : /^\s*$/;
+        htmlBlock = { end, quote: prefix.quote,
           column: hasList ? containerPrefix(quoteLine).column : (prefix.quote ? 0 : listColumn) };
-        if (rawTag && new RegExp(`</${rawTag[1]}[ \\t]*>`, "i").test(content)) htmlBlock = null;
+        if (end.test(content)) htmlBlock = null;
         kept.push("");
         paragraphOpen = false;
         continue;
@@ -1183,10 +1185,18 @@ function targetsBannedLan(sectionText, definitions, literalCode = []) {
   );
   const bannedTarget = (value) => {
     if (BANNED_LAN_IP.test(value)) return true;
-    const decoded = decodeCharacterReferences(value, { htmlNumeric: true }).replace(/\\(.)/g, "$1").replace(/[\t\n\r]/g, "");
-    return [...decoded.matchAll(/(?:https?:|\/\/)[^\s<>()"'`]+/gi)].some((match) => {
+    const decoded = decodeCharacterReferences(value, { htmlNumeric: true }).replace(/\\(.)/g, "$1");
+    const targets = [...decoded.replace(/[\t\n\r]/g, "").matchAll(/(?:https?:|\/\/)[^\s<>()"'`]+/gi)]
+      .map((match) => trimToken(match[0]));
+    for (const token of decoded.split(/[\s<>()"'`]+/)) {
+      const target = trimToken(token);
+      if (/[.:/?#]/.test(target)
+        && /^(?:0x[\da-f]+|\d+)(?:\.(?:0x[\da-f]+|\d+)){0,3}(?::\d+)?(?:[/?#].*)?$/i.test(target)) {
+        targets.push(`http://${target}`);
+      }
+    }
+    return targets.some((target) => {
       try {
-        const target = trimToken(match[0]);
         let host = new URL(target, /^https?:/i.test(target) ? undefined : "https://example.test/").hostname;
         const mapped = host.match(/^\[::ffff:([\da-f]{1,4}):([\da-f]{1,4})\]$/i);
         if (mapped) {
