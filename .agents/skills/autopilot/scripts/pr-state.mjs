@@ -132,14 +132,14 @@ function currentChecks(checks) {
       ? JSON.stringify([suite.app.id, run.workflow.id, run.event, check.name])
       : null;
     let attemptTime = NaN;
-    if (run?.runAttempt === 1) attemptTime = Date.parse(run.createdAt);
-    else if (Number.isInteger(run?.runAttempt) && run.runAttempt > 1) {
+    // gh pr checks keeps the later check start. Workflow creation time is a
+    // different clock, and runAttempt belongs to the whole run, including a
+    // check a partial rerun did not start again. Missing and tied starts stay.
+    if (Number.isInteger(run?.runAttempt) && run.runAttempt >= 1) {
       attemptTime = Date.parse(check.startedAt);
     }
     return { check, key, suiteId: suite?.id, attemptTime };
   });
-  // Creation time orders only first attempts. Reruns keep that original time,
-  // so use their check start time and retain queued reruns without timing.
   return records.filter((record) => !records.some((other) => {
     if (!record.key || record.key !== other.key) return false;
     if (!record.suiteId || !other.suiteId || record.suiteId === other.suiteId) return false;
@@ -429,50 +429,81 @@ function fetchChecksPaged({ owner, name, oid }) {
   return checks;
 }
 
+const PR_VIEW_FIELDS =
+  "number,title,url,isDraft,baseRefName,headRefName,mergeable,mergeStateStatus,headRefOid";
+
+function viewPullRequest(prNumber) {
+  return ghJson(
+    prNumber
+      ? ["pr", "view", String(prNumber), "--json", PR_VIEW_FIELDS]
+      : ["pr", "view", "--json", PR_VIEW_FIELDS],
+  );
+}
+
+function unknownHeadSnapshot(pr) {
+  return evaluateSnapshot({
+    pr: {
+      ...(pr ?? {}),
+      mergeable: "UNKNOWN",
+      mergeStateStatus: "UNKNOWN",
+    },
+  });
+}
+
 export function fetchLiveSnapshot({ prNumber } = {}) {
   // Read the repository first. A missing token, an SSO-blocked token, or an
   // unreachable repository fails here and surfaces its own message, which is
   // what lets a later `pr view` failure mean "no such pull request".
   const repo = ghJson(["repo", "view", "--json", "nameWithOwner"]);
   const [owner, name] = String(repo.nameWithOwner).split("/");
+  let seen = null;
 
-  const fields =
-    "number,title,url,isDraft,baseRefName,headRefName,mergeable,mergeStateStatus,headRefOid";
-  let pr;
-  try {
-    pr = ghJson(
-      prNumber
-        ? ["pr", "view", String(prNumber), "--json", fields]
-        : ["pr", "view", "--json", fields],
-    );
-  } catch (error) {
-    if (isMissingPrError(error)) return evaluateSnapshot({ pr: null });
-    throw error;
+  for (let read = 0; read < 2; read += 1) {
+    let pr;
+    try {
+      pr = viewPullRequest(prNumber);
+    } catch (error) {
+      if (isMissingPrError(error)) return evaluateSnapshot({ pr: null });
+      throw error;
+    }
+    seen = pr;
+
+    const { threads, viewerLogin } = fetchReviewThreadsPaged({
+      owner,
+      name,
+      number: pr.number,
+    });
+    let issueComments = [];
+    try {
+      issueComments = ghJson([
+        "api",
+        `repos/${owner}/${name}/issues/${pr.number}/comments`,
+      ]);
+      if (!Array.isArray(issueComments)) issueComments = [];
+    } catch {
+      issueComments = [];
+    }
+    const statusCheckRollup = fetchChecksPaged({ owner, name, oid: pr.headRefOid });
+
+    let confirmed;
+    try {
+      confirmed = viewPullRequest(prNumber);
+    } catch (error) {
+      if (error?.exitCode === 4 || error?.ghFailure === "launch") throw error;
+      return unknownHeadSnapshot(pr);
+    }
+    if (confirmed.headRefOid && confirmed.headRefOid === pr.headRefOid) {
+      return evaluateSnapshot({
+        pr: confirmed,
+        reviewThreads: threads,
+        statusCheckRollup,
+        issueComments,
+        viewerLogin,
+      });
+    }
   }
 
-  const { threads, viewerLogin } = fetchReviewThreadsPaged({
-    owner,
-    name,
-    number: pr.number,
-  });
-  let issueComments = [];
-  try {
-    issueComments = ghJson([
-      "api",
-      `repos/${owner}/${name}/issues/${pr.number}/comments`,
-    ]);
-    if (!Array.isArray(issueComments)) issueComments = [];
-  } catch {
-    issueComments = [];
-  }
-
-  return evaluateSnapshot({
-    pr,
-    reviewThreads: threads,
-    statusCheckRollup: fetchChecksPaged({ owner, name, oid: pr.headRefOid }),
-    issueComments,
-    viewerLogin,
-  });
+  return unknownHeadSnapshot(seen);
 }
 
 export function renderReport(report) {

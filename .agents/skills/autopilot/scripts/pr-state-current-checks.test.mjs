@@ -43,14 +43,14 @@ for (const [status, conclusion, action, field] of [
   ["COMPLETED", "FUTURE_OUTCOME", "ci", "failingChecks"],
   ["FUTURE_STATUS", null, "ci", "failingChecks"],
 ]) {
-  test(`latest ${status}/${conclusion} stays actionable regardless of input order`, () => {
+  test(`latest ${status}/${conclusion} stays actionable when its start time is missing`, () => {
     const checks = structuredClone(fixture.statusCheckRollup);
     Object.assign(checks.at(-1), { status, conclusion, startedAt: null, completedAt: null });
     for (const ordered of [checks, checks.toReversed()]) {
       const report = evaluateSnapshot(snapshotWithChecks(ordered));
       assert.equal(report.nextAction, action);
       assert.deepEqual(report[field].map((item) => item.url), [currentUrl]);
-      assert.equal(report.passedCheckCount, 0);
+      assert.equal(report.passedCheckCount, 1);
     }
   });
 }
@@ -318,7 +318,6 @@ function runLiveFixture(context, mode = "pages") {
   if (mode === "head-moved") {
     data.oldChecks = [latestCheck()];
     const failure = latestCheck();
-    failure.id = "moved-failure";
     failure.conclusion = "FAILURE";
     failure.detailsUrl = movedFailureUrl;
     data.newChecks = [failure];
