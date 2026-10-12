@@ -114,7 +114,19 @@ function insideFenceContainer(line, fence) {
  * the end of the text. `onLiteralLine` reports code, raw HTML, and comment
  * suffixes with their boundaries, so payload cannot impersonate metadata.
  */
+// One body is stripped several times with the same text. Keep the last result.
+let stripSlot = null;
+
 function stripHiddenMarkdown(text, { inlineMultiline = true, includeRawHtml = false, onLiteralLine } = {}) {
+  if (!onLiteralLine && stripSlot?.text === text && stripSlot.inlineMultiline === inlineMultiline && stripSlot.includeRawHtml === includeRawHtml) {
+    return stripSlot.value;
+  }
+  const value = stripHiddenMarkdownCompute(text, { inlineMultiline, includeRawHtml, onLiteralLine });
+  if (!onLiteralLine) stripSlot = { text, inlineMultiline, includeRawHtml, value };
+  return value;
+}
+
+function stripHiddenMarkdownCompute(text, { inlineMultiline = true, includeRawHtml = false, onLiteralLine } = {}) {
   const kept = [];
   let fence = null;
   let inComment = false;
@@ -632,6 +644,7 @@ const NON_ARTIFACT_WORD =
  * literal. Ranges are [open, close) with content between the backtick runs.
  */
 function codeSpanRanges(value) {
+  if (!value.includes("`")) return [];
   const runs = [...value.matchAll(/`+/g)].map((m) => ({ at: m.index, len: m[0].length }));
   const byLength = new Map();
   runs.forEach((run, index) => {
