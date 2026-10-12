@@ -70,6 +70,6 @@ for (const { version, name } of cases) {
     node.close();
     inputs.push({ name, version, original, expected, rust });
 }
-writeFileSync(join(out, 'fixtures.json'), JSON.stringify({ clock, inputs, node: process.version }, null, 2));
+writeFileSync(join(out, 'fixtures.json'), JSON.stringify({ clock, inputs, node: process.version, abi: process.versions.modules }, null, 2));
 mock.timers.reset();
 console.log(JSON.stringify({ fixtures: inputs.length, node_exited_before_rust: true }));

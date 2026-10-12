@@ -1,4 +1,7 @@
 use super::*;
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
+use std::process::Command;
 use std::sync::mpsc;
 fn directory(name: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!(
@@ -599,7 +602,7 @@ fn public_open_recovers_dead_writer_marker_and_atomic_lease() {
         .unwrap();
     assert!(WriterOwner::open(&path, Limits::default()).is_err());
     owner.shutdown().unwrap();
-    let mut prior = std::process::Command::new("/bin/true").spawn().unwrap();
+    let mut prior = Command::new("/bin/true").spawn().unwrap();
     let pid = prior.id();
     prior.wait().unwrap();
     let marker = serde_json::json!({"storage_protocol_version": 1, "pid": pid, "process_identity": "prior-process", "instance": "ab".repeat(16)});
@@ -624,7 +627,7 @@ fn public_open_recovers_dead_writer_marker_and_atomic_lease() {
 
 #[test]
 fn unowned_preflight_rejects_live_and_invalid_markers_without_changes() {
-    let mut prior = std::process::Command::new("/bin/true").spawn().unwrap();
+    let mut prior = Command::new("/bin/true").spawn().unwrap();
     let pid = prior.id();
     prior.wait().unwrap();
     let child = lease::current_process_identity();
@@ -653,4 +656,612 @@ fn unowned_preflight_rejects_live_and_invalid_markers_without_changes() {
     assert!(path.join(".desktop-owner.json").is_dir());
     assert_eq!(std::fs::read_dir(&path).unwrap().count(), 1);
     std::fs::remove_dir_all(path).unwrap();
+}
+
+const PINNED_NODE_SHA256: &str = "fde6a4bf8d0562f7751d1a2d6cb9b417c4cfe107bbcb0aa3e9a24e125e348f48";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SchemaGraph {
+    version: String,
+    objects: BTreeMap<(String, String), (String, Option<String>)>,
+    columns: BTreeMap<String, Vec<String>>,
+    foreign_keys: BTreeMap<String, Vec<String>>,
+    rows: BTreeMap<String, Vec<String>>,
+}
+
+fn schema_parity_node() -> PathBuf {
+    if let Ok(path) = std::env::var("PP_SCHEMA_PARITY_NODE") {
+        return PathBuf::from(path);
+    }
+    let pinned = PathBuf::from(
+        "/var/lib/agent-fleet-runtime-owner/runtime-root/releases/node-project-22.23.3-bb2b080fb03ea1f2/bin/node",
+    );
+    if pinned.is_file() {
+        return pinned;
+    }
+    for dir in std::env::var("PATH").unwrap_or_default().split(':') {
+        let candidate = PathBuf::from(dir).join("node");
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    panic!("node binary for schema fixtures was not found");
+}
+
+fn quote_ident(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+fn value_token(value: rusqlite::types::Value) -> String {
+    match value {
+        rusqlite::types::Value::Null => "<null>".to_owned(),
+        rusqlite::types::Value::Integer(value) => value.to_string(),
+        rusqlite::types::Value::Real(value) => value.to_string(),
+        rusqlite::types::Value::Text(value) => value,
+        rusqlite::types::Value::Blob(value) => hex::encode(value),
+    }
+}
+
+fn tree_hashes(root: &Path) -> Vec<(String, String)> {
+    let mut files = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        if !dir.exists() {
+            continue;
+        }
+        let mut entries: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap())
+            .collect();
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    files
+        .into_iter()
+        .map(|path| {
+            let relative = path
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            let digest = hex::encode(Sha256::digest(std::fs::read(&path).unwrap()));
+            (relative, digest)
+        })
+        .collect()
+}
+
+fn copy_db_files(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    if !from.is_dir() {
+        return;
+    }
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let name = entry.file_name();
+        let label = name.to_string_lossy();
+        if label.starts_with("print-partner.db") && entry.path().is_file() {
+            std::fs::copy(entry.path(), to.join(name)).unwrap();
+        }
+    }
+}
+
+fn read_schema_graph(db: &Path) -> SchemaGraph {
+    let conn = Connection::open(db).unwrap();
+    let version: String = conn
+        .query_row(
+            "SELECT value FROM app_settings WHERE tenant_id='default' AND key='schema_version'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut objects = BTreeMap::new();
+    let mut statement = conn
+        .prepare("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .unwrap();
+    let listed = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })
+        .unwrap();
+    for row in listed {
+        let (kind, name, table, sql) = row.unwrap();
+        assert!(
+            objects.insert((kind, name), (table, sql)).is_none(),
+            "duplicate sqlite_master name"
+        );
+    }
+    drop(statement);
+    let tables: Vec<String> = objects
+        .iter()
+        .filter(|((kind, _), _)| kind == "table")
+        .map(|((_, name), _)| name.clone())
+        .collect();
+    let mut columns = BTreeMap::new();
+    let mut foreign_keys = BTreeMap::new();
+    let mut rows = BTreeMap::new();
+    for table in tables {
+        let ident = quote_ident(&table);
+        let mut info = conn
+            .prepare(&format!("PRAGMA table_info({ident})"))
+            .unwrap();
+        let mut names = Vec::new();
+        let defs = info
+            .query_map([], |row| {
+                let name: String = row.get(1)?;
+                let line = format!(
+                    "{}\u{1f}{name}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+                    value_token(row.get(0)?),
+                    value_token(row.get(2)?),
+                    value_token(row.get(3)?),
+                    value_token(row.get(4)?),
+                    value_token(row.get(5)?),
+                );
+                Ok((name, line))
+            })
+            .unwrap()
+            .map(|row| row.unwrap())
+            .collect::<Vec<_>>();
+        drop(info);
+        let defs: Vec<String> = defs
+            .into_iter()
+            .map(|(name, line)| {
+                names.push(name);
+                line
+            })
+            .collect();
+        let mut listed = conn
+            .prepare(&format!("PRAGMA foreign_key_list({ident})"))
+            .unwrap();
+        let keys = listed
+            .query_map([], |row| {
+                let mut parts = Vec::new();
+                for index in 0..8 {
+                    parts.push(value_token(row.get(index)?));
+                }
+                Ok(parts.join("\u{1f}"))
+            })
+            .unwrap()
+            .map(|row| row.unwrap())
+            .collect::<Vec<_>>();
+        drop(listed);
+        let projected = names
+            .iter()
+            .map(|name| format!("quote({})", quote_ident(name)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut data = conn
+            .prepare(&format!(
+                "SELECT {projected} FROM {ident} ORDER BY {projected}"
+            ))
+            .unwrap();
+        let stored = data
+            .query_map([], |row| {
+                let mut cells = Vec::new();
+                for index in 0..names.len() {
+                    cells.push(row.get::<_, String>(index)?);
+                }
+                Ok(cells.join("\u{1e}"))
+            })
+            .unwrap()
+            .map(|row| row.unwrap())
+            .collect::<Vec<_>>();
+        columns.insert(table.clone(), defs);
+        foreign_keys.insert(table.clone(), keys);
+        rows.insert(table, stored);
+    }
+    SchemaGraph {
+        version,
+        objects,
+        columns,
+        foreign_keys,
+        rows,
+    }
+}
+
+fn map_diff(
+    label: &str,
+    left_map: &BTreeMap<String, Vec<String>>,
+    right_map: &BTreeMap<String, Vec<String>>,
+) -> Vec<String> {
+    let mut tables: Vec<_> = left_map.keys().chain(right_map.keys()).collect();
+    tables.sort();
+    tables.dedup();
+    tables
+        .into_iter()
+        .filter(|table| left_map.get(*table) != right_map.get(*table))
+        .map(|table| format!("{label} {table}"))
+        .collect()
+}
+
+fn graph_diff(left: &SchemaGraph, right: &SchemaGraph) -> Vec<String> {
+    let mut diffs = Vec::new();
+    if left.version != right.version {
+        diffs.push(format!("version {} != {}", left.version, right.version));
+    }
+    if left.objects != right.objects {
+        let mut keys: Vec<_> = left.objects.keys().chain(right.objects.keys()).collect();
+        keys.sort();
+        keys.dedup();
+        for key in keys {
+            if left.objects.get(key) != right.objects.get(key) {
+                diffs.push(format!("object {} {}", key.0, key.1));
+            }
+        }
+    }
+    diffs.extend(map_diff("columns", &left.columns, &right.columns));
+    diffs.extend(map_diff(
+        "foreign_keys",
+        &left.foreign_keys,
+        &right.foreign_keys,
+    ));
+    diffs.extend(map_diff("rows", &left.rows, &right.rows));
+    diffs.sort();
+    diffs.dedup();
+    diffs
+}
+
+fn rewrite_sql(graph: &mut SchemaGraph, needle: &str, replacement: &str) -> String {
+    for ((kind, name), (_, sql)) in &mut graph.objects {
+        let Some(sql) = sql.as_mut() else {
+            continue;
+        };
+        let Some(index) = sql.find(needle) else {
+            continue;
+        };
+        sql.replace_range(index..index + needle.len(), replacement);
+        return format!("{kind} {name}");
+    }
+    panic!("fixture SQL has no {needle}");
+}
+
+fn drift_controls(source: &SchemaGraph) -> Vec<(&'static str, SchemaGraph)> {
+    let mut check = source.clone();
+    rewrite_sql(&mut check, "CHECK", "CHECK /*drift*/");
+    let mut default = source.clone();
+    rewrite_sql(&mut default, "DEFAULT", "DEFAULT /*drift*/");
+    let mut foreign_key = source.clone();
+    rewrite_sql(&mut foreign_key, "REFERENCES", "REFERENCES /*drift*/");
+    let keys = foreign_key
+        .foreign_keys
+        .values_mut()
+        .find(|keys| !keys.is_empty())
+        .unwrap();
+    keys[0].push_str("|drift");
+    let mut index = source.clone();
+    let index_key = index
+        .objects
+        .iter()
+        .find(|((kind, _), (_, sql))| kind == "index" && sql.is_some())
+        .map(|(key, _)| key.clone())
+        .unwrap();
+    index.objects.remove(&index_key);
+    let mut trigger = source.clone();
+    let trigger_sql = trigger
+        .objects
+        .iter_mut()
+        .find(|((kind, _), _)| kind == "trigger")
+        .map(|(_, (_, sql))| sql.as_mut().unwrap())
+        .unwrap();
+    trigger_sql.push_str(" /*drift*/");
+    let mut tenant = source.clone();
+    let row = tenant
+        .rows
+        .get_mut("app_settings")
+        .unwrap()
+        .iter_mut()
+        .find(|row| row.contains("'tenant-a'"))
+        .unwrap();
+    *row = row.replacen("'tenant-a'", "'tenant-drift'", 1);
+    let mut order = source.clone();
+    let swapped = order.objects.iter_mut().find_map(|((kind, _), (_, sql))| {
+        if kind != "table" {
+            return None;
+        }
+        let sql = sql.as_mut()?;
+        let left = "\n    id INTEGER";
+        let right = "\n    tenant_id TEXT";
+        if sql.contains(left) && sql.contains(right) {
+            *sql = sql
+                .replacen(left, "\n    \u{0}", 1)
+                .replacen(right, left, 1)
+                .replacen("\n    \u{0}", right, 1);
+            Some(())
+        } else {
+            None
+        }
+    });
+    assert!(swapped.is_some(), "no observed column pair to swap");
+    vec![
+        ("check", check),
+        ("default", default),
+        ("foreign-key", foreign_key),
+        ("index", index),
+        ("trigger", trigger),
+        ("tenant", tenant),
+        ("column-order", order),
+    ]
+}
+
+fn open_parity(dir: &Path, clock: &str) -> (WriterOwner, SchemaReady) {
+    WriterOwner::open_at(
+        dir,
+        Limits {
+            queued_writes: 2,
+            readers: 2,
+        },
+        clock,
+    )
+    .unwrap()
+}
+
+fn apply_parity_settings(owner: &WriterOwner) {
+    let client = owner.client();
+    let cancelled = AtomicBool::new(false);
+    let wait = Duration::from_secs(5);
+    for (tenant, key, value) in [
+        ("tenant-a", "discord_notify_on_update", "1"),
+        ("tenant-b", "discord_notify_on_update", "0"),
+        ("tenant-a", "discord_notify_on_sync", ""),
+    ] {
+        client
+            .submit(
+                SettingCommand::Set(Setting {
+                    tenant: tenant.into(),
+                    key: key.into(),
+                    value: value.into(),
+                }),
+                &cancelled,
+                wait,
+            )
+            .unwrap()
+            .recv()
+            .unwrap()
+            .unwrap();
+    }
+    let read = client.reader(Duration::ZERO).unwrap();
+    assert_eq!(
+        read.snapshot("tenant-a", "discord_notify_on_sync").unwrap(),
+        SettingSnapshot::Stored {
+            value: String::new()
+        }
+    );
+    drop(read);
+    for (expected, value, outcome) in [
+        (
+            SettingSnapshot::Stored {
+                value: String::new(),
+            },
+            "1",
+            true,
+        ),
+        (SettingSnapshot::Missing, "wrong", false),
+    ] {
+        let applied = client
+            .submit(
+                SettingCommand::CompareAndSet {
+                    setting: Setting {
+                        tenant: "tenant-a".into(),
+                        key: "discord_notify_on_sync".into(),
+                        value: value.into(),
+                    },
+                    expected,
+                },
+                &cancelled,
+                wait,
+            )
+            .unwrap()
+            .recv()
+            .unwrap()
+            .unwrap();
+        assert_eq!(applied, outcome);
+    }
+}
+
+fn schema_version_at(path: &Path) -> String {
+    Connection::open(path)
+        .unwrap()
+        .query_row(
+            "SELECT value FROM app_settings WHERE tenant_id='default' AND key='schema_version'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
+#[test]
+fn ticket_t_7_migrations() {
+    let node = schema_parity_node();
+    let bytes = std::fs::read(&node).unwrap();
+    assert_eq!(
+        &bytes[..4],
+        b"\x7fELF",
+        "fixture node must be an ELF, not a dispatcher script"
+    );
+    let node_hash = hex::encode(Sha256::digest(&bytes));
+    let root = directory("schema-parity-fixtures");
+    let web = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../web");
+    let output = std::process::Command::new(&node)
+        .current_dir(&web)
+        .args([
+            "--conditions=development",
+            "--import",
+            "tsx",
+            "scripts/storage-fixtures/prepare.mts",
+        ])
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "node fixture prepare failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let meta: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join("fixtures.json")).unwrap()).unwrap();
+    let clock = meta["clock"].as_str().unwrap().to_owned();
+    let node_version = meta["node"].as_str().unwrap();
+    let abi = meta["abi"].as_str().unwrap();
+    if node_hash == PINNED_NODE_SHA256 {
+        assert_eq!(node_version, "v22.23.3");
+        assert_eq!(abi, "127");
+    }
+    let mut names = Vec::new();
+    let mut fresh_graph = None;
+    for case in meta["inputs"].as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        names.push(name.to_owned());
+        let initial = case["version"].as_u64().unwrap();
+        let source = PathBuf::from(case["rust"].as_str().unwrap());
+        let expected = PathBuf::from(case["expected"].as_str().unwrap()).join("print-partner.db");
+        let before_source = tree_hashes(&source);
+        let work = directory(&format!("schema-parity-{name}"));
+        copy_db_files(&source, &work);
+        let before_work = tree_hashes(&work);
+        if initial == 0 {
+            assert!(before_work.is_empty(), "{name} input was not empty");
+        } else {
+            assert!(
+                before_work
+                    .iter()
+                    .any(|(file, _)| file == "print-partner.db"),
+                "{name} had no copied database"
+            );
+        }
+        let (owner, ready) = open_parity(&work, &clock);
+        assert_eq!(ready.version, 34, "{name}");
+        assert_eq!(ready.previous_version, initial, "{name}");
+        let backup = ready.backup.clone();
+        if (1..34).contains(&initial) {
+            assert_eq!(
+                schema_version_at(backup.as_ref().unwrap()),
+                initial.to_string(),
+                "{name}"
+            );
+        } else {
+            assert!(backup.is_none(), "{name}");
+        }
+        apply_parity_settings(&owner);
+        owner.shutdown().unwrap();
+        assert_eq!(tree_hashes(&source), before_source, "{name} source changed");
+        let observed = read_schema_graph(&work.join("print-partner.db"));
+        let node_graph = read_schema_graph(&expected);
+        let diff = graph_diff(&node_graph, &observed);
+        assert!(diff.is_empty(), "{name} node {node_version}: {diff:#?}");
+        let backup_bytes = backup.as_ref().map(|path| std::fs::read(path).unwrap());
+        let (reopened, again) = open_parity(&work, &clock);
+        assert_eq!(again.version, 34);
+        assert_eq!(again.previous_version, 34);
+        assert!(again.backup.is_none());
+        reopened.shutdown().unwrap();
+        if let Some(bytes) = backup_bytes {
+            assert_eq!(std::fs::read(backup.unwrap()).unwrap(), bytes);
+        }
+        let reopened_diff = graph_diff(
+            &node_graph,
+            &read_schema_graph(&work.join("print-partner.db")),
+        );
+        // A second open runs INSERT OR IGNORE again, which can allocate new
+        // autoincrement values without changing stored rows.
+        let reopened_diff: Vec<_> = reopened_diff
+            .into_iter()
+            .filter(|line| line != "rows sqlite_sequence")
+            .collect();
+        assert!(
+            reopened_diff.is_empty(),
+            "{name} reopen: {reopened_diff:#?}"
+        );
+        if name == "fresh" {
+            fresh_graph = Some(node_graph);
+        }
+    }
+    assert_eq!(
+        names,
+        [
+            "fresh",
+            "schema-31",
+            "schema-32",
+            "schema-33",
+            "schema-34",
+            "immutable-corpus"
+        ]
+    );
+    let fresh = fresh_graph.unwrap();
+    for (label, drifted) in drift_controls(&fresh) {
+        let diff = graph_diff(&fresh, &drifted);
+        assert!(!diff.is_empty(), "{label} drift was accepted: {diff:#?}");
+    }
+}
+
+fn refused_wal_input(version: &str) -> PathBuf {
+    let source = directory("refuse-source");
+    let raw = Connection::open(source.join("print-partner.db")).unwrap();
+    raw.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE app_settings(tenant_id TEXT, key TEXT, value TEXT); INSERT INTO app_settings VALUES('default','schema_version','34'); PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
+    raw.execute("UPDATE app_settings SET value=?1", [version])
+        .unwrap();
+    let target = directory("refuse-target");
+    for suffix in ["", "-wal", "-shm"] {
+        let from = source.join(format!("print-partner.db{suffix}"));
+        if from.is_file() {
+            std::fs::copy(&from, target.join(from.file_name().unwrap())).unwrap();
+        }
+    }
+    drop(raw);
+    std::fs::write(target.join("retain-user-file"), b"untouched").unwrap();
+    assert!(target.join("print-partner.db-wal").is_file());
+    assert!(target.join("print-partner.db-shm").is_file());
+    target
+}
+
+fn assert_refused(path: &Path, message: &str) {
+    let before = tree_hashes(path);
+    assert!(
+        before.iter().any(|(file, _)| file == "print-partner.db")
+            && before.iter().any(|(file, _)| file == "retain-user-file")
+    );
+    let error = WriterOwner::open(path, Limits::default())
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(error.contains(message), "{error}");
+    assert_eq!(tree_hashes(path), before);
+}
+
+#[test]
+fn ticket_t_7_migrations_preserves_refused_inputs() {
+    assert_refused(
+        &refused_wal_input("30"),
+        "Cannot upgrade database schema version 30",
+    );
+    assert_refused(&refused_wal_input("35"), "newer than supported version 34");
+    assert_refused(&refused_wal_input("abc"), "Invalid database schema version");
+    let corrupt = directory("refuse-corrupt");
+    std::fs::write(corrupt.join("print-partner.db"), b"not a sqlite database").unwrap();
+    std::fs::write(corrupt.join("print-partner.db-wal"), b"wal-bytes").unwrap();
+    std::fs::write(corrupt.join("print-partner.db-shm"), b"shm-bytes").unwrap();
+    std::fs::write(corrupt.join("retain-user-file"), b"untouched").unwrap();
+    let before = tree_hashes(&corrupt);
+    let error = WriterOwner::open(&corrupt, Limits::default())
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        error.contains("integrity")
+            || error.contains("not a database")
+            || error.contains("file is not a database"),
+        "{error}"
+    );
+    assert_eq!(tree_hashes(&corrupt), before);
 }
