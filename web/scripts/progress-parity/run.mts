@@ -17,6 +17,7 @@ import { PlanDraftWorkspaceService } from "../../apps/server/src/services/plan-d
 import { registerPartRoutes } from "../../apps/server/src/routes/parts.js";
 import { registerPlanDraftRoutes } from "../../apps/server/src/routes/plan-drafts.js";
 import { canonical, digest, json, object, type Json } from "../desktop-parity/model.mjs";
+import { canonicalInputs } from "./inputs.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const fixtures = join(repo, "rust/crates/pp-storage/tests/fixtures");
@@ -270,16 +271,7 @@ try {
   object(fileDrift[12]).files = [];
   assert.throws(() => equal(records, fileDrift, "planted file mismatch"));
   assert.throws(() => coverage(records.slice(1)), /28/);
-  const sourceHashes: Record<string, string> = {};
-  function hashTree(path: string) {
-    for (const name of readdirSync(path).sort()) {
-      const full = join(path, name);
-      if (statSync(full).isDirectory()) hashTree(full);
-      else sourceHashes[relative(repo, full)] = digest(readFileSync(full));
-    }
-  }
-  for (const path of ["web/apps/server/src", "web/packages/contracts/src", "web/packages/domain/src", "web/scripts/desktop-parity", "web/scripts/progress-parity", "rust/crates/pp-storage/src", "rust/crates/pp-storage/data", "rust/crates/pp-contracts/src", "rust/crates/pp-api-types/src", "rust/crates/pp-storage/tests/fixtures"]) hashTree(join(repo, path));
-  for (const path of ["web/package.json", "web/package-lock.json", "web/tsconfig.base.json", "web/packages/contracts/package.json", "web/packages/domain/package.json", "web/apps/server/package.json", "rust-toolchain.toml", "rust/Cargo.toml", "rust/Cargo.lock", "rust/crates/pp-storage/Cargo.toml", "rust/crates/pp-contracts/Cargo.toml", "rust/crates/pp-api-types/Cargo.toml"]) sourceHashes[path] = digest(readFileSync(join(repo, path)));
+  const sourceHashes = Object.fromEntries(canonicalInputs(repo).map((path) => [path, digest(readFileSync(join(repo, path)))]));
   const binaryHashes = Object.fromEntries(["progress-parity-prepare", "required-unit-fixture", "checkoff-progress-fixture"].map((name) => [name, digest(readFileSync(join(binaryDirectory, name)))]));
   const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }); assert.equal(head.status, 0);
   const report = process.report.getReport();
