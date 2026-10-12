@@ -23,8 +23,8 @@ import urllib.parse
 import urllib.request
 
 HELPER = Path(__file__).resolve().with_name("verify.py")
-# git rev-parse (15s), four build steps (600s each), server startup (60s), plus margin.
-BUILD_TIMEOUT = 15 + 4 * 600 + 60 + 60
+# git rev-parse, four build steps, both inventory checks, readiness, plus margin.
+BUILD_TIMEOUT = 15 + 4 * 600 + 157 + 60
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -225,6 +225,29 @@ class CredentialFileTest(unittest.TestCase):
             shutil.rmtree(parent)  # the consumer removed its directory after reading the credential
             verify.unpublish_credential(parent / "credentials.json", handle)
             self.assertFalse(parent.exists())
+
+
+class StartupReadinessTest(unittest.TestCase):
+    def test_origin_after_both_release_checks_is_accepted(self):
+        verify = load_verify()
+        read_fd, write_fd = os.pipe()
+        try:
+            os.write(write_fd, b"http://127.0.0.1:12345\n")
+            with os.fdopen(read_fd, "rb") as output, \
+                    mock.patch.object(verify.time, "monotonic", side_effect=[0, 90]):
+                read_fd = None
+                origin = verify.read_origin(SimpleNamespace(stdout=output), io.StringIO())
+            self.assertEqual(origin, "http://127.0.0.1:12345")
+        finally:
+            if read_fd is not None:
+                os.close(read_fd)
+            os.close(write_fd)
+
+    def test_silent_server_past_complete_startup_budget_is_refused(self):
+        verify = load_verify()
+        with mock.patch.object(verify.time, "monotonic", side_effect=[0, 158]):
+            with self.assertRaisesRegex(RuntimeError, "Rust startup timed out"):
+                verify.read_origin(SimpleNamespace(stdout=None), io.StringIO())
 
 
 class StartupStopTest(unittest.TestCase):

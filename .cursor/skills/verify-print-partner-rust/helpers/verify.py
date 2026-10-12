@@ -24,6 +24,12 @@ import urllib.parse
 import urllib.request
 
 
+# Core checks the full inventory before ownership (60s). The compatibility
+# process rechecks the backend before spawn (60s), then Core observes readiness
+# (30s + 2s for supervisor reporting). Allow 5s for ownership and origin output.
+# The second hash protects against changes after the first check.
+SERVER_STARTUP_SECONDS = 60 + 60 + 32 + 5
+
 STOP_SIGNALS = frozenset({signal.SIGTERM, signal.SIGINT, signal.SIGHUP})
 
 
@@ -382,7 +388,7 @@ def start_server(binary, root, node, commit, fixture, errors, credentials=None, 
 def read_origin(process, errors):
     # Read only available bytes, so a silent server or an unterminated origin line
     # cannot postpone a held stop request until the full startup timeout.
-    deadline = time.monotonic() + 60
+    deadline = time.monotonic() + SERVER_STARTUP_SECONDS
     data = bytearray()
     while b"\n" not in data:
         remaining = deadline - time.monotonic()
