@@ -2123,6 +2123,50 @@ fn uploaded_only_does_not_consume_active_queue_capacity() {
     owner.shutdown().unwrap();
 }
 #[test]
+fn archived_enqueue_replay_rejects_mismatched_identity_without_writes() {
+    for field in ["tenant", "job_id"] {
+        let (path, owner) = fixture();
+        let parent = uploaded_only_parent(&owner, "replay-identity", "replay-printer");
+        owner.shutdown().unwrap();
+        let raw = Connection::open(path.join("print-partner.db")).unwrap();
+        raw.execute(
+            "UPDATE durable_jobs SET updated=updated-172800,document=json_set(document,'$.updated_at',updated-172800)",
+            [],
+        ).unwrap();
+        drop(raw);
+        let owner = WriterOwner::open(&path, Limits::default()).unwrap().0;
+        assert_eq!(owner.retain_jobs(1, 1).unwrap(), 1);
+        owner.shutdown().unwrap();
+        let raw = Connection::open(path.join("print-partner.db")).unwrap();
+        raw.execute(
+            "UPDATE durable_job_keys SET archived_document=json_set(archived_document,?1,'other-identity') WHERE job_id=?2",
+            rusqlite::params![format!("$.{field}"), parent.job_id],
+        ).unwrap();
+        let snapshot = || {
+            raw.query_row(
+            "SELECT archived_document,(SELECT COUNT(*) FROM durable_jobs),(SELECT COUNT(*) FROM durable_job_history),(SELECT COUNT(*) FROM durable_job_keys) FROM durable_job_keys WHERE job_id=?1",
+            [&parent.job_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?, row.get::<_, i64>(3)?)),
+        ).unwrap()
+        };
+        let before = snapshot();
+        let owner = WriterOwner::open(&path, Limits::default()).unwrap().0;
+        let error = call(
+            &owner,
+            UserOperation::Enqueue {
+                key: "replay-identity".into(),
+                payload_version: 1,
+                payload: parent.payload.clone(),
+            },
+        )
+        .err()
+        .expect("Mismatched archived identity must reject replay");
+        assert_eq!(error.to_string(), "Job not found");
+        assert_eq!(snapshot(), before);
+        owner.shutdown().unwrap();
+    }
+}
+#[test]
 fn archived_started_child_blocks_new_key_and_replays_original_key() {
     let (path, owner) = fixture();
     let parent = uploaded_only_parent(&owner, "archive-parent", "archive-printer");
@@ -2191,6 +2235,30 @@ fn archived_started_child_blocks_new_key_and_replays_original_key() {
             .unwrap();
         assert!(details.iter().any(|detail| detail.contains(expected)));
     }
+    let details = raw
+        .prepare("EXPLAIN QUERY PLAN SELECT document FROM durable_jobs WHERE tenant=?1 AND json_extract(document,'$.payload.payload.uploaded_job_id')=?2 UNION ALL SELECT archived_document FROM durable_job_keys WHERE tenant=?1 AND archived_document IS NOT NULL AND json_extract(archived_document,'$.payload.payload.uploaded_job_id')=?2")
+        .unwrap()
+        .query_map(rusqlite::params!["default", parent.job_id], |row| row.get::<_, String>(3))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert!(
+        details.iter().any(|detail| detail
+            .contains("SEARCH durable_jobs USING INDEX durable_jobs_printer_start_parent")),
+        "{details:?}"
+    );
+    assert!(
+        details.iter().any(|detail| detail.contains(
+            "SEARCH durable_job_keys USING INDEX durable_job_keys_archived_printer_start_parent"
+        )),
+        "{details:?}"
+    );
+    assert!(
+        !details
+            .iter()
+            .any(|detail| detail.contains("SCAN durable_")),
+        "{details:?}"
+    );
     drop(raw);
     owner.shutdown().unwrap();
 }
