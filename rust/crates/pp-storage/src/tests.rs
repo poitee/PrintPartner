@@ -1081,6 +1081,258 @@ fn schema_version_at(path: &Path) -> String {
         .unwrap()
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum FixtureRefusal {
+    HistoricalClaim,
+    RejectedKind,
+    ShapeMismatch,
+}
+
+struct GeneratedFixture {
+    name: String,
+    initial: u64,
+    shape_group: String,
+    transformations: Vec<String>,
+    source: PathBuf,
+    expected_dir: PathBuf,
+}
+
+fn steps_are(steps: &[String], expected: &[&str]) -> bool {
+    steps.len() == expected.len()
+        && steps
+            .iter()
+            .zip(expected)
+            .all(|(step, expected)| step == expected)
+}
+
+fn listed_shape(group: &str, initial: u64, steps: &[String]) -> bool {
+    match group {
+        "empty-directory" => {
+            initial == 0 && steps_are(steps, &["node-connect-from-empty-directory"])
+        }
+        "generated-v34-minus-board-and-legacy-column" => {
+            initial == 31
+                && steps_are(
+                    steps,
+                    &[
+                        "node-connect-current-schema",
+                        "insert-tenant-claimed-project",
+                        "drop-board-posts-and-board-comments",
+                        "drop-projects-legacy-manifest-cutover",
+                        "stamp-schema-version",
+                    ],
+                )
+        }
+        "generated-v34-minus-board-tables" => {
+            (initial == 32 || initial == 33)
+                && steps_are(
+                    steps,
+                    &[
+                        "node-connect-current-schema",
+                        "insert-tenant-claimed-project",
+                        "drop-board-posts-and-board-comments",
+                        "stamp-schema-version",
+                    ],
+                )
+        }
+        "generated-v34-current" => {
+            initial == 34
+                && steps_are(
+                    steps,
+                    &[
+                        "node-connect-current-schema",
+                        "insert-tenant-claimed-project",
+                        "stamp-schema-version",
+                    ],
+                )
+        }
+        "generated-v34-current-autosave" => {
+            initial == 34
+                && steps_are(
+                    steps,
+                    &[
+                        "node-connect-current-schema",
+                        "replace-rows-from-autosave-golden",
+                        "stamp-schema-version",
+                    ],
+                )
+        }
+        _ => false,
+    }
+}
+
+fn accept_generated_fixture(case: &serde_json::Value) -> Result<GeneratedFixture, FixtureRefusal> {
+    let kind = case["kind"].as_str().unwrap_or("");
+    let historical = case["historicalSnapshot"].as_bool();
+    if kind == "historical-snapshot" || historical == Some(true) {
+        return Err(FixtureRefusal::HistoricalClaim);
+    }
+    if kind != "generated-current-node" || historical != Some(false) {
+        return Err(FixtureRefusal::RejectedKind);
+    }
+    if case["sourceSchemaVersion"].as_u64() != Some(34) {
+        return Err(FixtureRefusal::RejectedKind);
+    }
+    let name = case["name"]
+        .as_str()
+        .ok_or(FixtureRefusal::RejectedKind)?
+        .to_owned();
+    let initial = case["startingVersionStamp"]
+        .as_u64()
+        .ok_or(FixtureRefusal::RejectedKind)?;
+    if case["version"].as_u64() != Some(initial) {
+        return Err(FixtureRefusal::RejectedKind);
+    }
+    let shape_group = case["shapeGroup"]
+        .as_str()
+        .ok_or(FixtureRefusal::RejectedKind)?
+        .to_owned();
+    let transformations = case["transformations"]
+        .as_array()
+        .ok_or(FixtureRefusal::RejectedKind)?
+        .iter()
+        .map(|step| {
+            step.as_str()
+                .ok_or(FixtureRefusal::RejectedKind)
+                .map(str::to_owned)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if !listed_shape(&shape_group, initial, &transformations) {
+        return Err(FixtureRefusal::ShapeMismatch);
+    }
+    Ok(GeneratedFixture {
+        name,
+        initial,
+        shape_group,
+        transformations,
+        source: PathBuf::from(case["rust"].as_str().ok_or(FixtureRefusal::RejectedKind)?),
+        expected_dir: PathBuf::from(
+            case["expected"]
+                .as_str()
+                .ok_or(FixtureRefusal::RejectedKind)?,
+        ),
+    })
+}
+
+fn file_list(value: &serde_json::Value) -> Vec<(String, String)> {
+    let mut files = value
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| {
+            (
+                row["path"].as_str().unwrap().to_owned(),
+                row["sha256"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    files.sort();
+    files
+}
+
+fn cache_material(meta: &serde_json::Value, generator_sha: &str) -> String {
+    let mut lines = vec![
+        generator_sha.to_owned(),
+        meta["node"].as_str().unwrap().to_owned(),
+        meta["abi"].as_str().unwrap().to_owned(),
+        meta["sourceSchemaVersion"].as_u64().unwrap().to_string(),
+        meta["nodeSha256"].as_str().unwrap().to_owned(),
+        meta["clock"].as_str().unwrap().to_owned(),
+    ];
+    for case in meta["inputs"].as_array().unwrap() {
+        let steps = case["transformations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|step| step.as_str().unwrap())
+            .collect::<Vec<_>>()
+            .join(",");
+        lines.push(format!(
+            "{}\t{}\t{}\t{}\t{}\t{}",
+            case["name"].as_str().unwrap(),
+            case["kind"].as_str().unwrap(),
+            case["historicalSnapshot"].as_bool().unwrap(),
+            case["shapeGroup"].as_str().unwrap(),
+            case["startingVersionStamp"].as_u64().unwrap(),
+            steps,
+        ));
+    }
+    format!("{}\n", lines.join("\n"))
+}
+
+fn table_present(conn: &Connection, name: &str) -> bool {
+    conn.query_row(
+        "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?1",
+        [name],
+        |row| row.get::<_, i64>(0),
+    )
+    .unwrap()
+        == 1
+}
+
+fn column_present(conn: &Connection, table: &str, column: &str) -> bool {
+    let mut statement = conn
+        .prepare(&format!("PRAGMA table_info({})", quote_ident(table)))
+        .unwrap();
+    statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .map(|name| name.unwrap())
+        .any(|name| name == column)
+}
+
+fn require_observed_shape(fixture: &GeneratedFixture) {
+    if fixture.shape_group == "empty-directory" {
+        assert!(
+            tree_hashes(&fixture.source).is_empty(),
+            "{} input was not an empty directory",
+            fixture.name
+        );
+        return;
+    }
+    let scratch = directory(&format!("generated-shape-{}", fixture.name));
+    let database = scratch.join("print-partner.db");
+    std::fs::copy(fixture.source.join("print-partner.db"), &database).unwrap();
+    let conn = Connection::open(&database).unwrap();
+    let board_posts = table_present(&conn, "board_posts");
+    let board_comments = table_present(&conn, "board_comments");
+    let legacy = column_present(&conn, "projects", "legacy_manifest_cutover");
+    let stamp: String = conn
+        .query_row(
+            "SELECT value FROM app_settings WHERE tenant_id='default' AND key='schema_version'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stamp, fixture.initial.to_string(), "{}", fixture.name);
+    let marks = (board_posts, board_comments, legacy);
+    let expected = match fixture.shape_group.as_str() {
+        "generated-v34-minus-board-and-legacy-column" => (false, false, false),
+        "generated-v34-minus-board-tables" => (false, false, true),
+        "generated-v34-current" | "generated-v34-current-autosave" => (true, true, true),
+        other => panic!("{} has unexpected shape group {other}", fixture.name),
+    };
+    assert_eq!(
+        marks, expected,
+        "{} shape {} did not match the input database",
+        fixture.name, fixture.shape_group
+    );
+}
+
+fn sequence_identities(graph: &SchemaGraph) -> Vec<String> {
+    graph
+        .rows
+        .get("sqlite_sequence")
+        .map(|rows| {
+            rows.iter()
+                .map(|row| row.split('\u{1e}').next().unwrap_or("").to_owned())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+// Generated Node schema 34 fixtures with recorded manual edits.
+// Passing this test does not prove a copied historical database or schema 32 to 33 migration order.
 #[test]
 fn ticket_t_7_migrations() {
     let node = schema_parity_node();
@@ -1118,15 +1370,71 @@ fn ticket_t_7_migrations() {
         assert_eq!(node_version, "v22.23.3");
         assert_eq!(abi, "127");
     }
+    assert_eq!(meta["nodeSha256"].as_str().unwrap(), node_hash);
+    assert_eq!(
+        meta["contract"].as_str().unwrap(),
+        "generated-fixture-compatibility"
+    );
+    assert!(!meta["historicalSnapshot"].as_bool().unwrap());
+    assert_eq!(meta["sourceSchemaVersion"].as_u64().unwrap(), 34);
+    let generator = web.join("scripts/storage-fixtures/prepare.mts");
+    let generator_sha = hex::encode(Sha256::digest(std::fs::read(&generator).unwrap()));
+    assert_eq!(meta["generatorSha256"].as_str().unwrap(), generator_sha);
+    let cache_key = hex::encode(Sha256::digest(
+        cache_material(&meta, &generator_sha).as_bytes(),
+    ));
+    assert_eq!(meta["cacheKey"].as_str().unwrap(), cache_key);
+    let mut forged = meta["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == "schema-31")
+        .unwrap()
+        .clone();
+    forged["kind"] = serde_json::json!("historical-snapshot");
+    assert!(matches!(
+        accept_generated_fixture(&forged),
+        Err(FixtureRefusal::HistoricalClaim)
+    ));
     let mut names = Vec::new();
     let mut fresh_graph = None;
+    let mut opened = Vec::new();
     for case in meta["inputs"].as_array().unwrap() {
-        let name = case["name"].as_str().unwrap();
-        names.push(name.to_owned());
-        let initial = case["version"].as_u64().unwrap();
-        let source = PathBuf::from(case["rust"].as_str().unwrap());
-        let expected = PathBuf::from(case["expected"].as_str().unwrap()).join("print-partner.db");
+        let fixture = accept_generated_fixture(case).unwrap_or_else(|reason| {
+            panic!(
+                "{} generated fixture was refused: {reason:?}",
+                case["name"].as_str().unwrap_or("unnamed")
+            )
+        });
+        let name = fixture.name.clone();
+        names.push(name.clone());
+        let initial = fixture.initial;
+        let source = fixture.source.clone();
+        let expected = fixture.expected_dir.join("print-partner.db");
         let before_source = tree_hashes(&source);
+        assert_eq!(
+            before_source,
+            file_list(&case["rustFiles"]),
+            "{name} rust input hash"
+        );
+        assert_eq!(
+            tree_hashes(&fixture.expected_dir),
+            file_list(&case["expectedFiles"]),
+            "{name} expected hash"
+        );
+        require_observed_shape(&fixture);
+        assert_eq!(
+            tree_hashes(&source),
+            before_source,
+            "{name} shape read changed the input"
+        );
+        opened.push((
+            name.clone(),
+            initial,
+            fixture.shape_group.clone(),
+            fixture.transformations.clone(),
+            file_list(&case["expectedFiles"]),
+        ));
         let work = directory(&format!("schema-parity-{name}"));
         copy_db_files(&source, &work);
         let before_work = tree_hashes(&work);
@@ -1169,16 +1477,13 @@ fn ticket_t_7_migrations() {
         if let Some(bytes) = backup_bytes {
             assert_eq!(std::fs::read(backup.unwrap()).unwrap(), bytes);
         }
-        let reopened_diff = graph_diff(
-            &node_graph,
-            &read_schema_graph(&work.join("print-partner.db")),
-        );
-        // A second open runs INSERT OR IGNORE again, which can allocate new
-        // autoincrement values without changing stored rows.
-        let reopened_diff: Vec<_> = reopened_diff
-            .into_iter()
-            .filter(|line| line != "rows sqlite_sequence")
-            .collect();
+        let reopened_graph = read_schema_graph(&work.join("print-partner.db"));
+        let mut reopened_diff = graph_diff(&node_graph, &reopened_graph);
+        // Seed replay uses INSERT OR IGNORE. SQLite can advance sqlite_sequence.seq
+        // while the named rows stay in place. Any other row payload still fails the diff.
+        if sequence_identities(&node_graph) == sequence_identities(&reopened_graph) {
+            reopened_diff.retain(|line| line != "rows sqlite_sequence");
+        }
         assert!(
             reopened_diff.is_empty(),
             "{name} reopen: {reopened_diff:#?}"
@@ -1197,6 +1502,32 @@ fn ticket_t_7_migrations() {
             "schema-34",
             "immutable-corpus"
         ]
+    );
+    let find = |label: &str| {
+        opened
+            .iter()
+            .find(|(name, ..)| name == label)
+            .unwrap_or_else(|| panic!("missing {label}"))
+    };
+    let schema_32 = find("schema-32");
+    let schema_33 = find("schema-33");
+    assert_eq!(schema_32.1, 32);
+    assert_eq!(schema_33.1, 33);
+    assert_eq!(schema_32.2, "generated-v34-minus-board-tables");
+    assert_eq!(schema_33.2, schema_32.2);
+    assert_eq!(schema_33.3, schema_32.3);
+    assert_eq!(
+        schema_32.4, schema_33.4,
+        "schema-32 and schema-33 share one generated shape, so their schema 34 endpoint trees match"
+    );
+    assert_eq!(
+        meta["sameGeneratedShape"]["shapeGroup"].as_str().unwrap(),
+        "generated-v34-minus-board-tables"
+    );
+    assert!(
+        meta["sameGeneratedShape"]["expectedTreesEqual"]
+            .as_bool()
+            .unwrap()
     );
     let fresh = fresh_graph.unwrap();
     for (label, drifted) in drift_controls(&fresh) {
