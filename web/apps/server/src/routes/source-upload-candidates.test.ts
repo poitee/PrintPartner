@@ -10,6 +10,12 @@ import * as sourceDocs from "../services/source-docs-index.js";
 
 vi.mock("../services/source-docs-index.js", { spy: true });
 
+function archive(files: Array<{ path: string; content: Buffer }>) {
+  const zip = new AdmZip();
+  for (const file of files) zip.addFile(file.path, file.content);
+  return zip.toBuffer();
+}
+
 function multipart(files: Array<{ path: string; content: Buffer }>, zip = false) {
   const boundary = "gre288-candidate";
   const chunks: Buffer[] = [Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="relative_paths"\r\n\r\n${JSON.stringify(files.map((file) => file.path))}\r\n`)];
@@ -73,16 +79,44 @@ describe("Source upload candidate routes", () => {
     await expect.poll(() => readdirSync(join(dir, "sources"))).toEqual([String(id)]);
   });
 
-  it("publishes a complete candidate despite a documentation indexing failure", async () => {
+  it.each(["files", "zip"] as const)("publishes %s and drops stale docs when indexing fails", async (kind) => {
+    const seeded = await app.inject({
+      method: "POST",
+      url: `/sources/${id}/upload-${kind}`,
+      ...multipart(kind === "zip"
+        ? [{ path: "upload.zip", content: archive([
+          { path: "keep.stl", content: Buffer.from("previous STL") },
+          { path: "old/readme.md", content: Buffer.from("old readme\n") },
+        ]) }]
+        : [
+          { path: "keep.stl", content: Buffer.from("previous STL") },
+          { path: "old/readme.md", content: Buffer.from("old readme\n") },
+        ], kind === "zip"),
+    });
+    expect(seeded.statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: `/sources/${id}/docs` })).json().docs.map((doc: { path: string }) => doc.path)).toEqual(["old/readme.md"]);
     vi.mocked(sourceDocs.indexSourceDocsFromDisk).mockImplementationOnce(() => { throw new Error("index unavailable"); });
-    const response = await app.inject({ method: "POST", url: `/sources/${id}/upload-files`, ...multipart([
-      { path: "replacement.stl", content: Buffer.from("replacement STL") },
-      { path: "notes.txt", content: Buffer.from("candidate notes") },
-    ]) });
+    const response = await app.inject({
+      method: "POST",
+      url: `/sources/${id}/upload-${kind}`,
+      ...multipart(kind === "zip"
+        ? [{ path: "upload.zip", content: archive([
+          { path: "replacement.stl", content: Buffer.from("replacement STL") },
+          { path: "new/readme.md", content: Buffer.from("new readme\n") },
+        ]) }]
+        : [
+          { path: "replacement.stl", content: Buffer.from("replacement STL") },
+          { path: "new/readme.md", content: Buffer.from("new readme\n") },
+        ], kind === "zip"),
+    });
     expect(response.statusCode).toBe(200);
     const active = response.json();
     expect(readFileSync(join(active.local_path, "replacement.stl"), "utf8")).toBe("replacement STL");
-    expect(readFileSync(join(active.local_path, "notes.txt"), "utf8")).toBe("candidate notes");
+    expect(readFileSync(join(active.local_path, "new/readme.md"), "utf8")).toBe("new readme\n");
     expect(readFileSync(join(priorPath, "keep.stl"), "utf8")).toBe("previous STL");
+    const listed = await app.inject({ method: "GET", url: `/sources/${id}/docs` });
+    expect(listed.json().docs.map((doc: { path: string }) => doc.path)).toEqual(["new/readme.md"]);
+    expect((await app.inject({ method: "GET", url: `/sources/${id}/docs/old/readme.md` })).statusCode).toBe(404);
+    expect((await app.inject({ method: "GET", url: `/sources/${id}/docs/new/readme.md` })).statusCode).toBe(200);
   });
 });

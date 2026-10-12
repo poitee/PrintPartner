@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSelfHostPorts } from "../adapters/self-host/index.js";
 import { InProcessJobRunner } from "../services/job-runner.js";
 import { encodeAcceptedPlate3mf, type StlMesh } from "@print-partner/domain";
@@ -429,6 +429,41 @@ option_groups:
     expect(applied.ok).toBe(true);
     expect(repo.getSource(source.id)?.last_commit_sha).toMatch(/^[a-f0-9]{64}$/);
     expect(applied.result?.artifacts).toEqual(expect.arrayContaining([expect.objectContaining({ path: "parts/uploaded.stl" })]));
+  });
+
+  it("clears stale docs when a confirmed import's indexing fails", async () => {
+    const source = repo.createSource({ name: "Indexed uploads", source_kind: "local" });
+    const oldReadme = Buffer.from("old readme\n").toString("base64");
+    const oldProposal = await invokeAssistantTool("propose_import_source_files", {
+      source_id: source.id,
+      files: [
+        { path: "parts/uploaded.stl", content_base64: Buffer.from("solid uploaded").toString("base64") },
+        { path: "old/readme.md", content_base64: oldReadme },
+      ],
+    }, { repo });
+    const oldApplied = await applyAssistantAction(oldProposal.proposedAction!, {
+      repo, dataDir, jobs: { start: async () => "unused" } as never,
+    });
+    expect(oldApplied.ok).toBe(true);
+    expect(repo.listSourceDocs(source.id).map((doc) => doc.path)).toEqual(["old/readme.md"]);
+    const spy = vi.spyOn(repo, "replaceSourceDocs").mockImplementationOnce(() => { throw new Error("index unavailable"); });
+    const nextReadme = Buffer.from("new readme\n").toString("base64");
+    const proposal = await invokeAssistantTool("propose_import_source_files", {
+      source_id: source.id,
+      files: [
+        { path: "parts/uploaded.stl", content_base64: Buffer.from("solid replacement").toString("base64") },
+        { path: "new/readme.md", content_base64: nextReadme },
+      ],
+    }, { repo });
+    const applied = await applyAssistantAction(proposal.proposedAction!, {
+      repo, dataDir, jobs: { start: async () => "unused" } as never,
+    });
+    spy.mockRestore();
+    expect(applied.ok).toBe(true);
+    expect(repo.listSourceDocs(source.id)).toEqual([]);
+    const active = repo.getSource(source.id)?.local_path;
+    expect(active).toBeTruthy();
+    expect(readFileSync(join(active!, "new/readme.md"), "utf8")).toBe("new readme\n");
   });
 
   it("preserves working bytes when a confirmed MCP archive is invalid", async () => {

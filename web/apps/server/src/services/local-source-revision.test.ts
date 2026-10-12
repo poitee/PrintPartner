@@ -11,7 +11,7 @@ import {
 import { sql } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import * as fsPromises from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getDb, SqliteDatabase } from "../db/client.js";
@@ -22,6 +22,8 @@ import {
 } from "../lib/tenant-disk-quota.js";
 import { SOURCE_SNAPSHOT_MANIFEST_FILE } from "./local-source-snapshot.js";
 import {
+  SOURCE_PUBLICATION_UNAVAILABLE_DETAIL,
+  indexDocsForActivatedRevision,
   publishLocalSourceWorkingTree,
   publishSourceManifestRevision,
 } from "./local-source-revision.js";
@@ -450,6 +452,10 @@ describe("candidate publication", () => {
     expect(readdirSync(active.local_path!).sort()).toEqual([SOURCE_SNAPSHOT_MANIFEST_FILE, winner].sort());
     expect(readFileSync(join(active.local_path!, winner), "utf8")).toBe(winner === "cube.stl" ? "solid cube\nendsolid cube\n" : "other candidate");
     expect(readFileSync(join(workingTree, "cube.stl"), "utf8")).toBe("solid cube\nendsolid cube\n");
+    const revisionsRoot = join(sqlite.reposDir, String(source.id), "revisions");
+    const directories = readdirSync(revisionsRoot).filter((name) => !name.startsWith("."));
+    expect(directories).toEqual([basename(active.local_path!)]);
+    expect(repo.listSourceRevisions(source.id).map((revision) => revision.upstream_revision_key)).toEqual(directories);
     sqlite.close();
   });
 
@@ -465,6 +471,34 @@ describe("candidate publication", () => {
     expect(results[0]!.local_path).toBe(results[1]!.local_path);
     expect(readFileSync(join(results[0]!.local_path!, "cube.stl"), "utf8")).toBe("solid cube\nendsolid cube\n");
     expect(repo.listSourceRevisions(source.id)).toHaveLength(1);
+    expect(existsSync(results[0]!.local_path!)).toBe(true);
+    sqlite.close();
+  });
+
+  it("drops the losing snapshot and keeps the accepted history", async () => {
+    const { sqlite, repo, source, workingTree } = fixture();
+    const accepted = await publishLocalSourceWorkingTree({
+      repo, reposDir: sqlite.reposDir, sourceId: source.id, workingTree,
+    });
+    const observed = repo.getSourceActivationObservation(source.id)!;
+    const winnerTree = join(sqlite.reposDir, "winner-input");
+    mkdirSync(winnerTree);
+    writeFileSync(join(winnerTree, "winner.stl"), "solid winner\nendsolid winner\n");
+    const winner = await publishLocalSourceWorkingTree({
+      repo, reposDir: sqlite.reposDir, sourceId: source.id, workingTree: winnerTree,
+    });
+    writeFileSync(join(workingTree, "cube.stl"), "solid loser\nendsolid loser\n");
+    await expect(publishLocalSourceWorkingTree({
+      repo, reposDir: sqlite.reposDir, sourceId: source.id, workingTree, observed,
+    })).rejects.toBeInstanceOf(SourceActivationConflictError);
+    const revisionsRoot = join(sqlite.reposDir, String(source.id), "revisions");
+    const directories = readdirSync(revisionsRoot).filter((name) => !name.startsWith(".")).sort();
+    const referenced = repo.listSourceRevisions(source.id).map((revision) => revision.upstream_revision_key).sort();
+    expect(directories).toEqual(referenced);
+    expect(directories).toEqual([basename(accepted.local_path!), basename(winner.local_path!)].sort());
+    expect(readFileSync(join(accepted.local_path!, "cube.stl"), "utf8")).toBe("solid cube\nendsolid cube\n");
+    expect(readFileSync(join(winner.local_path!, "winner.stl"), "utf8")).toBe("solid winner\nendsolid winner\n");
+    expect(repo.getSource(source.id)?.local_path).toBe(winner.local_path);
     sqlite.close();
   });
 
@@ -479,6 +513,9 @@ describe("candidate publication", () => {
     expect(repo.getSource(source.id)?.local_path).toBe(winner.local_path);
     expect(readFileSync(join(winner.local_path!, "cube.stl"), "utf8")).toBe("solid cube\nendsolid cube\n");
     expect(readFileSync(join(winner.local_path!, "print-partner.manifest.yaml"), "utf8")).toBe(manifest);
+    const revisionsRoot = join(sqlite.reposDir, String(source.id), "revisions");
+    const directories = readdirSync(revisionsRoot).filter((name) => !name.startsWith(".")).sort();
+    expect(directories).toEqual(repo.listSourceRevisions(source.id).map((revision) => revision.upstream_revision_key).sort());
     sqlite.close();
   });
 
@@ -504,4 +541,189 @@ describe("candidate publication", () => {
     expect(readFileSync(join(active.local_path!, ".source-info"), "utf8")).toBe("hidden bytes");
     sqlite.close();
   });
+
+  it("clears the active revision's docs when indexing fails and ignores a stale revision", async () => {
+    const { sqlite, repo, source, workingTree } = fixture();
+    mkdirSync(join(workingTree, "old"));
+    writeFileSync(join(workingTree, "old", "readme.md"), "old readme\n");
+    const first = await publishLocalSourceWorkingTree({
+      repo, reposDir: sqlite.reposDir, sourceId: source.id, workingTree, preserveAllFiles: true,
+    });
+    expect(indexDocsForActivatedRevision({
+      repo, sourceId: source.id, localPath: first.local_path!, revisionId: first.current_source_revision_id!,
+    })).toEqual({ outcome: "indexed", docCount: 1, pendingPdfs: 0 });
+
+    const nextTree = join(sqlite.reposDir, "next-docs");
+    mkdirSync(join(nextTree, "next"), { recursive: true });
+    writeFileSync(join(nextTree, "cube.stl"), "solid next\nendsolid next\n");
+    writeFileSync(join(nextTree, "next", "readme.md"), "next readme\n");
+    const second = await publishLocalSourceWorkingTree({
+      repo, reposDir: sqlite.reposDir, sourceId: source.id, workingTree: nextTree, preserveAllFiles: true,
+    });
+    expect(indexDocsForActivatedRevision({
+      repo, sourceId: source.id, localPath: second.local_path!, revisionId: second.current_source_revision_id!,
+    })).toEqual({ outcome: "indexed", docCount: 1, pendingPdfs: 0 });
+
+    expect(indexDocsForActivatedRevision({
+      repo, sourceId: source.id, localPath: first.local_path!, revisionId: first.current_source_revision_id!,
+    })).toEqual({
+      outcome: "unchanged",
+      revisionId: first.current_source_revision_id,
+      activeRevisionId: second.current_source_revision_id,
+    });
+    expect(repo.listSourceDocs(source.id).map((doc) => doc.path)).toEqual(["next/readme.md"]);
+
+    vi.spyOn(repo, "replaceSourceDocs").mockImplementationOnce(() => {
+      throw new Error("index unavailable");
+    });
+    expect(indexDocsForActivatedRevision({
+      repo, sourceId: source.id, localPath: second.local_path!, revisionId: second.current_source_revision_id!,
+    })).toEqual({ outcome: "cleared", revisionId: second.current_source_revision_id, reason: "index unavailable" });
+    expect(repo.listSourceDocs(source.id)).toEqual([]);
+    vi.restoreAllMocks();
+
+    expect(indexDocsForActivatedRevision({
+      repo, sourceId: source.id, localPath: second.local_path!, revisionId: second.current_source_revision_id!,
+    })).toEqual({ outcome: "indexed", docCount: 1, pendingPdfs: 0 });
+    expect(repo.listSourceDocs(source.id).map((doc) => doc.path)).toEqual(["next/readme.md"]);
+    sqlite.close();
+  });
+
+  it("refuses experimental PostgreSQL publication before creating a snapshot", async () => {
+    const { sqlite, repo, source, workingTree } = fixture();
+    const unsupported = vi.spyOn(repo, "canPublishSourceRevision").mockReturnValue(false);
+    try {
+      await expect(publishLocalSourceWorkingTree({
+        repo, reposDir: sqlite.reposDir, sourceId: source.id, workingTree,
+      })).rejects.toThrow(SOURCE_PUBLICATION_UNAVAILABLE_DETAIL);
+      await expect(publishSourceManifestRevision({
+        repo, sourceId: source.id, manifestYaml: "project: preserved\nparts: []\n",
+      })).rejects.toThrow(SOURCE_PUBLICATION_UNAVAILABLE_DETAIL);
+      expect(existsSync(join(sqlite.reposDir, String(source.id), "revisions"))).toBe(false);
+    } finally {
+      unsupported.mockRestore();
+      sqlite.close();
+    }
+  });
+
+  it("keeps a reused digest when the creator loses activation", async () => {
+    await expectSharedDigestRace("creator-first");
+  }, 20_000);
+
+  it("keeps the reused digest when the reuser registers first", async () => {
+    await expectSharedDigestRace("reuser-first");
+  }, 20_000);
 });
+
+async function expectSharedDigestRace(order: "creator-first" | "reuser-first") {
+  const { dir, sqlite, repo, source } = fixture();
+  const historicalTree = join(dir, "historical");
+  mkdirSync(historicalTree);
+  writeFileSync(join(historicalTree, "keep.stl"), "solid keep\nendsolid keep\n");
+  const historical = await publishLocalSourceWorkingTree({
+    repo, reposDir: sqlite.reposDir, sourceId: source.id, workingTree: historicalTree, preserveAllFiles: true,
+  });
+  const separate = repo.createSource({ name: "Separate source", source_kind: "local" });
+  const separateTree = join(dir, "separate");
+  mkdirSync(separateTree);
+  writeFileSync(join(separateTree, "same.stl"), "solid same\nendsolid same\n");
+  writeFileSync(join(separateTree, "note.txt"), "digest-s\n");
+  const separateActive = await publishLocalSourceWorkingTree({
+    repo, reposDir: sqlite.reposDir, sourceId: separate.id, workingTree: separateTree, preserveAllFiles: true,
+  });
+  const sameTree = join(dir, "same");
+  mkdirSync(sameTree);
+  writeFileSync(join(sameTree, "same.stl"), "solid same\nendsolid same\n");
+  writeFileSync(join(sameTree, "note.txt"), "digest-s\n");
+  const makerTree = join(dir, "maker");
+  mkdirSync(makerTree);
+  writeFileSync(join(makerTree, "other.stl"), "solid other\nendsolid other\n");
+  writeFileSync(join(makerTree, "note.txt"), "digest-m\n");
+  const observed = repo.getSourceActivationObservation(source.id)!;
+  const { rm: actualRm } = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  const releases: Array<() => void> = [];
+  let blockStaging = true;
+  vi.mocked(fsPromises.rm).mockImplementation(async (path, options) => {
+    if (blockStaging && String(path).includes(".local-source-")) {
+      await new Promise<void>((resolveHold) => {
+        releases.push(resolveHold);
+      });
+    }
+    return actualRm(path, options);
+  });
+  let pendingA: ReturnType<typeof publishLocalSourceWorkingTree> | undefined;
+  let pendingB: ReturnType<typeof publishLocalSourceWorkingTree> | undefined;
+  try {
+    pendingA = publishLocalSourceWorkingTree({
+      repo, reposDir: sqlite.reposDir, sourceId: source.id, workingTree: sameTree, observed, preserveAllFiles: true,
+    });
+    await waitForCount(releases, 1);
+    blockStaging = false;
+    const maker = await publishLocalSourceWorkingTree({
+      repo, reposDir: sqlite.reposDir, sourceId: source.id, workingTree: makerTree, preserveAllFiles: true,
+    });
+    blockStaging = true;
+    pendingB = publishLocalSourceWorkingTree({
+      repo, reposDir: sqlite.reposDir, sourceId: source.id, workingTree: sameTree, preserveAllFiles: true,
+    });
+    await waitForCount(releases, 2);
+    if (!pendingA || !pendingB) throw new Error("publish did not start");
+    const revisionsRoot = join(sqlite.reposDir, String(source.id), "revisions");
+    const digestS = readdirSync(revisionsRoot).find((name) => (
+      !name.startsWith(".")
+      && name !== basename(historical.local_path!)
+      && name !== basename(maker.local_path!)
+    ));
+    if (digestS === undefined) throw new Error("shared digest directory was not materialized");
+    expect(repo.listSourceRevisions(source.id).map((revision) => revision.upstream_revision_key).sort()).toEqual(
+      [basename(historical.local_path!), basename(maker.local_path!)].sort(),
+    );
+    expect(readFileSync(join(revisionsRoot, digestS!, "same.stl"), "utf8")).toBe("solid same\nendsolid same\n");
+    expect(readFileSync(join(revisionsRoot, digestS!, "note.txt"), "utf8")).toBe("digest-s\n");
+    if (order === "creator-first") {
+      releases[0]!();
+      await expect(pendingA).rejects.toBeInstanceOf(SourceActivationConflictError);
+      expect(readFileSync(join(revisionsRoot, digestS!, "note.txt"), "utf8")).toBe("digest-s\n");
+      expect(readFileSync(join(revisionsRoot, digestS!, "same.stl"), "utf8")).toBe("solid same\nendsolid same\n");
+      releases[1]!();
+      const activated = await pendingB;
+      expect(activated.local_path).toBe(join(revisionsRoot, digestS!));
+      expect(readFileSync(join(activated.local_path!, "same.stl"), "utf8")).toBe("solid same\nendsolid same\n");
+      expect(readFileSync(join(activated.local_path!, "note.txt"), "utf8")).toBe("digest-s\n");
+      expect(repo.getSource(source.id)?.local_path).toBe(activated.local_path);
+    } else {
+      releases[1]!();
+      const activated = await pendingB;
+      expect(activated.local_path).toBe(join(revisionsRoot, digestS!));
+      expect(readFileSync(join(activated.local_path!, "note.txt"), "utf8")).toBe("digest-s\n");
+      releases[0]!();
+      const creator = await pendingA;
+      expect(creator.local_path).toBe(activated.local_path);
+      expect(readFileSync(join(creator.local_path!, "same.stl"), "utf8")).toBe("solid same\nendsolid same\n");
+    }
+    expect(readFileSync(join(historical.local_path!, "keep.stl"), "utf8")).toBe("solid keep\nendsolid keep\n");
+    expect(readFileSync(join(maker.local_path!, "other.stl"), "utf8")).toBe("solid other\nendsolid other\n");
+    expect(readFileSync(join(maker.local_path!, "note.txt"), "utf8")).toBe("digest-m\n");
+    expect(readFileSync(join(separateActive.local_path!, "same.stl"), "utf8")).toBe("solid same\nendsolid same\n");
+    expect(readFileSync(join(separateActive.local_path!, "note.txt"), "utf8")).toBe("digest-s\n");
+    const referenced = repo.listSourceRevisions(source.id).map((revision) => revision.upstream_revision_key).sort();
+    const directories = readdirSync(revisionsRoot).filter((name) => !name.startsWith(".")).sort();
+    expect(directories).toEqual(referenced);
+    expect(directories).toEqual([basename(historical.local_path!), basename(maker.local_path!), digestS!].sort());
+  } finally {
+    for (const release of releases) release();
+    vi.mocked(fsPromises.rm).mockImplementation((path, options) => actualRm(path, options));
+    await Promise.allSettled([pendingA, pendingB].filter((pending) => pending !== undefined));
+    sqlite.close();
+  }
+}
+
+async function waitForCount(releases: Array<() => void>, count: number) {
+  const started = Date.now();
+  while (releases.length < count) {
+    if (Date.now() - started > 5000) {
+      throw new Error(`timed out with ${releases.length} held staging removals`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}

@@ -47,6 +47,18 @@ type ExtractLimits = {
   maxUncompressedBytes?: number;
 };
 
+type ValidationBudget = {
+  remainingEntries: number;
+  remainingBytes: number;
+};
+
+function validationBudget(limits: ExtractLimits): ValidationBudget {
+  return {
+    remainingEntries: limits.maxEntries ?? MAX_ZIP_ENTRIES,
+    remainingBytes: limits.maxUncompressedBytes ?? MAX_ZIP_UNCOMPRESSED_BYTES,
+  };
+}
+
 /**
  * Extract entries one by one instead of `extractAllTo` so each entry path is
  * validated against zip-slip, and total uncompressed size / entry count are
@@ -56,11 +68,17 @@ export function extractZipFile(zipPath: string, destDir: string, limits: Extract
   return processZipFile(zipPath, destDir, limits);
 }
 
-function processZipFile(zipPath: string, destDir: string | null, limits: ExtractLimits = {}): number {
+function processZipFile(
+  zipPath: string,
+  destDir: string | null,
+  limits: ExtractLimits = {},
+  budget = validationBudget(limits),
+  directory = readZipDirectory(zipPath, Math.min(limits.maxEntries ?? MAX_ZIP_ENTRIES, budget.remainingEntries)),
+): number {
   const maxEntries = limits.maxEntries ?? MAX_ZIP_ENTRIES;
   const maxBytes = limits.maxUncompressedBytes ?? MAX_ZIP_UNCOMPRESSED_BYTES;
-  const entries = new Map(readZipDirectory(zipPath, maxEntries).map((entry) => [entry.name, entry]));
-  if ([...entries.values()].reduce((total, entry) => total + entry.size, 0) > maxBytes) {
+  const entries = new Map(directory.map((entry) => [entry.name, entry]));
+  if (directory.reduce((total, entry) => total + entry.size, 0) > Math.min(maxBytes, budget.remainingBytes)) {
     throw new Error("Archive uncompressed size exceeds limit");
   }
   const base = resolve(destDir ?? ".");
@@ -72,11 +90,16 @@ function processZipFile(zipPath: string, destDir: string | null, limits: Extract
   let entryCount = 0;
   let failure: Error | null = null;
   const unzip = new Unzip((file) => {
+    if (failure) {
+      file.terminate();
+      return;
+    }
     const expected = entries.get(file.name);
     if (!expected) throw new InvalidSourceArchiveError();
     entries.delete(file.name);
     entryCount += 1;
-    if (entryCount > maxEntries) {
+    budget.remainingEntries -= 1;
+    if (entryCount > maxEntries || budget.remainingEntries < 0) {
       failure = new Error(`Archive has too many entries (${entryCount}, max ${maxEntries})`);
       file.terminate();
       return;
@@ -95,7 +118,7 @@ function processZipFile(zipPath: string, destDir: string | null, limits: Extract
     targets.add(target);
     const directory = entryName.endsWith("/");
     if (directory && destDir) mkdirSync(target, { recursive: true });
-    if (file.originalSize != null && totalBytes + file.originalSize > maxBytes) {
+    if (file.originalSize != null && (totalBytes + file.originalSize > maxBytes || file.originalSize > budget.remainingBytes)) {
       failure = new Error("Archive uncompressed size exceeds limit");
       file.terminate();
       return;
@@ -109,6 +132,13 @@ function processZipFile(zipPath: string, destDir: string | null, limits: Extract
         failure = error;
         return;
       }
+      totalBytes += chunk.length;
+      budget.remainingBytes -= chunk.length;
+      if (totalBytes > maxBytes || budget.remainingBytes < 0) {
+        failure = new Error("Archive uncompressed size exceeds limit");
+        file.terminate();
+        return;
+      }
       bytes += chunk.length;
       checksum = crc32(chunk, checksum);
       if (final) {
@@ -117,12 +147,6 @@ function processZipFile(zipPath: string, destDir: string | null, limits: Extract
           return;
         }
         completed += 1;
-      }
-      totalBytes += chunk.length;
-      if (totalBytes > maxBytes) {
-        failure = new Error("Archive uncompressed size exceeds limit");
-        file.terminate();
-        return;
       }
       if (!destDir || directory) return;
       if (!started) {
@@ -240,7 +264,8 @@ function storedBytes(root: string): number {
   return total;
 }
 
-function expandThreeMfFiles(extractDir: string, maxTotalBytes = MAX_ZIP_UNCOMPRESSED_BYTES): number {
+function expandThreeMfFiles(extractDir: string, limits: ExtractLimits, budget: ValidationBudget): number {
+  const maxTotalBytes = limits.maxUncompressedBytes ?? MAX_ZIP_UNCOMPRESSED_BYTES;
   const paths: string[] = [];
   const walk = (dir: string): void => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -254,18 +279,17 @@ function expandThreeMfFiles(extractDir: string, maxTotalBytes = MAX_ZIP_UNCOMPRE
   let derivedStlCount = 0;
   let remainingBytes = maxTotalBytes - storedBytes(extractDir);
   if (remainingBytes < 0) throw new Error("Uploaded source exceeds the total size limit");
-  const children = paths.map((path) => ({
-    path,
-    uncompressedBytes: readZipDirectory(path, MAX_ZIP_ENTRIES)
-      .reduce((total, entry) => total + entry.size, 0),
-  }));
-  let remainingValidationBytes = maxTotalBytes;
-  if (children.reduce((total, child) => total + child.uncompressedBytes, 0) > remainingValidationBytes) {
-    throw new Error("Nested 3MF uncompressed size exceeds limit");
-  }
-  for (const { path, uncompressedBytes } of children) {
-    processZipFile(path, null, { maxUncompressedBytes: remainingValidationBytes });
-    remainingValidationBytes -= uncompressedBytes;
+  let declaredEntriesRemaining = budget.remainingEntries;
+  let declaredBytesRemaining = budget.remainingBytes;
+  const children = paths.map((path) => {
+    const directory = readZipDirectory(path, Math.min(limits.maxEntries ?? MAX_ZIP_ENTRIES, declaredEntriesRemaining));
+    declaredEntriesRemaining -= directory.length;
+    declaredBytesRemaining -= directory.reduce((total, entry) => total + entry.size, 0);
+    if (declaredBytesRemaining < 0) throw new Error("Nested 3MF uncompressed size exceeds limit");
+    return { path, directory };
+  });
+  for (const { path, directory } of children) {
+    processZipFile(path, null, limits, budget, directory);
     const result = extractThreeMfMeshes(fileChunks(path), extractDir, path, { maxOutputBytes: remainingBytes });
     derivedStlCount += result.files.length;
     remainingBytes -= result.files.reduce((total, file) => total + file.byteSize, 0);
@@ -280,11 +304,18 @@ export function writeUploadedFiles(
   limits: ExtractLimits = {},
 ): UploadedFilesResult {
   if (!files.length) throw new Error("At least one file is required");
+  const budget = validationBudget(limits);
+  if (files.length > budget.remainingEntries) {
+    throw new Error(`Archive has too many entries (${files.length}, max ${budget.remainingEntries})`);
+  }
   const staged = files.map((file) => ({ ...file, bytes: statSync(file.path).size }));
   const uploadedBytes = staged.reduce((total, file) => total + file.bytes, 0);
   if (uploadedBytes > MAX_SOURCE_UPLOAD_BYTES) {
     throw new SourceUploadTooLargeError();
   }
+  budget.remainingEntries -= files.length;
+  budget.remainingBytes -= uploadedBytes;
+  if (budget.remainingBytes < 0) throw new Error("Uploaded source exceeds the total size limit");
   const extractDir = join(stagingDir, "files");
   mkdirSync(extractDir);
   const base = resolve(extractDir);
@@ -299,7 +330,7 @@ export function writeUploadedFiles(
       renameSync(file.path, target);
       if (file.relativePath.toLowerCase().endsWith(".stl")) stlCount += 1;
     }
-    stlCount += expandThreeMfFiles(extractDir, limits.maxUncompressedBytes);
+    stlCount += expandThreeMfFiles(extractDir, limits, budget);
   } catch (error) {
     rmSync(extractDir, { recursive: true, force: true });
     throw error;
@@ -313,11 +344,12 @@ export function writeUploadedFiles(
 }
 
 export function writeUploadedZip(stagedZip: string, stagingDir: string, limits: ExtractLimits = {}): string {
+  const budget = validationBudget(limits);
   const extractDir = join(stagingDir, "files");
   mkdirSync(extractDir);
   try {
-    extractZipFile(stagedZip, extractDir, limits);
-    expandThreeMfFiles(extractDir, limits.maxUncompressedBytes);
+    processZipFile(stagedZip, extractDir, limits, budget);
+    expandThreeMfFiles(extractDir, limits, budget);
   } catch (error) {
     rmSync(extractDir, { recursive: true, force: true });
     throw error;

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { randomBytes } from "node:crypto";
 import AdmZip from "adm-zip";
 import { ZipFile } from "yazl";
 import { encodeAcceptedPlate3mf, type StlMesh } from "@print-partner/domain";
@@ -36,6 +37,108 @@ function addMaliciousEntry(zip: AdmZip, name: string, data: Buffer): void {
 }
 
 describe("archive extraction hardening", () => {
+  it.each(["zip", "files"])("shares validation bytes between outer content and nested packages in a %s upload", (kind) => {
+    const root = tempRoot();
+    const nested = new AdmZip(Buffer.from(encodeAcceptedPlate3mf([
+      { token: "clip", objectName: "Clip", xUm: 0, yUm: 0, mesh: triangle },
+    ])));
+    nested.addFile("padding.bin", Buffer.alloc(4096));
+    const bytes = nested.toBuffer();
+    const limit = bytes.length + nested.getEntries().reduce((total, entry) => total + entry.header.size, 0);
+    const upload = (maxUncompressedBytes: number): string => {
+      const staging = createSourceUploadStaging(root, "default");
+      if (kind === "files") return writeUploadedFiles([staged("clip.3mf", bytes)], staging, { maxUncompressedBytes }).extractDir;
+      const zip = new AdmZip();
+      zip.addFile("clip.3mf", bytes);
+      return writeUploadedZip(stagedFile(zip.toBuffer()), staging, { maxUncompressedBytes });
+    };
+    try {
+      expect(() => upload(limit - 1)).toThrow("Nested 3MF uncompressed size exceeds limit");
+      const extracted = upload(limit);
+      expect(readFileSync(join(extracted, "_3mf/clip/clip.stl")).length).toBe(142);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("accounts for actual nested bytes when a child understates its declared size", () => {
+    const root = tempRoot();
+    const nested = new AdmZip(Buffer.from(encodeAcceptedPlate3mf([
+      { token: "clip", objectName: "Clip", xUm: 0, yUm: 0, mesh: triangle },
+    ])));
+    nested.addFile("padding.bin", randomBytes(128 * 1024));
+    const bytes = nested.toBuffer();
+    const name = Buffer.from("padding.bin");
+    for (let offset = 0; offset + 4 <= bytes.length; offset++) {
+      const signature = bytes.readUInt32LE(offset);
+      if (signature === 0x02014b50 && bytes.subarray(offset + 46, offset + 46 + name.length).equals(name)) bytes.writeUInt32LE(1, offset + 24);
+      if (signature === 0x04034b50 && bytes.subarray(offset + 30, offset + 30 + name.length).equals(name)) bytes.writeUInt32LE(1, offset + 22);
+    }
+    const zip = new AdmZip();
+    zip.addFile("clip.3mf", bytes);
+    try {
+      const staging = createSourceUploadStaging(root, "default");
+      expect(() => writeUploadedZip(stagedFile(zip.toBuffer()), staging, {
+        maxUncompressedBytes: bytes.length + 64 * 1024,
+      })).toThrow("Archive uncompressed size exceeds limit");
+      expect(readdirSync(staging)).toEqual([]);
+      const alone = createSourceUploadStaging(root, "default");
+      expect(() => writeUploadedZip(stagedFile(zip.toBuffer()), alone, {
+        maxUncompressedBytes: bytes.length + 256 * 1024,
+      })).toThrow("File is not a valid ZIP archive or is truncated");
+      expect(readdirSync(alone)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["zip", "files"])("shares the aggregate entry budget across a %s upload, including empty files and directories", (kind) => {
+    const root = tempRoot();
+    const nested = new AdmZip(Buffer.from(encodeAcceptedPlate3mf([
+      { token: "clip", objectName: "Clip", xUm: 0, yUm: 0, mesh: triangle },
+    ])));
+    nested.addFile("discarded/", Buffer.alloc(0));
+    nested.addFile("discarded/empty.bin", Buffer.alloc(0));
+    const bytes = nested.toBuffer();
+    const entryLimit = 3 * (nested.getEntries().length + 1);
+    const upload = (count: number, maxEntries: number): string => {
+      const staging = createSourceUploadStaging(root, "default");
+      const files = Array.from({ length: count }, (_, index) => staged(`${index}.3mf`, bytes));
+      if (kind === "files") return writeUploadedFiles(files, staging, { maxEntries }).extractDir;
+      const zip = new AdmZip();
+      for (const file of files) zip.addFile(file.relativePath, bytes);
+      return writeUploadedZip(stagedFile(zip.toBuffer()), staging, { maxEntries });
+    };
+    try {
+      expect(() => upload(3, entryLimit - 1)).toThrow(/too many entries/);
+      const extracted = upload(3, entryLimit);
+      expect(readFileSync(join(extracted, "0.3mf"))).toEqual(bytes);
+      expect(readdirSync(join(extracted, "_3mf")).sort()).toEqual(["0", "1", "2"]);
+      expect(readFileSync(join(extracted, "_3mf/2/clip.stl")).length).toBe(142);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("counts outer ZIP directories and empty files toward the nested entry budget", () => {
+    const root = tempRoot();
+    const model = Buffer.from(encodeAcceptedPlate3mf([
+      { token: "clip", objectName: "Clip", xUm: 0, yUm: 0, mesh: triangle },
+    ]));
+    const zip = new AdmZip();
+    zip.addFile("empty/", Buffer.alloc(0));
+    zip.addFile("empty/file.bin", Buffer.alloc(0));
+    zip.addFile("model.3mf", model);
+    try {
+      expect(() => writeUploadedZip(stagedFile(zip.toBuffer()), root, {
+        maxEntries: new AdmZip(model).getEntries().length + 2,
+      })).toThrow(/too many entries/);
+      expect(readdirSync(root)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it.each(["zip", "files"])("shares the nested 3MF validation budget across a %s upload", (kind) => {
     const root = tempRoot();
     const model = encodeAcceptedPlate3mf([{ token: "clip", objectName: "Clip", xUm: 0, yUm: 0, mesh: triangle }]);

@@ -1,16 +1,20 @@
 import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { createReadStream, rmSync } from "node:fs";
 import { copyFile, lstat, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 import type { SourceSummary } from "@print-partner/contracts";
 import { chargeTenantDiskBytes } from "../lib/tenant-disk-quota.js";
-import type {
-  AppRepository,
-  SourceActivationObservation,
+import {
+  SourceActivationConflictError,
+  type AppRepository,
+  type SourceActivationObservation,
 } from "../db/repository.js";
+import { indexSourceDocsFromDisk } from "./source-docs-index.js";
 import {
   LocalSourceSnapshotStore,
   SOURCE_SNAPSHOT_MANIFEST_FILE,
+  releaseSharedSnapshot,
+  sharedSnapshotHolderCount,
   sourceRelativePath,
   type PublishedSourceSnapshot,
   type SnapshotFile,
@@ -232,6 +236,8 @@ async function materializeLocalSourceWorkingTree(input: {
   });
   await mkdir(sourceWorkspace, { recursive: true });
   const stagingRoot = await mkdtemp(join(sourceWorkspace, ".local-source-"));
+  let published: PublishedSourceSnapshot | undefined;
+  let workError: unknown;
   try {
     for (const file of liveFiles) {
       if (
@@ -268,8 +274,11 @@ async function materializeLocalSourceWorkingTree(input: {
       kind: file.kind,
       sizeHintBytes: file.sizeHintBytes,
     }));
-    const store = new LocalSourceSnapshotStore({ reposDir: input.reposDir });
-    return await store.materialize({
+    const store = new LocalSourceSnapshotStore({
+      reposDir: input.reposDir,
+      retainUntilRelease: true,
+    });
+    published = await store.materialize({
       sourceId: input.sourceId,
       upstreamRevisionKey,
       files,
@@ -288,9 +297,18 @@ async function materializeLocalSourceWorkingTree(input: {
         };
       },
     });
-  } finally {
-    await rm(stagingRoot, { recursive: true, force: true });
+  } catch (error) {
+    workError = error;
   }
+  try {
+    await rm(stagingRoot, { recursive: true, force: true });
+  } catch (error) {
+    if (published) releaseSharedSnapshot(published);
+    throw error;
+  }
+  if (workError !== undefined) throw workError;
+  if (published === undefined) throw new Error("Source snapshot was not materialized");
+  return published;
 }
 
 function registerAndActivateSnapshot(input: {
@@ -330,6 +348,98 @@ function registerAndActivateSnapshot(input: {
   }, "immediate");
 }
 
+type ActivatedSourceDocsIndex =
+  | { outcome: "indexed"; docCount: number; pendingPdfs: number }
+  | { outcome: "cleared"; revisionId: number; reason: string }
+  | { outcome: "unchanged"; revisionId: number; activeRevisionId: number | null };
+
+export function indexDocsForActivatedRevision(input: {
+  repo: AppRepository;
+  sourceId: number;
+  localPath: string;
+  revisionId: number;
+}): ActivatedSourceDocsIndex {
+  const activeRevisionId = (): number | null =>
+    input.repo.getSourceActivationObservation(input.sourceId)?.currentSourceRevisionId ?? null;
+  try {
+    return input.repo.transaction(() => {
+      const current = activeRevisionId();
+      if (current !== input.revisionId) {
+        return { outcome: "unchanged", revisionId: input.revisionId, activeRevisionId: current };
+      }
+      const indexed = indexSourceDocsFromDisk(input.repo, input.sourceId, input.localPath);
+      return { outcome: "indexed", docCount: indexed.doc_count, pendingPdfs: indexed.pending_pdfs };
+    }, "immediate");
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "documentation indexing failed";
+    try {
+      return input.repo.transaction(() => {
+        const current = activeRevisionId();
+        if (current !== input.revisionId) {
+          return { outcome: "unchanged", revisionId: input.revisionId, activeRevisionId: current };
+        }
+        input.repo.replaceSourceDocs(input.sourceId, []);
+        return { outcome: "cleared", revisionId: input.revisionId, reason };
+      }, "immediate");
+    } catch {
+      return { outcome: "unchanged", revisionId: input.revisionId, activeRevisionId: null };
+    }
+  }
+}
+
+function releaseUnreferencedSnapshot(
+  repo: AppRepository,
+  reposDir: string,
+  sourceId: number,
+  snapshot: PublishedSourceSnapshot,
+): void {
+  releaseSharedSnapshot(snapshot);
+  if (snapshot.publication !== "created") return;
+  const expected = resolve(reposDir, String(sourceId), "revisions", snapshot.upstreamRevisionKey);
+  if (resolve(snapshot.absolutePath) !== expected) return;
+  repo.transaction(() => {
+    if (sharedSnapshotHolderCount(expected) > 0) return;
+    const referenced = repo.listSourceRevisions(sourceId).some(
+      (revision) => revision.snapshot_locator === snapshot.snapshotLocator,
+    );
+    if (referenced) return;
+    if (resolve(snapshot.absolutePath) !== expected) return;
+    rmSync(expected, { recursive: true, force: true });
+  }, "immediate");
+}
+
+function activateMaterializedSnapshot(input: {
+  repo: AppRepository;
+  reposDir: string;
+  sourceId: number;
+  observed: SourceActivationObservation;
+  snapshot: PublishedSourceSnapshot;
+  sourceVersion: string;
+  markRemoteCurrent: boolean;
+  recordLegacyManifestCutover: boolean;
+  suggestedImportRules?: string[];
+}): SourceSummary {
+  try {
+    return registerAndActivateSnapshot({
+      repo: input.repo,
+      sourceId: input.sourceId,
+      observed: input.observed,
+      snapshot: input.snapshot,
+      sourceVersion: input.sourceVersion,
+      markRemoteCurrent: input.markRemoteCurrent,
+      recordLegacyManifestCutover: input.recordLegacyManifestCutover,
+      suggestedImportRules: input.suggestedImportRules,
+    });
+  } catch (error) {
+    if (error instanceof SourceActivationConflictError) {
+      releaseUnreferencedSnapshot(input.repo, input.reposDir, input.sourceId, input.snapshot);
+    }
+    throw error;
+  } finally {
+    releaseSharedSnapshot(input.snapshot);
+  }
+}
+
 export async function publishLocalSourceWorkingTree(input: {
   repo: AppRepository;
   reposDir: string;
@@ -358,8 +468,9 @@ export async function publishLocalSourceWorkingTree(input: {
     maxDocumentationBytes,
     maxTotalBytes,
   });
-  return registerAndActivateSnapshot({
+  return activateMaterializedSnapshot({
     repo: input.repo,
+    reposDir: input.reposDir,
     sourceId: input.sourceId,
     observed,
     snapshot,
@@ -405,7 +516,10 @@ export async function publishSourceManifestRevision(input: {
     if (activeRevision.snapshot_locator !== expectedLocator) {
       throw new Error("Active Source revision has an unsupported snapshot locator");
     }
-    snapshot = await new LocalSourceSnapshotStore({ reposDir: input.repo.reposDir })
+    snapshot = await new LocalSourceSnapshotStore({
+      reposDir: input.repo.reposDir,
+      retainUntilRelease: true,
+    })
       .deriveFileReplacement({
         sourceId: input.sourceId,
         baseRevisionKey: activeRevision.upstream_revision_key,
@@ -428,8 +542,9 @@ export async function publishSourceManifestRevision(input: {
     });
   }
 
-  return registerAndActivateSnapshot({
+  return activateMaterializedSnapshot({
     repo: input.repo,
+    reposDir: input.repo.reposDir,
     sourceId: input.sourceId,
     observed,
     snapshot,
