@@ -703,4 +703,44 @@ describe("LocalSourceSnapshotStore", () => {
       releaseSharedSnapshot(created);
     }
   });
+
+  it("drops an unreferenced digest after a missing reuse claim is released", async () => {
+    const reposDir = tempReposDir();
+    const store = new LocalSourceSnapshotStore({ reposDir, retainUntilRelease: true });
+    const loser = file("loser.stl", "stl", "loser-bytes");
+    const winner = file("winner.stl", "stl", "winner-bytes");
+    const lost = await store.materialize({
+      sourceId: 8,
+      upstreamRevisionKey: "digest-loser",
+      files: [loser.descriptor],
+      selection: selection(),
+      openFile: async () => response(loser.content),
+    });
+    const kept = await store.materialize({
+      sourceId: 8,
+      upstreamRevisionKey: "digest-winner",
+      files: [winner.descriptor],
+      selection: selection(),
+      openFile: async () => response(winner.content),
+    });
+    const absent = join(reposDir, "8", "revisions", "digest-absent");
+    await expect(store.materialize({
+      sourceId: 8,
+      upstreamRevisionKey: "digest-absent",
+      files: [loser.descriptor],
+      selection: selection(),
+      openFile: async () => {
+        throw new Error("stop before publish");
+      },
+    })).rejects.toThrow("stop before publish");
+    expect(sharedSnapshotHolderCount(absent)).toBe(0);
+    expect(existsSync(absent)).toBe(false);
+    releaseSharedSnapshot(lost);
+    expect(sharedSnapshotHolderCount(lost.absolutePath)).toBe(0);
+    rmSync(lost.absolutePath, { recursive: true, force: true });
+    expect(existsSync(lost.absolutePath)).toBe(false);
+    expect(readFileSync(join(kept.absolutePath, "winner.stl"), "utf8")).toBe("winner-bytes");
+    releaseSharedSnapshot(kept);
+    expect(sharedSnapshotHolderCount(kept.absolutePath)).toBe(0);
+  });
 });

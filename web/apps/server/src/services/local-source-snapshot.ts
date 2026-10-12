@@ -632,13 +632,18 @@ export class LocalSourceSnapshotStore {
     };
   }
 
-  async #readSharedSnapshot(input: {
+  async #reuseExistingSnapshot(input: {
     finalDir: string;
     revisionKey: string;
     snapshotLocator: string;
-  }): Promise<PublishedSourceSnapshot> {
-    const heldKey = this.#retainUntilRelease ? retainSharedSnapshot(input.finalDir) : null;
+  }): Promise<PublishedSourceSnapshot | null> {
+    let heldKey = this.#retainUntilRelease ? retainSharedSnapshot(input.finalDir) : null;
     try {
+      if (!(await pathExists(input.finalDir))) {
+        if (heldKey) releaseSharedSnapshotKey(heldKey);
+        heldKey = null;
+        return null;
+      }
       const existing = await loadExistingSnapshot({
         finalDir: input.finalDir,
         revisionKey: input.revisionKey,
@@ -653,6 +658,7 @@ export class LocalSourceSnapshotStore {
         publication: "reused",
       };
       if (heldKey) handoffSharedSnapshot(snapshot, heldKey);
+      heldKey = null;
       return snapshot;
     } catch (error) {
       if (heldKey) releaseSharedSnapshotKey(heldKey);
@@ -755,13 +761,12 @@ export class LocalSourceSnapshotStore {
     const finalDir = join(revisionsRoot, input.upstreamRevisionKey);
     await mkdir(revisionsRoot, { recursive: true });
 
-    if (await pathExists(finalDir)) {
-      return await this.#readSharedSnapshot({
-        finalDir,
-        revisionKey: input.upstreamRevisionKey,
-        snapshotLocator,
-      });
-    }
+    const reused = await this.#reuseExistingSnapshot({
+      finalDir,
+      revisionKey: input.upstreamRevisionKey,
+      snapshotLocator,
+    });
+    if (reused) return reused;
 
     const candidateDir = await mkdtemp(
       join(revisionsRoot, `.candidate-${input.upstreamRevisionKey}-`),
@@ -817,12 +822,13 @@ export class LocalSourceSnapshotStore {
             { cause: error },
           );
         }
-        if (hasErrorCode(error, new Set(["EEXIST", "ENOTEMPTY"])) && await pathExists(finalDir)) {
-          return await this.#readSharedSnapshot({
+        if (hasErrorCode(error, new Set(["EEXIST", "ENOTEMPTY"]))) {
+          const reused = await this.#reuseExistingSnapshot({
             finalDir,
             revisionKey: input.upstreamRevisionKey,
             snapshotLocator,
           });
+          if (reused) return reused;
         }
         throw error;
       }
