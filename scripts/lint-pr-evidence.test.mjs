@@ -6091,3 +6091,9 @@ test("r32-ssh-forward-and-command-bounds", () => {
   assert.equal(command.ok, false);
   assert.match(command.errors.join("\n"), /SSH connection options/);
 });
+
+test("r32-explicitly-disabled-local-hook-is-data", () => {
+  assertSafeCommand('ssh -o "LocalCommand=nc 3232235856 22" -o PermitLocalCommand=no example.test');
+  assertSafeCommand('ssh -o PermitLocalCommand=no -o PermitLocalCommand=yes -o "LocalCommand=curl 3232235856" example.test');
+  assertBannedCommand('ssh -o PermitLocalCommand=yes -o PermitLocalCommand=no -o "LocalCommand=curl 3232235856" example.test');
+});

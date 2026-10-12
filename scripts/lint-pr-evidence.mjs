@@ -3637,6 +3637,8 @@ function sshForwardHost(value, stdio = false) {
 function sshDestinations(args) {
   const hosts = [];
   const commands = [];
+  const localCommands = [];
+  let permitLocalCommand = null;
   let sshUnresolved = false;
   const hostValue = (value) => {
     if (!value || /[%$`\s]/.test(value) || hosts.length >= MAX_STATIC_CURL_TARGETS) {
@@ -3659,7 +3661,12 @@ function sshDestinations(args) {
   const finish = (arg) => {
     const host = arg ? sshHostToken(arg) : null;
     if (host) hostValue(host);
-    return { hosts, commands, sshUnresolved, reject: !host };
+    return {
+      hosts,
+      commands: permitLocalCommand === false ? commands : [...commands, ...localCommands],
+      sshUnresolved,
+      reject: !host,
+    };
   };
   const forward = (value, stdio = false) => {
     const host = sshForwardHost(value, stdio);
@@ -3692,9 +3699,13 @@ function sshDestinations(args) {
               else if (!jumpHosts(scalar)) sshUnresolved = true;
             } else if (["proxycommand", "localcommand", "knownhostscommand"].includes(key)) {
               if (option[2].trim().toLowerCase() !== "none") {
-                if (commands.length >= MAX_STATIC_CURL_TARGETS) sshUnresolved = true;
-                else commands.push(option[2]);
+                if (commands.length + localCommands.length >= MAX_STATIC_CURL_TARGETS) sshUnresolved = true;
+                else (key === "localcommand" ? localCommands : commands).push(option[2]);
               }
+            } else if (key === "permitlocalcommand" && permitLocalCommand === null) {
+              if (scalar?.toLowerCase() === "no") permitLocalCommand = false;
+              else if (scalar?.toLowerCase() === "yes") permitLocalCommand = true;
+              else sshUnresolved = true;
             } else if (key === "localforward" || key === "remoteforward") {
               const fields = shellWords(option[2]);
               if (fields.length !== 2) sshUnresolved = true;
