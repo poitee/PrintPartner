@@ -95,9 +95,8 @@ import {
 import { PlanDraftWorkspaceService } from "../services/plan-draft-workspace.js";
 import { createSourceUploadStaging, finalizeUploadedSource, writeUploadedFiles, writeUploadedZip } from "../services/archive-import.js";
 import { MAX_MCP_INLINE_FILE_BYTES, MCP_INLINE_UPLOAD_TOO_LARGE_DETAIL } from "../services/upload-limits.js";
-import { indexSourceDocsFromDisk } from "../services/source-docs-index.js";
+import { indexDocsForActivatedRevision, publishLocalSourceWorkingTree, SOURCE_PUBLICATION_UNAVAILABLE_DETAIL } from "../services/local-source-revision.js";
 import { resolvedFileUnderRoot } from "../lib/secure-path.js";
-import { publishLocalSourceWorkingTree, SOURCE_PUBLICATION_UNAVAILABLE_DETAIL } from "../services/local-source-revision.js";
 import { addCustomFilament, listCustomFilaments } from "../services/custom-filaments.js";
 import { extractThreeMfMeshes } from "../services/three-mf-import.js";
 import { bufferChunks } from "../lib/byte-chunks.js";
@@ -3356,10 +3355,17 @@ export async function applyAssistantAction(
             repo: deps.repo, reposDir: deps.repo.reposDir, sourceId, workingTree, observed,
             preserveAllFiles: true, suggestedImportRules: suggestedRules,
           });
-          try {
-            indexSourceDocsFromDisk(deps.repo, sourceId, updated.local_path ?? workingTree);
-          } catch (error) {
-            getLogger().log("warn", "Uploaded Source documentation indexing failed", { error: String(error) });
+          const revisionId = updated.current_source_revision_id;
+          const indexedDocs = revisionId == null
+            ? null
+            : indexDocsForActivatedRevision({
+              repo: deps.repo,
+              sourceId,
+              localPath: updated.local_path ?? workingTree,
+              revisionId,
+            });
+          if (indexedDocs?.outcome === "cleared") {
+            getLogger().log("warn", "Uploaded Source documentation indexing failed", { sourceId, revisionId, error: indexedDocs.reason });
           }
           outcome = {
             ok: true,

@@ -45,7 +45,7 @@ import {
 } from "../services/source-docs-index.js";
 import { PDF_BG_EXTRACT_BYTES } from "../services/pdf-text-extract.js";
 import { sourcePdfTextStorage } from "../services/source-workspace.js";
-import { publishLocalSourceWorkingTree, SOURCE_PUBLICATION_UNAVAILABLE_DETAIL } from "../services/local-source-revision.js";
+import { indexDocsForActivatedRevision, publishLocalSourceWorkingTree, SOURCE_PUBLICATION_UNAVAILABLE_DETAIL } from "../services/local-source-revision.js";
 import { scanSourceArtifacts } from "../services/source-artifacts.js";
 import { sendIfTenantDiskQuotaExceeded, runWithTenantDiskQuota, TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
 
@@ -423,10 +423,16 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
             preserveAllFiles: true,
             suggestedImportRules,
           });
-          try {
-            indexSourceDocsFromDisk(deps.repo, id, updated.local_path ?? extractDir);
-          } catch (error) {
-            request.log.warn({ err: error, sourceId: id }, "Uploaded Source documentation indexing failed");
+          const indexedDocs = updated.current_source_revision_id == null
+            ? null
+            : indexDocsForActivatedRevision({
+              repo: deps.repo,
+              sourceId: id,
+              localPath: updated.local_path ?? extractDir,
+              revisionId: updated.current_source_revision_id,
+            });
+          if (indexedDocs?.outcome === "cleared") {
+            request.log.warn({ err: indexedDocs.reason, sourceId: id, revisionId: updated.current_source_revision_id }, "Uploaded Source documentation indexing failed");
           }
           void prefetchSourceCover(deps, id);
           return {
@@ -543,10 +549,16 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
             preserveAllFiles: true,
             suggestedImportRules: result.suggestedImportRules,
           });
-          try {
-            indexSourceDocsFromDisk(deps.repo, id, updated.local_path ?? result.extractDir);
-          } catch (error) {
-            request.log.warn({ err: error, sourceId: id }, "Uploaded Source documentation indexing failed");
+          const indexedDocs = updated.current_source_revision_id == null
+            ? null
+            : indexDocsForActivatedRevision({
+              repo: deps.repo,
+              sourceId: id,
+              localPath: updated.local_path ?? result.extractDir,
+              revisionId: updated.current_source_revision_id,
+            });
+          if (indexedDocs?.outcome === "cleared") {
+            request.log.warn({ err: indexedDocs.reason, sourceId: id, revisionId: updated.current_source_revision_id }, "Uploaded Source documentation indexing failed");
           }
           void prefetchSourceCover(deps, id);
           return {
