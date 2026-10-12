@@ -2766,7 +2766,8 @@ function assignmentName(text) {
   if (eq <= 0) return null;
   let name = text.slice(0, eq);
   if (name.endsWith("+")) name = name.slice(0, -1);
-  name = name.replace(/\[[^\]]*\]$/, "");
+  const subscript = name.indexOf("[");
+  if (subscript !== -1 && name.endsWith("]")) name = name.slice(0, subscript);
   if (!/^[A-Za-z_][\w]*$/.test(name)) return null;
   return name;
 }
