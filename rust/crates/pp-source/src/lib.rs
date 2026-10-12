@@ -485,9 +485,19 @@ fn legacy_only_collision(files: &[SelectedFile]) -> bool {
     })
 }
 fn validate_request(request: &mut SnapshotRequest) -> Result<()> {
-    validate_request_with(request, true)
+    validate_request_policy(request, true, false)
 }
 fn validate_request_with(request: &mut SnapshotRequest, selected_collisions: bool) -> Result<()> {
+    validate_request_policy(request, selected_collisions, false)
+}
+fn validate_persisted_request(request: &mut SnapshotRequest) -> Result<()> {
+    validate_request_policy(request, true, true)
+}
+fn validate_request_policy(
+    request: &mut SnapshotRequest,
+    selected_collisions: bool,
+    persisted_unicode16: bool,
+) -> Result<()> {
     validate_revision(&request.upstream_revision_key)?;
     if request.files.len() + request.selection.omitted_files.len() > MAX_ENTRIES
         || request.selection.max_stl_files > MAX_SAFE_INTEGER
@@ -497,7 +507,11 @@ fn validate_request_with(request: &mut SnapshotRequest, selected_collisions: boo
     }
     // Snapshot destinations share one spelling per ASCII-lowercased folder,
     // so only folder spellings that canonicalize together may differ.
-    let mut paths = PathCollisions::merging_folder_case();
+    let mut paths = if persisted_unicode16 {
+        PathCollisions::persisted_unicode16()
+    } else {
+        PathCollisions::merging_folder_case()
+    };
     for file in &request.files {
         if file.size_hint_bytes.is_some_and(|n| n > MAX_SAFE_INTEGER) {
             return Err(Error::Limit);
@@ -557,11 +571,27 @@ fn copy_hash(mut input: impl Read, mut output: impl Write, limit: u64) -> Result
     }
     Ok((count, hex::encode(hash.finalize())))
 }
+#[derive(Clone, Copy)]
+enum TreeIdentity {
+    /// New publication listings. Unicode 17 NFC, rejected unless that form is a new write.
+    Unicode17,
+    /// Version-1 listings. Unicode 16 NFC keeps historically distinct names distinct.
+    Unicode16,
+}
+
+fn listing_key(path: &str, identity: TreeIdentity) -> String {
+    match identity {
+        TreeIdentity::Unicode17 => path.nfc().collect(),
+        TreeIdentity::Unicode16 => nfc16(path),
+    }
+}
+
 fn tree_paths(
     dir: &Directory,
     prefix: &str,
     result: &mut BTreeSet<String>,
     depth: usize,
+    identity: TreeIdentity,
 ) -> Result<()> {
     if depth > 64 {
         return Err(Error::Limit);
@@ -576,14 +606,23 @@ fn tree_paths(
         // HFS+ may enumerate decomposed names even though the manifest uses
         // NFC. Normalize only the comparison path; open the original entry
         // relative to the pinned directory with NOFOLLOW below.
-        let path = format!("{prefix}{}", name.nfc().collect::<String>());
-        SourcePath::try_from(path.clone())?;
+        let path = format!("{prefix}{}", listing_key(&name, identity));
+        match identity {
+            TreeIdentity::Unicode17 => {
+                SourcePath::try_from(path.clone())?;
+            }
+            TreeIdentity::Unicode16 => {
+                if !source_path_structure(&path) {
+                    return Err(Error::UnsafePath);
+                }
+            }
+        }
         match dir.child(&name, false) {
             Ok(child) => {
                 if !result.insert(format!("{path}/")) {
                     return Err(Error::CorruptSnapshot);
                 }
-                tree_paths(&child, &format!("{path}/"), result, depth + 1)?;
+                tree_paths(&child, &format!("{path}/"), result, depth + 1, identity)?;
                 child.sync()?;
             }
             Err(_) => {
@@ -596,18 +635,16 @@ fn tree_paths(
     }
     Ok(())
 }
-fn tree_key(path: &str) -> String {
-    path.nfc().collect()
-}
-fn expected_paths(files: &[ContentFile]) -> BTreeSet<String> {
+fn expected_paths(files: &[ContentFile], identity: TreeIdentity) -> BTreeSet<String> {
     let mut paths = BTreeSet::new();
     for file in files {
-        // Listings are compared in Unicode 17 NFC. A stored Unicode 16 spelling
-        // is opened by that exact name and compared as this key.
-        paths.insert(tree_key(file.path.as_str()));
+        // Open the stored spelling. Publication compares Unicode 17 NFC.
+        // A version-1 load compares Unicode 16 NFC so a pair that Unicode 17
+        // collapses stays two files.
+        paths.insert(listing_key(file.path.as_str(), identity));
         let mut parent = file.path.as_str();
         while let Some((prefix, _)) = parent.rsplit_once('/') {
-            paths.insert(format!("{}/", tree_key(prefix)));
+            paths.insert(format!("{}/", listing_key(prefix, identity)));
             parent = prefix;
         }
     }
@@ -778,8 +815,8 @@ impl SourceRoot {
         file.write_all(&encoded)?;
         file.sync_all()?;
         let mut paths = BTreeSet::new();
-        tree_paths(candidate, "", &mut paths, 0)?;
-        if paths != expected_paths(&manifest.files) {
+        tree_paths(candidate, "", &mut paths, 0, TreeIdentity::Unicode17)?;
+        if paths != expected_paths(&manifest.files, TreeIdentity::Unicode17) {
             return Err(Error::CorruptSnapshot);
         }
         candidate.sync()?;
@@ -810,7 +847,7 @@ impl SourceRoot {
                 .collect(),
             selection: manifest.selection.clone(),
         };
-        let ambiguous = match validate_request(&mut request) {
+        let ambiguous = match validate_persisted_request(&mut request) {
             Err(Error::DuplicatePath) if legacy_only_collision(&request.files) => {
                 // Every other request constraint must still hold.
                 validate_request_with(&mut request, false)?;
@@ -832,8 +869,8 @@ impl SourceRoot {
             return Err(Error::CorruptSnapshot);
         }
         let mut actual = BTreeSet::new();
-        tree_paths(existing, "", &mut actual, 0)?;
-        if actual != expected_paths(&manifest.files) {
+        tree_paths(existing, "", &mut actual, 0, TreeIdentity::Unicode16)?;
+        if actual != expected_paths(&manifest.files, TreeIdentity::Unicode16) {
             return Err(Error::CorruptSnapshot);
         }
         let mut bytes = 0;
@@ -902,7 +939,13 @@ mod tests {
         }
         fn paths(&self) -> Result<BTreeSet<String>> {
             let mut paths = BTreeSet::new();
-            tree_paths(&Directory::open_root(&self.0)?, "", &mut paths, 0)?;
+            tree_paths(
+                &Directory::open_root(&self.0)?,
+                "",
+                &mut paths,
+                0,
+                TreeIdentity::Unicode17,
+            )?;
             Ok(paths)
         }
     }
@@ -1100,5 +1143,128 @@ mod tests {
                 )
                 .is_err()
         );
+    }
+
+    #[test]
+    fn unicode16_distinct_pair_stays_byte_exact_while_new_writes_still_collide() {
+        use sha2::Digest;
+        use std::os::unix::fs::PermissionsExt;
+
+        let legacy = "a\u{1ADD}\u{0300}.stl".to_owned();
+        let composed = "\u{00E0}\u{1ADD}.stl".to_owned();
+        assert!(SourcePath::try_from(legacy.clone()).is_err());
+        assert!(SourcePath::try_from(composed.clone()).is_ok());
+        let legacy_path = SourcePath::from_persisted(legacy.clone()).unwrap();
+        let composed_path = SourcePath::from_persisted(composed.clone()).unwrap();
+        let mut publication = PathCollisions::merging_folder_case();
+        publication.insert(&composed_path, false).unwrap();
+        assert!(matches!(
+            publication.insert(&legacy_path, false),
+            Err(Error::DuplicatePath)
+        ));
+        let mut persisted = PathCollisions::persisted_unicode16();
+        persisted.insert(&composed_path, false).unwrap();
+        persisted.insert(&legacy_path, false).unwrap();
+        assert!(serde_json::from_str::<SnapshotRequest>(&format!(
+            r#"{{"upstreamRevisionKey":"new-rev","files":[{{"path":{},"kind":"stl"}}],"selection":{{"maxStlFiles":1,"maxDocumentationBytes":1,"omittedFiles":[]}}}}"#,
+            serde_json::to_string(&legacy).unwrap()
+        ))
+        .is_err());
+
+        let legacy_bytes = b"legacy-solid";
+        let composed_bytes = b"composed-solid";
+        let mut files = vec![
+            ContentFile {
+                path: legacy_path,
+                kind: FileKind::Stl,
+                size_bytes: legacy_bytes.len() as u64,
+                sha256: hex::encode(sha2::Sha256::digest(legacy_bytes)),
+            },
+            ContentFile {
+                path: composed_path,
+                kind: FileKind::Stl,
+                size_bytes: composed_bytes.len() as u64,
+                sha256: hex::encode(sha2::Sha256::digest(composed_bytes)),
+            },
+        ];
+        files.sort_by(|a, b| compare_paths(a.path.as_str(), b.path.as_str()));
+        let manifest = Manifest {
+            version: 1,
+            upstream_revision_key: "pair-rev".into(),
+            manifest_digest: hex::encode(sha2::Sha256::digest(serde_json::to_vec(&files).unwrap())),
+            selection: Selection {
+                max_stl_files: 10,
+                max_documentation_bytes: 1000,
+                omitted_files: vec![],
+            },
+            files,
+        };
+        let mut encoded = serde_json::to_vec_pretty(&manifest).unwrap();
+        encoded.push(b'\n');
+
+        let root = std::env::temp_dir().join(format!(
+            "pp-source-unicode16-pair-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&root).unwrap();
+        struct Remove(std::path::PathBuf);
+        impl Drop for Remove {
+            fn drop(&mut self) {
+                fs::remove_dir_all(&self.0).unwrap();
+            }
+        }
+        let _remove = Remove(root.clone());
+        for dir in ["repos", "input"] {
+            let path = root.join(dir);
+            fs::create_dir(&path).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+        let root = fs::canonicalize(root).unwrap();
+        let revision = root.join("repos/42/revisions/pair-rev");
+        fs::create_dir_all(&revision).unwrap();
+        fs::write(revision.join(&legacy), legacy_bytes).unwrap();
+        fs::write(revision.join(&composed), composed_bytes).unwrap();
+        fs::write(revision.join(MANIFEST), &encoded).unwrap();
+
+        let input = LocalFiles::open(&root.join("input")).unwrap();
+        let mut source = TenantRepos::open("tenant".into(), &root.join("repos"))
+            .unwrap()
+            .source(42)
+            .unwrap();
+        let published = source
+            .materialize(
+                SnapshotRequest {
+                    upstream_revision_key: "pair-rev".into(),
+                    files: vec![SelectedFile {
+                        path: SourcePath::try_from("part.stl".to_owned()).unwrap(),
+                        kind: FileKind::Stl,
+                        size_hint_bytes: None,
+                    }],
+                    selection: Selection {
+                        max_stl_files: 10,
+                        max_documentation_bytes: 1000,
+                        omitted_files: vec![],
+                    },
+                },
+                &input,
+                ArtifactBudget::new(1024 * 1024, 1024 * 1024).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(published.publication, Publication::Reused);
+        let mut names: Vec<_> = published
+            .files
+            .iter()
+            .map(|file| file.path.as_str().to_owned())
+            .collect();
+        names.sort();
+        let mut expected = vec![legacy.clone(), composed.clone()];
+        expected.sort();
+        assert_eq!(names, expected);
+        assert_eq!(fs::read(revision.join(&legacy)).unwrap(), legacy_bytes);
+        assert_eq!(fs::read(revision.join(&composed)).unwrap(), composed_bytes);
+        assert_eq!(fs::read(revision.join(MANIFEST)).unwrap(), encoded);
+        assert_eq!(fs::read_dir(&revision).unwrap().count(), 3);
     }
 }
