@@ -29,6 +29,8 @@ test("ticket_t_10_fixtures_current_required_progress_domain", () => {
   const receipt = object(json(JSON.parse(readFileSync(join(output, "parity.json"), "utf8"))));
   assert.equal(receipt.cases, 29);
   assert.equal(receipt.operations, 61);
+  assert.deepEqual(receipt.projectionComparisons, { mutation: 37, reopened: 17 });
+  assert.deepEqual(receipt.projectionControls, ["remaining-count", "unit-flag", "reopened-progress"]);
   assert.equal(receipt.nodeStartup35, "refused");
   assert.deepEqual(receipt.controls, ["response", "database", "files", "case-count"]);
   verifyInputs(receipt);

@@ -14,6 +14,8 @@ import * as schema from "../../apps/server/src/db/schema.js";
 import { SqliteDatabase } from "../../apps/server/src/db/client.js";
 import { AppRepository } from "../../apps/server/src/db/repository.js";
 import { PlanDraftWorkspaceService } from "../../apps/server/src/services/plan-draft-workspace.js";
+import { registerPlanRoutes } from "../../apps/server/src/routes/plans.js";
+import { publicNodeProjection, type ProjectionPair, type PublicProjection } from "./projections.mjs";
 import { registerPartRoutes } from "../../apps/server/src/routes/parts.js";
 import { registerPlanDraftRoutes } from "../../apps/server/src/routes/plan-drafts.js";
 import { canonical, digest, json, object, type Json } from "../desktop-parity/model.mjs";
@@ -75,7 +77,8 @@ function files(directory: string): Json {
 function open(directory: string) {
   const raw = new Database(join(directory, "print-partner.db"));
   raw.pragma("foreign_keys=ON");
-  return { raw, repository: new AppRepository(drizzle(raw, { schema }), "default", join(directory, "repos")) };
+  const database = drizzle(raw, { schema });
+  return { raw, database, repository: new AppRepository(database, "default", join(directory, "repos")) };
 }
 function equal(left: Json, right: Json, name: string) {
   if (Array.isArray(left)) {
@@ -97,6 +100,20 @@ function seed(name: string) {
   return prepared;
 }
 const records: Json[] = [];
+const projectionPairs: ProjectionPair[] = [];
+function compareProjection(node: PublicProjection, rust: Json, name: string) {
+  const builds = object(rust).builds; assert(Array.isArray(builds)); assert.equal(builds.length, 1);
+  const native = object(builds[0]);
+  equal(node.progress, native.progress, `${name}: complete public progress`);
+  equal(node.checkoff, native.checkoff, `${name}: complete public Checkoff view`);
+  equal(node.http.body, object(native.checkoff).body, `${name}: actual GET Checkoff body`);
+}
+async function appFor(connection: ReturnType<typeof open>, directory: string) {
+  const app = Fastify();
+  const deps = { repo: connection.repository, reposDir: join(directory, "repos"), thumbsDir: join(directory, "thumbs"), dataDir: directory };
+  await registerPartRoutes(app, deps); await registerPlanDraftRoutes(app, deps); await registerPlanRoutes(app, deps);
+  return app;
+}
 function coverage(cases: Json[]) {
   assert.equal(cases.length, 29, "Current corpus requires all29 distinct cases");
   assert.equal(cases.filter((r) => object(r).family === "required").length, 12);
@@ -223,10 +240,10 @@ try {
     const requests = [...prelude, json(requestBody), json(requestBody)];
     const input = join(root, `${id}.json`); writeFileSync(input, JSON.stringify({ profiles: [1], requests }));
     const result = command("checkoff-progress-fixture", [rust, input], { PP_CHECKOFF_CREDENTIAL: "read-fixture-secret" });
-    const connection = open(node); const app = Fastify();
-    await registerPartRoutes(app, { repo: connection.repository, reposDir: join(node, "repos"), thumbsDir: join(node, "thumbs") });
-    await registerPlanDraftRoutes(app, { repo: connection.repository, reposDir: join(node, "repos"), thumbsDir: join(node, "thumbs"), dataDir: node });
+    const connection = open(node); const app = await appFor(connection, node);
+    const rustResults = result.results; assert(Array.isArray(rustResults));
     const nodeResults: Json[] = [];
+    const projections: PublicProjection[] = [];
     for (const [index, value] of requests.entries()) {
       const request = object(value);
       const response = await app.inject(request.operation === "import"
@@ -234,6 +251,10 @@ try {
         : { method: "PATCH", url: `/parts/${request.part_id}/${request.operation === "completion_coordinate" ? "progress" : "assembled"}`, payload: object(request.body) });
       assert.equal(response.statusCode, index < prelude.length ? 200 : status, `${id}: expected status`);
       nodeResults.push({ status: response.statusCode, body: json(response.json()) });
+      const projection = await publicNodeProjection({ database: connection.database, repository: connection.repository, app });
+      const nativeRead = object(rustResults[index]).read;
+      compareProjection(projection, nativeRead, `${id}[${index}]`);
+      projections.push(projection); projectionPairs.push({ node: projection, rust: nativeRead, phase: "mutation" });
     }
     if (id === "uncomplete") {
       assert.equal(object(object(nodeResults[0]).body).printed_count, 3);
@@ -246,15 +267,31 @@ try {
     await app.close(); connection.raw.close();
     const domainAfter = graph(node);
     nodeWriterOpens += Number(command("progress-parity-prepare", [node]).writer_opens);
-    const reopened = open(node); reopened.raw.close();
-    const rustResults = result.results; assert(Array.isArray(rustResults));
+    const reopened = open(node); const reopenedApp = await appFor(reopened, node);
+    const reopenedProjection = await publicNodeProjection({ database: reopened.database, repository: reopened.repository, app: reopenedApp });
+    compareProjection(reopenedProjection, result.reopened, `${id}: reopened`);
+    equal(json(reopenedProjection), json(projections[projections.length - 1]), `${id}: Node public projections survive reopen`);
+    projectionPairs.push({ node: reopenedProjection, rust: result.reopened, phase: "reopened" });
+    await reopenedApp.close(); reopened.raw.close();
     equal(nodeResults, rustResults.map((r) => object(r).response), `${id}: actual registered-handler responses/replay`);
     equal(graph(node), graph(rust), `${id}: entire ordered database/restart`); equal(files(node), files(rust), `${id}: files`);
     if (status !== 200) equal(before, domainAfter, `${id}: refusal/rollback preserves all tables`);
     assert.equal(nodeWriterOpens, result.writer_opens, `${id}: target lifecycle count`);
-    records.push({ id, family: "progress", responses: nodeResults, writerOpens: { nodeFixtureTarget: nodeWriterOpens, rust: result.writer_opens }, database: graph(node), files: files(node) });
+    records.push({ id, family: "progress", responses: nodeResults, projections: json(projections), reopenedProjection: json(reopenedProjection), writerOpens: { nodeFixtureTarget: nodeWriterOpens, rust: result.writer_opens }, database: graph(node), files: files(node) });
   }
   coverage(records);
+  assert.equal(projectionPairs.filter((p) => p.phase === "mutation").length, 37);
+  assert.equal(projectionPairs.filter((p) => p.phase === "reopened").length, 17);
+  const firstProjection = projectionPairs[0];
+  const staleCount = structuredClone(firstProjection.node); object(staleCount.progress).remainingUnits = 999;
+  assert.throws(() => compareProjection(staleCount, firstProjection.rust, "planted stale progress count"), /remainingUnits/);
+  const wrongUnit = structuredClone(firstProjection.node);
+  const parts = object(object(wrongUnit.checkoff).body).parts; assert(Array.isArray(parts));
+  const flags = object(parts[0]).print_units; assert(Array.isArray(flags)); assert.equal(typeof flags[0], "boolean"); flags[0] = !flags[0];
+  assert.throws(() => compareProjection(wrongUnit, firstProjection.rust, "planted unit flag"), /print_units/);
+  const reopenedPair = projectionPairs.find((p) => p.phase === "reopened"); assert(reopenedPair);
+  const wrongReopened = structuredClone(reopenedPair.node); object(wrongReopened.progress).remainingUnits = 999;
+  assert.throws(() => compareProjection(wrongReopened, reopenedPair.rust, "planted reopened projection"), /remainingUnits/);
   const operations = records.reduce<number>((total, record) => {
     const row = object(record);
     if (row.family === "required") return total + 2;
@@ -280,6 +317,6 @@ try {
   const sqliteAddonPath = report.sharedObjects.find((path: unknown) => typeof path === "string" && path.includes("/better-sqlite3/") && path.endsWith(".node"));
   assert(typeof sqliteAddonPath === "string", "Receipt must hash the actual loaded SQLite addon");
   const sqliteAddonSha256 = digest(readFileSync(sqliteAddonPath));
-  writeFileSync(join(output, "parity.json"), JSON.stringify({ format: "current-required-progress-domain-v1", head: head.stdout.trim(), sourceHashes, binaryHashes, node: process.version, nodeSha256: digest(readFileSync(process.execPath)), sqliteAddonSha256, cases: 29, operations, records, controls: ["response", "database", "files", "case-count"], nodeStartup35: "refused", startupRefusal, clockPolicy: "Only Node Date uses bounded observed Rust creation timestamp; no timestamp excluded", lifecycle: "one shared prepared seed before clone; two real target writer opens per side, first and reopen" }, null, 2));
+  writeFileSync(join(output, "parity.json"), JSON.stringify({ format: "current-required-progress-domain-v1", head: head.stdout.trim(), sourceHashes, binaryHashes, node: process.version, nodeSha256: digest(readFileSync(process.execPath)), sqliteAddonSha256, cases: 29, operations, projectionComparisons: { mutation: 37, reopened: 17 }, projectionPairs: json(projectionPairs), projectionControls: ["remaining-count", "unit-flag", "reopened-progress"], records, controls: ["response", "database", "files", "case-count"], nodeStartup35: "refused", startupRefusal, clockPolicy: "Only Node Date uses bounded observed Rust creation timestamp; no timestamp excluded", lifecycle: "one shared prepared seed before clone; two real target writer opens per side, first and reopen" }, null, 2));
   process.stdout.write("PASS: 12 current Required-unit cases,17 current registered-handler cases;61 paired operations including clearing preconditions; restart/state/file parity and4 drift controls\n");
 } finally { mock.timers.reset(); rmSync(root, { recursive: true, force: true }); }
