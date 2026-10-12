@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { getDb, SqliteDatabase } from "../db/client.js";
 import { AppRepository, SourceActivationConflictError } from "../db/repository.js";
 import {
+  measureTenantDiskUsage,
   runWithTenantDiskQuota,
   TenantDiskQuotaError,
 } from "../lib/tenant-disk-quota.js";
@@ -519,16 +520,62 @@ describe("candidate publication", () => {
     sqlite.close();
   });
 
-  it("rolls activation back when import-rule persistence fails", async () => {
-    const { sqlite, repo, source, workingTree } = fixture();
+  it("rolls activation back when test-injected import-rule persistence fails and removes the unreferenced snapshot", async () => {
+    const { dir, sqlite, repo, source, workingTree } = fixture();
     const previous = await publishLocalSourceWorkingTree({ repo, reposDir: sqlite.reposDir, sourceId: source.id, workingTree });
+    const revisionsRoot = join(sqlite.reposDir, String(source.id), "revisions");
+    const beforeDirectories = readdirSync(revisionsRoot).sort();
+    const beforeUsage = await measureTenantDiskUsage({
+      dataDir: dir, reposDir: sqlite.reposDir, tenantId: "default", sourceIds: [source.id],
+    });
     writeFileSync(join(workingTree, "cube.stl"), "replacement");
-    const spy = vi.spyOn(repo, "updateImportRules").mockImplementationOnce(() => { throw new Error("injected write failure"); });
-    await expect(publishLocalSourceWorkingTree({ repo, reposDir: sqlite.reposDir, sourceId: source.id, workingTree, suggestedImportRules: ["cube.stl"] })).rejects.toThrow("injected write failure");
+    const spy = vi.spyOn(repo, "updateImportRules").mockImplementationOnce(() => {
+      throw new Error("test-injected import-rule persistence failure");
+    });
+    await expect(publishLocalSourceWorkingTree({
+      repo, reposDir: sqlite.reposDir, sourceId: source.id, workingTree, suggestedImportRules: ["cube.stl"],
+    })).rejects.toMatchObject({
+      name: "Error",
+      message: "test-injected import-rule persistence failure",
+    });
     spy.mockRestore();
     expect(repo.getSource(source.id)?.local_path).toBe(previous.local_path);
     expect(readFileSync(join(previous.local_path!, "cube.stl"), "utf8")).toBe("solid cube\nendsolid cube\n");
     expect(repo.getProjectRow(source.id)?.importedPaths).toBeNull();
+    expect(readdirSync(revisionsRoot).sort()).toEqual(beforeDirectories);
+    expect(repo.listSourceRevisions(source.id).map((revision) => revision.upstream_revision_key).sort())
+      .toEqual(beforeDirectories.filter((name) => !name.startsWith(".")));
+    expect(await measureTenantDiskUsage({
+      dataDir: dir, reposDir: sqlite.reposDir, tenantId: "default", sourceIds: [source.id],
+    })).toBe(beforeUsage);
+    sqlite.close();
+  });
+
+  it("keeps a referenced snapshot when test-injected import-rule persistence fails on reuse", async () => {
+    const { dir, sqlite, repo, source, workingTree } = fixture();
+    const previous = await publishLocalSourceWorkingTree({ repo, reposDir: sqlite.reposDir, sourceId: source.id, workingTree });
+    const revisionsRoot = join(sqlite.reposDir, String(source.id), "revisions");
+    const beforeDirectories = readdirSync(revisionsRoot).sort();
+    const beforeUsage = await measureTenantDiskUsage({
+      dataDir: dir, reposDir: sqlite.reposDir, tenantId: "default", sourceIds: [source.id],
+    });
+    const spy = vi.spyOn(repo, "updateImportRules").mockImplementationOnce(() => {
+      throw new Error("test-injected import-rule persistence failure");
+    });
+    await expect(publishLocalSourceWorkingTree({
+      repo, reposDir: sqlite.reposDir, sourceId: source.id, workingTree, suggestedImportRules: ["cube.stl"],
+    })).rejects.toMatchObject({
+      name: "Error",
+      message: "test-injected import-rule persistence failure",
+    });
+    spy.mockRestore();
+    expect(repo.getSource(source.id)?.local_path).toBe(previous.local_path);
+    expect(readFileSync(join(previous.local_path!, "cube.stl"), "utf8")).toBe("solid cube\nendsolid cube\n");
+    expect(repo.listSourceRevisions(source.id)).toHaveLength(1);
+    expect(readdirSync(revisionsRoot).sort()).toEqual(beforeDirectories);
+    expect(await measureTenantDiskUsage({
+      dataDir: dir, reposDir: sqlite.reposDir, tenantId: "default", sourceIds: [source.id],
+    })).toBe(beforeUsage);
     sqlite.close();
   });
 

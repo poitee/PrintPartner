@@ -9,9 +9,14 @@ import { AppRepository, type SchemaTables } from "../db/repository.js";
 import * as pgSchema from "../db/schema-pg.js";
 import { registerPostgresSyncQuery, unregisterPostgresSyncQuery } from "../db/sync-db-bridge.js";
 import { registerSourceRoutes } from "../routes/sources.js";
+import { registerRepoManifestRoutes } from "../routes/repo-manifest.js";
 import { applyAssistantAction } from "../assistant/tools.js";
 import { InProcessJobRunner } from "./job-runner.js";
-import { publishLocalSourceWorkingTree, publishSourceManifestRevision } from "./local-source-revision.js";
+import {
+  publishLocalSourceWorkingTree,
+  publishSourceManifestRevision,
+  SOURCE_PUBLICATION_UNAVAILABLE_DETAIL,
+} from "./local-source-revision.js";
 
 it("rejects PostgreSQL uploads and manifest publication before SQL or filesystem mutation", async () => {
   const dir = mkdtempSync(join(tmpdir(), "pp-pg-publication-"));
@@ -34,11 +39,19 @@ it("rejects PostgreSQL uploads and manifest publication before SQL or filesystem
       repo, reposDir, sourcesDir, dataDir: dir, hostedPlanning: false,
       thumbsDir: join(dir, "thumbs"), coversDir: join(dir, "covers"),
     });
+    await registerRepoManifestRoutes(app, { repo });
     for (const endpoint of ["upload-files", "upload-zip"]) {
       const result = await app.inject({ method: "POST", url: `/sources/1/${endpoint}`, payload: {} });
       expect(result.statusCode).toBe(503);
-      expect(result.json().detail).toContain("atomic publication transactions are not supported");
+      expect(result.json()).toEqual({ detail: SOURCE_PUBLICATION_UNAVAILABLE_DETAIL });
     }
+    const manifest = await app.inject({
+      method: "PUT",
+      url: "/sources/1/repo-manifest",
+      payload: { yaml: "project: test\nparts: []\n" },
+    });
+    expect(manifest.statusCode).toBe(503);
+    expect(manifest.json()).toEqual({ detail: SOURCE_PUBLICATION_UNAVAILABLE_DETAIL });
     const result = await applyAssistantAction({
       id: "pg-upload", type: "propose_import_source_files", plan_id: 0,
       label: "Import", summary: "Import", params: { source_id: 1, files: [] },
