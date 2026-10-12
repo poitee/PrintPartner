@@ -269,12 +269,16 @@ test("a missing workflow creation time still orders by check start", () => {
   assert.equal(report.passedCheckCount, 0);
 });
 
+const pinnedHead = "46f4b164a93ddaac910d6680dda52903dc757327";
 const oldHead = "1111111111111111111111111111111111111111";
 const newHead = "2222222222222222222222222222222222222222";
 const movedFailureUrl = "https://github.com/poitee/PrintPartner/actions/runs/9001/job/2";
 const staleFailureUrl = "https://github.com/poitee/PrintPartner/actions/runs/9100/job/1";
 const currentSuccessUrl = "https://github.com/poitee/PrintPartner/actions/runs/9100/job/101";
 const laterFailureUrl = "https://github.com/poitee/PrintPartner/actions/runs/9100/job/102";
+const queuedReplacementUrl = "https://github.com/poitee/PrintPartner/actions/runs/9100/job/queued";
+const externalFailureUrl = "https://cursor.com/checks/old-failure";
+const externalSuccessUrl = "https://cursor.com/checks/new-success";
 
 function membershipPair({
   staleId,
@@ -310,6 +314,99 @@ function membershipPair({
   return [stale, current];
 }
 
+function finishedRuns(id) {
+  return { pageInfo: { hasNextPage: false }, nodes: [{ id }] };
+}
+
+function externalPair({
+  olderConclusion,
+  newerConclusion,
+  newerStatus = "COMPLETED",
+  newerStartedAt = "2026-10-12T05:00:00Z",
+  newerApp = "MDM6QXBwMTUzNjg=",
+  olderApp = "MDM6QXBwMTUzNjg=",
+  dropApp = false,
+  dropWorkflowOnNewerOnly = false,
+  incompleteNewer = false,
+  name = "Lint Evidence block",
+}) {
+  const older = latestCheck();
+  const newer = latestCheck();
+  Object.assign(older, {
+    id: "external-old",
+    name,
+    conclusion: olderConclusion,
+    status: "COMPLETED",
+    detailsUrl: externalFailureUrl,
+    startedAt: "2026-10-12T03:00:00Z",
+  });
+  Object.assign(newer, {
+    id: "external-new",
+    name,
+    conclusion: newerConclusion,
+    status: newerStatus,
+    detailsUrl: externalSuccessUrl,
+    startedAt: newerStartedAt,
+  });
+  older.checkSuite.id = "suite-old";
+  newer.checkSuite.id = "suite-new";
+  older.checkSuite.app.id = olderApp;
+  newer.checkSuite.app.id = newerApp;
+  older.checkSuite.currentRuns = finishedRuns(older.id);
+  newer.checkSuite.currentRuns = incompleteNewer
+    ? {
+        totalCount: 101,
+        pageInfo: { hasNextPage: true, endCursor: "suite-2" },
+        nodes: Array.from({ length: 100 }, (_, index) => ({ id: `ext-${index + 1}` })),
+      }
+    : finishedRuns(newer.id);
+  delete older.checkSuite.workflowRun;
+  if (!dropWorkflowOnNewerOnly) delete newer.checkSuite.workflowRun;
+  if (dropApp) {
+    delete older.checkSuite.app;
+    delete newer.checkSuite.app;
+  }
+  return [older, newer];
+}
+
+function externalRollup(mode) {
+  if (mode === "queued-authoritative") {
+    const failure = latestCheck();
+    Object.assign(failure, {
+      id: "current-failure",
+      conclusion: "FAILURE",
+      status: "COMPLETED",
+      detailsUrl: staleFailureUrl,
+      startedAt: "2026-10-12T03:00:00Z",
+    });
+    failure.checkSuite.id = "suite-current";
+    failure.checkSuite.currentRuns = finishedRuns(failure.id);
+    const queued = latestCheck();
+    Object.assign(queued, {
+      id: "queued-replacement",
+      status: "QUEUED",
+      conclusion: null,
+      detailsUrl: queuedReplacementUrl,
+      startedAt: null,
+    });
+    queued.checkSuite.id = "suite-queued";
+    queued.checkSuite.workflowRun.runAttempt = 2;
+    queued.checkSuite.currentRuns = finishedRuns(queued.id);
+    return [failure, queued];
+  }
+  const specs = {
+    "external-new-success": { olderConclusion: "FAILURE", newerConclusion: "SUCCESS" },
+    "external-new-failure": { olderConclusion: "SUCCESS", newerConclusion: "FAILURE", newerStartedAt: "2026-10-12T05:00:00Z" },
+    "external-cross-app": { olderConclusion: "FAILURE", newerConclusion: "SUCCESS", newerApp: "cursor-bugbot" },
+    "external-missing-start": { olderConclusion: "FAILURE", newerConclusion: "SUCCESS", newerStartedAt: null },
+    "external-missing-status": { olderConclusion: "FAILURE", newerConclusion: null, newerStatus: null },
+    "external-missing-app": { olderConclusion: "FAILURE", newerConclusion: "SUCCESS", dropApp: true },
+    "external-versus-workflow": { olderConclusion: "FAILURE", newerConclusion: "SUCCESS", dropWorkflowOnNewerOnly: true },
+    "external-incomplete": { olderConclusion: "FAILURE", newerConclusion: "SUCCESS", incompleteNewer: true },
+  };
+  return externalPair(specs[mode]);
+}
+
 function runLiveFixture(context, mode = "pages") {
   const dir = mkdtempSync(join(tmpdir(), "pr-state-current-"));
   context.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -318,7 +415,7 @@ function runLiveFixture(context, mode = "pages") {
     mode,
     oldHead,
     newHead,
-    pinnedHead: "46f4b164a93ddaac910d6680dda52903dc757327",
+    pinnedHead,
   };
   if (mode === "rerun" || mode === "queued-rerun") {
     data.statusCheckRollup = [rerunCheck({
@@ -404,6 +501,70 @@ function runLiveFixture(context, mode = "pages") {
     data.page2Ids = ["latest-101"];
     data.totalCount = 101;
     data.suiteBehavior = "page2";
+  }
+  if (mode === "latest-shifted" || mode === "latest-overlap") {
+    data.statusCheckRollup = membershipPair({
+      staleId: "lived-past-page",
+      staleConclusion: "FAILURE",
+      staleUrl: staleFailureUrl,
+      currentId: "latest-1",
+      currentConclusion: "SUCCESS",
+      currentUrl: currentSuccessUrl,
+    });
+    data.page2Ids = mode === "latest-overlap" ? ["latest-100"] : ["replacement-not-in-rollup"];
+    data.totalCount = 101;
+    data.suiteBehavior = "page2";
+  }
+  if (mode === "ambiguous-success" || mode === "ambiguous-queued") {
+    const page = {
+      totalCount: 101,
+      pageInfo: { hasNextPage: true, endCursor: "suite-2" },
+      nodes: Array.from({ length: 100 }, (_, index) => ({ id: `old-${index + 1}` })),
+    };
+    const stale = latestCheck();
+    Object.assign(stale, {
+      id: "stale-success",
+      conclusion: "SUCCESS",
+      status: "COMPLETED",
+      detailsUrl: currentSuccessUrl,
+      startedAt: "2026-10-12T05:00:00Z",
+    });
+    stale.checkSuite.id = "suite-ambiguous";
+    stale.checkSuite.currentRuns = page;
+    const failure = latestCheck();
+    Object.assign(failure, {
+      id: "current-failure",
+      conclusion: "FAILURE",
+      status: "COMPLETED",
+      detailsUrl: staleFailureUrl,
+      startedAt: "2026-10-12T03:00:00Z",
+    });
+    failure.checkSuite.id = "suite-current";
+    failure.checkSuite.currentRuns = {
+      pageInfo: { hasNextPage: false },
+      nodes: [{ id: failure.id }],
+    };
+    data.statusCheckRollup = [stale, failure];
+    if (mode === "ambiguous-queued") {
+      const queued = latestCheck();
+      Object.assign(queued, {
+        id: "queued-replacement",
+        status: "QUEUED",
+        conclusion: null,
+        detailsUrl: queuedReplacementUrl,
+        startedAt: null,
+      });
+      queued.checkSuite.id = "suite-ambiguous";
+      queued.checkSuite.currentRuns = structuredClone(page);
+      data.statusCheckRollup = [stale, queued, failure];
+    }
+    data.page2Ids = ["replacement-not-in-rollup"];
+    data.totalCount = 101;
+    data.suiteBehavior = "error";
+  }
+  if (mode === "queued-authoritative" || mode.startsWith("external-")) {
+    data.statusCheckRollup = externalRollup(mode);
+    data.suiteBehavior = mode === "external-incomplete" ? "error" : "page2";
   }
   if (mode === "head-during-suite") {
     data.oldChecks = membershipPair({
@@ -772,4 +933,76 @@ test("live CLI does not keep an old head that finishes paging after the head mov
   assert.equal(report.nextAction, "ci");
   assert.deepEqual(report.failingChecks.map((check) => check.url), [movedFailureUrl]);
   assert.equal(report.passedCheckCount, 0);
+});
+
+function reportOf(result) {
+  assert.equal(result.status, 0, result.stderr);
+  return JSON.parse(result.stdout);
+}
+
+for (const mode of ["latest-shifted", "latest-overlap"]) {
+  test(`same-head latest membership with an unchanged count keeps the failure in ${mode}`, (context) => {
+    const result = runLiveFixture(context, mode);
+    const report = reportOf(result);
+    assert.equal(report.nextAction, "ci");
+    assert.deepEqual(report.failingChecks.map((check) => check.url), [staleFailureUrl]);
+    assert.equal(report.passedCheckCount, 1);
+    const state = JSON.parse(readFileSync(result.statePath, "utf8"));
+    assert.deepEqual(state.checkOids, [pinnedHead, pinnedHead]);
+    assert.equal(state.prViews, 2);
+    assert.equal(state.suiteCalls, 1);
+    assert.deepEqual(state.suiteCursors, ["suite-2"]);
+  });
+}
+
+for (const mode of ["ambiguous-success", "ambiguous-queued"]) {
+  test(`an unresolved suite cannot hide a current failure in ${mode}`, (context) => {
+    const result = runLiveFixture(context, mode);
+    const report = reportOf(result);
+    assert.equal(report.nextAction, "ci");
+    assert.deepEqual(report.failingChecks.map((check) => check.url), [staleFailureUrl]);
+    assert.equal(report.passedCheckCount, 1);
+  });
+}
+
+test("a queued replacement without a start time does not remove a current failure", (context) => {
+  const result = runLiveFixture(context, "queued-authoritative");
+  const report = reportOf(result);
+  assert.equal(report.nextAction, "ci");
+  assert.deepEqual(report.failingChecks.map((check) => check.url), [staleFailureUrl]);
+  assert.deepEqual(report.pendingChecks.map((check) => check.url), [queuedReplacementUrl]);
+  assert.equal(report.passedCheckCount, 0);
+});
+
+test("a newer external success replaces an older failure from the same app and name", (context) => {
+  const result = runLiveFixture(context, "external-new-success");
+  const report = reportOf(result);
+  assert.equal(report.nextAction, "ready");
+  assert.deepEqual(report.failingChecks, []);
+  assert.equal(report.passedCheckCount, 1);
+});
+
+test("a newer external failure replaces an older success from the same app and name", (context) => {
+  const result = runLiveFixture(context, "external-new-failure");
+  const report = reportOf(result);
+  assert.equal(report.nextAction, "ci");
+  assert.deepEqual(report.failingChecks.map((check) => check.url), [externalSuccessUrl]);
+  assert.equal(report.passedCheckCount, 0);
+});
+
+for (const mode of ["external-cross-app", "external-missing-start", "external-missing-app", "external-versus-workflow", "external-incomplete"]) {
+  test(`external check ${mode} keeps the current failure`, (context) => {
+    const result = runLiveFixture(context, mode);
+    const report = reportOf(result);
+    assert.equal(report.nextAction, "ci");
+    assert.deepEqual(report.failingChecks.map((check) => check.url), [externalFailureUrl]);
+    assert.equal(report.passedCheckCount, 1);
+  });
+}
+
+test("an external check with no status and no conclusion does not remove a current failure", (context) => {
+  const result = runLiveFixture(context, "external-missing-status");
+  const report = reportOf(result);
+  assert.equal(report.nextAction, "ci");
+  assert.deepEqual(report.failingChecks.map((check) => check.url), [externalFailureUrl, externalSuccessUrl]);
 });
