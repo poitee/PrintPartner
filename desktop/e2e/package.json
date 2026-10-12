@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "smoke": "node --import tsx src/run.ts",
+    "smoke": "python3 src/run-owned.py",
     "check-release": "node --import tsx assert-release-exclusion.ts"
   },
   "devDependencies": {

@@ -340,7 +340,12 @@ export function requestSignal(pid: number, signal: NodeJS.Signals): SignalResult
     signal,
     startIdentity,
   });
-  process.kill(pid, signal);
+  try {
+    process.kill(pid, signal);
+  } catch (error) {
+    if (isRecord(error) && error.code === "ESRCH") return "refused";
+    throw error;
+  }
   append({
     kind: "signal-sent",
     role: owned.role,
@@ -537,4 +542,33 @@ export function processesMentioning(needle: string): number[] {
     }
   }
   return hits;
+}
+
+
+/** Stop only acquired PID/start pairs; refresh descendants before parents exit. */
+export async function stopOwnedProcesses(roles: readonly ProcessRole[], graceMs = 8000): Promise<void> {
+  const discover = (): number[] => {
+    const live = ownedLivePids(roles);
+    for (const pid of live) recordDescendants(pid);
+    return ownedLivePids(roles);
+  };
+  const wait = async (signal: NodeJS.Signals, duration: number): Promise<number[]> => {
+    const signaled = new Set<string>();
+    const deadline = Date.now() + duration;
+    let live = discover();
+    while (live.length > 0 && Date.now() < deadline) {
+      for (const pid of live) {
+        const identity = readStartIdentity(pid);
+        if (!identity || signaled.has(`${pid}:${identity}`)) continue;
+        requestSignal(pid, signal);
+        signaled.add(`${pid}:${identity}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      live = discover();
+    }
+    return live;
+  };
+  if ((await wait("SIGTERM", graceMs)).length === 0) return;
+  const survivors = await wait("SIGKILL", 3000);
+  if (survivors.length) throw new Error(`Owned processes survived cleanup: ${survivors.join(",")}`);
 }

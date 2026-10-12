@@ -1,3 +1,4 @@
+import { writeFileSync } from "node:fs";
 import { installOwnedLifecycle } from "./src/owned-lifecycle.ts";
 
 installOwnedLifecycle();
@@ -51,6 +52,10 @@ const output = requiredText("GRE492_OUTPUT");
 
 export const config = {
   runner: "local",
+  afterSession: async () => {
+    // WDIO calls this after its WebDriver deleteSession has completed.
+    writeFileSync(`${output}/session-deleted.json`, JSON.stringify({ deleted: true, at: new Date().toISOString() }) + "\n");
+  },
   specs: ["./specs/**/*.ts"],
   maxInstances: 1,
   specFileRetries: 0,

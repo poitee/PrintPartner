@@ -4,7 +4,10 @@ on:
   pull_request:
     paths:
       - 'desktop/e2e/**'
-      - 'rust/crates/pp-desktop/**'
+      - 'web/**'
+      - 'rust/crates/**'
+      - 'rust/scripts/**'
+      - 'rust-toolchain.toml'
       - 'rust/Cargo.toml'
       - 'rust/Cargo.lock'
       - '.github/workflows/desktop-e2e.yml'
@@ -93,7 +96,7 @@ jobs:
           set -euo pipefail
           mkdir -p "$GRE492_OUTPUT"
           cp "$RUNNER_TEMP/release-exclusion.json" "$GRE492_OUTPUT/release-exclusion.json"
-          dbus-run-session -- bash -c 'cd desktop/e2e && node --import tsx src/run.ts'
+          dbus-run-session -- bash -c 'cd desktop/e2e && python3 src/run-owned.py'
       - name: Upload the screenshot and receipts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

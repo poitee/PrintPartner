@@ -1,14 +1,11 @@
 import { browser, expect } from "@wdio/globals";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { PNG } from "pngjs";
 import {
   exePath,
   launcherPid,
-  ownedLivePids,
-  processesMentioning,
   readStartIdentity,
   recordDescendants,
   requestSignal,
@@ -80,17 +77,14 @@ function pngFacts(bytes: Buffer): {
   };
 }
 
-function portBusy(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const server = createServer();
-    server.once("error", () => resolve(true));
-    server.listen(port, "127.0.0.1", () => {
-      server.close(() => resolve(false));
-    });
-  });
-}
 
 describe("native desktop", () => {
+  before(async () => {
+    const window = await browser.getWindowHandle();
+    expect(window).toBe("main");
+    // Select through WebDriver. The product intentionally exposes no global native IPC API.
+    await browser.switchToWindow(window);
+  });
   it("refuses a signal to an unowned pid", () => {
     const before = readStartIdentity(1);
     expect(before).not.toBeNull();
@@ -124,6 +118,11 @@ describe("native desktop", () => {
     if (launcher === null) {
       return;
     }
+    const binary = process.env.GRE492_APP_BINARY;
+    if (!binary) throw new Error("GRE492_APP_BINARY is required");
+    expect(exePath(launcher)).toBe(realpathSync(binary));
+    const runningBinarySha256 = sha256(readFileSync(`/proc/${launcher}/exe`));
+    expect(runningBinarySha256).toBe(sha256(readFileSync(binary)));
     const descendants = recordDescendants(launcher);
     const stagedNode = process.env.GRE492_STAGED_NODE;
     if (!stagedNode) {
@@ -161,6 +160,7 @@ describe("native desktop", () => {
       windowHandle: await browser.getWindowHandle(),
       launcherPid: launcher,
       launcherStartIdentity: readStartIdentity(launcher),
+      runningBinarySha256,
       descendantPids: descendants,
       stagedNode,
       stagedNodePid: nodePid,
@@ -171,29 +171,4 @@ describe("native desktop", () => {
     writeFileSync(`${outputDir()}/plan-receipt.json`, `${JSON.stringify(receipt, null, 2)}\n`);
   });
 
-  after(async () => {
-    const launcher = launcherPid();
-    if (launcher === null) {
-      return;
-    }
-    recordDescendants(launcher);
-    const data = process.env.GRE492_DATA;
-    const sent = requestSignal(launcher, "SIGTERM");
-    expect(sent).toBe("sent");
-    const deadline = Date.now() + 8000;
-    while (Date.now() < deadline && readStartIdentity(launcher) !== null) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    const live = ownedLivePids(["launcher", "descendant"]);
-    const dataHits = data ? processesMentioning(data) : [];
-    const port = Number(process.env.GRE492_PORT);
-    const busy = Number.isInteger(port) ? await portBusy(port) : false;
-    writeFileSync(
-      `${outputDir()}/shutdown.json`,
-      `${JSON.stringify({ sent, live, dataHits, portBusy: busy }, null, 2)}\n`,
-    );
-    expect(live).toEqual([]);
-    expect(dataHits).toEqual([]);
-    expect(busy).toBe(false);
-  });
 });
