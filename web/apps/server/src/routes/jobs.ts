@@ -28,6 +28,10 @@ import {
 import { DIRECT_EXPORT_3MF_LIMITS } from "../services/accepted-direct-export-3mf.js";
 import type { InProcessJobRunner } from "../services/job-runner.js";
 import { isRecord, positiveSafeInteger } from "./job-route-inputs.js";
+import {
+  OwnershipAdmissionError,
+  requireSourceSyncParticipant,
+} from "../ownership/source-sync-admission.js";
 
 export async function registerJobRoutes(
   app: FastifyInstance,
@@ -56,6 +60,15 @@ export async function registerJobRoutes(
   }
 
   app.post("/jobs/sync", limited, async (request, reply) => {
+    try {
+      requireSourceSyncParticipant("http.POST /jobs/sync");
+      requireSourceSyncParticipant("http.POST /api/v1/jobs/sync");
+    } catch (error) {
+      if (error instanceof OwnershipAdmissionError) {
+        return reply.status(503).send({ detail: error.message });
+      }
+      throw error;
+    }
     if (await refuseIfHostedQuotaExceeded(reply, request.tenantId)) return;
     const body = (request.body ?? {}) as Record<string, unknown>;
     const job_id = await jobs.start("sync", body, request.tenantId);

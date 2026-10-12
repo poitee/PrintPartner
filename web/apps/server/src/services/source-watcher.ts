@@ -8,6 +8,7 @@ import { getLogger } from "./logger.js";
 import { tenantStorage, getRequestTenantId } from "../middleware/tenant-context.js";
 import { runWithTenantDiskQuota } from "../lib/tenant-disk-quota.js";
 import { readStoredSourceUpdateIntervalHours } from "./source-monitoring-settings.js";
+import { requireSourceSyncParticipant } from "../ownership/source-sync-admission.js";
 
 type SourceWatcherSettings = {
   discordWebhookUrl: string | null;
@@ -398,6 +399,8 @@ export function startSourceWatcher(input: {
   getSettings: () => SourceWatcherSettings;
   listTenantIds: () => readonly string[];
 }): { stop: () => void } {
+  requireSourceSyncParticipant("startup.startSourceWatcher");
+  requireSourceSyncParticipant("worker.startSourceWatcher");
   const logger = getLogger();
   const coordinator = createSourceWatcherCoordinator({
     listTenantIds: input.listTenantIds,

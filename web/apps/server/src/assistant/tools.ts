@@ -1,4 +1,8 @@
 import { TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
+import {
+  OwnershipAdmissionError,
+  requireSourceSyncParticipant,
+} from "../ownership/source-sync-admission.js";
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync, readdirSync, lstatSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
@@ -4134,6 +4138,14 @@ export async function applyAssistantAction(
         break;
       }
       case "start_sync": {
+        try {
+          requireSourceSyncParticipant("mcp.start_sync");
+        } catch (error) {
+          if (error instanceof OwnershipAdmissionError) {
+            return { ok: false, detail: error.message };
+          }
+          throw error;
+        }
         const ids: number[] = [];
         if (Array.isArray(action.params.project_ids)) {
           for (const raw of action.params.project_ids) {

@@ -10,6 +10,10 @@ import { HOSTED_TENANT_DISK_QUOTA_BYTES, isHostedLibrarySourceKind, normalizeCat
 import type { JobSnapshot } from "@print-partner/contracts";
 import type { AppRepository } from "../db/repository.js";
 import {
+  OwnershipAdmissionError,
+  requireSourceSyncParticipant,
+} from "../ownership/source-sync-admission.js";
+import {
   createReadStreamUnderRoot,
   openRepoStlMeshStream,
   openStlThumbStream,
@@ -206,6 +210,7 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
       if (kind === "github" || kind === "git") {
         if (await refuseIfHostedQuotaExceeded(reply, deps, request.tenantId)) return;
       }
+      requireSourceSyncParticipant("http.POST /sources");
       const newSource = deps.repo.createSource({
         name: String(body.name ?? ""),
         url: githubLocation?.url ?? requestedUrl,
@@ -225,7 +230,9 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
           if (deps.jobs) {
             void deps.jobs.start("sync", { project_ids: [newSource.id] }, request.tenantId);
           }
-        } catch { /* best effort */ }
+        } catch (error) {
+          if (error instanceof OwnershipAdmissionError) throw error;
+        }
       }
       return deps.repo.sourceSummaryForClient(newSource);
     } catch (e) {

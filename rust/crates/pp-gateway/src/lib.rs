@@ -19,6 +19,8 @@ use std::{
 use tokio::{net::TcpListener, task::JoinHandle};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
+pub mod ownership;
+
 pub struct LaunchTarget(String);
 impl LaunchTarget {
     pub fn into_url(self) -> String {
@@ -107,6 +109,8 @@ impl Gateway {
                 "Invalid operation ownership manifest"
             );
         }
+        ownership::admit_bundled_source_sync()
+            .map_err(|error| anyhow::anyhow!("Source Sync ownership admission failed: {error}"))?;
         sort_routes(&mut manifest.routes);
         let launch = Some(LaunchTarget(format!(
             "{origin}/__desktop/bootstrap?token={token}"

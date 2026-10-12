@@ -1,0 +1,52 @@
+{
+  "operation": "source.sync",
+  "owner": "node",
+  "live_format": {
+    "id": "source-revision-workspace-v1",
+    "rollback": "compatible"
+  },
+  "participants": [
+    {
+      "id": "http.POST /jobs/sync",
+      "kind": "http",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "file:source-workspace"]
+    },
+    {
+      "id": "http.POST /api/v1/jobs/sync",
+      "kind": "http_alias",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "file:source-workspace"]
+    },
+    {
+      "id": "http.POST /sources",
+      "kind": "http",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions"]
+    },
+    {
+      "id": "mcp.start_sync",
+      "kind": "mcp_action",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "file:source-workspace"]
+    },
+    {
+      "id": "job.sync",
+      "kind": "job",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "file:source-workspace"]
+    },
+    {
+      "id": "startup.startSourceWatcher",
+      "kind": "startup_watcher",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "file:source-workspace"]
+    },
+    {
+      "id": "worker.startSourceWatcher",
+      "kind": "worker",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "file:source-workspace"]
+    }
+  ]
+}

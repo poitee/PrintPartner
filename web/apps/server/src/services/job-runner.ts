@@ -34,6 +34,7 @@ import { runWithTenantDiskQuota, withoutTenantDiskQuota, TenantDiskQuotaError } 
 import { runPrinterUploadJob } from "./printer-upload-job.js";
 import { reconcileSendQueueJobResult } from "./printer-send-queue.js";
 import { getLogger } from "./logger.js";
+import { requireSourceSyncParticipant } from "../ownership/source-sync-admission.js";
 import {
   ACCEPTED_PLATE_EXPORT_LIMITS,
   materializeAcceptedPlateExport,
@@ -257,6 +258,7 @@ export class InProcessJobRunner {
     if (!STARTABLE_JOB_KINDS.has(kind)) {
       throw new Error(`Unsupported job kind: ${kind}`);
     }
+    if (kind === "sync") requireSourceSyncParticipant("job.sync");
     this.pruneCompletedJobs();
     const jobId = crypto.randomUUID();
     const snap: JobSnapshot = {
@@ -388,6 +390,7 @@ export class InProcessJobRunner {
         }, async () => {
           let result: Record<string, unknown>;
           if (kind === "sync") {
+            requireSourceSyncParticipant("job.sync");
             result = await this.runSync(jobId, payload);
           } else if (kind === "import-scan") {
             const projectId = Number(payload.project_id);
