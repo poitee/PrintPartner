@@ -121,6 +121,82 @@ describe("atomic GitHub Source sync", () => {
     await ports.db.close();
   });
 
+  it.each(["github", "git"])("rejects unsupported %s publication before upstream or Source mutation", async (sourceKind) => {
+    const dataDir = reposRoot();
+    const ports = createSelfHostPorts(dataDir);
+    await ports.db.connect();
+    const repo = ports.repository!;
+    const source = repo.createSource({ name: "Unsupported kit", url: "https://github.com/example/kit", source_kind: sourceKind });
+    const before = repo.getProjectRow(source.id);
+    const capability = vi.spyOn(repo, "canPublishSourceRevision").mockReturnValue(false);
+    const upstream = vi.fn(() => { throw new Error("Upstream must not be contacted"); });
+    github.getCommit.mockImplementation(upstream);
+    try {
+      await expect(syncProjectById(repo, repo.reposDir, source.id)).rejects.toThrow(
+        "atomic publication transactions are not supported",
+      );
+      expect(repo.getProjectRow(source.id)).toEqual(before);
+      expect(repo.listSourceRevisions(source.id)).toEqual([]);
+      expect(readdirSync(repo.reposDir)).toEqual([]);
+      expect(upstream).not.toHaveBeenCalled();
+    } finally {
+      capability.mockRestore();
+      await ports.db.close();
+    }
+  });
+
+  it.each(["local", "zip"])("keeps %s document indexing available without revision publication", async (sourceKind) => {
+    const dataDir = reposRoot();
+    const ports = createSelfHostPorts(dataDir);
+    await ports.db.connect();
+    const repo = ports.repository!;
+    const files = join(dataDir, "local-files");
+    mkdirSync(files);
+    writeFileSync(join(files, "README.md"), "# Existing local documentation");
+    const source = repo.createSource({ name: "Local docs", source_kind: sourceKind, local_path: files });
+    const capability = vi.spyOn(repo, "canPublishSourceRevision").mockReturnValue(false);
+    try {
+      expect(await syncProjectById(repo, repo.reposDir, source.id)).toEqual({
+        stl_count: 0, downloaded: 0, doc_count: 1, docs_downloaded: 0,
+      });
+      expect(repo.listSourceDocs(source.id).map((doc) => doc.path)).toEqual(["README.md"]);
+      expect(readFileSync(join(files, "README.md"), "utf8")).toBe("# Existing local documentation");
+    } finally {
+      capability.mockRestore();
+      await ports.db.close();
+    }
+  });
+
+  it("rolls back sync activation when marking the revision current fails", async () => {
+    const dataDir = reposRoot();
+    const ports = createSelfHostPorts(dataDir);
+    await ports.db.connect();
+    const repo = ports.repository!;
+    const source = repo.createSource({ name: "Rollback kit", url: "https://github.com/example/kit", source_kind: "github" });
+    const candidate = join(dataDir, "upload-candidate");
+    mkdirSync(candidate);
+    writeFileSync(join(candidate, "previous.stl"), "previous bytes");
+    const previous = await publishLocalSourceWorkingTree({
+      repo, reposDir: repo.reposDir, sourceId: source.id, workingTree: candidate,
+    });
+    const revisions = repo.listSourceRevisions(source.id);
+    setTree(COMMIT_A, [{ path: "remote.stl", type: "blob", mode: "100644", size: 6 }]);
+    vi.stubGlobal("fetch", rawResponse({ "remote.stl": "remote" }));
+    const markCurrent = vi.spyOn(repo, "markSourceRevisionCurrent").mockImplementation(() => {
+      throw new Error("forced current-status failure");
+    });
+    try {
+      await expect(syncProjectById(repo, repo.reposDir, source.id)).rejects.toThrow("forced current-status failure");
+      expect(repo.getSource(source.id)?.current_source_revision_id).toBe(previous.current_source_revision_id);
+      expect(repo.getSource(source.id)?.local_path).toBe(previous.local_path);
+      expect(repo.listSourceRevisions(source.id)).toEqual(revisions);
+      expect(readFileSync(join(previous.local_path!, "previous.stl"), "utf8")).toBe("previous bytes");
+    } finally {
+      markCurrent.mockRestore();
+      await ports.db.close();
+    }
+  });
+
   it("keeps the branch from a deep GitHub tree URL", () => {
     const url =
       "https://github.com/MillenniumMachines/Milo-V2.0/tree/Current/STL%20Files/Spindle-Mounts/LDO-Kit-Spindle-Mount";

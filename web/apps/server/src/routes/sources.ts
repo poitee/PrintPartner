@@ -714,6 +714,9 @@ export async function syncProjectById(
 }> {
   const row = repo.getProjectRow(projectId);
   if (!row) throw new Error("Source not found");
+  if ((row.sourceKind === "github" || row.sourceKind === "git") && !repo.canPublishSourceRevision()) {
+    throw new Error(SOURCE_PUBLICATION_UNAVAILABLE_DETAIL);
+  }
   const observed = repo.getSourceActivationObservation(projectId);
   if (!observed) throw new Error("Source not found");
   const token = repo.getSetting(GITHUB_PAT_KEY);
@@ -742,21 +745,24 @@ export async function syncProjectById(
           },
         },
       });
-      const revision = repo.recordSourceRevision({
-        sourceId: projectId,
-        upstreamRevisionKey: result.snapshot.upstreamRevisionKey,
-        manifestDigest: result.snapshot.manifestDigest,
-        snapshotLocator: result.snapshot.snapshotLocator,
-        syncedAt: new Date().toISOString(),
-        completeness: "complete",
-      });
-      const activated = repo.activateSourceRevision({
-        sourceId: projectId,
-        revisionId: revision.id,
-        observed,
-        sourceVersion: result.commitSha,
-      });
-      repo.markSourceRevisionCurrent(projectId, revision.id);
+      const activated = repo.transaction(() => {
+        const revision = repo.recordSourceRevision({
+          sourceId: projectId,
+          upstreamRevisionKey: result.snapshot.upstreamRevisionKey,
+          manifestDigest: result.snapshot.manifestDigest,
+          snapshotLocator: result.snapshot.snapshotLocator,
+          syncedAt: new Date().toISOString(),
+          completeness: "complete",
+        });
+        const source = repo.activateSourceRevision({
+          sourceId: projectId,
+          revisionId: revision.id,
+          observed,
+          sourceVersion: result.commitSha,
+        });
+        repo.markSourceRevisionCurrent(projectId, revision.id);
+        return source;
+      }, "immediate");
       const activePath = activated.local_path;
       if (!activePath) throw new Error("Activated Source revision has no local path");
 
