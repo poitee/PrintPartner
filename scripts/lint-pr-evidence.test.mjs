@@ -3436,9 +3436,10 @@ test("r7-env-empty", () => {
   const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv \"\" curl 3232235856\n```\n");
   assert.equal(result.ok, true, result.errors.join("; "));
 });
-test("r7-env-split-unsupported", () => {
+test("r7-env-split-string", () => {
   const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nenv -S 'curl 3232235856'\n```\n");
-  assert.equal(result.ok, true, result.errors.join("; "));
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
 });
 test("r7-unknown", () => {
   const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nunknown-launcher curl 3232235856\n```\n");
@@ -5754,4 +5755,159 @@ test("r29-static-client-operand-gaps", () => {
   ]) {
     r19Expect(commandEvidence(command), 0, OK_LINE, "");
   }
+});
+
+test("r30-positional-shell-arguments", () => {
+  for (const command of [
+    "bash -c 'curl \"$1\"' _ 3232235856",
+    "bash -c 'curl $1' _ 3232235856",
+    "bash -c 'curl ${1}' _ 3232235856",
+  ]) {
+    assertBannedCommand(command);
+  }
+  assertSafeCommand("bash -c 'curl \"$1\"' _ 3232235855");
+  assertSafeCommand("bash -c 'curl $1' _ 3232235855");
+  r19Expect(commandEvidence("bash -c 'curl \"$1\"' _ \"$(printf 3232235856)\""), 1, "", R20_SUBSTITUTION_STDERR);
+});
+
+test("r30-xargs-client", () => {
+  for (const command of [
+    "xargs curl 3232235856 </dev/null",
+    "xargs -r curl 3232235856",
+    "xargs wget 3232235856",
+    "xargs bash -c 'curl 3232235856'",
+  ]) {
+    assertBannedCommand(command);
+  }
+  assertSafeCommand("xargs curl 3232235855 </dev/null");
+  assertSafeCommand("xargs echo 3232235856");
+  r19Expect(commandEvidence("xargs -I {} curl {}"), 1, "", R23_VARIABLE_STDERR);
+});
+
+test("r30-expand-connection-options", () => {
+  for (const command of [
+    "curl --variable p=3232235856 --expand-proxy '{{p}}' http://example.test/",
+    "curl --variable p=3232235856 --expand-preproxy '{{p}}' http://example.test/",
+    "curl --variable p=3232235856 --expand-socks5 '{{p}}' http://example.test/",
+    "curl --variable h=3232235856 --expand-connect-to 'example.test:80:{{h}}:80' http://example.test/",
+    "curl --variable a=3232235856 --expand-resolve 'example.test:80:{{a}}' http://example.test/",
+  ]) {
+    assertBannedCommand(command);
+  }
+  assertSafeCommand("curl --variable p=3232235855 --expand-proxy '{{p}}' http://example.test/");
+  assertSafeCommand("curl --expand-data '{{p}}' http://example.test/");
+});
+
+test("r30-env-split-string", () => {
+  for (const command of [
+    "env -S 'curl 3232235856'",
+    "env --split-string='curl 3232235856'",
+    "env -S curl 3232235856",
+    "env -i -S 'curl 3232235856'",
+  ]) {
+    assertBannedCommand(command);
+  }
+  assertSafeCommand("env -S 'curl 3232235855'");
+  assertSafeCommand("env --split-string='curl http://example.test/'");
+  r19Expect(commandEvidence("env -S 'curl ${HOST}'"), 1, "", R23_VARIABLE_STDERR);
+});
+
+test("r30-indirect-parameter", () => {
+  assertBannedCommand("HOST=3232235856; VAR=HOST; curl ${!VAR}");
+  assertBannedCommand("HOST=3232235856; VAR=HOST; wget ${!VAR}");
+  assertSafeCommand("HOST=3232235855; VAR=HOST; curl ${!VAR}");
+  r19Expect(commandEvidence("curl ${!VAR}"), 1, "", R23_VARIABLE_STDERR);
+  r19Expect(commandEvidence("VAR=NOT_A_NAME; curl ${!VAR}"), 1, "", R23_VARIABLE_STDERR);
+});
+
+test("r30-ssh-destination", () => {
+  for (const command of [
+    "ssh 3232235856",
+    "ssh user@3232235856",
+    "ssh -p 22 3232235856",
+    "ssh ssh://3232235856",
+  ]) {
+    assertBannedCommand(command);
+  }
+  assertSafeCommand("ssh 3232235855");
+  assertSafeCommand("ssh user@3232235855");
+  assertSafeCommand("ssh example.test");
+});
+
+test("r30-brace-group", () => {
+  assertBannedCommand("{ curl 3232235856; }");
+  assertBannedCommand("{ wget 3232235856; }");
+  assertSafeCommand("{ curl 3232235855; }");
+  assertSafeCommand("curl {example.test,3232235855}");
+  assertBannedCommand("curl {example.test,3232235856}");
+});
+
+test("r30-block-quote-reference", () => {
+  const banned = lintPrEvidence(`## Evidence
+Exemption: none
+intro
+> [lan]: http://3232235856/
+- Steps followed to produce the evidence: ran locally
+- Result observed: passed
+- Screenshot / recording / verify-skill output or trace: [preview][lan]
+`);
+  assert.equal(banned.ok, false, banned.errors.join("; "));
+  assert.match(banned.errors.join("\n"), /LAN instances/);
+  const safe = lintPrEvidence(`## Evidence
+Exemption: none
+intro
+> [lan]: http://example.test/
+- Steps followed to produce the evidence: ran locally
+- Result observed: passed
+- Screenshot / recording / verify-skill output or trace: [preview][lan]
+`);
+  assert.equal(safe.ok, true, safe.errors.join("; "));
+});
+
+test("r30-exemption-continuation", () => {
+  const continued = lintPrEvidence(`## Evidence
+- Exemption reason: docs update
+  Exemption: docs-only
+- Steps followed to produce the evidence: ran locally
+`);
+  assert.equal(continued.ok, false, continued.errors.join("; "));
+  assert.equal(continued.exemption, null);
+  assert.match(continued.errors.join("\n"), /exactly one Exemption/);
+  const standalone = lintPrEvidence(`## Evidence
+Exemption: docs-only
+- Exemption reason: docs update
+`);
+  assert.equal(standalone.ok, true, standalone.errors.join("; "));
+});
+
+test("r30-html-list-continuation-artifact", () => {
+  const body = `## Evidence
+Exemption: none
+- Steps followed to produce the evidence: ran locally
+- Result observed: passed
+- Screenshot / recording / verify-skill output or trace:
+
+  <img src="evidence/shot.png" alt="Exemption: docs-only">
+`;
+  const result = lintPrEvidence(body);
+  assert.equal(result.ok, true, result.errors.join("; "));
+  const disguised = lintPrEvidence(`## Evidence
+- Steps followed to produce the evidence: ran locally
+- Result observed: passed
+- Screenshot / recording / verify-skill output or trace:
+
+  <img src="evidence/shot.png" alt="Exemption: none">
+`);
+  assert.equal(disguised.ok, false);
+  assert.equal(disguised.exemption, null);
+  const lan = lintPrEvidence(`## Evidence
+Exemption: none
+- Steps followed to produce the evidence: ran locally
+- Result observed: passed
+- Screenshot / recording / verify-skill output or trace:
+
+  <img src="http://3232235856/shot.png" alt="shot">
+`);
+  assert.equal(lan.ok, false);
+  assert.match(lan.errors.join("\n"), /LAN instances/);
 });

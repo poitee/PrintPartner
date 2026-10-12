@@ -216,7 +216,21 @@ function stripHiddenMarkdownCompute(text, { inlineMultiline = true, includeRawHt
           onLiteralLine?.(lineIndex, visible.visible, { boundary: true });
         }
         if (end.test(content)) htmlBlock = null;
-        kept.push("");
+        // A complete image or anchor is an artifact, but its attributes are not metadata.
+        let keptLine = "";
+        if (!rawTag && !HTML_BLOCK_START.test(content) && isCompleteHtmlTag(content)) {
+          const marked = htmlConcreteMarker(content);
+          if (marked.includes("\u0001")) {
+            const tagAt = content.indexOf("<");
+            const tag = readHtmlTag(content, tagAt);
+            const destination = tag
+              ? decodeCharacterReferences(htmlAttribute(tag.tag, tag.name === "img" ? "src" : "href"), { htmlNumeric: true, dropBreaks: true })
+              : "";
+            const lead = content.match(/^[ \t]*/)[0];
+            keptLine = `${lead}${destination}`;
+          }
+        }
+        kept.push(keptLine);
         paragraphOpen = false;
         continue;
       }
@@ -447,9 +461,19 @@ export function extractEvidenceSection(body, options) {
 }
 
 function parseExemption(sectionText) {
-  const match = sectionText.match(/^[ \t]*Exemption[ \t]*:(.*)$/im);
-  if (!match) return { raw: null, value: null };
-  const raw = match[1].trim();
+  const fields = parseFields(sectionText);
+  let offset = 0;
+  let line = null;
+  for (const candidate of sectionText.split("\n")) {
+    const start = offset;
+    offset += candidate.length + 1;
+    if (!EXEMPTION_START.test(candidate)) continue;
+    if (fields.some((field) => start >= field.start && start < field.end)) continue;
+    line = candidate;
+    break;
+  }
+  if (!line) return { raw: null, value: null };
+  const raw = line.replace(EXEMPTION_START, "").trim();
   if (!raw || PLACEHOLDER_EXEMPTION.test(raw)) {
     return { raw, value: null };
   }
@@ -951,7 +975,7 @@ function pullReference(scan, index) {
     scan.paragraph = false;
     return { kind: "block" };
   }
-  if (lineStartsListItem(raw)) scan.paragraph = false;
+  if (lineStartsListItem(raw) || /^[ \t]{0,3}>/.test(raw)) scan.paragraph = false;
   if (!scan.paragraph && lineIsIndentedCode(raw)) return { kind: "skip" };
   if (!scan.paragraph) {
     const definition = referenceDestination(scan.normalized, index);
@@ -1906,6 +1930,20 @@ function readParameterExpansion(value, start) {
   if (next === "{") {
     let name = null;
     let nameAt = start + 2;
+    if (value[nameAt] === "!") {
+      const indirectAt = nameAt + 1;
+      if (/[A-Za-z_]/.test(value[indirectAt] ?? "")) {
+        let endName = indirectAt;
+        while (/[A-Za-z0-9_]/.test(value[endName] ?? "")) endName += 1;
+        if (value[endName] === "}") return { end: endName + 1, name: null, indirect: value.slice(indirectAt, endName) };
+      }
+    } else if (/[0-9]/.test(value[nameAt] ?? "")) {
+      let endName = nameAt;
+      while (/[0-9]/.test(value[endName] ?? "")) endName += 1;
+      if (value[endName] === "}" && /^(?:0|[1-9][0-9]*)$/.test(value.slice(nameAt, endName))) {
+        return { end: endName + 1, name: value.slice(nameAt, endName) };
+      }
+    }
     if (/[A-Za-z_]/.test(value[nameAt] ?? "")) {
       const nameStart = nameAt;
       while (/[A-Za-z0-9_]/.test(value[nameAt] ?? "")) nameAt += 1;
@@ -1941,7 +1979,8 @@ function readParameterExpansion(value, start) {
     }
     return { end: index, name, fallback, dynamicFallback };
   }
-  if (/[0-9*@#?!$\-]/.test(next)) return { end: start + 2, name: null };
+  if (/[0-9]/.test(next)) return { end: start + 2, name: next };
+  if (/[*@#?!$\-]/.test(next)) return { end: start + 2, name: null };
   if (!/[A-Za-z_]/.test(next)) return null;
   let index = start + 2;
   while (index < value.length && /[A-Za-z0-9_]/.test(value[index])) index += 1;
@@ -1963,6 +2002,7 @@ function shellWords(value, { commandTokens = false } = {}) {
   let wordProcessSource = false;
   let wordReplacements = [];
   let wordDynamicFallback = false;
+  let wordIndirect = null;
   let fenceFrom = -1;
   let fenceTo = -1;
   let fenceHit = false;
@@ -1995,6 +2035,7 @@ function shellWords(value, { commandTokens = false } = {}) {
         processSource: wordProcessSource,
         replacements: wordReplacements,
         dynamicFallback: wordDynamicFallback,
+        indirect: wordIndirect,
       } : word);
     }
     word = "";
@@ -2009,6 +2050,7 @@ function shellWords(value, { commandTokens = false } = {}) {
     wordProcessSource = false;
     wordReplacements = [];
     wordDynamicFallback = false;
+    wordIndirect = null;
   };
   for (let index = 0; index < value.length; index += 1) {
     const ch = value[index];
@@ -2056,6 +2098,11 @@ function shellWords(value, { commandTokens = false } = {}) {
       index = group.end - 1;
       continue;
     }
+    if (quote === null && !wordStarted && (ch === "{" || ch === "}") && (index + 1 === value.length || /[\s;|&<>()]/.test(value[index + 1]))) {
+      flush();
+      if (commandTokens) words.push(null);
+      continue;
+    }
     if (quote === null && /[\s;|&<>()]/.test(ch)) {
       flush();
       if (commandTokens && /[\n\r;|&<>()]/.test(ch)) words.push(null);
@@ -2082,6 +2129,7 @@ function shellWords(value, { commandTokens = false } = {}) {
           wordReplacements.push({ from: word.length, length: slice.length, fallback: parameter.fallback });
         }
         if (parameter.dynamicFallback) wordDynamicFallback = true;
+        if (parameter.indirect) wordIndirect = parameter.indirect;
         append(slice, true);
         if (parameter.name) wordParameters.push(parameter.name);
         index = parameter.end - 1;
@@ -2650,7 +2698,7 @@ function curlExpandedOption(arg, args, index, variables, budget) {
     }
   } else operand = arg.slice(equal + 1);
   if (!takesValue || operand === undefined) return { index: next };
-  if (expand && name !== "url" && name !== "variable") return { index: next };
+  if (expand && name !== "url" && name !== "variable" && !CURL_CONNECTION_OPTIONS.has(name)) return { index: next };
   const expanded = expand ? expandCurlTemplate(operand, variables, budget) : { ok: true, text: operand };
   if (expanded.budget) {
     if (name === "variable") {
@@ -2755,7 +2803,7 @@ function transferClientName(program) {
   let base = slash < 0 ? program : program.slice(slash + 1);
   if (base.length > 4 && base.slice(-4).toLowerCase() === ".exe") base = base.slice(0, -4);
   const folded = base.toLowerCase();
-  return folded === "curl" || folded === "wget" ? folded : null;
+  return folded === "curl" || folded === "wget" || folded === "ssh" ? folded : null;
 }
 
 function effectiveCurlStart(command, assigned, stop = (program) => Boolean(transferClientName(program))) {
@@ -3096,6 +3144,53 @@ function expandSameShellWords(value, shellVars) {
   return { text: out, parameter: unresolvedParameter };
 }
 
+// Arguments after a shell -c string are $0, $1, ... They are substituted before the inner scan.
+function expandPositionalParameters(text, positionals) {
+  const values = positionals.map((word) => {
+    if (word.substitution) return { reject: "substitution" };
+    if (word.unresolved) return { reject: "unresolved" };
+    if (word.dynamicFallback || word.indirect || (word.parameters ?? []).length) return { reject: "parameter" };
+    if (/['"`$\\\n\s;&|<>(){}]/.test(word.text)) return { reject: "parameter" };
+    return { text: word.text };
+  });
+  let out = "";
+  let quote = null;
+  for (let index = 0; index < text.length; index += 1) {
+    const ch = text[index];
+    if (quote !== "'" && ch === "\\" && text[index + 1] !== undefined) {
+      out += ch + text[index + 1];
+      index += 1;
+      continue;
+    }
+    if (ch === quote) {
+      quote = null;
+      out += ch;
+      continue;
+    }
+    if (quote === null && (ch === "'" || ch === '"')) {
+      quote = ch;
+      out += ch;
+      continue;
+    }
+    if (quote !== "'" && ch === "$") {
+      const parameter = readParameterExpansion(text, index);
+      if (parameter?.name && /^(?:0|[1-9][0-9]*)$/.test(parameter.name)) {
+        const binding = values[Number(parameter.name)];
+        if (!binding) {
+          out += text.slice(index, parameter.end);
+        } else if (binding.reject) {
+          return { reject: true, [binding.reject]: true };
+        } else out += binding.text;
+        index = parameter.end - 1;
+        continue;
+      }
+    }
+    out += ch;
+  }
+  if (out.length > MAX_CURL_EXPAND_TOTAL) return { reject: true, parameter: true };
+  return { text: out };
+}
+
 // eval joins its arguments and parses them in this shell. The text is not executed.
 function staticEvalOperand(command) {
   const args = command.slice(1);
@@ -3143,10 +3238,12 @@ function staticShellOperand(command) {
       const flag = option[at];
       if (flag === "c") {
         const inline = option.slice(at + 1);
-        if (inline !== "") return inline.length > MAX_CURL_EXPAND_TOTAL ? { reject: true } : { text: inline, word };
-        const next = command[index + 1];
-        if (!next) return null;
-        return next.text.length > MAX_CURL_EXPAND_TOTAL ? { reject: true } : { text: next.text, word: next };
+        const script = inline !== "" ? word : command[index + 1];
+        if (!script) return null;
+        const text = inline !== "" ? inline : script.text;
+        if (text.length > MAX_CURL_EXPAND_TOTAL) return { reject: true };
+        const after = inline !== "" ? index + 1 : index + 2;
+        return { text, word: script, positionals: command.slice(after) };
       }
       if (flag === "o" || flag === "O") {
         index += option.slice(at + 1) === "" ? 2 : 1;
@@ -3307,6 +3404,210 @@ function commandProxies(shellVars, prefixes) {
   return active;
 }
 
+function programBaseName(program) {
+  const slash = Math.max(program.lastIndexOf("/"), program.lastIndexOf("\\"));
+  let base = slash < 0 ? program : program.slice(slash + 1);
+  if (base.length > 4 && base.slice(-4).toLowerCase() === ".exe") base = base.slice(0, -4);
+  return base.toLowerCase();
+}
+
+function quoteScanWord(text) {
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(text)) return text;
+  return `'${text.replaceAll("'", "'\\''")}'`;
+}
+
+function resolveIndirectWords(command, shellVars) {
+  let unresolvedParameter = false;
+  for (const word of command) {
+    if (!word?.indirect) continue;
+    if (word.text !== `\${\!${word.indirect}}`) {
+      unresolvedParameter = true;
+      continue;
+    }
+    const pointer = shellVars.get(word.indirect);
+    const targetName = pointer && !pointer.substitution && !pointer.arithmetic && !pointer.parameter ? pointer.value : "";
+    const target = /^[A-Za-z_][\w]*$/.test(targetName) ? shellVars.get(targetName) : null;
+    if (!target || target.substitution || target.arithmetic || target.parameter || /['"`$\\\n\s]/.test(target.value ?? "")) {
+      unresolvedParameter = true;
+      continue;
+    }
+    word.text = target.value;
+    word.braceText = target.value;
+    word.unresolved = false;
+    word.parameters = [];
+    word.indirect = null;
+  }
+  return unresolvedParameter;
+}
+
+function envSplitOperand(command) {
+  let index = 0;
+  while (/^[a-zA-Z_][\w]*\+?=/.test(command[index]?.text ?? "")) index += 1;
+  if (programBaseName(command[index]?.text ?? "") !== "env") return null;
+  index += 1;
+  const launcher = COMMAND_LAUNCHERS.env;
+  let split = null;
+  while (index < command.length && !split) {
+    const word = command[index];
+    const option = word?.text ?? "";
+    if (option === "--" || option === "-" || !option.startsWith("-")) return null;
+    if (option === "-S" || option === "--split-string") {
+      const source = command[index + 1];
+      if (!source) return { reject: true };
+      split = { text: source.text, word: source, after: index + 2 };
+      break;
+    }
+    if (option.startsWith("--split-string=")) {
+      split = { text: option.slice("--split-string=".length), word, after: index + 1 };
+      break;
+    }
+    if (option.startsWith("-S") && !option.startsWith("--")) {
+      split = { text: option.slice(2), word, after: index + 1 };
+      break;
+    }
+    index += 1;
+    if (option.startsWith("--")) {
+      const equal = option.indexOf("=");
+      const flag = option.slice(2, equal === -1 ? undefined : equal);
+      if (launcher.optionalValues.includes(flag)) continue;
+      if (launcher.longFlags.includes(flag) && equal === -1) continue;
+      if (!launcher.longValues.includes(flag)) return null;
+      if (equal === -1) {
+        if (index >= command.length) return null;
+        index += 1;
+      }
+      continue;
+    }
+    let known = true;
+    for (let at = 1; at < option.length; at += 1) {
+      const flag = option[at];
+      if (launcher.flags.includes(flag)) continue;
+      if (!launcher.values.includes(flag)) {
+        known = false;
+        break;
+      }
+      if (at + 1 === option.length) {
+        if (index >= command.length) return null;
+        index += 1;
+      }
+      break;
+    }
+    if (!known) return null;
+  }
+  if (!split) return null;
+  if (split.word.unresolved || split.word.substitution || split.word.dynamicFallback) return { reject: true };
+  if (/[$`]/.test(split.text) || split.text.length > MAX_CURL_EXPAND_TOTAL) return { reject: true };
+  const rest = command.slice(split.after);
+  if (rest.some((word) => word.unresolved || word.substitution || word.dynamicFallback || word.indirect)) return { reject: true };
+  const trailing = rest.map((word) => quoteScanWord(word.text)).join(" ");
+  const text = trailing ? `${split.text} ${trailing}` : split.text;
+  if (text.length > MAX_CURL_EXPAND_TOTAL) return { reject: true };
+  return { text };
+}
+
+const XARGS_FLAGS = new Set("0rtxpo");
+const XARGS_VALUES = new Set("adEILnPs");
+const XARGS_OPTIONAL = new Set("eil");
+const XARGS_LONG_FLAGS = new Set(["null", "no-run-if-empty", "verbose", "exit", "interactive", "open-tty", "show-limits", "help", "version"]);
+const XARGS_LONG_VALUES = new Set(["arg-file", "delimiter", "eof", "replace", "max-lines", "max-args", "max-procs", "max-chars", "process-slot-var"]);
+
+function xargsCommand(command) {
+  let index = 0;
+  while (/^[a-zA-Z_][\w]*\+?=/.test(command[index]?.text ?? "")) index += 1;
+  if (programBaseName(command[index]?.text ?? "") !== "xargs") return null;
+  index += 1;
+  let replacing = false;
+  while (index < command.length) {
+    const option = command[index]?.text ?? "";
+    if (option === "--") {
+      index += 1;
+      break;
+    }
+    if (!option.startsWith("-") || option === "-") break;
+    if (option.startsWith("--")) {
+      const equal = option.indexOf("=");
+      const flag = option.slice(2, equal === -1 ? undefined : equal);
+      if (flag === "replace") replacing = true;
+      if (XARGS_LONG_FLAGS.has(flag) && equal === -1) {
+        index += 1;
+        continue;
+      }
+      if (flag === "eof" && equal === -1) {
+        index += 1;
+        continue;
+      }
+      if (!XARGS_LONG_VALUES.has(flag)) return { reject: true };
+      if (equal === -1) {
+        if (!command[index + 1]) return { reject: true };
+        index += 2;
+      } else index += 1;
+      continue;
+    }
+    let consumedNext = false;
+    for (let at = 1; at < option.length; at += 1) {
+      const flag = option[at];
+      if (flag === "I" || flag === "i") replacing = true;
+      if (XARGS_FLAGS.has(flag)) continue;
+      if (XARGS_OPTIONAL.has(flag)) break;
+      if (!XARGS_VALUES.has(flag)) return { reject: true };
+      if (at + 1 < option.length) break;
+      consumedNext = true;
+      break;
+    }
+    if (consumedNext && !command[index + 1]) return { reject: true };
+    index += consumedNext ? 2 : 1;
+  }
+  if (replacing) return { reject: true };
+  const words = command.slice(index);
+  if (words.length === 0) return null;
+  const commandName = words[0].text.slice(Math.max(words[0].text.lastIndexOf("/"), words[0].text.lastIndexOf("\\")) + 1);
+  if (!transferClientName(words[0].text) && !STATIC_SHELLS.has(commandName)) return null;
+  if (words.some((word) => word.unresolved || word.substitution || word.dynamicFallback || word.indirect)) return { reject: true };
+  const text = words.map((word) => quoteScanWord(word.text)).join(" ");
+  if (text.length > MAX_CURL_EXPAND_TOTAL) return { reject: true };
+  return { text };
+}
+
+const SSH_FLAGS = new Set("46AaCfGgKkMNnqsTtVvXxYy");
+const SSH_VALUES = new Set("BbcDEeFIiJLlmOoPpQRSWw");
+
+function sshHostToken(token) {
+  const sshUrl = /^ssh:\/\/(?:[^@/?#]+@)?([^/:?#]+)/i.exec(token);
+  if (sshUrl) return sshUrl[1];
+  if (/^[a-z][\w+.-]*:/i.test(token)) return null;
+  const at = token.lastIndexOf("@");
+  const hostport = at === -1 ? token : token.slice(at + 1);
+  if (!hostport || hostport.startsWith("-")) return null;
+  return hostport.startsWith("[") ? hostport : hostport.replace(/:\d+$/, "");
+}
+
+function sshDestination(args) {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--") {
+      const host = args[index + 1] ? sshHostToken(args[index + 1]) : null;
+      return host ? { host } : { reject: true };
+    }
+    if (arg.startsWith("-") && arg !== "-") {
+      if (arg.startsWith("--")) return { reject: true };
+      const cluster = arg.slice(1);
+      for (let at = 0; at < cluster.length; at += 1) {
+        const flag = cluster[at];
+        if (SSH_FLAGS.has(flag)) continue;
+        if (!SSH_VALUES.has(flag)) return { reject: true };
+        if (at + 1 < cluster.length) break;
+        if (args[index + 1] === undefined) return { reject: true };
+        index += 1;
+        break;
+      }
+      continue;
+    }
+    const host = sshHostToken(arg);
+    return host ? { host } : { reject: true };
+  }
+  return null;
+}
+
 function copyExported(source) {
   const copy = new Map();
   for (const [name, binding] of source) {
@@ -3320,6 +3621,17 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
     return { targets: [], overflow: false, budget: false, unresolved: false, substitution: true, parameter: false, stdinConfig: false, wgetStdin: false, processSource: false };
   }
   const targets = [];
+  const takeInner = (inner) => {
+    targets.push(...inner.targets);
+    overflow ||= inner.overflow;
+    budget ||= inner.budget;
+    unresolved ||= inner.unresolved;
+    substitution ||= inner.substitution;
+    parameter ||= inner.parameter;
+    stdinConfig ||= inner.stdinConfig;
+    wgetStdin ||= inner.wgetStdin;
+    processSource ||= inner.processSource;
+  };
   let overflow = false;
   let budget = false;
   let unresolved = false;
@@ -3352,6 +3664,21 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
     const setOption = noteSetAllexport(command);
     if (setOption) {
       if (setOption.allexport != null) shellVars.allexport = setOption.allexport;
+      command = [];
+      return;
+    }
+    if (resolveIndirectWords(command, shellVars)) parameter = true;
+    const split = envSplitOperand(command);
+    if (split) {
+      if (split.reject) parameter = true;
+      else takeInner(curlCommandTargets(split.text, new Set(assigned), copyExported(shellVars), depth + 1));
+      command = [];
+      return;
+    }
+    const launched = xargsCommand(command);
+    if (launched) {
+      if (launched.reject) parameter = true;
+      else takeInner(curlCommandTargets(launched.text, new Set(assigned), copyExported(shellVars), depth + 1));
       command = [];
       return;
     }
@@ -3416,7 +3743,16 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
         if (shell.substitution !== false) substitution = true;
       }
       else if (shell.word) {
-        const inner = curlCommandTargets(shell.text, new Set(assigned), local, depth + 1);
+        let scanText = shell.text;
+        if (shell.positionals?.length) {
+          const expanded = expandPositionalParameters(shell.text, shell.positionals);
+          if (expanded.reject) {
+            if (expanded.unresolved) unresolved = true;
+            if (expanded.substitution) substitution = true;
+            if (expanded.parameter || (!expanded.unresolved && !expanded.substitution)) parameter = true;
+          } else scanText = expanded.text;
+        }
+        const inner = curlCommandTargets(scanText, new Set(assigned), local, depth + 1);
         targets.push(...inner.targets);
         overflow ||= inner.overflow;
         budget ||= inner.budget;
@@ -3502,6 +3838,14 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
       if (target) targets.push(target);
     }
     const client = transferClientName(command[start].text);
+    if (client === "ssh") {
+      const destination = sshDestination(args);
+      if (destination?.reject) parameter = true;
+      else if (destination?.host) urls.push(destination.host);
+      transfer();
+      command = [];
+      return;
+    }
     if (client === "wget") {
       const inputSource = collectWgetUrls(args, urls);
       if (inputSource.stdin) wgetStdin = true;
@@ -3828,7 +4172,7 @@ export function lintPrEvidence(body) {
     );
   }
 
-  if (exemptionDeclarationCount(section) > 1) {
+  if (exemptionDeclarationCount(section) !== 1) {
     errors.push("Evidence must contain exactly one Exemption declaration.");
   }
 
