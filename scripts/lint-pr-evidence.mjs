@@ -3602,8 +3602,49 @@ function sshHostToken(token) {
   return hostport.startsWith("[") ? hostport : hostport.replace(/:\d+$/, "");
 }
 
+function sshConfigScalar(value) {
+  const scalar = /^(?:"([^"]*)"|([^\s"#]+))(?:\s*(?:#.*)?)?$/.exec(value.trim());
+  return scalar ? scalar[1] ?? scalar[2] : null;
+}
+
+function sshForwardHost(value, stdio = false) {
+  if (value.startsWith("/")) return "";
+  const fields = [];
+  let bracket = false;
+  let from = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] === "[") {
+      if (bracket) return null;
+      bracket = true;
+    } else if (value[index] === "]") {
+      if (!bracket) return null;
+      bracket = false;
+    } else if (value[index] === ":" && !bracket) {
+      fields.push(value.slice(from, index));
+      if (fields.length > 3) return null;
+      from = index + 1;
+    }
+  }
+  if (bracket) return null;
+  fields.push(value.slice(from));
+  if (stdio) return fields.length === 2 && /^\d+$/.test(fields[1]) ? fields[0] : null;
+  if (fields.length <= 2 && /^\d+$/.test(fields.at(-1))) return "";
+  if (fields.at(-1)?.startsWith("/")) return "";
+  return fields.length >= 3 && fields.length <= 4 && /^\d+$/.test(fields.at(-1))
+    ? fields.at(-2) : null;
+}
+
 function sshDestinations(args) {
   const hosts = [];
+  const commands = [];
+  let sshUnresolved = false;
+  const hostValue = (value) => {
+    if (!value || /[%$`\s]/.test(value) || hosts.length >= MAX_STATIC_CURL_TARGETS) {
+      sshUnresolved = true;
+      return;
+    }
+    hosts.push(value);
+  };
   const jumpHosts = (value) => {
     if (value.trim().toLowerCase() === "none") return true;
     const hops = value.split(",");
@@ -3611,38 +3652,101 @@ function sshDestinations(args) {
     for (const hop of hops) {
       const host = sshHostToken(hop.trim());
       if (!host) return false;
-      hosts.push(host);
+      hostValue(host);
     }
     return true;
   };
-  const destination = (arg) => {
+  const finish = (arg) => {
     const host = arg ? sshHostToken(arg) : null;
-    return host ? { hosts: [...hosts, host] } : { hosts, reject: true };
+    if (host) hostValue(host);
+    return { hosts, commands, sshUnresolved, reject: !host };
+  };
+  const forward = (value, stdio = false) => {
+    const host = sshForwardHost(value, stdio);
+    if (host === null) sshUnresolved = true;
+    else if (host) hostValue(host);
   };
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
-    if (arg === "--") return destination(args[index + 1]);
+    if (arg === "--") return finish(args[index + 1]);
     if (arg.startsWith("-") && arg !== "-") {
-      if (arg.startsWith("--")) return { hosts, reject: true };
+      if (arg.startsWith("--")) return { hosts, commands, sshUnresolved, reject: true };
       const cluster = arg.slice(1);
       for (let at = 0; at < cluster.length; at += 1) {
         const flag = cluster[at];
         if (SSH_FLAGS.has(flag)) continue;
-        if (!SSH_VALUES.has(flag)) return { hosts, reject: true };
+        if (!SSH_VALUES.has(flag)) return { hosts, commands, sshUnresolved, reject: true };
         const value = at + 1 < cluster.length ? cluster.slice(at + 1) : args[++index];
-        if (value === undefined) return { hosts, reject: true };
-        if (flag === "J" && !jumpHosts(value)) return { hosts, reject: true };
+        if (value === undefined) return { hosts, commands, sshUnresolved, reject: true };
+        if (flag === "J" && !jumpHosts(value)) return { hosts, commands, sshUnresolved, reject: true };
+        if (flag === "W" || flag === "L" || flag === "R") forward(value, flag === "W");
+        if (flag === "F" && value !== "none") sshUnresolved = true;
         if (flag === "o") {
-          const option = /^proxyjump(?:\s*=\s*|\s+)(.*)$/i.exec(value.trim());
-          if (option && !jumpHosts(option[1])) return { hosts, reject: true };
+          const option = /^([a-z][\w]*)(?:\s*=\s*|\s+)(.*)$/is.exec(value.trim());
+          if (option) {
+            const key = option[1].toLowerCase();
+            const scalar = sshConfigScalar(option[2]);
+            if (key === "hostname" || key === "proxyjump") {
+              if (scalar === null) sshUnresolved = true;
+              else if (key === "hostname") hostValue(scalar);
+              else if (!jumpHosts(scalar)) sshUnresolved = true;
+            } else if (["proxycommand", "localcommand", "knownhostscommand"].includes(key)) {
+              if (option[2].trim().toLowerCase() !== "none") {
+                if (commands.length >= MAX_STATIC_CURL_TARGETS) sshUnresolved = true;
+                else commands.push(option[2]);
+              }
+            } else if (key === "localforward" || key === "remoteforward") {
+              const fields = shellWords(option[2]);
+              if (fields.length !== 2) sshUnresolved = true;
+              else forward(fields[1], true);
+            } else if (key === "include" || key === "match" || key === "canonicaldomains"
+              || (key === "canonicalizepermittedcnames" && scalar?.toLowerCase() !== "none")
+              || (key === "canonicalizehostname" && scalar?.toLowerCase() !== "no")) {
+              sshUnresolved = true;
+            }
+          }
         }
         break;
       }
       continue;
     }
-    return destination(arg);
+    return finish(arg);
   }
-  return { hosts };
+  return { hosts, commands, sshUnresolved };
+}
+
+const SSH_INERT_COMMANDS = new Set(["cat", "echo", "printf", "true", "false", ":"]);
+
+function staticSshCommand(text, depth = 0) {
+  if (depth > 8) return false;
+  let command = [];
+  const checked = () => {
+    command = shellCommandAfterControl(command);
+    if (command.length === 0) return true;
+    if (command.some((word) => word.unresolved || word.substitution || word.parameters.length > 0
+      || word.text.includes("%"))) return false;
+    if (command.length === 1 && command[0].plain && ["fi", "done", "esac"].includes(command[0].text)) return true;
+    const split = envSplitOperand(command) ?? xargsCommand(command);
+    if (split) return !split.reject && staticSshCommand(split.text, depth + 1);
+    const opened = effectiveCurlStart(command, new Set(), (program, name) => (
+      Boolean(transferClientName(program)) || STATIC_SHELLS.has(name) || name === "eval" || SSH_INERT_COMMANDS.has(name)
+    ));
+    if (opened.index === -1) return command.length === 1 && command[0].assignable;
+    const program = command[opened.index].text;
+    const name = program.slice(program.lastIndexOf("/") + 1);
+    if (STATIC_SHELLS.has(name) || name === "eval") {
+      const shell = staticShellOperand(command.slice(opened.index));
+      return Boolean(shell) && !shell.reject && staticSshCommand(shell.text, depth + 1);
+    }
+    return true;
+  };
+  for (const token of shellWords(text, { commandTokens: true })) {
+    if (token === null || token.fence) {
+      if (!checked()) return false;
+      command = [];
+    } else command.push(token);
+  }
+  return checked();
 }
 
 function copyExported(source) {
@@ -3655,7 +3759,7 @@ function copyExported(source) {
 
 function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), depth = 0, state = null) {
   if (depth > 8) {
-    return { targets: [], overflow: false, budget: false, unresolved: false, substitution: true, parameter: false, stdinConfig: false, wgetStdin: false, processSource: false };
+    return { targets: [], overflow: false, budget: false, unresolved: false, substitution: true, parameter: false, stdinConfig: false, wgetStdin: false, processSource: false, sshUnresolved: false };
   }
   const targets = [];
   const takeInner = (inner) => {
@@ -3668,6 +3772,7 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
     stdinConfig ||= inner.stdinConfig;
     wgetStdin ||= inner.wgetStdin;
     processSource ||= inner.processSource;
+    sshUnresolved ||= inner.sshUnresolved;
   };
   let overflow = false;
   let budget = false;
@@ -3677,6 +3782,7 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
   let stdinConfig = false;
   let wgetStdin = false;
   let processSource = false;
+  let sshUnresolved = false;
   const shellVars = state ?? copyExported(inherited);
   const bodies = [];
   const markUnresolved = (item) => {
@@ -3772,6 +3878,7 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
         stdinConfig ||= inner.stdinConfig;
         wgetStdin ||= inner.wgetStdin;
         processSource ||= inner.processSource;
+        sshUnresolved ||= inner.sshUnresolved;
         command = [];
         return;
       }
@@ -3800,6 +3907,7 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
         stdinConfig ||= inner.stdinConfig;
         wgetStdin ||= inner.wgetStdin;
         processSource ||= inner.processSource;
+        sshUnresolved ||= inner.sshUnresolved;
       }
       command = [];
       return;
@@ -3879,7 +3987,12 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
     if (client === "ssh") {
       const destinations = sshDestinations(args);
       if (destinations.reject) parameter = true;
+      sshUnresolved ||= destinations.sshUnresolved;
       urls.push(...destinations.hosts);
+      for (const text of destinations.commands) {
+        if (!staticSshCommand(text, depth + 1)) sshUnresolved = true;
+        else takeInner(curlCommandTargets(text, new Set(assigned), copyExported(shellVars), depth + 1));
+      }
       transfer();
       command = [];
       return;
@@ -3968,8 +4081,9 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
     stdinConfig ||= inner.stdinConfig;
     wgetStdin ||= inner.wgetStdin;
     processSource ||= inner.processSource;
+    sshUnresolved ||= inner.sshUnresolved;
   }
-  return { targets, overflow, budget, unresolved, substitution, parameter, stdinConfig, wgetStdin, processSource };
+  return { targets, overflow, budget, unresolved, substitution, parameter, stdinConfig, wgetStdin, processSource, sshUnresolved };
 }
 
 function joinShellContinuations(value) {
@@ -4038,6 +4152,7 @@ function targetsBannedLan(sectionText, definitions, literalText = []) {
   let stdinConfig = false;
   let wgetStdin = false;
   let processSource = false;
+  let sshUnresolved = false;
   const verification = withoutFencePayload(withoutFields(sectionText, [FIELD_LABELS.reason], {
     keepLazy: true,
   }).replace(
@@ -4056,6 +4171,7 @@ function targetsBannedLan(sectionText, definitions, literalText = []) {
     if (curl.stdinConfig) stdinConfig = true;
     if (curl.wgetStdin) wgetStdin = true;
     if (curl.processSource) processSource = true;
+    if (curl.sshUnresolved) sshUnresolved = true;
     if (curl.overflow) return true;
     const decoded = shellVisible(joined);
     const targets = [...decoded.matchAll(/(?:https?:|\/\/)[^\s<>()"'`]+/gi)]
@@ -4088,7 +4204,7 @@ function targetsBannedLan(sectionText, definitions, literalText = []) {
     // Malformed links render as raw text. Unlike artifact validation, the LAN
     // scan must retain their suffix so later reference uses cannot disappear.
     || (definitions.size > 0 && [...referenceUses(verification, { keepMalformed: true })].some((label) => bannedTarget(definitions.get(label) ?? "")));
-  return { banned, budget, unresolved, substitution, parameter, stdinConfig, wgetStdin, processSource };
+  return { banned, budget, unresolved, substitution, parameter, stdinConfig, wgetStdin, processSource, sshUnresolved };
 }
 
 function documentReferences(body) {
@@ -4187,6 +4303,11 @@ export function lintPrEvidence(body) {
   if (directLan.substitution || conservativeLan.substitution) {
     errors.push(
       "Evidence contains a curl or wget target with a command substitution this static check could not resolve. Rewrite that operand without command substitution.",
+    );
+  }
+  if (directLan.sshUnresolved || conservativeLan.sshUnresolved) {
+    errors.push(
+      "Evidence contains SSH connection options this static check could not resolve. Use literal endpoints and supported static commands without external configuration.",
     );
   }
   if (directLan.parameter || conservativeLan.parameter) {

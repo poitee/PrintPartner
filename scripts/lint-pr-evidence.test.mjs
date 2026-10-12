@@ -5989,3 +5989,105 @@ test("r31-ssh-jump-list-retains-static-bound", () => {
   const result = lintPrEvidence(commandEvidence(`ssh -J ${Array(4097).fill("example.test").join(",")} destination.test`));
   assert.equal(result.ok, false);
 });
+
+for (const [name, option] of [
+  ["equals", "-o HostName=HOST"], ["attached", "-oHostName=HOST"],
+  ["space", '-o "HostName HOST"'], ["whitespace", '-o " HostName = HOST "'],
+  ["mixed-case", "-o hOsTnAmE=HOST"], ["quoted-value", "-o 'HostName=\"HOST\"'"],
+  ["quoted-jump", "-o 'ProxyJump=\"HOST\"'"],
+]) {
+  test(`r32-ssh-host-option-${name}`, () => {
+    assertBannedCommand(`ssh ${option.replace("HOST", "3232235856")} example.test`);
+    assertBannedCommand(`ssh ${option.replace("HOST", "3232235857")} example.test`);
+    assertSafeCommand(`ssh ${option.replace("HOST", "example.test")} other.test`);
+  });
+}
+
+for (const [name, command] of [
+  ["curl", "curl HOST"], ["wget", "wget HOST"], ["ssh", "ssh HOST"],
+  ["launcher", "env curl HOST"], ["control", "if curl HOST; then true; fi"],
+  ["shell", "sh -c 'curl HOST'"], ["attached-shell", 'sh -c"curl HOST"'],
+  ["pipeline", "curl HOST | cat"], ["second-client", "curl example.test; ssh HOST"],
+  ["newline", "printf ok\ncurl HOST"],
+]) {
+  test(`r32-ssh-proxy-command-${name}`, () => {
+    const quote = command.includes("'") ? '"' : "'";
+    assertBannedCommand(`ssh -o ${quote}ProxyCommand=${command.replace("HOST", "3232235856")}${quote} example.test`);
+    assertSafeCommand(`ssh -o ${quote}ProxyCommand=${command.replace("HOST", "example.test")}${quote} other.test`);
+  });
+}
+
+for (const [name, option] of [
+  ["stdio", "-W HOST:22"], ["stdio-attached", "-WHOST:22"],
+  ["local", "-L 8080:HOST:22"], ["local-bind", "-L 127.0.0.1:8080:HOST:22"],
+  ["remote", "-R 8080:HOST:22"], ["remote-attached", "-R8080:HOST:22"],
+  ["local-option", '-o "LocalForward 8080 HOST:22"'],
+  ["remote-option", '-o "RemoteForward=8080 HOST:22"'],
+]) {
+  test(`r32-ssh-forward-${name}`, () => {
+    assertBannedCommand(`ssh ${option.replace("HOST", "3232235856")} example.test`);
+    assertSafeCommand(`ssh ${option.replace("HOST", "example.test")} other.test`);
+  });
+}
+
+for (const key of ["LocalCommand", "KnownHostsCommand"]) {
+  test(`r32-ssh-callback-${key}`, () => {
+    assertBannedCommand(`ssh -o "${key}=curl 3232235856" -o PermitLocalCommand=yes example.test`);
+    assertSafeCommand(`ssh -o "${key}=curl example.test" -o PermitLocalCommand=yes example.test`);
+  });
+}
+
+test("r32-reported-options-through-real-cli", () => {
+  r19Expect(commandEvidence("ssh -o HostName=3232235856 example.test"), 1, "", LAN_STDERR);
+  r19Expect(commandEvidence('ssh -o "ProxyCommand=curl 3232235856" example.test'), 1, "", LAN_STDERR);
+});
+
+test("r32-ssh-unsupported-connection-inputs-fail-closed", () => {
+  for (const command of [
+    'ssh -o "ProxyCommand=nc 3232235856 22" example.test',
+    'ssh -o "ProxyCommand=curl ${HOST}" example.test',
+    "ssh -o \"ProxyCommand=sh -c 'nc 3232235856 22'\" example.test",
+    'ssh -o "ProxyCommand=curl example.test; unknown 3232235856" example.test',
+    'ssh -o "ProxyCommand=ssh -W %h:%p example.test" other.test',
+    'ssh -o HostName=%h example.test', 'ssh -F config.txt example.test',
+    'ssh -o Include=config.txt example.test', 'ssh -o CanonicalizeHostname=yes example.test',
+    'ssh -o CanonicalDomains=example.test example.test',
+    'ssh -o CanonicalizePermittedCNAMEs=example.test:3232235856 example.test',
+  ]) {
+    const result = lintPrEvidence(commandEvidence(command));
+    assert.equal(result.ok, false, command);
+    assert.match(result.errors.join("\n"), /SSH connection options/);
+  }
+});
+
+test("r32-ssh-benign-flags-hosts-listeners-and-command-data", () => {
+  for (const command of [
+    'ssh -o ProxyCommand=none example.test', 'ssh -o KnownHostsCommand=none example.test',
+    'ssh -o CanonicalizePermittedCNAMEs=none example.test',
+    'ssh -o "ProxyCommand=printf 3232235856" example.test',
+    "ssh -o 'ProxyCommand=echo \"curl 3232235856\"' example.test",
+    'ssh -o User=3232235856 -o Port=22 -o HostKeyAlias=3232235856 example.test',
+    'ssh -b 3232235856 -B lo -i 3232235856 -S 3232235856 example.test',
+    'ssh -D 127.0.0.1:8080 example.test', 'ssh -R 127.0.0.1:8080 example.test',
+    'ssh -L 8080:/tmp/socket example.test', 'ssh -R 8080:/tmp/socket example.test',
+    'ssh -W [::1]:22 example.test', 'ssh -F none -o CanonicalizeHostname=no example.test',
+    'ssh example.test -o HostName=3232235856',
+    'ssh -o RemoteCommand="curl 3232235856" example.test',
+    "printf %s 'ssh -o HostName=3232235856 example.test'",
+  ]) assertSafeCommand(command);
+});
+
+const R32_SSH_STDERR = "PR evidence lint FAILED:\n- Evidence contains SSH connection options this static check could not resolve. Use literal endpoints and supported static commands without external configuration.\n";
+
+test("r32-unsupported-proxy-command-cli-explains-refusal", () => {
+  r19Expect(commandEvidence('ssh -o "ProxyCommand=nc 3232235856 22" example.test'), 1, "", R32_SSH_STDERR);
+});
+
+test("r32-ssh-forward-and-command-bounds", () => {
+  const forward = lintPrEvidence(commandEvidence(`ssh -W ${"x:".repeat(4096)}22 example.test`));
+  assert.equal(forward.ok, false);
+  assert.match(forward.errors.join("\n"), /SSH connection options/);
+  const command = lintPrEvidence(commandEvidence('ssh -o "ProxyCommand=sh -c sh" example.test'));
+  assert.equal(command.ok, false);
+  assert.match(command.errors.join("\n"), /SSH connection options/);
+});
