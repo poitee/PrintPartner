@@ -209,7 +209,7 @@ export async function drainPrinterSendQueue(
   return results;
 }
 
-export const INTERRUPTED_PRINTER_SEND_ERROR =
+const INTERRUPTED_PRINTER_SEND_ERROR =
   "Interrupted by process restart. Printer outcome is unknown, so this send was not marked successful. The staged file remains for an explicit retry. This process will not retry a print on its own.";
 
 function interruptSendingItem(

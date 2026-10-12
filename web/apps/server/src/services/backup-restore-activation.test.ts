@@ -70,6 +70,39 @@ function fakeSqlite(dataDir: string): SqliteDatabase {
   } as unknown as SqliteDatabase;
 }
 
+async function runKilledRestoreActivation(dataDir: string, archive: string): Promise<void> {
+  const rename = fs.rename.bind(fs);
+  Object.defineProperty(fs, "rename", {
+    configurable: true,
+    writable: true,
+    value: async (from: Parameters<typeof fs.rename>[0], to: Parameters<typeof fs.rename>[1]) => {
+      const source = String(from);
+      const target = String(to);
+      if (
+        target === join(dataDir, "print-partner.db") &&
+        source.includes(".restore-tmp-") &&
+        !source.includes(".previous")
+      ) {
+        process.kill(process.pid, "SIGKILL");
+      }
+      return rename(from, to);
+    },
+  });
+  await restoreBackup(archive, dataDir, fakeSqlite(dataDir));
+  process.stderr.write("activation finished without kill\n");
+  process.exit(1);
+}
+
+if (process.env.PP_RESTORE_ACTIVATION_CHILD === "1") {
+  const dataDir = process.argv[2];
+  const archive = process.argv[3];
+  if (!dataDir || !archive) {
+    process.stderr.write("dataDir and archive are required\n");
+    process.exit(2);
+  }
+  await runKilledRestoreActivation(dataDir, archive);
+}
+
 describe("restore activation", () => {
   const dirs: string[] = [];
 
@@ -119,9 +152,10 @@ describe("restore activation", () => {
     const original = sqliteFile("current");
     await writeArchive(archive, databaseOnlyArchiveFiles(sqliteFile("restored")));
     writeFileSync(join(dataDir, "print-partner.db"), original);
-    const childPath = join(here, "backup-restore-activation-child.ts");
+    const childPath = fileURLToPath(import.meta.url);
     const child = spawn(process.execPath, ["--import", "tsx", childPath, dataDir, archive], {
       cwd: webRoot,
+      env: { ...process.env, PP_RESTORE_ACTIVATION_CHILD: "1" },
       stdio: ["ignore", "pipe", "pipe"],
     });
     const stderr: Buffer[] = [];
