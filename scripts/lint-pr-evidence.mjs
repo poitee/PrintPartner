@@ -255,7 +255,7 @@ function stripHiddenMarkdown(text, { inlineMultiline = true, includeRawHtml = fa
     const shown = inline.visible;
     kept.push(shown);
     if (!paragraphOpen && lineIndex > referenceEnd) {
-      const definition = referenceDestination(referenceLines, lineIndex, true);
+      const definition = referenceDestination(referenceLines, lineIndex);
       if (definition) referenceEnd = definition.end;
     }
     paragraphOpen = lineIndex > referenceEnd && Boolean(shown.trim()) && !LEAF_BLOCK_START.test(shown);
@@ -750,20 +750,45 @@ function parseLinkTail(text, open) {
   return text[i] === ")" ? { destination, end: i + 1 } : null;
 }
 
-/** Link reference definition opener: `[label]:` (escapes allowed), optional destination. */
-const REFERENCE_DEFINITION = /^[ \t]*\[((?:[^\]\\\n]|\\.){1,999})\]:[ \t]*(<(?:[^>\\\n]|\\.)*>|\S+)?/;
+/** Logical label and tail position, before destination/title validation. */
+function referenceOpening(lines, index) {
+  const opening = lines[index]?.match(/^[ \t]*\[/);
+  if (!opening) return null;
+  let label = "";
+  let at = opening[0].length;
+  for (; label.length <= 999; at += 1) {
+    const ch = lines[index][at];
+    if (ch === undefined) {
+      if (!lines[index + 1]?.trim()) return null;
+      label += "\n";
+      index += 1;
+      at = -1;
+    } else if (ch === "\\" && at + 1 < lines[index].length) {
+      label += ch + lines[index][++at];
+    } else if (ch === "[") return null;
+    else if (ch === "]") {
+      return label.trim() && lines[index][at + 1] === ":"
+        ? { label, tail: lines[index].slice(at + 2).trimStart(), end: index }
+        : null;
+    } else label += ch;
+  }
+  return null;
+}
+
+const REFERENCE_DESTINATION = /^(<(?:[^>\\\n]|\\.)*>|\S+)/;
 
 /** Validate a complete destination and optional title, including continuation
  * lines. A prefix followed by unquoted garbage is not a Markdown definition. */
-function referenceDestination(lines, index, withEnd = false) {
-  const opening = lines[index].match(REFERENCE_DEFINITION);
+function referenceDestination(lines, index) {
+  const opening = referenceOpening(lines, index);
   if (!opening) return null;
-  let tail = lines[index].slice(opening[0].length - (opening[2]?.length ?? 0));
+  index = opening.end;
+  let tail = opening.tail;
   if (!tail.trim()) {
     index += 1;
     tail = lines[index]?.trim() ?? "";
   }
-  const destination = (`[ref]: ${tail}`).match(REFERENCE_DEFINITION)?.[2];
+  const destination = tail.match(REFERENCE_DESTINATION)?.[1];
   if (!destination) return null;
   let title = tail.slice(tail.indexOf(destination) + destination.length).trim();
   if (!title && /^[ \t]*["'(]/.test(lines[index + 1] ?? "")) title = lines[++index].trim();
@@ -788,7 +813,7 @@ function referenceDestination(lines, index, withEnd = false) {
   const wrapped = `(${destination}${title ? " " + title : ""})`;
   const parsed = parseLinkTail(wrapped, 0);
   return parsed?.end === wrapped.length
-    ? (withEnd ? { destination: parsed.destination, end: index } : parsed.destination)
+    ? { label: opening.label, destination: parsed.destination, end: index }
     : null;
 }
 
@@ -797,7 +822,7 @@ function referenceHeadingView(value) {
   const lines = value.split("\n");
   const normalized = referenceContainerLines(value);
   for (let index = 0; index < lines.length; index += 1) {
-    const definition = referenceDestination(normalized, index, true);
+    const definition = referenceDestination(normalized, index);
     if (!definition) continue;
     for (; index <= definition.end; index += 1) lines[index] = " ".repeat(lines[index].length);
     index -= 1;
@@ -843,7 +868,7 @@ function structuralMetadataView(value) {
   const lines = inline.split("\n");
   const normalized = referenceContainerLines(stripHiddenMarkdown(inline));
   for (let index = 0; index < lines.length; index += 1) {
-    const definition = referenceDestination(normalized, index, true);
+    const definition = referenceDestination(normalized, index);
     if (!definition) continue;
     const start = index;
     const continuation = [];
@@ -957,20 +982,20 @@ function stripReferenceDefinitions(value, references, { keepMalformed = false } 
       kept.push(line);
       continue;
     }
-    const definition = referenceLines[index].match(REFERENCE_DEFINITION);
+    const definition = referenceOpening(referenceLines, index);
     if (definition) {
       if (keepMalformed) {
         // Only valid definitions are hidden Markdown. A malformed opener and
         // any later labels remain raw text for conservative LAN checking.
-        const parsed = referenceDestination(referenceLines, index, true);
+        const parsed = referenceDestination(referenceLines, index);
         if (parsed) index = parsed.end;
         else kept.push(line);
         continue;
       }
       dropping = true;
-      const label = normalizeReferenceLabel(definition[1]);
+      const label = normalizeReferenceLabel(definition.label);
       const referenced = references.has(label);
-      const destination = referenceDestination(referenceLines, index);
+      const destination = referenceDestination(referenceLines, index)?.destination;
       if (destination && !defined.has(label)) {
         defined.add(label);
         if (referenced && isConcreteTarget(destination)) concrete = true;
@@ -1104,13 +1129,86 @@ function freeformText(sectionText) {
   );
 }
 
-/**
- * Evidence requires steps, observed result, and a concrete artifact: either the
- * artifact field or freeform text outside the template fields. A journey name,
- * a bare category word, or exemption-reason text cannot pass.
- */
+// Generated from Unicode 17.0.0 CaseFolding.txt, default full folding (C/F).
+// https://www.unicode.org/Public/17.0.0/ucd/CaseFolding.txt
+const REFERENCE_CASE_FOLD = new Map([
+  ["µ", "μ"], ["ß", "ss"], ["İ", "i̇"], ["ŉ", "ʼn"], ["Ÿ", "ÿ"], ["ſ", "s"],
+  ["Ɓ", "ɓ"], ["Ɔ", "ɔ"], ["Ƈ", "ƈ"], ["Ƌ", "ƌ"], ["Ǝ", "ǝ"], ["Ə", "ə"],
+  ["Ɛ", "ɛ"], ["Ƒ", "ƒ"], ["Ɠ", "ɠ"], ["Ɣ", "ɣ"], ["Ɩ", "ɩ"], ["Ɨ", "ɨ"],
+  ["Ƙ", "ƙ"], ["Ɯ", "ɯ"], ["Ɲ", "ɲ"], ["Ɵ", "ɵ"], ["Ʀ", "ʀ"], ["Ƨ", "ƨ"],
+  ["Ʃ", "ʃ"], ["Ƭ", "ƭ"], ["Ʈ", "ʈ"], ["Ư", "ư"], ["Ʒ", "ʒ"], ["Ƹ", "ƹ"],
+  ["Ƽ", "ƽ"], ["Ǆ", "ǆ"], ["ǅ", "ǆ"], ["Ǉ", "ǉ"], ["ǈ", "ǉ"], ["Ǌ", "ǌ"],
+  ["ǰ", "ǰ"], ["Ǳ", "ǳ"], ["Ƕ", "ƕ"], ["Ƿ", "ƿ"], ["Ƞ", "ƞ"], ["Ⱥ", "ⱥ"],
+  ["Ȼ", "ȼ"], ["Ƚ", "ƚ"], ["Ⱦ", "ⱦ"], ["Ɂ", "ɂ"], ["Ƀ", "ƀ"], ["Ʉ", "ʉ"],
+  ["Ʌ", "ʌ"], ["ͅ", "ι"], ["Ͷ", "ͷ"], ["Ϳ", "ϳ"], ["Ά", "ά"], ["Ό", "ό"],
+  ["ΐ", "ΐ"], ["ΰ", "ΰ"], ["ς", "σ"], ["Ϗ", "ϗ"], ["ϐ", "β"], ["ϑ", "θ"],
+  ["ϕ", "φ"], ["ϖ", "π"], ["ϰ", "κ"], ["ϱ", "ρ"], ["ϴ", "θ"], ["ϵ", "ε"],
+  ["Ϸ", "ϸ"], ["Ϲ", "ϲ"], ["Ϻ", "ϻ"], ["Ӏ", "ӏ"], ["և", "եւ"], ["Ⴧ", "ⴧ"],
+  ["Ⴭ", "ⴭ"], ["ᲀ", "в"], ["ᲁ", "д"], ["ᲂ", "о"], ["ᲅ", "т"], ["ᲆ", "ъ"],
+  ["ᲇ", "ѣ"], ["ᲈ", "ꙋ"], ["Ᲊ", "ᲊ"], ["ẖ", "ẖ"], ["ẗ", "ẗ"], ["ẘ", "ẘ"],
+  ["ẙ", "ẙ"], ["ẚ", "aʾ"], ["ẛ", "ṡ"], ["ẞ", "ss"], ["ὐ", "ὐ"], ["ὒ", "ὒ"],
+  ["ὔ", "ὔ"], ["ὖ", "ὖ"], ["ᾀ", "ἀι"], ["ᾁ", "ἁι"], ["ᾂ", "ἂι"], ["ᾃ", "ἃι"],
+  ["ᾄ", "ἄι"], ["ᾅ", "ἅι"], ["ᾆ", "ἆι"], ["ᾇ", "ἇι"], ["ᾈ", "ἀι"], ["ᾉ", "ἁι"],
+  ["ᾊ", "ἂι"], ["ᾋ", "ἃι"], ["ᾌ", "ἄι"], ["ᾍ", "ἅι"], ["ᾎ", "ἆι"], ["ᾏ", "ἇι"],
+  ["ᾐ", "ἠι"], ["ᾑ", "ἡι"], ["ᾒ", "ἢι"], ["ᾓ", "ἣι"], ["ᾔ", "ἤι"], ["ᾕ", "ἥι"],
+  ["ᾖ", "ἦι"], ["ᾗ", "ἧι"], ["ᾘ", "ἠι"], ["ᾙ", "ἡι"], ["ᾚ", "ἢι"], ["ᾛ", "ἣι"],
+  ["ᾜ", "ἤι"], ["ᾝ", "ἥι"], ["ᾞ", "ἦι"], ["ᾟ", "ἧι"], ["ᾠ", "ὠι"], ["ᾡ", "ὡι"],
+  ["ᾢ", "ὢι"], ["ᾣ", "ὣι"], ["ᾤ", "ὤι"], ["ᾥ", "ὥι"], ["ᾦ", "ὦι"], ["ᾧ", "ὧι"],
+  ["ᾨ", "ὠι"], ["ᾩ", "ὡι"], ["ᾪ", "ὢι"], ["ᾫ", "ὣι"], ["ᾬ", "ὤι"], ["ᾭ", "ὥι"],
+  ["ᾮ", "ὦι"], ["ᾯ", "ὧι"], ["ᾲ", "ὰι"], ["ᾳ", "αι"], ["ᾴ", "άι"], ["ᾶ", "ᾶ"],
+  ["ᾷ", "ᾶι"], ["ᾼ", "αι"], ["ι", "ι"], ["ῂ", "ὴι"], ["ῃ", "ηι"], ["ῄ", "ήι"],
+  ["ῆ", "ῆ"], ["ῇ", "ῆι"], ["ῌ", "ηι"], ["ῒ", "ῒ"], ["ΐ", "ΐ"], ["ῖ", "ῖ"],
+  ["ῗ", "ῗ"], ["ῢ", "ῢ"], ["ΰ", "ΰ"], ["ῤ", "ῤ"], ["ῦ", "ῦ"], ["ῧ", "ῧ"],
+  ["Ῥ", "ῥ"], ["ῲ", "ὼι"], ["ῳ", "ωι"], ["ῴ", "ώι"], ["ῶ", "ῶ"], ["ῷ", "ῶι"],
+  ["ῼ", "ωι"], ["Ω", "ω"], ["K", "k"], ["Å", "å"], ["Ⅎ", "ⅎ"], ["Ↄ", "ↄ"],
+  ["Ⱡ", "ⱡ"], ["Ɫ", "ɫ"], ["Ᵽ", "ᵽ"], ["Ɽ", "ɽ"], ["Ɑ", "ɑ"], ["Ɱ", "ɱ"],
+  ["Ɐ", "ɐ"], ["Ɒ", "ɒ"], ["Ⱳ", "ⱳ"], ["Ⱶ", "ⱶ"], ["Ⳳ", "ⳳ"], ["Ᵹ", "ᵹ"],
+  ["Ꞌ", "ꞌ"], ["Ɥ", "ɥ"], ["Ɦ", "ɦ"], ["Ɜ", "ɜ"], ["Ɡ", "ɡ"], ["Ɬ", "ɬ"],
+  ["Ɪ", "ɪ"], ["Ʞ", "ʞ"], ["Ʇ", "ʇ"], ["Ʝ", "ʝ"], ["Ꭓ", "ꭓ"], ["Ꞔ", "ꞔ"],
+  ["Ʂ", "ʂ"], ["Ᶎ", "ᶎ"], ["Ɤ", "ɤ"], ["Ƛ", "ƛ"], ["Ꟶ", "ꟶ"], ["ﬀ", "ff"],
+  ["ﬁ", "fi"], ["ﬂ", "fl"], ["ﬃ", "ffi"], ["ﬄ", "ffl"], ["ﬅ", "st"], ["ﬆ", "st"],
+  ["ﬓ", "մն"], ["ﬔ", "մե"], ["ﬕ", "մի"], ["ﬖ", "վն"], ["ﬗ", "մխ"],
+]);
+for (const [start, end, step, offset] of [
+  [0x41, 0x5a, 1, 32], [0xc0, 0xd6, 1, 32], [0xd8, 0xde, 1, 32],
+  [0x100, 0x12e, 2, 1], [0x132, 0x136, 2, 1], [0x139, 0x147, 2, 1],
+  [0x14a, 0x176, 2, 1], [0x179, 0x17d, 2, 1], [0x182, 0x184, 2, 1],
+  [0x189, 0x18a, 1, 205], [0x1a0, 0x1a4, 2, 1], [0x1b1, 0x1b2, 1, 217],
+  [0x1b3, 0x1b5, 2, 1], [0x1cb, 0x1db, 2, 1], [0x1de, 0x1ee, 2, 1],
+  [0x1f2, 0x1f4, 2, 1], [0x1f8, 0x21e, 2, 1], [0x222, 0x232, 2, 1],
+  [0x246, 0x24e, 2, 1], [0x370, 0x372, 2, 1], [0x388, 0x38a, 1, 37],
+  [0x38e, 0x38f, 1, 63], [0x391, 0x3a1, 1, 32], [0x3a3, 0x3ab, 1, 32],
+  [0x3d8, 0x3ee, 2, 1], [0x3fd, 0x3ff, 1, -130], [0x400, 0x40f, 1, 80],
+  [0x410, 0x42f, 1, 32], [0x460, 0x480, 2, 1], [0x48a, 0x4be, 2, 1],
+  [0x4c1, 0x4cd, 2, 1], [0x4d0, 0x52e, 2, 1], [0x531, 0x556, 1, 48],
+  [0x10a0, 0x10c5, 1, 7264], [0x13f8, 0x13fd, 1, -8], [0x1c83, 0x1c84, 1, -6210],
+  [0x1c90, 0x1cba, 1, -3008], [0x1cbd, 0x1cbf, 1, -3008], [0x1e00, 0x1e94, 2, 1],
+  [0x1ea0, 0x1efe, 2, 1], [0x1f08, 0x1f0f, 1, -8], [0x1f18, 0x1f1d, 1, -8],
+  [0x1f28, 0x1f2f, 1, -8], [0x1f38, 0x1f3f, 1, -8], [0x1f48, 0x1f4d, 1, -8],
+  [0x1f59, 0x1f5f, 2, -8], [0x1f68, 0x1f6f, 1, -8], [0x1fb8, 0x1fb9, 1, -8],
+  [0x1fba, 0x1fbb, 1, -74], [0x1fc8, 0x1fcb, 1, -86], [0x1fd8, 0x1fd9, 1, -8],
+  [0x1fda, 0x1fdb, 1, -100], [0x1fe8, 0x1fe9, 1, -8], [0x1fea, 0x1feb, 1, -112],
+  [0x1ff8, 0x1ff9, 1, -128], [0x1ffa, 0x1ffb, 1, -126], [0x2160, 0x216f, 1, 16],
+  [0x24b6, 0x24cf, 1, 26], [0x2c00, 0x2c2f, 1, 48], [0x2c67, 0x2c6b, 2, 1],
+  [0x2c7e, 0x2c7f, 1, -10815], [0x2c80, 0x2ce2, 2, 1], [0x2ceb, 0x2ced, 2, 1],
+  [0xa640, 0xa66c, 2, 1], [0xa680, 0xa69a, 2, 1], [0xa722, 0xa72e, 2, 1],
+  [0xa732, 0xa76e, 2, 1], [0xa779, 0xa77b, 2, 1], [0xa77e, 0xa786, 2, 1],
+  [0xa790, 0xa792, 2, 1], [0xa796, 0xa7a8, 2, 1], [0xa7b4, 0xa7c2, 2, 1],
+  [0xa7c7, 0xa7c9, 2, 1], [0xa7cc, 0xa7da, 2, 1], [0xab70, 0xabbf, 1, -38864],
+  [0xff21, 0xff3a, 1, 32], [0x10400, 0x10427, 1, 40], [0x104b0, 0x104d3, 1, 40],
+  [0x10570, 0x1057a, 1, 39], [0x1057c, 0x1058a, 1, 39], [0x1058c, 0x10592, 1, 39],
+  [0x10594, 0x10595, 1, 39], [0x10c80, 0x10cb2, 1, 64], [0x10d50, 0x10d65, 1, 32],
+  [0x118a0, 0x118bf, 1, 32], [0x16e40, 0x16e5f, 1, 32], [0x16ea0, 0x16eb8, 1, 27],
+  [0x1e900, 0x1e921, 1, 34],
+]) {
+  for (let cp = start; cp <= end; cp += step) {
+    REFERENCE_CASE_FOLD.set(String.fromCodePoint(cp), String.fromCodePoint(cp + offset));
+  }
+}
+
 function normalizeReferenceLabel(label) {
-  return label.replace(/\\(.)/g, "$1").trim().replace(/\s+/g, " ").toLowerCase();
+  const normalized = label.replace(/\\(.)/g, "$1").trim().replace(/\s+/g, " ");
+  return [...normalized].map((ch) => REFERENCE_CASE_FOLD.get(ch) ?? ch).join("");
 }
 
 function referenceUses(value, { requireVisible = false, keepMalformed = false } = {}) {
@@ -1120,9 +1218,10 @@ function referenceUses(value, { requireVisible = false, keepMalformed = false } 
   }
   text = stripLinks(text, new Set(), { keepMalformed }).rest;
   const references = new Set();
-  const uses = /\[((?:[^\]\\\n]|\\.){0,999})\](?:\[((?:[^\]\\\n]|\\.){0,999})\])?/g;
+  const uses = /\[((?:[^\[\]\\]|\\.){0,999})\](?:\[((?:[^\[\]\\]|\\.){0,999})\])?/g;
   for (const match of text.matchAll(uses)) {
     if (text[match.index + match[0].length] === ":") continue;
+    if (/\n[ \t]*\n/.test(match[0]) || !normalizeReferenceLabel(match[2] || match[1])) continue;
     let escapes = 0;
     for (let at = match.index - 1; at >= 0 && text[at] === "\\"; at -= 1) escapes += 1;
     if (escapes % 2) continue;
@@ -1193,6 +1292,11 @@ function isPlaceholderField(value) {
     || /^(?:n\/?a|none|pending|not provided)[.!?]*$/i.test(plain);
 }
 
+/**
+ * Evidence requires steps, observed result, and a concrete artifact: either the
+ * artifact field or freeform text outside the template fields. A journey name,
+ * a bare category word, or exemption-reason text cannot pass.
+ */
 export function hasEvidenceContent(sectionText) {
   const steps = readField(sectionText, FIELD_LABELS.steps);
   const result = readField(sectionText, FIELD_LABELS.result);
@@ -1203,6 +1307,42 @@ export function hasEvidenceContent(sectionText) {
   const verification = withoutFields(sectionText, [FIELD_LABELS.reason]);
   const references = referenceUses(verification, { requireVisible: true });
   return looksLikeArtifact(artifact, references) || looksLikeArtifact(freeformText(sectionText), references);
+}
+
+const ANSI_C_ESCAPES = {
+  a: "\x07", b: "\b", e: "\x1b", E: "\x1b", f: "\f", n: "\n",
+  r: "\r", t: "\t", v: "\v", "\\": "\\", "'": "'", '"': '"', "?": "?",
+};
+
+function ansiCFragment(value, start) {
+  let text = "";
+  let terminated = false;
+  for (let index = start; index < value.length; index += 1) {
+    const ch = value[index];
+    if (ch === "'") return { text, end: index };
+    let decoded = ch;
+    if (ch === "\\") {
+      const escape = value[++index];
+      if (Object.hasOwn(ANSI_C_ESCAPES, escape)) decoded = ANSI_C_ESCAPES[escape];
+      else {
+        const pattern = /[0-7]/.test(escape ?? "") ? /^[0-7]{1,3}/
+          : { x: /^[\da-fA-F]{1,2}/, u: /^[\da-fA-F]{1,4}/, U: /^[\da-fA-F]{1,8}/ }[escape];
+        const digits = pattern?.exec(value.slice(index + (escape === "x" || escape === "u" || escape === "U" ? 1 : 0)))?.[0];
+        if (digits) {
+          const octal = /[0-7]/.test(escape);
+          const code = parseInt(digits, octal ? 8 : 16);
+          decoded = String.fromCodePoint(octal || escape === "x" ? code & 255 : code <= 0x10ffff ? code : 0xfffd);
+          index += digits.length - (octal ? 1 : 0);
+        } else if (escape === "c" && value[index + 1] !== undefined) {
+          const control = value[++index];
+          decoded = String.fromCharCode(control === "?" ? 127 : control.toUpperCase().charCodeAt(0) & 31);
+        } else decoded = "\\" + (escape ?? "");
+      }
+    }
+    if (decoded === "\0") terminated = true;
+    if (!terminated) text += decoded;
+  }
+  return null;
 }
 
 function shellWords(value) {
@@ -1220,6 +1360,13 @@ function shellWords(value) {
       const end = value.indexOf("\n", index);
       if (end === -1) break;
       index = end;
+      continue;
+    }
+    if (quote === null && ch === "$" && value[index + 1] === "'") {
+      const fragment = ansiCFragment(value, index + 2);
+      if (!fragment) return words.filter((word) => !/\s/.test(word));
+      word += fragment.text;
+      index = fragment.end;
       continue;
     }
     if (ch === "\\" && quote !== "'") {
@@ -1248,6 +1395,13 @@ function joinShellContinuations(value) {
       if (end === -1) return joined + value.slice(index);
       joined += value.slice(index, end + 1);
       index = end;
+      continue;
+    }
+    if (quote === null && ch === "$" && value[index + 1] === "'") {
+      const fragment = ansiCFragment(value, index + 2);
+      if (!fragment) return joined + value.slice(index);
+      joined += value.slice(index, fragment.end + 1);
+      index = fragment.end;
       continue;
     }
     if (ch === "\\" && quote !== "'") {
@@ -1317,11 +1471,9 @@ function documentReferences(body) {
   const definitions = new Map();
   const lines = referenceContainerLines(stripHiddenMarkdown(body));
   for (let i = 0; i < lines.length; i += 1) {
-    const match = lines[i].match(REFERENCE_DEFINITION);
-    if (!match) continue;
-    const definition = referenceDestination(lines, i, true);
+    const definition = referenceDestination(lines, i);
     if (!definition) continue;
-    const label = normalizeReferenceLabel(match[1]);
+    const label = normalizeReferenceLabel(definition.label);
     if (!definitions.has(label)) definitions.set(label, definition.destination);
     i = definition.end;
   }
