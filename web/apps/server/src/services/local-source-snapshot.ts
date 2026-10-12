@@ -116,11 +116,42 @@ type SnapshotStoreDependencies = {
 type SnapshotStoreOptions = {
   reposDir: string;
   dependencies?: Partial<SnapshotStoreDependencies>;
+  retainUntilRelease?: boolean;
 };
 
 const defaultDependencies: SnapshotStoreDependencies = {
   renameDirectory: rename,
 };
+
+const sharedSnapshotHolds = new Map<string, number>();
+const snapshotHoldKeys = new WeakMap<PublishedSourceSnapshot, string>();
+
+function retainSharedSnapshot(absolutePath: string): string {
+  const key = resolve(absolutePath);
+  sharedSnapshotHolds.set(key, (sharedSnapshotHolds.get(key) ?? 0) + 1);
+  return key;
+}
+
+function releaseSharedSnapshotKey(key: string): void {
+  const current = sharedSnapshotHolds.get(key) ?? 0;
+  if (current <= 1) sharedSnapshotHolds.delete(key);
+  else sharedSnapshotHolds.set(key, current - 1);
+}
+
+function handoffSharedSnapshot(snapshot: PublishedSourceSnapshot, key: string): void {
+  snapshotHoldKeys.set(snapshot, key);
+}
+
+export function releaseSharedSnapshot(snapshot: PublishedSourceSnapshot): void {
+  const key = snapshotHoldKeys.get(snapshot);
+  if (!key) return;
+  snapshotHoldKeys.delete(snapshot);
+  releaseSharedSnapshotKey(key);
+}
+
+export function sharedSnapshotHolderCount(absolutePath: string): number {
+  return sharedSnapshotHolds.get(resolve(absolutePath)) ?? 0;
+}
 
 export function sourceRelativePath(value: string): SourceRelativePath {
   if (
@@ -590,13 +621,43 @@ async function pathExists(path: string): Promise<boolean> {
 export class LocalSourceSnapshotStore {
   readonly #reposDir: string;
   readonly #dependencies: SnapshotStoreDependencies;
+  readonly #retainUntilRelease: boolean;
 
   constructor(options: SnapshotStoreOptions) {
     this.#reposDir = resolve(options.reposDir);
+    this.#retainUntilRelease = options.retainUntilRelease === true;
     this.#dependencies = {
       renameDirectory:
         options.dependencies?.renameDirectory ?? defaultDependencies.renameDirectory,
     };
+  }
+
+  async #readSharedSnapshot(input: {
+    finalDir: string;
+    revisionKey: string;
+    snapshotLocator: string;
+  }): Promise<PublishedSourceSnapshot> {
+    const heldKey = this.#retainUntilRelease ? retainSharedSnapshot(input.finalDir) : null;
+    try {
+      const existing = await loadExistingSnapshot({
+        finalDir: input.finalDir,
+        revisionKey: input.revisionKey,
+      });
+      const snapshot: PublishedSourceSnapshot = {
+        upstreamRevisionKey: input.revisionKey,
+        manifestDigest: existing.digest,
+        snapshotLocator: input.snapshotLocator,
+        absolutePath: input.finalDir,
+        files: existing.files,
+        selection: existing.selection,
+        publication: "reused",
+      };
+      if (heldKey) handoffSharedSnapshot(snapshot, heldKey);
+      return snapshot;
+    } catch (error) {
+      if (heldKey) releaseSharedSnapshotKey(heldKey);
+      throw error;
+    }
   }
 
   async deriveFileReplacement(
@@ -695,19 +756,11 @@ export class LocalSourceSnapshotStore {
     await mkdir(revisionsRoot, { recursive: true });
 
     if (await pathExists(finalDir)) {
-      const existing = await loadExistingSnapshot({
+      return await this.#readSharedSnapshot({
         finalDir,
         revisionKey: input.upstreamRevisionKey,
-      });
-      return {
-        upstreamRevisionKey: input.upstreamRevisionKey,
-        manifestDigest: existing.digest,
         snapshotLocator,
-        absolutePath: finalDir,
-        files: existing.files,
-        selection: existing.selection,
-        publication: "reused",
-      };
+      });
     }
 
     const candidateDir = await mkdtemp(
@@ -765,24 +818,16 @@ export class LocalSourceSnapshotStore {
           );
         }
         if (hasErrorCode(error, new Set(["EEXIST", "ENOTEMPTY"])) && await pathExists(finalDir)) {
-          const existing = await loadExistingSnapshot({
+          return await this.#readSharedSnapshot({
             finalDir,
             revisionKey: input.upstreamRevisionKey,
-          });
-          return {
-            upstreamRevisionKey: input.upstreamRevisionKey,
-            manifestDigest: existing.digest,
             snapshotLocator,
-            absolutePath: finalDir,
-            files: existing.files,
-            selection: existing.selection,
-            publication: "reused",
-          };
+          });
         }
         throw error;
       }
 
-      return {
+      const snapshot: PublishedSourceSnapshot = {
         upstreamRevisionKey: input.upstreamRevisionKey,
         manifestDigest: digest,
         snapshotLocator,
@@ -791,6 +836,8 @@ export class LocalSourceSnapshotStore {
         selection,
         publication: "created",
       };
+      if (this.#retainUntilRelease) handoffSharedSnapshot(snapshot, retainSharedSnapshot(finalDir));
+      return snapshot;
     };
 
     let outcome:
@@ -808,7 +855,10 @@ export class LocalSourceSnapshotStore {
       cleanupError = error;
     }
     if (!outcome.ok) throw outcome.error;
-    if (cleanupError !== undefined) throw cleanupError;
+    if (cleanupError !== undefined) {
+      releaseSharedSnapshot(outcome.value);
+      throw cleanupError;
+    }
     return outcome.value;
   }
 }

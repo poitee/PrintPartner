@@ -13,6 +13,8 @@ import { indexSourceDocsFromDisk } from "./source-docs-index.js";
 import {
   LocalSourceSnapshotStore,
   SOURCE_SNAPSHOT_MANIFEST_FILE,
+  releaseSharedSnapshot,
+  sharedSnapshotHolderCount,
   sourceRelativePath,
   type PublishedSourceSnapshot,
   type SnapshotFile,
@@ -234,6 +236,8 @@ async function materializeLocalSourceWorkingTree(input: {
   });
   await mkdir(sourceWorkspace, { recursive: true });
   const stagingRoot = await mkdtemp(join(sourceWorkspace, ".local-source-"));
+  let published: PublishedSourceSnapshot | undefined;
+  let workError: unknown;
   try {
     for (const file of liveFiles) {
       if (
@@ -270,8 +274,11 @@ async function materializeLocalSourceWorkingTree(input: {
       kind: file.kind,
       sizeHintBytes: file.sizeHintBytes,
     }));
-    const store = new LocalSourceSnapshotStore({ reposDir: input.reposDir });
-    return await store.materialize({
+    const store = new LocalSourceSnapshotStore({
+      reposDir: input.reposDir,
+      retainUntilRelease: true,
+    });
+    published = await store.materialize({
       sourceId: input.sourceId,
       upstreamRevisionKey,
       files,
@@ -290,9 +297,18 @@ async function materializeLocalSourceWorkingTree(input: {
         };
       },
     });
-  } finally {
-    await rm(stagingRoot, { recursive: true, force: true });
+  } catch (error) {
+    workError = error;
   }
+  try {
+    await rm(stagingRoot, { recursive: true, force: true });
+  } catch (error) {
+    if (published) releaseSharedSnapshot(published);
+    throw error;
+  }
+  if (workError !== undefined) throw workError;
+  if (published === undefined) throw new Error("Source snapshot was not materialized");
+  return published;
 }
 
 function registerAndActivateSnapshot(input: {
@@ -377,13 +393,16 @@ function releaseUnreferencedSnapshot(
   sourceId: number,
   snapshot: PublishedSourceSnapshot,
 ): void {
+  releaseSharedSnapshot(snapshot);
   if (snapshot.publication !== "created") return;
+  const expected = resolve(reposDir, String(sourceId), "revisions", snapshot.upstreamRevisionKey);
+  if (resolve(snapshot.absolutePath) !== expected) return;
   repo.transaction(() => {
+    if (sharedSnapshotHolderCount(expected) > 0) return;
     const referenced = repo.listSourceRevisions(sourceId).some(
       (revision) => revision.snapshot_locator === snapshot.snapshotLocator,
     );
     if (referenced) return;
-    const expected = resolve(reposDir, String(sourceId), "revisions", snapshot.upstreamRevisionKey);
     if (resolve(snapshot.absolutePath) !== expected) return;
     rmSync(expected, { recursive: true, force: true });
   }, "immediate");
@@ -416,6 +435,8 @@ function activateMaterializedSnapshot(input: {
       releaseUnreferencedSnapshot(input.repo, input.reposDir, input.sourceId, input.snapshot);
     }
     throw error;
+  } finally {
+    releaseSharedSnapshot(input.snapshot);
   }
 }
 
@@ -495,7 +516,10 @@ export async function publishSourceManifestRevision(input: {
     if (activeRevision.snapshot_locator !== expectedLocator) {
       throw new Error("Active Source revision has an unsupported snapshot locator");
     }
-    snapshot = await new LocalSourceSnapshotStore({ reposDir: input.repo.reposDir })
+    snapshot = await new LocalSourceSnapshotStore({
+      reposDir: input.repo.reposDir,
+      retainUntilRelease: true,
+    })
       .deriveFileReplacement({
         sourceId: input.sourceId,
         baseRevisionKey: activeRevision.upstream_revision_key,
