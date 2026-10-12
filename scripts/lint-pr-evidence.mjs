@@ -2850,13 +2850,31 @@ function transferClientName(program) {
   return ["curl", "wget", "ssh", "scp", "sftp"].includes(folded) ? folded : null;
 }
 
-function effectiveCurlStart(command, assigned, stop = (program) => Boolean(transferClientName(program))) {
+// Shell append syntax applies before execution; env operands use literal keys.
+function commandEnvironmentAssignment(environment, word, shellAssignment) {
+  if (!environment) return;
+  const equal = word.text.indexOf("=");
+  if (equal <= 0) return;
+  const name = shellAssignment ? assignmentName(word.text) : word.text.slice(0, equal);
+  if (!name) return;
+  const flags = assignmentFlags(word, environment.assigned);
+  const prior = environment.bindings.get(name) ?? (shellAssignment ? environment.shellVars.get(name) : null);
+  const binding = staticAppend(prior, {
+    value: word.text.slice(equal + 1),
+    append: shellAssignment && word.text[equal - 1] === "+",
+    ...flags,
+  });
+  environment.bindings.set(name, { ...binding, exported: true });
+}
+
+function effectiveCurlStart(command, assigned, stop = (program) => Boolean(transferClientName(program)), environment = null) {
   const proxies = [];
   const miss = () => ({ index: -1, proxies });
   let start = 0;
   let mode = "shell";
   while (/^[a-zA-Z_][\w]*\+?=/.test(command[start]?.text ?? "")) {
     noteProxyAssignment(proxies, command[start], assigned);
+    commandEnvironmentAssignment(environment, command[start], true);
     start += 1;
   }
   while (start < command.length) {
@@ -2871,7 +2889,10 @@ function effectiveCurlStart(command, assigned, stop = (program) => Boolean(trans
       const next = sudoCommandIndex(command, start);
       if (next === -1 || next.index <= start) return miss();
       for (let at = from + 1; at < next.index; at += 1) {
-        if (sudoAssignment(command[at].text)) noteProxyAssignment(proxies, command[at], assigned);
+        if (sudoAssignment(command[at].text)) {
+          noteProxyAssignment(proxies, command[at], assigned);
+          commandEnvironmentAssignment(environment, command[at], false);
+        }
       }
       start = next.index;
       mode = next.shell ? "shell" : "executable";
@@ -2886,7 +2907,7 @@ function effectiveCurlStart(command, assigned, stop = (program) => Boolean(trans
     while (start < command.length) {
       const option = command[start].text;
       if (option === "--") { start += 1; break; }
-      if (name === "env" && option === "-") { start += 1; break; }
+      if (name === "env" && option === "-") { environment?.bindings.clear(); start += 1; break; }
       if (name === "nice" && /^-\d+$/.test(option)) { start += 1; continue; }
       if (!option.startsWith("-") || option === "-") break;
       start += 1;
@@ -2894,6 +2915,8 @@ function effectiveCurlStart(command, assigned, stop = (program) => Boolean(trans
         const equal = option.indexOf("=");
         const flag = option.slice(2, equal === -1 ? undefined : equal);
         if (launcher.optionalValues?.includes(flag)) continue;
+        if (name === "env" && flag === "ignore-environment" && equal === -1) environment?.bindings.clear();
+        if (name === "env" && flag === "unset") environment?.bindings.delete(equal === -1 ? command[start]?.text : option.slice(equal + 1));
         if (launcher.longFlags.includes(flag) && equal === -1) continue;
         if (!launcher.longValues.includes(flag)) return miss();
         if (equal === -1) {
@@ -2903,6 +2926,8 @@ function effectiveCurlStart(command, assigned, stop = (program) => Boolean(trans
       } else {
         for (let at = 1; at < option.length; at += 1) {
           const flag = option[at];
+          if ((name === "env" && flag === "i") || (name === "exec" && flag === "c")) environment?.bindings.clear();
+          if (name === "env" && flag === "u") environment?.bindings.delete(at + 1 === option.length ? command[start]?.text : option.slice(at + 1));
           if (launcher.flags.includes(flag)) continue;
           if (!launcher.values.includes(flag)) return miss();
           if (at + 1 === option.length) {
@@ -2916,6 +2941,7 @@ function effectiveCurlStart(command, assigned, stop = (program) => Boolean(trans
     if (name === "env") {
       while (/^[^=]*=/.test(command[start]?.text ?? "")) {
         noteProxyAssignment(proxies, command[start], assigned);
+        commandEnvironmentAssignment(environment, command[start], false);
         start += 1;
       }
     } else if (name === "timeout") {
@@ -3486,34 +3512,35 @@ function resolveIndirectWords(command, shellVars) {
 }
 
 function envSplitOperand(command) {
-  let index = 0;
-  while (/^[a-zA-Z_][\w]*\+?=/.test(command[index]?.text ?? "")) index += 1;
-  if (programBaseName(command[index]?.text ?? "") !== "env") return null;
-  index += 1;
+  const first = effectiveCurlStart(command, null, (_program, name) => name === "env");
+  if (first.index === -1) return null;
+  if (command.length > MAX_STATIC_CURL_TARGETS) return { reject: true };
+  let index = first.index + 1;
   const launcher = COMMAND_LAUNCHERS.env;
   let split = null;
   while (index < command.length && !split) {
     const word = command[index];
-    const option = word?.text ?? "";
-    if (option === "--" || option === "-" || !option.startsWith("-")) return null;
-    if (option === "-S" || option === "--split-string") {
-      const source = command[index + 1];
+    const option = word.text;
+    if (option === "--" || option === "-" || !option.startsWith("-")) {
+      if (option === "--" || option === "-") index += 1;
+      while (/^[^=]*=/.test(command[index]?.text ?? "")) index += 1;
+      const next = effectiveCurlStart(command.slice(index), null, (_program, name) => name === "env");
+      if (next.index === -1) return null;
+      index += next.index + 1;
+      continue;
+    }
+    if (option === "--split-string" || option.startsWith("--split-string=")) {
+      const attached = option !== "--split-string";
+      const source = attached ? word : command[index + 1];
       if (!source) return { reject: true };
-      split = { text: source.text, word: source, after: index + 2 };
+      split = { text: attached ? option.slice("--split-string=".length) : source.text,
+        word: source, before: index, after: index + (attached ? 1 : 2) };
       break;
     }
-    if (option.startsWith("--split-string=")) {
-      split = { text: option.slice("--split-string=".length), word, after: index + 1 };
-      break;
-    }
-    if (option.startsWith("-S") && !option.startsWith("--")) {
-      split = { text: option.slice(2), word, after: index + 1 };
-      break;
-    }
-    index += 1;
     if (option.startsWith("--")) {
       const equal = option.indexOf("=");
       const flag = option.slice(2, equal === -1 ? undefined : equal);
+      index += 1;
       if (launcher.optionalValues.includes(flag)) continue;
       if (launcher.longFlags.includes(flag) && equal === -1) continue;
       if (!launcher.longValues.includes(flag)) return null;
@@ -3523,29 +3550,37 @@ function envSplitOperand(command) {
       }
       continue;
     }
-    let known = true;
+    let next = index + 1;
     for (let at = 1; at < option.length; at += 1) {
       const flag = option[at];
-      if (launcher.flags.includes(flag)) continue;
-      if (!launcher.values.includes(flag)) {
-        known = false;
+      if (flag === "S") {
+        const inline = option.slice(at + 1);
+        const source = inline ? word : command[index + 1];
+        if (!source) return { reject: true };
+        split = { text: inline || source.text, word: source, before: index,
+          after: index + (inline ? 1 : 2), flags: at > 1 ? option.slice(0, at) : "" };
         break;
       }
+      if (launcher.flags.includes(flag)) continue;
+      if (!launcher.values.includes(flag)) return null;
       if (at + 1 === option.length) {
-        if (index >= command.length) return null;
-        index += 1;
+        if (!command[index + 1]) return null;
+        next += 1;
       }
       break;
     }
-    if (!known) return null;
+    index = next;
   }
   if (!split) return null;
   if (split.word.unresolved || split.word.substitution || split.word.dynamicFallback) return { reject: true };
   if (/[$`]/.test(split.text) || split.text.length > MAX_CURL_EXPAND_TOTAL) return { reject: true };
   const rest = command.slice(split.after);
   if (rest.some((word) => word.unresolved || word.substitution || word.dynamicFallback || word.indirect)) return { reject: true };
+  const prefix = command.slice(0, split.before);
+  if (prefix.some((word) => word.unresolved || word.substitution || word.dynamicFallback || word.indirect)) return { reject: true };
+  const leading = prefix.map((word) => quoteScanWord(word.text)).join(" ");
   const trailing = rest.map((word) => quoteScanWord(word.text)).join(" ");
-  const text = trailing ? `${split.text} ${trailing}` : split.text;
+  const text = `${leading}${split.flags ? ` ${split.flags}` : ""} ${split.text}${trailing ? ` ${trailing}` : ""}`;
   if (text.length > MAX_CURL_EXPAND_TOTAL) return { reject: true };
   return { text };
 }
@@ -3557,10 +3592,9 @@ const XARGS_LONG_FLAGS = new Set(["null", "no-run-if-empty", "verbose", "exit", 
 const XARGS_LONG_VALUES = new Set(["arg-file", "delimiter", "eof", "replace", "max-lines", "max-args", "max-procs", "max-chars", "process-slot-var"]);
 
 function xargsCommand(command) {
-  let index = 0;
-  while (/^[a-zA-Z_][\w]*\+?=/.test(command[index]?.text ?? "")) index += 1;
-  if (programBaseName(command[index]?.text ?? "") !== "xargs") return null;
-  index += 1;
+  const located = effectiveCurlStart(command, null, (_program, name) => name === "xargs");
+  if (located.index === -1) return null;
+  let index = located.index + 1;
   let replacing = false;
   while (index < command.length) {
     const option = command[index]?.text ?? "";
@@ -3940,52 +3974,34 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
     const split = envSplitOperand(command);
     if (split) {
       if (split.reject) parameter = true;
-      else takeInner(curlCommandTargets(split.text, new Set(assigned), copyExported(shellVars), depth + 1));
+      else {
+        const fork = new Map(shellVars);
+        fork.allexport = Boolean(shellVars.allexport);
+        takeInner(curlCommandTargets(split.text, new Set(assigned), copyExported(shellVars), depth + 1, fork));
+      }
       command = [];
       return;
     }
     const launched = xargsCommand(command);
     if (launched) {
+      const environment = { bindings: copyExported(shellVars), shellVars, assigned };
+      effectiveCurlStart(command, assigned, (_program, name) => name === "xargs", environment);
       if (launched.reject) parameter = true;
-      else takeInner(curlCommandTargets(launched.text, new Set(assigned), copyExported(shellVars), depth + 1));
+      else takeInner(curlCommandTargets(launched.text, new Set(assigned), environment.bindings, depth + 1));
       command = [];
       return;
     }
+    const environment = { bindings: copyExported(shellVars), shellVars, assigned };
     const opened = effectiveCurlStart(command, assigned, (program, name) => (
       Boolean(transferClientName(program)) || STATIC_SHELLS.has(name) || name === "eval"
-    ));
+    ), environment);
     const programAt = opened.index === -1 ? commandProgramIndex(command) : opened.index;
     const shell = staticShellOperand(command.slice(programAt));
     if (shell) {
       const shellName = command[programAt]?.text.split("/").at(-1);
       if (!shell.sameShell && shellName === "bash") {
-        let startup = shellVars.get("BASH_ENV");
-        for (let index = 0; index < programAt; index += 1) {
-          const word = command[index];
-          if (word.text.startsWith("BASH_ENV=")) startup = { value: word.text.slice(9), exported: true };
-          if (word.text.split("/").at(-1) !== "env") continue;
-          for (index += 1; index < programAt; index += 1) {
-            const option = command[index].text;
-            if (option === "--") break;
-            if (option === "-" || option === "-i" || option === "--ignore-environment") startup = null;
-            else if (option === "-u" || option === "--unset") {
-              if (command[++index]?.text === "BASH_ENV") startup = null;
-            } else if (option === "--unset=BASH_ENV") startup = null;
-            else if (["--chdir", "--argv0"].includes(option)) index += 1;
-            else if (option.startsWith("-") && !option.startsWith("--")) {
-              for (let at = 1; at < option.length; at += 1) {
-                const flag = option[at];
-                if (flag === "i") startup = null;
-                else if ("uCa".includes(flag)) {
-                  const operand = option.slice(at + 1) || command[++index]?.text;
-                  if (flag === "u" && operand === "BASH_ENV") startup = null;
-                  break;
-                }
-              }
-            } else if (!option.startsWith("-")) { index -= 1; break; }
-          }
-        }
-        if (startup?.exported && (startup.value || startup.substitution || startup.parameter || startup.arithmetic)) processSource = true;
+        const startup = environment.bindings.get("BASH_ENV");
+        if (startup && (startup.value || startup.substitution || startup.parameter || startup.arithmetic)) processSource = true;
       }
       const prefixes = [];
       for (const word of command.slice(0, programAt)) noteProxyAssignment(prefixes, word, assigned);
@@ -4038,6 +4054,8 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
         return;
       }
       const local = commandProxies(shellVars, prefixes);
+      const startup = environment.bindings.get("BASH_ENV");
+      if (startup) local.set("BASH_ENV", startup);
       if (shell.reject) {
         if (shell.unresolved) unresolved = true;
         if (shell.substitution !== false) substitution = true;
@@ -4482,7 +4500,7 @@ export function lintPrEvidence(body) {
   }
   if (directLan.processSource || conservativeLan.processSource) {
     errors.push(
-      "Evidence contains a curl --config or wget --input-file process substitution this static check does not read. Put the transfer URL on the command line.",
+      "Evidence contains an external process or shell startup source this static check does not read. Use literal transfer URLs and shell commands without unread startup files.",
     );
   }
 

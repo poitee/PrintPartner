@@ -5721,7 +5721,7 @@ test("r28-eval-command-binding", () => {
   }
 });
 
-const R29_PROCESS_STDERR = "PR evidence lint FAILED:\n- Evidence contains a curl --config or wget --input-file process substitution this static check does not read. Put the transfer URL on the command line.\n";
+const R29_PROCESS_STDERR = "PR evidence lint FAILED:\n- Evidence contains an external process or shell startup source this static check does not read. Use literal transfer URLs and shell commands without unread startup files.\n";
 
 test("r29-static-client-operand-gaps", () => {
   for (const command of [
@@ -6224,4 +6224,43 @@ test('r34-multiline-nested-html-anchor-preserved', () => {
   const body = bodyWithEvidence(`Exemption: none\n- Journey exercised: Settings saved\n- Steps followed to produce the evidence: Open settings and save\n- Result observed: Settings persisted\n- Screenshot / recording / verify-skill output or trace:\n${artifact}`);
   const result = lintPrEvidence(body);
   assert.equal(result.ok, true, result.errors.join('\n'));
+});
+
+for (const command of [
+  'BASH_ENV+=startup.sh bash -c true',
+  'BASH_ENV=startup.sh; BASH_ENV+= bash -c true',
+  'BASH_ENV+=startup.sh env bash -c true',
+  'BASH_ENV+=startup.sh env -S "bash -c true"',
+  'BASH_ENV=startup.sh; BASH_ENV+= env -S "bash -c true"',
+  'env BASH_ENV=startup.sh env -S "bash -c true"',
+  'BASH_ENV+=startup.sh xargs bash -c true',
+  'BASH_ENV+=startup.sh env nice xargs bash -c true',
+  'env BASH_ENV=startup.sh xargs bash -c true',
+  'BASH_ENV+=startup.sh env -vS "bash -c true"',
+  'BASH_ENV+=startup.sh env nice env -S "bash -c true"',
+  'declare -x BASH_ENV+=startup.sh; env -S "bash -c true"',
+]) test(`r35-startup-append-refuses-${command}`, () => {
+  const result = lintPrEvidence(commandEvidence(command));
+  assert.equal(result.ok, false, command);
+  assert.match(result.errors.join('\n'), /startup|external process/);
+});
+
+for (const command of [
+  'BASH_ENV=; BASH_ENV+= bash -c true', 'BASH_ENV+= bash -c true',
+  'env BASH_ENV+=startup.sh bash -c true', 'env -S "BASH_ENV+=startup.sh bash -c true"',
+  'BASH_ENV+=startup.sh env -i bash -c true', 'BASH_ENV+=startup.sh env -u BASH_ENV bash -c true',
+  'BASH_ENV+=startup.sh env -- BASH_ENV= bash -c true',
+  'BASH_ENV+=startup.sh env -i -S "bash -c true"',
+  'BASH_ENV+=startup.sh env -viS "bash -c true"',
+  'BASH_ENV+=startup.sh exec -c bash -c true',
+  'BASH_ENV+=startup.sh env -S "-u BASH_ENV bash -c true"',
+  'BASH_ENV=; BASH_ENV+= env -S "bash -c true"',
+  'env -C BASH_ENV=startup.sh bash -c true',
+  'BASH_ENV+=startup.sh env -i xargs bash -c true',
+  'env BASH_ENV+=startup.sh xargs bash -c true',
+]) test(`r35-startup-literal-or-cleared-safe-${command}`, () => assertSafeCommand(command));
+
+test('r35-env-split-wrapper-bound-refuses', () => {
+  const command = `BASH_ENV+=startup.sh ${'env '.repeat(4096)}-S "bash -c true"`;
+  assert.equal(lintPrEvidence(commandEvidence(command)).ok, false);
 });
