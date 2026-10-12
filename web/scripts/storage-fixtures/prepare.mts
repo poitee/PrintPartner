@@ -9,6 +9,8 @@ import { AppRepository } from '../../apps/server/src/db/repository.js';
 import { currentSchemaVersion } from '../../apps/server/src/db/schema.js';
 const require = createRequire(new URL('../../apps/server/package.json', import.meta.url));
 const Database = require('better-sqlite3');
+if (process.version !== 'v22.23.3' || process.versions.modules !== '127')
+    throw new Error(`storage fixtures require Node v22.23.3 ABI 127, found ${process.version} ABI ${process.versions.modules}`);
 const out = process.argv[2];
 if (!out)
     throw new Error('usage: prepare.mts OUTPUT_DIR');

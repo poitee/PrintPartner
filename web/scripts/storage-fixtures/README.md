@@ -12,6 +12,10 @@ For `schema-31`, `schema-32`, `schema-33`, `schema-34`, and `immutable-corpus`, 
 
 The Rust test name `ticket_t_7_migrations` is the selector target for this generated-fixture check. Passing it does not close GRE-400.
 
+The fixture runtime is Node 22.23.3 with module ABI 127. The generator refuses other versions before writing fixture files. Set `PP_SCHEMA_PARITY_NODE` to that runtime's actual executable when the default Node differs. The Rust test verifies the selected executable matches Node's reported `process.execPath`, so ELF and Mach-O executables work while dispatcher scripts fail. The binary hash in the metadata records the selected platform build rather than imposing a Linux-only hash.
+
+Hosted Rust CI installs the fixture runtime separately from the desktop's Node 24.21.0 runtime and sets `PP_SCHEMA_PARITY_NODE` to its saved executable. Changes under this fixture directory trigger Rust CI, including the macOS storage tests.
+
 ## Metadata
 
 `fixtures.json` records these fields.

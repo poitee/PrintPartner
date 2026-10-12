@@ -662,7 +662,78 @@ fn unowned_preflight_rejects_live_and_invalid_markers_without_changes() {
     std::fs::remove_dir_all(path).unwrap();
 }
 
-const PINNED_NODE_SHA256: &str = "fde6a4bf8d0562f7751d1a2d6cb9b417c4cfe107bbcb0aa3e9a24e125e348f48";
+const SCHEMA_PARITY_NODE_VERSION: &str = "v22.23.3";
+const SCHEMA_PARITY_NODE_ABI: &str = "127";
+
+#[derive(Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SchemaParityNodeIdentity {
+    exec_path: PathBuf,
+    version: String,
+    abi: String,
+}
+
+fn require_schema_parity_runtime(identity: &SchemaParityNodeIdentity) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        identity.version == SCHEMA_PARITY_NODE_VERSION && identity.abi == SCHEMA_PARITY_NODE_ABI,
+        "schema fixtures require Node {SCHEMA_PARITY_NODE_VERSION} ABI {SCHEMA_PARITY_NODE_ABI}, found {} ABI {}",
+        identity.version,
+        identity.abi
+    );
+    Ok(())
+}
+
+fn schema_parity_node_identity(node: &Path) -> anyhow::Result<SchemaParityNodeIdentity> {
+    let output = Command::new(node)
+        .args([
+            "--eval",
+            "process.stdout.write(JSON.stringify({execPath:process.execPath,version:process.version,abi:process.versions.modules}))",
+        ])
+        .output()?;
+    anyhow::ensure!(
+        output.status.success(),
+        "Node identity probe failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let identity: SchemaParityNodeIdentity = serde_json::from_slice(&output.stdout)?;
+    anyhow::ensure!(
+        std::fs::canonicalize(&identity.exec_path)? == std::fs::canonicalize(node)?,
+        "fixture node must be its actual executable, not a dispatcher script"
+    );
+    require_schema_parity_runtime(&identity)?;
+    Ok(identity)
+}
+
+#[test]
+fn ticket_t_7_migrations_requires_pinned_runtime_identity() {
+    let identity = schema_parity_node_identity(&schema_parity_node()).unwrap();
+    assert_eq!(identity.version, "v22.23.3");
+    assert_eq!(identity.abi, "127");
+    let mut wrong_version = identity.clone();
+    wrong_version.version = "v24.21.0".into();
+    assert!(require_schema_parity_runtime(&wrong_version).is_err());
+    let mut wrong_abi = identity;
+    wrong_abi.abi = "137".into();
+    assert!(require_schema_parity_runtime(&wrong_abi).is_err());
+}
+
+#[test]
+fn ticket_t_7_migrations_refuses_dispatcher_script() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = directory("schema-node-dispatcher");
+    let wrapper = root.join("node-wrapper");
+    let node = schema_parity_node();
+    let escaped = node.to_str().unwrap().replace('\'', "'\\''");
+    std::fs::write(&wrapper, format!("#!/bin/sh\nexec '{escaped}' \"$@\"\n")).unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let error = match schema_parity_node_identity(&wrapper) {
+        Ok(_) => panic!("accepted a Node dispatcher"),
+        Err(error) => error.to_string(),
+    };
+    assert!(error.contains("not a dispatcher script"), "{error}");
+    std::fs::remove_dir_all(root).unwrap();
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SchemaGraph {
@@ -1340,12 +1411,8 @@ fn sequence_identities(graph: &SchemaGraph) -> Vec<String> {
 #[test]
 fn ticket_t_7_migrations() {
     let node = schema_parity_node();
+    let identity = schema_parity_node_identity(&node).unwrap();
     let bytes = std::fs::read(&node).unwrap();
-    assert_eq!(
-        &bytes[..4],
-        b"\x7fELF",
-        "fixture node must be an ELF, not a dispatcher script"
-    );
     let node_hash = hex::encode(Sha256::digest(&bytes));
     let root = directory("schema-parity-fixtures");
     let web = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../web");
@@ -1370,10 +1437,8 @@ fn ticket_t_7_migrations() {
     let clock = meta["clock"].as_str().unwrap().to_owned();
     let node_version = meta["node"].as_str().unwrap();
     let abi = meta["abi"].as_str().unwrap();
-    if node_hash == PINNED_NODE_SHA256 {
-        assert_eq!(node_version, "v22.23.3");
-        assert_eq!(abi, "127");
-    }
+    assert_eq!(node_version, identity.version);
+    assert_eq!(abi, identity.abi);
     assert_eq!(meta["nodeSha256"].as_str().unwrap(), node_hash);
     assert_eq!(
         meta["contract"].as_str().unwrap(),
