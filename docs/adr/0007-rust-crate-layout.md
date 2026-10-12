@@ -2,7 +2,7 @@
 
 Status: accepted record of the `rust/crates` layout on `main` and the planned edges when the desktop chain ([GitHub #171](https://github.com/poitee/PrintPartner/issues/171)) lands. This ADR does not change `ALLOWED` in `rust/scripts/check-boundaries.py` or any crate dependency.
 
-Print Partner's Rust workspace under `rust/crates` is the protected runtime foundation and the home for the D7 crate split. Enforcement today is the explicit `ALLOWED` map in `rust/scripts/check-boundaries.py`, checked with `cargo metadata --no-deps`. Edges listed as **current** are copied from that map. Edges listed as **planned** are the expected allowlist after #171 brings in `pp-api` and extends `pp-storage` and after content moves into the reserved `pp-drivers` and `pp-services` crates. Planned edges are documentation only until a later change updates `ALLOWED`.
+Print Partner's Rust workspace under `rust/crates` is the protected runtime foundation and the home for the D7 crate split. Enforcement today is the explicit `ALLOWED` map in `rust/scripts/check-boundaries.py`, checked with `cargo metadata --no-deps`. Edges listed as **current** are copied from that map. Edges listed as **planned** cover the addition of `pp-api`, extensions to `pp-storage`, printer/provider adapters in the reserved `pp-drivers` crate, and broader use cases extending `pp-services` beyond its existing Orca/Bambu discovery. Planned edges are documentation only until a later change updates `ALLOWED`.
 
 ## Crates on main
 
