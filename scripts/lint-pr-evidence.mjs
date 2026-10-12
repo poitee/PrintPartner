@@ -1350,14 +1350,17 @@ function shellWords(value, { commandTokens = false } = {}) {
   let word = "";
   let quote = null;
   let braceText = "";
+  let wordStarted = false;
   const append = (text, protectedText = false) => {
+    wordStarted = true;
     word += text;
     braceText += protectedText ? text.replace(/[\\{},.]/g, (ch) => "\\" + ch) : text;
   };
   const flush = () => {
-    if (word) words.push(commandTokens ? { text: word, braceText } : word);
+    if (word || (commandTokens && wordStarted)) words.push(commandTokens ? { text: word, braceText } : word);
     word = "";
     braceText = "";
+    wordStarted = false;
   };
   for (let index = 0; index < value.length; index += 1) {
     const ch = value[index];
@@ -1366,7 +1369,7 @@ function shellWords(value, { commandTokens = false } = {}) {
       if (commandTokens && /[\n\r;|&<>()`]/.test(ch)) words.push(null);
       continue;
     }
-    if (quote === null && ch === "#" && !word) {
+    if (quote === null && ch === "#" && !wordStarted) {
       const end = value.indexOf("\n", index);
       if (end === -1) break;
       index = end - 1;
@@ -1388,7 +1391,7 @@ function shellWords(value, { commandTokens = false } = {}) {
       continue;
     }
     if (ch === quote) quote = null;
-    else if (quote === null && (ch === "'" || ch === '"')) quote = ch;
+    else if (quote === null && (ch === "'" || ch === '"')) { quote = ch; wordStarted = true; }
     else append(ch, quote !== null);
   }
   if (quote === null) flush();
@@ -1422,7 +1425,7 @@ const MAX_STATIC_CURL_TARGETS = 4096;
 
 function expandTargetGlobs(value, { shell = false } = {}) {
   let values = [value];
-  for (let pass = 0; pass < value.length; pass += 1) {
+  for (let pass = 0; pass <= value.length; pass += 1) {
     let changed = false;
     const next = [];
     for (const text of values) {
