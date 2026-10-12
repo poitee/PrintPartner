@@ -2070,3 +2070,440 @@ test("r4 regression exact-reference-title", () => {
   assert.equal(result.ok, false, result.errors.join("; "));
   assert.match(result.errors.join("\n"), /LAN instances/);
 });
+
+test("r5 regression exact-ansi-c", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.$'80':8080/\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression exact-unicode-fold", () => {
+  const result = lintPrEvidence("[SS]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[ẞ]\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression exact-multiline-label", () => {
+  const result = lintPrEvidence("[Foo\n  bar]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[Baz][Foo bar]\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression ansi-octal-80", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.$'\\070\\060':8080/\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression ansi-hex-80", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.$'\\x38\\x30':8080/\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression ansi-unicode-80", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.$'\\u0038\\U00000030':8080/\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression ansi-mixed-80", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.$'8'\"0\":8080/\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression ansi-nul-80", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.$'8\\0ignored'0:8080/\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression ansi-nul-hex-80", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.$'8\\x00ignored'0:8080/\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression ansi-control-nul-80", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.$'8\\c@ignored'0:8080/\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression ansi-schemeless-80", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl 192.168.$'80':8080/\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression ansi-escaped-quote-80", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl $'http://192.168.1.8\\'ignored'0:8080/\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression ansi-octal-81", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.$'\\070\\061':8080/\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression ansi-hex-81", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.$'\\x38\\x31':8080/\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression ansi-unicode-81", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.$'\\u0038\\U00000031':8080/\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression ansi-mixed-81", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.$'8'\"1\":8080/\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression ansi-nul-81", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.$'8\\0ignored'1:8080/\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression ansi-nul-hex-81", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.$'8\\x00ignored'1:8080/\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression ansi-control-nul-81", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.$'8\\c@ignored'1:8080/\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression ansi-schemeless-81", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl 192.168.$'81':8080/\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression ansi-escaped-quote-81", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl $'http://192.168.1.8\\'ignored'1:8080/\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression ansi-safe-separate", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.8 $'0':8080/\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression ansi-safe-double-context", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl \"http://192.168.1.$'80':8080/\"\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression ansi-safe-single-context", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl 'http://192.168.1.$80':8080/\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression ansi-safe-escaped-dollar", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.\\$'80':8080/\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression ansi-safe-unknown-escape", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.$'8\\q0':8080/\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression ansi-safe-unknown-numeric", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.$'8\\80':8080/\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression ansi-safe-missing-hex", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.$'8\\x0g':8080/\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression ansi-safe-literal-backslash", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.$'8\\\\0':8080/\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression ansi-safe-newline", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.$'8\\n0':8080/\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression ansi-safe-tab", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.$'8\\t0':8080/\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression ansi-safe-control", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.$'8\\cA0':8080/\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression ansi-safe-escape", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.$'8\\e0':8080/\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression ansi-safe-nul-safe", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.$'8\\0ignored'2:8080/\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression ansi-safe-empty", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.$'':8080/\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression ansi-safe-unfinished", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.$'80:8080/\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression ansi-safe-prose", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nThe prefix http://192.168.1.8 and $'0' are separate examples.\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression ansi-safe-quoted-prose", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nprintf '%s' $'prefix http://192.168.1.8'0\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression ansi-safe-safe-local", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl $'http://127.0.0.\\061':8080/\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression ansi-safe-dynamic", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.$HOST:8080/\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression fold-sharp-s", () => {
+  const result = lintPrEvidence("[Straße]: http://192.168.1.81/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[x][STRASSE]\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression fold-sigma", () => {
+  const result = lintPrEvidence("[ΟΣ]: http://192.168.1.81/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[x][οσ]\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression fold-final-sigma", () => {
+  const result = lintPrEvidence("[οσ]: http://192.168.1.81/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[x][ος]\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression fold-ligature", () => {
+  const result = lintPrEvidence("[ﬃ]: http://192.168.1.81/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[x][FFI]\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression fold-long-s", () => {
+  const result = lintPrEvidence("[ſ]: http://192.168.1.81/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[x][S]\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression fold-cherokee", () => {
+  const result = lintPrEvidence("[Ꭰ]: http://192.168.1.81/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[x][ꭰ]\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression fold-dotted-i", () => {
+  const result = lintPrEvidence("[İ]: http://192.168.1.81/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[x][i̇]\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression fold-armenian", () => {
+  const result = lintPrEvidence("[և]: http://192.168.1.81/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[x][ԵՒ]\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression fold-greek-expand", () => {
+  const result = lintPrEvidence("[ΐ]: http://192.168.1.81/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[x][ΐ]\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression fold-safe-dotless", () => {
+  const result = lintPrEvidence("[ı]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[x][I]\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression fold-safe-width", () => {
+  const result = lintPrEvidence("[Ａ]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[x][a]\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression fold-safe-circle", () => {
+  const result = lintPrEvidence("[ⓐ]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[x][a]\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression fold-safe-accent", () => {
+  const result = lintPrEvidence("[é]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[x][e]\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression fold-safe-canonical", () => {
+  const result = lintPrEvidence("[é]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[x][é]\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression fold-first-safe", () => {
+  const result = lintPrEvidence("[Straße]: https://example.test/first\n[STRASSE]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[straße]");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression fold-first-banned", () => {
+  const result = lintPrEvidence("[STRASSE]: http://192.168.1.80/\n[Straße]: https://example.test/second\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[straße]");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression span-next-destination", () => {
+  const result = lintPrEvidence("[Foo\n bar]:\n <http://192.168.1.81/>\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[Foo bar]\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression span-many-lines", () => {
+  const result = lintPrEvidence("[Foo\n bar\n baz]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[x][Foo bar baz]\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression span-multiline-use", () => {
+  const result = lintPrEvidence("[Foo bar]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[x][Foo\n bar]\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression span-shortcut-use", () => {
+  const result = lintPrEvidence("[Foo bar]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[Foo\n bar]\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression span-escaped-close", () => {
+  const result = lintPrEvidence("[Foo\\]\n bar]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[x][Foo\\] bar]\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression span-escaped-open", () => {
+  const result = lintPrEvidence("[Foo\\[\n bar]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[x][Foo\\[ bar]\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression span-title", () => {
+  const result = lintPrEvidence("[Foo\n bar]: https://example.test/outer \"title\n[target]: https://example.test/fake\nend\"\n[target]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[target]\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression span-title-heading", () => {
+  const result = lintPrEvidence("[Foo\n bar]: https://example.test/outer \"title\n## Evidence\nExemption: ci-only\nend\"\n[target]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[target]\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression span-title-duplicate", () => {
+  const result = lintPrEvidence("[Foo bar]: https://example.test/first\n[Foo\n bar]: https://example.test/outer \"title\n[target]: https://example.test/fake\nend\"\n[target]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[target]\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression span-blank-invalid-title", () => {
+  const result = lintPrEvidence("[outer\n label]: https://example.test/outer \"unterminated\n\n[target]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[target]\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression span-safe-safe", () => {
+  const result = lintPrEvidence("[Foo\n bar]: http://127.0.0.1/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[Foo bar]\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression span-safe-unused", () => {
+  const result = lintPrEvidence("[Foo\n bar]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[other]\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression span-safe-blank-label", () => {
+  const result = lintPrEvidence("[Foo\n\n bar]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[Foo bar]\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression span-safe-nested", () => {
+  const result = lintPrEvidence("[Foo[\n bar]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[Foo[ bar]\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression span-safe-empty", () => {
+  const result = lintPrEvidence("[ \n ]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[ ]\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression span-safe-missing-colon", () => {
+  const result = lintPrEvidence("[Foo\n bar] http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[Foo bar]\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression span-safe-bad-tail", () => {
+  const result = lintPrEvidence("[Foo\n bar]: http://192.168.1.80/ garbage\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[Foo bar]\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression span-safe-escaped-use", () => {
+  const result = lintPrEvidence("[Foo\n bar]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n\\[Foo bar]\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression span-safe-inline-code", () => {
+  const result = lintPrEvidence("[Foo\n bar]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n`[Foo bar]`\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression span-safe-title-only", () => {
+  const result = lintPrEvidence("[outer\n label]: https://example.test/outer \"title\n[target]: http://192.168.1.80/\nend\"\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[target]\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression span-safe-first-safe", () => {
+  const result = lintPrEvidence("[Foo bar]: https://example.test/first\n[Foo\n bar]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[Foo bar]\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression span-code-definition", () => {
+  const result = lintPrEvidence("```md\n[Foo\n bar]: http://192.168.1.80/\n```\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[Foo bar]");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression span-html-definition", () => {
+  const result = lintPrEvidence("<script>\n[Foo\n bar]: http://192.168.1.80/\n</script>\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[Foo bar]");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression span-reason-use", () => {
+  const result = lintPrEvidence("[Foo\n bar]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n- Exemption reason: historical\n  [Foo bar]");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression ansi-reason", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: ci-only\n- Exemption reason: parser-only tooling\n  `curl http://192.168.1.$'80':8080/`");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+
+test("r5 regression ansi-boundary-hex-limit", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.$'\\x380':8080/\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression ansi-boundary-octal-limit", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.$'\\0700':8080/\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression ansi-boundary-unicode-limit", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.$'\\u00380':8080/\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression ansi-boundary-unicode-wide-limit", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.$'\\U000000380':8080/\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression ansi-boundary-byte-wrap-nul", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.$'\\400ignored'80:8080/\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression ansi-boundary-nul-empty", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl http://192.168.1.$'\\0ignored'80:8080/\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression ansi-quote-continuation", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\nprintf '%s' $'escaped\\' quote'\ncurl http://192.168.1.8\\\n\"0\":8080/\n```\n");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression ansi-safe-quote-newline", () => {
+  const result = lintPrEvidence("## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n```sh\ncurl $'http://192.168.1.8\\'\n0':8080/\n```\n");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression fold-deseret", () => {
+  const result = lintPrEvidence("[𐐀]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[𐐨]");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression fold-osage", () => {
+  const result = lintPrEvidence("[𐒰]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[𐓘]");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression fold-new17", () => {
+  const result = lintPrEvidence("[𖺠]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[𖺻]");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression span-max", () => {
+  const result = lintPrEvidence("[xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\ny]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx y]");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
+test("r5 regression span-overlong", () => {
+  const result = lintPrEvidence("[xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\ny]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx y]");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression span-blank-use", () => {
+  const result = lintPrEvidence("[foo bar]: http://192.168.1.80/\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[foo\n\nbar]");
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+test("r5 regression span-overlong-title-later", () => {
+  const result = lintPrEvidence("[xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx]: https://example.test/outer \"title\n[target]: http://192.168.1.80/\nend\"\n\n## Evidence\nExemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json\n\n[target]");
+  assert.equal(result.ok, false, result.errors.join("; "));
+  assert.match(result.errors.join("\n"), /LAN instances/);
+});
