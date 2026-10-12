@@ -1715,3 +1715,89 @@ test("a top-level fence ends a real exemption reason before indented code", () =
     }
   }
 });
+
+for (const [name, open, close] of [
+  ["processing instruction", "<?php", "?>"],
+  ["declaration", "<!DOCTYPE", ">"],
+  ["CDATA", "<![CDATA[", "]]>"],
+]) {
+  test(`raw HTML ${name} retains fake Evidence across blank lines`, () => {
+    const body = `${open}\n\n## Evidence\nExemption: docs-only\n- Exemption reason: Updated docs.`;
+    const result = lintPrEvidence(body);
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join("\n"), /Missing "## Evidence" section/);
+    const run = spawnSync(process.execPath, [fileURLToPath(new URL("./lint-pr-evidence.mjs", import.meta.url)), "--stdin"], { input: body, encoding: "utf8" });
+    assert.equal(run.status, 1);
+    assert.match(run.stderr, /Missing "## Evidence" section/);
+  });
+
+  test(`raw HTML ${name} ends on its terminator before real Evidence`, () => {
+    for (const block of [`${open} example ${close}`, `${open}\n\nexample\n${close}`]) {
+      const result = lintPrEvidence(`${block}\n## Evidence\nExemption: docs-only\n- Exemption reason: Updated docs.`);
+      assert.equal(result.ok, true, result.errors.join("; "));
+    }
+  });
+
+  test(`raw HTML ${name} keeps fake metadata hidden until its terminator`, () => {
+    const result = lintPrEvidence(`${open}\n\n## Evidence\nExemption: invalid\n${close}\n## Evidence\nExemption: docs-only\n- Exemption reason: Updated docs.`);
+    assert.equal(result.ok, true, result.errors.join("; "));
+  });
+}
+
+test("ordinary HTML blocks still end on blank lines", () => {
+  for (const tag of ["<div>", "<span>"]) {
+    const result = lintPrEvidence(`${tag}\n\n## Evidence\nExemption: docs-only\n- Exemption reason: Updated docs.`);
+    assert.equal(result.ok, true, result.errors.join("; "));
+  }
+});
+
+for (const suffix of ["80", "81"]) {
+  test(`scheme-less numeric host ${suffix} is rejected in verification code`, () => {
+    for (const target of [`192.168.${suffix}:8080/`, `192.168.${suffix}/health`, `192.168.${suffix}:8080`, `192.168.${suffix}`]) {
+      for (const command of [
+        `Verification command:\n\n    curl ${target}`,
+        `- Verification command:\n\n      curl '${target}'`,
+        `\`\`\`sh\ncurl "${target}"\n\`\`\``,
+        `Ran \`curl ${target}\`.`,
+        `Target (${target}),`,
+      ]) {
+        const body = bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} trace.json\n\n${command}`);
+        const result = lintPrEvidence(body);
+        assert.equal(result.ok, false, command);
+        assert.match(result.errors.join("\n"), /LAN instances/);
+      }
+    }
+    const body = bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} trace.json\n\n    curl 192.168.${suffix}:8080/`);
+    const run = spawnSync(process.execPath, [fileURLToPath(new URL("./lint-pr-evidence.mjs", import.meta.url)), "--stdin"], { input: body, encoding: "utf8" });
+    assert.equal(run.status, 1);
+    assert.match(run.stderr, /LAN instances/);
+  });
+}
+
+test("scheme-less numeric scanning preserves safe targets and non-host text", () => {
+  for (const text of [
+    "curl 192.168.82:8080/", "curl 127.1:8080/", "curl 10.0.80:8080/",
+    "curl 192.168.80.example.test:8080/", "curl https://example.test/192.168.80:8080/",
+    "cat evidence/192.168.80/trace.json", "Build 3232235600 passed.",
+    "Version release192.168.80 is recorded.", "192.168.80-release", "192.168.80:99999/",
+  ]) {
+    const result = lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} trace.json\n\n\`\`\`text\n${text}\n\`\`\``));
+    assert.equal(result.ok, true, `${text}: ${result.errors.join("; ")}`);
+  }
+});
+
+test("scheme-less host scanning preserves reasons and document reference scope", () => {
+  for (const text of ["192.168.80:8080/", "192.168.81:8080/"]) {
+    for (const code of [`  \`\`\`text\n  curl ${text}\n  \`\`\``, `      curl ${text}`]) {
+      const result = lintPrEvidence(bodyWithEvidence(`Exemption: docs-only\n- Exemption reason: Document the prohibited target.\n\n${code}`));
+      assert.equal(result.ok, true, result.errors.join("; "));
+    }
+    const result = lintPrEvidence(bodyWithEvidence("Exemption: docs-only\n- Exemption reason: Updated docs.") + `\n    curl ${text}`);
+    assert.equal(result.ok, true, result.errors.join("; "));
+  }
+  const base = bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} trace.json\n\n\`\`\`text\n[target]\n\`\`\``);
+  assert.equal(lintPrEvidence(`[target]: http://192.168.0.80/\n\n${base}`).ok, true);
+  const real = lintPrEvidence(`[target]: http://192.168.0.80/\n\n${base.replace("```text\n[target]\n```", "[target]")}`);
+  assert.equal(real.ok, false);
+  assert.match(real.errors.join("\n"), /LAN instances/);
+});
