@@ -4734,3 +4734,75 @@ test("r16-checked-task-is-substantive", () => {
 ${R16_ARTIFACT} evidence/trace.json
 `));
 });
+
+function r17Ok(body) {
+  const result = lintPrEvidence(body);
+  assert.equal(result.ok, true, result.errors.join("; "));
+}
+
+function r17Lan(body) {
+  const result = lintPrEvidence(body);
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /LAN instances/);
+}
+
+test("r17-wget-start-p-prefix-consumes-offset-not-url", () => {
+  r17Ok(bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: \`wget --start-p 3232235856 https://example.test/file\`
+- Result observed: exit 0
+${R16_ARTIFACT} evidence/out.txt
+`));
+});
+
+test("r17-wget-ambiguous-long-prefix-leaves-numeric-url-checked", () => {
+  r17Lan(bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: \`wget --output 3232235856\`
+- Result observed: exit 0
+${R16_ARTIFACT} evidence/out.txt
+`));
+});
+
+test("r17-bare-wget-numeric-url-still-banned", () => {
+  r17Lan(bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: \`wget 3232235856\`
+- Result observed: exit 0
+${R16_ARTIFACT} evidence/out.txt
+`));
+});
+
+test("r17-go-test-command-plus-output-artifact", () => {
+  r17Ok(bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: \`go test ./...\`
+- Result observed: ok example.test/pkg 0.123s
+${R16_ARTIFACT} \`go test ./...\`
+ok example.test/pkg 0.123s
+`));
+});
+
+test("r17-pytest-output-artifact", () => {
+  r17Ok(bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: \`pytest tests/\`
+- Result observed: 2 passed in 0.41s
+${R16_ARTIFACT} \`pytest tests/\`
+2 passed in 0.41s
+`));
+});
+
+test("r17-maven-build-success-artifact", () => {
+  r17Ok(bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: \`mvn -q test\`
+- Result observed: BUILD SUCCESS
+${R16_ARTIFACT} \`mvn -q test\`
+BUILD SUCCESS
+`));
+});
+
+test("r17-unlisted-command-only-artifact-still-incomplete", () => {
+  const result = lintPrEvidence(bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: \`make test\`
+- Result observed: ok example.test/pkg 0.123s
+${R16_ARTIFACT} \`make test\`
+`));
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /Evidence is incomplete/);
+});

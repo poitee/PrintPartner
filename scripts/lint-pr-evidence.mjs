@@ -658,6 +658,12 @@ function codeSpans(value) {
  */
 const PLACEHOLDER_WORD = /\b(?:todo|tbd|fixme|placeholder)\b/i;
 
+const VERIFICATION_COMMAND =
+  /^(?:\$\s*)?(?:cd\s+\S+\s+&&\s+)?(?:node\s+(?:--test\b|\S+\.m?[jc]s\b)|cargo\s+(?:test|nextest|check|build|fmt|clippy)\b|(?:pnpm|npm)\s+(?:test|run|exec|check|build)\b|python3?\s+\S+\.py\b|(?:py\.test|pytest)\b|go\s+test\b|mvn(?:w)?\b|(?:\.\/)?gradlew(?:\.bat)?\b|gradle\s+(?:test|check|build)\b|curl\s+(?:-\S+\s+)*https?:\/\/)/i;
+
+const TEST_RUNNER_OUTPUT_LINE =
+  /^(?:ok\s+\S+\s+\d+(?:\.\d+)?s(?:\s+\([^\)]*\))?|(?:\d+\s+)?passed(?:\s|$)|(?:\d+\s+)?failed(?:\s|$)|=+\s*(?:test session starts|.*passed).*?=+|BUILD SUCCESS(?:FUL)?(?:\s|$)|Tests run:\s*\d+)/i;
+
 function hasSubstantiveCodeSpan(value) {
   return codeSpans(value).some((span) => {
     const content = span.trim();
@@ -668,10 +674,18 @@ function hasSubstantiveCodeSpan(value) {
       !PLACEHOLDER_WORD.test(content) &&
       (hasConcreteHttpUrl(content)
         || /^(?:[\w.-]+\/)+[\w.-]+$/.test(content)
-        || /^(?:\$\s*)?(?:cd\s+\S+\s+&&\s+)?(?:node\s+(?:--test\b|\S+\.m?[jc]s\b)|cargo\s+(?:test|nextest|check|build|fmt|clippy)\b|(?:pnpm|npm)\s+(?:test|run|exec|check|build)\b|python3?\s+\S+\.py\b|curl\s+(?:-\S+\s+)*https?:\/\/)/i.test(content)
+        || VERIFICATION_COMMAND.test(content)
+        || TEST_RUNNER_OUTPUT_LINE.test(content)
         || /\b(?:tests?|pass(?:ed)?|fail(?:ed)?|exit(?: status)?|status(?: code)?|assertions?)\s*[:=]?\s*\d+\b/i.test(content))
     );
   });
+}
+
+function hasCommandPlusRunnerOutput(value) {
+  const spans = codeSpans(value);
+  if (!spans.some((span) => VERIFICATION_COMMAND.test(span.trim()))) return false;
+  const plain = value.replace(/`+[^`]*`+/g, "\n");
+  return plain.split("\n").some((line) => TEST_RUNNER_OUTPUT_LINE.test(line.trim()));
 }
 
 /** File extensions for screenshots, recordings, traces, logs, and archives. */
@@ -1226,7 +1240,7 @@ function looksLikeArtifact(value, references, definitions = new Map()) {
     // A denied clause cannot suppress another independently cited artifact.
     if (denial.test(prose(text))) continue;
     if (clause.includes("\u0001") || referenceClauseConcrete(text, definitions)) return true;
-    if (hasConcreteHttpUrl(text) || hasSubstantiveCodeSpan(text)) return true;
+    if (hasConcreteHttpUrl(text) || hasSubstantiveCodeSpan(text) || hasCommandPlusRunnerOutput(text)) return true;
     // Bare paths count only as a citation, not as incidental prose about a
     // missing file. Prose can use a Markdown link or an explicit citation.
     const citation = text.replace(/^(?:see|artifact(?: at|:)?|attached|saved(?: at| to)?|captured(?: at| to)?|output(?: at|:)?)\s+/i, "");
@@ -2163,6 +2177,19 @@ const CURL_CONNECTION_OPTIONS = new Map([
 ]);
 const WGET_URL_OPTIONS = new Set(["base"]);
 const WGET_VALUE_OPTIONS = new Set("execute output-file append-output report-speed input-file input-metalink metalink-index config rejected-log tries retry-on-http-error output-document start-pos progress timeout dns-timeout connect-timeout read-timeout wait waitretry quota bind-address bind-dns-address dns-servers limit-rate restrict-file-names prefer-family user password use-askpass local-encoding remote-encoding directory-prefix cut-dirs http-user http-password default-page header compression max-redirect proxy-user proxy-password referer user-agent load-cookies save-cookies post-data post-file method body-data body-file secure-protocol certificate certificate-type private-key private-key-type ca-certificate ca-directory crl-file pinnedpubkey random-file egd-file ciphers hsts-file warc-file warc-header warc-max-size warc-dedup warc-tempdir ftp-user ftp-password level accept reject accept-regex reject-regex regex-type domains exclude-domains follow-tags ignore-tags include-directories exclude-directories".split(" "));
+const WGET_LONG_NAMES = [...WGET_URL_OPTIONS, ...WGET_VALUE_OPTIONS];
+
+function resolveWgetLongOption(name) {
+  if (WGET_URL_OPTIONS.has(name) || WGET_VALUE_OPTIONS.has(name)) return name;
+  let match = null;
+  for (const option of WGET_LONG_NAMES) {
+    if (!option.startsWith(name)) continue;
+    if (match) return null;
+    match = option;
+  }
+  return match;
+}
+
 const WGET_SHORT_VALUE = new Map([
   ["e", "value"], ["o", "value"], ["a", "value"], ["i", "value"], ["B", "url"],
   ["t", "value"], ["O", "value"], ["T", "value"], ["w", "value"], ["Q", "value"],
@@ -2247,8 +2274,10 @@ function collectWgetUrls(args, urls) {
     }
     if (arg.startsWith("--")) {
       const equal = arg.indexOf("=");
-      const name = arg.slice(2, equal === -1 ? undefined : equal);
-      const takes = WGET_URL_OPTIONS.has(name) || WGET_VALUE_OPTIONS.has(name);
+      const rawName = arg.slice(2, equal === -1 ? undefined : equal);
+      const resolved = resolveWgetLongOption(rawName);
+      const name = resolved === null ? rawName : (resolved ?? rawName);
+      const takes = resolved !== null && (WGET_URL_OPTIONS.has(name) || WGET_VALUE_OPTIONS.has(name));
       let operand;
       if (equal !== -1) operand = arg.slice(equal + 1);
       else if (takes) operand = args[++i];
