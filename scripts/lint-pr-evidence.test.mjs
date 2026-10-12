@@ -5557,3 +5557,111 @@ test("r26-exported-assignment-updates-the-same-binding", () => {
     r19Expect(commandEvidence(command), 0, OK_LINE, "");
   }
 });
+
+const R27_WGET_STDIN_STDERR = "PR evidence lint FAILED:\n- Evidence contains a wget -i or --input-file stdin source this static check does not read. Put the transfer URL on the wget command line.\n";
+const R27_WGET_STDIN_AND_LAN = LAN_STDERR + "- Evidence contains a wget -i or --input-file stdin source this static check does not read. Put the transfer URL on the wget command line.\n";
+
+test("r27-declare-x-exports-proxy", () => {
+  for (const command of [
+    "declare -x http_proxy=3232235856 NO_PROXY= no_proxy=; curl http://example.test/",
+    "typeset -x http_proxy=3232235856; curl http://example.test/",
+    "http_proxy=3232235856; declare -x http_proxy; curl http://example.test/",
+    "https_proxy=3232235856; typeset -x https_proxy; wget http://example.test/",
+    "declare -x http_proxy=3232235855; http_proxy=3232235856; curl http://example.test/",
+    "declare -x ALL_PROXY=3232235857; curl http://example.test/",
+    "export http_proxy=3232235856; declare +x http_proxy; curl http://example.test/",
+  ]) {
+    r19Expect(commandEvidence(command), 1, "", LAN_STDERR);
+  }
+  for (const command of [
+    "declare -x http_proxy=3232235855; curl http://example.test/",
+    "typeset -x http_proxy=3232235858; wget http://example.test/",
+    "declare -x HTTP_PROXY=3232235856; curl http://example.test/",
+    "declare -x HTTP_PROXY=3232235856; wget http://example.test/",
+    "declare http_proxy=3232235856; curl http://example.test/",
+    "http_proxy=3232235856; declare +x http_proxy; curl http://example.test/",
+    "declare -x http_proxy=3232235856; http_proxy=3232235855; curl http://example.test/",
+    "declare -x http_proxy=3232235856; http_proxy=3232235855 curl http://example.test/",
+  ]) {
+    r19Expect(commandEvidence(command), 0, OK_LINE, "");
+  }
+  r19Expect(r25Fences("declare -x http_proxy=3232235856", "curl http://example.test/"), 0, OK_LINE, "");
+});
+
+test("r27-eval-static-command", () => {
+  for (const command of [
+    "eval 'curl 3232235856'",
+    "eval \"curl 3232235856\"",
+    "eval curl 3232235856",
+    "eval 'wget 3232235856'",
+    "eval 'export http_proxy=3232235856; curl http://example.test/'",
+    "eval \"bash -c 'curl 3232235856'\"",
+    "export http_proxy=3232235856; eval 'curl http://example.test/'",
+  ]) {
+    r19Expect(commandEvidence(command), 1, "", LAN_STDERR);
+  }
+  r19Expect(commandEvidence("eval \"$(printf 'curl 3232235856')\""), 1, "", R20_SUBSTITUTION_STDERR);
+  r19Expect(commandEvidence("eval \"curl $((nope))\""), 1, "", R19_ARITHMETIC_STDERR);
+  for (const command of [
+    "eval 'curl 3232235855'",
+    "eval 'curl http://example.test/'",
+    "eval 'printf %s 3232235856'",
+    "eval '$cmd'",
+    "eval \"bash -c 'curl 3232235855'\"",
+  ]) {
+    r19Expect(commandEvidence(command), 0, OK_LINE, "");
+  }
+});
+
+test("r27-wget-stdin-url-list", () => {
+  for (const command of [
+    "printf '3232235856\\n' | wget --input-file=-",
+    "printf 'http://example.test/\\n' | wget --input-file=-",
+    "wget --input-file=-",
+    "wget --input-file -",
+    "wget --input-file='-'",
+    "wget -i -",
+    "wget -i-",
+    "bash -c 'wget --input-file=-'",
+    "eval 'wget -i -'",
+  ]) {
+    r19Expect(commandEvidence(command), 1, "", R27_WGET_STDIN_STDERR);
+  }
+  for (const command of [
+    "wget --input-file=/no/such/gre583-r27 http://example.test/",
+    "wget -i /no/such/gre583-r27 http://example.test/",
+    "wget http://example.test/",
+  ]) {
+    r19Expect(commandEvidence(command), 0, OK_LINE, "");
+  }
+  r19Expect(commandEvidence("wget -i - 3232235856"), 1, "", R27_WGET_STDIN_AND_LAN);
+  r19Expect(commandEvidence("wget -i /no/such/gre583-r27 3232235856"), 1, "", LAN_STDERR);
+});
+
+test("r27-windows-curl-wget-basename", () => {
+  for (const command of [
+    "curl.exe 3232235856",
+    "wget.exe 3232235856",
+    "CURL.EXE 3232235856",
+    "Wget.EXE 3232235857",
+    "/tools/curl.exe 3232235856",
+    "\"C:\\\\Windows\\\\System32\\\\curl.exe\" 3232235856",
+    "tools/wget.EXE -e http_proxy=3232235856 http://example.test/",
+    "command curl.exe 3232235856",
+    "sudo curl.exe 3232235856",
+  ]) {
+    r19Expect(commandEvidence(command), 1, "", LAN_STDERR);
+  }
+  for (const command of [
+    "curl.exe 3232235855",
+    "wget.exe http://example.test/",
+    "curl.exe --data 3232235856 http://example.test/",
+    "curl.exe -e http_proxy=3232235856 http://example.test/",
+    "notepad.exe 3232235856",
+    "curl.cmd 3232235856",
+  ]) {
+    r19Expect(commandEvidence(command), 0, OK_LINE, "");
+  }
+  r19Expect(commandEvidence("curl.exe --config -"), 1, "", R25_STDIN_STDERR);
+  r19Expect(commandEvidence("wget.exe --input-file=-"), 1, "", R27_WGET_STDIN_STDERR);
+});
