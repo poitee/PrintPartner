@@ -1853,3 +1853,18 @@ for (const payload of [
     assert.equal(result.ok, true, result.errors.join("; "));
   });
 }
+
+for (const [name, payload, ok] of [
+  ["raw hidden comment", "<pre>\n<!-- http://192.168.1.80/ -->\ncurl http://localhost/\n</pre>", true],
+  ["raw multiline comment", "<pre>\n<!-- hidden\nhttp://192.168.1.80/\n-->curl http://localhost/\n</pre>", true],
+  ["separate fences", "```sh\ncurl http://192.168.1.\\\n```\n```text\n80/\n```", true],
+  ["suffix second comment", "<!-- note -->safe <!--\nhttp://192.168.1.80/\n-->", true],
+  ["suffix fake indentation", "<!-- note -->  Exemption: curl http://192.168.1.80/", false],
+  ["suffix empty boundary", "<!-- note -->\n  Exemption: curl http://192.168.1.80/", false],
+]) {
+  test(`literal payload boundary preserves ${name}`, () => {
+    const result = lintPrEvidence("## Evidence\nExemption: docs-only\n- Exemption reason: Updated docs.\n" + payload);
+    assert.equal(result.ok, ok, result.errors.join("; "));
+    if (!ok) assert.match(result.errors.join("\n"), name === "suffix empty boundary" ? /exactly one Exemption/ : /LAN instances/);
+  });
+}
