@@ -1993,6 +1993,7 @@ function shellWords(value, { commandTokens = false } = {}) {
   let quote = null;
   let braceText = "";
   let wordStarted = false;
+  let wordProtected = false;
   let wordUnresolved = false;
   let wordSubstitution = false;
   let wordParameters = [];
@@ -2018,6 +2019,7 @@ function shellWords(value, { commandTokens = false } = {}) {
   };
   const append = (text, protectedText = false) => {
     wordStarted = true;
+    wordProtected ||= protectedText;
     word += text;
     braceText += protectedText ? text.replace(/[\\{},.]/g, (ch) => "\\" + ch) : text;
   };
@@ -2026,6 +2028,7 @@ function shellWords(value, { commandTokens = false } = {}) {
       const assignable = !nameQuoted && /^[A-Za-z_][\w]*\+?=/.test(word);
       words.push(commandTokens ? {
         text: word,
+        plain: !wordProtected,
         braceText,
         unresolved: wordUnresolved,
         substitution: wordSubstitution,
@@ -2041,6 +2044,7 @@ function shellWords(value, { commandTokens = false } = {}) {
     word = "";
     braceText = "";
     wordStarted = false;
+    wordProtected = false;
     wordUnresolved = false;
     wordSubstitution = false;
     wordParameters = [];
@@ -2148,6 +2152,7 @@ function shellWords(value, { commandTokens = false } = {}) {
     else if (quote === null && (ch === "'" || ch === '"')) {
       if (!sawUnquotedEquals) nameQuoted = true;
       quote = ch;
+      wordProtected = true;
       wordStarted = true;
     } else {
       if (quote === null && ch === "=") sawUnquotedEquals = true;
@@ -2796,6 +2801,22 @@ function noteProxyAssignment(proxies, word, assigned) {
     parameter: flags.parameter,
   };
   proxies.push(entry);
+}
+
+const SHELL_CONTROL_PREFIXES = new Set(["if", "elif", "then", "else", "while", "until", "do", "!"]);
+
+function shellCommandAfterControl(command) {
+  let index = 0;
+  while (command[index]?.plain) {
+    const word = command[index].text;
+    if (SHELL_CONTROL_PREFIXES.has(word)) index += 1;
+    else if (word === "time") {
+      index += 1;
+      if (command[index]?.text === "-p") index += 1;
+      if (command[index]?.text === "--") index += 1;
+    } else break;
+  }
+  return index === 0 ? command : command.slice(index);
 }
 
 function transferClientName(program) {
@@ -3581,31 +3602,47 @@ function sshHostToken(token) {
   return hostport.startsWith("[") ? hostport : hostport.replace(/:\d+$/, "");
 }
 
-function sshDestination(args) {
+function sshDestinations(args) {
+  const hosts = [];
+  const jumpHosts = (value) => {
+    if (value.trim().toLowerCase() === "none") return true;
+    const hops = value.split(",");
+    if (hosts.length + hops.length > MAX_STATIC_CURL_TARGETS) return false;
+    for (const hop of hops) {
+      const host = sshHostToken(hop.trim());
+      if (!host) return false;
+      hosts.push(host);
+    }
+    return true;
+  };
+  const destination = (arg) => {
+    const host = arg ? sshHostToken(arg) : null;
+    return host ? { hosts: [...hosts, host] } : { hosts, reject: true };
+  };
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
-    if (arg === "--") {
-      const host = args[index + 1] ? sshHostToken(args[index + 1]) : null;
-      return host ? { host } : { reject: true };
-    }
+    if (arg === "--") return destination(args[index + 1]);
     if (arg.startsWith("-") && arg !== "-") {
-      if (arg.startsWith("--")) return { reject: true };
+      if (arg.startsWith("--")) return { hosts, reject: true };
       const cluster = arg.slice(1);
       for (let at = 0; at < cluster.length; at += 1) {
         const flag = cluster[at];
         if (SSH_FLAGS.has(flag)) continue;
-        if (!SSH_VALUES.has(flag)) return { reject: true };
-        if (at + 1 < cluster.length) break;
-        if (args[index + 1] === undefined) return { reject: true };
-        index += 1;
+        if (!SSH_VALUES.has(flag)) return { hosts, reject: true };
+        const value = at + 1 < cluster.length ? cluster.slice(at + 1) : args[++index];
+        if (value === undefined) return { hosts, reject: true };
+        if (flag === "J" && !jumpHosts(value)) return { hosts, reject: true };
+        if (flag === "o") {
+          const option = /^proxyjump(?:\s*=\s*|\s+)(.*)$/i.exec(value.trim());
+          if (option && !jumpHosts(option[1])) return { hosts, reject: true };
+        }
         break;
       }
       continue;
     }
-    const host = sshHostToken(arg);
-    return host ? { host } : { reject: true };
+    return destination(arg);
   }
-  return null;
+  return { hosts };
 }
 
 function copyExported(source) {
@@ -3653,6 +3690,7 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
   };
   let command = [];
   const flush = () => {
+    command = shellCommandAfterControl(command);
     if (noteShellExport(command, assigned, shellVars)) {
       command = [];
       return;
@@ -3839,9 +3877,9 @@ function curlCommandTargets(value, assigned = new Set(), inherited = new Map(), 
     }
     const client = transferClientName(command[start].text);
     if (client === "ssh") {
-      const destination = sshDestination(args);
-      if (destination?.reject) parameter = true;
-      else if (destination?.host) urls.push(destination.host);
+      const destinations = sshDestinations(args);
+      if (destinations.reject) parameter = true;
+      urls.push(...destinations.hosts);
       transfer();
       command = [];
       return;

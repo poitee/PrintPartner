@@ -5911,3 +5911,81 @@ Exemption: none
   assert.equal(lan.ok, false);
   assert.match(lan.errors.join("\n"), /LAN instances/);
 });
+
+for (const [name, template] of [
+  ["if", "if CLIENT HOST; then echo ok; fi"],
+  ["elif", "if false; then echo no; elif CLIENT HOST; then echo ok; fi"],
+  ["while", "while CLIENT HOST; do break; done"],
+  ["until", "until CLIENT HOST; do break; done"],
+  ["for-body", "for item in one; do CLIENT HOST; done"],
+  ["else", "if false; then echo no; else CLIENT HOST; fi"],
+  ["negation", "! CLIENT HOST"],
+  ["time", "time CLIENT HOST"],
+  ["time-portable", "time -p CLIENT HOST"],
+  ["nested", "if ! time -p CLIENT HOST; then echo ok; fi"],
+]) {
+  for (const client of ["curl", "wget", "ssh"]) {
+    test(`r31-shell-control-${name}-${client}`, () => {
+      const command = (host) => template.replace("CLIENT", client).replace("HOST", host);
+      assertBannedCommand(command("3232235856"));
+      assertBannedCommand(command("3232235857"));
+      assertSafeCommand(command("3232235855"));
+      assertSafeCommand(command("example.test"));
+    });
+  }
+}
+
+test("r31-shell-control-keywords-remain-arguments-when-quoted", () => {
+  for (const command of [
+    '"if" curl 3232235856', "'while' wget 3232235856", String.raw`\if curl 3232235856`,
+    "echo if curl 3232235856", "printf '%s' 'if curl 3232235856'",
+    "for item in curl 3232235856; do echo ok; done",
+    "env if curl 3232235856", "command if curl 3232235856",
+  ]) assertSafeCommand(command);
+});
+
+for (const [name, option] of [
+  ["short-separated", "-J HOST"], ["short-attached", "-JHOST"],
+  ["cluster", "-vJHOST"], ["user-port", "-J jump@HOST:2222"],
+  ["uri", "-J ssh://jump@HOST:2222"],
+  ["first-hop", "-J HOST,example.test"], ["last-hop", "-J example.test,HOST"],
+  ["option-separated", "-o ProxyJump=HOST"], ["option-attached", "-oProxyJump=HOST"],
+  ["option-space", '-o "ProxyJump HOST"'],
+  ["option-equals-space", '-o "ProxyJump = HOST"'],
+  ["option-mixed-case", "-o pRoXyJuMp=HOST"],
+  ["option-whitespace", '-o " ProxyJump = HOST "'],
+  ["option-chain", "-o ProxyJump=example.test,jump@HOST:2222"],
+]) {
+  test(`r31-ssh-jump-${name}`, () => {
+    assertBannedCommand(`ssh ${option.replace("HOST", "3232235856")} example.test`);
+    assertBannedCommand(`ssh ${option.replace("HOST", "3232235857")} example.test`);
+    assertSafeCommand(`ssh ${option.replace("HOST", "3232235855")} example.test`);
+  });
+}
+
+test("r31-ssh-jump-data-and-disabled-jumps", () => {
+  assertBannedCommand("ssh -J none 3232235856");
+  assertBannedCommand("ssh -J example.test 3232235857");
+  for (const command of [
+    "ssh -J none example.test", "ssh -o ProxyJump=none example.test",
+    "ssh -J example.test other.test", "ssh -o User=3232235856 example.test",
+    "ssh -i 3232235856 example.test", "ssh example.test -J 3232235856",
+  ]) assertSafeCommand(command);
+});
+
+test("r31-reported-bypasses-run-through-real-cli", () => {
+  r19Expect(commandEvidence("if curl 3232235856; then echo ok; fi"), 1, "", LAN_STDERR);
+  r19Expect(commandEvidence("ssh -J 3232235856 example.test"), 1, "", LAN_STDERR);
+});
+
+test("r31-control-prefixes-keep-launchers-and-bindings-visible", () => {
+  assertBannedCommand("if env -S 'curl 3232235856'; then echo ok; fi");
+  assertBannedCommand("if bash -c 'curl 3232235856'; then echo ok; fi");
+  r19Expect(commandEvidence("if HOST=3232235856; then curl $HOST; fi"), 1, "", R23_VARIABLE_STDERR);
+  r19Expect(commandEvidence("if HOST=3232235855; then curl $HOST; fi"), 1, "", R23_VARIABLE_STDERR);
+});
+
+test("r31-ssh-jump-list-retains-static-bound", () => {
+  const result = lintPrEvidence(commandEvidence(`ssh -J ${Array(4097).fill("example.test").join(",")} destination.test`));
+  assert.equal(result.ok, false);
+});
