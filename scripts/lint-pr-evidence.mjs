@@ -3608,7 +3608,6 @@ function sshConfigScalar(value) {
 }
 
 function sshForwardHost(value, stdio = false) {
-  if (value.startsWith("/")) return "";
   const fields = [];
   let bracket = false;
   let from = 0;
@@ -3627,9 +3626,12 @@ function sshForwardHost(value, stdio = false) {
   }
   if (bracket) return null;
   fields.push(value.slice(from));
-  if (stdio) return fields.length === 2 && /^\d+$/.test(fields[1]) ? fields[0] : null;
+  if (stdio) {
+    if (fields.length === 1 && fields[0].includes("/")) return "";
+    return fields.length === 2 && /^\d+$/.test(fields[1]) ? fields[0] : null;
+  }
   if (fields.length <= 2 && /^\d+$/.test(fields.at(-1))) return "";
-  if (fields.at(-1)?.startsWith("/")) return "";
+  if (fields.at(-1)?.includes("/")) return "";
   return fields.length >= 3 && fields.length <= 4 && /^\d+$/.test(fields.at(-1))
     ? fields.at(-2) : null;
 }

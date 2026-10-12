@@ -6112,3 +6112,35 @@ test("r32-ssh-hook-external-client-and-shell-inputs-refuse", () => {
   assertSafeCommand('ssh -o "ProxyCommand=curl -H --config=literal example.test" example.test');
   assertSafeCommand('ssh -o "ProxyCommand=wget -U --config=literal example.test" example.test');
 });
+
+for (const flag of ["L", "R"]) {
+  for (const [name, format] of [
+    ["unix-tcp", `-${flag} /tmp/listener.sock:HOST:22`],
+    ["attached-unix-tcp", `-${flag}/tmp/listener.sock:HOST:22`],
+    ["relative-unix-tcp", `-${flag} ./listener.sock:HOST:22`],
+    ["config-unix-tcp", `-o "${flag === "L" ? "LocalForward" : "RemoteForward"} /tmp/listener.sock HOST:22"`],
+  ]) {
+    test(`r33-${flag}-${name}`, () => {
+      assertBannedCommand(`ssh ${format.replace("HOST", "3232235856")} example.test`);
+      assertBannedCommand(`ssh ${format.replace("HOST", "3232235857")} example.test`);
+      assertSafeCommand(`ssh ${format.replace("HOST", "3232235855")} example.test`);
+      assertSafeCommand(`ssh ${format.replace("HOST", "example.test")} other.test`);
+    });
+  }
+  test(`r33-${flag}-unix-destination-combinations-remain-inert`, () => {
+    for (const value of [
+      "8080:/tmp/destination.sock", "127.0.0.1:8080:/tmp/destination.sock",
+      "/tmp/listener.sock:/tmp/destination.sock", "./listener.sock:./destination.sock",
+    ]) assertSafeCommand(`ssh -${flag} ${value} example.test`);
+    const key = flag === "L" ? "LocalForward" : "RemoteForward";
+    assertSafeCommand(`ssh -o "${key} /tmp/listener.sock /tmp/destination.sock" example.test`);
+    assertSafeCommand(`ssh -o "${key} 8080 ./destination.sock" example.test`);
+    assertSafeCommand(`ssh -${flag} /tmp/listener.sock:[::1]:22 example.test`);
+  });
+}
+
+test("r33-unix-listener-reported-cases-through-cli", () => {
+  for (const flag of ["L", "R"]) {
+    r19Expect(commandEvidence(`ssh -${flag} /tmp/listener.sock:3232235856:22 example.test`), 1, "", LAN_STDERR);
+  }
+});
