@@ -1,0 +1,114 @@
+{
+  "scenario": "propose-dismiss",
+  "description": "propose -> dismiss_proposed_action discards without applying; a later confirm_apply is rejected",
+  "steps": [
+    {
+      "request": {
+        "method": "tools/call",
+        "params": {
+          "name": "propose_add_custom_filament",
+          "arguments": {
+            "display_name": "Galaxy Black",
+            "hex": "#1a1a1a",
+            "product_line": "PLA Basic"
+          }
+        }
+      },
+      "response": {
+        "isError": false,
+        "content": [
+          {
+            "type": "text",
+            "json": {
+              "status": "proposed",
+              "note": "Not applied yet — user must confirm via Apply in the UI.",
+              "action": {
+                "id": "<action-id-1>",
+                "type": "propose_add_custom_filament",
+                "plan_id": 0,
+                "label": "add custom filament Galaxy Black",
+                "summary": "Add a named external filament without stock tracking.",
+                "params": {
+                  "display_name": "Galaxy Black",
+                  "hex": "#1a1a1a",
+                  "product_line": "PLA Basic"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "method": "tools/call",
+        "params": {
+          "name": "dismiss_proposed_action",
+          "arguments": {
+            "action_id": "<action-id-1>"
+          }
+        }
+      },
+      "response": {
+        "isError": false,
+        "content": [
+          {
+            "type": "text",
+            "json": {
+              "ok": true,
+              "action_id": "<action-id-1>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "method": "tools/call",
+        "params": {
+          "name": "list_pending_actions",
+          "arguments": {}
+        }
+      },
+      "response": {
+        "isError": false,
+        "content": [
+          {
+            "type": "text",
+            "json": {
+              "actions": []
+            }
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "method": "tools/call",
+        "params": {
+          "name": "confirm_apply",
+          "arguments": {
+            "action_id": "<action-id-1>"
+          }
+        }
+      },
+      "response": {
+        "isError": true,
+        "content": [
+          {
+            "type": "text",
+            "json": {
+              "ok": false,
+              "error": "Unknown, in-flight, or already applied/dismissed action_id",
+              "action_id": "<action-id-1>"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "final_state": {
+    "pending_action_ids": [],
+    "custom_filaments": []
+  }
+}

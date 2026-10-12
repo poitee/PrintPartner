@@ -46,7 +46,7 @@ pub(crate) fn owner_is_stale(pid: u32, identity: Option<&str>) -> bool {
 
 // On platforms without foreign-process identity lookup, use an instance token.
 // A live foreign PID cannot be declared stale from a token mismatch there.
-pub fn record_child(directory: &Path, pid: u32) -> Result<()> {
+pub(crate) fn record_child(directory: &Path, pid: u32) -> Result<()> {
     #[cfg(target_os = "linux")]
     let identity = process_identity(pid)?;
     #[cfg(not(target_os = "linux"))]

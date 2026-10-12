@@ -1,7 +1,7 @@
 use crate::archive::{self, ArchiveError, ArchiveLimits};
 use crate::{
-    Directory, FileKind, LocalFiles, PathCollisions, SelectedFile, SourcePath, SourceRoot,
-    compare_paths,
+    compare_paths, Directory, FileKind, LocalFiles, PathCollisions, SelectedFile, SourcePath,
+    SourceRoot,
 };
 use fs2::FileExt;
 use regex::Regex;
@@ -11,7 +11,7 @@ use std::{
     fmt,
     fs::File,
     io::{self, Read, Seek, SeekFrom, Write},
-    sync::{LazyLock, atomic::AtomicBool},
+    sync::{atomic::AtomicBool, LazyLock},
 };
 use unicode_normalization::UnicodeNormalization;
 
@@ -374,12 +374,13 @@ fn read_model(
     };
     let entries = archive::inspect_index(&mut reader, length, ArchiveLimits::default(), cancelled)?;
     let (index, entry) = entries
+        .entries
         .iter()
         .enumerate()
         .filter(|(_, e)| e.raw_name.to_ascii_lowercase().ends_with(".model"))
-        .min_by_key(|(_, e)| e.local_offset)
+        .min_by_key(|(_, e)| e.local_header_offset)
         .ok_or(MediaError::Invalid("3MF model document is missing"))?;
-    if entry.uncompressed_size > limits.max_model_bytes {
+    if entry.inflated_bytes > limits.max_model_bytes {
         return Err(MediaError::Invalid(
             "3MF model document exceeds the size limit",
         ));
@@ -406,7 +407,7 @@ fn read_model(
         }
         bytes.extend_from_slice(&buffer[..n]);
     }
-    if bytes.len() as u64 != entry.uncompressed_size {
+    if bytes.len() as u64 != entry.inflated_bytes {
         return Err(MediaError::Invalid("3MF model size mismatch"));
     }
     drop(member);

@@ -132,6 +132,16 @@ async fn start_resources(
         .canonicalize()
         .context("React assets unavailable")?;
     pp_compat::verify_bundle(&input.bundle, &assets)?;
+    std::fs::create_dir_all(&input.data_dir)?;
+    if let Some(released) = StorageLease::retry_failed_release_if_present(&input.data_dir)? {
+        anyhow::ensure!(
+            released.marker_removed
+                && released.runtime_removed
+                && released.lock_released
+                && !released.ownership_retained,
+            "Storage cleanup still incomplete; ownership retained"
+        );
+    }
     let mut owner = StorageLease::acquire(&input.data_dir)?;
     let listener = bind_origin(&owner).await?;
     let supervisor = Supervisor::start_with_config(
