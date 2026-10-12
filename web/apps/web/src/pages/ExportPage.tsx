@@ -1,6 +1,7 @@
 import { lazy, Suspense, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { HOSTED_PLANNING_COMPOSE_NOTE, isHostedPlanning, type ProductionRoute } from "@print-partner/contracts";
+import { requiredUnitTokensInObjectNames } from "@print-partner/domain";
 import { FileArchive } from "lucide-react";
 import BuildSummaryHeader from "../components/build/BuildSummaryHeader";
 import PageHeader from "../components/layout/PageHeader";
@@ -268,8 +269,14 @@ function ProductionWorkspace() {
           totalUnitCount: selectableUnits.length,
           printerCount,
           sendPrinterCount: sendFleetQuery.data?.sendCount ?? 0,
-          dispatchedFilenames: [...projection.active, ...projection.recent].map(
-            (entry) => entry.title,
+          dispatchedUnitTokens: requiredUnitTokensInObjectNames(
+            (checkoffLinksQuery.data ?? [])
+              .filter((link) =>
+                selectedProfileId != null &&
+                link.profile_id === selectedProfileId &&
+                link.state !== "dismissed",
+              )
+              .flatMap((link) => link.units.map((unit) => unit.object_name)),
           ),
           exportError: exportFailure?.message ?? null,
           sendError: sendFailure?.message ?? null,
@@ -295,12 +302,14 @@ function ProductionWorkspace() {
     }
   }, [
     assignFailure,
+    checkoffLinksQuery.data,
     exportFailure,
     plateFailure,
     printerCount,
     projection,
     route,
     selectableUnits.length,
+    selectedProfileId,
     selectedTokens.length,
     sendFailure,
     sendFleetQuery.data,
@@ -804,9 +813,8 @@ function ProductionWorkspace() {
                       <span className="font-medium">{PRODUCTION_ROUTE_LABEL[route]}</span>
                     </p>
                     {projection.routeLocked ? (
-                      // A file for this Build is already at a printer, so the
-                      // result is physical and belongs to Checkoff. GOV.UK
-                      // advises against disabling a control, so this is
+                      // A recorded print covers a Required unit in this package.
+                      // GOV.UK advises against disabling a control, so this is
                       // read-only text with the route out, not a dead button.
                       <p className="text-xs text-muted-foreground">
                         A file is already at a printer, so the route stays as it is. Track the

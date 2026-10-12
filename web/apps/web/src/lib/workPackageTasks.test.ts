@@ -87,7 +87,7 @@ function platesInput(overrides: Partial<PlatesTaskInput> = {}): PlatesTaskInput 
     totalUnitCount: 22,
     printerCount: 1,
     sendPrinterCount: 1,
-    dispatchedFilenames: [],
+    dispatchedUnitTokens: [],
     exportError: null,
     sendError: null,
     plateError: null,
@@ -224,10 +224,34 @@ describe("productionTasks on the Plates route", () => {
           },
           slicedFile: { name: "batch.gcode" },
         }),
-        dispatchedFilenames: ["batch.gcode"],
+        dispatchedUnitTokens: [TOKEN_A],
       }),
     );
     expect(byId(tasks, "send-or-start").state).toBe("complete");
+    expect(byId(tasks, "send-or-start").hint).toBe(
+      "This file is at a printer. Track it above and verify it in Checkoff.",
+    );
+  });
+
+  it("does not complete Send when the recorded file does not cover this package", () => {
+    const tasks = productionTasks(
+      platesInput({
+        pkg: pkg({
+          exportArtifact: {
+            jobId: "job-90",
+            plateRevisionNumber: 3,
+            plateCount: 1,
+            bundleUrl: "/exports/a.zip",
+          },
+          slicedFile: { name: "batch.gcode" },
+        }),
+        dispatchedUnitTokens: [`ppu_${"c".repeat(32)}`],
+      }),
+    );
+    expect(byId(tasks, "send-or-start").state).toBe("not_started");
+    expect(byId(tasks, "send-or-start").hint).toBe(
+      "Send the file to a printer, or start the print now.",
+    );
   });
 });
 

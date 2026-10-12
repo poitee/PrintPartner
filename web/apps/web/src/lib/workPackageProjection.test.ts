@@ -233,6 +233,27 @@ describe("projectWorkPackages routeLocked", () => {
       projectWorkPackages(input({ checkoffLinks: [checkoffLink({ profile_id: 99 })] })).routeLocked,
     ).toBe(false);
   });
+
+  it("keeps a past file that names no Required unit visible without locking the method", () => {
+    const projection = projectWorkPackages(input({
+      checkoffLinks: [checkoffLink({
+        filename: "shop-floor.gcode",
+        units: [{ part_id: 3, unit_index: 0, object_name: "shop-floor.gcode" }],
+      })],
+    }));
+    expect(projection.routeLocked).toBe(false);
+    expect(projection.active.map((entry) => entry.title)).toEqual(["shop-floor.gcode"]);
+    expect(projection.active[0]?.links.unitTokens).toEqual([]);
+  });
+
+  it("does not lock the method when the recorded units are outside the current package", () => {
+    const projection = projectWorkPackages(input({
+      selectedTokens: [TOKEN_B],
+      checkoffLinks: [checkoffLink()],
+    }));
+    expect(projection.routeLocked).toBe(false);
+    expect(projection.active[0]?.links.unitTokens).toEqual([TOKEN_A]);
+  });
 });
 
 describe("projectWorkPackages bench status on the Plates route", () => {

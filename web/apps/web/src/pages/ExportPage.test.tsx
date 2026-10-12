@@ -597,6 +597,34 @@ describe("ExportPage route question", () => {
     );
   });
 
+  it("keeps a past file that names no Required unit from locking the method or completing Send", () => {
+    state.checkoffLinks = [{
+      ...checkoffLink(),
+      filename: "shop-floor.gcode",
+      units: [{ part_id: 1, unit_index: 0, object_name: "shop-floor.gcode" }],
+    }];
+    renderAt("/export");
+    expect(screen.getByRole("button", { name: "Change production method" })).toBeTruthy();
+    expect(screen.queryByText(/A file is already at a printer, so the route stays as it is/)).toBeNull();
+    expect(screen.getByText("shop-floor.gcode")).toBeTruthy();
+    expect(screen.queryByText("This file is at a printer. Track it above and verify it in Checkoff.")).toBeNull();
+    expect(screen.getByText("Available once a sliced file is added.")).toBeTruthy();
+  });
+
+  it("lets a legacy external Build choose a method after a past file that names no Required unit", () => {
+    state.route = "external";
+    state.checkoffLinks = [{
+      ...checkoffLink(),
+      filename: "shop-floor.gcode",
+      units: [],
+      unlabeled_names: ["shop-floor.gcode"],
+    }];
+    renderAt("/export");
+    expect(screen.getByRole("button", { name: "Choose a Production method" })).toBeTruthy();
+    expect(screen.getByText("shop-floor.gcode")).toBeTruthy();
+    expect(screen.queryByText(/A file is already at a printer, so the route stays as it is/)).toBeNull();
+  });
+
   it("shows no tabs and no step count on any route", () => {
     for (const route of ["plates", "stl", "external"] as const) {
       cleanup();
