@@ -3995,3 +3995,19 @@ test("r13-sudo-command-executable", () => {
 test("r13-sudo-shell-lookup", () => {
   assertSafeCommand("sudo -s command -v curl 3232235856");
 });
+
+test("r13-proxy-socks-scheme", () => {
+  assertBannedCommand("curl --proxy socks5://3232235856 http://example.test");
+});
+
+test("r13-proxy-socks-scheme-safe", () => {
+  assertSafeCommand("curl --proxy socks5://3232235858 http://example.test");
+});
+
+test("r13-append-wget", () => {
+  assertBannedCommand("A+=B wget 3232235856");
+});
+
+test("r13-sudo-long-shell-command", () => {
+  assertBannedCommand("sudo --shell command curl 3232235856");
+});

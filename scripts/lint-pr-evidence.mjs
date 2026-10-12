@@ -1687,7 +1687,7 @@ function sudoCommandIndex(command, index) {
   if (Object.keys(flag).some((name) => !allowed.has(name))) return -1;
   if (cursor < command.length && mode !== "run" && mode !== "edit" && mode !== "check") return -1;
   if (mode !== "run" || cursor >= command.length) return -1;
-  return cursor;
+  return { index: cursor, shell: Boolean(flag.shell || flag.login) };
 }
 
 const MAX_CURL_EXPAND_BYTES = 4096;
@@ -1885,11 +1885,8 @@ function curlVariableName(input) {
 
 function assignCurlVariable(variables, input) {
   let line = input;
-  if (line.startsWith("%")) {
-    const imported = curlVariableName(line);
-    if (imported) variables.set(imported, { dynamic: true });
-    return;
-  }
+  const imported = line.startsWith("%");
+  if (imported) line = line.slice(1);
   const name = curlVariableName(line);
   if (!name) return;
   line = line.slice(name.length);
@@ -1905,11 +1902,15 @@ function assignCurlVariable(variables, input) {
     line = line.slice(range[0].length);
     ranged = true;
   }
-  if (line.startsWith("@")) {
+  if (!imported && line.startsWith("@")) {
     variables.set(name, { dynamic: true });
     return;
   }
-  if (!line.startsWith("=")) return;
+  const hasContent = line[0] === "=" || (imported && line[0] === "@");
+  if (!hasContent) {
+    if (imported) variables.set(name, { dynamic: true });
+    return;
+  }
   let content = line.slice(1);
   if (ranged) {
     if (start >= content.length) content = "";
@@ -1955,22 +1956,25 @@ function curlExpandedOption(arg, args, index, variables, budget) {
     return { index: next };
   }
   if (name === "url" && !expanded.dynamic) return { index: next, url: expanded.text };
+  if (!expanded.dynamic && CURL_CONNECTION_OPTIONS.has(name)) {
+    return { index: next, endpoints: connectionEndpoints(CURL_CONNECTION_OPTIONS.get(name), expanded.text) };
+  }
   return { index: next };
 }
 function effectiveCurlStart(command) {
   let start = 0;
   let mode = "shell";
-  while (/^[a-zA-Z_][\w]*=/.test(command[start]?.text ?? "")) start += 1;
+  while (/^[a-zA-Z_][\w]*\+?=/.test(command[start]?.text ?? "")) start += 1;
   while (start < command.length) {
     const program = command[start].text;
     const name = program.slice(program.lastIndexOf("/") + 1);
-    if (name === "curl") return mode === "builtin" ? -1 : start;
+    if (name === "curl" || name === "wget") return mode === "builtin" ? -1 : start;
     if (name === "sudo" || name === "sudoedit") {
       if (mode === "builtin") return -1;
       const next = sudoCommandIndex(command, start);
-      if (next <= start) return -1;
-      start = next;
-      mode = "executable";
+      if (next === -1 || next.index <= start) return -1;
+      start = next.index;
+      mode = next.shell ? "shell" : "executable";
       continue;
     }
     if (!Object.hasOwn(COMMAND_LAUNCHERS, name)) return -1;
@@ -2020,6 +2024,125 @@ function effectiveCurlStart(command) {
   return -1;
 }
 
+const CURL_CONNECTION_OPTIONS = new Map([
+  ["proxy", "endpoint"],
+  ["preproxy", "endpoint"],
+  ["connect-to", "connect-to"],
+  ["resolve", "resolve"],
+  ["socks4", "endpoint"],
+  ["socks4a", "endpoint"],
+  ["socks5", "endpoint"],
+  ["socks5-hostname", "endpoint"],
+]);
+const WGET_URL_OPTIONS = new Set(["base"]);
+const WGET_VALUE_OPTIONS = new Set("execute output-file append-output report-speed input-file input-metalink metalink-index config rejected-log tries retry-on-http-error output-document start-pos progress timeout dns-timeout connect-timeout read-timeout wait waitretry quota bind-address bind-dns-address dns-servers limit-rate restrict-file-names prefer-family user password use-askpass local-encoding remote-encoding directory-prefix cut-dirs http-user http-password default-page header compression max-redirect proxy-user proxy-password referer user-agent load-cookies save-cookies post-data post-file method body-data body-file secure-protocol check-certificate certificate certificate-type private-key private-key-type ca-certificate ca-directory crl-file pinnedpubkey random-file egd-file ciphers hsts-file warc-file warc-header warc-max-size warc-dedup warc-tempdir ftp-user ftp-password retr-symlinks level backups accept reject accept-regex reject-regex regex-type domains exclude-domains follow-tags ignore-tags include-directories exclude-directories".split(" "));
+const WGET_SHORT_VALUE = new Map([
+  ["e", "value"], ["o", "value"], ["a", "value"], ["i", "value"], ["B", "url"],
+  ["t", "value"], ["O", "value"], ["T", "value"], ["w", "value"], ["Q", "value"],
+  ["P", "value"], ["U", "value"], ["l", "value"], ["A", "value"], ["R", "value"],
+  ["D", "value"], ["I", "value"], ["X", "value"],
+]);
+
+function httpHostTarget(value) {
+  if (!/^[a-z][\w+.-]*:\/\//i.test(value)) return value;
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return value;
+  }
+  if (/^(?:0x[\da-f]+|\d+)$/i.test(parsed.hostname)) return `http://${parsed.hostname}`;
+  return value;
+}
+
+function splitColons(value) {
+  const fields = [];
+  let current = "";
+  let depth = 0;
+  for (const ch of value) {
+    if (ch === "[") depth += 1;
+    else if (ch === "]" && depth > 0) depth -= 1;
+    else if (ch === ":" && depth === 0) {
+      fields.push(current);
+      current = "";
+      continue;
+    }
+    current += ch;
+  }
+  fields.push(current);
+  return fields;
+}
+
+function connectionEndpoints(kind, value) {
+  if (!value) return [];
+  if (kind === "endpoint") return [httpHostTarget(value)];
+  if (kind === "connect-to") {
+    const fields = splitColons(value);
+    if (fields.length !== 4) return [];
+    return fields[2] ? [httpHostTarget(fields[2])] : [];
+  }
+  if (kind !== "resolve") return [];
+  let text = value.startsWith("+") ? value.slice(1) : value;
+  let hostEnd;
+  if (text.startsWith("[")) {
+    const close = text.indexOf("]");
+    if (close < 0 || text[close + 1] !== ":") return [];
+    hostEnd = close + 1;
+  } else {
+    hostEnd = text.indexOf(":");
+    if (hostEnd < 0) return [];
+  }
+  const portEnd = text.indexOf(":", hostEnd + 1);
+  if (portEnd < 0) return [];
+  const addresses = [];
+  let current = "";
+  let depth = 0;
+  for (const ch of text.slice(portEnd + 1)) {
+    if (ch === "[") depth += 1;
+    else if (ch === "]" && depth > 0) depth -= 1;
+    else if (ch === "," && depth === 0) {
+      if (current) addresses.push(current);
+      current = "";
+      continue;
+    }
+    current += ch;
+  }
+  if (current) addresses.push(current);
+  return addresses.map(httpHostTarget);
+}
+
+function collectWgetUrls(args, urls) {
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === "--") {
+      for (const url of args.slice(i + 1)) urls.push(url);
+      return;
+    }
+    if (arg.startsWith("--")) {
+      const equal = arg.indexOf("=");
+      const name = arg.slice(2, equal === -1 ? undefined : equal);
+      const takes = WGET_URL_OPTIONS.has(name) || WGET_VALUE_OPTIONS.has(name);
+      let operand;
+      if (equal !== -1) operand = arg.slice(equal + 1);
+      else if (takes) operand = args[++i];
+      if (WGET_URL_OPTIONS.has(name) && operand !== undefined) urls.push(operand);
+      continue;
+    }
+    if (arg.startsWith("-") && arg !== "-") {
+      for (let at = 1; at < arg.length; at += 1) {
+        const spec = WGET_SHORT_VALUE.get(arg[at]);
+        if (!spec) continue;
+        const inline = arg.slice(at + 1);
+        const operand = inline === "" ? args[++i] : inline;
+        if (spec === "url" && operand !== undefined) urls.push(operand);
+        break;
+      }
+      continue;
+    }
+    urls.push(arg);
+  }
+}
+
 function curlCommandTargets(value) {
   const targets = [];
   let overflow = false;
@@ -2051,6 +2174,13 @@ function curlCommandTargets(value) {
       overflow ||= expanded.overflow;
       args.push(...expanded.values.map((text) => text.replace(/\\([\\{},.])/g, "$1")));
     }
+    const client = command[start].text.slice(command[start].text.lastIndexOf("/") + 1);
+    if (client === "wget") {
+      collectWgetUrls(args, urls);
+      transfer();
+      command = [];
+      return;
+    }
     for (let i = 0; i < args.length; i += 1) {
       const arg = args[i];
       if (!options) { urls.push(arg); continue; }
@@ -2063,13 +2193,17 @@ function curlCommandTargets(value) {
         i = parsed.index;
         if (parsed.budget) budget = true;
         if (parsed.url !== undefined) urls.push(parsed.url);
+        if (parsed.endpoints) urls.push(...parsed.endpoints);
         continue;
       }
       if (arg.startsWith("-") && arg !== "-") {
         for (let at = 1; at < arg.length; at += 1) {
           if (arg[at] === "g") globoff = true;
           if (CURL_SHORT_VALUE_OPTIONS.has(arg[at])) {
-            if (at + 1 === arg.length) i += 1;
+            const inline = arg.slice(at + 1);
+            const operand = inline === "" ? args[i + 1] : inline;
+            if (inline === "") i += 1;
+            if (arg[at] === "x" && operand !== undefined) urls.push(operand);
             break;
           }
         }
