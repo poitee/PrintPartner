@@ -316,7 +316,10 @@ fn max_flat_snapshot_publishes_and_retries_cleanly() {
 #[test]
 fn cli_retry_reuses_revision_after_inputs_are_deleted() {
     use std::io::Write;
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
+
+    #[path = "support/process.rs"]
+    mod test_process;
 
     let fixture = Fixture::new();
     let command = serde_json::json!({
@@ -325,7 +328,7 @@ fn cli_retry_reuses_revision_after_inputs_are_deleted() {
         "reservedStoredBytes": 1024 * 1024, "snapshot": request(),
     });
     let invoke = || {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_pp-source"))
+        let mut child = test_process::command(env!("CARGO_BIN_EXE_pp-source"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
