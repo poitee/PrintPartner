@@ -44,7 +44,7 @@ import {
   indexSourceDocsFromDisk,
 } from "../services/source-docs-index.js";
 import { PDF_BG_EXTRACT_BYTES } from "../services/pdf-text-extract.js";
-import { sourcePdfTextStorage } from "../services/source-workspace.js";
+import { findSourceManifestPath, sourcePdfTextStorage } from "../services/source-workspace.js";
 import { publishLocalSourceWorkingTree } from "../services/local-source-revision.js";
 import { scanSourceArtifacts } from "../services/source-artifacts.js";
 import { sendIfTenantDiskQuotaExceeded, runWithTenantDiskQuota, TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
@@ -571,10 +571,16 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
     }
   });
 
-  app.get("/sources/:id/has-manifest", async () => ({
-    has_manifest: false,
-    manifest_kind: null,
-  }));
+  app.get<{ Params: { id: string } }>("/sources/:id/has-manifest", async (request, reply) => {
+    const id = Number(request.params.id);
+    if (!Number.isSafeInteger(id) || id <= 0) {
+      return reply.status(404).send({ detail: "Source not found" });
+    }
+    const row = deps.repo.getProjectRow(id);
+    if (!row) return reply.status(404).send({ detail: "Source not found" });
+    const hasManifest = row.localPath != null && findSourceManifestPath(row.localPath) != null;
+    return { has_manifest: hasManifest, manifest_kind: hasManifest ? "repo" : null };
+  });
 
   app.get("/sources/:id/cover", async (request, reply) => {
     const id = Number((request.params as { id: string }).id);
@@ -605,11 +611,9 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
     return searchSourceStls(sources, query.q ?? "", limit);
   });
 
-  app.get("/sources/maintenance", async () => ({
-    no_manifest: [],
-    catalog_orphans: [],
-    empty_categories: [],
-    drift: [],
+  app.get("/sources/maintenance", async (_request, reply) => reply.status(501).send({
+    code: "source_maintenance_unsupported",
+    detail: "Source maintenance reporting is not supported by this web API.",
   }));
 
   app.post("/sources/import-repos-txt", async (request, reply) => {

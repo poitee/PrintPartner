@@ -617,15 +617,18 @@ export async function registerPlanRoutes(
     }
   });
 
-  app.get("/plans/maintenance", async () => ({ plans_with_warnings: [] }));
-  app.get("/plans/:id/manifest-summary", async (request) => ({
-    profile_id: Number((request.params as { id: string }).id),
-    required: { total: 0, included: 0 },
-    optional: { total: 0, included: 0 },
-    recommended: { total: 0, included: 0 },
-    option_groups: [],
+  app.get("/plans/maintenance", async (_request, reply) => reply.status(501).send({
+    code: "plan_maintenance_unsupported",
+    detail: "Plan maintenance reporting is not supported by this web API.",
   }));
-  app.get("/plans/:id/manifest-warnings", async () => ({ warnings: [] }));
+  app.get("/plans/:id/manifest-summary", async (_request, reply) => reply.status(501).send({
+    code: "plan_manifest_summary_unsupported",
+    detail: "Plan manifest summary is not supported by this web API.",
+  }));
+  app.get("/plans/:id/manifest-warnings", async (_request, reply) => reply.status(501).send({
+    code: "plan_manifest_warnings_unsupported",
+    detail: "Plan manifest warning reporting is not supported by this web API.",
+  }));
   app.get("/plans/:id/role-filaments", async (request, reply) => {
     const id = Number((request.params as { id: string }).id);
     if (!deps.repo.getOwnedProfileIdentity(id)) return reply.status(404).send({ detail: "Profile not found" });

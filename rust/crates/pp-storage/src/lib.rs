@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod lease;
 mod schema;
 
@@ -56,9 +57,15 @@ enum Work {
     Setting(SettingCommand),
     Backup(PathBuf),
 }
-struct Envelope {
-    work: Work,
-    reply: mpsc::Sender<Result<bool>>,
+enum Envelope {
+    Setting {
+        work: Work,
+        reply: mpsc::Sender<Result<bool>>,
+    },
+    Auth {
+        command: auth::Command,
+        reply: mpsc::Sender<Result<auth::Reply>>,
+    },
 }
 struct Queue {
     closed: bool,
@@ -145,7 +152,7 @@ impl SettingsClient {
             );
             if queue.pending.len() < self.shared.capacity {
                 let (reply, receiver) = mpsc::channel();
-                queue.pending.push_back(Envelope { work, reply });
+                queue.pending.push_back(Envelope::Setting { work, reply });
                 self.shared.changed.notify_all();
                 return Ok(receiver);
             }
@@ -307,8 +314,14 @@ impl WriterOwner {
                         None => break,
                     }
                 };
-                let result = execute(&mut connection, envelope.work);
-                let _ = envelope.reply.send(result);
+                match envelope {
+                    Envelope::Setting { work, reply } => {
+                        let _ = reply.send(execute(&mut connection, work));
+                    }
+                    Envelope::Auth { command, reply } => {
+                        let _ = reply.send(auth::execute(&mut connection, command));
+                    }
+                }
             }
             drop(connection);
         });
