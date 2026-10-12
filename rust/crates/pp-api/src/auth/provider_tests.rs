@@ -379,6 +379,9 @@ async fn linked_account_sessions_remember_their_sign_in_provider() {
     ] {
         let me = server.me(cookie).await;
         assert_eq!(me["user"]["provider"], expected);
+        assert_eq!(me["user"]["hasPassword"], true);
+        assert_eq!(me["user"]["email"], "primary@example.com");
+        assert!(me["user"].get("password_hash").is_none());
     }
 
     server

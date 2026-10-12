@@ -105,8 +105,9 @@ async fn main() -> Result<()> {
         })?,
         None => ResetMailer::disabled(),
     };
-    let router = auth_router(config, auth, providers, mail);
+    let router = auth_router(config, auth, providers, mail.clone());
     let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     println!(
         "{}",
         serde_json::json!({"origin":format!("http://{address}"),"writer_owners":1,"mode":"standalone-auth-http"})
@@ -116,9 +117,13 @@ async fn main() -> Result<()> {
         router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
     .with_graceful_shutdown(async move {
-        interrupt.recv().await;
+        tokio::select! {
+            _ = interrupt.recv() => {}
+            _ = terminate.recv() => {}
+        }
     })
     .await?;
+    mail.drain_deliveries().await;
     owner.shutdown()?;
     Ok(())
 }

@@ -433,15 +433,7 @@ async fn forgot(
         None
     };
     if let Some(permit) = delivery_permit {
-        let mail = app.mail.clone();
-        tokio::spawn(async move {
-            let _permit = permit;
-            tokio::join!(tokio::time::sleep_until(deadline), async {
-                if let Some(url) = reset_url {
-                    mail.deliver_until(&email, &url, deadline).await;
-                }
-            });
-        });
+        app.mail.schedule_reset(email, reset_url, deadline, permit);
     } else if app.config.dev_reset_exposure
         && let Some(url) = reset_url
     {
