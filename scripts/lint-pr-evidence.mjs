@@ -1443,7 +1443,7 @@ function expandTargetGlobs(value, { shell = false } = {}) {
         }
         if (content.includes("{")) { if (shell) continue; return { values: [], overflow: false }; }
         let items;
-        const authorityStart = /^(?:[a-z][\w+.-]*:)?\/\//i.exec(text)?.[0].length ?? 0;
+        const authorityStart = /^(?:[a-z][\w+.-]*:\/{1,3}|\/\/)/i.exec(text)?.[0].length ?? 0;
         const pathStart = text.slice(authorityStart).search(/[/?#]/);
         const inPath = !shell && pathStart !== -1 && at >= authorityStart + pathStart;
         const list = [""];
