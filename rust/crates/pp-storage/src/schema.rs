@@ -213,6 +213,11 @@ pub(crate) fn initialize(
         );
     }
     tx.commit()?;
+    // Historical Node client.ts rebuilt this table when source_revision_id was NOT NULL,
+    // before stamping the current version. Schema 34 already publishes the repaired
+    // shape, so this stays inside version 34 instead of allocating a new version.
+    rebuild_legacy_plan_revision_inputs(&mut conn, &data.migrations)?;
+    realign_equivalent_indexes_and_triggers(&mut conn, &data.migrations)?;
     add_column(
         &conn,
         "parts",
@@ -269,6 +274,175 @@ pub(crate) fn initialize(
             backup: backup_path,
         },
     ))
+}
+
+pub(crate) fn sql_identity(sql: &str) -> String {
+    let mut tokens: Vec<&str> = sql.split_whitespace().collect();
+    let mut index = 1;
+    if matches!(tokens.get(index), Some(&"UNIQUE" | &"TEMP" | &"TEMPORARY")) {
+        index += 1;
+    }
+    if matches!(
+        tokens.get(index),
+        Some(&"TABLE" | &"INDEX" | &"TRIGGER" | &"VIEW")
+    ) {
+        index += 1;
+        if tokens.get(index) == Some(&"IF")
+            && tokens.get(index + 1) == Some(&"NOT")
+            && tokens.get(index + 2) == Some(&"EXISTS")
+        {
+            tokens.drain(index..index + 3);
+        }
+    }
+    tokens.join(" ")
+}
+
+fn canonical_migration<'a>(migrations: &'a [String], needle: &str) -> Result<&'a str> {
+    let mut matches = migrations.iter().filter(|sql| sql.contains(needle));
+    let found = matches
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("Missing migration containing {needle}"))?;
+    ensure!(
+        matches.next().is_none(),
+        "Multiple migrations contain {needle}"
+    );
+    Ok(found)
+}
+
+fn quote_sql_ident(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+fn rebuild_legacy_plan_revision_inputs(conn: &mut Connection, migrations: &[String]) -> Result<()> {
+    let notnull: Option<i64> = conn
+        .query_row(
+            "SELECT \"notnull\" FROM pragma_table_info('plan_revision_inputs') WHERE name = 'source_revision_id'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if notnull != Some(1) {
+        return Ok(());
+    }
+    let orphan: Option<i64> = conn
+        .query_row(
+            "SELECT input.id
+               FROM plan_revision_inputs input
+               LEFT JOIN source_revisions revision ON revision.id = input.source_revision_id
+              WHERE revision.id IS NULL
+              LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if let Some(id) = orphan {
+        bail!("Cannot migrate Plan revision input {id}: Source revision is missing");
+    }
+    let create = canonical_migration(
+        migrations,
+        "CREATE TABLE IF NOT EXISTS plan_revision_inputs",
+    )?;
+    let tenant_index = canonical_migration(migrations, "idx_plan_revision_inputs_tenant_set")?;
+    let unique_index = canonical_migration(migrations, "uq_plan_revision_inputs_v2_set_source")?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    // Historical schemaMigrations filled these columns before the client rebuild.
+    // Current schema.json publishes the repaired CREATE instead of that UPDATE,
+    // so a legacy NOT NULL table still needs the fill before the NOT NULL copy.
+    tx.execute_batch(
+        "UPDATE plan_revision_inputs
+            SET source_id = (
+                  SELECT project_id FROM source_revisions
+                   WHERE source_revisions.id = plan_revision_inputs.source_revision_id
+                ),
+                source_layer = 'legacy:' || COALESCE((
+                  SELECT project_id FROM source_revisions
+                   WHERE source_revisions.id = plan_revision_inputs.source_revision_id
+                ), 0)
+          WHERE source_id IS NULL OR source_layer IS NULL",
+    )?;
+    tx.execute_batch("ALTER TABLE plan_revision_inputs RENAME TO plan_revision_inputs_v17")?;
+    tx.execute_batch(create)?;
+    tx.execute_batch(
+        "INSERT INTO plan_revision_inputs (
+            id, tenant_id, input_set_id, source_id, source_layer, layer_order,
+            tracking_kind, source_revision_id, manifest_digest, effective_naming_digest
+         )
+         SELECT
+            id, tenant_id, input_set_id, source_id, source_layer, layer_order,
+            tracking_kind, source_revision_id, manifest_digest, effective_naming_digest
+           FROM plan_revision_inputs_v17",
+    )?;
+    tx.execute_batch("DROP TABLE plan_revision_inputs_v17")?;
+    tx.execute_batch(unique_index)?;
+    tx.execute_batch(tenant_index)?;
+    // Historical Node's empty rebuild records sqlite_sequence.seq = 0. Current
+    // fresh initialization never inserts that row. The next AUTOINCREMENT id is
+    // 1 either way, so drop only the empty marker and leave a real sequence.
+    let has_sequence: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'sqlite_sequence')",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_sequence {
+        tx.execute_batch(
+            "DELETE FROM sqlite_sequence
+              WHERE name = 'plan_revision_inputs'
+                AND seq = 0
+                AND NOT EXISTS (SELECT 1 FROM plan_revision_inputs)",
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+fn realign_equivalent_indexes_and_triggers(
+    conn: &mut Connection,
+    migrations: &[String],
+) -> Result<()> {
+    let mut statement = conn.prepare(
+        "SELECT type, name, sql FROM sqlite_master
+          WHERE sql IS NOT NULL AND type IN ('index', 'trigger')
+            AND name NOT LIKE 'sqlite_%'",
+    )?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+    let mut replacements = Vec::new();
+    for (kind, name, sql) in rows {
+        let identity = sql_identity(&sql);
+        let mut matches = migrations
+            .iter()
+            .filter(|statement| sql_identity(statement) == identity);
+        let Some(canonical) = matches.next() else {
+            continue;
+        };
+        if matches.next().is_some() || canonical == &sql {
+            continue;
+        }
+        replacements.push((kind, name, canonical.clone()));
+    }
+    if replacements.is_empty() {
+        return Ok(());
+    }
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    for (kind, name, statement) in &replacements {
+        let drop_sql = match kind.as_str() {
+            "index" => format!("DROP INDEX {}", quote_sql_ident(name)),
+            "trigger" => format!("DROP TRIGGER {}", quote_sql_ident(name)),
+            other => bail!("Refusing to realign {other} {name}"),
+        };
+        tx.execute_batch(&drop_sql)?;
+        tx.execute_batch(statement)?;
+    }
+    tx.commit()?;
+    Ok(())
 }
 
 fn execute_migration(conn: &Connection, sql: &str) -> Result<()> {
