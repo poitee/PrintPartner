@@ -295,8 +295,8 @@ pub(super) fn execute(connection: &mut Connection, command: Command) -> Result<O
             Outcome::Rebased { draft }
             | Outcome::Created { draft }
             | Outcome::Existing { draft }
-            | Outcome::Updated { draft }
-            | Outcome::Unchanged { draft } => Some(draft),
+            | Outcome::Updated { draft } => Some(draft),
+            Outcome::Unchanged { draft } if draft["state"] == "open" => Some(draft),
             _ => None,
         };
         if let Some(draft) = draft {
@@ -708,6 +708,7 @@ fn auto_select(
     committed: Option<Value>,
     expected: Option<&pp_contracts::working_drafts::ExpectedDraft>,
 ) -> Result<Outcome> {
+    ensure!(!c.cancelled.load(Ordering::Acquire), Failure::Cancelled);
     let tx = connection.transaction()?;
     let (tenant, _) = auth::observe_reconciliation_actor(&tx, &c.credential, c.policy)?;
     let profile = c.profile.get() as i64;
@@ -770,6 +771,7 @@ fn auto_select(
     )?;
     let key = format!("auto-{}", text(&d.header, "snapshotDigest")?);
     tx.commit()?;
+    ensure!(!c.cancelled.load(Ordering::Acquire), Failure::Cancelled);
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let result = required_units::reconcile_in_transaction(
         &tx,
@@ -867,3 +869,6 @@ fn edit(
 fn js_trim(value: &str) -> &str {
     value.trim_matches(|c: char| matches!(c, '\u{0009}'..='\u{000d}' | ' ' | '\u{00a0}' | '\u{1680}' | '\u{2000}'..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}' | '\u{205f}' | '\u{3000}' | '\u{feff}'))
 }
+
+#[cfg(test)]
+mod tests;
