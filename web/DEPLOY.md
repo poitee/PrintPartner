@@ -365,5 +365,5 @@ Run `npm run quality` before deploying a changed image.
 
 - No PyVista/VTK mesh preview server-side (client thumbnails only)
 - Printables/MakerWorld source create returns `501`
-- Community manifest report issue action uses an export-draft stub body
+- Community manifest submission draft export and Source/Plan maintenance and manifest reports return explicit HTTP 501 unsupported responses. Source manifest presence reads owned canonical file availability. These GRE-292 corrections are unreleased; see [manifest API availability](../docs/gre-292-manifest-api-availability.md).
 - Bambu metadata in 3MF is minimal (plate JSON + slice_info stub)
