@@ -7796,6 +7796,22 @@ export class AppRepository {
       .run();
   }
 
+  savePlanVariantSelection(
+    planId: number,
+    sourceId: number,
+    selection: Record<string, string>,
+  ): { rules: string[] } {
+    if (!this.syncSqlite) throw new Error("Atomic variant selection is unavailable for this database");
+    return this.transaction(() => {
+      this.requireProfile(planId);
+      const baseSourceId = this.getProfileLayers(planId).find((layer) => layer.layer_type === "base")?.project_id;
+      if (sourceId !== baseSourceId) throw new Error("Source must match the plan's base source");
+      const rules = Object.values(selection).filter(Boolean).map((value) => `${value}/`);
+      this.setSetting(`plan_variant_selection_${planId}`, JSON.stringify(selection));
+      return this.updateImportRules(sourceId, rules);
+    }, "immediate");
+  }
+
   updateImportRules(id: number, rules: string[]): { rules: string[] } {
     const row = this.getProjectRow(id);
     if (!row) throw new Error("Source not found");
