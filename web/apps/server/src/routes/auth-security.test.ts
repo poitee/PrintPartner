@@ -140,6 +140,81 @@ describe("production authentication routes", () => {
     }
   });
 
+  it("rejects a wrong current password without ending the session or changing it", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pp-auth-wrong-current-"));
+    const { app, ports } = await makeProductionApp(dir);
+    const email = "wrong-current@example.com";
+    const currentPassword = "correct-horse-battery";
+    const rejectedNewPassword = "correct-horse-battery-2";
+
+    try {
+      const registration = await app.inject({
+        method: "POST",
+        url: "/auth/register",
+        payload: {
+          email,
+          password: currentPassword,
+          display_name: "Wrong Current",
+        },
+      });
+      expect(registration.statusCode).toBe(200);
+      const cookie = String(registration.headers["set-cookie"]).split(";", 1)[0];
+
+      const rejected = await app.inject({
+        method: "POST",
+        url: "/auth/change-password",
+        headers: { cookie },
+        payload: {
+          current_password: "not-the-password",
+          new_password: rejectedNewPassword,
+        },
+      });
+      expect(rejected.statusCode).toBe(401);
+      expect(rejected.json()).toEqual({
+        code: "current_password_rejected",
+        detail: "Current password is incorrect",
+      });
+
+      const stillSignedIn = await app.inject({
+        method: "GET",
+        url: "/auth/me",
+        headers: { cookie },
+      });
+      expect(stillSignedIn.statusCode).toBe(200);
+      expect(stillSignedIn.json()).toMatchObject({ user: { email } });
+
+      const oldPassword = await app.inject({
+        method: "POST",
+        url: "/auth/login",
+        payload: { email, password: currentPassword },
+      });
+      expect(oldPassword.statusCode).toBe(200);
+
+      const newPassword = await app.inject({
+        method: "POST",
+        url: "/auth/login",
+        payload: { email, password: rejectedNewPassword },
+      });
+      expect(newPassword.statusCode).toBe(401);
+      expect(newPassword.json()).toEqual({ detail: "Invalid email or password" });
+
+      const missingSession = await app.inject({
+        method: "POST",
+        url: "/auth/change-password",
+        payload: {
+          current_password: currentPassword,
+          new_password: rejectedNewPassword,
+        },
+      });
+      expect(missingSession.statusCode).toBe(401);
+      expect(missingSession.json()).toEqual({ detail: "Authentication required" });
+    } finally {
+      await app.close();
+      ports.db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("reports whether the health request has an authenticated session", async () => {
     const dir = mkdtempSync(join(tmpdir(), "pp-auth-production-health-"));
     const { app, ports } = await makeProductionApp(dir);
