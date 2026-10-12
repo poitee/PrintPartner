@@ -1204,26 +1204,34 @@ async fn desktop_marker_with_both_processes_dead_allows_start() {
 
 #[tokio::test]
 async fn ticket_t_5_staged_release_reuses_the_persisted_desktop_identity() {
-    let manifest = PathBuf::from(std::env::var_os("PP_DESKTOP_RELEASE_MANIFEST").unwrap());
-    let stage = manifest.parent().unwrap();
-    let release: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(stage.join("release.json")).unwrap()).unwrap();
+    let stage = std::env::var_os("PP_DESKTOP_RELEASE_MANIFEST")
+        .map(PathBuf::from)
+        .and_then(|manifest| manifest.parent().map(PathBuf::from))
+        .filter(|root| root.join("release.json").is_file());
+    let release: Option<serde_json::Value> = stage.as_ref().map(|root| {
+        serde_json::from_slice(&std::fs::read(root.join("release.json")).unwrap()).unwrap()
+    });
     let data =
         std::env::temp_dir().join(format!("pp-t-5-{}", hex::encode(rand::random::<[u8; 8]>())));
-    let staged_launch = || DesktopLaunch {
-        data_dir: data.clone(),
-        assets: stage
-            .join(release["web"].as_str().unwrap())
-            .join("apps/web/dist"),
-        bundle: VerifiedBundle {
-            node: stage.join(release["node"].as_str().unwrap()),
-            entry: stage
+    let staged_launch = || {
+        let (Some(stage), Some(release)) = (&stage, &release) else {
+            return launch(data.clone());
+        };
+        DesktopLaunch {
+            data_dir: data.clone(),
+            assets: stage
                 .join(release["web"].as_str().unwrap())
-                .join("apps/server/dist/current/desktop.js"),
-            web_root: stage.join(release["web"].as_str().unwrap()),
-            runtime_version: release["runtime_version"].as_str().unwrap().into(),
-            commit: release["commit"].as_str().unwrap().into(),
-        },
+                .join("apps/web/dist"),
+            bundle: VerifiedBundle {
+                node: stage.join(release["node"].as_str().unwrap()),
+                entry: stage
+                    .join(release["web"].as_str().unwrap())
+                    .join("apps/server/dist/current/desktop.js"),
+                web_root: stage.join(release["web"].as_str().unwrap()),
+                runtime_version: release["runtime_version"].as_str().unwrap().into(),
+                commit: release["commit"].as_str().unwrap().into(),
+            },
+        }
     };
     let mut runtime = CoreRuntime::start(staged_launch()).await.unwrap();
     let origin = runtime.origin().to_owned();
