@@ -81,4 +81,3 @@ Exact-head Linux app and staged-runtime receipts cover those actual consumers.
 They do not establish macOS signing, notarization, native updating, Windows
 runtime support, or clean-device installation. Those remain release gates,
 not dependencies that postpone this M0 identity decision.
-
