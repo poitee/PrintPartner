@@ -43,7 +43,7 @@ impl Fixture {
             },
         )
         .unwrap();
-        let client = owner.accepted_reads();
+        let client = owner.accepted_reads().unwrap();
         Self {
             root,
             owner: Some(owner),
@@ -183,7 +183,7 @@ fn ticket_t_61_read_model_revocation_and_restart() {
             .is_err()
     );
     let (o, _) = WriterOwner::open(&f.root, Limits::default()).unwrap();
-    f.client = o.accepted_reads();
+    f.client = o.accepted_reads().unwrap();
     f.owner = Some(o);
     assert!(matches!(
         f.read().builds[0].accepted,

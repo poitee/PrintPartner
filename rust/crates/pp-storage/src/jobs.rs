@@ -969,7 +969,10 @@ fn user(
                     job.state = PersistentState::ReconciliationRequired;
                 }
             }
-            let effect = job.effects.last().expect("reconciliation effect");
+            let effect = job
+                .effects
+                .last()
+                .ok_or_else(|| anyhow!("Reconciliation effect required"))?;
             tx.execute("INSERT INTO durable_job_reconciliations(job_id,version,subject,generation,effect_hash,basis_hash,target,decision,receipt,at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",params![job.job_id,job.state_version+1,subject,expected_generation,effect_hash,effect.intent.basis_hash,effect.intent.target,format!("{decision:?}"),serde_json::to_string(&subject_receipt)?,now()])?;
             job.recovery = Some(format!("User reconciliation: {decision:?}"));
             save(
@@ -1018,8 +1021,9 @@ fn claim(tx: &Transaction<'_>, worker: &str, admission: &WorkerAdmission) -> Res
             job.state = PersistentState::Running;
             job.attempt += 1;
             job.generation += 1;
+            let fence = random();
             job.lease_until = Some(now() + i64::from(admission.lease_seconds));
-            job.fence = Some(random());
+            job.fence = Some(fence.clone());
             job.worker = Some(worker.into());
             save(tx, &mut job, "claimed")?;
             let lease = AttemptLease {
@@ -1027,7 +1031,7 @@ fn claim(tx: &Transaction<'_>, worker: &str, admission: &WorkerAdmission) -> Res
                 tenant: job.tenant.clone(),
                 generation: job.generation,
                 version: job.state_version,
-                fence: job.fence.clone().expect("claim fence"),
+                fence,
                 worker: worker.into(),
             };
             return Ok(Outcome::Claimed(Some((job, lease))));

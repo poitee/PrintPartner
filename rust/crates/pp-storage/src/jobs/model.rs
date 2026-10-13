@@ -38,12 +38,19 @@ impl JobKind {
             _ => EffectClass::LocalStaging,
         }
     }
-    pub fn name(self) -> String {
-        serde_json::to_value(self)
-            .expect("enum")
-            .as_str()
-            .expect("string")
-            .into()
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Sync => "sync",
+            Self::ImportScan => "import-scan",
+            Self::ExtractSourceDocs => "extract-source-docs",
+            Self::CheckSourceUpdates => "check-source-updates",
+            Self::ExportStlPack => "export-stl-pack",
+            Self::ExportChecklistHtml => "export-checklist-html",
+            Self::ExportKitBundle => "export-kit-bundle",
+            Self::ExportAcceptedPlate3mf => "export-accepted-plate-3mf",
+            Self::ExportDirect3mf => "export-direct-3mf",
+            Self::PrinterUpload => "printer-upload",
+        }
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -676,7 +683,9 @@ pub enum Decision {
 }
 
 fn timestamp(seconds: i64) -> String {
-    let time = time::OffsetDateTime::from_unix_timestamp(seconds).expect("persisted UTC timestamp");
+    let Ok(time) = time::OffsetDateTime::from_unix_timestamp(seconds) else {
+        return format!("invalid-timestamp:{seconds}");
+    };
     format!(
         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.000Z",
         time.year(),

@@ -139,7 +139,9 @@ fn naming_digest(global: &Naming, metadata: Option<&str>) -> Result<String> {
     if metadata["naming"]["use_defaults"] == false {
         let over = &metadata["naming"]["override"];
         if let Some(roles) = over["roles"].as_array() {
-            let target = value["roles"].as_array_mut().expect("roles");
+            let target = value["roles"]
+                .as_array_mut()
+                .ok_or_else(|| anyhow::Error::msg("Naming roles are missing"))?;
             for r in roles {
                 if let Some(existing) = target.iter_mut().find(|e| e["id"] == r["id"]) {
                     for k in ["label", "markers"] {
@@ -254,10 +256,13 @@ fn freshness(
             attached,
         ));
     }
-    let global = setting(tx, tenant, "stl_naming_defaults", b)?
+    let global = match setting(tx, tenant, "stl_naming_defaults", b)?
         .and_then(|s| serde_json::from_str(&s).ok())
         .and_then(|v| naming(v).ok())
-        .unwrap_or_else(|| naming(default_naming()).expect("default naming"));
+    {
+        Some(naming) => naming,
+        None => naming(default_naming())?,
+    };
     let mut current = HashMap::new();
     let mut invalid = false;
     for l in layers {
@@ -594,7 +599,7 @@ pub(super) fn capture(
     let mut progress = views::progress(id, accepted);
     progress
         .as_object_mut()
-        .expect("progress")
+        .ok_or_else(|| anyhow::Error::msg("Accepted progress is missing"))?
         .remove("profileId");
     let sources = if attached == 0 {
         Sources::Empty
@@ -603,7 +608,7 @@ pub(super) fn capture(
             attached_count: attached,
         }
     };
-    let a=match accepted{AcceptedRead::Ready{snapshot}=>Accepted::Ready{revision_id:snapshot.revision_id,plan_version:snapshot.plan_version,total_units:progress["totalUnits"].as_u64().expect("count"),remaining_units:progress["remainingUnits"].as_u64().expect("count")},AcceptedRead::Empty{..}=>Accepted::None,AcceptedRead::CompatibilityDirty=>Accepted::Unavailable{reason:"This Build's Accepted Plan cannot be read. Restart PrintPartner so it can repair the Plan data.".into()},AcceptedRead::Uninitialized=>Accepted::Unavailable{reason:"The Accepted Plan has not been initialized.".into()},_=>Accepted::Unavailable{reason:"Accepted Plan data is inconsistent.".into()}};
+    let a=match accepted{AcceptedRead::Ready{snapshot}=>Accepted::Ready{revision_id:snapshot.revision_id,plan_version:snapshot.plan_version,total_units:progress["totalUnits"].as_u64().ok_or_else(||anyhow::Error::msg("Accepted progress is missing a unit count"))?,remaining_units:progress["remainingUnits"].as_u64().ok_or_else(||anyhow::Error::msg("Accepted progress is missing a unit count"))?},AcceptedRead::Empty{..}=>Accepted::None,AcceptedRead::CompatibilityDirty=>Accepted::Unavailable{reason:"This Build's Accepted Plan cannot be read. Restart PrintPartner so it can repair the Plan data.".into()},AcceptedRead::Uninitialized=>Accepted::Unavailable{reason:"The Accepted Plan has not been initialized.".into()},_=>Accepted::Unavailable{reason:"Accepted Plan data is inconsistent.".into()}};
     let work = working(tx, tenant, id, &p, b)?;
     let (mut production, checkoff) = jobs(tx, tenant, id, b)?;
     let history_rows = rows(tx, "plan_revisions", "profile_id=?1", &[&id], "revision", b)?;

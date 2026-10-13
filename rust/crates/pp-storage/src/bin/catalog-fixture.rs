@@ -24,22 +24,24 @@ fn main() -> Result<()> {
                 .remove("auth");
             let client = match auth {
                 None => owner.local_source_catalog(),
-                Some(a) if a.get("session").and_then(Value::as_str).is_some() => owner
-                    .source_catalog(Credentials::Session(Secret::new(
-                        a["session"].as_str().unwrap().into(),
-                    ))),
-                Some(a) => owner.source_catalog(Credentials::Key {
-                    tenant_id: a["tenant_id"]
-                        .as_str()
-                        .ok_or_else(|| anyhow!("tenant required"))?
-                        .into(),
-                    key: Secret::new(
-                        a["key"]
-                            .as_str()
-                            .ok_or_else(|| anyhow!("key required"))?
-                            .into(),
-                    ),
-                }),
+                Some(a) => {
+                    if let Some(session) = a.get("session").and_then(Value::as_str) {
+                        owner.source_catalog(Credentials::Session(Secret::new(session.into())))
+                    } else {
+                        owner.source_catalog(Credentials::Key {
+                            tenant_id: a["tenant_id"]
+                                .as_str()
+                                .ok_or_else(|| anyhow!("tenant required"))?
+                                .into(),
+                            key: Secret::new(
+                                a["key"]
+                                    .as_str()
+                                    .ok_or_else(|| anyhow!("key required"))?
+                                    .into(),
+                            ),
+                        })
+                    }
+                }
             };
             let request: Request = serde_json::from_value(input)?;
             Ok(serde_json::to_value(client.execute(request)?)?)

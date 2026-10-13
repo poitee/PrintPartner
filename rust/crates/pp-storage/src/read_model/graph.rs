@@ -688,12 +688,11 @@ pub(super) fn read(
                     "source_revision",
                     "Accepted Plan Source revision is corrupt",
                 )?;
-                root = Some(
-                    resolved
-                        .expect("validated root")
-                        .to_string_lossy()
-                        .into_owned(),
-                );
+                let resolved = resolved.map_err(|_| Integrity {
+                    code: "source_revision",
+                    message: "Accepted Plan Source revision is corrupt".into(),
+                })?;
+                root = Some(resolved.to_string_lossy().into_owned());
                 synced = sr.os("synced_at")?;
             } else {
                 check(
@@ -862,8 +861,14 @@ pub(super) fn read(
                 )?;
                 Artifact::Tracked {
                     source_id: input.source_id,
-                    source_revision_id: input.source_revision_id.expect("validated input"),
-                    snapshot_root: input.snapshot_root.clone().expect("validated input"),
+                    source_revision_id: input.source_revision_id.ok_or_else(|| Integrity {
+                        code: "artifact_linkage",
+                        message: "Tracked accepted Plan Part has no source revision".into(),
+                    })?,
+                    snapshot_root: input.snapshot_root.clone().ok_or_else(|| Integrity {
+                        code: "artifact_linkage",
+                        message: "Tracked accepted Plan Part has no snapshot".into(),
+                    })?,
                     relative_path: r.s("relative_path")?.into(),
                     expected_sha256: r.s("artifact_digest")?.into(),
                 }

@@ -30,8 +30,8 @@ pub fn catalog_color(id: &str) -> Option<&'static Color> {
     COLORS
         .get_or_init(|| {
             serde_json::from_str::<Catalog>(include_str!("../../data/filament-catalog.json"))
-                .expect("bundled filament catalog")
-                .colors
+                .map(|catalog| catalog.colors)
+                .unwrap_or_default()
         })
         .iter()
         .find(|c| c.id == id)
@@ -339,7 +339,7 @@ fn project_review(
         }
         let (display, hex, spools) = resolved
             .remove(&p.projection_part_id)
-            .expect("resolved part");
+            .ok_or_else(|| anyhow::anyhow!("Included part has no filament resolution"))?;
         let printed = p.units.iter().filter(|u| u.completed).count() as i64;
         let mut row = json!({"id":p.projection_part_id,"match_key":p.part_key,"relative_path":p.relative_path,"filename":p.filename,"source_layer":p.source_layer,"status":p.status,"role":p.effective_role,"requirement":p.requirement,"option_group_id":p.option_group_id,"included":p.included,"filament_color_id":p.filament_color_id,"filament_custom_hex":p.filament_custom_hex,"spoolman_spool_id":p.spoolman_spool_id,"filament_display":display,"filament_hex":hex,"quantity_auto":p.quantity_inferred,"quantity_override":p.quantity_override,"quantity_effective":p.quantity_effective,"printed_count":printed,"print_units":p.units.iter().map(|u|u.completed).collect::<Vec<_>>(),"assembled_units":p.units.iter().map(|u|u.assembled).collect::<Vec<_>>(),"missing":printed<p.quantity_effective,"stl_missing":artifact_missing,"thumb_empty":thumb_empty});
         add_spools(&mut row, spools)?;
@@ -375,13 +375,13 @@ fn project_review(
             ));
         }
     }
-    let mut groups = folder_order
-        .into_iter()
-        .map(|folder| {
-            let value = grouped.remove(&folder).expect("known folder");
-            (folder, value)
-        })
-        .collect::<Vec<_>>();
+    let mut groups = Vec::new();
+    for folder in folder_order {
+        let value = grouped
+            .remove(&folder)
+            .ok_or_else(|| anyhow::anyhow!("Part folder was not grouped"))?;
+        groups.push((folder, value));
+    }
     groups.sort_by(|a, b| match (a.0.as_str(), b.0.as_str()) {
         ("(root)", "(root)") => std::cmp::Ordering::Equal,
         ("(root)", _) => std::cmp::Ordering::Less,
@@ -408,11 +408,11 @@ pub fn summarize_review(body: &Value) -> Result<Value> {
 }
 
 pub fn folder_compare(left: &str, right: &str) -> std::cmp::Ordering {
-    static COLLATOR: OnceLock<icu_collator::CollatorBorrowed<'static>> = OnceLock::new();
-    COLLATOR
-        .get_or_init(|| {
-            icu_collator::Collator::try_new(Default::default(), Default::default())
-                .expect("compiled root collation")
-        })
-        .compare(left, right)
+    static COLLATOR: OnceLock<Option<icu_collator::CollatorBorrowed<'static>>> = OnceLock::new();
+    match COLLATOR.get_or_init(|| {
+        icu_collator::Collator::try_new(Default::default(), Default::default()).ok()
+    }) {
+        Some(collator) => collator.compare(left, right),
+        None => left.cmp(right),
+    }
 }

@@ -58,7 +58,45 @@ pub enum NamingCommand {
 }
 impl Default for NamingProfile {
     fn default() -> Self {
-        serde_json::from_value(json!({"roles":[{"id":"primary","label":"Primary","markers":[]},{"id":"accent","label":"Accent","markers":["[a]"]},{"id":"clear","label":"Clear","markers":["[c]"]},{"id":"opaque","label":"Opaque","markers":["[o]"]}],"quantity":{"regex":"[ _]x([0-9]+)\\.stl$","default":1},"slug":{"strip_markers":true,"strip_quantity":true},"folder_rules":[],"export_role_order":["primary","accent","clear","opaque"]})).expect("default naming")
+        Self {
+            roles: vec![
+                Role {
+                    id: RoleId::Primary,
+                    label: "Primary".into(),
+                    markers: vec![],
+                },
+                Role {
+                    id: RoleId::Accent,
+                    label: "Accent".into(),
+                    markers: vec!["[a]".into()],
+                },
+                Role {
+                    id: RoleId::Clear,
+                    label: "Clear".into(),
+                    markers: vec!["[c]".into()],
+                },
+                Role {
+                    id: RoleId::Opaque,
+                    label: "Opaque".into(),
+                    markers: vec!["[o]".into()],
+                },
+            ],
+            quantity: Quantity {
+                regex: "[ _]x([0-9]+)\\.stl$".into(),
+                default: 1,
+            },
+            slug: Slug {
+                strip_markers: true,
+                strip_quantity: true,
+            },
+            folder_rules: vec![],
+            export_role_order: vec![
+                RoleId::Primary,
+                RoleId::Accent,
+                RoleId::Clear,
+                RoleId::Opaque,
+            ],
+        }
     }
 }
 impl NamingProfile {
@@ -243,7 +281,9 @@ pub(super) fn get(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<Value> 
         );
         if k == "roles" {
             let roles = v.as_array().ok_or_else(|| anyhow!("Invalid roles"))?;
-            let base = effective["roles"].as_array_mut().unwrap();
+            let base = effective["roles"]
+                .as_array_mut()
+                .ok_or_else(|| anyhow!("Naming roles are missing"))?;
             let mut seen = Vec::new();
             ensure!(!roles.is_empty(), "Empty roles override");
             for r in roles {
@@ -251,22 +291,31 @@ pub(super) fn get(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<Value> 
                 ensure!(!seen.contains(id), "Duplicate role override");
                 seen.push(id.clone());
                 serde_json::from_value::<RoleId>(id.clone())?;
-                if !base.iter().any(|b| b.get("id") == Some(id)) {
+                let index = if let Some(index) = base.iter().position(|b| b.get("id") == Some(id)) {
+                    index
+                } else {
                     base.push(json!({"id":id,"label":id,"markers":[]}));
-                }
-                let target = base.iter_mut().find(|b| b.get("id") == Some(id)).unwrap();
-                target.as_object_mut().unwrap().extend(
+                    base.len() - 1
+                };
+                let target = base
+                    .get_mut(index)
+                    .and_then(Value::as_object_mut)
+                    .ok_or_else(|| anyhow!("Naming role override is missing"))?;
+                target.extend(
                     r.as_object()
                         .ok_or_else(|| anyhow!("Invalid role"))?
                         .clone(),
                 );
             }
         } else if matches!(k.as_str(), "quantity" | "slug") {
-            effective[k].as_object_mut().unwrap().extend(
-                v.as_object()
-                    .ok_or_else(|| anyhow!("Invalid naming fields"))?
-                    .clone(),
-            );
+            effective[k]
+                .as_object_mut()
+                .ok_or_else(|| anyhow!("Invalid naming fields"))?
+                .extend(
+                    v.as_object()
+                        .ok_or_else(|| anyhow!("Invalid naming fields"))?
+                        .clone(),
+                );
         } else {
             effective[k] = v.clone();
         }
@@ -274,23 +323,36 @@ pub(super) fn get(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<Value> 
     let effective = serde_json::from_value::<NamingProfile>(effective)?.validate()?;
     let normalized = serde_json::to_value(&effective)?;
     let mut override_value = override_value;
-    for (key, value) in override_value.as_object_mut().unwrap() {
+    let override_object = override_value
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("Invalid naming override"))?;
+    for (key, value) in override_object {
         if key == "roles" {
-            for r in value.as_array_mut().unwrap() {
-                let id = r["id"].clone();
-                let full = normalized["roles"]
-                    .as_array()
-                    .unwrap()
+            let roles = value
+                .as_array_mut()
+                .ok_or_else(|| anyhow!("Invalid roles"))?;
+            let normalized_roles = normalized["roles"]
+                .as_array()
+                .ok_or_else(|| anyhow!("Naming roles are missing"))?;
+            for role in roles {
+                let id = role["id"].clone();
+                let full = normalized_roles
                     .iter()
-                    .find(|p| p["id"] == id)
-                    .unwrap();
-                for (k, v) in r.as_object_mut().unwrap() {
-                    *v = full[k].clone();
+                    .find(|part| part["id"] == id)
+                    .ok_or_else(|| anyhow!("Naming role override is missing"))?;
+                for (field, field_value) in role
+                    .as_object_mut()
+                    .ok_or_else(|| anyhow!("Invalid role"))?
+                {
+                    *field_value = full[field].clone();
                 }
             }
         } else if matches!(key.as_str(), "quantity" | "slug") {
-            for (k, v) in value.as_object_mut().unwrap() {
-                *v = normalized[key][k].clone();
+            for (field, field_value) in value
+                .as_object_mut()
+                .ok_or_else(|| anyhow!("Invalid naming fields"))?
+            {
+                *field_value = normalized[key][field].clone();
             }
         } else {
             *value = normalized[key].clone();

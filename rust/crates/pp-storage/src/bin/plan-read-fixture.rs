@@ -47,7 +47,7 @@ fn main() -> Result<()> {
         .collect::<std::result::Result<Vec<i64>, _>>()?;
     let witness = rusqlite::Connection::open(Path::new(&args[1]).join("print-partner.db"))?;
     let before: i64 = witness.query_row("PRAGMA data_version", [], |r| r.get(0))?;
-    let result = owner.accepted_reads().read(
+    let result = owner.accepted_reads()?.read(
         Credential::Session(Secret::new(secret)),
         &ids,
         &AtomicBool::new(false),

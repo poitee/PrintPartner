@@ -163,7 +163,9 @@ fn main() -> Result<()> {
                     }
                 }
                 ensure!(claims.len() == 1, "Concurrent claim exclusivity failed");
-                claims.pop().expect("one claim")
+                claims
+                    .pop()
+                    .ok_or_else(|| anyhow!("Concurrent claim missing"))?
             } else {
                 worker.claim()?.ok_or_else(|| anyhow!("No claim"))?
             };

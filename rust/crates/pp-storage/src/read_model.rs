@@ -78,13 +78,12 @@ pub(super) struct Command {
 }
 
 impl WriterOwner {
-    pub fn accepted_reads(&self) -> ReadClient {
+    pub fn accepted_reads(&self) -> Result<ReadClient> {
         self.accepted_reads_with_policy(auth::AuthPolicy {
             registration: auth::RegistrationPolicy::Open,
             session_tenant: auth::SessionTenantPolicy::AccountTenant,
             first_user: auth::FirstUserTenant::NewUser,
         })
-        .expect("neutral policy")
     }
     pub fn accepted_reads_with_policy(&self, policy: auth::AuthPolicy) -> Result<ReadClient> {
         auth::validate_policy(policy)?;
@@ -94,7 +93,7 @@ impl WriterOwner {
             repos: self
                 .lease
                 .as_ref()
-                .expect("live owner")
+                .ok_or_else(|| anyhow!("Storage owner is closed"))?
                 .data_dir()
                 .join("repos"),
         })

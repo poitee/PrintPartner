@@ -7,7 +7,10 @@ pub(super) fn metadata(map: &Map<String, Value>) -> Result<String> {
             Value::Null => out.push_str("null"),
             Value::Bool(value) => out.push_str(if *value { "true" } else { "false" }),
             Value::Number(value) => {
-                out.push_str(ryu_js::Buffer::new().format(value.as_f64().expect("JSON number")))
+                let number = value
+                    .as_f64()
+                    .ok_or_else(|| anyhow::anyhow!("JSON number is outside f64"))?;
+                out.push_str(ryu_js::Buffer::new().format(number));
             }
             Value::String(value) => out.push_str(&serde_json::to_string(value)?),
             Value::Array(values) => {

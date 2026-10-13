@@ -11,6 +11,9 @@ use std::{
     thread,
     time::Duration,
 };
+
+#[path = "common/process.rs"]
+mod child_process;
 fn directory() -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
         "pp-durable-{}",
@@ -1451,7 +1454,7 @@ fn ticket_t_28_claims_crash_retry_fences_stale_updates() {
     }
 
     let path = directory();
-    let output = std::process::Command::new(std::env::current_exe().unwrap())
+    let output = child_process::command(std::env::current_exe().unwrap())
         .args([
             "--exact",
             "ticket_t_28_claims_crash_retry_fences_stale_updates",
@@ -4442,7 +4445,7 @@ fn gre_526_startup_and_load_skip_and_log_invalid_saved_rows() {
     }
     drop(raw);
 
-    let output = std::process::Command::new(std::env::current_exe().unwrap())
+    let output = child_process::command(std::env::current_exe().unwrap())
         .args([
             "--exact",
             "gre_526_startup_and_load_skip_and_log_invalid_saved_rows",

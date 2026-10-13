@@ -1159,7 +1159,7 @@ async fn public_cookie_catalog_and_accepted_reads_share_default_tenant() {
             .tenant,
         "default"
     );
-    let neutral = server.owner.accepted_reads();
+    let neutral = server.owner.accepted_reads().unwrap();
     assert!(matches!(
         domain_read(&neutral, token).unwrap().builds[0].accepted,
         AcceptedRead::Missing
