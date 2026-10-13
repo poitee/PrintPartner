@@ -59,6 +59,8 @@ def planted_ownership_error(document):
     if not participants:
         return 'ownership admission: ownership sections declare no participants'
     for entry in participants:
+        if entry['kind'] not in {'http', 'http_alias', 'mcp_action', 'job', 'startup_watcher', 'worker', 'migration', 'assistant_action'}:
+            return f"ownership admission: unknown participant kind {entry['kind']}"
         if entry['raw_owner'] not in {'node', 'compat', 'rust'}:
             return f"ownership admission: unknown owner {entry['raw_owner']}"
         if entry['operation'] != 'source.sync':

@@ -100,11 +100,11 @@ type RouteDeps = {
   jobs?: import("../services/job-runner.js").InProcessJobRunner;
 };
 
-async function prefetchSourceCover(deps: RouteDeps, sourceId: number): Promise<void> {
+async function prefetchSourceCover(deps: RouteDeps, sourceId: number, beforePublish: () => undefined): Promise<void> {
   const row = deps.repo.getProjectRow(sourceId);
   if (!row) return;
   try {
-    await ensureSourceCover(deps.coversDir, toCoverProject(row));
+    await ensureSourceCover(deps.coversDir, toCoverProject(row), { beforePublish });
   } catch {
     /* cover is best-effort */
   }
@@ -229,10 +229,13 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
       if (kind === "github" || kind === "git") {
         try {
           if (deps.jobs) {
-            void deps.jobs.start("sync", { project_ids: [newSource.id] }, request.tenantId);
+            await deps.jobs.start("sync", { project_ids: [newSource.id] }, request.tenantId);
           }
         } catch (error) {
-          if (error instanceof OwnershipAdmissionError) throw error;
+          if (error instanceof OwnershipAdmissionError) {
+            deps.repo.deleteSource(newSource.id);
+            throw error;
+          }
         }
       }
       return deps.repo.sourceSummaryForClient(newSource);
@@ -380,6 +383,9 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
   });
 
   app.post("/sources/:id/upload-zip", async (request, reply) => {
+    const beforePublish = () => requireSourceSyncParticipant(request.url.startsWith("/api/v1/")
+      ? "http.POST /api/v1/sources/:id/upload-zip" : "http.POST /sources/:id/upload-zip");
+    beforePublish();
     const id = Number((request.params as { id: string }).id);
     const row = deps.repo.getProjectRow(id);
     if (!row) return reply.status(404).send({ detail: "Source not found" });
@@ -418,6 +424,7 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
         }, async () => {
           if (!deps.repo.getProjectRow(id)) return reply.status(404).send({ detail: "Source not found" });
           try {
+            beforePublish();
             const extractDir = writeUploadedZip(stagedZip, deps.sourcesDir, id);
             const { suggestedImportRules, stlCount } = finalizeUploadedSource(extractDir);
             const existingRules = deps.repo.getProjectRow(id)?.importedPaths;
@@ -425,17 +432,17 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
               existingRules != null &&
               existingRules.trim() !== "" &&
               existingRules.trim() !== "[]";
-            if (!hasRules && suggestedImportRules.length > 0) {
-              deps.repo.updateImportRules(id, suggestedImportRules);
-            }
             const updated = await publishLocalSourceWorkingTree({
+              beforePublish,
               repo: deps.repo,
               reposDir: deps.reposDir,
               sourceId: id,
               workingTree: extractDir,
             });
-            indexSourceDocsFromDisk(deps.repo, id, updated.local_path ?? extractDir);
-            void prefetchSourceCover(deps, id);
+            beforePublish();
+            if (!hasRules && suggestedImportRules.length > 0) deps.repo.updateImportRules(id, suggestedImportRules);
+            indexSourceDocsFromDisk(deps.repo, id, updated.local_path ?? extractDir, undefined, beforePublish);
+            void prefetchSourceCover(deps, id, beforePublish);
             return {
               ...deps.repo.sourceSummaryForClient(updated),
               imported_files: uploadedBytes,
@@ -459,6 +466,9 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
   });
 
   app.post("/sources/:id/upload-files", async (request, reply) => {
+    const beforePublish = () => requireSourceSyncParticipant(request.url.startsWith("/api/v1/")
+      ? "http.POST /api/v1/sources/:id/upload-files" : "http.POST /sources/:id/upload-files");
+    beforePublish();
     const id = Number((request.params as { id: string }).id);
     const row = deps.repo.getProjectRow(id);
     if (!row) return reply.status(404).send({ detail: "Source not found" });
@@ -538,6 +548,7 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
         }, async () => {
           if (!deps.repo.getProjectRow(id)) return reply.status(404).send({ detail: "Source not found" });
           try {
+            beforePublish();
             const result = writeUploadedFiles(uploads, deps.sourcesDir, id);
 
             const existingRules = deps.repo.getProjectRow(id)?.importedPaths;
@@ -545,18 +556,18 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
               existingRules != null &&
               existingRules.trim() !== "" &&
               existingRules.trim() !== "[]";
-            if (!hasRules && result.suggestedImportRules.length > 0) {
-              deps.repo.updateImportRules(id, result.suggestedImportRules);
-            }
 
             const updated = await publishLocalSourceWorkingTree({
+              beforePublish,
               repo: deps.repo,
               reposDir: deps.reposDir,
               sourceId: id,
               workingTree: result.extractDir,
             });
-            indexSourceDocsFromDisk(deps.repo, id, updated.local_path ?? result.extractDir);
-            void prefetchSourceCover(deps, id);
+            beforePublish();
+            if (!hasRules && result.suggestedImportRules.length > 0) deps.repo.updateImportRules(id, result.suggestedImportRules);
+            indexSourceDocsFromDisk(deps.repo, id, updated.local_path ?? result.extractDir, undefined, beforePublish);
+            void prefetchSourceCover(deps, id, beforePublish);
             return {
               ...deps.repo.sourceSummaryForClient(updated),
               imported_files: result.fileCount,
@@ -595,7 +606,9 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
     const row = deps.repo.getProjectRow(id);
     if (!row) return reply.status(404).send({ detail: "Source not found" });
     const coverRel = `source_${id}.img`;
-    const ready = await ensureSourceCover(deps.coversDir, toCoverProject(row));
+    const beforePublish = () => requireSourceSyncParticipant(request.url.startsWith("/api/v1/")
+      ? "http.GET /api/v1/sources/:id/cover" : "http.GET /sources/:id/cover");
+    const ready = await ensureSourceCover(deps.coversDir, toCoverProject(row), { beforePublish });
     // 204, not 404: most sources have no cover, and the Library probes this
     // route for every card — a 404 would log a console error per card.
     if (!ready) return reply.status(204).send();
@@ -783,7 +796,7 @@ export async function syncProjectById(
       let pdf_extract_job_id: string | undefined;
       let postprocess_warning: string | undefined;
       try {
-        indexed = indexSourceDocsFromDisk(repo, projectId, activePath, result.docPaths);
+        indexed = indexSourceDocsFromDisk(repo, projectId, activePath, result.docPaths, checkAdmission);
         const pdfTextStorage = sourcePdfTextStorage(repo, projectId, activePath);
 
         // Eagerly extract small PDFs; large ones go to a background job.
@@ -846,7 +859,8 @@ export async function syncProjectById(
 
     // Zip/local: index whatever docs already landed on disk.
     if (row.localPath) {
-      const indexed = indexSourceDocsFromDisk(repo, projectId, row.localPath);
+      const indexed = indexSourceDocsFromDisk(repo, projectId, row.localPath, undefined, checkAdmission);
+      checkAdmission();
       repo.markSourceSynced(projectId, row.lastCommitSha);
       return {
         stl_count: 0,
@@ -856,6 +870,7 @@ export async function syncProjectById(
       };
     }
 
+    checkAdmission();
     repo.markSourceSynced(projectId, row.lastCommitSha);
     return { stl_count: 0, downloaded: 0, doc_count: 0, docs_downloaded: 0 };
   } catch (error) {

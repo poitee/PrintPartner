@@ -3311,6 +3311,8 @@ export async function applyAssistantAction(
         let importedFiles = 0;
         let stlCount = 0;
         let suggestedRules: string[] = [];
+        const beforePublish = () => requireSourceSyncParticipant("assistant.propose_import_source_files");
+        beforePublish();
         const staging = createSourceUploadStaging(sourcesDir);
         try {
           if (archive) {
@@ -3346,10 +3348,11 @@ export async function applyAssistantAction(
             stlCount = written.stlCount;
             suggestedRules = written.suggestedImportRules;
           }
-          const updated = await publishLocalSourceWorkingTree({ repo: deps.repo, reposDir: deps.repo.reposDir, sourceId, workingTree });
+          const updated = await publishLocalSourceWorkingTree({ beforePublish, repo: deps.repo, reposDir: deps.repo.reposDir, sourceId, workingTree });
+          beforePublish();
           const existingRules = deps.repo.getProjectRow(sourceId)?.importedPaths;
           if ((!existingRules || existingRules === "[]") && suggestedRules.length > 0) deps.repo.updateImportRules(sourceId, suggestedRules);
-          indexSourceDocsFromDisk(deps.repo, sourceId, updated.local_path ?? workingTree);
+          indexSourceDocsFromDisk(deps.repo, sourceId, updated.local_path ?? workingTree, undefined, beforePublish);
           outcome = {
             ok: true,
             result: {

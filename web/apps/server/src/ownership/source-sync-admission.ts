@@ -8,6 +8,9 @@ export const SOURCE_SYNC_OPERATION = "source.sync";
 const SYNC_RESOURCES = ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"] as const;
 const UPDATE_RESOURCES = ["table:projects", "table:app_settings", "table:app_events"] as const;
 const DOC_RESOURCES = ["table:source_docs", "file:source-workspace"] as const;
+const INDEX_RESOURCES = ["table:source_docs"] as const;
+const COVER_RESOURCES = ["file:source-covers"] as const;
+const LOCAL_RESOURCES = ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace"] as const;
 const CREATE_RESOURCES = ["table:projects", "table:source_revisions"] as const;
 const MIGRATION_RESOURCES = ["table:projects", "table:source_revisions", "file:source-workspace"] as const;
 const WORKER_RESOURCES = ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers", "table:app_settings", "table:app_events"] as const;
@@ -26,6 +29,17 @@ const SOURCE_SYNC_PARTICIPANT_SPECS = {
   "http.PUT /api/v1/sources/:id/repo-manifest": { kind: "http_alias", resources: MIGRATION_RESOURCES },
   "http.POST /assistant/actions/apply": { kind: "http", resources: SYNC_RESOURCES },
   "http.POST /api/v1/assistant/actions/apply": { kind: "http_alias", resources: SYNC_RESOURCES },
+  "http.POST /sources/:id/upload-zip": { kind: "http", resources: SYNC_RESOURCES },
+  "http.POST /api/v1/sources/:id/upload-zip": { kind: "http_alias", resources: SYNC_RESOURCES },
+  "http.POST /sources/:id/upload-files": { kind: "http", resources: SYNC_RESOURCES },
+  "http.POST /api/v1/sources/:id/upload-files": { kind: "http_alias", resources: SYNC_RESOURCES },
+  "http.GET /sources/:id/docs": { kind: "http", resources: INDEX_RESOURCES },
+  "http.GET /api/v1/sources/:id/docs": { kind: "http_alias", resources: INDEX_RESOURCES },
+  "http.GET /sources/:id/docs/*": { kind: "http", resources: DOC_RESOURCES },
+  "http.GET /api/v1/sources/:id/docs/*": { kind: "http_alias", resources: DOC_RESOURCES },
+  "http.GET /sources/:id/cover": { kind: "http", resources: COVER_RESOURCES },
+  "http.GET /api/v1/sources/:id/cover": { kind: "http_alias", resources: COVER_RESOURCES },
+  "assistant.propose_import_source_files": { kind: "assistant_action", resources: LOCAL_RESOURCES },
   "mcp.start_sync": { kind: "mcp_action", resources: SYNC_RESOURCES },
   "job.check-source-updates": { kind: "job", resources: UPDATE_RESOURCES },
   "job.extract-source-docs": { kind: "job", resources: DOC_RESOURCES },
@@ -51,7 +65,7 @@ const MAX_PROCESS_ID = 2_147_483_647;
 let admittedManifestSha256: string | undefined;
 const LIVE_FORMAT_FIELDS = new Set(["id", "rollback"]);
 const PARTICIPANT_FIELDS = new Set(["id", "kind", "owner", "resources"]);
-const KINDS = new Set(["http", "http_alias", "mcp_action", "job", "startup_watcher", "worker", "migration"]);
+const KINDS = new Set(["http", "http_alias", "mcp_action", "job", "startup_watcher", "worker", "migration", "assistant_action"]);
 
 export class OwnershipAdmissionError extends Error {
   readonly code: string;

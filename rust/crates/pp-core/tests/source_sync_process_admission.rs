@@ -110,6 +110,40 @@ fn ticket_t_7_ownership_python_unknown_owner_exits_nonzero() {
 }
 
 #[test]
+fn ticket_t_7_ownership_python_unknown_kind_preserves_registry() {
+    let dir = scratch("ticket_t_7_ownership_python_unknown_kind");
+    let operations = repo_root().join("rust/crates/pp-gateway/operations.json");
+    let before = fs::read(&operations).unwrap();
+    for kind in ["cron", "", "mcp_acton"] {
+        let inventory = serde_json::json!({
+            "routes": [],
+            "operations": { "source.sync": { "participants": [
+                { "id": "watcher", "kind": "worker", "owner": "node" },
+                { "id": "boot", "kind": "startup_watcher", "owner": "node" },
+                { "id": "sync", "kind": "mcp_action", "owner": "node" },
+                { "id": "unknown", "kind": kind, "owner": "node" }
+            ] } }
+        });
+        let path = dir.join("inventory.json");
+        fs::write(&path, serde_json::to_vec(&inventory).unwrap()).unwrap();
+        for checking in [false, true] {
+            let mut command = Command::new("python3");
+            command
+                .arg(repo_root().join("rust/scripts/gateway-operations.py"))
+                .arg(&path);
+            if checking {
+                command.arg("--check");
+            }
+            let output = command.output().unwrap();
+            let text = command_text(&output);
+            assert!(!output.status.success(), "{kind}: {text}");
+            assert!(text.contains("unknown participant kind"), "{kind}: {text}");
+            assert_eq!(fs::read(&operations).unwrap(), before);
+        }
+    }
+}
+
+#[test]
 fn ticket_t_7_ownership_python_self_test_unchanged() {
     let output = Command::new("python3")
         .arg(repo_root().join("rust/scripts/gateway-operations.py"))

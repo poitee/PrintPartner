@@ -220,6 +220,7 @@ async function materializeLocalSourceWorkingTree(input: {
     maxDocumentationBytes: input.maxDocumentationBytes,
     maxTotalBytes: input.maxTotalBytes,
   });
+  input.beforePublish?.();
   await mkdir(sourceWorkspace, { recursive: true });
   const stagingRoot = await mkdtemp(join(sourceWorkspace, ".local-source-"));
   try {
@@ -315,6 +316,7 @@ function registerAndActivateSnapshot(input: {
 }
 
 export async function publishLocalSourceWorkingTree(input: {
+  beforePublish?: () => undefined;
   repo: AppRepository;
   reposDir: string;
   sourceId: number;
@@ -323,6 +325,7 @@ export async function publishLocalSourceWorkingTree(input: {
   maxDocumentationBytes?: number;
   maxTotalBytes?: number;
 }): Promise<SourceSummary> {
+  input.beforePublish?.();
   const observed = input.repo.getSourceActivationObservation(input.sourceId);
   if (!observed) throw new Error("Source not found");
 
@@ -330,6 +333,7 @@ export async function publishLocalSourceWorkingTree(input: {
   const maxDocumentationBytes = input.maxDocumentationBytes ?? DEFAULT_LOCAL_SNAPSHOT_DOCS_BYTES;
   const maxTotalBytes = input.maxTotalBytes ?? DEFAULT_LOCAL_SNAPSHOT_TOTAL_BYTES;
   const snapshot = await materializeLocalSourceWorkingTree({
+    beforePublish: input.beforePublish,
     reposDir: input.reposDir,
     sourceId: input.sourceId,
     workingTree: input.workingTree,
@@ -337,6 +341,7 @@ export async function publishLocalSourceWorkingTree(input: {
     maxDocumentationBytes,
     maxTotalBytes,
   });
+  input.beforePublish?.();
   return registerAndActivateSnapshot({
     repo: input.repo,
     sourceId: input.sourceId,

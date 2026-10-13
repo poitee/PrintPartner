@@ -18,9 +18,14 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative, sep } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import AdmZip from "adm-zip";
+import * as docScan from "../services/source-docs-scan.js";
+import { InProcessJobRunner } from "../services/job-runner.js";
+import { syncProjectById } from "../routes/sources.js";
 import * as legacyManifest from "../services/legacy-source-manifest.js";
 
 vi.mock("../services/legacy-source-manifest.js", { spy: true });
+vi.mock("../services/source-docs-scan.js", { spy: true });
 import Database from "better-sqlite3";
 import { buildApp, createPorts, startServer } from "../app.js";
 import { loadConfig } from "../config.js";
@@ -35,6 +40,7 @@ import {
   parseSourceSyncAdmissionReceipt,
   OwnershipAdmissionError,
   sourceSyncAdmissionReceiptPath,
+  requireSourceSyncParticipant,
   type SourceSyncAdmissionReceipt,
 } from "./source-sync-admission.js";
 
@@ -114,6 +120,31 @@ async function boot(dataDir: string): Promise<AppHandle> {
   return handle;
 }
 
+function minimalPdf(text: string): string {
+  const stream = `BT\n/F1 12 Tf\n72 72 Td\n(${text}) Tj\nET`;
+  const objects = [
+    "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+    "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
+    "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n",
+    "4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
+    `5 0 obj\n<< /Length ${stream.length} >>\nstream\n${stream}\nendstream\nendobj\n`,
+  ];
+  let body = "%PDF-1.4\n";
+  const offsets = [0];
+  for (const object of objects) {
+    offsets.push(body.length);
+    body += object;
+  }
+  const xrefOffset = body.length;
+  body += "xref\n0 6\n0000000000 65535 f \n";
+  body += offsets
+    .slice(1)
+    .map((offset) => `${String(offset).padStart(10, "0")} 00000 n \n`)
+    .join("");
+  body += `trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  return body;
+}
+
 function fingerprint(dir: string): string {
   const files: string[] = [];
   const visit = (current: string): void => {
@@ -183,7 +214,156 @@ function toolText(body: string): string {
   return body;
 }
 
+async function localAdmissionFixture(name: string) {
+  const dir = scratch(name);
+  const manifest = writeManifest(dir, "admitted.json");
+  installManifest(manifest, dir);
+  const started = await boot(dir);
+  const repo = started.ports.repository;
+  const reposDir = started.ports.reposDir;
+  if (!repo || !reposDir) throw new Error("Expected self-host Source repository");
+  const source = repo.createSource({ name, source_kind: "local" });
+  const workspace = join(reposDir, String(source.id));
+  mkdirSync(workspace, { recursive: true });
+  return { dir, manifest, original: readFileSync(manifest, "utf8"), started, repo, source, workspace };
+}
+
+function multipartUpload(kind: "zip" | "files") {
+  const boundary = "pp-admission-upload";
+  const field = kind === "zip" ? "file" : "files";
+  let bytes: Buffer = Buffer.from("solid cube\nendsolid cube\n");
+  if (kind === "zip") {
+    const archive = new AdmZip();
+    archive.addFile("cube.stl", bytes);
+    bytes = archive.toBuffer();
+  }
+  return {
+    headers: { "content-type": `multipart/form-data; boundary=${boundary}`, authorization: "Bearer test-mcp-key" },
+    payload: Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${field}"; filename="cube.${kind === "zip" ? "zip" : "stl"}"\r\nContent-Type: application/octet-stream\r\n\r\n`),
+      bytes, Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]),
+  };
+}
+
 describe("Source Sync Fastify admission", () => {
+  it.each([["", "zip"], ["/api/v1", "zip"], ["", "files"], ["/api/v1", "files"]] as const)(
+    "admits %s local upload-%s and refuses publication after manifest replacement", async (prefix, kind) => {
+      const f = await localAdmissionFixture("upload-admission");
+      const url = `${prefix}/sources/${f.source.id}/upload-${kind}`;
+      const before = f.repo.getProjectRow(f.source.id);
+      writeFileSync(f.manifest, `${f.original}\n`);
+      const refused = await f.started.app.inject({ method: "POST", url, ...multipartUpload(kind) });
+      expect(refused.statusCode).toBeGreaterThanOrEqual(400);
+      expect(refused.body).toMatch(/runtime manifest does not match/);
+      expect(f.repo.getProjectRow(f.source.id)).toEqual(before);
+      expect(f.repo.listSourceRevisions(f.source.id)).toEqual([]);
+      expect(readdirSync(f.workspace)).toEqual([]);
+      writeFileSync(f.manifest, f.original);
+      const admitted = await f.started.app.inject({ method: "POST", url, ...multipartUpload(kind) });
+      expect(admitted.statusCode, admitted.body).toBe(200);
+      expect(f.repo.listSourceRevisions(f.source.id)).toHaveLength(1);
+      expect(f.repo.getSource(f.source.id)?.current_source_revision_id).toEqual(expect.any(Number));
+    },
+  );
+
+  it("admits assistant file import and rejects it after manifest replacement", async () => {
+    const f = await localAdmissionFixture("assistant-import-admission");
+    const action = {
+      id: "local-import", type: "propose_import_source_files", plan_id: 0, label: "Import", summary: "Import local files",
+      params: { source_id: f.source.id, files: [{ path: "cube.stl", content_base64: Buffer.from("solid cube\nendsolid cube\n").toString("base64") }] },
+    };
+    writeFileSync(f.manifest, `${f.original}\n`);
+    const refused = await f.started.app.inject({ method: "POST", url: "/assistant/actions/apply", payload: { action } });
+    expect(refused.body).toMatch(/runtime manifest does not match/);
+    expect(f.repo.listSourceRevisions(f.source.id)).toEqual([]);
+    expect(readdirSync(f.workspace)).toEqual([]);
+    writeFileSync(f.manifest, f.original);
+    const admitted = await f.started.app.inject({ method: "POST", url: "/assistant/actions/apply", payload: { action } });
+    expect(admitted.statusCode, admitted.body).toBe(200);
+    expect(admitted.json()).toMatchObject({ ok: true });
+    expect(f.repo.listSourceRevisions(f.source.id)).toHaveLength(1);
+  });
+
+  it.each(["", "/api/v1"])("guards %s document and cover cache writes while serving admitted cached reads", async (prefix) => {
+    const f = await localAdmissionFixture("read-cache-admission");
+    writeFileSync(join(f.workspace, "README.md"), "# Owned documentation\n");
+    writeFileSync(join(f.workspace, "manual.pdf"), minimalPdf("Owned manual"), "binary");
+    writeFileSync(join(f.workspace, "cover.png"), "owned cover bytes");
+    const docsBefore = f.repo.listSourceDocs(f.source.id);
+    const sourceTree = fingerprint(f.workspace);
+    const coverDir = join(f.dir, "covers");
+    const coversBefore = fingerprint(coverDir);
+    const base = `${prefix}/sources/${f.source.id}`;
+    const headers = { authorization: "Bearer test-mcp-key" };
+    writeFileSync(f.manifest, `${f.original}\n`);
+    for (const suffix of ["docs", "docs/manual.pdf", "cover"]) {
+      const refused = await f.started.app.inject({ method: "GET", url: `${base}/${suffix}`, headers });
+      expect(refused.statusCode, refused.body).toBeGreaterThanOrEqual(400);
+      expect(refused.body).toMatch(/runtime manifest does not match/);
+    }
+    expect(f.repo.listSourceDocs(f.source.id)).toEqual(docsBefore);
+    expect(fingerprint(f.workspace)).toBe(sourceTree);
+    expect(fingerprint(coverDir)).toBe(coversBefore);
+    writeFileSync(f.manifest, f.original);
+    for (const suffix of ["docs", "docs/manual.pdf", "cover"]) {
+      const admitted = await f.started.app.inject({ method: "GET", url: `${base}/${suffix}`, headers });
+      expect(admitted.statusCode, admitted.body).toBe(200);
+    }
+    expect(f.repo.listSourceDocs(f.source.id).find((doc) => doc.path === "manual.pdf")?.extract_status).toBe("ready");
+    const docRows = f.repo.listSourceDocs(f.source.id);
+    const cachedTree = fingerprint(f.workspace);
+    const cachedCovers = fingerprint(coverDir);
+    writeFileSync(f.manifest, `${f.original}\n`);
+    for (const suffix of ["docs", "docs/manual.pdf", "cover"]) {
+      const cached = await f.started.app.inject({ method: "GET", url: `${base}/${suffix}`, headers });
+      expect(cached.statusCode, cached.body).toBe(200);
+    }
+    expect(f.repo.listSourceDocs(f.source.id)).toEqual(docRows);
+    expect(fingerprint(f.workspace)).toBe(cachedTree);
+    expect(fingerprint(coverDir)).toBe(cachedCovers);
+  });
+
+  it("rechecks local import admission after document discovery before replacing the index", async () => {
+    const f = await localAdmissionFixture("index-recheck");
+    writeFileSync(join(f.workspace, "README.md"), "# New indexed document\n");
+    const before = f.repo.getProjectRow(f.source.id);
+    const actual = await vi.importActual<typeof docScan>("../services/source-docs-scan.js");
+    vi.spyOn(docScan, "walkSourceDocs").mockImplementationOnce((path) => {
+      const docs = actual.walkSourceDocs(path);
+      writeFileSync(f.manifest, `${f.original}\n`);
+      return docs;
+    });
+    await expect(syncProjectById(f.repo, f.repo.reposDir, f.source.id, join(f.dir, "covers"), {
+      beforePublish: () => requireSourceSyncParticipant("job.import-scan"),
+    })).rejects.toThrow(/runtime manifest does not match/);
+    expect(f.repo.listSourceDocs(f.source.id)).toEqual([]);
+    expect(f.repo.getProjectRow(f.source.id)).toEqual(before);
+  });
+
+  it.each(["", "/api/v1"])("removes %s new Git source when enqueue admission fails", async (prefix) => {
+    const f = await localAdmissionFixture("enqueue-compensation");
+    f.repo.deleteSource(f.source.id);
+    const jobs = f.started.ports.jobs;
+    if (!(jobs instanceof InProcessJobRunner)) throw new Error("Expected local job runner");
+    const start = jobs.start.bind(jobs);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      writeFileSync(f.manifest, f.original);
+      vi.spyOn(jobs, "start").mockImplementationOnce(async (...args) => {
+        writeFileSync(f.manifest, `${f.original}\n`);
+        return start(...args);
+      });
+      const rejected = await f.started.app.inject({
+        method: "POST", url: `${prefix}/sources`, headers: { authorization: "Bearer test-mcp-key" },
+        payload: { name: "Compensated source", source_kind: "github", url: "https://github.com/example/fixture" },
+      });
+      expect(rejected.statusCode, rejected.body).toBe(400);
+      expect(rejected.body).toMatch(/runtime manifest does not match/);
+      expect(f.repo.listSources()).toEqual([]);
+      expect(jobs.listJobs({}, "default")).toEqual([]);
+    }
+  });
+
   it.each(["dangling-symlink", "valid-symlink", "directory", "fifo"])(
     "rejects a non-regular startup receipt (%s) without replacing it",
     async (kind) => {

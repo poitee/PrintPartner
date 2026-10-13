@@ -34,6 +34,7 @@ export function indexSourceDocsFromDisk(
   projectId: number,
   repoRoot: string,
   syncDocs?: SyncDocEntry[],
+  beforePublish?: () => undefined,
 ): { doc_count: number; pending_pdfs: number } {
   const discovered = walkSourceDocs(repoRoot);
   const sizeByPath = new Map(
@@ -64,6 +65,7 @@ export function indexSourceDocsFromDisk(
     };
   });
 
+  beforePublish?.();
   repo.replaceSourceDocs(projectId, rows);
   const pending = rows.filter((r) => r.kind === "pdf").length;
   return { doc_count: rows.length, pending_pdfs: pending };

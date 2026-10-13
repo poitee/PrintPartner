@@ -91,6 +91,72 @@
       "resources": ["table:projects", "table:source_revisions", "file:source-workspace"]
     },
     {
+      "id": "http.POST /sources/:id/upload-zip",
+      "kind": "http",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"]
+    },
+    {
+      "id": "http.POST /api/v1/sources/:id/upload-zip",
+      "kind": "http_alias",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"]
+    },
+    {
+      "id": "http.POST /sources/:id/upload-files",
+      "kind": "http",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"]
+    },
+    {
+      "id": "http.POST /api/v1/sources/:id/upload-files",
+      "kind": "http_alias",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"]
+    },
+    {
+      "id": "http.GET /sources/:id/docs",
+      "kind": "http",
+      "owner": "node",
+      "resources": ["table:source_docs"]
+    },
+    {
+      "id": "http.GET /api/v1/sources/:id/docs",
+      "kind": "http_alias",
+      "owner": "node",
+      "resources": ["table:source_docs"]
+    },
+    {
+      "id": "http.GET /sources/:id/docs/*",
+      "kind": "http",
+      "owner": "node",
+      "resources": ["table:source_docs", "file:source-workspace"]
+    },
+    {
+      "id": "http.GET /api/v1/sources/:id/docs/*",
+      "kind": "http_alias",
+      "owner": "node",
+      "resources": ["table:source_docs", "file:source-workspace"]
+    },
+    {
+      "id": "http.GET /sources/:id/cover",
+      "kind": "http",
+      "owner": "node",
+      "resources": ["file:source-covers"]
+    },
+    {
+      "id": "http.GET /api/v1/sources/:id/cover",
+      "kind": "http_alias",
+      "owner": "node",
+      "resources": ["file:source-covers"]
+    },
+    {
+      "id": "assistant.propose_import_source_files",
+      "kind": "assistant_action",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace"]
+    },
+    {
       "id": "mcp.start_sync",
       "kind": "mcp_action",
       "owner": "node",

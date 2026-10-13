@@ -38,6 +38,17 @@ pub const SOURCE_SYNC_PARTICIPANTS: &[&str] = &[
     "http.PUT /api/v1/sources/:id/repo-manifest",
     "http.POST /assistant/actions/apply",
     "http.POST /api/v1/assistant/actions/apply",
+    "http.POST /sources/:id/upload-zip",
+    "http.POST /api/v1/sources/:id/upload-zip",
+    "http.POST /sources/:id/upload-files",
+    "http.POST /api/v1/sources/:id/upload-files",
+    "http.GET /sources/:id/docs",
+    "http.GET /api/v1/sources/:id/docs",
+    "http.GET /sources/:id/docs/*",
+    "http.GET /api/v1/sources/:id/docs/*",
+    "http.GET /sources/:id/cover",
+    "http.GET /api/v1/sources/:id/cover",
+    "assistant.propose_import_source_files",
     "mcp.start_sync",
     "job.sync",
     "job.import-scan",
@@ -325,6 +336,7 @@ pub fn admit_observed(
                 Some("http") => "http",
                 Some("job") => "job",
                 Some("mcp") => "mcp_action",
+                Some("assistant") => "assistant_action",
                 Some("startup") => "startup_watcher",
                 Some("worker") => "worker",
                 Some("migration") => "migration",
@@ -395,7 +407,7 @@ pub fn admit_observed(
 fn validate_kind(kind: &str) -> Result<(), AdmissionError> {
     match kind {
         "http" | "http_alias" | "mcp_action" | "job" | "startup_watcher" | "worker"
-        | "migration" => Ok(()),
+        | "migration" | "assistant_action" => Ok(()),
         other => Err(AdmissionError::UnknownParticipantKind {
             value: other.to_string(),
         }),
@@ -403,6 +415,23 @@ fn validate_kind(kind: &str) -> Result<(), AdmissionError> {
 }
 
 fn expected_resources(id: &str) -> &'static [&'static str] {
+    if id.ends_with("/cover") {
+        return &["file:source-covers"];
+    }
+    if id.ends_with("/docs") {
+        return &["table:source_docs"];
+    }
+    if id.ends_with("/docs/*") {
+        return &["table:source_docs", "file:source-workspace"];
+    }
+    if id == "assistant.propose_import_source_files" {
+        return &[
+            "table:projects",
+            "table:source_revisions",
+            "table:source_docs",
+            "file:source-workspace",
+        ];
+    }
     if id == "worker.startSourceWatcher" {
         return &[
             "table:projects",

@@ -25,6 +25,7 @@ import {
   publishSourceManifestRevision,
 } from "./local-source-revision.js";
 
+import { beginSourceSyncAdmission, packagedSourceSyncManifestPath, requireSourceSyncParticipant } from "../ownership/source-sync-admission.js";
 vi.mock("node:fs/promises", { spy: true });
 
 const roots: string[] = [];
@@ -48,6 +49,37 @@ function fixture() {
 }
 
 describe("publishLocalSourceWorkingTree", () => {
+  it("refuses local publication when admission changes during staging", async () => {
+    const f = fixture();
+    const manifest = join(f.dir, "ownership.json");
+    const original = readFileSync(packagedSourceSyncManifestPath(), "utf8");
+    const previous = process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST;
+    const before = f.repo.getProjectRow(f.source.id);
+    const actualFs = await vi.importActual<typeof fsPromises>("node:fs/promises");
+    try {
+      writeFileSync(manifest, original);
+      process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST = manifest;
+      beginSourceSyncAdmission(f.dir);
+      vi.mocked(fsPromises.copyFile).mockImplementationOnce(async (...args) => {
+        await actualFs.copyFile(...args);
+        writeFileSync(manifest, `${original}\n`);
+      });
+      await expect(publishLocalSourceWorkingTree({
+        repo: f.repo, reposDir: f.sqlite.reposDir, sourceId: f.source.id, workingTree: f.workingTree,
+        beforePublish: () => requireSourceSyncParticipant("assistant.propose_import_source_files"),
+      })).rejects.toThrow(/runtime manifest does not match/);
+      expect(f.repo.getProjectRow(f.source.id)).toEqual(before);
+      expect(f.repo.listSourceRevisions(f.source.id)).toEqual([]);
+      const workspace = join(f.sqlite.reposDir, String(f.source.id));
+      expect(readdirSync(workspace).filter((name) => name.startsWith(".local-source-") || name === "revisions")).toEqual([]);
+    } finally {
+      vi.restoreAllMocks();
+      if (previous === undefined) delete process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST;
+      else process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST = previous;
+      f.sqlite.close();
+    }
+  });
+
   it("streams a large file while deriving its revision digest", async () => {
     const { sqlite, repo, source, workingTree } = fixture();
     const contentBytes = 32 * 1024 * 1024;
