@@ -24,6 +24,8 @@ use std::{
 use tokio::{net::TcpListener, task::JoinHandle};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
+pub const MUTATION_DRAIN: Duration = Duration::from_secs(5);
+
 pub struct LaunchTarget(String);
 impl LaunchTarget {
     pub fn into_url(self) -> String {
@@ -254,6 +256,10 @@ impl Gateway {
         }
     }
     pub async fn drain(&self) {
+        self.drain_for(MUTATION_DRAIN).await;
+    }
+
+    pub async fn drain_for(&self, bound: Duration) {
         self.state.watcher_cancelled.cancel();
         {
             let mut access = self.state.access.lock().expect("Session mutex poisoned");
@@ -261,7 +267,7 @@ impl Gateway {
             access.bootstrap = None;
             access.sessions.clear();
         }
-        let _ = tokio::time::timeout(Duration::from_secs(5), async {
+        let _ = tokio::time::timeout(bound, async {
             while self
                 .state
                 .access

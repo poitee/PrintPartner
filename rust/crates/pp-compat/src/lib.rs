@@ -1,3 +1,4 @@
+pub mod drain;
 mod logs;
 mod release;
 use anyhow::{Context, Result, bail};
@@ -270,21 +271,26 @@ impl CleanupErrors {
 }
 
 fn validate_stop_outcome(outcome: StopOutcome, intent: StopIntent) -> Result<()> {
-    match outcome {
-        StopOutcome::Observed(_) | StopOutcome::ForcedAfterTimeout(_)
-            if matches!(intent, StopIntent::Restart) =>
+    match (outcome, intent) {
+        (StopOutcome::Observed(_) | StopOutcome::ForcedAfterTimeout(_), StopIntent::Restart) => {
+            Ok(())
+        }
+        (StopOutcome::ForcedAfterTimeout(status), StopIntent::PlannedShutdown)
+            if status.signal() == Some(libc::SIGKILL) || status.success() =>
         {
             Ok(())
         }
-        StopOutcome::ForcedAfterTimeout(status) => {
+        (StopOutcome::ForcedAfterTimeout(status), StopIntent::PlannedShutdown) => {
             bail!("Compatibility child required parent-forced termination: {status}")
         }
-        StopOutcome::Observed(status)
-            if status.success() || status.signal() == Some(libc::SIGKILL) =>
+        (StopOutcome::Observed(status), StopIntent::PlannedShutdown)
+            if status.success()
+                || status.signal() == Some(libc::SIGKILL)
+                || status.signal() == Some(libc::SIGTERM) =>
         {
             Ok(())
         }
-        StopOutcome::Observed(status) => {
+        (StopOutcome::Observed(status), StopIntent::PlannedShutdown) => {
             bail!("Compatibility child exited unexpectedly during shutdown: {status}")
         }
     }
@@ -404,57 +410,90 @@ impl Process {
         mut self,
         observed: Option<ExitStatus>,
         cancelled: &CancellationToken,
+        eof_watchdog: bool,
     ) -> Result<StopIntent> {
-        self.endpoint.connections.close();
-        self.stdin.take();
         let pid = self.pid;
         let mut errors = CleanupErrors::default();
-        let mut outcome = observed.map(StopOutcome::Observed);
-        if outcome.is_none() {
-            match tokio::time::timeout(Duration::from_secs(10), self.child.wait()).await {
-                Ok(result) => {
-                    if let Some(status) = errors.capture(result.context("Child reap failed")) {
-                        outcome = Some(StopOutcome::Observed(status));
+        let mut outcome = None;
+        if cancelled.is_cancelled() {
+            let eof_closed = {
+                let connections = Arc::clone(&self.endpoint.connections);
+                let mut reject = move || connections.close();
+                drain::reject_and_arm_eof(eof_watchdog, &mut self.stdin, &mut reject)
+            };
+            match drain::drive_shutdown_group(
+                &mut self.child,
+                pid,
+                eof_closed,
+                drain::SIGTERM_GRACE,
+                observed,
+            )
+            .await
+            {
+                Ok(report) => {
+                    outcome = Some(match report.exit {
+                        drain::GroupExit::Observed(status) => StopOutcome::Observed(status),
+                        drain::GroupExit::Forced(status) => StopOutcome::ForcedAfterTimeout(status),
+                    });
+                    if !report.group_absent {
+                        errors.capture::<()>(Err(anyhow::anyhow!("Process group still present")));
                     }
                 }
-                Err(_) => {
-                    unsafe {
-                        libc::kill(-(pid as i32), libc::SIGKILL);
-                    }
-                    errors.capture(self.child.start_kill().context("Child termination failed"));
-                    match tokio::time::timeout(Duration::from_secs(2), self.child.wait()).await {
-                        Ok(result) => {
-                            if let Some(status) =
-                                errors.capture(result.context("Child reap failed"))
-                            {
-                                outcome = Some(StopOutcome::ForcedAfterTimeout(status));
-                            }
+                Err(error) => {
+                    errors.capture::<()>(Err(error));
+                }
+            }
+        } else {
+            self.endpoint.connections.close();
+            self.stdin.take();
+            outcome = observed.map(StopOutcome::Observed);
+            if outcome.is_none() {
+                match tokio::time::timeout(Duration::from_secs(10), self.child.wait()).await {
+                    Ok(result) => {
+                        if let Some(status) = errors.capture(result.context("Child reap failed")) {
+                            outcome = Some(StopOutcome::Observed(status));
                         }
-                        Err(error) => {
-                            errors.capture::<()>(Err(error).context("Child reap timed out"));
+                    }
+                    Err(_) => {
+                        unsafe {
+                            libc::kill(-(pid as i32), libc::SIGKILL);
+                        }
+                        errors.capture(self.child.start_kill().context("Child termination failed"));
+                        match tokio::time::timeout(Duration::from_secs(2), self.child.wait()).await
+                        {
+                            Ok(result) => {
+                                if let Some(status) =
+                                    errors.capture(result.context("Child reap failed"))
+                                {
+                                    outcome = Some(StopOutcome::ForcedAfterTimeout(status));
+                                }
+                            }
+                            Err(error) => {
+                                errors.capture::<()>(Err(error).context("Child reap timed out"));
+                            }
                         }
                     }
                 }
             }
-        }
-        unsafe {
-            libc::kill(-(pid as i32), libc::SIGKILL);
-        }
-        errors.capture(
-            tokio::time::timeout(Duration::from_secs(2), async {
-                loop {
-                    let result = unsafe { libc::kill(-(pid as i32), 0) };
-                    if result < 0
-                        && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
-                    {
-                        return;
+            unsafe {
+                libc::kill(-(pid as i32), libc::SIGKILL);
+            }
+            errors.capture(
+                tokio::time::timeout(Duration::from_secs(2), async {
+                    loop {
+                        let result = unsafe { libc::kill(-(pid as i32), 0) };
+                        if result < 0
+                            && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+                        {
+                            return;
+                        }
+                        tokio::time::sleep(Duration::from_millis(10)).await;
                     }
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                }
-            })
-            .await
-            .context("Process group still present"),
-        );
+                })
+                .await
+                .context("Process group still present"),
+            );
+        }
         errors.capture(self.endpoint.connections.join().await);
         for mut log in self.logs {
             let result = match tokio::time::timeout(Duration::from_secs(1), &mut log).await {
@@ -489,12 +528,15 @@ pub fn backoff(attempt: usize) -> Duration {
 pub struct SupervisorConfig {
     /// Ready time required to reset backoff, and age beyond which crashes expire.
     pub crash_guard_window: Duration,
+    /// Close compat stdin during planned shutdown. Restart cleanup always closes it.
+    pub eof_watchdog: bool,
 }
 
 impl Default for SupervisorConfig {
     fn default() -> Self {
         Self {
             crash_guard_window: Duration::from_secs(120),
+            eof_watchdog: true,
         }
     }
 }
@@ -578,7 +620,10 @@ impl Supervisor {
                     }
                     endpoints.send_replace(None);
                     states.send_replace(Status::Stopping);
-                    let stop_intent = match process.stop(observed_exit, &cancelled).await {
+                    let stop_intent = match process
+                        .stop(observed_exit, &cancelled, config.eof_watchdog)
+                        .await
+                    {
                         Ok(intent) => intent,
                         Err(error) => {
                             states.send_replace(Status::Failed);
@@ -590,6 +635,9 @@ impl Supervisor {
                         break;
                     }
                 } else if cancelled.is_cancelled() {
+                    break;
+                }
+                if !drain::restarts_allowed(cancelled.is_cancelled()) {
                     break;
                 }
                 let now = tokio::time::Instant::now();
@@ -767,7 +815,10 @@ mod tests {
             logs: vec![first_log, later_log],
         };
         let active = tokio_util::sync::CancellationToken::new();
-        let error = process.stop(Some(observed), &active).await.unwrap_err();
+        let error = process
+            .stop(Some(observed), &active, true)
+            .await
+            .unwrap_err();
 
         let error_message = error.to_string();
         let later_cleanup_attempted = later_attempted.load(Ordering::SeqCst);
@@ -798,7 +849,7 @@ mod tests {
     }
 
     #[test]
-    fn planned_shutdown_accepts_only_observed_success_or_server_sigkill() {
+    fn planned_shutdown_accepts_term_or_forced_group_exit() {
         assert!(
             super::validate_stop_outcome(
                 super::StopOutcome::Observed(std::process::ExitStatus::from_raw(0)),
@@ -809,6 +860,13 @@ mod tests {
         assert!(
             super::validate_stop_outcome(
                 super::StopOutcome::Observed(std::process::ExitStatus::from_raw(libc::SIGKILL)),
+                super::StopIntent::PlannedShutdown,
+            )
+            .is_ok()
+        );
+        assert!(
+            super::validate_stop_outcome(
+                super::StopOutcome::Observed(std::process::ExitStatus::from_raw(libc::SIGTERM)),
                 super::StopIntent::PlannedShutdown,
             )
             .is_ok()
@@ -834,7 +892,7 @@ mod tests {
                 )),
                 super::StopIntent::PlannedShutdown,
             )
-            .is_err()
+            .is_ok()
         );
     }
 
@@ -864,6 +922,104 @@ mod tests {
             super::SupervisorConfig::default().crash_guard_window,
             std::time::Duration::from_secs(120)
         );
+    }
+
+    struct OwnedStop {
+        intent: super::StopIntent,
+        elapsed: Duration,
+        rejected: bool,
+        group_absent: bool,
+    }
+
+    async fn stop_owned_child(mut child: tokio::process::Child, eof_watchdog: bool) -> OwnedStop {
+        let pid = child.id().unwrap();
+        let stdin = child.stdin.take();
+        let runtime_dir = std::env::temp_dir().join(format!(
+            "pp-t3-stop-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        std::fs::create_dir(&runtime_dir).unwrap();
+        let socket = runtime_dir.join("compat.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let connections = Arc::new(super::Connections::new());
+        let endpoint = Arc::new(super::Endpoint {
+            socket: socket.clone(),
+            generation: "t3-drain".to_owned(),
+            key: [0; 32],
+            connections: connections.clone(),
+        });
+        let process = super::Process {
+            child,
+            pid,
+            stdin,
+            endpoint,
+            logs: Vec::new(),
+        };
+        let cancelled = tokio_util::sync::CancellationToken::new();
+        cancelled.cancel();
+        let started = std::time::Instant::now();
+        let intent = process.stop(None, &cancelled, eof_watchdog).await.unwrap();
+        let rejected = connections.admit().is_err();
+        let group_absent = unsafe { libc::kill(-(pid as i32), 0) } < 0
+            && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+        drop(listener);
+        let _ = std::fs::remove_dir_all(&runtime_dir);
+        OwnedStop {
+            intent,
+            elapsed: started.elapsed(),
+            rejected,
+            group_absent,
+        }
+    }
+
+    #[tokio::test]
+    async fn ticket_t_3_drain_process_stop_sigterms_cooperative_child() {
+        let mut command = tokio::process::Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg("trap 'exit 0' TERM; sleep 30")
+            .stdin(std::process::Stdio::piped())
+            .process_group(0)
+            .kill_on_drop(true);
+        let child = command.spawn().unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let outcome = stop_owned_child(child, true).await;
+        assert_eq!(outcome.intent, super::StopIntent::PlannedShutdown);
+        assert!(
+            outcome.elapsed < Duration::from_secs(3),
+            "{:?}",
+            outcome.elapsed
+        );
+        assert!(outcome.rejected);
+        assert!(outcome.group_absent);
+    }
+
+    #[tokio::test]
+    async fn ticket_t_3_drain_process_stop_force_kills_after_sigterm_grace() {
+        let mut command = tokio::process::Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg("trap '' TERM; while true; do sleep 30; done")
+            .stdin(std::process::Stdio::piped())
+            .process_group(0)
+            .kill_on_drop(true);
+        let child = command.spawn().unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let outcome = stop_owned_child(child, false).await;
+        assert_eq!(outcome.intent, super::StopIntent::PlannedShutdown);
+        assert!(
+            outcome.elapsed >= Duration::from_secs(10),
+            "{:?}",
+            outcome.elapsed
+        );
+        assert!(
+            outcome.elapsed < Duration::from_secs(13),
+            "{:?}",
+            outcome.elapsed
+        );
+        assert!(outcome.rejected);
+        assert!(outcome.group_absent);
     }
 
     #[test]

@@ -13,6 +13,15 @@ use std::{
 };
 use tokio::net::TcpListener;
 
+mod drain;
+
+pub use drain::{ShutdownGate, TrackedShutdownWork};
+pub use pp_compat::drain::{
+    GroupStopReport, SIGTERM_GRACE, drive_shutdown_group, process_alive, process_group_absent,
+    reap_process_group, reject_and_arm_eof, restarts_allowed,
+};
+pub use pp_gateway::MUTATION_DRAIN;
+
 pub struct DesktopLaunch {
     pub data_dir: PathBuf,
     pub bundle: Bundle,
@@ -61,12 +70,14 @@ async fn bind_origin(owner: &StorageLease) -> Result<TcpListener> {
 pub struct CoreHandle {
     compat: CompatHandle,
     monitoring: pp_gateway::MonitoringControl,
+    gate: ShutdownGate,
 }
 impl Clone for CoreHandle {
     fn clone(&self) -> Self {
         Self {
             compat: self.compat.clone(),
             monitoring: self.monitoring.clone(),
+            gate: self.gate.clone(),
         }
     }
 }
@@ -86,6 +97,10 @@ impl CoreHandle {
     pub async fn recover_compat(&self) -> Result<()> {
         self.compat.recover().await
     }
+
+    pub fn track_shutdown_work(&self) -> Result<TrackedShutdownWork, &'static str> {
+        self.gate.track()
+    }
 }
 
 pub struct CoreRuntime {
@@ -101,6 +116,7 @@ struct Resources {
     gateway: Gateway,
     supervisor: Supervisor,
     owner: StorageLease,
+    gate: ShutdownGate,
 }
 
 #[derive(Serialize, Debug)]
@@ -208,6 +224,7 @@ async fn start_resources(
         gateway,
         supervisor,
         owner,
+        gate: ShutdownGate::new(),
     })
 }
 
@@ -253,6 +270,7 @@ impl CoreRuntime {
                             CoreHandle {
                                 compat: resources.supervisor.handle.clone(),
                                 monitoring: resources.gateway.monitoring_control(),
+                                gate: resources.gate.clone(),
                             },
                             launch,
                             requested_by_adapter,
@@ -317,7 +335,16 @@ impl CoreRuntime {
 }
 
 async fn stop_resources(resources: Resources) -> ShutdownReceipt {
-    resources.gateway.drain().await;
+    let deadline = tokio::time::Instant::now() + MUTATION_DRAIN;
+    resources.gate.reject_new();
+    let _ = resources
+        .gate
+        .wait_idle(deadline.saturating_duration_since(tokio::time::Instant::now()))
+        .await;
+    resources
+        .gateway
+        .drain_for(deadline.saturating_duration_since(tokio::time::Instant::now()))
+        .await;
     let compat_reaped = resources.supervisor.shutdown().await.is_ok();
     let gateway_stopped = resources.gateway.stop().await.is_ok();
     let mut receipt = ShutdownReceipt {
