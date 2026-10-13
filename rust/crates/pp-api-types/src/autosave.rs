@@ -1,4 +1,6 @@
 pub use pp_domain::*;
+const MIN_PLAN_DECISIONS: usize = 1;
+const MAX_PLAN_DECISIONS: usize = 10_000;
 use serde::{Deserialize, Deserializer, Serialize, de};
 use std::{collections::HashSet, fmt};
 
@@ -17,10 +19,12 @@ pub struct PlanDraftBasis {
     plan_version: Version,
 }
 
+#[cfg_attr(feature = "codegen", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PlanDraftBasisWire {
     #[serde(deserialize_with = "required_nullable")]
+    #[cfg_attr(feature = "codegen", schemars(with = "RequiredNullable<PositiveId>"))]
     revision_id: Option<PositiveId>,
     plan_version: Version,
 }
@@ -38,6 +42,7 @@ impl TryFrom<PlanDraftBasisWire> for PlanDraftBasis {
     }
 }
 
+#[cfg_attr(feature = "codegen", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlanDraftIdentity {
@@ -48,15 +53,21 @@ pub struct PlanDraftIdentity {
     base: PlanDraftBasis,
 }
 
+#[cfg_attr(feature = "codegen", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FileTarget {
     part_key: WireText<1, 4096>,
     relative_path: WireText<1, 4096>,
     #[serde(deserialize_with = "required_nullable")]
+    #[cfg_attr(
+        feature = "codegen",
+        schemars(with = "RequiredNullable<WireText<0, 1000>>")
+    )]
     source_layer: Option<WireText<0, 1000>>,
 }
 
+#[cfg_attr(feature = "codegen", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PlanChoice {
@@ -67,6 +78,7 @@ pub enum PlanChoice {
     SetQuantityOverride {
         target: FileTarget,
         #[serde(deserialize_with = "required_nullable")]
+        #[cfg_attr(feature = "codegen", schemars(with = "RequiredNullable<Quantity>"))]
         value: Option<Quantity>,
     },
 }
@@ -80,20 +92,29 @@ pub struct SavePlanChoicesRequest {
     decisions: Vec<PlanChoice>,
 }
 
+#[cfg_attr(feature = "codegen", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SavePlanChoicesRequestWire {
     expected_base: PlanDraftBasis,
     #[serde(deserialize_with = "required_nullable")]
+    #[cfg_attr(
+        feature = "codegen",
+        schemars(with = "RequiredNullable<PlanDraftIdentity>")
+    )]
     expected_draft: Option<PlanDraftIdentity>,
     remap_checkoff_links: bool,
+    #[cfg_attr(
+        feature = "codegen",
+        schemars(length(min = "MIN_PLAN_DECISIONS", max = "MAX_PLAN_DECISIONS"))
+    )]
     decisions: Vec<PlanChoice>,
 }
 
 impl TryFrom<SavePlanChoicesRequestWire> for SavePlanChoicesRequest {
     type Error = &'static str;
     fn try_from(value: SavePlanChoicesRequestWire) -> Result<Self, Self::Error> {
-        if !(1..=10_000).contains(&value.decisions.len()) {
+        if !(MIN_PLAN_DECISIONS..=MAX_PLAN_DECISIONS).contains(&value.decisions.len()) {
             return Err("decision_count;field=decisions");
         }
         if let Some(draft) = &value.expected_draft
@@ -120,6 +141,7 @@ impl TryFrom<SavePlanChoicesRequestWire> for SavePlanChoicesRequest {
     }
 }
 
+#[cfg_attr(feature = "codegen", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ApplyPlanDraftReceipt {
@@ -140,7 +162,19 @@ pub struct BoundaryError {
     pub detail: String,
 }
 
-fn parse<T: de::DeserializeOwned>(text: &str) -> Result<T, BoundaryError> {
+/// Match JSON.parse before DTO validation: repeated object keys keep the last
+/// value. DTO unknown-field, required-field and domain checks still run after it.
+pub(crate) fn parse<T: de::DeserializeOwned>(text: &str) -> Result<T, BoundaryError> {
+    let input: serde_json::Value = deserialize(text)?;
+    let normalized = serde_json::to_string(&input).map_err(|error| BoundaryError {
+        category: "invalid_json".into(),
+        field: "$".into(),
+        detail: error.to_string(),
+    })?;
+    deserialize(&normalized)
+}
+
+fn deserialize<T: de::DeserializeOwned>(text: &str) -> Result<T, BoundaryError> {
     let mut deserializer = serde_json::Deserializer::from_str(text);
     let value = serde_path_to_error::deserialize(&mut deserializer).map_err(|error| {
         let detail = error.inner().to_string();
@@ -375,6 +409,39 @@ impl fmt::Display for BoundaryError {
     }
 }
 impl std::error::Error for BoundaryError {}
+
+#[cfg(feature = "codegen")]
+pub(crate) struct RequiredNullable<T>(std::marker::PhantomData<T>);
+#[cfg(feature = "codegen")]
+impl<T: schemars::JsonSchema> schemars::JsonSchema for RequiredNullable<T> {
+    fn schema_name() -> String {
+        format!("RequiredNullable_{}", T::schema_name())
+    }
+    fn is_referenceable() -> bool {
+        false
+    }
+    fn json_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+        <Option<T> as schemars::JsonSchema>::json_schema(generator)
+    }
+}
+#[cfg(feature = "codegen")]
+impl schemars::JsonSchema for PlanDraftBasis {
+    fn schema_name() -> String {
+        "PlanDraftBasis".into()
+    }
+    fn json_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+        <PlanDraftBasisWire as schemars::JsonSchema>::json_schema(generator)
+    }
+}
+#[cfg(feature = "codegen")]
+impl schemars::JsonSchema for SavePlanChoicesRequest {
+    fn schema_name() -> String {
+        "SavePlanChoicesRequest".into()
+    }
+    fn json_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+        <SavePlanChoicesRequestWire as schemars::JsonSchema>::json_schema(generator)
+    }
+}
 
 #[cfg(test)]
 mod tests {

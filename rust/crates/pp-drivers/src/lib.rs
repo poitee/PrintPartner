@@ -1,1 +1,2 @@
-//! Move deferred until after #171.
+//! Status-only printer monitoring.
+pub mod moonraker;

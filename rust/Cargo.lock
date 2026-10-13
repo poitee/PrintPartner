@@ -3106,6 +3106,7 @@ name = "pp-domain"
 version = "0.1.0"
 dependencies = [
  "proptest",
+ "schemars 0.8.22",
  "serde",
  "serde_json",
 ]
@@ -3113,6 +3114,16 @@ dependencies = [
 [[package]]
 name = "pp-drivers"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "pp-api-types",
+ "pp-net",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+]
 
 [[package]]
 name = "pp-gateway"
@@ -3122,9 +3133,11 @@ dependencies = [
  "axum",
  "hex",
  "http-body",
+ "http-body-util",
  "hyper",
  "hyper-util",
  "pp-compat",
+ "pp-drivers",
  "pp-net",
  "rand 0.9.5",
  "serde",
@@ -3141,7 +3154,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "proptest",
+ "tokio",
 ]
 
 [[package]]
@@ -3168,7 +3185,9 @@ dependencies = [
  "insta",
  "libc",
  "proptest",
+ "regex",
  "rustix",
+ "ryu-js",
  "serde",
  "serde_json",
  "sha2",
@@ -3645,6 +3664,12 @@ name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
+
+[[package]]
+name = "ryu-js"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dd29631678d6fb0903b69223673e122c32e9ae559d0960a38d574695ebc0ea15"
 
 [[package]]
 name = "salsa20"
@@ -5012,9 +5037,9 @@ checksum = "d245f478577f809a851594d02313b640fb437e0bb33866753cff937863096954"
 
 [[package]]
 name = "unicode-normalization"
-version = "0.1.24"
+version = "0.1.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5033c97c4262335cded6d6fc3e5c18ab755e1a3dc96376350f3d8e9f009ad956"
+checksum = "5fd4f6878c9cb28d874b009da9e8d183b5abc80117c40bbd187a1fde336be6e8"
 dependencies = [
  "tinyvec",
 ]

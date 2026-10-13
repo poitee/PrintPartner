@@ -148,6 +148,16 @@ describe("requiredUnitTokensFromObjectNames", () => {
       requiredUnitTokensFromObjectNames([`a__${TOKEN_A}`, "plain", undefined, `b__${TOKEN_A}`]),
     ).toEqual([TOKEN_A]);
   });
+
+  it("reads tokens from Orca and Prusa labels after the slicer parser unwraps them", () => {
+    expect(
+      requiredUnitTokensFromObjectNames([
+        `bracket__${TOKEN_A}_id_0_copy_0`,
+        `clip__${TOKEN_B}__instance_1`,
+        `frame__${TOKEN_A} (instance 2)`,
+      ]),
+    ).toEqual([TOKEN_A, TOKEN_B]);
+  });
 });
 
 describe("currentExportArtifact", () => {
@@ -232,6 +242,42 @@ describe("projectWorkPackages routeLocked", () => {
     expect(
       projectWorkPackages(input({ checkoffLinks: [checkoffLink({ profile_id: 99 })] })).routeLocked,
     ).toBe(false);
+  });
+
+  it("keeps a past file that names no Required unit visible without locking the method", () => {
+    const projection = projectWorkPackages(input({
+      checkoffLinks: [checkoffLink({
+        filename: "shop-floor.gcode",
+        units: [{ part_id: 3, unit_index: 0, object_name: "shop-floor.gcode" }],
+      })],
+    }));
+    expect(projection.routeLocked).toBe(false);
+    expect(projection.active.map((entry) => entry.title)).toEqual(["shop-floor.gcode"]);
+    expect(projection.active[0]?.links.unitTokens).toEqual([]);
+  });
+
+  it("locks when a printer send stored a decorated label for a current unit", () => {
+    const projection = projectWorkPackages(
+      input({
+        checkoffLinks: [
+          checkoffLink({
+            units: [{ part_id: 3, unit_index: 0, object_name: `part__${TOKEN_A}_id_0_copy_0` }],
+          }),
+        ],
+      }),
+    );
+    expect(projection.routeLocked).toBe(true);
+    expect(projection.active[0]?.links.unitTokens).toEqual([TOKEN_A]);
+    expect(projection.active[0]?.status).toBe("queued");
+  });
+
+  it("does not lock the method when the recorded units are outside the current package", () => {
+    const projection = projectWorkPackages(input({
+      selectedTokens: [TOKEN_B],
+      checkoffLinks: [checkoffLink()],
+    }));
+    expect(projection.routeLocked).toBe(false);
+    expect(projection.active[0]?.links.unitTokens).toEqual([TOKEN_A]);
   });
 });
 

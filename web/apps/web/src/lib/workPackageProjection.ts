@@ -1,11 +1,16 @@
-import type {
-  AcceptedPlateExportRecord,
-  AcceptedPlateWorkspace,
-  ProductionPrinterAssignment,
-  ProductionRoute,
-  ProductionSetup,
-  RequiredUnitToken,
+import {
+  parseRequiredUnitTokenContract,
+  type AcceptedPlateExportRecord,
+  type AcceptedPlateWorkspace,
+  type ProductionPrinterAssignment,
+  type ProductionRoute,
+  type ProductionSetup,
+  type RequiredUnitToken,
 } from "@print-partner/contracts";
+import {
+  recordedPrintsLockProductionMethod,
+  requiredUnitTokensInObjectNames,
+} from "@print-partner/domain";
 import type { PrinterCheckoffLink } from "../api/endpoints/checkoff";
 import { productionPlateReadiness, type ProductionSelectableUnit } from "./productionSelection";
 import { progressRoute } from "./routes";
@@ -153,15 +158,12 @@ type WorkPackageProjection = Readonly<{
   /** Recently finished packages, newest first. */
   recent: readonly WorkPackage[];
   /**
-   * True once a file for this Build reached a printer. The result is physical
-   * from that moment, so the route stops being changeable and Checkoff owns
-   * what happens next. The route is Build state rather than per-package state,
-   * which is why one send fixes it for the Build.
+   * True when a non-dismissed recorded print for this Build names a Required
+   * unit in the package being prepared. Other past files stay visible and do
+   * not lock the method.
    */
   routeLocked: boolean;
 }>;
-
-const TOKEN_PATTERN = /__(ppu_[0-9a-f]{32})$/;
 
 /**
  * Object names carry their Required-unit token, so a sent G-code file can be
@@ -170,17 +172,7 @@ const TOKEN_PATTERN = /__(ppu_[0-9a-f]{32})$/;
 export function requiredUnitTokensFromObjectNames(
   names: readonly (string | undefined)[],
 ): RequiredUnitToken[] {
-  const tokens: RequiredUnitToken[] = [];
-  const seen = new Set<string>();
-  for (const name of names) {
-    const match = name ? TOKEN_PATTERN.exec(name) : null;
-    if (!match) continue;
-    const token = match[1];
-    if (seen.has(token)) continue;
-    seen.add(token);
-    tokens.push(token as RequiredUnitToken);
-  }
-  return tokens;
+  return requiredUnitTokensInObjectNames(names).map((token) => parseRequiredUnitTokenContract(token));
 }
 
 function plural(count: number, one: string, many: string): string {
@@ -483,7 +475,15 @@ export function projectWorkPackages(input: WorkPackageProjectionInput): WorkPack
     })
     .slice(0, 5);
   const route = input.setup?.route ?? null;
-  const routeLocked = dispatched.length > 0;
+  const routeLocked = input.profileId != null && recordedPrintsLockProductionMethod({
+    profileId: input.profileId,
+    packageTokens: input.selectedTokens,
+    records: input.checkoffLinks.map((link) => ({
+      profileId: link.profile_id,
+      state: link.state,
+      objectNames: link.units.map((unit) => unit.object_name),
+    })),
+  });
 
   if (input.profileId == null || workspace == null || workspace.kind === "empty_plan") {
     return {

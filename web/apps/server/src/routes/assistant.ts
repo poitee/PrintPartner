@@ -219,7 +219,7 @@ export async function registerAssistantRoutes(
         return sendProblem(reply, 500, "Internal Server Error", "Internal Server Error");
       }
       if (!result.ok) {
-        const status = result.status === 500 || result.status === 503 ? result.status : 400;
+        const status = result.status === 409 || result.status === 500 || result.status === 503 ? result.status : 400;
         if (status === 500) {
           request.log.error(
             {
@@ -235,11 +235,13 @@ export async function registerAssistantRoutes(
         return sendProblem(
           reply,
           status,
-          status === 503
-            ? "Service Unavailable"
-            : status === 500
-              ? "Internal Server Error"
-              : "Bad Request",
+          status === 409
+            ? "Conflict"
+            : status === 503
+              ? "Service Unavailable"
+              : status === 500
+                ? "Internal Server Error"
+                : "Bad Request",
           result.detail ?? "Action failed",
         );
       }

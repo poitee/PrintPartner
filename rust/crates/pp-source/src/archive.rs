@@ -6,9 +6,11 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeSet,
     fmt,
-    fs::File,
+    fs::{self, File, OpenOptions},
     io::{self, Read, Seek, SeekFrom, Write},
-    sync::atomic::{AtomicBool, Ordering},
+    os::unix::fs::OpenOptionsExt,
+    path::PathBuf,
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 const CANDIDATE: &str = ".candidate";
@@ -361,14 +363,14 @@ impl SourceRoot {
     }
 }
 
-fn check_cancel(cancelled: &AtomicBool) -> Result<()> {
+pub(crate) fn check_cancel(cancelled: &AtomicBool) -> Result<()> {
     if cancelled.load(Ordering::Relaxed) {
         Err(ArchiveError::Cancelled)
     } else {
         Ok(())
     }
 }
-fn transfer(
+pub(crate) fn transfer(
     mut input: impl Read,
     mut output: impl Write,
     limit: u64,
@@ -392,19 +394,31 @@ fn transfer(
     }
     Ok((bytes, hex::encode(hash.finalize())))
 }
-struct Entry {
-    raw_name: String,
+pub(crate) struct Entry {
+    pub(crate) raw_name: String,
     path: SourcePath,
     directory: bool,
     compressed_bytes: u64,
-    inflated_bytes: u64,
+    pub(crate) inflated_bytes: u64,
     central_header_offset: u64,
-    local_header_offset: u64,
+    pub(crate) local_header_offset: u64,
 }
-struct Preflight {
-    entries: Vec<Entry>,
+pub(crate) struct Preflight {
+    pub(crate) entries: Vec<Entry>,
     central_offset: u64,
     eocd_offset: u64,
+}
+struct ResolvedZip64 {
+    uncompressed_bytes: u64,
+    compressed_bytes: u64,
+    local_header_offset: u64,
+    disk: u64,
+}
+struct Zip64Directory {
+    total_entries: u64,
+    central_size: u64,
+    central_offset: u64,
+    record_offset: u64,
 }
 
 /// The ZIP crate falls back to earlier end records when the validated central
@@ -452,15 +466,46 @@ fn verify_reader_entry<R: Read + ?Sized>(
 /// Walks central extra-field records the way zip 8.6 parses them and rejects
 /// anything it would fail on, so the reader never abandons the validated
 /// directory for an earlier end record.
-fn validate_extra_field(extra: &[u8], central: &[u8; 46]) -> Result<()> {
-    // zip applies every ZIP64 record to one set of values, so what a record
-    // must carry depends on what earlier records already replaced.
-    let mut zip64 = [
-        u32_at(central, 24)?,
-        u32_at(central, 20)?,
-        u32_at(central, 42)?,
-    ]
-    .map(u64::from);
+fn validate_extra_field(extra: &[u8], central: &[u8; 46]) -> Result<ResolvedZip64> {
+    let original = [
+        u64::from(u32_at(central, 24)?),
+        u64::from(u32_at(central, 20)?),
+        u64::from(u32_at(central, 42)?),
+    ];
+    let mut values = original;
+    let original_disk = u64::from(u16_at(central, 34)?);
+    let mut disk = original_disk;
+    absorb_zip64(extra, &mut values, &mut disk)?;
+    // A 24-byte ZIP64 record rewrites unsaturated fields the way zip 8.6 does.
+    // Preflight keeps the central header's own values unless they are sentinels,
+    // so that rewrite shows up as a reader mismatch instead of becoming the
+    // sizes and offset the ratio cap and local-header checks trusted.
+    let values = trust_sentinels(original, values);
+    if original_disk != u64::from(u16::MAX) {
+        disk = original_disk;
+    }
+    Ok(ResolvedZip64 {
+        uncompressed_bytes: values[0],
+        compressed_bytes: values[1],
+        local_header_offset: values[2],
+        disk,
+    })
+}
+
+fn trust_sentinels(original: [u64; 3], absorbed: [u64; 3]) -> [u64; 3] {
+    let mut trusted = absorbed;
+    for (trusted, original) in trusted.iter_mut().zip(original) {
+        if original != u64::from(u32::MAX) {
+            *trusted = original;
+        }
+    }
+    trusted
+}
+
+/// Walks extra-field records the way zip 8.6 parses them. ZIP64 values still
+/// saturated, and any 24-byte ZIP64 record, replace the running sizes so a
+/// later record has to carry what an earlier record put back.
+fn absorb_zip64(extra: &[u8], values: &mut [u64; 3], disk: &mut u64) -> Result<()> {
     let mut rest = extra;
     while !rest.is_empty() {
         if rest.len() < 4 {
@@ -472,18 +517,26 @@ fn validate_extra_field(extra: &[u8], central: &[u8; 46]) -> Result<()> {
             return Err(ArchiveError::MalformedExtraField);
         };
         match id {
-            // ZIP64: each value still saturated needs its 64-bit replacement;
-            // a 24-byte field replaces all three (uncompressed size,
-            // compressed size, header offset, in that order).
             0x0001 => {
-                let mut replacements = data.as_chunks::<8>().0.iter();
-                for value in &mut zip64 {
+                let mut cursor = 0;
+                for value in values.iter_mut() {
                     if len >= 24 || *value == u64::from(u32::MAX) {
-                        let replacement = replacements
-                            .next()
-                            .ok_or(ArchiveError::MalformedExtraField)?;
-                        *value = u64::from_le_bytes(*replacement);
+                        let Some(bytes) = data.get(cursor..cursor + 8) else {
+                            return Err(ArchiveError::MalformedExtraField);
+                        };
+                        let mut wide = [0u8; 8];
+                        wide.copy_from_slice(bytes);
+                        *value = u64::from_le_bytes(wide);
+                        cursor += 8;
                     }
+                }
+                if *disk == u64::from(u16::MAX) {
+                    let Some(bytes) = data.get(cursor..cursor + 4) else {
+                        return Err(ArchiveError::MalformedExtraField);
+                    };
+                    let mut narrow = [0u8; 4];
+                    narrow.copy_from_slice(bytes);
+                    *disk = u64::from(u32::from_le_bytes(narrow));
                 }
             }
             0x000a => {
@@ -554,8 +607,160 @@ fn bind_zip_reader_to_validated_eocd(file: &mut File, eocd_offset: u64) -> Resul
     Ok(())
 }
 
-fn inspect_index(
-    file: &mut File,
+static BOUND_COPIES: AtomicU64 = AtomicU64::new(0);
+
+/// Private file that receives the validated archive prefix. Binding rewrites the
+/// EOCD, so this must never be the caller's 3MF or a published original.
+struct BoundCopy {
+    path: PathBuf,
+    file: Option<File>,
+}
+impl BoundCopy {
+    fn create() -> Result<Self> {
+        let path = std::env::temp_dir().join(format!(
+            "pp-source-bind-{}-{}",
+            std::process::id(),
+            BOUND_COPIES.fetch_add(1, Ordering::Relaxed)
+        ));
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)?;
+        Ok(Self {
+            path,
+            file: Some(file),
+        })
+    }
+}
+impl Drop for BoundCopy {
+    fn drop(&mut self) {
+        drop(self.file.take());
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+fn local_member_span(
+    source: &mut (impl Read + Seek),
+    entry: &Entry,
+    central_offset: u64,
+) -> Result<(u64, u64)> {
+    source.seek(SeekFrom::Start(entry.local_header_offset))?;
+    let mut local = [0u8; 30];
+    source.read_exact(&mut local)?;
+    if local[..4] != *b"PK\x03\x04" {
+        return Err(ArchiveError::InvalidArchive);
+    }
+    let name_len = u64::from(u16_at(&local, 26)?);
+    let extra_len = u64::from(u16_at(&local, 28)?);
+    let payload_end = entry
+        .local_header_offset
+        .checked_add(30)
+        .and_then(|n| n.checked_add(name_len))
+        .and_then(|n| n.checked_add(extra_len))
+        .and_then(|n| n.checked_add(entry.compressed_bytes))
+        .ok_or(ArchiveError::InvalidArchive)?;
+    if payload_end > central_offset {
+        return Err(ArchiveError::InvalidArchive);
+    }
+    let descriptor = if u16_at(&local, 6)? & 8 != 0 {
+        (central_offset - payload_end).min(24)
+    } else {
+        0
+    };
+    Ok((
+        entry.local_header_offset,
+        payload_end - entry.local_header_offset + descriptor,
+    ))
+}
+
+fn copy_span(
+    source: &mut (impl Read + Seek),
+    dest: &mut (impl Write + Seek),
+    offset: u64,
+    len: u64,
+    cancelled: &AtomicBool,
+) -> Result<()> {
+    source.seek(SeekFrom::Start(offset))?;
+    dest.seek(SeekFrom::Start(offset))?;
+    let mut remaining = len;
+    let mut buffer = [0u8; 64 * 1024];
+    while remaining > 0 {
+        check_cancel(cancelled)?;
+        let want = remaining.min(buffer.len() as u64) as usize;
+        source.read_exact(&mut buffer[..want])?;
+        dest.write_all(&buffer[..want])?;
+        remaining -= want as u64;
+    }
+    Ok(())
+}
+
+/// Copy the central directory and the selected member into a private file, bind
+/// that EOCD, and return the member bytes only after the opened reader matches
+/// the preflight record. A ZIP64 extra that redirects the local header is
+/// rejected before those bytes are returned. Sibling members stay unread.
+pub(crate) fn read_bound_entry(
+    source: &mut (impl Read + Seek),
+    preflight: &Preflight,
+    index: usize,
+    limit: u64,
+    cancelled: &AtomicBool,
+) -> Result<Vec<u8>> {
+    let entry = preflight
+        .entries
+        .get(index)
+        .ok_or(ArchiveError::InvalidArchive)?;
+    let prefix = preflight
+        .eocd_offset
+        .checked_add(22)
+        .ok_or(ArchiveError::InvalidArchive)?;
+    if preflight.central_offset > prefix {
+        return Err(ArchiveError::InvalidArchive);
+    }
+    let mut bound = BoundCopy::create()?;
+    let mut file = bound.file.take().ok_or(ArchiveError::InvalidArchive)?;
+    file.set_len(prefix)?;
+    copy_span(
+        source,
+        &mut file,
+        preflight.central_offset,
+        prefix - preflight.central_offset,
+        cancelled,
+    )?;
+    let (local_offset, local_len) = local_member_span(source, entry, preflight.central_offset)?;
+    copy_span(source, &mut file, local_offset, local_len, cancelled)?;
+    bind_zip_reader_to_validated_eocd(&mut file, preflight.eocd_offset)?;
+    let mut archive = zip::ZipArchive::with_config(
+        zip::read::Config {
+            archive_offset: zip::read::ArchiveOffset::Known(0),
+        },
+        file,
+    )?;
+    verify_reader_archive(&archive, preflight)?;
+    let mut member = archive.by_index(index)?;
+    verify_reader_entry(&member, entry)?;
+    let mut bytes = Vec::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        check_cancel(cancelled)?;
+        let n = member.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        let next = (bytes.len() as u64)
+            .checked_add(n as u64)
+            .ok_or(ArchiveError::Limit)?;
+        if next > limit {
+            return Err(ArchiveError::Limit);
+        }
+        bytes.extend_from_slice(&buffer[..n]);
+    }
+    Ok(bytes)
+}
+
+pub(crate) fn inspect_index(
+    file: &mut (impl Read + Seek),
     length: u64,
     limits: ArchiveLimits,
     cancelled: &AtomicBool,
@@ -574,37 +779,59 @@ fn inspect_index(
         if i + 22 + comment_len != tail_size {
             continue;
         }
-        let footer = &tail[i..];
-        let central_size = u32_at(footer, 12)? as u64;
-        let central_offset = u32_at(footer, 16)? as u64;
-        let eocd_offset = tail_start + i as u64;
-        if central_offset + central_size != eocd_offset {
-            continue;
-        }
-        let comment = &footer[22..22 + comment_len];
+        let comment = &tail[i + 22..i + 22 + comment_len];
         if comment_contains_zip_end_record(comment) {
             return Err(ArchiveError::InvalidArchive);
         }
         if chosen.is_some() {
             return Err(ArchiveError::InvalidArchive);
         }
-        chosen = Some((footer, eocd_offset));
+        let mut footer = [0u8; 22];
+        footer.copy_from_slice(&tail[i..i + 22]);
+        chosen = Some((footer, tail_start + i as u64));
     }
     let Some((footer, eocd_offset)) = chosen else {
         return Err(ArchiveError::InvalidArchive);
     };
-    let count = u16_at(footer, 10)? as usize;
-    let central_size = u32_at(footer, 12)? as u64;
-    let central_offset = u32_at(footer, 16)? as u64;
-    if u16_at(footer, 4)? != 0
-        || u16_at(footer, 6)? != 0
-        || u16_at(footer, 8)? as usize != count
-        || count == 65_535
-        || central_size == u32::MAX as u64
-        || central_offset == u32::MAX as u64
+    let mut count = u64::from(u16_at(&footer, 10)?);
+    let mut central_size = u64::from(u32_at(&footer, 12)?);
+    let mut central_offset = u64::from(u32_at(&footer, 16)?);
+    let disk = u16_at(&footer, 4)?;
+    let start_disk = u16_at(&footer, 6)?;
+    let entries_on_disk = u64::from(u16_at(&footer, 8)?);
+    if (disk != 0 && disk != u16::MAX)
+        || (start_disk != 0 && start_disk != u16::MAX)
+        || entries_on_disk != count
     {
         return Err(ArchiveError::Unsupported);
     }
+    if let Some(zip64) = read_zip64_directory(file, eocd_offset)? {
+        for (old, sentinel, new) in [
+            (count, u64::from(u16::MAX), zip64.total_entries),
+            (central_size, u64::from(u32::MAX), zip64.central_size),
+            (central_offset, u64::from(u32::MAX), zip64.central_offset),
+        ] {
+            if old != sentinel && old != new {
+                return Err(ArchiveError::InvalidArchive);
+            }
+        }
+        count = zip64.total_entries;
+        central_size = zip64.central_size;
+        central_offset = zip64.central_offset;
+        if central_offset.checked_add(central_size) != Some(zip64.record_offset) {
+            return Err(ArchiveError::InvalidArchive);
+        }
+    } else if disk == u16::MAX
+        || start_disk == u16::MAX
+        || count == u64::from(u16::MAX)
+        || central_size == u64::from(u32::MAX)
+        || central_offset == u64::from(u32::MAX)
+    {
+        return Err(ArchiveError::Unsupported);
+    } else if central_offset.checked_add(central_size) != Some(eocd_offset) {
+        return Err(ArchiveError::InvalidArchive);
+    }
+    let count = usize::try_from(count).map_err(|_| ArchiveError::InvalidArchive)?;
     if count > limits.max_entries || central_size > MAX_METADATA_BYTES {
         return Err(ArchiveError::Limit);
     }
@@ -622,9 +849,10 @@ fn inspect_index(
         let flags = u16_at(&header, 8)?;
         let compression = u16_at(&header, 10)?;
         let mode = u32_at(&header, 38)? >> 16;
+        let disk_start = u16_at(&header, 34)?;
         if flags & (1 | 0x40 | 0x2000) != 0
             || ![0, 8].contains(&compression)
-            || u16_at(&header, 34)? != 0
+            || (disk_start != 0 && disk_start != u16::MAX)
             || (mode & 0o170000 != 0 && ![0o100000, 0o040000].contains(&(mode & 0o170000)))
         {
             return Err(ArchiveError::Unsupported);
@@ -653,21 +881,32 @@ fn inspect_index(
                 crate::Error::Limit => ArchiveError::Limit,
                 other => ArchiveError::Source(other),
             })?;
-        // Reject advertised bombs before inflating; transfer enforces the same
-        // cap on actual bytes because these sizes are untrusted.
-        let compressed_bytes = u32_at(&header, 20)? as u64;
-        let inflated_bytes = u32_at(&header, 24)? as u64;
-        if inflated_bytes > ratio_limit(compressed_bytes) {
-            return Err(ArchiveError::CompressionRatio);
-        }
-        let extra_end = file.stream_position()? + u16_at(&header, 30)? as u64;
+        let extra_len = u16_at(&header, 30)? as u64;
+        let extra_end = file
+            .stream_position()?
+            .checked_add(extra_len)
+            .ok_or(ArchiveError::InvalidArchive)?;
         if extra_end > central_offset + central_size {
             return Err(ArchiveError::InvalidArchive);
         }
-        let mut extra = vec![0; u16_at(&header, 30)? as usize];
+        let mut extra = vec![0; extra_len as usize];
         file.read_exact(&mut extra)?;
-        validate_extra_field(&extra, &header)?;
-        validate_local_header(file, &header, &raw_name, central_offset)?;
+        // Sizes in the central header are untrusted and may be ZIP64 sentinels.
+        // Resolve them before the ratio cap so a saturated marker is not treated
+        // as a multi-gigabyte payload.
+        let resolved = validate_extra_field(&extra, &header)?;
+        if resolved.disk != 0 {
+            return Err(ArchiveError::Unsupported);
+        }
+        if resolved.compressed_bytes > limits.max_compressed_bytes
+            || resolved.uncompressed_bytes > limits.max_inflated_bytes
+        {
+            return Err(ArchiveError::Limit);
+        }
+        if resolved.uncompressed_bytes > ratio_limit(resolved.compressed_bytes) {
+            return Err(ArchiveError::CompressionRatio);
+        }
+        validate_local_header(file, &header, &raw_name, central_offset, &resolved)?;
         file.seek(SeekFrom::Current(u16_at(&header, 32)? as i64))?;
         if file.stream_position()? > central_offset + central_size {
             return Err(ArchiveError::InvalidArchive);
@@ -676,10 +915,10 @@ fn inspect_index(
             raw_name,
             path,
             directory,
-            compressed_bytes,
-            inflated_bytes,
+            compressed_bytes: resolved.compressed_bytes,
+            inflated_bytes: resolved.uncompressed_bytes,
             central_header_offset,
-            local_header_offset: u32_at(&header, 42)? as u64,
+            local_header_offset: resolved.local_header_offset,
         });
     }
     if file.stream_position()? != central_offset + central_size {
@@ -693,14 +932,62 @@ fn inspect_index(
     })
 }
 
+fn read_zip64_directory(
+    file: &mut (impl Read + Seek),
+    eocd_offset: u64,
+) -> Result<Option<Zip64Directory>> {
+    if eocd_offset < 20 {
+        return Ok(None);
+    }
+    file.seek(SeekFrom::Start(eocd_offset - 20))?;
+    let mut locator = [0u8; 20];
+    file.read_exact(&mut locator)?;
+    if locator[..4] != *ZIP64_EOCD_LOCATOR_SIGNATURE {
+        return Ok(None);
+    }
+    if u32_at(&locator, 4)? != 0 || u32_at(&locator, 16)? != 1 {
+        return Err(ArchiveError::Unsupported);
+    }
+    let record_offset = u64_at(&locator, 8)?;
+    match record_offset.checked_add(56) {
+        Some(end) if end <= eocd_offset - 20 => {}
+        _ => return Err(ArchiveError::InvalidArchive),
+    }
+    file.seek(SeekFrom::Start(record_offset))?;
+    let mut record = [0u8; 56];
+    file.read_exact(&mut record)?;
+    let size = u64_at(&record, 4)?;
+    if record[..4] != *ZIP64_EOCD_SIGNATURE
+        || !(44..=MAX_METADATA_BYTES).contains(&size)
+        || record_offset
+            .checked_add(12)
+            .and_then(|start| start.checked_add(size))
+            != Some(eocd_offset - 20)
+    {
+        return Err(ArchiveError::InvalidArchive);
+    }
+    let entries_on_disk = u64_at(&record, 24)?;
+    let total_entries = u64_at(&record, 32)?;
+    if u32_at(&record, 16)? != 0 || u32_at(&record, 20)? != 0 || entries_on_disk != total_entries {
+        return Err(ArchiveError::Unsupported);
+    }
+    Ok(Some(Zip64Directory {
+        total_entries,
+        central_size: u64_at(&record, 40)?,
+        central_offset: u64_at(&record, 48)?,
+        record_offset,
+    }))
+}
+
 fn validate_local_header(
-    file: &mut File,
+    file: &mut (impl Read + Seek),
     central: &[u8; 46],
     name: &str,
     central_offset: u64,
+    resolved: &ResolvedZip64,
 ) -> Result<()> {
     let next = file.stream_position()?;
-    let local_offset = u32_at(central, 42)? as u64;
+    let local_offset = resolved.local_header_offset;
     if local_offset >= central_offset {
         return Err(ArchiveError::InvalidArchive);
     }
@@ -714,18 +1001,17 @@ fn validate_local_header(
     {
         return Err(ArchiveError::InvalidArchive);
     }
-    if u16_at(&local, 6)? & 8 == 0
-        && (u32_at(&local, 14)? != u32_at(central, 16)?
-            || u32_at(&local, 18)? != u32_at(central, 20)?
-            || u32_at(&local, 22)? != u32_at(central, 24)?)
-    {
+    let descriptor = u16_at(&local, 6)? & 8 != 0;
+    if !descriptor && u32_at(&local, 14)? != u32_at(central, 16)? {
         return Err(ArchiveError::InvalidArchive);
     }
+    let extra_len = u64::from(u16_at(&local, 28)?);
     let payload_end = local_offset
-        + 30
-        + name.len() as u64
-        + u16_at(&local, 28)? as u64
-        + u32_at(central, 20)? as u64;
+        .checked_add(30)
+        .and_then(|n| n.checked_add(name.len() as u64))
+        .and_then(|n| n.checked_add(extra_len))
+        .and_then(|n| n.checked_add(resolved.compressed_bytes))
+        .ok_or(ArchiveError::InvalidArchive)?;
     if payload_end > central_offset {
         return Err(ArchiveError::InvalidArchive);
     }
@@ -734,8 +1020,100 @@ fn validate_local_header(
     if local_name != name.as_bytes() {
         return Err(ArchiveError::InvalidArchive);
     }
+    let mut extra = vec![0; extra_len as usize];
+    file.read_exact(&mut extra)?;
+    if !descriptor {
+        let local_uncompressed = u64::from(u32_at(&local, 22)?);
+        let local_compressed = u64::from(u32_at(&local, 18)?);
+        // Opaque local extra bytes are not a second central directory. Only a
+        // saturated size is resolved from the local ZIP64 field; an unsaturated
+        // ZIP64 rewrite is left for the reader mismatch check.
+        let (uncompressed, compressed) = if local_uncompressed == u64::from(u32::MAX)
+            || local_compressed == u64::from(u32::MAX)
+        {
+            resolved_local_sizes(&extra, &local)?
+        } else {
+            (local_uncompressed, local_compressed)
+        };
+        if (uncompressed, compressed) != (resolved.uncompressed_bytes, resolved.compressed_bytes) {
+            return Err(ArchiveError::InvalidArchive);
+        }
+    }
+    if descriptor
+        && !data_descriptor_matches(
+            file,
+            payload_end,
+            central_offset,
+            &local,
+            u32_at(central, 16)?,
+            resolved,
+        )?
+    {
+        return Err(ArchiveError::InvalidArchive);
+    }
     file.seek(SeekFrom::Start(next))?;
     Ok(())
+}
+
+fn resolved_local_sizes(extra: &[u8], local: &[u8; 30]) -> Result<(u64, u64)> {
+    let original = [
+        u64::from(u32_at(local, 22)?),
+        u64::from(u32_at(local, 18)?),
+        0,
+    ];
+    let mut values = original;
+    let mut disk = 0;
+    absorb_zip64(extra, &mut values, &mut disk)?;
+    let values = trust_sentinels(original, values);
+    Ok((values[0], values[1]))
+}
+
+fn data_descriptor_matches(
+    file: &mut (impl Read + Seek),
+    payload_end: u64,
+    central_offset: u64,
+    local: &[u8; 30],
+    central_crc: u32,
+    resolved: &ResolvedZip64,
+) -> Result<bool> {
+    file.seek(SeekFrom::Start(payload_end))?;
+    let wide = u32_at(local, 18)? == u32::MAX || u32_at(local, 22)? == u32::MAX;
+    let width = if wide { 16 } else { 8 };
+    let available = (central_offset - payload_end).min(8 + width) as usize;
+    let mut bytes = [0u8; 24];
+    file.read_exact(&mut bytes[..available])?;
+    Ok([4usize, 0].into_iter().any(|prefix| {
+        let length = prefix + 4 + width as usize;
+        if length > available || (prefix == 4 && bytes[..4] != *b"PK\x07\x08") {
+            return false;
+        }
+        let Ok(crc) = u32_at(&bytes, prefix) else {
+            return false;
+        };
+        let sizes = &bytes[prefix + 4..];
+        let parsed = if wide {
+            let (Ok(compressed), Ok(uncompressed)) = (u64_at(sizes, 0), u64_at(sizes, 8)) else {
+                return false;
+            };
+            (compressed, uncompressed)
+        } else {
+            let (Ok(compressed), Ok(uncompressed)) = (u32_at(sizes, 0), u32_at(sizes, 4)) else {
+                return false;
+            };
+            (u64::from(compressed), u64::from(uncompressed))
+        };
+        crc == central_crc
+            && parsed.0 == resolved.compressed_bytes
+            && parsed.1 == resolved.uncompressed_bytes
+    }))
+}
+
+fn u64_at(bytes: &[u8], offset: usize) -> Result<u64> {
+    bytes
+        .get(offset..offset + 8)
+        .and_then(|field| field.try_into().ok())
+        .map(u64::from_le_bytes)
+        .ok_or(ArchiveError::InvalidArchive)
 }
 
 #[cfg(test)]

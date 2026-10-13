@@ -11,8 +11,10 @@ export default function AccountPasswordCard() {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [busy, setBusy] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
   const onSubmit = () => {
+    setFormError(null);
     if (newPassword !== confirmPassword) {
       toast.error("New passwords do not match");
       return;
@@ -26,7 +28,7 @@ export default function AccountPasswordCard() {
         setConfirmPassword("");
         toast.success("Password updated");
       } catch (e) {
-        toast.error(e instanceof Error ? e.message : String(e));
+        setFormError(e instanceof Error ? e.message : String(e));
       } finally {
         setBusy(false);
       }
@@ -73,6 +75,11 @@ export default function AccountPasswordCard() {
             autoComplete="new-password"
           />
         </label>
+        {formError ? (
+          <p role="alert" className="text-sm text-destructive">
+            {formError}
+          </p>
+        ) : null}
         <Button
           disabled={busy || !currentPassword || newPassword.length < 8 || !confirmPassword}
           onClick={onSubmit}

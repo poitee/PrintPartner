@@ -4,6 +4,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
 const repoRoot = resolve(import.meta.dirname, "..");
+const checkOnly = process.argv.slice(2).includes("--check");
 const webRoot = join(repoRoot, "web");
 const workspacePackageFiles = [
   "apps/server/package.json",
@@ -102,9 +103,30 @@ const targets = [
   noticesPath,
   join(repoRoot, "web/apps/server/src/data/legal/THIRD_PARTY_NOTICES.md"),
 ];
+const labels = targets.map((target) => target.slice(repoRoot.length + 1));
 
-for (const target of targets) {
-  await writeFile(target, updated);
+if (checkOnly) {
+  const problems = [];
+  for (let index = 0; index < targets.length; index += 1) {
+    const label = labels[index];
+    const target = targets[index];
+    try {
+      const actual = await readFile(target, "utf8");
+      if (actual !== updated) problems.push(`${label} differs`);
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+      problems.push(`${label} is missing`);
+    }
+  }
+  if (problems.length > 0) {
+    process.stderr.write(`Dependency notices check failed: ${problems.join("; ")}\n`);
+    process.exitCode = 1;
+  } else {
+    process.stdout.write(`Dependency notices match ${labels.join(" and ")}\n`);
+  }
+} else {
+  for (const target of targets) {
+    await writeFile(target, updated);
+  }
+  process.stdout.write(`Updated ${labels.join(" and ")}\n`);
 }
-
-process.stdout.write(`Updated ${targets.map((target) => target.slice(repoRoot.length + 1)).join(" and ")}\n`);

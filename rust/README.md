@@ -60,3 +60,63 @@ Logs keep only approved event names, severity and timestamps. Raw Node output, U
 The loopback document carries `frame-src 'none'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'`. Existing blob thumbnails/downloads and popup-based handoffs are preserved. This CSP does not deny popups; the native shell must deny new windows separately.
 
 Browser interaction, native window permissions, macOS WebKit cookies, signed/notarized packaging and installed-app process behavior remain separate acceptance requirements. Job WebSocket path/reconnect work is owned by another worker; the gateway supports upgrade relay but that journey is not proved by these tests. Slow-consumer stress, steady-health three-failure timing and broader operation admission remain follow-up verification work.
+
+## Moonraker status seed (GRE-335)
+
+The desktop gateway starts status monitoring independently of browser requests
+and window visibility. Node retains storage ownership and provides a private,
+signed-principal-only UDS snapshot of Moonraker configuration. That endpoint is
+not admitted through the public gateway. Snapshot reconciliation runs once per
+second, has an independently bounded two-second queue wait and two-second Node
+read (at most four seconds total before reconciliation), and also runs after successful integration
+creation/update/removal. At most 128 Moonraker configurations are admitted.
+Malformed or denied snapshots cancel monitoring immediately. If Node is slow or
+unavailable, the last-known-good pollers keep running for a 10-second grace
+period and are then stopped. The status route serves cached Moonraker status.
+Ids that are not in the last valid snapshot (PrusaLink, Bambu, Home Assistant)
+are forwarded straight to Node without waiting. When no valid snapshot exists,
+or a known Moonraker host has no running poller, the route refreshes once and
+otherwise returns 503. It never falls back to Node's on-demand path for a plain
+HTTP Moonraker host.
+
+`pp-drivers` owns one task per enabled host and serves the existing optional-field
+`PrinterHostStatus` DTO from `pp-api-types` at the admitted v1 status route. A
+successful poll waits two seconds. A new poller reports `unknown` "Awaiting
+status" until its first poll. Errors mark the host offline with a fixed message,
+which keeps the HTTP status code (for example "Moonraker returned HTTP 401"),
+and back off from four to sixty seconds. Reconciliation joins removed/replaced tasks before
+starting replacements. Core shutdown cancels and joins monitoring. Native power
+adapters can await `CoreHandle::suspend_monitoring()` before sleep and call
+`resume_monitoring()` on wake; hiding the window never suspends monitoring.
+OS-specific power notification delivery has not been proved here.
+
+Both GET and HEAD status requests use the cache; HEAD returns no body.
+Snapshot reads use a separate reconciliation lock so cached reads do not wait
+for Node. The bounded snapshot transport covers worst-case JSON escaping of
+all accepted host fields.
+
+Each status poll makes only a GET to `/printer/objects/query`. This seed omits
+system uptime, which requires a separate Moonraker endpoint; the printer page
+hides the uptime row when that optional field is absent. `pp-net` resolves
+once per request, rejects the entire answer set if any address is prohibited,
+and connects using checked `SocketAddr` values without another resolution.
+Explicit LAN and loopback printer targets are allowed. Metadata, link-local,
+unspecified, multicast and IPv6 transition/translation targets are rejected.
+HTTP requests have five-second monotonic and wall-time deadlines (sleep must
+not extend a socket's life), at most 32 DNS answers and a 2 MiB response limit.
+Redirects are not followed. This seed supports explicit HTTP; HTTPS/TLS provider
+work belongs to GRE-359. Until then, HTTPS hosts and hosts that answer with a
+redirect stay on Node's existing on-demand status path, which supports HTTPS
+and SSRF-checked redirects. API-key/JWT headers stay on the configured connection.
+
+Monitoring has no database, Checkoff, upload or dispatch dependencies. Node's
+other printer operations retain their existing behavior. Simulator fixtures and
+the real gateway test cover successful, printer-error and offline responses,
+cancellation, backoff, duplicate prevention, DNS rebinding and trust boundaries:
+
+```sh
+cargo nextest run --locked --manifest-path rust/Cargo.toml --no-tests=fail -E 'test(ticket_t_4) | test(gre_335)'
+```
+
+GRE-449 and controlled hardware/native-window/power evidence remain separate
+completion gates. These seed receipts do not mark GRE-335 or its parent Done.

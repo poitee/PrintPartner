@@ -112,7 +112,7 @@ export default function PartsPage() {
           </section>
           <section id="plan-parts" className="space-y-2">
             <h2 className="text-sm font-semibold">Parts and quantities</h2>
-            <ReviewPartsSheet ref={sheetRef} review={review} planName={review.plan_name} folderRules={folderRules} disabled={disabled} />
+            <ReviewPartsSheet ref={sheetRef} review={review} planName={review.plan_name} folderRules={folderRules} disabled={disabled} quantityDisabled={loading || draftLoading} />
           </section>
           <div className="flex flex-wrap gap-2 print:hidden">
             <Button asChild><Link to={productionRoute(selectedProfileId)}>Open Production</Link></Button>
