@@ -1,0 +1,2858 @@
+[
+  {
+    "accept": true,
+    "path": "a᫏̀.stl",
+    "rustNfc": "a᫏̀.stl",
+    "nodeNfc": "a᫏̀.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "à᫏.stl",
+    "rustNfc": "à᫏.stl",
+    "nodeNfc": "à᫏.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫏́.stl",
+    "rustNfc": "a᫏́.stl",
+    "nodeNfc": "a᫏́.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "á᫏.stl",
+    "rustNfc": "á᫏.stl",
+    "nodeNfc": "á᫏.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫏̂.stl",
+    "rustNfc": "a᫏̂.stl",
+    "nodeNfc": "a᫏̂.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "â᫏.stl",
+    "rustNfc": "â᫏.stl",
+    "nodeNfc": "â᫏.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫏̣.stl",
+    "rustNfc": "ạ᫏.stl",
+    "nodeNfc": "ạ᫏.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "ạ᫏.stl",
+    "rustNfc": "ạ᫏.stl",
+    "nodeNfc": "ạ᫏.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫏̛.stl",
+    "rustNfc": "a̛᫏.stl",
+    "nodeNfc": "a̛᫏.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a̛᫏.stl",
+    "rustNfc": "a̛᫏.stl",
+    "nodeNfc": "a̛᫏.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": true,
+    "path": "a᫏̕.stl",
+    "rustNfc": "a᫏̕.stl",
+    "nodeNfc": "a᫏̕.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "a̕᫏.stl",
+    "rustNfc": "a᫏̕.stl",
+    "nodeNfc": "a᫏̕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫐̀.stl",
+    "rustNfc": "a᫐̀.stl",
+    "nodeNfc": "a᫐̀.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "à᫐.stl",
+    "rustNfc": "à᫐.stl",
+    "nodeNfc": "à᫐.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫐́.stl",
+    "rustNfc": "a᫐́.stl",
+    "nodeNfc": "a᫐́.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "á᫐.stl",
+    "rustNfc": "á᫐.stl",
+    "nodeNfc": "á᫐.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫐̂.stl",
+    "rustNfc": "a᫐̂.stl",
+    "nodeNfc": "a᫐̂.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "â᫐.stl",
+    "rustNfc": "â᫐.stl",
+    "nodeNfc": "â᫐.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫐̣.stl",
+    "rustNfc": "ạ᫐.stl",
+    "nodeNfc": "ạ᫐.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "ạ᫐.stl",
+    "rustNfc": "ạ᫐.stl",
+    "nodeNfc": "ạ᫐.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫐̛.stl",
+    "rustNfc": "a̛᫐.stl",
+    "nodeNfc": "a̛᫐.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a̛᫐.stl",
+    "rustNfc": "a̛᫐.stl",
+    "nodeNfc": "a̛᫐.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": true,
+    "path": "a᫐̕.stl",
+    "rustNfc": "a᫐̕.stl",
+    "nodeNfc": "a᫐̕.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "a̕᫐.stl",
+    "rustNfc": "a᫐̕.stl",
+    "nodeNfc": "a᫐̕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫑̀.stl",
+    "rustNfc": "a᫑̀.stl",
+    "nodeNfc": "a᫑̀.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "à᫑.stl",
+    "rustNfc": "à᫑.stl",
+    "nodeNfc": "à᫑.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫑́.stl",
+    "rustNfc": "a᫑́.stl",
+    "nodeNfc": "a᫑́.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "á᫑.stl",
+    "rustNfc": "á᫑.stl",
+    "nodeNfc": "á᫑.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫑̂.stl",
+    "rustNfc": "a᫑̂.stl",
+    "nodeNfc": "a᫑̂.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "â᫑.stl",
+    "rustNfc": "â᫑.stl",
+    "nodeNfc": "â᫑.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫑̣.stl",
+    "rustNfc": "ạ᫑.stl",
+    "nodeNfc": "ạ᫑.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "ạ᫑.stl",
+    "rustNfc": "ạ᫑.stl",
+    "nodeNfc": "ạ᫑.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫑̛.stl",
+    "rustNfc": "a̛᫑.stl",
+    "nodeNfc": "a̛᫑.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a̛᫑.stl",
+    "rustNfc": "a̛᫑.stl",
+    "nodeNfc": "a̛᫑.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": true,
+    "path": "a᫑̕.stl",
+    "rustNfc": "a᫑̕.stl",
+    "nodeNfc": "a᫑̕.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "a̕᫑.stl",
+    "rustNfc": "a᫑̕.stl",
+    "nodeNfc": "a᫑̕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫒̀.stl",
+    "rustNfc": "a᫒̀.stl",
+    "nodeNfc": "a᫒̀.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "à᫒.stl",
+    "rustNfc": "à᫒.stl",
+    "nodeNfc": "à᫒.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫒́.stl",
+    "rustNfc": "a᫒́.stl",
+    "nodeNfc": "a᫒́.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "á᫒.stl",
+    "rustNfc": "á᫒.stl",
+    "nodeNfc": "á᫒.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫒̂.stl",
+    "rustNfc": "a᫒̂.stl",
+    "nodeNfc": "a᫒̂.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "â᫒.stl",
+    "rustNfc": "â᫒.stl",
+    "nodeNfc": "â᫒.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫒̣.stl",
+    "rustNfc": "ạ᫒.stl",
+    "nodeNfc": "ạ᫒.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "ạ᫒.stl",
+    "rustNfc": "ạ᫒.stl",
+    "nodeNfc": "ạ᫒.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫒̛.stl",
+    "rustNfc": "a̛᫒.stl",
+    "nodeNfc": "a̛᫒.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a̛᫒.stl",
+    "rustNfc": "a̛᫒.stl",
+    "nodeNfc": "a̛᫒.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": true,
+    "path": "a᫒̕.stl",
+    "rustNfc": "a᫒̕.stl",
+    "nodeNfc": "a᫒̕.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "a̕᫒.stl",
+    "rustNfc": "a᫒̕.stl",
+    "nodeNfc": "a᫒̕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫓̀.stl",
+    "rustNfc": "a᫓̀.stl",
+    "nodeNfc": "a᫓̀.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "à᫓.stl",
+    "rustNfc": "à᫓.stl",
+    "nodeNfc": "à᫓.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫓́.stl",
+    "rustNfc": "a᫓́.stl",
+    "nodeNfc": "a᫓́.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "á᫓.stl",
+    "rustNfc": "á᫓.stl",
+    "nodeNfc": "á᫓.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫓̂.stl",
+    "rustNfc": "a᫓̂.stl",
+    "nodeNfc": "a᫓̂.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "â᫓.stl",
+    "rustNfc": "â᫓.stl",
+    "nodeNfc": "â᫓.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫓̣.stl",
+    "rustNfc": "ạ᫓.stl",
+    "nodeNfc": "ạ᫓.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "ạ᫓.stl",
+    "rustNfc": "ạ᫓.stl",
+    "nodeNfc": "ạ᫓.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫓̛.stl",
+    "rustNfc": "a̛᫓.stl",
+    "nodeNfc": "a̛᫓.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a̛᫓.stl",
+    "rustNfc": "a̛᫓.stl",
+    "nodeNfc": "a̛᫓.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": true,
+    "path": "a᫓̕.stl",
+    "rustNfc": "a᫓̕.stl",
+    "nodeNfc": "a᫓̕.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "a̕᫓.stl",
+    "rustNfc": "a᫓̕.stl",
+    "nodeNfc": "a᫓̕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫔̀.stl",
+    "rustNfc": "a᫔̀.stl",
+    "nodeNfc": "a᫔̀.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "à᫔.stl",
+    "rustNfc": "à᫔.stl",
+    "nodeNfc": "à᫔.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫔́.stl",
+    "rustNfc": "a᫔́.stl",
+    "nodeNfc": "a᫔́.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "á᫔.stl",
+    "rustNfc": "á᫔.stl",
+    "nodeNfc": "á᫔.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫔̂.stl",
+    "rustNfc": "a᫔̂.stl",
+    "nodeNfc": "a᫔̂.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "â᫔.stl",
+    "rustNfc": "â᫔.stl",
+    "nodeNfc": "â᫔.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫔̣.stl",
+    "rustNfc": "ạ᫔.stl",
+    "nodeNfc": "ạ᫔.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "ạ᫔.stl",
+    "rustNfc": "ạ᫔.stl",
+    "nodeNfc": "ạ᫔.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫔̛.stl",
+    "rustNfc": "a̛᫔.stl",
+    "nodeNfc": "a̛᫔.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a̛᫔.stl",
+    "rustNfc": "a̛᫔.stl",
+    "nodeNfc": "a̛᫔.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": true,
+    "path": "a᫔̕.stl",
+    "rustNfc": "a᫔̕.stl",
+    "nodeNfc": "a᫔̕.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "a̕᫔.stl",
+    "rustNfc": "a᫔̕.stl",
+    "nodeNfc": "a᫔̕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫕̀.stl",
+    "rustNfc": "a᫕̀.stl",
+    "nodeNfc": "a᫕̀.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "à᫕.stl",
+    "rustNfc": "à᫕.stl",
+    "nodeNfc": "à᫕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫕́.stl",
+    "rustNfc": "a᫕́.stl",
+    "nodeNfc": "a᫕́.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "á᫕.stl",
+    "rustNfc": "á᫕.stl",
+    "nodeNfc": "á᫕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫕̂.stl",
+    "rustNfc": "a᫕̂.stl",
+    "nodeNfc": "a᫕̂.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "â᫕.stl",
+    "rustNfc": "â᫕.stl",
+    "nodeNfc": "â᫕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫕̣.stl",
+    "rustNfc": "ạ᫕.stl",
+    "nodeNfc": "ạ᫕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "ạ᫕.stl",
+    "rustNfc": "ạ᫕.stl",
+    "nodeNfc": "ạ᫕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫕̛.stl",
+    "rustNfc": "a̛᫕.stl",
+    "nodeNfc": "a̛᫕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a̛᫕.stl",
+    "rustNfc": "a̛᫕.stl",
+    "nodeNfc": "a̛᫕.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": true,
+    "path": "a᫕̕.stl",
+    "rustNfc": "a᫕̕.stl",
+    "nodeNfc": "a᫕̕.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "a̕᫕.stl",
+    "rustNfc": "a᫕̕.stl",
+    "nodeNfc": "a᫕̕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫖̀.stl",
+    "rustNfc": "a᫖̀.stl",
+    "nodeNfc": "a᫖̀.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "à᫖.stl",
+    "rustNfc": "à᫖.stl",
+    "nodeNfc": "à᫖.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫖́.stl",
+    "rustNfc": "a᫖́.stl",
+    "nodeNfc": "a᫖́.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "á᫖.stl",
+    "rustNfc": "á᫖.stl",
+    "nodeNfc": "á᫖.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫖̂.stl",
+    "rustNfc": "a᫖̂.stl",
+    "nodeNfc": "a᫖̂.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "â᫖.stl",
+    "rustNfc": "â᫖.stl",
+    "nodeNfc": "â᫖.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫖̣.stl",
+    "rustNfc": "ạ᫖.stl",
+    "nodeNfc": "ạ᫖.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "ạ᫖.stl",
+    "rustNfc": "ạ᫖.stl",
+    "nodeNfc": "ạ᫖.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫖̛.stl",
+    "rustNfc": "a̛᫖.stl",
+    "nodeNfc": "a̛᫖.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a̛᫖.stl",
+    "rustNfc": "a̛᫖.stl",
+    "nodeNfc": "a̛᫖.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": true,
+    "path": "a᫖̕.stl",
+    "rustNfc": "a᫖̕.stl",
+    "nodeNfc": "a᫖̕.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "a̕᫖.stl",
+    "rustNfc": "a᫖̕.stl",
+    "nodeNfc": "a᫖̕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫗̀.stl",
+    "rustNfc": "a᫗̀.stl",
+    "nodeNfc": "a᫗̀.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "à᫗.stl",
+    "rustNfc": "à᫗.stl",
+    "nodeNfc": "à᫗.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫗́.stl",
+    "rustNfc": "a᫗́.stl",
+    "nodeNfc": "a᫗́.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "á᫗.stl",
+    "rustNfc": "á᫗.stl",
+    "nodeNfc": "á᫗.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫗̂.stl",
+    "rustNfc": "a᫗̂.stl",
+    "nodeNfc": "a᫗̂.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "â᫗.stl",
+    "rustNfc": "â᫗.stl",
+    "nodeNfc": "â᫗.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫗̣.stl",
+    "rustNfc": "ạ᫗.stl",
+    "nodeNfc": "ạ᫗.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "ạ᫗.stl",
+    "rustNfc": "ạ᫗.stl",
+    "nodeNfc": "ạ᫗.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫗̛.stl",
+    "rustNfc": "a̛᫗.stl",
+    "nodeNfc": "a̛᫗.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a̛᫗.stl",
+    "rustNfc": "a̛᫗.stl",
+    "nodeNfc": "a̛᫗.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": true,
+    "path": "a᫗̕.stl",
+    "rustNfc": "a᫗̕.stl",
+    "nodeNfc": "a᫗̕.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "a̕᫗.stl",
+    "rustNfc": "a᫗̕.stl",
+    "nodeNfc": "a᫗̕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫘̀.stl",
+    "rustNfc": "a᫘̀.stl",
+    "nodeNfc": "a᫘̀.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "à᫘.stl",
+    "rustNfc": "à᫘.stl",
+    "nodeNfc": "à᫘.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫘́.stl",
+    "rustNfc": "a᫘́.stl",
+    "nodeNfc": "a᫘́.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "á᫘.stl",
+    "rustNfc": "á᫘.stl",
+    "nodeNfc": "á᫘.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫘̂.stl",
+    "rustNfc": "a᫘̂.stl",
+    "nodeNfc": "a᫘̂.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "â᫘.stl",
+    "rustNfc": "â᫘.stl",
+    "nodeNfc": "â᫘.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫘̣.stl",
+    "rustNfc": "ạ᫘.stl",
+    "nodeNfc": "ạ᫘.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "ạ᫘.stl",
+    "rustNfc": "ạ᫘.stl",
+    "nodeNfc": "ạ᫘.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫘̛.stl",
+    "rustNfc": "a̛᫘.stl",
+    "nodeNfc": "a̛᫘.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a̛᫘.stl",
+    "rustNfc": "a̛᫘.stl",
+    "nodeNfc": "a̛᫘.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": true,
+    "path": "a᫘̕.stl",
+    "rustNfc": "a᫘̕.stl",
+    "nodeNfc": "a᫘̕.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "a̕᫘.stl",
+    "rustNfc": "a᫘̕.stl",
+    "nodeNfc": "a᫘̕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫙̀.stl",
+    "rustNfc": "a᫙̀.stl",
+    "nodeNfc": "a᫙̀.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "à᫙.stl",
+    "rustNfc": "à᫙.stl",
+    "nodeNfc": "à᫙.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫙́.stl",
+    "rustNfc": "a᫙́.stl",
+    "nodeNfc": "a᫙́.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "á᫙.stl",
+    "rustNfc": "á᫙.stl",
+    "nodeNfc": "á᫙.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫙̂.stl",
+    "rustNfc": "a᫙̂.stl",
+    "nodeNfc": "a᫙̂.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "â᫙.stl",
+    "rustNfc": "â᫙.stl",
+    "nodeNfc": "â᫙.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫙̣.stl",
+    "rustNfc": "ạ᫙.stl",
+    "nodeNfc": "ạ᫙.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "ạ᫙.stl",
+    "rustNfc": "ạ᫙.stl",
+    "nodeNfc": "ạ᫙.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫙̛.stl",
+    "rustNfc": "a̛᫙.stl",
+    "nodeNfc": "a̛᫙.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a̛᫙.stl",
+    "rustNfc": "a̛᫙.stl",
+    "nodeNfc": "a̛᫙.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": true,
+    "path": "a᫙̕.stl",
+    "rustNfc": "a᫙̕.stl",
+    "nodeNfc": "a᫙̕.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "a̕᫙.stl",
+    "rustNfc": "a᫙̕.stl",
+    "nodeNfc": "a᫙̕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫚̀.stl",
+    "rustNfc": "a᫚̀.stl",
+    "nodeNfc": "a᫚̀.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "à᫚.stl",
+    "rustNfc": "à᫚.stl",
+    "nodeNfc": "à᫚.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫚́.stl",
+    "rustNfc": "a᫚́.stl",
+    "nodeNfc": "a᫚́.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "á᫚.stl",
+    "rustNfc": "á᫚.stl",
+    "nodeNfc": "á᫚.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫚̂.stl",
+    "rustNfc": "a᫚̂.stl",
+    "nodeNfc": "a᫚̂.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "â᫚.stl",
+    "rustNfc": "â᫚.stl",
+    "nodeNfc": "â᫚.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫚̣.stl",
+    "rustNfc": "ạ᫚.stl",
+    "nodeNfc": "ạ᫚.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "ạ᫚.stl",
+    "rustNfc": "ạ᫚.stl",
+    "nodeNfc": "ạ᫚.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫚̛.stl",
+    "rustNfc": "a̛᫚.stl",
+    "nodeNfc": "a̛᫚.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a̛᫚.stl",
+    "rustNfc": "a̛᫚.stl",
+    "nodeNfc": "a̛᫚.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": true,
+    "path": "a᫚̕.stl",
+    "rustNfc": "a᫚̕.stl",
+    "nodeNfc": "a᫚̕.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "a̕᫚.stl",
+    "rustNfc": "a᫚̕.stl",
+    "nodeNfc": "a᫚̕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫛̀.stl",
+    "rustNfc": "a᫛̀.stl",
+    "nodeNfc": "a᫛̀.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "à᫛.stl",
+    "rustNfc": "à᫛.stl",
+    "nodeNfc": "à᫛.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫛́.stl",
+    "rustNfc": "a᫛́.stl",
+    "nodeNfc": "a᫛́.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "á᫛.stl",
+    "rustNfc": "á᫛.stl",
+    "nodeNfc": "á᫛.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫛̂.stl",
+    "rustNfc": "a᫛̂.stl",
+    "nodeNfc": "a᫛̂.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "â᫛.stl",
+    "rustNfc": "â᫛.stl",
+    "nodeNfc": "â᫛.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫛̣.stl",
+    "rustNfc": "ạ᫛.stl",
+    "nodeNfc": "ạ᫛.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "ạ᫛.stl",
+    "rustNfc": "ạ᫛.stl",
+    "nodeNfc": "ạ᫛.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫛̛.stl",
+    "rustNfc": "a̛᫛.stl",
+    "nodeNfc": "a̛᫛.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a̛᫛.stl",
+    "rustNfc": "a̛᫛.stl",
+    "nodeNfc": "a̛᫛.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": true,
+    "path": "a᫛̕.stl",
+    "rustNfc": "a᫛̕.stl",
+    "nodeNfc": "a᫛̕.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "a̕᫛.stl",
+    "rustNfc": "a᫛̕.stl",
+    "nodeNfc": "a᫛̕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫜̀.stl",
+    "rustNfc": "a᫜̀.stl",
+    "nodeNfc": "a᫜̀.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "à᫜.stl",
+    "rustNfc": "à᫜.stl",
+    "nodeNfc": "à᫜.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫜́.stl",
+    "rustNfc": "a᫜́.stl",
+    "nodeNfc": "a᫜́.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "á᫜.stl",
+    "rustNfc": "á᫜.stl",
+    "nodeNfc": "á᫜.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫜̂.stl",
+    "rustNfc": "a᫜̂.stl",
+    "nodeNfc": "a᫜̂.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "â᫜.stl",
+    "rustNfc": "â᫜.stl",
+    "nodeNfc": "â᫜.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫜̣.stl",
+    "rustNfc": "ạ᫜.stl",
+    "nodeNfc": "ạ᫜.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "ạ᫜.stl",
+    "rustNfc": "ạ᫜.stl",
+    "nodeNfc": "ạ᫜.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫜̛.stl",
+    "rustNfc": "a̛᫜.stl",
+    "nodeNfc": "a̛᫜.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a̛᫜.stl",
+    "rustNfc": "a̛᫜.stl",
+    "nodeNfc": "a̛᫜.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": true,
+    "path": "a᫜̕.stl",
+    "rustNfc": "a᫜̕.stl",
+    "nodeNfc": "a᫜̕.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "a̕᫜.stl",
+    "rustNfc": "a᫜̕.stl",
+    "nodeNfc": "a᫜̕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫝̀.stl",
+    "rustNfc": "à᫝.stl",
+    "nodeNfc": "à᫝.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "à᫝.stl",
+    "rustNfc": "à᫝.stl",
+    "nodeNfc": "à᫝.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫝́.stl",
+    "rustNfc": "á᫝.stl",
+    "nodeNfc": "á᫝.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "á᫝.stl",
+    "rustNfc": "á᫝.stl",
+    "nodeNfc": "á᫝.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫝̂.stl",
+    "rustNfc": "â᫝.stl",
+    "nodeNfc": "â᫝.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "â᫝.stl",
+    "rustNfc": "â᫝.stl",
+    "nodeNfc": "â᫝.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫝̣.stl",
+    "rustNfc": "a᫝̣.stl",
+    "nodeNfc": "a᫝̣.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "ạ᫝.stl",
+    "rustNfc": "ạ᫝.stl",
+    "nodeNfc": "ạ᫝.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫝̛.stl",
+    "rustNfc": "a̛᫝.stl",
+    "nodeNfc": "a̛᫝.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a̛᫝.stl",
+    "rustNfc": "a̛᫝.stl",
+    "nodeNfc": "a̛᫝.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": true,
+    "path": "a᫝̕.stl",
+    "rustNfc": "a᫝̕.stl",
+    "nodeNfc": "a᫝̕.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "a̕᫝.stl",
+    "rustNfc": "a᫝̕.stl",
+    "nodeNfc": "a᫝̕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫠̀.stl",
+    "rustNfc": "a᫠̀.stl",
+    "nodeNfc": "a᫠̀.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "à᫠.stl",
+    "rustNfc": "à᫠.stl",
+    "nodeNfc": "à᫠.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫠́.stl",
+    "rustNfc": "a᫠́.stl",
+    "nodeNfc": "a᫠́.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "á᫠.stl",
+    "rustNfc": "á᫠.stl",
+    "nodeNfc": "á᫠.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫠̂.stl",
+    "rustNfc": "a᫠̂.stl",
+    "nodeNfc": "a᫠̂.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "â᫠.stl",
+    "rustNfc": "â᫠.stl",
+    "nodeNfc": "â᫠.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫠̣.stl",
+    "rustNfc": "ạ᫠.stl",
+    "nodeNfc": "ạ᫠.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "ạ᫠.stl",
+    "rustNfc": "ạ᫠.stl",
+    "nodeNfc": "ạ᫠.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫠̛.stl",
+    "rustNfc": "a̛᫠.stl",
+    "nodeNfc": "a̛᫠.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a̛᫠.stl",
+    "rustNfc": "a̛᫠.stl",
+    "nodeNfc": "a̛᫠.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": true,
+    "path": "a᫠̕.stl",
+    "rustNfc": "a᫠̕.stl",
+    "nodeNfc": "a᫠̕.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "a̕᫠.stl",
+    "rustNfc": "a᫠̕.stl",
+    "nodeNfc": "a᫠̕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫡̀.stl",
+    "rustNfc": "a᫡̀.stl",
+    "nodeNfc": "a᫡̀.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "à᫡.stl",
+    "rustNfc": "à᫡.stl",
+    "nodeNfc": "à᫡.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫡́.stl",
+    "rustNfc": "a᫡́.stl",
+    "nodeNfc": "a᫡́.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "á᫡.stl",
+    "rustNfc": "á᫡.stl",
+    "nodeNfc": "á᫡.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫡̂.stl",
+    "rustNfc": "a᫡̂.stl",
+    "nodeNfc": "a᫡̂.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "â᫡.stl",
+    "rustNfc": "â᫡.stl",
+    "nodeNfc": "â᫡.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫡̣.stl",
+    "rustNfc": "ạ᫡.stl",
+    "nodeNfc": "ạ᫡.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "ạ᫡.stl",
+    "rustNfc": "ạ᫡.stl",
+    "nodeNfc": "ạ᫡.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫡̛.stl",
+    "rustNfc": "a̛᫡.stl",
+    "nodeNfc": "a̛᫡.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a̛᫡.stl",
+    "rustNfc": "a̛᫡.stl",
+    "nodeNfc": "a̛᫡.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": true,
+    "path": "a᫡̕.stl",
+    "rustNfc": "a᫡̕.stl",
+    "nodeNfc": "a᫡̕.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "a̕᫡.stl",
+    "rustNfc": "a᫡̕.stl",
+    "nodeNfc": "a᫡̕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫢̀.stl",
+    "rustNfc": "a᫢̀.stl",
+    "nodeNfc": "a᫢̀.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "à᫢.stl",
+    "rustNfc": "à᫢.stl",
+    "nodeNfc": "à᫢.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫢́.stl",
+    "rustNfc": "a᫢́.stl",
+    "nodeNfc": "a᫢́.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "á᫢.stl",
+    "rustNfc": "á᫢.stl",
+    "nodeNfc": "á᫢.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫢̂.stl",
+    "rustNfc": "a᫢̂.stl",
+    "nodeNfc": "a᫢̂.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "â᫢.stl",
+    "rustNfc": "â᫢.stl",
+    "nodeNfc": "â᫢.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫢̣.stl",
+    "rustNfc": "ạ᫢.stl",
+    "nodeNfc": "ạ᫢.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "ạ᫢.stl",
+    "rustNfc": "ạ᫢.stl",
+    "nodeNfc": "ạ᫢.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫢̛.stl",
+    "rustNfc": "a̛᫢.stl",
+    "nodeNfc": "a̛᫢.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a̛᫢.stl",
+    "rustNfc": "a̛᫢.stl",
+    "nodeNfc": "a̛᫢.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": true,
+    "path": "a᫢̕.stl",
+    "rustNfc": "a᫢̕.stl",
+    "nodeNfc": "a᫢̕.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "a̕᫢.stl",
+    "rustNfc": "a᫢̕.stl",
+    "nodeNfc": "a᫢̕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫣̀.stl",
+    "rustNfc": "a᫣̀.stl",
+    "nodeNfc": "a᫣̀.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "à᫣.stl",
+    "rustNfc": "à᫣.stl",
+    "nodeNfc": "à᫣.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫣́.stl",
+    "rustNfc": "a᫣́.stl",
+    "nodeNfc": "a᫣́.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "á᫣.stl",
+    "rustNfc": "á᫣.stl",
+    "nodeNfc": "á᫣.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫣̂.stl",
+    "rustNfc": "a᫣̂.stl",
+    "nodeNfc": "a᫣̂.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "â᫣.stl",
+    "rustNfc": "â᫣.stl",
+    "nodeNfc": "â᫣.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫣̣.stl",
+    "rustNfc": "ạ᫣.stl",
+    "nodeNfc": "ạ᫣.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "ạ᫣.stl",
+    "rustNfc": "ạ᫣.stl",
+    "nodeNfc": "ạ᫣.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫣̛.stl",
+    "rustNfc": "a̛᫣.stl",
+    "nodeNfc": "a̛᫣.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a̛᫣.stl",
+    "rustNfc": "a̛᫣.stl",
+    "nodeNfc": "a̛᫣.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": true,
+    "path": "a᫣̕.stl",
+    "rustNfc": "a᫣̕.stl",
+    "nodeNfc": "a᫣̕.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "a̕᫣.stl",
+    "rustNfc": "a᫣̕.stl",
+    "nodeNfc": "a᫣̕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫤̀.stl",
+    "rustNfc": "a᫤̀.stl",
+    "nodeNfc": "a᫤̀.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "à᫤.stl",
+    "rustNfc": "à᫤.stl",
+    "nodeNfc": "à᫤.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫤́.stl",
+    "rustNfc": "a᫤́.stl",
+    "nodeNfc": "a᫤́.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "á᫤.stl",
+    "rustNfc": "á᫤.stl",
+    "nodeNfc": "á᫤.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫤̂.stl",
+    "rustNfc": "a᫤̂.stl",
+    "nodeNfc": "a᫤̂.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "â᫤.stl",
+    "rustNfc": "â᫤.stl",
+    "nodeNfc": "â᫤.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫤̣.stl",
+    "rustNfc": "ạ᫤.stl",
+    "nodeNfc": "ạ᫤.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "ạ᫤.stl",
+    "rustNfc": "ạ᫤.stl",
+    "nodeNfc": "ạ᫤.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫤̛.stl",
+    "rustNfc": "a̛᫤.stl",
+    "nodeNfc": "a̛᫤.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a̛᫤.stl",
+    "rustNfc": "a̛᫤.stl",
+    "nodeNfc": "a̛᫤.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": true,
+    "path": "a᫤̕.stl",
+    "rustNfc": "a᫤̕.stl",
+    "nodeNfc": "a᫤̕.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "a̕᫤.stl",
+    "rustNfc": "a᫤̕.stl",
+    "nodeNfc": "a᫤̕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫥̀.stl",
+    "rustNfc": "a᫥̀.stl",
+    "nodeNfc": "a᫥̀.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "à᫥.stl",
+    "rustNfc": "à᫥.stl",
+    "nodeNfc": "à᫥.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫥́.stl",
+    "rustNfc": "a᫥́.stl",
+    "nodeNfc": "a᫥́.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "á᫥.stl",
+    "rustNfc": "á᫥.stl",
+    "nodeNfc": "á᫥.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫥̂.stl",
+    "rustNfc": "a᫥̂.stl",
+    "nodeNfc": "a᫥̂.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "â᫥.stl",
+    "rustNfc": "â᫥.stl",
+    "nodeNfc": "â᫥.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫥̣.stl",
+    "rustNfc": "ạ᫥.stl",
+    "nodeNfc": "ạ᫥.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "ạ᫥.stl",
+    "rustNfc": "ạ᫥.stl",
+    "nodeNfc": "ạ᫥.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫥̛.stl",
+    "rustNfc": "a̛᫥.stl",
+    "nodeNfc": "a̛᫥.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a̛᫥.stl",
+    "rustNfc": "a̛᫥.stl",
+    "nodeNfc": "a̛᫥.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": true,
+    "path": "a᫥̕.stl",
+    "rustNfc": "a᫥̕.stl",
+    "nodeNfc": "a᫥̕.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "a̕᫥.stl",
+    "rustNfc": "a᫥̕.stl",
+    "nodeNfc": "a᫥̕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫦̀.stl",
+    "rustNfc": "à᫦.stl",
+    "nodeNfc": "à᫦.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "à᫦.stl",
+    "rustNfc": "à᫦.stl",
+    "nodeNfc": "à᫦.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫦́.stl",
+    "rustNfc": "á᫦.stl",
+    "nodeNfc": "á᫦.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "á᫦.stl",
+    "rustNfc": "á᫦.stl",
+    "nodeNfc": "á᫦.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫦̂.stl",
+    "rustNfc": "â᫦.stl",
+    "nodeNfc": "â᫦.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "â᫦.stl",
+    "rustNfc": "â᫦.stl",
+    "nodeNfc": "â᫦.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫦̣.stl",
+    "rustNfc": "a᫦̣.stl",
+    "nodeNfc": "a᫦̣.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "ạ᫦.stl",
+    "rustNfc": "ạ᫦.stl",
+    "nodeNfc": "ạ᫦.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫦̛.stl",
+    "rustNfc": "a̛᫦.stl",
+    "nodeNfc": "a̛᫦.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a̛᫦.stl",
+    "rustNfc": "a̛᫦.stl",
+    "nodeNfc": "a̛᫦.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": true,
+    "path": "a᫦̕.stl",
+    "rustNfc": "a᫦̕.stl",
+    "nodeNfc": "a᫦̕.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "a̕᫦.stl",
+    "rustNfc": "a᫦̕.stl",
+    "nodeNfc": "a᫦̕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫧̀.stl",
+    "rustNfc": "a᫧̀.stl",
+    "nodeNfc": "a᫧̀.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "à᫧.stl",
+    "rustNfc": "à᫧.stl",
+    "nodeNfc": "à᫧.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫧́.stl",
+    "rustNfc": "a᫧́.stl",
+    "nodeNfc": "a᫧́.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "á᫧.stl",
+    "rustNfc": "á᫧.stl",
+    "nodeNfc": "á᫧.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫧̂.stl",
+    "rustNfc": "a᫧̂.stl",
+    "nodeNfc": "a᫧̂.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "â᫧.stl",
+    "rustNfc": "â᫧.stl",
+    "nodeNfc": "â᫧.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫧̣.stl",
+    "rustNfc": "ạ᫧.stl",
+    "nodeNfc": "ạ᫧.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "ạ᫧.stl",
+    "rustNfc": "ạ᫧.stl",
+    "nodeNfc": "ạ᫧.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫧̛.stl",
+    "rustNfc": "a̛᫧.stl",
+    "nodeNfc": "a̛᫧.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a̛᫧.stl",
+    "rustNfc": "a̛᫧.stl",
+    "nodeNfc": "a̛᫧.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": true,
+    "path": "a᫧̕.stl",
+    "rustNfc": "a᫧̕.stl",
+    "nodeNfc": "a᫧̕.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "a̕᫧.stl",
+    "rustNfc": "a᫧̕.stl",
+    "nodeNfc": "a᫧̕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫨̀.stl",
+    "rustNfc": "a᫨̀.stl",
+    "nodeNfc": "a᫨̀.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "à᫨.stl",
+    "rustNfc": "à᫨.stl",
+    "nodeNfc": "à᫨.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫨́.stl",
+    "rustNfc": "a᫨́.stl",
+    "nodeNfc": "a᫨́.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "á᫨.stl",
+    "rustNfc": "á᫨.stl",
+    "nodeNfc": "á᫨.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫨̂.stl",
+    "rustNfc": "a᫨̂.stl",
+    "nodeNfc": "a᫨̂.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "â᫨.stl",
+    "rustNfc": "â᫨.stl",
+    "nodeNfc": "â᫨.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫨̣.stl",
+    "rustNfc": "ạ᫨.stl",
+    "nodeNfc": "ạ᫨.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "ạ᫨.stl",
+    "rustNfc": "ạ᫨.stl",
+    "nodeNfc": "ạ᫨.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫨̛.stl",
+    "rustNfc": "a̛᫨.stl",
+    "nodeNfc": "a̛᫨.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a̛᫨.stl",
+    "rustNfc": "a̛᫨.stl",
+    "nodeNfc": "a̛᫨.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": true,
+    "path": "a᫨̕.stl",
+    "rustNfc": "a᫨̕.stl",
+    "nodeNfc": "a᫨̕.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "a̕᫨.stl",
+    "rustNfc": "a᫨̕.stl",
+    "nodeNfc": "a᫨̕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫩̀.stl",
+    "rustNfc": "a᫩̀.stl",
+    "nodeNfc": "a᫩̀.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "à᫩.stl",
+    "rustNfc": "à᫩.stl",
+    "nodeNfc": "à᫩.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫩́.stl",
+    "rustNfc": "a᫩́.stl",
+    "nodeNfc": "a᫩́.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "á᫩.stl",
+    "rustNfc": "á᫩.stl",
+    "nodeNfc": "á᫩.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫩̂.stl",
+    "rustNfc": "a᫩̂.stl",
+    "nodeNfc": "a᫩̂.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "â᫩.stl",
+    "rustNfc": "â᫩.stl",
+    "nodeNfc": "â᫩.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫩̣.stl",
+    "rustNfc": "ạ᫩.stl",
+    "nodeNfc": "ạ᫩.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "ạ᫩.stl",
+    "rustNfc": "ạ᫩.stl",
+    "nodeNfc": "ạ᫩.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫩̛.stl",
+    "rustNfc": "a̛᫩.stl",
+    "nodeNfc": "a̛᫩.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a̛᫩.stl",
+    "rustNfc": "a̛᫩.stl",
+    "nodeNfc": "a̛᫩.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": true,
+    "path": "a᫩̕.stl",
+    "rustNfc": "a᫩̕.stl",
+    "nodeNfc": "a᫩̕.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "a̕᫩.stl",
+    "rustNfc": "a᫩̕.stl",
+    "nodeNfc": "a᫩̕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫪̀.stl",
+    "rustNfc": "a᫪̀.stl",
+    "nodeNfc": "a᫪̀.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "à᫪.stl",
+    "rustNfc": "à᫪.stl",
+    "nodeNfc": "à᫪.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫪́.stl",
+    "rustNfc": "a᫪́.stl",
+    "nodeNfc": "a᫪́.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "á᫪.stl",
+    "rustNfc": "á᫪.stl",
+    "nodeNfc": "á᫪.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a᫪̂.stl",
+    "rustNfc": "a᫪̂.stl",
+    "nodeNfc": "a᫪̂.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "â᫪.stl",
+    "rustNfc": "â᫪.stl",
+    "nodeNfc": "â᫪.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫪̣.stl",
+    "rustNfc": "ạ᫪.stl",
+    "nodeNfc": "ạ᫪.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "ạ᫪.stl",
+    "rustNfc": "ạ᫪.stl",
+    "nodeNfc": "ạ᫪.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫪̛.stl",
+    "rustNfc": "a̛᫪.stl",
+    "nodeNfc": "a̛᫪.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a̛᫪.stl",
+    "rustNfc": "a̛᫪.stl",
+    "nodeNfc": "a̛᫪.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": true,
+    "path": "a᫪̕.stl",
+    "rustNfc": "a᫪̕.stl",
+    "nodeNfc": "a᫪̕.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "a̕᫪.stl",
+    "rustNfc": "a᫪̕.stl",
+    "nodeNfc": "a᫪̕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫫̀.stl",
+    "rustNfc": "à᫫.stl",
+    "nodeNfc": "à᫫.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "à᫫.stl",
+    "rustNfc": "à᫫.stl",
+    "nodeNfc": "à᫫.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫫́.stl",
+    "rustNfc": "á᫫.stl",
+    "nodeNfc": "á᫫.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "á᫫.stl",
+    "rustNfc": "á᫫.stl",
+    "nodeNfc": "á᫫.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫫̂.stl",
+    "rustNfc": "â᫫.stl",
+    "nodeNfc": "â᫫.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "â᫫.stl",
+    "rustNfc": "â᫫.stl",
+    "nodeNfc": "â᫫.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫫̣.stl",
+    "rustNfc": "ạ᫫.stl",
+    "nodeNfc": "ạ᫫.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "ạ᫫.stl",
+    "rustNfc": "ạ᫫.stl",
+    "nodeNfc": "ạ᫫.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a᫫̛.stl",
+    "rustNfc": "a̛᫫.stl",
+    "nodeNfc": "a̛᫫.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a̛᫫.stl",
+    "rustNfc": "a̛᫫.stl",
+    "nodeNfc": "a̛᫫.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "a᫫̕.stl",
+    "rustNfc": "a̕᫫.stl",
+    "nodeNfc": "a̕᫫.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a̕᫫.stl",
+    "rustNfc": "a̕᫫.stl",
+    "nodeNfc": "a̕᫫.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "a𐻺̀.stl",
+    "rustNfc": "à𐻺.stl",
+    "nodeNfc": "à𐻺.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "à𐻺.stl",
+    "rustNfc": "à𐻺.stl",
+    "nodeNfc": "à𐻺.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a𐻺́.stl",
+    "rustNfc": "á𐻺.stl",
+    "nodeNfc": "á𐻺.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "á𐻺.stl",
+    "rustNfc": "á𐻺.stl",
+    "nodeNfc": "á𐻺.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a𐻺̂.stl",
+    "rustNfc": "â𐻺.stl",
+    "nodeNfc": "â𐻺.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "â𐻺.stl",
+    "rustNfc": "â𐻺.stl",
+    "nodeNfc": "â𐻺.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a𐻺̣.stl",
+    "rustNfc": "a𐻺̣.stl",
+    "nodeNfc": "a𐻺̣.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "ạ𐻺.stl",
+    "rustNfc": "ạ𐻺.stl",
+    "nodeNfc": "ạ𐻺.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a𐻺̛.stl",
+    "rustNfc": "a̛𐻺.stl",
+    "nodeNfc": "a̛𐻺.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a̛𐻺.stl",
+    "rustNfc": "a̛𐻺.stl",
+    "nodeNfc": "a̛𐻺.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": true,
+    "path": "a𐻺̕.stl",
+    "rustNfc": "a𐻺̕.stl",
+    "nodeNfc": "a𐻺̕.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "a̕𐻺.stl",
+    "rustNfc": "a𐻺̕.stl",
+    "nodeNfc": "a𐻺̕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a𐻻̀.stl",
+    "rustNfc": "à𐻻.stl",
+    "nodeNfc": "à𐻻.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "à𐻻.stl",
+    "rustNfc": "à𐻻.stl",
+    "nodeNfc": "à𐻻.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a𐻻́.stl",
+    "rustNfc": "á𐻻.stl",
+    "nodeNfc": "á𐻻.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "á𐻻.stl",
+    "rustNfc": "á𐻻.stl",
+    "nodeNfc": "á𐻻.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a𐻻̂.stl",
+    "rustNfc": "â𐻻.stl",
+    "nodeNfc": "â𐻻.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "â𐻻.stl",
+    "rustNfc": "â𐻻.stl",
+    "nodeNfc": "â𐻻.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a𐻻̣.stl",
+    "rustNfc": "a𐻻̣.stl",
+    "nodeNfc": "a𐻻̣.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "ạ𐻻.stl",
+    "rustNfc": "ạ𐻻.stl",
+    "nodeNfc": "ạ𐻻.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a𐻻̛.stl",
+    "rustNfc": "a̛𐻻.stl",
+    "nodeNfc": "a̛𐻻.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a̛𐻻.stl",
+    "rustNfc": "a̛𐻻.stl",
+    "nodeNfc": "a̛𐻻.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": true,
+    "path": "a𐻻̕.stl",
+    "rustNfc": "a𐻻̕.stl",
+    "nodeNfc": "a𐻻̕.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "a̕𐻻.stl",
+    "rustNfc": "a𐻻̕.stl",
+    "nodeNfc": "a𐻻̕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a𞛣̀.stl",
+    "rustNfc": "a𞛣̀.stl",
+    "nodeNfc": "a𞛣̀.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "à𞛣.stl",
+    "rustNfc": "à𞛣.stl",
+    "nodeNfc": "à𞛣.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a𞛣́.stl",
+    "rustNfc": "a𞛣́.stl",
+    "nodeNfc": "a𞛣́.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "á𞛣.stl",
+    "rustNfc": "á𞛣.stl",
+    "nodeNfc": "á𞛣.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a𞛣̂.stl",
+    "rustNfc": "a𞛣̂.stl",
+    "nodeNfc": "a𞛣̂.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "â𞛣.stl",
+    "rustNfc": "â𞛣.stl",
+    "nodeNfc": "â𞛣.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a𞛣̣.stl",
+    "rustNfc": "ạ𞛣.stl",
+    "nodeNfc": "ạ𞛣.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "ạ𞛣.stl",
+    "rustNfc": "ạ𞛣.stl",
+    "nodeNfc": "ạ𞛣.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a𞛣̛.stl",
+    "rustNfc": "a̛𞛣.stl",
+    "nodeNfc": "a̛𞛣.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a̛𞛣.stl",
+    "rustNfc": "a̛𞛣.stl",
+    "nodeNfc": "a̛𞛣.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": true,
+    "path": "a𞛣̕.stl",
+    "rustNfc": "a𞛣̕.stl",
+    "nodeNfc": "a𞛣̕.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "a̕𞛣.stl",
+    "rustNfc": "a𞛣̕.stl",
+    "nodeNfc": "a𞛣̕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a𞛦̀.stl",
+    "rustNfc": "a𞛦̀.stl",
+    "nodeNfc": "a𞛦̀.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "à𞛦.stl",
+    "rustNfc": "à𞛦.stl",
+    "nodeNfc": "à𞛦.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a𞛦́.stl",
+    "rustNfc": "a𞛦́.stl",
+    "nodeNfc": "a𞛦́.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "á𞛦.stl",
+    "rustNfc": "á𞛦.stl",
+    "nodeNfc": "á𞛦.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a𞛦̂.stl",
+    "rustNfc": "a𞛦̂.stl",
+    "nodeNfc": "a𞛦̂.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "â𞛦.stl",
+    "rustNfc": "â𞛦.stl",
+    "nodeNfc": "â𞛦.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a𞛦̣.stl",
+    "rustNfc": "ạ𞛦.stl",
+    "nodeNfc": "ạ𞛦.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "ạ𞛦.stl",
+    "rustNfc": "ạ𞛦.stl",
+    "nodeNfc": "ạ𞛦.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a𞛦̛.stl",
+    "rustNfc": "a̛𞛦.stl",
+    "nodeNfc": "a̛𞛦.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a̛𞛦.stl",
+    "rustNfc": "a̛𞛦.stl",
+    "nodeNfc": "a̛𞛦.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": true,
+    "path": "a𞛦̕.stl",
+    "rustNfc": "a𞛦̕.stl",
+    "nodeNfc": "a𞛦̕.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "a̕𞛦.stl",
+    "rustNfc": "a𞛦̕.stl",
+    "nodeNfc": "a𞛦̕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a𞛮̀.stl",
+    "rustNfc": "a𞛮̀.stl",
+    "nodeNfc": "a𞛮̀.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "à𞛮.stl",
+    "rustNfc": "à𞛮.stl",
+    "nodeNfc": "à𞛮.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a𞛮́.stl",
+    "rustNfc": "a𞛮́.stl",
+    "nodeNfc": "a𞛮́.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "á𞛮.stl",
+    "rustNfc": "á𞛮.stl",
+    "nodeNfc": "á𞛮.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a𞛮̂.stl",
+    "rustNfc": "a𞛮̂.stl",
+    "nodeNfc": "a𞛮̂.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "â𞛮.stl",
+    "rustNfc": "â𞛮.stl",
+    "nodeNfc": "â𞛮.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a𞛮̣.stl",
+    "rustNfc": "ạ𞛮.stl",
+    "nodeNfc": "ạ𞛮.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "ạ𞛮.stl",
+    "rustNfc": "ạ𞛮.stl",
+    "nodeNfc": "ạ𞛮.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a𞛮̛.stl",
+    "rustNfc": "a̛𞛮.stl",
+    "nodeNfc": "a̛𞛮.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a̛𞛮.stl",
+    "rustNfc": "a̛𞛮.stl",
+    "nodeNfc": "a̛𞛮.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": true,
+    "path": "a𞛮̕.stl",
+    "rustNfc": "a𞛮̕.stl",
+    "nodeNfc": "a𞛮̕.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "a̕𞛮.stl",
+    "rustNfc": "a𞛮̕.stl",
+    "nodeNfc": "a𞛮̕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a𞛯̀.stl",
+    "rustNfc": "a𞛯̀.stl",
+    "nodeNfc": "a𞛯̀.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "à𞛯.stl",
+    "rustNfc": "à𞛯.stl",
+    "nodeNfc": "à𞛯.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a𞛯́.stl",
+    "rustNfc": "a𞛯́.stl",
+    "nodeNfc": "a𞛯́.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "á𞛯.stl",
+    "rustNfc": "á𞛯.stl",
+    "nodeNfc": "á𞛯.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a𞛯̂.stl",
+    "rustNfc": "a𞛯̂.stl",
+    "nodeNfc": "a𞛯̂.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "â𞛯.stl",
+    "rustNfc": "â𞛯.stl",
+    "nodeNfc": "â𞛯.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a𞛯̣.stl",
+    "rustNfc": "ạ𞛯.stl",
+    "nodeNfc": "ạ𞛯.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "ạ𞛯.stl",
+    "rustNfc": "ạ𞛯.stl",
+    "nodeNfc": "ạ𞛯.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a𞛯̛.stl",
+    "rustNfc": "a̛𞛯.stl",
+    "nodeNfc": "a̛𞛯.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a̛𞛯.stl",
+    "rustNfc": "a̛𞛯.stl",
+    "nodeNfc": "a̛𞛯.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": true,
+    "path": "a𞛯̕.stl",
+    "rustNfc": "a𞛯̕.stl",
+    "nodeNfc": "a𞛯̕.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "a̕𞛯.stl",
+    "rustNfc": "a𞛯̕.stl",
+    "nodeNfc": "a𞛯̕.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a𞛵̀.stl",
+    "rustNfc": "a𞛵̀.stl",
+    "nodeNfc": "a𞛵̀.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "à𞛵.stl",
+    "rustNfc": "à𞛵.stl",
+    "nodeNfc": "à𞛵.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a𞛵́.stl",
+    "rustNfc": "a𞛵́.stl",
+    "nodeNfc": "a𞛵́.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "á𞛵.stl",
+    "rustNfc": "á𞛵.stl",
+    "nodeNfc": "á𞛵.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a𞛵̂.stl",
+    "rustNfc": "a𞛵̂.stl",
+    "nodeNfc": "a𞛵̂.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "â𞛵.stl",
+    "rustNfc": "â𞛵.stl",
+    "nodeNfc": "â𞛵.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a𞛵̣.stl",
+    "rustNfc": "ạ𞛵.stl",
+    "nodeNfc": "ạ𞛵.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "ạ𞛵.stl",
+    "rustNfc": "ạ𞛵.stl",
+    "nodeNfc": "ạ𞛵.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": false,
+    "path": "a𞛵̛.stl",
+    "rustNfc": "a̛𞛵.stl",
+    "nodeNfc": "a̛𞛵.stl",
+    "nodeAccept": false
+  },
+  {
+    "accept": true,
+    "path": "a̛𞛵.stl",
+    "rustNfc": "a̛𞛵.stl",
+    "nodeNfc": "a̛𞛵.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": true,
+    "path": "a𞛵̕.stl",
+    "rustNfc": "a𞛵̕.stl",
+    "nodeNfc": "a𞛵̕.stl",
+    "nodeAccept": true
+  },
+  {
+    "accept": false,
+    "path": "a̕𞛵.stl",
+    "rustNfc": "a𞛵̕.stl",
+    "nodeNfc": "a𞛵̕.stl",
+    "nodeAccept": false
+  }
+]

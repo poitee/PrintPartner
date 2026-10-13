@@ -86,8 +86,8 @@ try {
   const retryAttempt = { trigger: "explicit Try again", exportJobs: [] };
   let currentAttempt = initialAttempt;
   const jobAttempts = new Map();
-  /** @type {{ exportJobs: string[], closedSocketJobs: string[], deniedPollJobs: string[], failedPollJobs: string[], recoveredPollJobs: string[], fixtureErrors: string[], attempts: typeof initialAttempt[] }} */
-  const observation = { exportJobs: [], closedSocketJobs: [], deniedPollJobs: [], failedPollJobs: [], recoveredPollJobs: [], fixtureErrors: [], attempts: [initialAttempt, retryAttempt] };
+  /** @type {{ exportJobs: string[], closedSocketJobs: string[], deniedPollJobs: string[], failedPollJobs: string[], terminalPollJobs: string[], recoveredPollJobs: string[], fixtureErrors: string[], attempts: typeof initialAttempt[] }} */
+  const observation = { exportJobs: [], closedSocketJobs: [], deniedPollJobs: [], failedPollJobs: [], terminalPollJobs: [], recoveredPollJobs: [], fixtureErrors: [], attempts: [initialAttempt, retryAttempt] };
   /** @type {Map<string, ReturnType<typeof Promise.withResolvers>>} */
   const socketClosures = new Map();
   const socketClosureFor = (jobId) => {
@@ -109,7 +109,11 @@ try {
     assert.ok(match, "Expected a fixture job endpoint");
     return decodeURIComponent(match[1]);
   };
+  let wsInterceptCount = 0;
+  let pollCount = 0;
+  // Disable the actual job stream so WebSocket completion cannot race the failed HTTP poll.
   await recoveryPage.routeWebSocket(/\/ws\/jobs\/[^/?]+$/, async (socket) => {
+    wsInterceptCount += 1;
     const jobId = jobIdFromUrl(socket.url());
     try {
       await awaitWitness(socket.close(), `socket close for job ${jobId}`);
@@ -142,7 +146,10 @@ try {
       const closedJobId = await awaitWitness(socketClosureFor(jobId).promise, `closed socket for poll job ${jobId}`);
       assert.equal(jobId, closedJobId, "The poll must observe its own interrupted socket");
       if (jobAttempts.get(jobId) === retryAttempt) return await route.continue();
-      await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Test connection interrupted" }) });
+      pollCount += 1;
+      // Transient failures keep observing; a non-retryable poll failure ends observation.
+      const status = pollCount <= 2 ? 503 : 400;
+      await route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ error: status === 503 ? "Test connection interrupted" : "Test invalid job request" }) });
       observation.deniedPollJobs.push(jobId);
     } catch (error) {
       observation.fixtureErrors.push(`Request ${request.method()} ${jobId}: ${error.message}`);
@@ -154,6 +161,7 @@ try {
     if (response.request().method() !== "GET" || !jobStatus.test(response.url())) return;
     const jobId = jobIdFromUrl(response.url());
     if (response.status() === 503) observation.failedPollJobs.push(jobId);
+    if (response.status() === 400) observation.terminalPollJobs.push(jobId);
     if (response.status() === 200) observation.recoveredPollJobs.push(jobId);
   });
   const recoveryError = recoveryPage.getByText("Could not download the STL files", { exact: true });
@@ -170,9 +178,13 @@ try {
     assert.deepEqual(observation.fixtureErrors, [], "Fault handlers must finish without errors");
     assert.equal(initialAttempt.exportJobs.length, 1, "One initial download action must start one real export");
     assert.deepEqual(retryAttempt.exportJobs, [], "No retry may start before the explicit Try again action");
+    assert.ok(wsInterceptCount >= 1, "WebSocket intercept must fire for /ws/jobs/:jobId (not HTTP-only recovery)");
     const interruptedJobId = initialAttempt.exportJobs[0];
     assert.ok(observation.closedSocketJobs.includes(interruptedJobId), "The intended export's canonical job socket must be closed");
-    assert.ok(observation.deniedPollJobs.length > 0, "The job HTTP status request must receive the injected 503");
+    assert.equal(pollCount, 3, "Both transient failures must be retried before the non-retryable 400");
+    assert.deepEqual(observation.failedPollJobs, [interruptedJobId, interruptedJobId], "The browser must receive both transient 503 failures for the intended export");
+    assert.deepEqual(observation.terminalPollJobs, [interruptedJobId], "The browser must receive the terminal 400 for the intended export");
+    assert.equal(observation.deniedPollJobs.length, 3, "All three injected failures must belong to the initial attempt");
     assert.ok(observation.deniedPollJobs.every((id) => id === interruptedJobId && observation.closedSocketJobs.includes(id)));
     assert.ok(observation.failedPollJobs.includes(interruptedJobId), "The browser must receive the intended export's HTTP 503");
     assert.equal(await recoveryButton.isEnabled(), true);
@@ -211,6 +223,6 @@ try {
     throw error;
   }
   await recoveryPage.close();
-  log("PASS: interrupted job observation stops the spinner; retry completes through HTTP polling without WebSocket");
+  log("PASS: transient job polls retry; non-retryable job poll stops the spinner; retry completes through HTTP polling without WebSocket");
   log("PASS: real upload, saved rules reload, Accent + Structural ZIP download with identical STL bytes, overlap warning, mobile layout", { build: build.id });
 } finally { await browser.close(); }

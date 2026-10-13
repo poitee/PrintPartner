@@ -37,11 +37,11 @@ struct TestOwnership {
 }
 
 impl TestOwnership {
+    // The installed-bundle fixture owns its marker; compat stays storage-independent.
     fn record_child(directory: &Path, pid: u32) -> Result<()> {
         let path = directory.join(".desktop-owner.json");
         let mut marker: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
         marker["child_pid"] = pid.into();
-        // macOS cannot query a foreign process identity; retain a per-child instance token.
         marker["child_process_identity"] =
             format!("instance:{}", hex::encode(rand::random::<[u8; 16]>())).into();
         let temporary = directory.join(format!(
@@ -156,10 +156,9 @@ async fn wait_for_ready(
                     bail!("Compatibility child entered backoff {attempt}")
                 }
                 Status::Guarded => bail!("Compatibility child entered crash guard"),
-                Status::Stopping | Status::Stopped => {
-                    bail!("Compatibility child stopped before readiness")
-                }
-                Status::Failed => bail!("Compatibility child cleanup failed before readiness"),
+                Status::Stopping => bail!("Compatibility child stopping before readiness"),
+                Status::Stopped => bail!("Compatibility child stopped before readiness"),
+                Status::Failed => bail!("Compatibility child failed before readiness"),
             }
             status
                 .changed()
@@ -193,6 +192,7 @@ fn write_receipt(path: &Path, receipt: &LifecycleReceipt<'_>) -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "requires a packaged macOS app and PP_COMPAT_* paths"]
 async fn installed_bundle_start_health_shutdown() -> Result<()> {
     ensure!(
         env::var_os("LD_PRELOAD").is_none(),

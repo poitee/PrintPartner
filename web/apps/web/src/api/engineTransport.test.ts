@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { setEngineUnauthorizedHandler } from "./contractRequest";
 import {
   EngineHttpError,
+  engineFetch,
   engineFetchMultipart,
   engineFetchStream,
   engineSendMultipart,
@@ -45,6 +46,64 @@ describe("engine transport", () => {
       engineFetchStream({ path: "/assistant/chat", method: "POST" }),
     ).rejects.toEqual(expect.objectContaining<Partial<EngineHttpError>>({ status: 401 }));
     expect(unauthorized).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the session for a rejected current password and still signs out for other 401s", async () => {
+    const unauthorized = vi.fn();
+    setEngineUnauthorizedHandler(unauthorized);
+    fetchMock.mockResolvedValueOnce(
+      Response.json(
+        { code: "current_password_rejected", detail: "Current password is incorrect" },
+        { status: 401 },
+      ),
+    );
+
+    await expect(
+      engineFetch("/auth/change-password", {
+        method: "POST",
+        body: JSON.stringify({
+          current_password: "wrong-current-password",
+          new_password: "correct-horse-battery-2",
+        }),
+      }),
+    ).rejects.toMatchObject({
+      name: "EngineHttpError",
+      message: "Current password is incorrect",
+      status: 401,
+    });
+    expect(unauthorized).not.toHaveBeenCalled();
+
+    fetchMock.mockResolvedValueOnce(
+      Response.json({ detail: "Current password is incorrect" }, { status: 401 }),
+    );
+    await expect(engineFetch("/auth/change-password", { method: "POST", body: "{}" })).rejects.toMatchObject({
+      message: "Current password is incorrect",
+      status: 401,
+    });
+    expect(unauthorized).toHaveBeenCalledOnce();
+
+    fetchMock.mockResolvedValueOnce(
+      Response.json({ detail: "Authentication required" }, { status: 401 }),
+    );
+    await expect(engineFetch("/auth/me")).rejects.toMatchObject({
+      message: "Authentication required",
+      status: 401,
+    });
+    expect(unauthorized).toHaveBeenCalledTimes(2);
+
+    fetchMock.mockResolvedValueOnce(
+      Response.json({ detail: "Invalid email or password" }, { status: 401 }),
+    );
+    await expect(
+      engineFetch("/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ email: "a@example.test", password: "wrong" }),
+      }),
+    ).rejects.toMatchObject({
+      message: "Invalid email or password",
+      status: 401,
+    });
+    expect(unauthorized).toHaveBeenCalledTimes(3);
   });
 
   it("accepts an empty successful response for multipart commands", async () => {

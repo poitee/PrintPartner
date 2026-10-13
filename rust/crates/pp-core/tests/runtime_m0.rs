@@ -4,8 +4,11 @@ use axum::{
 };
 use http_body_util::BodyExt;
 use hyper_util::rt::TokioIo;
-use pp_core::{CoreRuntime, CoreStatus, DesktopLaunch, VerifiedBundle};
-use std::{path::PathBuf, time::Duration};
+use pp_core::{CoreRuntime, CoreStatus, DesktopLaunch, SupervisorConfig, VerifiedBundle};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 fn launch(data: PathBuf) -> DesktopLaunch {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -15,16 +18,44 @@ fn launch(data: PathBuf) -> DesktopLaunch {
     let manifest = std::env::var_os("PP_DESKTOP_RELEASE_MANIFEST")
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join("rust/bundle-manifest.json"));
-    let release: serde_json::Value =
+    launch_from_manifest(data, &manifest)
+}
+
+fn launch_from_manifest(data: PathBuf, manifest: &Path) -> DesktopLaunch {
+    let inventory: serde_json::Value =
         serde_json::from_slice(&std::fs::read(manifest).unwrap()).unwrap();
-    let web = root.join("web");
+    let (web, node, release) = if inventory["dependencies"]["web_path"] == "." {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../..")
+            .canonicalize()
+            .unwrap();
+        (
+            root.join("web"),
+            std::env::var_os("PP_TEST_NODE")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("/usr/bin/node")),
+            inventory,
+        )
+    } else {
+        let stage = manifest.parent().unwrap().canonicalize().unwrap();
+        let identity = if stage.join("release.json").is_file() {
+            stage.join("release.json")
+        } else {
+            stage.join("Resources/desktop-runtime/release.json")
+        };
+        let release: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(identity).unwrap()).unwrap();
+        (
+            stage.join(release["web"].as_str().unwrap()),
+            stage.join(release["node"].as_str().unwrap()),
+            release,
+        )
+    };
     DesktopLaunch {
         data_dir: data,
         assets: web.join("apps/web/dist"),
         bundle: VerifiedBundle {
-            node: std::env::var_os("PP_TEST_NODE")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("/usr/bin/node")),
+            node,
             entry: web.join("apps/server/dist/current/desktop.js"),
             web_root: web,
             runtime_version: release["runtime_version"].as_str().unwrap().into(),
@@ -598,9 +629,17 @@ async fn cleanup_error_publishes_failed_and_preserves_failure() {
 
 #[tokio::test]
 async fn stable_child_resets_backoff_without_erasing_rapid_crash_escalation() {
-    let runtime = CoreRuntime::start(launch(temporary("stable-backoff")))
-        .await
-        .unwrap();
+    let window = Duration::from_secs(1);
+    let stable_time = window + Duration::from_millis(100);
+    let runtime = CoreRuntime::start_with_compat_config(
+        launch(temporary("stable-backoff")),
+        SupervisorConfig {
+            crash_guard_window: window,
+            ..SupervisorConfig::default()
+        },
+    )
+    .await
+    .unwrap();
     let mut state = runtime.handle().subscribe();
     let mut prior_pid = 0;
     for (index, expected) in [0, 1, 0].into_iter().enumerate() {
@@ -617,7 +656,7 @@ async fn stable_child_resets_backoff_without_erasing_rapid_crash_escalation() {
         };
         prior_pid = pid;
         if index == 2 {
-            tokio::time::sleep(Duration::from_secs(121)).await;
+            tokio::time::sleep(stable_time).await;
         }
         assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGKILL) }, 0);
         let attempt = loop {
@@ -635,7 +674,7 @@ async fn stable_child_resets_backoff_without_erasing_rapid_crash_escalation() {
     assert!(receipt.complete());
     println!(
         "{}",
-        serde_json::json!({"case":"stable_backoff_reset", "observed_attempts":[0,1,0], "stable_seconds":121, "receipt":receipt})
+        serde_json::json!({"case":"stable_backoff_reset", "observed_attempts":[0,1,0], "window_ms":window.as_millis(), "stable_ms":stable_time.as_millis(), "receipt":receipt})
     );
 }
 
@@ -658,6 +697,47 @@ async fn unexpected_marker_directory_is_preserved_and_reported() {
         "{}",
         serde_json::json!({"case":"truthful_cleanup_failure","receipt":receipt,"unexpected_marker_preserved":true})
     );
+}
+
+#[tokio::test]
+async fn same_process_restart_retries_failed_storage_release_without_double_ownership() {
+    use fs2::FileExt;
+
+    let data = temporary("restart-after-failed-release");
+    let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    let marker = data.join(".desktop-owner.json");
+    std::fs::remove_file(&marker).unwrap();
+    std::fs::create_dir(&marker).unwrap();
+    let blocker = marker.join("retain");
+    std::fs::write(&blocker, b"must not delete").unwrap();
+    let lease = data.join(".desktop-lease/owner.json");
+    let owner = std::fs::read(&lease).unwrap();
+    let lock = std::fs::File::open(data.join(".desktop.lock")).unwrap();
+
+    let receipt = runtime.shutdown().await;
+    assert!(receipt.compat_reaped && receipt.gateway_stopped && receipt.runtime_removed);
+    assert!(!receipt.storage_released && !receipt.marker_removed && !receipt.complete());
+    assert!(receipt.errors.contains(&"storage_ownership_retained"));
+    assert!(lock.try_lock_exclusive().is_err());
+
+    assert!(CoreRuntime::start(launch(data.clone())).await.is_err());
+    assert_eq!(std::fs::read(&lease).unwrap(), owner);
+    assert_eq!(std::fs::read(&blocker).unwrap(), b"must not delete");
+    assert!(lock.try_lock_exclusive().is_err());
+
+    std::fs::remove_file(blocker).unwrap();
+    std::fs::remove_dir(&marker).unwrap();
+    let restarted = CoreRuntime::start(launch(data.clone()))
+        .await
+        .expect("same-process restart retries the retained failed release");
+    assert_ne!(std::fs::read(&lease).unwrap(), owner);
+    assert!(lock.try_lock_exclusive().is_err());
+    assert!(CoreRuntime::start(launch(data.clone())).await.is_err());
+    assert!(restarted.shutdown().await.complete());
+    assert!(!marker.exists() && !data.join(".desktop-lease").exists());
+    lock.try_lock_exclusive().unwrap();
+    FileExt::unlock(&lock).unwrap();
+    std::fs::remove_dir_all(data).unwrap();
 }
 
 #[test]
@@ -777,6 +857,11 @@ async fn compatibility_cleanup_failure_reports_failed_instead_of_ready() {
     assert!(receipt.errors.contains(&"compat_cleanup_unproved"));
     assert!(matches!(*state.borrow(), CoreStatus::Failed));
     std::fs::remove_dir_all(runtime_dir).unwrap();
+    let error = CoreRuntime::start(launch(data.clone()))
+        .await
+        .err()
+        .expect("unproved child closure must prevent same-process restart");
+    assert!(error.to_string().contains("Closure was not proved"));
     std::fs::remove_dir_all(data).unwrap();
 }
 
@@ -1147,4 +1232,685 @@ async fn desktop_marker_with_both_processes_dead_allows_start() {
     let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
     assert!(runtime.shutdown().await.complete());
     std::fs::remove_dir_all(data).unwrap();
+}
+
+#[tokio::test]
+async fn ticket_t_4_real_gateway_hidden_status_and_config_cancellation() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seen = calls.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let printer_url = format!("http://{}", listener.local_addr().unwrap());
+    let mode = Arc::new(AtomicUsize::new(0));
+    let served_mode = mode.clone();
+
+    let simulator = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut bytes = [0; 4096];
+            let count = stream.read(&mut bytes).await.unwrap();
+            let request = String::from_utf8_lossy(&bytes[..count]);
+            assert!(request.starts_with("GET /printer/objects/query?"));
+            assert!(request.contains("x-api-key: recorded-test-key"));
+            seen.fetch_add(1, Ordering::SeqCst);
+            let fixture: &[u8] = match served_mode.load(Ordering::SeqCst) {
+                1 => include_bytes!("../../pp-drivers/tests/fixtures/moonraker-error.json"),
+                2 => include_bytes!("../../pp-drivers/tests/fixtures/moonraker-offline.json"),
+                _ => include_bytes!("../../pp-drivers/tests/fixtures/moonraker-success.json"),
+            };
+            let header = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+                fixture.len()
+            );
+            stream.write_all(header.as_bytes()).await.unwrap();
+            stream.write_all(fixture).await.unwrap();
+        }
+    });
+    let data =
+        std::env::temp_dir().join(format!("pp-t4-{}", hex::encode(rand::random::<[u8; 8]>())));
+    let mut runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    let origin = runtime.origin().to_owned();
+    let target = runtime.take_launch_target().unwrap().into_url();
+    let bootstrap = request(
+        &origin,
+        target.strip_prefix(&origin).unwrap(),
+        "GET",
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(bootstrap.0, StatusCode::SEE_OTHER);
+    let cookie = bootstrap.1["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    let created = request(&origin,"/api/v1/integrations","POST",Some(cookie),None,None,Some(serde_json::json!({"name":"Isolated simulator","type":"moonraker","config":{"base_url":printer_url,"api_key":"recorded-test-key"}}))).await;
+    assert_eq!(
+        created.0,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&created.2)
+    );
+    let item: serde_json::Value = serde_json::from_slice(&created.2).unwrap();
+    let id = item["id"].as_str().unwrap();
+    assert_eq!(item["config"]["api_key"], "****");
+    // No browser/window/request traffic drives the polling loop.
+    tokio::time::sleep(Duration::from_millis(2300)).await;
+    assert!(calls.load(Ordering::SeqCst) >= 2);
+    let count = calls.load(Ordering::SeqCst);
+    for alias in ["/api/v1/integrations/"] {
+        let response = request(
+            &origin,
+            &format!("{alias}{id}/status"),
+            "GET",
+            Some(cookie),
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(response.0, StatusCode::OK);
+        assert_eq!(response.1["cache-control"], "no-store");
+        let body: serde_json::Value = serde_json::from_slice(&response.2).unwrap();
+        assert_eq!(body["state"], "printing");
+        assert_eq!(body["filename"], "bracket.gcode");
+        assert!(!String::from_utf8_lossy(&response.2).contains("recorded-test-key"));
+    }
+    let head = request(
+        &origin,
+        &format!("/api/v1/integrations/{id}/status"),
+        "HEAD",
+        Some(cookie),
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(head.0, StatusCode::OK);
+    assert_eq!(head.1["cache-control"], "no-store");
+    assert!(head.2.is_empty());
+    assert!(
+        head.1["content-length"]
+            .to_str()
+            .unwrap()
+            .parse::<usize>()
+            .unwrap()
+            > 0
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        count,
+        "Reads must not make another outbound request"
+    );
+    // A stalled compatibility snapshot must not stall an already-cached read.
+    let pid = match runtime.handle().subscribe().borrow().clone() {
+        CoreStatus::Ready { pid, .. } => pid,
+        _ => panic!("backend not ready"),
+    };
+    assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGSTOP) }, 0);
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    let cached_while_node_stopped = tokio::time::timeout(
+        Duration::from_millis(300),
+        request(
+            &origin,
+            &format!("/api/v1/integrations/{id}/status"),
+            "GET",
+            Some(cookie),
+            None,
+            None,
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGCONT) }, 0);
+    assert_eq!(
+        cached_while_node_stopped
+            .expect("cached read blocked on Node")
+            .0,
+        StatusCode::OK
+    );
+    for (fixture_mode, expected) in [(1, "error"), (2, "offline")] {
+        mode.store(fixture_mode, Ordering::SeqCst);
+        tokio::time::timeout(Duration::from_secs(6), async {
+            loop {
+                let response = request(
+                    &origin,
+                    &format!("/api/v1/integrations/{id}/status"),
+                    "GET",
+                    Some(cookie),
+                    None,
+                    None,
+                    None,
+                )
+                .await;
+                if serde_json::from_slice::<serde_json::Value>(&response.2).unwrap()["state"]
+                    == expected
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+    mode.store(0, Ordering::SeqCst);
+    let control = runtime.handle();
+    tokio::time::timeout(Duration::from_millis(300), control.suspend_monitoring())
+        .await
+        .unwrap();
+    let asleep = calls.load(Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    assert_eq!(calls.load(Ordering::SeqCst), asleep);
+    control.resume_monitoring();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while calls.load(Ordering::SeqCst) == asleep {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        request(
+            &origin,
+            "/__desktop/moonraker-hosts",
+            "GET",
+            Some(cookie),
+            None,
+            None,
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        request(
+            &origin,
+            &format!("/api/v1/integrations/{id}/status"),
+            "GET",
+            None,
+            None,
+            None,
+            None
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        request(
+            &origin,
+            &format!("/api/v1/integrations/{id}"),
+            "PATCH",
+            Some(cookie),
+            None,
+            None,
+            Some(serde_json::json!({"config":{"enabled":false}}))
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let count = calls.load(Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    assert_eq!(calls.load(Ordering::SeqCst), count);
+    let response = request(
+        &origin,
+        &format!("/api/v1/integrations/{id}/status"),
+        "GET",
+        Some(cookie),
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&response.2).unwrap()["state"],
+        "offline"
+    );
+    assert_eq!(
+        request(
+            &origin,
+            &format!("/api/v1/integrations/{id}"),
+            "DELETE",
+            Some(cookie),
+            None,
+            None,
+            None
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        request(
+            &origin,
+            &format!("/api/v1/integrations/{id}/status"),
+            "GET",
+            Some(cookie),
+            None,
+            None,
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    let receipt = runtime.shutdown().await;
+    assert!(receipt.complete(), "{receipt:?}");
+    assert_eq!(calls.load(Ordering::SeqCst), count);
+    simulator.abort();
+    std::fs::remove_dir_all(data).unwrap();
+    println!(
+        "ticket_t_4 gateway: hidden polling, existing v1 alias, no request-driven polls, secret isolation, suspend/resume, disable/removal/shutdown passed"
+    );
+}
+
+#[tokio::test]
+async fn gre_335_shared_status_route_keeps_node_path_for_other_printers() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    // Records connections; `reply` is None for a socket that only reads (TLS peer).
+    async fn fake(reply: Option<&'static [u8]>) -> (String, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        let (calls, tls) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+        let (seen, handshakes) = (calls.clone(), tls.clone());
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut bytes = [0; 4096];
+                let count = stream.read(&mut bytes).await.unwrap_or(0);
+                seen.fetch_add(1, Ordering::SeqCst);
+                if count > 0 && bytes[0] == 0x16 {
+                    handshakes.fetch_add(1, Ordering::SeqCst);
+                }
+                if let Some(reply) = reply {
+                    let _ = stream.write_all(reply).await;
+                }
+            }
+        });
+        (address, calls, tls)
+    }
+    async fn get(
+        origin: &str,
+        cookie: &str,
+        id: &str,
+    ) -> (StatusCode, serde_json::Value, Duration) {
+        let started = std::time::Instant::now();
+        let response = request(
+            origin,
+            &format!("/api/v1/integrations/{id}/status"),
+            "GET",
+            Some(cookie),
+            None,
+            None,
+            None,
+        )
+        .await;
+        let body = serde_json::from_slice(&response.2).unwrap_or(serde_json::Value::Null);
+        (response.0, body, started.elapsed())
+    }
+    let success = include_bytes!("../../pp-drivers/tests/fixtures/moonraker-success.json");
+    let moonraker_reply: &'static [u8] = Box::leak(
+        [
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+                success.len()
+            )
+            .as_bytes(),
+            success,
+        ]
+        .concat()
+        .into_boxed_slice(),
+    );
+    let (moonraker, moonraker_calls, _) = fake(Some(moonraker_reply)).await;
+    let (prusa, prusa_calls, _) = fake(Some(
+        b"HTTP/1.1 503 Unavailable\r\nContent-Length: 0\r\n\r\n",
+    ))
+    .await;
+    let (tls, tls_calls, tls_handshakes) = fake(None).await;
+
+    let data = std::env::temp_dir().join(format!(
+        "pp-gre335-{}",
+        hex::encode(rand::random::<[u8; 8]>())
+    ));
+    let mut runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    let origin = runtime.origin().to_owned();
+    let target = runtime.take_launch_target().unwrap().into_url();
+    let bootstrap = request(
+        &origin,
+        target.strip_prefix(&origin).unwrap(),
+        "GET",
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    let cookie = bootstrap.1["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    let create = |name: &str, kind: &str, config: serde_json::Value| {
+        let (origin, cookie) = (origin.clone(), cookie.clone());
+        let body = serde_json::json!({"name": name, "type": kind, "config": config});
+        async move {
+            let created = request(
+                &origin,
+                "/api/v1/integrations",
+                "POST",
+                Some(&cookie),
+                None,
+                None,
+                Some(body),
+            )
+            .await;
+            assert_eq!(
+                created.0,
+                StatusCode::CREATED,
+                "{}",
+                String::from_utf8_lossy(&created.2)
+            );
+            serde_json::from_slice::<serde_json::Value>(&created.2).unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        }
+    };
+    let moonraker_id = create(
+        "Moonraker",
+        "moonraker",
+        serde_json::json!({"base_url": format!("http://{moonraker}"), "api_key": "k"}),
+    )
+    .await;
+    let prusa_id = create(
+        "PrusaLink",
+        "prusalink",
+        serde_json::json!({"base_url": format!("http://{prusa}"), "api_key": "k"}),
+    )
+    .await;
+    let tls_id = create(
+        "TLS Moonraker",
+        "moonraker",
+        serde_json::json!({"base_url": format!("https://{tls}"), "api_key": "k"}),
+    )
+    .await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while get(&origin, &cookie, &moonraker_id).await.1["state"] != "printing" {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("Rust watcher serves the plain-HTTP Moonraker host");
+
+    // (1) Healthy snapshot: a non-Moonraker id forwards straight to Node.
+    let (status, body, elapsed) = get(&origin, &cookie, &prusa_id).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        prusa_calls.load(Ordering::SeqCst) >= 1,
+        "Node queried PrusaLink"
+    );
+    println!(
+        "gre_335 trace: healthy snapshot, prusalink status={status} via Node in {elapsed:?} body={body}"
+    );
+
+    // HTTPS Moonraker stays on Node's on-demand path until GRE-359; Rust never polls it.
+    assert_eq!(tls_calls.load(Ordering::SeqCst), 0);
+    let (status, body, elapsed) = get(&origin, &cookie, &tls_id).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        tls_handshakes.load(Ordering::SeqCst) >= 1,
+        "Node attempted TLS"
+    );
+    println!(
+        "gre_335 trace: https moonraker status={status} via Node fallback in {elapsed:?} body={body}"
+    );
+
+    // A Node stall past the 2 s snapshot deadline keeps Moonraker pollers alive.
+    let pid = match runtime.handle().subscribe().borrow().clone() {
+        CoreStatus::Ready { pid, .. } => pid,
+        _ => panic!("backend not ready"),
+    };
+    assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGSTOP) }, 0);
+    let before = moonraker_calls.load(Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(3500)).await;
+    let during = moonraker_calls.load(Ordering::SeqCst);
+    let (status, body, _) = get(&origin, &cookie, &moonraker_id).await;
+    assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGCONT) }, 0);
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["state"], "printing");
+    assert!(
+        during > before,
+        "pollers kept running through the snapshot timeout"
+    );
+    println!(
+        "gre_335 trace: node stalled 3.5s, moonraker polls {before}->{during}, cached state={}",
+        body["state"]
+    );
+
+    // An oversized Moonraker row fails only its own id closed; other printers keep routing.
+    let oversized_id = create(
+        "Oversized",
+        "moonraker",
+        serde_json::json!({"base_url": format!("http://{}", "a".repeat(5000)), "enabled": true}),
+    )
+    .await;
+    let (status, _, _) = get(&origin, &cookie, &oversized_id).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    let (status, body, _) = get(&origin, &cookie, &prusa_id).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body, _) = get(&origin, &cookie, &moonraker_id).await;
+    assert_eq!(
+        (status, &body["state"]),
+        (StatusCode::OK, &serde_json::json!("printing"))
+    );
+    println!("gre_335 trace: oversized row=503, prusalink and moonraker unaffected");
+
+    // (2) Over-cap snapshot (above 128 Moonraker hosts): no new pollers, grace for old ones.
+    for index in 0..125 {
+        create(
+            &format!("Disabled {index}"),
+            "moonraker",
+            serde_json::json!({"base_url": "http://127.0.0.1:9", "enabled": false}),
+        )
+        .await;
+    }
+    let (overflow, overflow_calls, _) = fake(Some(moonraker_reply)).await;
+    let newest = create(
+        "129th enabled HTTP host",
+        "moonraker",
+        serde_json::json!({"base_url": format!("http://{overflow}"), "enabled": true}),
+    )
+    .await;
+    let calls = prusa_calls.load(Ordering::SeqCst);
+    let (status, body, elapsed) = get(&origin, &cookie, &prusa_id).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(prusa_calls.load(Ordering::SeqCst) > calls);
+    assert!(elapsed < Duration::from_secs(2), "{elapsed:?}");
+    // The 129th host is not proven non-Moonraker, so it must not fall back to Node.
+    let (status, body, _) = get(&origin, &cookie, &newest).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(overflow_calls.load(Ordering::SeqCst), 0);
+    let (status, body, _) = get(&origin, &cookie, &moonraker_id).await;
+    assert_eq!(
+        (status, &body["state"]),
+        (StatusCode::OK, &serde_json::json!("printing"))
+    );
+    println!(
+        "gre_335 trace: failing snapshot, prusalink status={status} via Node in {elapsed:?}; moonraker still cached"
+    );
+    // Past the grace period plain-HTTP Moonraker fails closed; other printers and the
+    // HTTPS Moonraker host still reach Node.
+    tokio::time::sleep(Duration::from_secs(11)).await;
+    let (status, _, _) = get(&origin, &cookie, &moonraker_id).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    let (status, body, elapsed) = get(&origin, &cookie, &prusa_id).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let handshakes = tls_handshakes.load(Ordering::SeqCst);
+    let (tls_status, tls_body, tls_elapsed) = get(&origin, &cookie, &tls_id).await;
+    assert_eq!(tls_status, StatusCode::OK, "{tls_body}");
+    assert!(
+        tls_handshakes.load(Ordering::SeqCst) > handshakes,
+        "Node attempted TLS after grace"
+    );
+    println!(
+        "gre_335 trace: after grace, moonraker=503, prusalink status={status} via Node in {elapsed:?}, https moonraker status={tls_status} via Node in {tls_elapsed:?}"
+    );
+
+    let (status, body, _) = get(&origin, &cookie, &newest).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(
+        overflow_calls.load(Ordering::SeqCst),
+        0,
+        "no Node fallback or new poller, even after grace"
+    );
+    println!("gre_335 trace: 129th enabled HTTP host=503, outbound calls=0 before and after grace");
+
+    let receipt = runtime.shutdown().await;
+    assert!(receipt.complete(), "{receipt:?}");
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+#[tokio::test]
+async fn ticket_t_5_staged_release_reuses_the_persisted_desktop_identity() {
+    let data =
+        std::env::temp_dir().join(format!("pp-t-5-{}", hex::encode(rand::random::<[u8; 8]>())));
+    let selected = launch(data.clone());
+    let expected_version = selected.bundle.runtime_version.clone();
+    let mut runtime = CoreRuntime::start(selected).await.unwrap();
+    let origin = runtime.origin().to_owned();
+    let target = runtime.take_launch_target().unwrap().into_url();
+    let (status, headers, _) = request(
+        &origin,
+        target.strip_prefix(&origin).unwrap(),
+        "GET",
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let cookie = headers
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    let (status, _, body) =
+        request(&origin, "/health", "GET", Some(cookie), None, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let health: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(health["ok"], true);
+    assert_eq!(health["version"], expected_version);
+    let persisted = std::fs::read(data.join("desktop.toml")).unwrap();
+    assert!(runtime.shutdown().await.complete());
+    let reopened = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    assert_eq!(reopened.origin(), origin);
+    assert_eq!(std::fs::read(data.join("desktop.toml")).unwrap(), persisted);
+    assert!(reopened.shutdown().await.complete());
+    assert!(!data.join(".desktop-owner.json").exists());
+    assert!(!data.join(".desktop-lease").exists());
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+#[test]
+fn identity_manifest_selects_staged_paths_and_current_version() {
+    let root = temporary("identity-manifest");
+    std::fs::create_dir_all(&root).unwrap();
+    let root = root.canonicalize().unwrap();
+    let manifest = root.join("bundle-manifest.json");
+    for (identity, node, web) in [
+        ("release.json", "bin/node", "web"),
+        (
+            "Resources/desktop-runtime/release.json",
+            "MacOS/printpartner-node",
+            "Resources/desktop-runtime/web",
+        ),
+    ] {
+        let identity = root.join(identity);
+        std::fs::create_dir_all(identity.parent().unwrap()).unwrap();
+        std::fs::write(
+            &manifest,
+            serde_json::json!({"dependencies": {"web_path": web}}).to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            &identity,
+            serde_json::json!({
+                "node": node,
+                "web": web,
+                "runtime_version": "4.2.1-web",
+                "commit": "f00471f13d2f0e69631d3130e594b9244f93e01d"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let selected = launch_from_manifest(root.join("data"), &manifest);
+        assert_eq!(selected.bundle.node, root.join(node));
+        assert_eq!(selected.bundle.web_root, root.join(web));
+        assert_eq!(selected.assets, root.join(web).join("apps/web/dist"));
+        assert_eq!(
+            selected.bundle.entry,
+            root.join(web).join("apps/server/dist/current/desktop.js")
+        );
+        assert_eq!(selected.bundle.runtime_version, "4.2.1-web");
+        assert_eq!(
+            selected.bundle.commit,
+            "f00471f13d2f0e69631d3130e594b9244f93e01d"
+        );
+        std::fs::write(&identity, b"invalid json").unwrap();
+        assert!(
+            std::panic::catch_unwind(|| launch_from_manifest(root.join("data"), &manifest))
+                .is_err()
+        );
+        std::fs::remove_file(identity).unwrap();
+        assert!(
+            std::panic::catch_unwind(|| launch_from_manifest(root.join("data"), &manifest))
+                .is_err()
+        );
+    }
+    std::fs::write(
+        &manifest,
+        serde_json::json!({
+            "dependencies": {"web_path": "."},
+            "runtime_version": "4.2.1-web",
+            "commit": "f00471f13d2f0e69631d3130e594b9244f93e01d"
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let selected = launch_from_manifest(root.join("data"), &manifest);
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../web")
+        .canonicalize()
+        .unwrap();
+    assert_eq!(selected.bundle.web_root, source);
+    assert_eq!(selected.bundle.runtime_version, "4.2.1-web");
+    std::fs::write(&manifest, b"invalid json").unwrap();
+    assert!(
+        std::panic::catch_unwind(|| launch_from_manifest(root.join("data"), &manifest)).is_err()
+    );
+    std::fs::remove_file(&manifest).unwrap();
+    assert!(
+        std::panic::catch_unwind(|| launch_from_manifest(root.join("data"), &manifest)).is_err()
+    );
+    std::fs::remove_dir_all(root).unwrap();
 }

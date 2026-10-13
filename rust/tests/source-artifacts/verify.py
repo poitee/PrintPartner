@@ -14,6 +14,9 @@ parser.add_argument('--node', type=Path, required=True)
 parser.add_argument('--node-snapshot', type=Path, required=True)
 parser.add_argument('--binary', type=Path, required=True)
 args = parser.parse_args()
+# pp-source rejects group/world-writable root ancestors, so fixture modes
+# must not depend on the caller's umask.
+os.umask(0o022)
 args.output.mkdir(parents=True, exist_ok=False)
 args.output = args.output.resolve()
 args.binary = args.binary.resolve()
@@ -71,6 +74,45 @@ def compare(case, command=base, expect=True):
             assert first.read_bytes() == second.read_bytes()
     rows.append({'case': case, 'expectation': 'parity-success' if expect else 'both-reject', 'passed': True})
     return node, rust
+
+command = copy.deepcopy(base)
+command['snapshot']['selection']['omittedFiles'] = [{'path': 'readme.md', 'kind': 'md', 'sizeHintBytes': None, 'reason': 'unknown-document-size'}]
+compare('selected-omitted-case-pair', command)
+command['snapshot']['selection']['omittedFiles'][0]['path'] = 'README.md'
+compare('selected-omitted-exact-duplicate', command, False)
+command['snapshot']['selection']['omittedFiles'] = [
+    {'path': path, 'kind': 'md', 'sizeHintBytes': None, 'reason': 'unknown-document-size'}
+    for path in ['omitted.md', 'OMITTED.md']]
+compare('omitted-case-collision', command, False)
+
+# Destination folder spelling must not create a selected/omitted overlap.
+for name in ['Parts/a.stl', 'parts/notes.md']:
+    path = input_dir / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b'canonical folder overlap fixture')
+command = copy.deepcopy(base)
+command['snapshot']['files'] = [
+    {'path': path, 'kind': kind, 'sizeHintBytes': None}
+    for path, kind in [('Parts/a.stl', 'stl'), ('parts/notes.md', 'md')]]
+command['snapshot']['selection']['omittedFiles'] = [
+    {'path': 'Parts/notes.md', 'kind': 'md', 'sizeHintBytes': None, 'reason': 'unknown-document-size'}]
+case = 'canonical-folder-omission-overlap'
+rejected = invoke(case, 'rust', command, False)
+assert rejected['error'] == 'duplicate-path', rejected
+repo = fixture / case / 'rust'
+assert not (repo / '42/revisions' / command['snapshot']['upstreamRevisionKey']).exists()
+assert not (repo / '42/revisions/.pp-source-candidate').exists()
+rows.append({'case': case, 'expectation': 'reject-before-publication-and-clean-candidate', 'passed': True})
+command['reposDir'] = str(repo)
+command['snapshot']['selection']['omittedFiles'][0]['path'] = 'Parts/other.md'
+created = invoke(case + '-recovery', 'rust', command)
+assert created['publication'] == 'created'
+for engine in ['rust', 'node']:
+    reused = invoke(case + '-reuse', engine, command)
+    assert reused['publication'] == 'reused'
+    assert reused['manifestDigest'] == created['manifestDigest']
+    assert reused['files'] == created['files']
+rows.append({'case': case + '-valid-recovery-and-cross-load', 'passed': True})
 
 node, rust = compare('nested-unicode-archive-bytes')
 for engine, other in [('rust', 'node'), ('node', 'rust')]:

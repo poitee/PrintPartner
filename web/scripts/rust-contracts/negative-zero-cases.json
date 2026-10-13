@@ -1,0 +1,101 @@
+{
+  "cases": [
+    {
+      "name": "negative-zero-request-basis",
+      "parser": "parseSavePlanChoicesRequest",
+      "raw_input": "{\"expected_base\":{\"revision_id\":null,\"plan_version\":-0},\"expected_draft\":null,\"remap_checkoff_links\":true,\"decisions\":[{\"kind\":\"set_quantity_override\",\"target\":{\"part_key\":\"part\",\"relative_path\":\"part.stl\",\"source_layer\":null},\"value\":null}]}",
+      "outcome": {
+        "kind": "accepted",
+        "parsed": {
+          "expected_base": {
+            "revision_id": null,
+            "plan_version": 0
+          },
+          "expected_draft": null,
+          "remap_checkoff_links": true,
+          "decisions": [
+            {
+              "kind": "set_quantity_override",
+              "target": {
+                "part_key": "part",
+                "relative_path": "part.stl",
+                "source_layer": null
+              },
+              "value": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "negative-zero-identity-lifecycle",
+      "parser": "parsePlanDraftIdentity",
+      "raw_input": "{\"draft_id\":2,\"state\":\"open\",\"lifecycle_version\":-0,\"snapshot_digest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"base\":{\"revision_id\":1,\"plan_version\":1}}",
+      "outcome": {
+        "kind": "accepted",
+        "parsed": {
+          "draft_id": 2,
+          "state": "open",
+          "lifecycle_version": 0,
+          "snapshot_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "base": {
+            "revision_id": 1,
+            "plan_version": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "negative-zero-nested-draft-lifecycle",
+      "parser": "parseSavePlanChoicesRequest",
+      "raw_input": "{\"expected_base\":{\"revision_id\":1,\"plan_version\":1},\"expected_draft\":{\"draft_id\":2,\"state\":\"open\",\"lifecycle_version\":-0,\"snapshot_digest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"base\":{\"revision_id\":1,\"plan_version\":1}},\"remap_checkoff_links\":true,\"decisions\":[{\"kind\":\"set_quantity_override\",\"target\":{\"part_key\":\"part\",\"relative_path\":\"part.stl\",\"source_layer\":null},\"value\":null}]}",
+      "outcome": {
+        "kind": "accepted",
+        "parsed": {
+          "expected_base": {
+            "revision_id": 1,
+            "plan_version": 1
+          },
+          "expected_draft": {
+            "draft_id": 2,
+            "state": "open",
+            "lifecycle_version": 0,
+            "snapshot_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "base": {
+              "revision_id": 1,
+              "plan_version": 1
+            }
+          },
+          "remap_checkoff_links": true,
+          "decisions": [
+            {
+              "kind": "set_quantity_override",
+              "target": {
+                "part_key": "part",
+                "relative_path": "part.stl",
+                "source_layer": null
+              },
+              "value": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "negative-zero-positive-receipt-rejected",
+      "parser": "parseApplyPlanDraftReceipt",
+      "raw_input": "{\"profile_id\":1,\"draft_id\":2,\"revision_id\":3,\"plan_version\":2,\"draft_lifecycle_version\":-0,\"revision_digest\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"required_unit_mapping_digest\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"applied_at\":\"2026-09-06T00:00:00.000Z\"}",
+      "outcome": {
+        "kind": "rejected"
+      }
+    },
+    {
+      "name": "negative-zero-array-quantity-rejected",
+      "parser": "parseSavePlanChoicesRequest",
+      "raw_input": "{\"expected_base\":{\"revision_id\":null,\"plan_version\":0},\"expected_draft\":null,\"remap_checkoff_links\":true,\"decisions\":[{\"kind\":\"set_quantity_override\",\"target\":{\"part_key\":\"part\",\"relative_path\":\"part.stl\",\"source_layer\":null},\"value\":-0}]}",
+      "outcome": {
+        "kind": "rejected"
+      }
+    }
+  ]
+}

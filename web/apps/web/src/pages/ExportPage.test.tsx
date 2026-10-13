@@ -10,6 +10,7 @@ import {
   type AcceptedPlateWorkspace,
   type ProductionPrinterAssignment,
   type ProductionRoute,
+  type ProductionSelection,
   type RequiredUnitToken,
 } from "@print-partner/contracts";
 import type { PrinterCheckoffLink } from "../api/endpoints/checkoff";
@@ -95,6 +96,7 @@ const state = {
   checkoffLinks: [] as PrinterCheckoffLink[],
   route: "plates" as ProductionRoute | null,
   printerAssignments: [] as ProductionPrinterAssignment[],
+  selection: null as ProductionSelection | null,
   selectedTokens: null as ReadonlySet<RequiredUnitToken> | null,
   save: vi.fn<(patch: unknown) => Promise<unknown>>(),
 };
@@ -193,6 +195,7 @@ vi.mock("../queries/productionSetup", () => ({
       ...defaultProductionSetup(profileId),
       route: state.route,
       printer_assignments: state.printerAssignments,
+      ...(state.selection ? { selection: state.selection } : {}),
     },
     isPending: false,
     saving: false,
@@ -263,6 +266,7 @@ beforeEach(() => {
   state.checkoffLinks = [];
   state.route = "plates";
   state.printerAssignments = [];
+  state.selection = null;
   state.selectedTokens = null;
   state.save = vi.fn(() => Promise.resolve(undefined));
 });
@@ -400,6 +404,92 @@ describe("ExportPage work packages", () => {
     expect(within(active).getByText("Needs verification")).toBeTruthy();
     expect(within(active).getByRole("link", { name: "Verify in Checkoff" }).getAttribute("href"))
       .toBe("/progress?profile=1");
+  });
+
+  it("keeps Send open for the remaining units when one of three was recorded", async () => {
+    const tokenC = `ppu_${"c".repeat(32)}` as RequiredUnitToken;
+    if (readyWorkspace.kind !== "ready") throw new Error("expected ready plates");
+    const plate = readyWorkspace.plates[0];
+    if (!plate) throw new Error("expected a plate");
+    state.workspace = {
+      ...readyWorkspace,
+      plates: [{ ...plate, units: [unit(TOKEN_A), unit(TOKEN_B), unit(tokenC)] }],
+    };
+    state.exportRecords = [exportRecord()];
+    state.checkoffLinks = [{
+      ...checkoffLink(),
+      units: [{ part_id: 1, unit_index: 0, object_name: `bracket__${TOKEN_A}_id_0_copy_0` }],
+    }];
+    renderAt("/export");
+    fireEvent.click(await screen.findByRole("button", { name: "Choose test sliced file" }));
+    expect(screen.getByText("Send the file to a printer, or start the print now.")).toBeTruthy();
+    expect(screen.queryByText("This file is at a printer. Track it above and verify it in Checkoff.")).toBeNull();
+    expect(screen.getByTestId("panel-send")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Change production method" })).toBeNull();
+
+    cleanup();
+    renderAt("/export");
+    expect(screen.queryByText("This file is at a printer. Track it above and verify it in Checkoff.")).toBeNull();
+    expect(screen.getByText(/A file is already at a printer, so the route stays as it is/)).toBeTruthy();
+    expect(screen.getByText("Available once a sliced file is added.")).toBeTruthy();
+  });
+
+  it("completes Send when decorated labels across links cover every unit", () => {
+    const tokenC = `ppu_${"c".repeat(32)}` as RequiredUnitToken;
+    if (readyWorkspace.kind !== "ready") throw new Error("expected ready plates");
+    const plate = readyWorkspace.plates[0];
+    if (!plate) throw new Error("expected a plate");
+    state.workspace = {
+      ...readyWorkspace,
+      plates: [{ ...plate, units: [unit(TOKEN_A), unit(TOKEN_B), unit(tokenC)] }],
+    };
+    state.exportRecords = [exportRecord()];
+    const recorded = (id: string, objectName: string): PrinterCheckoffLink => ({
+      ...checkoffLink(),
+      id,
+      units: [{ part_id: 1, unit_index: 0, object_name: objectName }],
+    });
+    state.checkoffLinks = [
+      recorded("link-a", `bracket__${TOKEN_A}_id_0_copy_0`),
+      recorded("link-b", `bracket__${TOKEN_B}__instance_1`),
+      recorded("link-c", `bracket__${tokenC} (instance 2)`),
+    ];
+    renderAt("/export");
+    expect(screen.getByText("This file is at a printer. Track it above and verify it in Checkoff.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Change production method" })).toBeNull();
+  });
+
+  it("keeps Send open when a finished unit is chosen again", async () => {
+    if (readyWorkspace.kind !== "ready") throw new Error("expected ready plates");
+    const plate = readyWorkspace.plates[0];
+    if (!plate) throw new Error("expected a plate");
+    const finished = { ...unit(TOKEN_A), completed: true };
+    state.workspace = {
+      ...readyWorkspace,
+      plates: [{ ...plate, units: [finished] }],
+    };
+    state.exportRecords = [exportRecord()];
+    state.selectedTokens = new Set([TOKEN_A]);
+    state.checkoffLinks = [{ ...checkoffLink(), state: "verified" }];
+    renderAt("/export");
+    fireEvent.click(await screen.findByRole("button", { name: "Choose test sliced file" }));
+    expect(screen.getByText("Send the file to a printer, or start the print now.")).toBeTruthy();
+    expect(screen.queryByText("This file is at a printer. Track it above and verify it in Checkoff.")).toBeNull();
+
+    cleanup();
+    state.checkoffLinks = [
+      { ...checkoffLink(), state: "verified" },
+      {
+        ...checkoffLink(),
+        id: "link-2",
+        state: "watching",
+        saw_active: false,
+        filename: "replacement.gcode",
+      },
+    ];
+    renderAt("/export");
+    fireEvent.click(await screen.findByRole("button", { name: "Choose test sliced file" }));
+    expect(screen.getByText("This file is at a printer. Track it above and verify it in Checkoff.")).toBeTruthy();
   });
 
   it("blocks every task with a reason when the Build has no Required units", () => {
@@ -585,6 +675,63 @@ describe("ExportPage route question", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("asks for the first method when a recorded print exists and no route is saved", async () => {
+    state.route = null;
+    state.checkoffLinks = [checkoffLink()];
+    renderAt("/export");
+    expect(screen.queryByText(/A file is already at a printer, so the route stays as it is/)).toBeNull();
+    chooseRoute(/Generate 3MF plates/);
+    continueOn();
+    await waitFor(() => expect(state.save).toHaveBeenCalledWith({
+      kind: "set_route",
+      route: "plates",
+    }));
+  });
+
+  it("saves the displayed package before the route when it differs from the stored one", async () => {
+    if (setupWorkspace.kind !== "setup") throw new Error("expected setup");
+    const open = setupWorkspace.units[0];
+    if (!open) throw new Error("expected a unit");
+    state.workspace = {
+      ...setupWorkspace,
+      units: [open, { ...open, token: TOKEN_B, object_name: `bracket__${TOKEN_B}` }],
+    };
+    state.selection = { mode: "custom", selected_unit_tokens: [TOKEN_A, TOKEN_B] };
+    state.selectedTokens = new Set([TOKEN_B]);
+    renderAt("/export");
+    fireEvent.click(screen.getByRole("button", { name: "Change production method" }));
+    chooseRoute(/Download sorted STL files/);
+    continueOn();
+    await waitFor(() => expect(state.save).toHaveBeenCalledTimes(2));
+    expect(state.save.mock.calls).toEqual([
+      [{
+        kind: "set_selection",
+        selection: { mode: "custom", selected_unit_tokens: [TOKEN_B] },
+      }],
+      [{ kind: "set_route", route: "stl" }],
+    ]);
+  });
+
+  it("closes an open plates method question when the current package becomes locked", () => {
+    const view = renderAt("/export");
+    fireEvent.click(screen.getByRole("button", { name: "Change production method" }));
+    expect(screen.getByRole("button", { name: "Continue" })).toBeTruthy();
+    expect(state.save).not.toHaveBeenCalled();
+
+    state.checkoffLinks = [checkoffLink()];
+    view.rerender(
+      <MemoryRouter initialEntries={["/export"]}>
+        <BuildSwitcher />
+        <ExportPage />
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryByRole("button", { name: "Continue" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Change production method" })).toBeNull();
+    expect(screen.getByText(/A file is already at a printer, so the route stays as it is/)).toBeTruthy();
+    expect(state.save).not.toHaveBeenCalled();
+  });
+
   it("makes the route read-only after a send and points at Checkoff", () => {
     state.checkoffLinks = [checkoffLink()];
     renderAt("/export");
@@ -595,6 +742,72 @@ describe("ExportPage route question", () => {
     expect(within(line).getByRole("link", { name: "Checkoff" }).getAttribute("href")).toBe(
       "/progress?profile=1",
     );
+  });
+
+  it("keeps a past file that names no Required unit from locking the method or completing Send", () => {
+    state.checkoffLinks = [{
+      ...checkoffLink(),
+      filename: "shop-floor.gcode",
+      units: [{ part_id: 1, unit_index: 0, object_name: "shop-floor.gcode" }],
+    }];
+    renderAt("/export");
+    expect(screen.getByRole("button", { name: "Change production method" })).toBeTruthy();
+    expect(screen.queryByText(/A file is already at a printer, so the route stays as it is/)).toBeNull();
+    expect(screen.getByText("shop-floor.gcode")).toBeTruthy();
+    expect(screen.queryByText("This file is at a printer. Track it above and verify it in Checkoff.")).toBeNull();
+    expect(screen.getByText("Available once a sliced file is added.")).toBeTruthy();
+  });
+
+  it("keeps a locked external Build on the Checkoff note instead of a method change", () => {
+    state.route = "external";
+    state.checkoffLinks = [checkoffLink()];
+    renderAt("/export");
+    expect(screen.queryByRole("button", { name: "Choose a Production method" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Continue" })).toBeNull();
+    const line = screen.getByText(/A file is already at a printer, so the route stays as it is/);
+    expect(within(line).getByRole("link", { name: "Checkoff" }).getAttribute("href")).toBe(
+      "/progress?profile=1",
+    );
+    expect(screen.getByRole("link", { name: "Add a past print in Checkoff" })).toBeTruthy();
+    expect(state.save).not.toHaveBeenCalled();
+  });
+
+  it("closes an open external method question when the current package becomes locked", async () => {
+    state.route = "external";
+    state.save = vi.fn(() => Promise.reject(new Error("offline")));
+    const view = renderAt("/export");
+    fireEvent.click(screen.getByRole("button", { name: "Choose a Production method" }));
+    fireEvent.click(screen.getByRole("radio", { name: /Generate 3MF plates/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    expect(await screen.findByRole("button", { name: "Retry" })).toBeTruthy();
+
+    state.checkoffLinks = [checkoffLink()];
+    view.rerender(
+      <MemoryRouter initialEntries={["/export"]}>
+        <BuildSwitcher />
+        <ExportPage />
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Continue" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Choose a Production method" })).toBeNull();
+    expect(screen.getByText(/A file is already at a printer, so the route stays as it is/)).toBeTruthy();
+    expect(state.save).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a legacy external Build choose a method after a past file that names no Required unit", () => {
+    state.route = "external";
+    state.checkoffLinks = [{
+      ...checkoffLink(),
+      filename: "shop-floor.gcode",
+      units: [],
+      unlabeled_names: ["shop-floor.gcode"],
+    }];
+    renderAt("/export");
+    expect(screen.getByRole("button", { name: "Choose a Production method" })).toBeTruthy();
+    expect(screen.getByText("shop-floor.gcode")).toBeTruthy();
+    expect(screen.queryByText(/A file is already at a printer, so the route stays as it is/)).toBeNull();
   });
 
   it("shows no tabs and no step count on any route", () => {

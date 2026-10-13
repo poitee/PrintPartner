@@ -13,12 +13,22 @@ use std::{
 };
 use tokio::net::TcpListener;
 
+mod drain;
+
+pub use drain::{ShutdownGate, TrackedShutdownWork};
+pub use pp_compat::drain::{
+    GroupStopReport, SIGTERM_GRACE, drive_shutdown_group, process_alive, process_group_absent,
+    reap_process_group, reject_and_arm_eof, restarts_allowed,
+};
+pub use pp_gateway::MUTATION_DRAIN;
+
 pub struct DesktopLaunch {
     pub data_dir: PathBuf,
     pub bundle: Bundle,
     pub assets: PathBuf,
 }
 
+pub use pp_compat::SupervisorConfig;
 pub use pp_compat::{Bundle as VerifiedBundle, Status as CoreStatus};
 pub use pp_gateway::LaunchTarget as DesktopLaunchTarget;
 
@@ -59,20 +69,37 @@ async fn bind_origin(owner: &StorageLease) -> Result<TcpListener> {
 
 pub struct CoreHandle {
     compat: CompatHandle,
+    monitoring: pp_gateway::MonitoringControl,
+    gate: ShutdownGate,
 }
 impl Clone for CoreHandle {
     fn clone(&self) -> Self {
         Self {
             compat: self.compat.clone(),
+            monitoring: self.monitoring.clone(),
+            gate: self.gate.clone(),
         }
     }
 }
 impl CoreHandle {
+    /// Power adapters can cancel/join status sockets before acknowledging sleep.
+    /// Hide-to-tray deliberately leaves monitoring running.
+    pub async fn suspend_monitoring(&self) {
+        self.monitoring.suspend().await;
+    }
+    pub fn resume_monitoring(&self) {
+        self.monitoring.resume();
+    }
+
     pub fn subscribe(&self) -> tokio::sync::watch::Receiver<pp_compat::Status> {
         self.compat.status.clone()
     }
     pub async fn recover_compat(&self) -> Result<()> {
         self.compat.recover().await
+    }
+
+    pub fn track_shutdown_work(&self) -> Result<TrackedShutdownWork, &'static str> {
+        self.gate.track()
     }
 }
 
@@ -89,6 +116,7 @@ struct Resources {
     gateway: Gateway,
     supervisor: Supervisor,
     owner: StorageLease,
+    gate: ShutdownGate,
 }
 
 #[derive(Serialize, Debug)]
@@ -122,23 +150,39 @@ impl ShutdownReceipt {
     }
 }
 
-async fn start_resources(input: DesktopLaunch) -> Result<Resources> {
+async fn start_resources(
+    input: DesktopLaunch,
+    compat_config: SupervisorConfig,
+) -> Result<Resources> {
     let assets = input
         .assets
         .canonicalize()
         .context("React assets unavailable")?;
     pp_compat::verify_bundle(&input.bundle, &assets)?;
+    std::fs::create_dir_all(&input.data_dir)?;
+    if let Some(released) = StorageLease::retry_failed_release_if_present(&input.data_dir)? {
+        anyhow::ensure!(
+            released.marker_removed
+                && released.runtime_removed
+                && released.lock_released
+                && !released.ownership_retained,
+            "Storage cleanup still incomplete; ownership retained"
+        );
+    }
     let mut owner = StorageLease::acquire(&input.data_dir)?;
     let listener = bind_origin(&owner).await?;
-    let supervisor = Supervisor::start(SpawnSpec {
-        bundle: input.bundle,
-        data_dir: owner.data_dir().to_owned(),
-        runtime_dir: owner.runtime_dir().to_owned(),
-        lease: owner.secret().to_owned(),
-        lease_file: owner.clone_file()?,
-        port: listener.local_addr()?.port(),
-        record_child: pp_storage::lease::record_child,
-    })?;
+    let supervisor = Supervisor::start_with_config(
+        SpawnSpec {
+            bundle: input.bundle,
+            data_dir: owner.data_dir().to_owned(),
+            runtime_dir: owner.runtime_dir().to_owned(),
+            lease: owner.secret().to_owned(),
+            lease_file: owner.clone_file()?,
+            port: listener.local_addr()?.port(),
+            record_child: pp_storage::lease::record_child,
+        },
+        compat_config,
+    )?;
     owner.retain_on_drop();
     let mut status = supervisor.handle.status.clone();
     let ready = tokio::time::timeout(Duration::from_secs(32), async {
@@ -180,11 +224,20 @@ async fn start_resources(input: DesktopLaunch) -> Result<Resources> {
         gateway,
         supervisor,
         owner,
+        gate: ShutdownGate::new(),
     })
 }
 
 impl CoreRuntime {
     pub async fn start(input: DesktopLaunch) -> Result<Self> {
+        Self::start_with_compat_config(input, SupervisorConfig::default()).await
+    }
+
+    /// Start with a per-instance compatibility timing policy.
+    pub async fn start_with_compat_config(
+        input: DesktopLaunch,
+        compat_config: SupervisorConfig,
+    ) -> Result<Self> {
         let (started, startup) = tokio::sync::oneshot::channel();
         let (stop, stopped) = tokio::sync::oneshot::channel();
         let (completed, completion) = tokio::sync::oneshot::channel();
@@ -202,7 +255,7 @@ impl CoreRuntime {
                     }
                 };
                 runtime.block_on(async move {
-                    let mut resources = match start_resources(input).await {
+                    let mut resources = match start_resources(input, compat_config).await {
                         Ok(resources) => resources,
                         Err(error) => {
                             let _ = started.send(Err(error));
@@ -216,6 +269,8 @@ impl CoreRuntime {
                             resources.gateway.origin().to_owned(),
                             CoreHandle {
                                 compat: resources.supervisor.handle.clone(),
+                                monitoring: resources.gateway.monitoring_control(),
+                                gate: resources.gate.clone(),
                             },
                             launch,
                             requested_by_adapter,
@@ -280,7 +335,15 @@ impl CoreRuntime {
 }
 
 async fn stop_resources(resources: Resources) -> ShutdownReceipt {
-    resources.gateway.drain().await;
+    let _ = drain::reject_and_wait(
+        MUTATION_DRAIN,
+        &resources.gate,
+        || resources.gateway.begin_drain(),
+        |bound| resources.gateway.wait_idle(bound),
+        || resources.supervisor.disarm_restarts(),
+    )
+    .await;
+    resources.gateway.finish_drain();
     let compat_reaped = resources.supervisor.shutdown().await.is_ok();
     let gateway_stopped = resources.gateway.stop().await.is_ok();
     let mut receipt = ShutdownReceipt {

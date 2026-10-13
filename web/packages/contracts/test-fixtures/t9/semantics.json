@@ -1,0 +1,481 @@
+{
+  "cases": [
+    {
+      "name": "defaults-and-optional-omitted",
+      "input": {
+        "nullable": null,
+        "mode": "read",
+        "integer": 1,
+        "date": "2024-02-29",
+        "text": "🙂é"
+      },
+      "accepted": true,
+      "output": {
+        "nullable": null,
+        "mode": "read",
+        "integer": 1,
+        "date": "2024-02-29",
+        "text": "🙂é",
+        "defaulted": 3
+      }
+    },
+    {
+      "name": "optional-present",
+      "input": {
+        "nullable": null,
+        "mode": "read",
+        "integer": 1,
+        "date": "2024-02-29",
+        "text": "🙂é",
+        "optional": "hello"
+      },
+      "accepted": true,
+      "output": {
+        "nullable": null,
+        "mode": "read",
+        "integer": 1,
+        "date": "2024-02-29",
+        "text": "🙂é",
+        "optional": "hello",
+        "defaulted": 3
+      }
+    },
+    {
+      "name": "optional-null-rejected",
+      "input": {
+        "nullable": null,
+        "mode": "read",
+        "integer": 1,
+        "date": "2024-02-29",
+        "text": "🙂é",
+        "optional": null
+      },
+      "accepted": false
+    },
+    {
+      "name": "nullable-present",
+      "input": {
+        "nullable": "hello",
+        "mode": "read",
+        "integer": 1,
+        "date": "2024-02-29",
+        "text": "🙂é"
+      },
+      "accepted": true,
+      "output": {
+        "nullable": "hello",
+        "mode": "read",
+        "integer": 1,
+        "date": "2024-02-29",
+        "text": "🙂é",
+        "defaulted": 3
+      }
+    },
+    {
+      "name": "required-nullable-missing",
+      "input": {
+        "mode": "read",
+        "integer": 1,
+        "date": "2024-02-29",
+        "text": "🙂é"
+      },
+      "accepted": false
+    },
+    {
+      "name": "default-explicit-zero",
+      "input": {
+        "nullable": null,
+        "mode": "read",
+        "integer": 1,
+        "date": "2024-02-29",
+        "text": "🙂é",
+        "defaulted": 0
+      },
+      "accepted": true,
+      "output": {
+        "nullable": null,
+        "mode": "read",
+        "integer": 1,
+        "date": "2024-02-29",
+        "text": "🙂é",
+        "defaulted": 0
+      }
+    },
+    {
+      "name": "default-explicit-null-rejected",
+      "input": {
+        "nullable": null,
+        "mode": "read",
+        "integer": 1,
+        "date": "2024-02-29",
+        "text": "🙂é",
+        "defaulted": null
+      },
+      "accepted": false
+    },
+    {
+      "name": "default-out-of-range",
+      "input": {
+        "nullable": null,
+        "mode": "read",
+        "integer": 1,
+        "date": "2024-02-29",
+        "text": "🙂é",
+        "defaulted": 11
+      },
+      "accepted": false
+    },
+    {
+      "name": "unknown-properties-stripped",
+      "input": {
+        "nullable": null,
+        "mode": "read",
+        "integer": 1,
+        "date": "2024-02-29",
+        "text": "🙂é",
+        "extra": {
+          "nested": true
+        }
+      },
+      "accepted": true,
+      "output": {
+        "nullable": null,
+        "mode": "read",
+        "integer": 1,
+        "date": "2024-02-29",
+        "text": "🙂é",
+        "defaulted": 3
+      }
+    },
+    {
+      "name": "enum-write-accepted",
+      "input": {
+        "nullable": null,
+        "mode": "write",
+        "integer": 1,
+        "date": "2024-02-29",
+        "text": "🙂é"
+      },
+      "accepted": true,
+      "output": {
+        "nullable": null,
+        "mode": "write",
+        "integer": 1,
+        "date": "2024-02-29",
+        "text": "🙂é",
+        "defaulted": 3
+      }
+    },
+    {
+      "name": "unknown-enum",
+      "input": {
+        "nullable": null,
+        "mode": "execute",
+        "integer": 1,
+        "date": "2024-02-29",
+        "text": "🙂é"
+      },
+      "accepted": false
+    },
+    {
+      "name": "relational-refinement",
+      "input": {
+        "nullable": null,
+        "mode": "write",
+        "integer": 1,
+        "date": "2024-02-29",
+        "text": "🙂é",
+        "defaulted": 0
+      },
+      "accepted": false
+    },
+    {
+      "name": "integer-zero",
+      "input": {
+        "nullable": null,
+        "mode": "read",
+        "integer": 0,
+        "date": "2024-02-29",
+        "text": "🙂é"
+      },
+      "accepted": true,
+      "output": {
+        "nullable": null,
+        "mode": "read",
+        "integer": 0,
+        "date": "2024-02-29",
+        "text": "🙂é",
+        "defaulted": 3
+      }
+    },
+    {
+      "name": "integer-safe-max",
+      "input": {
+        "nullable": null,
+        "mode": "read",
+        "integer": 9007199254740991,
+        "date": "2024-02-29",
+        "text": "🙂é"
+      },
+      "accepted": true,
+      "output": {
+        "nullable": null,
+        "mode": "read",
+        "integer": 9007199254740991,
+        "date": "2024-02-29",
+        "text": "🙂é",
+        "defaulted": 3
+      }
+    },
+    {
+      "name": "integer-unsafe",
+      "input": {
+        "nullable": null,
+        "mode": "read",
+        "integer": 9007199254740992,
+        "date": "2024-02-29",
+        "text": "🙂é"
+      },
+      "accepted": false
+    },
+    {
+      "name": "integer-negative",
+      "input": {
+        "nullable": null,
+        "mode": "read",
+        "integer": -1,
+        "date": "2024-02-29",
+        "text": "🙂é"
+      },
+      "accepted": false
+    },
+    {
+      "name": "integer-fraction",
+      "input": {
+        "nullable": null,
+        "mode": "read",
+        "integer": 1.5,
+        "date": "2024-02-29",
+        "text": "🙂é"
+      },
+      "accepted": false
+    },
+    {
+      "name": "integer-string",
+      "input": {
+        "nullable": null,
+        "mode": "read",
+        "integer": "1",
+        "date": "2024-02-29",
+        "text": "🙂é"
+      },
+      "accepted": false
+    },
+    {
+      "name": "integer-bool",
+      "input": {
+        "nullable": null,
+        "mode": "read",
+        "integer": true,
+        "date": "2024-02-29",
+        "text": "🙂é"
+      },
+      "accepted": false
+    },
+    {
+      "name": "integer-integral-float",
+      "input": {
+        "nullable": null,
+        "mode": "read",
+        "integer": 1.0,
+        "date": "2024-02-29",
+        "text": "🙂é"
+      },
+      "accepted": true,
+      "output": {
+        "nullable": null,
+        "mode": "read",
+        "integer": 1,
+        "date": "2024-02-29",
+        "text": "🙂é",
+        "defaulted": 3
+      }
+    },
+    {
+      "name": "date-valid",
+      "input": {
+        "nullable": null,
+        "mode": "read",
+        "integer": 1,
+        "date": "2000-02-29",
+        "text": "🙂é"
+      },
+      "accepted": true,
+      "output": {
+        "nullable": null,
+        "mode": "read",
+        "integer": 1,
+        "date": "2000-02-29",
+        "text": "🙂é",
+        "defaulted": 3
+      }
+    },
+    {
+      "name": "date-non-leap",
+      "input": {
+        "nullable": null,
+        "mode": "read",
+        "integer": 1,
+        "date": "2023-02-29",
+        "text": "🙂é"
+      },
+      "accepted": false
+    },
+    {
+      "name": "date-month",
+      "input": {
+        "nullable": null,
+        "mode": "read",
+        "integer": 1,
+        "date": "2024-13-01",
+        "text": "🙂é"
+      },
+      "accepted": false
+    },
+    {
+      "name": "date-timestamp",
+      "input": {
+        "nullable": null,
+        "mode": "read",
+        "integer": 1,
+        "date": "2024-01-01T00:00:00Z",
+        "text": "🙂é"
+      },
+      "accepted": false
+    },
+    {
+      "name": "date-not-string",
+      "input": {
+        "nullable": null,
+        "mode": "read",
+        "integer": 1,
+        "date": 42,
+        "text": "🙂é"
+      },
+      "accepted": false
+    },
+    {
+      "name": "date-non-padded",
+      "input": {
+        "nullable": null,
+        "mode": "read",
+        "integer": 1,
+        "date": "2024-1-1",
+        "text": "🙂é"
+      },
+      "accepted": false
+    },
+    {
+      "name": "text-four-codepoints",
+      "input": {
+        "nullable": null,
+        "mode": "read",
+        "integer": 1,
+        "date": "2024-02-29",
+        "text": "🙂🙂🙂🙂"
+      },
+      "accepted": true,
+      "output": {
+        "nullable": null,
+        "mode": "read",
+        "integer": 1,
+        "date": "2024-02-29",
+        "text": "🙂🙂🙂🙂",
+        "defaulted": 3
+      }
+    },
+    {
+      "name": "text-five-codepoints",
+      "input": {
+        "nullable": null,
+        "mode": "read",
+        "integer": 1,
+        "date": "2024-02-29",
+        "text": "🙂🙂🙂🙂🙂"
+      },
+      "accepted": false
+    },
+    {
+      "name": "text-empty",
+      "input": {
+        "nullable": null,
+        "mode": "read",
+        "integer": 1,
+        "date": "2024-02-29",
+        "text": ""
+      },
+      "accepted": false
+    },
+    {
+      "name": "text-combining",
+      "input": {
+        "nullable": null,
+        "mode": "read",
+        "integer": 1,
+        "date": "2024-02-29",
+        "text": "é"
+      },
+      "accepted": true,
+      "output": {
+        "nullable": null,
+        "mode": "read",
+        "integer": 1,
+        "date": "2024-02-29",
+        "text": "é",
+        "defaulted": 3
+      }
+    },
+    {
+      "name": "array-rejected",
+      "input": [],
+      "accepted": false
+    },
+    {
+      "name": "null-rejected",
+      "input": null,
+      "accepted": false
+    },
+    {
+      "name": "relational-refinement-integral-float",
+      "input": {
+        "nullable": null,
+        "mode": "write",
+        "integer": 1,
+        "date": "2024-02-29",
+        "text": "🙂é",
+        "defaulted": 0.0
+      },
+      "accepted": false
+    },
+    {
+      "name": "default-integral-float",
+      "input": {
+        "nullable": null,
+        "mode": "read",
+        "integer": 1,
+        "date": "2024-02-29",
+        "text": "🙂é",
+        "defaulted": 3.0
+      },
+      "accepted": true,
+      "output": {
+        "nullable": null,
+        "mode": "read",
+        "integer": 1,
+        "date": "2024-02-29",
+        "text": "🙂é",
+        "defaulted": 3
+      }
+    }
+  ]
+}

@@ -252,35 +252,39 @@ struct Pool {
 impl Pool {
     fn global() -> &'static Self {
         static POOL: OnceLock<Pool> = OnceLock::new();
-        POOL.get_or_init(|| {
-            let (sender, receiver) = mpsc::sync_channel::<Job>(32);
-            let receiver = Arc::new(Mutex::new(receiver));
-            for _ in 0..2 {
-                let receiver = receiver.clone();
-                thread::spawn(move || {
-                    loop {
-                        let job = receiver.lock().expect("Auth pool poisoned").recv();
-                        let Ok(job) = job else {
-                            break;
-                        };
-                        let result = if job.cancelled.load(Ordering::Acquire) {
-                            Err(anyhow!("Cancelled before authentication"))
+        POOL.get_or_init(Self::new)
+    }
+    fn new() -> Self {
+        let (sender, receiver) = mpsc::sync_channel::<Job>(32);
+        let receiver = Arc::new(Mutex::new(receiver));
+        for _ in 0..2 {
+            let receiver = receiver.clone();
+            thread::spawn(move || {
+                loop {
+                    let job = match receiver.lock() {
+                        Ok(receiver) => receiver.recv(),
+                        Err(_) => break,
+                    };
+                    let Ok(job) = job else {
+                        break;
+                    };
+                    let result = if job.cancelled.load(Ordering::Acquire) {
+                        Err(anyhow!("Cancelled before authentication"))
+                    } else {
+                        job.client.perform(job.request, &job.cancelled)
+                    };
+                    let result = result.map_err(|error| {
+                        if error.downcast_ref::<AuthFailure>().is_some() {
+                            error
                         } else {
-                            job.client.perform(job.request, &job.cancelled)
-                        };
-                        let result = result.map_err(|error| {
-                            if error.downcast_ref::<AuthFailure>().is_some() {
-                                error
-                            } else {
-                                error.context(AuthFailure::Storage)
-                            }
-                        });
-                        let _ = job.reply.send(result);
-                    }
-                });
-            }
-            Pool { sender }
-        })
+                            error.context(AuthFailure::Storage)
+                        }
+                    });
+                    let _ = job.reply.send(result);
+                }
+            });
+        }
+        Pool { sender }
     }
 }
 impl WriterOwner {
@@ -322,6 +326,15 @@ impl AuthClient {
         cancelled: Arc<AtomicBool>,
         wait: Duration,
     ) -> Result<AuthReply> {
+        self.submit_to_pool(request, cancelled, wait, Pool::global())
+    }
+    fn submit_to_pool(
+        &self,
+        request: Request,
+        cancelled: Arc<AtomicBool>,
+        wait: Duration,
+        pool: &Pool,
+    ) -> Result<AuthReply> {
         request.validate()?;
         let (reply, receiver) = mpsc::channel();
         let mut job = Job {
@@ -336,7 +349,7 @@ impl AuthClient {
                 !job.cancelled.load(Ordering::Acquire),
                 "Cancelled before admission"
             );
-            match Pool::global().sender.try_send(job) {
+            match pool.sender.try_send(job) {
                 Ok(()) => return Ok(receiver),
                 Err(mpsc::TrySendError::Disconnected(_)) => bail!(AuthFailure::Stopped),
                 Err(mpsc::TrySendError::Full(returned)) => job = returned,
@@ -976,9 +989,6 @@ pub(super) fn execute(
     Ok(Reply::Outcome(outcome))
 }
 
-#[cfg(test)]
-mod tests;
-
 pub(crate) fn read_session_tenant(
     tx: &Transaction<'_>,
     secret: &Secret,
@@ -1025,7 +1035,6 @@ pub(crate) fn catalog_tenant(
         }
     }
 }
-
 pub(crate) fn job_session_actor(
     tx: &Transaction<'_>,
     token: &str,
@@ -1054,3 +1063,6 @@ pub(crate) fn job_key_actor(
         _ => Err(AuthFailure::SessionRequired.into()),
     }
 }
+
+#[cfg(test)]
+mod tests;

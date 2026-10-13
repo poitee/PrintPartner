@@ -1,7 +1,8 @@
 import process from "node:process";
+import { auditRefinements } from "./refinements.mjs";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { URL, fileURLToPath, pathToFileURL } from "node:url";
@@ -15,13 +16,17 @@ mkdirSync(output, { recursive: true });
 const require = createRequire(join(web, "package.json"));
 const { z } = await import(pathToFileURL(join(web, "node_modules/zod/index.js")).href);
 const parsers = await import(pathToFileURL(join(web, "packages/contracts/src/plan-drafts.ts")).href);
+const { semanticFixtureSchema } = await import(pathToFileURL(join(web, "packages/contracts/test-fixtures/t9/schema.ts")).href);
+const adapters = JSON.parse(readFileSync(join(web, "scripts/desktop-contracts/boundary-adapters.json"), "utf8"));
 const Ajv = require("ajv");
 const goldenPath = join(web, "packages/contracts/test-fixtures/desktop/autosave-v1.json");
 const goldenBytes = readFileSync(goldenPath);
 const golden = JSON.parse(goldenBytes);
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const save = (name, value) => writeFileSync(join(output, name), `${JSON.stringify(value, null, 2)}\n`);
+const artifactNames = new Set();
 function schemaArtifact(name, value) {
+  artifactNames.add(name);
   const bytes = `${JSON.stringify(value, null, 2)}\n`;
   const path = join(committed, name);
   if (mode === "--write") { mkdirSync(committed, { recursive: true }); writeFileSync(path, bytes); }
@@ -45,8 +50,9 @@ for (const item of inputCases) {
   if (result.success) assert.deepEqual(result.data, item.outcome.parsed, item.name);
 }
 const generated = new Map();
-for (const [parser, schema] of [...exportedSchemas, ["planDraftBasisSchema", parsers.planDraftBasisSchema]]) {
-  const name = sources[parser] ?? "accepted-base";
+for (const [parser, schema] of [...exportedSchemas, ["planDraftBasisSchema", parsers.planDraftBasisSchema], ["semanticFixtureSchema", semanticFixtureSchema]]) {
+  const name = sources[parser] ?? (parser === "semanticFixtureSchema" ? "semantic-fixture" : "accepted-base");
+  auditRefinements(schema, adapters);
   for (const io of ["input", "output"]) {
     const schemaJson = z.toJSONSchema(schema, { io, target: "draft-7", unrepresentable: "throw" });
     schemaArtifact(`${name}.${io}.schema.json`, schemaJson);
@@ -145,7 +151,7 @@ const semanticRules = {
   wire_semantics: {
     nullable_presence: "revision_id, expected_draft, source_layer and quantity value are required fields whose values may be null; no serde default",
     numeric: "JSON numbers must be mathematically integral and bounded; integral float lexemes accepted, strings and booleans rejected; IDs and versions limited to JavaScript MAX_SAFE_INTEGER",
-    strings: "Installed Zod4.5.4 uses Unicode code-point lengths; Rust chars().count() matches the measured 1000/1001 emoji, CJK and combining-mark bounds",
+    strings: `Installed Zod ${source.versions.zod} uses Unicode code-point lengths; Rust chars().count() matches the measured 1000/1001 emoji, CJK and combining-mark bounds`,
     receipt: "applied_at is bounded nonempty text, not an ISO timestamp refinement; all IDs/digests are serialized from provided values unchanged",
   },
   diagnostic_projection: {
@@ -158,4 +164,10 @@ const semanticRules = {
 };
 schemaArtifact("semantic-constraints.json", semanticRules);
 save("semantic-constraints.json", semanticRules);
+for (const name of readdirSync(committed).filter((name) => name.endsWith(".schema.json"))) {
+  if (!artifactNames.has(name)) {
+    assert.equal(mode, "--write", `Obsolete schema artifact: ${name}; regenerate deliberately with --write`);
+    rmSync(join(committed, name));
+  }
+}
 process.stdout.write(`PASS: 41 original cases; ${generated.size} exported Zod input/output schemas; ${supplemental.length} separate measured supplemental cases; deterministic ${mode}\n`);

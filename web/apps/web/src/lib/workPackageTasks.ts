@@ -1,4 +1,5 @@
 import type { AcceptedPlateWorkspace, ProductionRoute } from "@print-partner/contracts";
+import { currentPackageDispatchCoverage } from "@print-partner/domain";
 import type { WorkflowTaskState } from "../components/layout/TaskList";
 import type { WorkPackage } from "./workPackageProjection";
 import { productionPlateReadiness } from "./productionSelection";
@@ -155,8 +156,8 @@ export type PlatesTaskInput = TaskInputBase &
     printerCount: number;
     /** Printers with a linked host, the only ones a sliced file can go to. */
     sendPrinterCount: number;
-    /** Filenames of packages already sent to a printer for this Build. */
-    dispatchedFilenames: readonly string[];
+    /** Required-unit tokens the current print attempt still has to cover. */
+    dispatchedUnitTokens: readonly string[];
     exportError: string | null;
     sendError: string | null;
     plateError: string | null;
@@ -200,9 +201,11 @@ function platesTasks(input: PlatesTaskInput): ProductionTask[] {
   const prepared = selected && input.printerCount > 0 && arranged && !isSetup;
   const exported = links.exportArtifact != null;
   const sliced = links.slicedFile != null;
-  const sent = sliced
-    ? input.dispatchedFilenames.includes(links.slicedFile?.name ?? "")
-    : input.dispatchedFilenames.length > 0;
+  const sent =
+    currentPackageDispatchCoverage({
+      packageTokens: links.unitTokens,
+      recordedTokens: input.dispatchedUnitTokens,
+    }) === "full";
 
   const preparationFailed = input.assignError != null || input.plateError != null;
   const preparePlates: ProductionTask = {

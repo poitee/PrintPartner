@@ -1519,6 +1519,210 @@
         "keyword": "additionalProperties",
         "value": false
       }
+    ],
+    "semanticFixtureSchema:input": [
+      {
+        "path": "$.type",
+        "keyword": "type",
+        "value": "object"
+      },
+      {
+        "path": "$.properties.optional.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.nullable.type",
+        "keyword": "type",
+        "value": [
+          "string",
+          "null"
+        ]
+      },
+      {
+        "path": "$.properties.defaulted.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.defaulted.minimum",
+        "keyword": "minimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.defaulted.maximum",
+        "keyword": "maximum",
+        "value": 10
+      },
+      {
+        "path": "$.properties.mode.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.mode.enum",
+        "keyword": "enum",
+        "value": [
+          "read",
+          "write"
+        ]
+      },
+      {
+        "path": "$.properties.integer.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.integer.minimum",
+        "keyword": "minimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.integer.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.properties.date.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.date.pattern",
+        "keyword": "pattern",
+        "value": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+      },
+      {
+        "path": "$.properties.text.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.text.minLength",
+        "keyword": "minLength",
+        "value": 1
+      },
+      {
+        "path": "$.properties.text.maxLength",
+        "keyword": "maxLength",
+        "value": 4
+      },
+      {
+        "path": "$.required",
+        "keyword": "required",
+        "value": [
+          "nullable",
+          "mode",
+          "integer",
+          "date",
+          "text"
+        ]
+      }
+    ],
+    "semanticFixtureSchema:output": [
+      {
+        "path": "$.type",
+        "keyword": "type",
+        "value": "object"
+      },
+      {
+        "path": "$.properties.optional.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.nullable.type",
+        "keyword": "type",
+        "value": [
+          "string",
+          "null"
+        ]
+      },
+      {
+        "path": "$.properties.defaulted.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.defaulted.minimum",
+        "keyword": "minimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.defaulted.maximum",
+        "keyword": "maximum",
+        "value": 10
+      },
+      {
+        "path": "$.properties.mode.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.mode.enum",
+        "keyword": "enum",
+        "value": [
+          "read",
+          "write"
+        ]
+      },
+      {
+        "path": "$.properties.integer.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.integer.minimum",
+        "keyword": "minimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.integer.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.properties.date.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.date.pattern",
+        "keyword": "pattern",
+        "value": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+      },
+      {
+        "path": "$.properties.text.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.text.minLength",
+        "keyword": "minLength",
+        "value": 1
+      },
+      {
+        "path": "$.properties.text.maxLength",
+        "keyword": "maxLength",
+        "value": 4
+      },
+      {
+        "path": "$.required",
+        "keyword": "required",
+        "value": [
+          "nullable",
+          "defaulted",
+          "mode",
+          "integer",
+          "date",
+          "text"
+        ]
+      },
+      {
+        "path": "$.additionalProperties",
+        "keyword": "additionalProperties",
+        "value": false
+      }
     ]
   },
   "domain_refinements": [
@@ -1560,7 +1764,7 @@
   "wire_semantics": {
     "nullable_presence": "revision_id, expected_draft, source_layer and quantity value are required fields whose values may be null; no serde default",
     "numeric": "JSON numbers must be mathematically integral and bounded; integral float lexemes accepted, strings and booleans rejected; IDs and versions limited to JavaScript MAX_SAFE_INTEGER",
-    "strings": "Installed Zod4.5.4 uses Unicode code-point lengths; Rust chars().count() matches the measured 1000/1001 emoji, CJK and combining-mark bounds",
+    "strings": "Installed Zod 4.6.5 uses Unicode code-point lengths; Rust chars().count() matches the measured 1000/1001 emoji, CJK and combining-mark bounds",
     "receipt": "applied_at is bounded nonempty text, not an ISO timestamp refinement; all IDs/digests are serialized from provided values unchanged"
   },
   "diagnostic_projection": {

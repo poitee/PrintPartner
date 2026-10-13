@@ -1196,6 +1196,10 @@ export class AppRepository {
     return this.syncSqlite ? this.transaction(read, "deferred") : read();
   }
 
+  canPublishSourceRevision(): boolean {
+    return this.syncSqlite;
+  }
+
   canMutateAcceptedPlan(): boolean {
     return this.syncSqlite;
   }
@@ -2908,6 +2912,21 @@ export class AppRepository {
       .where(and(eq(this.schema.sourceRevisions.tenantId, this.tenantId), eq(this.schema.sourceRevisions.id, id)))
       .get();
     return row ? sourceRevision(row) : null;
+  }
+
+  /** Revision locators for cleanup. A deleted Source has no row and no references. */
+  sourceRevisionSnapshotLocators(sourceId: number): string[] {
+    return this.db
+      .select({ snapshotLocator: this.schema.sourceRevisions.snapshotLocator })
+      .from(this.schema.sourceRevisions)
+      .where(
+        and(
+          eq(this.schema.sourceRevisions.tenantId, this.tenantId),
+          eq(this.schema.sourceRevisions.projectId, sourceId),
+        ),
+      )
+      .all()
+      .map((row) => row.snapshotLocator);
   }
 
   listSourceRevisions(sourceId: number): SourceRevision[] {
@@ -7790,6 +7809,22 @@ export class AppRepository {
       })
       .where(eq(this.schema.projects.id, id))
       .run();
+  }
+
+  savePlanVariantSelection(
+    planId: number,
+    sourceId: number,
+    selection: Record<string, string>,
+  ): { rules: string[] } {
+    if (!this.syncSqlite) throw new Error("Atomic variant selection is unavailable for this database");
+    return this.transaction(() => {
+      this.requireProfile(planId);
+      const baseSourceId = this.getProfileLayers(planId).find((layer) => layer.layer_type === "base")?.project_id;
+      if (sourceId !== baseSourceId) throw new Error("Source must match the plan's base source");
+      const rules = Object.values(selection).filter(Boolean).map((value) => `${value}/`);
+      this.setSetting(`plan_variant_selection_${planId}`, JSON.stringify(selection));
+      return this.updateImportRules(sourceId, rules);
+    }, "immediate");
   }
 
   updateImportRules(id: number, rules: string[]): { rules: string[] } {

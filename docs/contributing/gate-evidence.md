@@ -1,39 +1,42 @@
 # Gate evidence
 
-> User-visible pull requests must attach or link evidence from the real running app, not mocks or stubs, and include the steps followed to produce it in the PR's Evidence section. Gate returns **FAIL** without this evidence unless one of the four exemptions below applies. Automated verification must never target Chad's LAN instances (.80/.81).
+The PR template provides `## Evidence` and `## Exemption` sections.
+Put verification output or a description of what you checked under Evidence.
+Use `Exemption: none` when providing evidence. If evidence is unavailable,
+write a reason directly on the `Exemption:` line; no category is required.
 
-"User-visible" means any change to the UI, routes, printer actions, or the
-desktop shell.
+The lint fails only when Evidence is empty or missing and no exemption reason
+is given. Whitespace, HTML comments, and unfilled template placeholders
+(`<...>`, TODO, TBD, FIXME, or placeholder prompts) count as empty.
+An absent or empty `Exemption:` line, `none` (case-insensitive), or an unfilled
+placeholder does not provide a reason. Exemption metadata does not itself
+count as evidence. The Evidence section ends at the next level-one or
+level-two heading; fenced output can be included as evidence.
 
-Accepted evidence includes:
+The lint does not require Steps/Result fields or artifacts and does not check
+hosts. Those removed requirements are tracked in
+[GRE-583](https://linear.app/greetz/issue/GRE-583).
 
-- A screenshot showing the changed behavior.
-- A recording of the affected journey.
-- Verify-skill output or a trace demonstrating the result.
+## CI and local checks
 
-Put evidence in the PR body's **Evidence** section. Attach files or link to
-screenshots, recordings, verify output, or trace artifacts from the real running
-app, not mocks or stubs. Include the steps followed to produce the evidence and
-the result observed. Automated verification must never target Chad's LAN
-instances (.80/.81).
+`.github/workflows/pr-evidence.yml` runs the tests and body lint on
+`pull_request_target` events, including body edits. It executes the protected
+default branch's checker with read-only permissions. This keeps the same
+repository evidence policy for stacked PRs whose base branches predate the
+checker. The PR body enters the checker through an environment variable;
+the workflow never checks out or executes the PR head.
 
-The only exemptions are exactly these four:
+```sh
+node --test scripts/lint-pr-evidence.test.mjs
+node scripts/lint-pr-evidence.mjs --body-file body.md
+```
 
-- docs-only
-- CI-only
-- dependency-only
-- internal refactor with no user-visible change
-
-Authors must either attach or link evidence and set `Exemption: none`, or name
-one of these four exemptions in the Evidence section and explain why it applies.
-Use `Exemption: internal refactor` only when there is no user-visible change.
-Gate returns **FAIL** if the evidence or a valid named exemption is missing, or
-if automated verification targets Chad's LAN instances (.80/.81).
+The checker also accepts `PR_BODY` or `--stdin`.
 
 ## Desktop and tray capture
 
 For changes to the desktop app, including Tauri tray menus, windows, and native
-UI, attach visual evidence from the real app **built at the head SHA** of the PR.
+UI, attach visual evidence from the real app built at the head SHA of the PR.
 On an evidence-enabled Linux development environment:
 
 1. Run `evidence status` to check the virtual display, tray, and status notifier

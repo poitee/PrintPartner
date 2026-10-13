@@ -326,7 +326,10 @@ export function registerAuthRoutes(
         return reply.status(400).send({ detail: "This account uses OAuth sign-in only" });
       }
       if (!verifyPassword(currentPassword, user.passwordHash)) {
-        return reply.status(401).send({ detail: "Current password is incorrect" });
+        return reply.status(401).send({
+          code: "current_password_rejected",
+          detail: "Current password is incorrect",
+        });
       }
 
       authStore.updatePasswordHash(user.id, hashPassword(newPassword));

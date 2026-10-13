@@ -1,5 +1,24 @@
 # Protected runtime foundation
 
+The Rust lint ratchet runs with ast-grep 0.50.0:
+
+```sh
+ast-grep test --config rust/sgconfig.yml --skip-snapshot-tests
+python3 rust/scripts/test_ast_grep.py
+python3 rust/scripts/check-ast-grep.py
+```
+
+The ratchet fails unless every rule's hit count equals its entry in `rust/ast-grep-baseline.json`. Fewer hits also fail until the baseline is lowered in the same change. Deleted, disabled, unbaselined, or unloaded rules and scanner errors fail closed.
+
+The baseline may not rise over `origin/main`'s `rust/ast-grep-baseline.json`. A rule absent from main's baseline counts as zero. To raise a baseline intentionally, set `PP_AST_GREP_ALLOW_BASELINE_RAISE=1` for that check and document the reason in the change. The override relaxes only the rise check; counts must still equal the baseline. If `origin/main` has no baseline file yet (the first landing), the rise check is skipped and the gate prints that it was skipped. A missing `origin/main` ref is an error, so fetch it first (`git fetch origin main`).
+
+Use the Python gate for production counts. It canonicalizes non-keyword raw
+identifier AST nodes in temporary copies before checking process aliases, so
+`r#p` and `p` share provenance and shadowing. Strings, comments, source files,
+and other rules retain their original text. Diagnostics use original source
+spelling and byte positions. Qualified `self`, `crate`, and single-parent
+`super` aliases resolve module imports rather than block-local bindings.
+
 This workspace runs the existing React application behind a Rust loopback gateway. The real Node compatibility server owns all admitted domain operations and listens only on a private Unix socket. This is an unsigned Linux proof. It is not a Tauri build or a Rust-only backend release.
 
 Use Rust 1.99.0 and Node 24.21.0. From the repository root:
@@ -13,6 +32,7 @@ cargo test --manifest-path rust/Cargo.toml --locked -p pp-core --test runtime_m0
 python3 rust/tests/workflow_m0.py
 python3 rust/tests/lifecycle_m0.py
 python3 rust/scripts/check-boundaries.py --self-test
+python3 rust/scripts/check-domain-deps.py --self-test
 cargo fmt --manifest-path rust/Cargo.toml --all --check
 cargo clippy --manifest-path rust/Cargo.toml --locked --workspace --all-targets -- -D warnings
 ```
@@ -23,7 +43,11 @@ The launcher takes `--data`, `--web`, `--node` and `--commit`. It prints only th
 
 CoreRuntime controls one dedicated owner thread with its own Tokio runtime. That thread owns the gateway, supervisor and storage lease through cleanup. Dropping CoreRuntime signals this thread even after the caller runtime has been destroyed. Consuming shutdown awaits cleanup and joins the owner thread. Its receipt measures child reap, process-group absence and marker/directory cleanup, and reports release of the owner's storage descriptor; failures are returned and the launcher exits unsuccessfully. If writer death is unproved, ownership remains conservatively held.
 
+Before a same-process restart, Core retries any retained failed storage release whose writer closure was proved. Startup fails while cleanup is still incomplete, and releases retained because closure was unproved remain blocked until process exit. A new lease is acquired only after the retry completes.
+
 Rust owns an OS data-directory lock. The child inherits that locked descriptor and a private parent-liveness pipe. Rust and standalone Node entry points share a filesystem lease: a prepared nonempty directory is atomically renamed into place before inspecting or creating the owner marker. Rust additionally holds its OS lock, inherited by the child. The marker is kept until database closure. An unmodified legacy executable does not cooperate with this protocol. After an abrupt crash, acquisition removes a remaining marker only under that lease and when its PID is absent or its boot ID/process start time differs. Live matching identities and uncheckable owners remain blocked. New Rust markers carry `storage_protocol_version: 1`, which guarantees that child ownership is recorded before setup can open storage. With a stale parent, both runtimes recover these markers when both child fields are absent, or recover markers with complete stale-child metadata. Legacy childless Rust markers remain blocked because an unrecorded child may still hold storage. Standalone marker recovery is unchanged. Stale leases are atomically renamed to generation-specific nonempty retired directories, retained to prevent competing stale observers from retiring a new lease. These small directories contain only ownership metadata.
+
+Linux compares boot IDs and process start times. Other Unix targets identify this process with an instance token and require `ESRCH` from `kill(pid, 0)` to prove a foreign PID absent. A live or reused foreign PID stays blocked; native macOS process identity lookup remains follow-up work.
 
 The generated manifest measures Node, every frontend and backend build file, compiled contracts/domain files and package metadata. Rust embeds that inventory at compile time and measures the selected files before acquiring storage. It measures the backend again before every child restart. Missing, changed or extra build files fail closed. `PP_DESKTOP_RELEASE_MANIFEST` can select the package builder's manifest at Rust compile time; manifests contain relative artifact paths so resource trees can move. Generate the manifest again only after an intentional build, then rebuild Rust. It does not measure the entire node_modules dependency closure; that remains a native staging requirement. These hashes detect stale or changed bundles. Publisher trust still requires native signing and installed-file permissions.
 
@@ -36,3 +60,63 @@ Logs keep only approved event names, severity and timestamps. Raw Node output, U
 The loopback document carries `frame-src 'none'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'`. Existing blob thumbnails/downloads and popup-based handoffs are preserved. This CSP does not deny popups; the native shell must deny new windows separately.
 
 Browser interaction, native window permissions, macOS WebKit cookies, signed/notarized packaging and installed-app process behavior remain separate acceptance requirements. Job WebSocket path/reconnect work is owned by another worker; the gateway supports upgrade relay but that journey is not proved by these tests. Slow-consumer stress, steady-health three-failure timing and broader operation admission remain follow-up verification work.
+
+## Moonraker status seed (GRE-335)
+
+The desktop gateway starts status monitoring independently of browser requests
+and window visibility. Node retains storage ownership and provides a private,
+signed-principal-only UDS snapshot of Moonraker configuration. That endpoint is
+not admitted through the public gateway. Snapshot reconciliation runs once per
+second, has an independently bounded two-second queue wait and two-second Node
+read (at most four seconds total before reconciliation), and also runs after successful integration
+creation/update/removal. At most 128 Moonraker configurations are admitted.
+Malformed or denied snapshots cancel monitoring immediately. If Node is slow or
+unavailable, the last-known-good pollers keep running for a 10-second grace
+period and are then stopped. The status route serves cached Moonraker status.
+Ids that are not in the last valid snapshot (PrusaLink, Bambu, Home Assistant)
+are forwarded straight to Node without waiting. When no valid snapshot exists,
+or a known Moonraker host has no running poller, the route refreshes once and
+otherwise returns 503. It never falls back to Node's on-demand path for a plain
+HTTP Moonraker host.
+
+`pp-drivers` owns one task per enabled host and serves the existing optional-field
+`PrinterHostStatus` DTO from `pp-api-types` at the admitted v1 status route. A
+successful poll waits two seconds. A new poller reports `unknown` "Awaiting
+status" until its first poll. Errors mark the host offline with a fixed message,
+which keeps the HTTP status code (for example "Moonraker returned HTTP 401"),
+and back off from four to sixty seconds. Reconciliation joins removed/replaced tasks before
+starting replacements. Core shutdown cancels and joins monitoring. Native power
+adapters can await `CoreHandle::suspend_monitoring()` before sleep and call
+`resume_monitoring()` on wake; hiding the window never suspends monitoring.
+OS-specific power notification delivery has not been proved here.
+
+Both GET and HEAD status requests use the cache; HEAD returns no body.
+Snapshot reads use a separate reconciliation lock so cached reads do not wait
+for Node. The bounded snapshot transport covers worst-case JSON escaping of
+all accepted host fields.
+
+Each status poll makes only a GET to `/printer/objects/query`. This seed omits
+system uptime, which requires a separate Moonraker endpoint; the printer page
+hides the uptime row when that optional field is absent. `pp-net` resolves
+once per request, rejects the entire answer set if any address is prohibited,
+and connects using checked `SocketAddr` values without another resolution.
+Explicit LAN and loopback printer targets are allowed. Metadata, link-local,
+unspecified, multicast and IPv6 transition/translation targets are rejected.
+HTTP requests have five-second monotonic and wall-time deadlines (sleep must
+not extend a socket's life), at most 32 DNS answers and a 2 MiB response limit.
+Redirects are not followed. This seed supports explicit HTTP; HTTPS/TLS provider
+work belongs to GRE-359. Until then, HTTPS hosts and hosts that answer with a
+redirect stay on Node's existing on-demand status path, which supports HTTPS
+and SSRF-checked redirects. API-key/JWT headers stay on the configured connection.
+
+Monitoring has no database, Checkoff, upload or dispatch dependencies. Node's
+other printer operations retain their existing behavior. Simulator fixtures and
+the real gateway test cover successful, printer-error and offline responses,
+cancellation, backoff, duplicate prevention, DNS rebinding and trust boundaries:
+
+```sh
+cargo nextest run --locked --manifest-path rust/Cargo.toml --no-tests=fail -E 'test(ticket_t_4) | test(gre_335)'
+```
+
+GRE-449 and controlled hardware/native-window/power evidence remain separate
+completion gates. These seed receipts do not mark GRE-335 or its parent Done.

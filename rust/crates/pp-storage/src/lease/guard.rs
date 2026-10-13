@@ -51,8 +51,16 @@ pub fn record_child(directory: &Path, pid: u32) -> Result<()> {
     let identity = format!("instance:{}", hex::encode(rand::random::<[u8; 16]>()));
     let path = directory.join(".desktop-owner.json");
     let mut marker: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+    anyhow::ensure!(
+        marker["pid"].as_u64() == Some(u64::from(std::process::id())),
+        "Desktop owner marker belongs to another process"
+    );
     marker["child_pid"] = pid.into();
     marker["child_process_identity"] = identity.into();
+    publish_child_marker(directory, &path, &marker)
+}
+
+fn publish_child_marker(directory: &Path, path: &Path, marker: &serde_json::Value) -> Result<()> {
     let temporary = directory.join(format!(
         ".desktop-owner-{}.json.new",
         hex::encode(rand::random::<[u8; 16]>())
@@ -62,11 +70,17 @@ pub fn record_child(directory: &Path, pid: u32) -> Result<()> {
         .create_new(true)
         .mode(0o600)
         .open(&temporary)?;
-    file.write_all(&serde_json::to_vec(&marker)?)?;
-    file.sync_all()?;
-    std::fs::rename(temporary, path)?;
-    std::fs::File::open(directory)?.sync_all()?;
-    Ok(())
+    let result = (|| {
+        file.write_all(&serde_json::to_vec(marker)?)?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, path)?;
+        std::fs::File::open(directory)?.sync_all()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
 }
 
 pub(crate) fn ensure_stale_owner(marker: &serde_json::Value) -> Result<()> {
@@ -202,6 +216,42 @@ impl Drop for StorageLease {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn child_recording_refuses_a_different_owner_without_modifying_its_marker() {
+        let directory = std::env::temp_dir().join(format!(
+            "pp-child-owner-{}",
+            hex::encode(rand::random::<[u8; 16]>())
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join(".desktop-owner.json");
+        let marker = br#"{"pid":0,"lease_hash":"original"}"#;
+        std::fs::write(&path, marker).unwrap();
+        let error = super::record_child(&directory, std::process::id()).unwrap_err();
+        assert!(error.to_string().contains("another process"));
+        assert_eq!(std::fs::read(&path).unwrap(), marker);
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn failed_child_marker_publication_removes_its_temporary_file() {
+        let directory = std::env::temp_dir().join(format!(
+            "pp-child-publication-{}",
+            hex::encode(rand::random::<[u8; 16]>())
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join(".desktop-owner.json");
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("keep"), "original").unwrap();
+        assert!(super::publish_child_marker(&directory, &path, &serde_json::json!({})).is_err());
+        assert_eq!(
+            std::fs::read_to_string(path.join("keep")).unwrap(),
+            "original"
+        );
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn own_instance_identity_is_stable_and_lease_can_restart() {

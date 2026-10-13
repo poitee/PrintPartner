@@ -9,6 +9,17 @@ use tauri::{
     webview::NewWindowResponse,
 };
 
+#[cfg(all(not(debug_assertions), feature = "desktop-e2e"))]
+compile_error!("the desktop-e2e feature is not part of a release build");
+
+#[cfg(feature = "desktop-e2e")]
+static AUTOMATION_BUILD_MARKER: &str = "pp-desktop-e2e-marker-gre492";
+
+#[cfg(feature = "desktop-e2e")]
+fn automation_marker() -> &'static str {
+    AUTOMATION_BUILD_MARKER
+}
+
 fn main() -> std::process::ExitCode {
     match run() {
         Ok(code) => std::process::ExitCode::from(code),
@@ -60,7 +71,15 @@ fn run() -> Result<u8> {
         .enable_all()
         .build()?;
     tauri::async_runtime::set(runtime.handle().clone());
-    let app = tauri::Builder::default()
+    #[cfg(feature = "desktop-e2e")]
+    let builder = tauri::Builder::default().plugin(tauri_plugin_wdio_webdriver::init());
+    #[cfg(not(feature = "desktop-e2e"))]
+    let builder = tauri::Builder::default();
+    #[cfg(feature = "desktop-e2e")]
+    if std::env::var_os("PP_DESKTOP_E2E_MARKER").is_some() {
+        println!("{}", automation_marker());
+    }
+    let app = builder
         .build(tauri::generate_context!())
         .context("Native shell initialization failed")?;
     let mut args = std::env::args().skip(1);
@@ -264,4 +283,12 @@ fn build_tray(
         }
     });
     Ok(watch)
+}
+
+#[cfg(test)]
+mod automation_boundary {
+    #[test]
+    fn desktop_e2e_is_opt_in() {
+        assert!(!cfg!(feature = "desktop-e2e"));
+    }
 }

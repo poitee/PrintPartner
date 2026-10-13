@@ -40,17 +40,18 @@ def make(force=False, streaming=False, compression=zipfile.ZIP_STORED, payload=b
         with w.open('part.stl','w',force_zip64=force) as f:f.write(payload)
     return buffer.getvalue()
 
-def check(name,data,accepted=True,limits=None,node_unsigned_defect=False,expected_payload=b'solid forced\nendsolid forced\n'):
+def check(name,data,accepted=True,limits=None,expected_error=None,node_unsigned_defect=False,expected_payload=b'solid forced\nendsolid forced\n'):
     root=a.output/name;root.mkdir();archive=root/'input.zip';archive.write_bytes(data);(root/'repos').mkdir()
     before=hashlib.sha256(data).hexdigest()
     cmd={'tenantId':'zip64','sourceId':42,'reposDir':str(root/'repos'),'inputDir':str(root),'zipPath':'input.zip','revisionKey':name}
-    if limits:cmd['limits']=limits
+    if limits:cmd['archiveLimits']=limits
     nc={'zip':str(archive),'destination':str(root/'node')}
     r=subprocess.run([str(a.binary)],input=json.dumps(cmd),text=True,capture_output=True)
     n=subprocess.run([str(a.node),str(Path(__file__).parents[1]/'source-artifacts/node-archive-oracle.mjs'),str(a.node_archive)],input=json.dumps(nc),text=True,capture_output=True)
     (root/'rust.json').write_text(r.stdout);(root/'node.json').write_text(n.stdout);(root/'command.json').write_text(json.dumps(cmd,indent=2))
     result=json.loads(r.stdout)
     assert (r.returncode==0)==accepted,(name,result)
+    if expected_error is not None:assert result.get('error')==expected_error,(name,result)
     assert hashlib.sha256(archive.read_bytes()).hexdigest()==before
     assert not (root/'repos/42/revisions/.pp-source-archives/.candidate').exists()
     if accepted:
@@ -117,5 +118,5 @@ for name,location,value,fmt in [
     bad=bytearray(base);struct.pack_into('<'+fmt,bad,location,value);check(name,bad,False)
 check('truncated',base[:-8],False)
 bad=bytearray(base);bad[30+len('part.stl')+20]^=1;check('crc',bad,False)
-check('inflated-budget',base,False,{'maxEntries':10000,'maxCompressedBytes':256*1024*1024,'maxInflatedBytes':2})
+check('inflated-budget',base,False,{'maxEntries':10000,'maxCompressedBytes':256*1024*1024,'maxInflatedBytes':2},expected_error='archive-limit')
 print(json.dumps({'passed':len(rows)}))

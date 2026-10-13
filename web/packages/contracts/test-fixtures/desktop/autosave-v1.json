@@ -543,16 +543,33 @@
             "kind": "rejected",
             "issues": [
               {
-                "origin": "number",
-                "code": "too_small",
-                "minimum": 0,
-                "inclusive": false,
+                "code": "invalid_union",
+                "errors": [
+                  [
+                    {
+                      "origin": "number",
+                      "code": "too_small",
+                      "minimum": 1,
+                      "inclusive": true,
+                      "path": [],
+                      "message": "Too small: expected number to be >=1"
+                    }
+                  ],
+                  [
+                    {
+                      "expected": "null",
+                      "code": "invalid_type",
+                      "path": [],
+                      "message": "Invalid input: expected null, received number"
+                    }
+                  ]
+                ],
                 "path": [
                   "decisions",
                   0,
                   "value"
                 ],
-                "message": "Too small: expected number to be >0"
+                "message": "Invalid input"
               }
             ]
           }
@@ -584,16 +601,33 @@
             "kind": "rejected",
             "issues": [
               {
-                "origin": "number",
-                "code": "too_small",
-                "minimum": 0,
-                "inclusive": false,
+                "code": "invalid_union",
+                "errors": [
+                  [
+                    {
+                      "origin": "number",
+                      "code": "too_small",
+                      "minimum": 1,
+                      "inclusive": true,
+                      "path": [],
+                      "message": "Too small: expected number to be >=1"
+                    }
+                  ],
+                  [
+                    {
+                      "expected": "null",
+                      "code": "invalid_type",
+                      "path": [],
+                      "message": "Invalid input: expected null, received number"
+                    }
+                  ]
+                ],
                 "path": [
                   "decisions",
                   0,
                   "value"
                 ],
-                "message": "Too small: expected number to be >0"
+                "message": "Invalid input"
               }
             ]
           }
@@ -625,16 +659,33 @@
             "kind": "rejected",
             "issues": [
               {
-                "origin": "number",
-                "code": "too_big",
-                "maximum": 10000,
-                "inclusive": true,
+                "code": "invalid_union",
+                "errors": [
+                  [
+                    {
+                      "origin": "number",
+                      "code": "too_big",
+                      "maximum": 10000,
+                      "inclusive": true,
+                      "path": [],
+                      "message": "Too big: expected number to be <=10000"
+                    }
+                  ],
+                  [
+                    {
+                      "expected": "null",
+                      "code": "invalid_type",
+                      "path": [],
+                      "message": "Invalid input: expected null, received number"
+                    }
+                  ]
+                ],
                 "path": [
                   "decisions",
                   0,
                   "value"
                 ],
-                "message": "Too big: expected number to be <=10000"
+                "message": "Invalid input"
               }
             ]
           }
@@ -666,15 +717,32 @@
             "kind": "rejected",
             "issues": [
               {
-                "expected": "int",
-                "format": "safeint",
-                "code": "invalid_type",
+                "code": "invalid_union",
+                "errors": [
+                  [
+                    {
+                      "expected": "int",
+                      "format": "safeint",
+                      "code": "invalid_type",
+                      "path": [],
+                      "message": "Invalid input: expected int, received number"
+                    }
+                  ],
+                  [
+                    {
+                      "expected": "null",
+                      "code": "invalid_type",
+                      "path": [],
+                      "message": "Invalid input: expected null, received number"
+                    }
+                  ]
+                ],
                 "path": [
                   "decisions",
                   0,
                   "value"
                 ],
-                "message": "Invalid input: expected int, received number"
+                "message": "Invalid input"
               }
             ]
           }
@@ -706,14 +774,31 @@
             "kind": "rejected",
             "issues": [
               {
-                "expected": "number",
-                "code": "invalid_type",
+                "code": "invalid_union",
+                "errors": [
+                  [
+                    {
+                      "expected": "number",
+                      "code": "invalid_type",
+                      "path": [],
+                      "message": "Invalid input: expected number, received string"
+                    }
+                  ],
+                  [
+                    {
+                      "expected": "null",
+                      "code": "invalid_type",
+                      "path": [],
+                      "message": "Invalid input: expected null, received string"
+                    }
+                  ]
+                ],
                 "path": [
                   "decisions",
                   0,
                   "value"
                 ],
-                "message": "Invalid input: expected number, received string"
+                "message": "Invalid input"
               }
             ]
           }
@@ -745,14 +830,31 @@
             "kind": "rejected",
             "issues": [
               {
-                "expected": "number",
-                "code": "invalid_type",
+                "code": "invalid_union",
+                "errors": [
+                  [
+                    {
+                      "expected": "number",
+                      "code": "invalid_type",
+                      "path": [],
+                      "message": "Invalid input: expected number, received boolean"
+                    }
+                  ],
+                  [
+                    {
+                      "expected": "null",
+                      "code": "invalid_type",
+                      "path": [],
+                      "message": "Invalid input: expected null, received boolean"
+                    }
+                  ]
+                ],
                 "path": [
                   "decisions",
                   0,
                   "value"
                 ],
-                "message": "Invalid input: expected number, received boolean"
+                "message": "Invalid input"
               }
             ]
           }
@@ -783,14 +885,31 @@
             "kind": "rejected",
             "issues": [
               {
-                "expected": "number",
-                "code": "invalid_type",
+                "code": "invalid_union",
+                "errors": [
+                  [
+                    {
+                      "expected": "number",
+                      "code": "invalid_type",
+                      "path": [],
+                      "message": "Invalid input: expected number, received undefined"
+                    }
+                  ],
+                  [
+                    {
+                      "expected": "null",
+                      "code": "invalid_type",
+                      "path": [],
+                      "message": "Invalid input: expected null, received undefined"
+                    }
+                  ]
+                ],
                 "path": [
                   "decisions",
                   0,
                   "value"
                 ],
-                "message": "Invalid input: expected number, received undefined"
+                "message": "Invalid input"
               }
             ]
           }
@@ -821,15 +940,32 @@
             "kind": "rejected",
             "issues": [
               {
-                "expected": "string",
-                "code": "invalid_type",
+                "code": "invalid_union",
+                "errors": [
+                  [
+                    {
+                      "expected": "string",
+                      "code": "invalid_type",
+                      "path": [],
+                      "message": "Invalid input: expected string, received undefined"
+                    }
+                  ],
+                  [
+                    {
+                      "expected": "null",
+                      "code": "invalid_type",
+                      "path": [],
+                      "message": "Invalid input: expected null, received undefined"
+                    }
+                  ]
+                ],
                 "path": [
                   "decisions",
                   0,
                   "target",
                   "source_layer"
                 ],
-                "message": "Invalid input: expected string, received undefined"
+                "message": "Invalid input"
               }
             ]
           }
@@ -906,12 +1042,29 @@
             "kind": "rejected",
             "issues": [
               {
-                "expected": "object",
-                "code": "invalid_type",
+                "code": "invalid_union",
+                "errors": [
+                  [
+                    {
+                      "expected": "object",
+                      "code": "invalid_type",
+                      "path": [],
+                      "message": "Invalid input: expected object, received undefined"
+                    }
+                  ],
+                  [
+                    {
+                      "expected": "null",
+                      "code": "invalid_type",
+                      "path": [],
+                      "message": "Invalid input: expected null, received undefined"
+                    }
+                  ]
+                ],
                 "path": [
                   "expected_draft"
                 ],
-                "message": "Invalid input: expected object, received undefined"
+                "message": "Invalid input"
               }
             ]
           }
@@ -990,10 +1143,10 @@
             "issues": [
               {
                 "code": "custom",
-                "message": "Accepted Plan base is inconsistent",
                 "path": [
                   "expected_base"
-                ]
+                ],
+                "message": "basis_inconsistent"
               }
             ]
           }
@@ -1026,10 +1179,10 @@
             "issues": [
               {
                 "code": "custom",
-                "message": "Accepted Plan base is inconsistent",
                 "path": [
                   "expected_base"
-                ]
+                ],
+                "message": "basis_inconsistent"
               }
             ]
           }
@@ -1061,13 +1214,30 @@
             "kind": "rejected",
             "issues": [
               {
-                "expected": "number",
-                "code": "invalid_type",
+                "code": "invalid_union",
+                "errors": [
+                  [
+                    {
+                      "expected": "number",
+                      "code": "invalid_type",
+                      "path": [],
+                      "message": "Invalid input: expected number, received string"
+                    }
+                  ],
+                  [
+                    {
+                      "expected": "null",
+                      "code": "invalid_type",
+                      "path": [],
+                      "message": "Invalid input: expected null, received string"
+                    }
+                  ]
+                ],
                 "path": [
                   "expected_base",
                   "revision_id"
                 ],
-                "message": "Invalid input: expected number, received string"
+                "message": "Invalid input"
               }
             ]
           }
@@ -1173,10 +1343,8 @@
             "issues": [
               {
                 "code": "custom",
-                "path": [
-                  "expected_draft"
-                ],
-                "message": "The selected draft must be open on the expected Plan base"
+                "message": "observed_draft_mismatch",
+                "path": []
               }
             ]
           }
@@ -1218,10 +1386,8 @@
             "issues": [
               {
                 "code": "custom",
-                "path": [
-                  "expected_draft"
-                ],
-                "message": "The selected draft must be open on the expected Plan base"
+                "message": "observed_draft_mismatch",
+                "path": []
               }
             ]
           }
@@ -1263,10 +1429,8 @@
             "issues": [
               {
                 "code": "custom",
-                "path": [
-                  "decisions"
-                ],
-                "message": "A file field may be edited only once per save"
+                "message": "duplicate_target_field",
+                "path": []
               }
             ]
           }
@@ -1699,11 +1863,11 @@
                 "origin": "string",
                 "code": "invalid_format",
                 "format": "regex",
-                "pattern": "/^[0-9a-f]{64}$/",
+                "pattern": "/^[a-f0-9]{64}$/",
                 "path": [
                   "revision_digest"
                 ],
-                "message": "Invalid string: must match pattern /^[0-9a-f]{64}$/"
+                "message": "Invalid string: must match pattern /^[a-f0-9]{64}$/"
               }
             ]
           }
@@ -1757,12 +1921,12 @@
               {
                 "origin": "number",
                 "code": "too_small",
-                "minimum": 0,
-                "inclusive": false,
+                "minimum": 1,
+                "inclusive": true,
                 "path": [
                   "plan_version"
                 ],
-                "message": "Too small: expected number to be >0"
+                "message": "Too small: expected number to be >=1"
               }
             ]
           }
@@ -1869,16 +2033,43 @@
             "kind": "rejected",
             "issues": [
               {
-                "code": "invalid_value",
-                "values": [
-                  "open",
-                  "abandoned",
-                  "consumed"
+                "code": "invalid_union",
+                "errors": [
+                  [
+                    {
+                      "code": "invalid_value",
+                      "values": [
+                        "open"
+                      ],
+                      "path": [],
+                      "message": "Invalid input: expected \"open\""
+                    }
+                  ],
+                  [
+                    {
+                      "code": "invalid_value",
+                      "values": [
+                        "abandoned"
+                      ],
+                      "path": [],
+                      "message": "Invalid input: expected \"abandoned\""
+                    }
+                  ],
+                  [
+                    {
+                      "code": "invalid_value",
+                      "values": [
+                        "consumed"
+                      ],
+                      "path": [],
+                      "message": "Invalid input: expected \"consumed\""
+                    }
+                  ]
                 ],
                 "path": [
                   "state"
                 ],
-                "message": "Invalid option: expected one of \"open\"|\"abandoned\"|\"consumed\""
+                "message": "Invalid input"
               }
             ]
           }
@@ -13223,16 +13414,33 @@
           "kind": "rejected",
           "issues": [
             {
-              "origin": "number",
-              "code": "too_small",
-              "minimum": 0,
-              "inclusive": false,
+              "code": "invalid_union",
+              "errors": [
+                [
+                  {
+                    "origin": "number",
+                    "code": "too_small",
+                    "minimum": 1,
+                    "inclusive": true,
+                    "path": [],
+                    "message": "Too small: expected number to be >=1"
+                  }
+                ],
+                [
+                  {
+                    "expected": "null",
+                    "code": "invalid_type",
+                    "path": [],
+                    "message": "Invalid input: expected null, received number"
+                  }
+                ]
+              ],
               "path": [
                 "decisions",
                 0,
                 "value"
               ],
-              "message": "Too small: expected number to be >0"
+              "message": "Invalid input"
             }
           ]
         }
@@ -13264,16 +13472,33 @@
           "kind": "rejected",
           "issues": [
             {
-              "origin": "number",
-              "code": "too_small",
-              "minimum": 0,
-              "inclusive": false,
+              "code": "invalid_union",
+              "errors": [
+                [
+                  {
+                    "origin": "number",
+                    "code": "too_small",
+                    "minimum": 1,
+                    "inclusive": true,
+                    "path": [],
+                    "message": "Too small: expected number to be >=1"
+                  }
+                ],
+                [
+                  {
+                    "expected": "null",
+                    "code": "invalid_type",
+                    "path": [],
+                    "message": "Invalid input: expected null, received number"
+                  }
+                ]
+              ],
               "path": [
                 "decisions",
                 0,
                 "value"
               ],
-              "message": "Too small: expected number to be >0"
+              "message": "Invalid input"
             }
           ]
         }
@@ -13305,16 +13530,33 @@
           "kind": "rejected",
           "issues": [
             {
-              "origin": "number",
-              "code": "too_big",
-              "maximum": 10000,
-              "inclusive": true,
+              "code": "invalid_union",
+              "errors": [
+                [
+                  {
+                    "origin": "number",
+                    "code": "too_big",
+                    "maximum": 10000,
+                    "inclusive": true,
+                    "path": [],
+                    "message": "Too big: expected number to be <=10000"
+                  }
+                ],
+                [
+                  {
+                    "expected": "null",
+                    "code": "invalid_type",
+                    "path": [],
+                    "message": "Invalid input: expected null, received number"
+                  }
+                ]
+              ],
               "path": [
                 "decisions",
                 0,
                 "value"
               ],
-              "message": "Too big: expected number to be <=10000"
+              "message": "Invalid input"
             }
           ]
         }
@@ -13346,15 +13588,32 @@
           "kind": "rejected",
           "issues": [
             {
-              "expected": "int",
-              "format": "safeint",
-              "code": "invalid_type",
+              "code": "invalid_union",
+              "errors": [
+                [
+                  {
+                    "expected": "int",
+                    "format": "safeint",
+                    "code": "invalid_type",
+                    "path": [],
+                    "message": "Invalid input: expected int, received number"
+                  }
+                ],
+                [
+                  {
+                    "expected": "null",
+                    "code": "invalid_type",
+                    "path": [],
+                    "message": "Invalid input: expected null, received number"
+                  }
+                ]
+              ],
               "path": [
                 "decisions",
                 0,
                 "value"
               ],
-              "message": "Invalid input: expected int, received number"
+              "message": "Invalid input"
             }
           ]
         }
@@ -13386,14 +13645,31 @@
           "kind": "rejected",
           "issues": [
             {
-              "expected": "number",
-              "code": "invalid_type",
+              "code": "invalid_union",
+              "errors": [
+                [
+                  {
+                    "expected": "number",
+                    "code": "invalid_type",
+                    "path": [],
+                    "message": "Invalid input: expected number, received string"
+                  }
+                ],
+                [
+                  {
+                    "expected": "null",
+                    "code": "invalid_type",
+                    "path": [],
+                    "message": "Invalid input: expected null, received string"
+                  }
+                ]
+              ],
               "path": [
                 "decisions",
                 0,
                 "value"
               ],
-              "message": "Invalid input: expected number, received string"
+              "message": "Invalid input"
             }
           ]
         }
@@ -13425,14 +13701,31 @@
           "kind": "rejected",
           "issues": [
             {
-              "expected": "number",
-              "code": "invalid_type",
+              "code": "invalid_union",
+              "errors": [
+                [
+                  {
+                    "expected": "number",
+                    "code": "invalid_type",
+                    "path": [],
+                    "message": "Invalid input: expected number, received boolean"
+                  }
+                ],
+                [
+                  {
+                    "expected": "null",
+                    "code": "invalid_type",
+                    "path": [],
+                    "message": "Invalid input: expected null, received boolean"
+                  }
+                ]
+              ],
               "path": [
                 "decisions",
                 0,
                 "value"
               ],
-              "message": "Invalid input: expected number, received boolean"
+              "message": "Invalid input"
             }
           ]
         }
@@ -13463,14 +13756,31 @@
           "kind": "rejected",
           "issues": [
             {
-              "expected": "number",
-              "code": "invalid_type",
+              "code": "invalid_union",
+              "errors": [
+                [
+                  {
+                    "expected": "number",
+                    "code": "invalid_type",
+                    "path": [],
+                    "message": "Invalid input: expected number, received undefined"
+                  }
+                ],
+                [
+                  {
+                    "expected": "null",
+                    "code": "invalid_type",
+                    "path": [],
+                    "message": "Invalid input: expected null, received undefined"
+                  }
+                ]
+              ],
               "path": [
                 "decisions",
                 0,
                 "value"
               ],
-              "message": "Invalid input: expected number, received undefined"
+              "message": "Invalid input"
             }
           ]
         }
@@ -13501,15 +13811,32 @@
           "kind": "rejected",
           "issues": [
             {
-              "expected": "string",
-              "code": "invalid_type",
+              "code": "invalid_union",
+              "errors": [
+                [
+                  {
+                    "expected": "string",
+                    "code": "invalid_type",
+                    "path": [],
+                    "message": "Invalid input: expected string, received undefined"
+                  }
+                ],
+                [
+                  {
+                    "expected": "null",
+                    "code": "invalid_type",
+                    "path": [],
+                    "message": "Invalid input: expected null, received undefined"
+                  }
+                ]
+              ],
               "path": [
                 "decisions",
                 0,
                 "target",
                 "source_layer"
               ],
-              "message": "Invalid input: expected string, received undefined"
+              "message": "Invalid input"
             }
           ]
         }
@@ -13586,12 +13913,29 @@
           "kind": "rejected",
           "issues": [
             {
-              "expected": "object",
-              "code": "invalid_type",
+              "code": "invalid_union",
+              "errors": [
+                [
+                  {
+                    "expected": "object",
+                    "code": "invalid_type",
+                    "path": [],
+                    "message": "Invalid input: expected object, received undefined"
+                  }
+                ],
+                [
+                  {
+                    "expected": "null",
+                    "code": "invalid_type",
+                    "path": [],
+                    "message": "Invalid input: expected null, received undefined"
+                  }
+                ]
+              ],
               "path": [
                 "expected_draft"
               ],
-              "message": "Invalid input: expected object, received undefined"
+              "message": "Invalid input"
             }
           ]
         }
@@ -13670,10 +14014,10 @@
           "issues": [
             {
               "code": "custom",
-              "message": "Accepted Plan base is inconsistent",
               "path": [
                 "expected_base"
-              ]
+              ],
+              "message": "basis_inconsistent"
             }
           ]
         }
@@ -13706,10 +14050,10 @@
           "issues": [
             {
               "code": "custom",
-              "message": "Accepted Plan base is inconsistent",
               "path": [
                 "expected_base"
-              ]
+              ],
+              "message": "basis_inconsistent"
             }
           ]
         }
@@ -13741,13 +14085,30 @@
           "kind": "rejected",
           "issues": [
             {
-              "expected": "number",
-              "code": "invalid_type",
+              "code": "invalid_union",
+              "errors": [
+                [
+                  {
+                    "expected": "number",
+                    "code": "invalid_type",
+                    "path": [],
+                    "message": "Invalid input: expected number, received string"
+                  }
+                ],
+                [
+                  {
+                    "expected": "null",
+                    "code": "invalid_type",
+                    "path": [],
+                    "message": "Invalid input: expected null, received string"
+                  }
+                ]
+              ],
               "path": [
                 "expected_base",
                 "revision_id"
               ],
-              "message": "Invalid input: expected number, received string"
+              "message": "Invalid input"
             }
           ]
         }
@@ -13853,10 +14214,8 @@
           "issues": [
             {
               "code": "custom",
-              "path": [
-                "expected_draft"
-              ],
-              "message": "The selected draft must be open on the expected Plan base"
+              "message": "observed_draft_mismatch",
+              "path": []
             }
           ]
         }
@@ -13898,10 +14257,8 @@
           "issues": [
             {
               "code": "custom",
-              "path": [
-                "expected_draft"
-              ],
-              "message": "The selected draft must be open on the expected Plan base"
+              "message": "observed_draft_mismatch",
+              "path": []
             }
           ]
         }
@@ -13943,10 +14300,8 @@
           "issues": [
             {
               "code": "custom",
-              "path": [
-                "decisions"
-              ],
-              "message": "A file field may be edited only once per save"
+              "message": "duplicate_target_field",
+              "path": []
             }
           ]
         }
@@ -14379,11 +14734,11 @@
               "origin": "string",
               "code": "invalid_format",
               "format": "regex",
-              "pattern": "/^[0-9a-f]{64}$/",
+              "pattern": "/^[a-f0-9]{64}$/",
               "path": [
                 "revision_digest"
               ],
-              "message": "Invalid string: must match pattern /^[0-9a-f]{64}$/"
+              "message": "Invalid string: must match pattern /^[a-f0-9]{64}$/"
             }
           ]
         }
@@ -14437,12 +14792,12 @@
             {
               "origin": "number",
               "code": "too_small",
-              "minimum": 0,
-              "inclusive": false,
+              "minimum": 1,
+              "inclusive": true,
               "path": [
                 "plan_version"
               ],
-              "message": "Too small: expected number to be >0"
+              "message": "Too small: expected number to be >=1"
             }
           ]
         }
@@ -14549,16 +14904,43 @@
           "kind": "rejected",
           "issues": [
             {
-              "code": "invalid_value",
-              "values": [
-                "open",
-                "abandoned",
-                "consumed"
+              "code": "invalid_union",
+              "errors": [
+                [
+                  {
+                    "code": "invalid_value",
+                    "values": [
+                      "open"
+                    ],
+                    "path": [],
+                    "message": "Invalid input: expected \"open\""
+                  }
+                ],
+                [
+                  {
+                    "code": "invalid_value",
+                    "values": [
+                      "abandoned"
+                    ],
+                    "path": [],
+                    "message": "Invalid input: expected \"abandoned\""
+                  }
+                ],
+                [
+                  {
+                    "code": "invalid_value",
+                    "values": [
+                      "consumed"
+                    ],
+                    "path": [],
+                    "message": "Invalid input: expected \"consumed\""
+                  }
+                ]
               ],
               "path": [
                 "state"
               ],
-              "message": "Invalid option: expected one of \"open\"|\"abandoned\"|\"consumed\""
+              "message": "Invalid input"
             }
           ]
         }
