@@ -1,0 +1,155 @@
+{
+  "nextAction": "watch-ci",
+  "mergeable": "MERGEABLE",
+  "mergeStateStatus": "UNSTABLE",
+  "conflicts": false,
+  "behind": false,
+  "pr": {
+    "number": 134,
+    "url": "https://github.com/poitee/PrintPartner/pull/134",
+    "title": "feat(storage): add durable Jobs and Source work ownership",
+    "isDraft": false,
+    "baseRefName": "desktop/domain-family-integration",
+    "headRefName": "desktop/jobs-domain-integration"
+  },
+  "unresolvedComments": [],
+  "awaitingHumanComments": [],
+  "conversationComments": [
+    {
+      "id": 5998141866,
+      "url": "https://github.com/poitee/PrintPartner/pull/134#issuecomment-5998141866",
+      "author": "poitee",
+      "body": "The intended recovery behavior is settled. When the upload is confirmed but print start was interrupted, reconciliation must finish as uploaded-only. Starting the print requires a separate deliberate action. The prepared fix that requeues the pending start does not meet this requirement. The current implementation still needs the uploaded-only completion change, so the reconciliation review thread remains open."
+    },
+    {
+      "id": 6072628089,
+      "url": "https://github.com/poitee/PrintPartner/pull/134#issuecomment-6072628089",
+      "author": "poitee",
+      "body": "@greptileai"
+    },
+    {
+      "id": 6091974918,
+      "url": "https://github.com/poitee/PrintPartner/pull/134#issuecomment-6091974918",
+      "author": "poitee",
+      "body": "Greptile P1 4225913594: confirmed upload/start now retains `Succeeded` and the start receipt when a later Spoolman deduction is denied. That production fix was already present in 85f0770; commit 2ef47c30ad8c397444732d8e85d17174d703a885 adds a dedicated regression test covering the no-effect decision, audit, and persisted outcome. No production code changed. Real test results: `cargo test -p pp-storage` exited 101 on an auth timing assertion (9 passed, 1 failed). A single-thread rerun passed auth (10/10) and ran durable jobs (67 passed, 1 failed): existing `ticket_t_28_recovery_success_require…"
+    },
+    {
+      "id": 6092331041,
+      "url": "https://github.com/poitee/PrintPartner/pull/134#issuecomment-6092331041",
+      "author": "poitee",
+      "body": "New head: d7e09d14980d95493babc543aac3bfe4f57ec46c (normal push to desktop/jobs-domain-integration). Fixed the t_28 regression introduced by f0571c79: Finish(None) now uses the already-confirmed primary printer receipt. The strengthened t_28 test verifies that the distinct confirmed PrinterStart receipt is persisted; explicit ancillary receipts remain rejected. Re-checked Bugbot High 4180471823 (split printer jobs cannot reconcile, raised at cdd4c910): already addressed on this branch. Interrupted split uploads reconcile to terminal UploadedOnly, releasing active/resource admission; a deliber…"
+    },
+    {
+      "id": 6092504570,
+      "url": "https://github.com/poitee/PrintPartner/pull/134#issuecomment-6092504570",
+      "author": "poitee",
+      "body": "@greptileai review"
+    },
+    {
+      "id": 6097806121,
+      "url": "https://github.com/poitee/PrintPartner/pull/134#issuecomment-6097806121",
+      "author": "poitee",
+      "body": "@greptileai review"
+    },
+    {
+      "id": 6099656003,
+      "url": "https://github.com/poitee/PrintPartner/pull/134#issuecomment-6099656003",
+      "author": "poitee",
+      "body": "@greptileai review"
+    },
+    {
+      "id": 6100621592,
+      "url": "https://github.com/poitee/PrintPartner/pull/134#issuecomment-6100621592",
+      "author": "poitee",
+      "body": "Fix and validation evidence for head `743953a8cb7abb0f4bad4a06c816435eaf43dc1b`: both Bugbot findings are fixed and their threads resolved. Full serial `pp-storage` suite: **147 passed, 0 failed**; formatting and clippy with `-D warnings` passed. Both bug regression tests failed before the fix and pass after it. Test names, counts, thread links, and the absence of pp-storage PR CI are recorded in the [PR Evidence section](https://github.com/poitee/PrintPartner/pull/134#user-content-evidence). **Cursor Bugbot: SUCCESS**, no issues found ([check run](https://github.com/poitee/PrintPartner/pull/…"
+    },
+    {
+      "id": 6100621886,
+      "url": "https://github.com/poitee/PrintPartner/pull/134#issuecomment-6100621886",
+      "author": "poitee",
+      "body": "@greptileai review"
+    },
+    {
+      "id": 6100973842,
+      "url": "https://github.com/poitee/PrintPartner/pull/134#issuecomment-6100973842",
+      "author": "poitee",
+      "body": "### Desktop evidence (20261010T184836Z) Real Linux native app window and tray at 743953a8cb7abb0f4bad4a06c816435eaf43dc1b. Built and run from a separate exact-head checkout with measured resources and disposable data. App UI only; desktop-shell smoke evidence, not proof of every domain feature in this stack layer. ![pr134-window.png](https://github.com/poitee/PrintPartner/raw/evidence/desktop/jobs-domain-integration/20261010T184836Z/pr134-window.png) ![pr134-tray.png](https://github.com/poitee/PrintPartner/raw/evidence/desktop/jobs-domain-integration/20261010T184836Z/pr134-tray.png) <sub>Capt…"
+    },
+    {
+      "id": 6101227697,
+      "url": "https://github.com/poitee/PrintPartner/pull/134#issuecomment-6101227697",
+      "author": "poitee",
+      "body": "### Desktop evidence (20261010T191700Z) Real Linux native app window and tray at 743953a8cb7abb0f4bad4a06c816435eaf43dc1b. Built and run from a separate exact-head checkout with measured resources and disposable data. App UI only; desktop-shell smoke evidence, not proof of every domain feature in this stack layer. ![pr134-743953a8-fresh-20261010T191608Z-window.png](https://github.com/poitee/PrintPartner/raw/evidence/desktop/jobs-domain-integration/20261010T191700Z/pr134-743953a8-fresh-20261010T191608Z-window.png) ![pr134-743953a8-fresh-20261010T191608Z-tray.png](https://github.com/poitee/Prin…"
+    },
+    {
+      "id": 6102304326,
+      "url": "https://github.com/poitee/PrintPartner/pull/134#issuecomment-6102304326",
+      "author": "poitee",
+      "body": "@greptileai review"
+    },
+    {
+      "id": 6104114221,
+      "url": "https://github.com/poitee/PrintPartner/pull/134#issuecomment-6104114221",
+      "author": "poitee",
+      "body": "@greptileai review"
+    }
+  ],
+  "failingChecks": [],
+  "pendingChecks": [
+    {
+      "name": "bundle (macos-26, arm64, arm64, aarch64-apple-darwin, ee35ee364a0c626df7852d9a5bc0c5394b6440772e9...",
+      "status": "QUEUED",
+      "conclusion": null,
+      "url": "https://github.com/poitee/PrintPartner/actions/runs/38416385105/job/115361816024"
+    },
+    {
+      "name": "Rust partition (1/2)",
+      "status": "IN_PROGRESS",
+      "conclusion": null,
+      "url": "https://github.com/poitee/PrintPartner/actions/runs/38416385173/job/115361819420"
+    },
+    {
+      "name": "webkit-stl",
+      "status": "IN_PROGRESS",
+      "conclusion": null,
+      "url": "https://github.com/poitee/PrintPartner/actions/runs/38416385194/job/115361817590"
+    },
+    {
+      "name": "runtime",
+      "status": "IN_PROGRESS",
+      "conclusion": null,
+      "url": "https://github.com/poitee/PrintPartner/actions/runs/38416385472/job/115361817828"
+    },
+    {
+      "name": "postgres",
+      "status": "IN_PROGRESS",
+      "conclusion": null,
+      "url": "https://github.com/poitee/PrintPartner/actions/runs/38416385268/job/115361826810"
+    },
+    {
+      "name": "web",
+      "status": "IN_PROGRESS",
+      "conclusion": null,
+      "url": "https://github.com/poitee/PrintPartner/actions/runs/38416385182/job/115361816738"
+    },
+    {
+      "name": "bundle (macos-26-intel, x86_64, x64, x86_64-apple-darwin, e5386ba6dadc3fbbdcf46c1f95b700f28caf03d...",
+      "status": "QUEUED",
+      "conclusion": null,
+      "url": "https://github.com/poitee/PrintPartner/actions/runs/38416385105/job/115361815764"
+    },
+    {
+      "name": "Rust partition (2/2)",
+      "status": "IN_PROGRESS",
+      "conclusion": null,
+      "url": "https://github.com/poitee/PrintPartner/actions/runs/38416385173/job/115361820029"
+    },
+    {
+      "name": "macos-storage-gate",
+      "status": "QUEUED",
+      "conclusion": null,
+      "url": "https://github.com/poitee/PrintPartner/actions/runs/38416385173/job/115361819195"
+    }
+  ],
+  "passedCheckCount": 7
+}
