@@ -774,28 +774,52 @@ fn parse_receipt(
     Ok(receipt)
 }
 
-fn write_or_reuse_receipt(
-    data_dir: &Path,
+fn read_existing_receipt(
+    receipt_path: &Path,
     admitted: &AdmittedOperation,
-) -> Result<AdmissionReceipt, AdmissionError> {
-    let receipt_path = data_dir.join(RECEIPT_FILE);
-    let receipt_exists = match fs::symlink_metadata(&receipt_path) {
-        Ok(metadata) if metadata.is_file() => true,
+) -> Result<Option<AdmissionReceipt>, AdmissionError> {
+    match fs::symlink_metadata(receipt_path) {
+        Ok(metadata) if metadata.is_file() => {}
         Ok(_) => {
             return Err(AdmissionError::Malformed(
                 "admission receipt is not a regular file".into(),
             ));
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(AdmissionError::Malformed(error.to_string())),
-    };
-    if receipt_exists {
-        let existing = fs::read_to_string(&receipt_path)
-            .map_err(|error| AdmissionError::Malformed(error.to_string()))?;
-        let receipt = parse_receipt(&existing, admitted)?;
-        if receipt.manifest_sha256 != admitted.manifest_sha256 {
-            return Err(AdmissionError::RestartManifestChanged);
+    }
+    let existing = fs::read_to_string(receipt_path)
+        .map_err(|error| AdmissionError::Malformed(error.to_string()))?;
+    let receipt = parse_receipt(&existing, admitted)?;
+    if receipt.manifest_sha256 != admitted.manifest_sha256 {
+        return Err(AdmissionError::RestartManifestChanged);
+    }
+    Ok(Some(receipt))
+}
+
+fn publish_receipt(
+    temporary: &Path,
+    receipt_path: &Path,
+    receipt: AdmissionReceipt,
+    admitted: &AdmittedOperation,
+) -> Result<AdmissionReceipt, AdmissionError> {
+    match fs::hard_link(temporary, receipt_path) {
+        Ok(()) => Ok(receipt),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            read_existing_receipt(receipt_path, admitted)?.ok_or_else(|| {
+                AdmissionError::Malformed("concurrent admission receipt disappeared".into())
+            })
         }
+        Err(error) => Err(AdmissionError::Malformed(error.to_string())),
+    }
+}
+
+fn write_or_reuse_receipt(
+    data_dir: &Path,
+    admitted: &AdmittedOperation,
+) -> Result<AdmissionReceipt, AdmissionError> {
+    let receipt_path = data_dir.join(RECEIPT_FILE);
+    if let Some(receipt) = read_existing_receipt(&receipt_path, admitted)? {
         return Ok(receipt);
     }
     let participant_count = u32::try_from(admitted.participant_ids.len())
@@ -827,7 +851,8 @@ fn write_or_reuse_receipt(
         file.sync_all()
             .map_err(|error| AdmissionError::Malformed(error.to_string()))?;
         drop(file);
-        fs::rename(&temporary, &receipt_path)
+        let receipt = publish_receipt(&temporary, &receipt_path, receipt, admitted)?;
+        fs::remove_file(&temporary)
             .map_err(|error| AdmissionError::Malformed(error.to_string()))?;
         fs::File::open(data_dir)
             .and_then(|directory| directory.sync_all())
@@ -838,4 +863,60 @@ fn write_or_reuse_receipt(
         let _ = fs::remove_file(&temporary);
     }
     result
+}
+
+#[cfg(test)]
+mod receipt_publication_tests {
+    use super::*;
+
+    #[test]
+    fn preserves_and_validates_a_concurrent_winner() -> Result<(), Box<dyn std::error::Error>> {
+        for scenario in ["same", "different", "malformed", "nonregular"] {
+            let dir = std::env::temp_dir().join(format!(
+                "pp-receipt-race-{scenario}-{}",
+                hex::encode(rand::random::<[u8; 16]>())
+            ));
+            fs::create_dir_all(&dir)?;
+            let winner = boot_source_sync(&dir, BUNDLED_SOURCE_SYNC_MANIFEST)?;
+            let manifest = if scenario == "different" {
+                format!("{BUNDLED_SOURCE_SYNC_MANIFEST}\n")
+            } else {
+                BUNDLED_SOURCE_SYNC_MANIFEST.to_string()
+            };
+            let admitted = admit_observed(&manifest, SOURCE_SYNC_PARTICIPANTS)?;
+            let mut loser = winner.clone();
+            loser.worker_pid = 123;
+            loser.manifest_sha256 = admitted.manifest_sha256.clone();
+            let temporary = dir.join("loser.tmp");
+            fs::write(&temporary, serde_json::to_vec(&loser)?)?;
+            let receipt_path = dir.join(RECEIPT_FILE);
+            if scenario == "malformed" {
+                fs::write(&receipt_path, "{broken")?;
+            } else if scenario == "nonregular" {
+                fs::remove_file(&receipt_path)?;
+                fs::create_dir(&receipt_path)?;
+            }
+            let before = if scenario == "nonregular" {
+                None
+            } else {
+                Some(fs::read(&receipt_path)?)
+            };
+            let result = publish_receipt(&temporary, &receipt_path, loser, &admitted);
+            match scenario {
+                "same" => assert_eq!(result?, winner),
+                "different" => assert!(matches!(
+                    result,
+                    Err(AdmissionError::RestartManifestChanged)
+                )),
+                _ => assert!(matches!(result, Err(AdmissionError::Malformed(_)))),
+            }
+            if let Some(bytes) = before {
+                assert_eq!(fs::read(&receipt_path)?, bytes);
+            } else {
+                assert!(fs::symlink_metadata(&receipt_path)?.is_dir());
+            }
+            fs::remove_dir_all(&dir)?;
+        }
+        Ok(())
+    }
 }

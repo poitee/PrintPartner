@@ -791,6 +791,15 @@ describe("Source Sync Fastify admission", () => {
     expect(existsSync(dataDir)).toBe(false);
   });
 
+  it.each(["same", "different", "malformed", "nonregular"])("preserves a concurrent %s admission receipt", (scenario) => {
+    const dir = scratch(`concurrent-${scenario}`);
+    const result = spawnSync(process.execPath, [
+      "--experimental-strip-types", join(sourceDir, "fixtures/concurrent-admission.mjs"), dir, scenario,
+    ], { encoding: "utf8", timeout: 20_000 });
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain(`Preserved concurrent ${scenario} admission`);
+  });
+
   it("publishes a complete reusable receipt when filesystem writes are short", () => {
     const dir = scratch("short-writes");
     const proof = join(dir, "short-writes.mjs");

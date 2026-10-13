@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, constants, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, constants, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, linkSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -348,26 +348,34 @@ export function parseSourceSyncAdmissionReceipt(
   };
 }
 
+function readExistingAdmissionReceipt(
+  receiptPath: string,
+  admitted: ReturnType<typeof admitSourceSyncManifest>,
+): SourceSyncAdmissionReceipt | null {
+  const receiptEntry = lstatSync(receiptPath, { throwIfNoEntry: false });
+  if (!receiptEntry) return null;
+  if (!receiptEntry.isFile()) {
+    return fail("malformed", "admission receipt is not a regular file");
+  }
+  const existing = parseSourceSyncAdmissionReceipt(
+    readFileSync(receiptPath, "utf8"), admitted.participantIds.length,
+  );
+  if (existing.manifest_sha256 !== admitted.manifestSha256) {
+    return fail("restart_manifest_changed", "restart manifest does not match the admitted record");
+  }
+  return existing;
+}
+
 /** Admit the bundled manifest and persist one receipt. A later boot reuses it. */
 export function beginSourceSyncAdmission(dataDir: string): SourceSyncAdmissionReceipt {
   const admitted = admitSourceSyncManifest(readSourceSyncManifest());
   const receiptPath = sourceSyncAdmissionReceiptPath(dataDir);
-  const receiptEntry = lstatSync(receiptPath, { throwIfNoEntry: false });
-  if (receiptEntry) {
-    if (!receiptEntry.isFile()) {
-      return fail("malformed", "admission receipt is not a regular file");
-    }
-    const existing = parseSourceSyncAdmissionReceipt(
-      readFileSync(receiptPath, "utf8"),
-      admitted.participantIds.length,
-    );
-    if (existing.manifest_sha256 !== admitted.manifestSha256) {
-      return fail("restart_manifest_changed", "restart manifest does not match the admitted record");
-    }
+  const existing = readExistingAdmissionReceipt(receiptPath, admitted);
+  if (existing) {
     admittedManifestSha256 = existing.manifest_sha256;
     return existing;
   }
-  const receipt: SourceSyncAdmissionReceipt = {
+  let receipt: SourceSyncAdmissionReceipt = {
     operation: SOURCE_SYNC_OPERATION,
     owner: "node",
     worker_pid: process.pid,
@@ -379,7 +387,6 @@ export function beginSourceSyncAdmission(dataDir: string): SourceSyncAdmissionRe
   const payload = Buffer.from(JSON.stringify(receipt, null, 2));
   mkdirSync(dataDir, { recursive: true });
   const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-  let published = false;
   try {
     try {
       writeFileSync(fd, payload);
@@ -387,16 +394,21 @@ export function beginSourceSyncAdmission(dataDir: string): SourceSyncAdmissionRe
     } finally {
       closeSync(fd);
     }
-    renameSync(temporary, receiptPath);
-    published = true;
-    const directory = openSync(dataDir, "r");
     try {
-      fsyncSync(directory);
-    } finally {
-      closeSync(directory);
+      linkSync(temporary, receiptPath);
+    } catch (error) {
+      if (!isRecord(error) || error.code !== "EEXIST") throw error;
+      receipt = readExistingAdmissionReceipt(receiptPath, admitted)
+        ?? fail("malformed", "concurrent admission receipt disappeared");
     }
   } finally {
-    if (!published) rmSync(temporary, { force: true });
+    rmSync(temporary, { force: true });
+  }
+  const directory = openSync(dataDir, "r");
+  try {
+    fsyncSync(directory);
+  } finally {
+    closeSync(directory);
   }
   admittedManifestSha256 = receipt.manifest_sha256;
   return receipt;
