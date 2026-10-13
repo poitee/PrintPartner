@@ -697,6 +697,58 @@ selections:
     database.close();
   });
 
+  it("keeps a draft PATCH that commits after recompute has prepared the replacement", () => {
+    const { database, raw, profile, repo, draft } = editableDraftFixture();
+    const bracket = draft.parts.find((part) => part.filename === "bracket.stl");
+    const gear = draft.parts.find((part) => part.filename === "gear.stl");
+    if (!bracket || !gear) throw new Error("editable draft Parts are missing");
+    const included = repo.editPlanDraftParts({
+      profileId: profile.id,
+      draftId: draft.id,
+      expectedSnapshotDigest: draft.snapshotDigest,
+      decision: { kind: "set_included", partIds: [bracket.id], value: false },
+    });
+    expect(included.kind).toBe("updated");
+    if (included.kind !== "updated") throw new Error("inclusion PATCH was not applied");
+    const acceptedBefore = snapshotTables(raw, ACCEPTED_STATE_TABLES);
+    const concurrent = new AppRepository(getDb(database), "default", database.reposDir);
+    const nativeTransaction = repo.transaction.bind(repo);
+    repo.transaction = <T>(fn: () => T, behavior: "deferred" | "immediate" = "deferred"): T => {
+      const quantity = concurrent.editPlanDraftParts({
+        profileId: profile.id,
+        draftId: draft.id,
+        expectedSnapshotDigest: included.draft.snapshotDigest,
+        decision: { kind: "set_quantity_override", partIds: [gear.id], value: 9 },
+      });
+      if (quantity.kind !== "updated") throw new Error("quantity PATCH was not applied");
+      return nativeTransaction(fn, behavior);
+    };
+
+    const recomputed = repo.recomputePlanDraft({
+      profileId: profile.id,
+      actor: "test:user",
+      idempotencyKey: "recompute-after-patch",
+      applyManifest: false,
+    });
+
+    expect(recomputed.kind).toBe("created");
+    if (recomputed.kind !== "created") throw new Error("replacement draft was not created");
+    expect(recomputed.draft.parts.find((part) => part.filename === "bracket.stl")).toMatchObject({
+      included: false,
+      quantityOverride: null,
+      quantityEffective: 1,
+    });
+    expect(recomputed.draft.parts.find((part) => part.filename === "gear.stl")).toMatchObject({
+      included: true,
+      quantityOverride: 9,
+      quantityEffective: 9,
+    });
+    expect(repo.getPlanDraft(profile.id, draft.id)?.state).toBe("abandoned");
+    expect(recomputed.draft.id).not.toBe(draft.id);
+    expect(snapshotTables(raw, ACCEPTED_STATE_TABLES)).toEqual(acceptedBefore);
+    database.close();
+  });
+
   it("persists accepted-baseline planning fields and duplicate-key diff across restart", () => {
     const { database, raw, repo } = fixture();
     const sourceRoot = join(database.reposDir, "accepted-source");

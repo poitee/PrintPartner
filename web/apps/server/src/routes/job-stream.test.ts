@@ -58,8 +58,8 @@ async function fixture() {
   const auth = new AuthStore(getDb(db));
   const owner = auth.createUser({ displayName: "Owner" });
   const other = auth.createUser({ displayName: "Other" });
-  const ownerCookie = `pp_session=${auth.createSession(owner.id)}`;
-  const otherCookie = `pp_session=${auth.createSession(other.id)}`;
+  const ownerCookie = `pp_session=${auth.createSession(owner.id, "email")}`;
+  const otherCookie = `pp_session=${auth.createSession(other.id, "email")}`;
   const jobs = new SimulatedJobRunner({
     getRepo: () => repository, dataDir, reposDir: db.reposDir, exportsDir: join(dataDir, "exports"),
   });
