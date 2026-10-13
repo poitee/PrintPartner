@@ -16,6 +16,7 @@ on:
       - ".cursor/skills/verify-print-partner/helpers/**"
       - "Caddyfile"
       - "README.md"
+      - "THIRD_PARTY_NOTICES.md"
       - "CHANGELOG.md"
       - "OPERATIONS.md"
       - ".github/FUNDING.yml"
@@ -40,6 +41,7 @@ on:
       - ".cursor/skills/verify-print-partner/helpers/**"
       - "Caddyfile"
       - "README.md"
+      - "THIRD_PARTY_NOTICES.md"
       - "CHANGELOG.md"
       - "OPERATIONS.md"
       - ".github/FUNDING.yml"
@@ -94,6 +96,8 @@ jobs:
           fi
       - name: Audit high-severity vulnerabilities
         run: npm audit --audit-level=high
+      - name: Check dependency notices
+        run: node ../scripts/update-third-party-notices.mjs --check
       - name: Full quality suite
         env:
           PLAYWRIGHT_CHROMIUM_EXECUTABLE: /usr/bin/google-chrome
