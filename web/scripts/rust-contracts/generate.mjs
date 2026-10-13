@@ -33,7 +33,8 @@ export function generate(document) {
       return emit(definitions[key], definitions, key, [...visited, key]);
     }
     const union = schema.anyOf ?? schema.oneOf;
-    if (union) result = `z.union([${union.map((item) => emit(item, definitions)).join(", ")}])`;
+    if (schema.oneOf) result = `z.discriminatedUnion("kind", [${schema.oneOf.map((item) => emit(item, definitions)).join(", ")}])`;
+    else if (union) result = `z.union([${union.map((item) => emit(item, definitions)).join(", ")}])`;
     else if (schema.allOf) {
       assert.equal(schema.allOf.length, 1, "Multiple schema intersections unsupported");
       result = emit(schema.allOf[0], definitions);
@@ -84,7 +85,7 @@ export function generate(document) {
         if (schema.minLength !== undefined) result += `.min(${schema.minLength})`;
         if (schema.maxLength !== undefined) result += `.max(${schema.maxLength})`;
         if (schema.pattern) result += `.regex(new RegExp(${quote(schema.pattern)}))`;
-        if (schema["x-unicode-scalar"]) result += '.refine((value) => value.isWellFormed(), "invalid_unicode_scalar_text")';
+        if (schema["x-unicode-scalar"]) result += '.refine((value) => !/[\\uD800-\\uDFFF]/u.test(value), "invalid_unicode_scalar_text")';
         break;
       case "boolean": result = "z.boolean()"; break;
       case "null": result = "z.null()"; break;

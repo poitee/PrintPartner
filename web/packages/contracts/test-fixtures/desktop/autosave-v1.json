@@ -547,57 +547,27 @@
                 "errors": [
                   [
                     {
-                      "code": "invalid_value",
-                      "values": [
-                        "set_included"
-                      ],
-                      "path": [
-                        "kind"
-                      ],
-                      "message": "Invalid input: expected \"set_included\""
-                    },
-                    {
-                      "expected": "boolean",
-                      "code": "invalid_type",
-                      "path": [
-                        "value"
-                      ],
-                      "message": "Invalid input: expected boolean, received number"
+                      "origin": "number",
+                      "code": "too_small",
+                      "minimum": 1,
+                      "inclusive": true,
+                      "path": [],
+                      "message": "Too small: expected number to be >=1"
                     }
                   ],
                   [
                     {
-                      "code": "invalid_union",
-                      "errors": [
-                        [
-                          {
-                            "origin": "number",
-                            "code": "too_small",
-                            "minimum": 1,
-                            "inclusive": true,
-                            "path": [],
-                            "message": "Too small: expected number to be >=1"
-                          }
-                        ],
-                        [
-                          {
-                            "expected": "null",
-                            "code": "invalid_type",
-                            "path": [],
-                            "message": "Invalid input: expected null, received number"
-                          }
-                        ]
-                      ],
-                      "path": [
-                        "value"
-                      ],
-                      "message": "Invalid input"
+                      "expected": "null",
+                      "code": "invalid_type",
+                      "path": [],
+                      "message": "Invalid input: expected null, received number"
                     }
                   ]
                 ],
                 "path": [
                   "decisions",
-                  0
+                  0,
+                  "value"
                 ],
                 "message": "Invalid input"
               }
@@ -635,57 +605,27 @@
                 "errors": [
                   [
                     {
-                      "code": "invalid_value",
-                      "values": [
-                        "set_included"
-                      ],
-                      "path": [
-                        "kind"
-                      ],
-                      "message": "Invalid input: expected \"set_included\""
-                    },
-                    {
-                      "expected": "boolean",
-                      "code": "invalid_type",
-                      "path": [
-                        "value"
-                      ],
-                      "message": "Invalid input: expected boolean, received number"
+                      "origin": "number",
+                      "code": "too_small",
+                      "minimum": 1,
+                      "inclusive": true,
+                      "path": [],
+                      "message": "Too small: expected number to be >=1"
                     }
                   ],
                   [
                     {
-                      "code": "invalid_union",
-                      "errors": [
-                        [
-                          {
-                            "origin": "number",
-                            "code": "too_small",
-                            "minimum": 1,
-                            "inclusive": true,
-                            "path": [],
-                            "message": "Too small: expected number to be >=1"
-                          }
-                        ],
-                        [
-                          {
-                            "expected": "null",
-                            "code": "invalid_type",
-                            "path": [],
-                            "message": "Invalid input: expected null, received number"
-                          }
-                        ]
-                      ],
-                      "path": [
-                        "value"
-                      ],
-                      "message": "Invalid input"
+                      "expected": "null",
+                      "code": "invalid_type",
+                      "path": [],
+                      "message": "Invalid input: expected null, received number"
                     }
                   ]
                 ],
                 "path": [
                   "decisions",
-                  0
+                  0,
+                  "value"
                 ],
                 "message": "Invalid input"
               }
@@ -723,57 +663,27 @@
                 "errors": [
                   [
                     {
-                      "code": "invalid_value",
-                      "values": [
-                        "set_included"
-                      ],
-                      "path": [
-                        "kind"
-                      ],
-                      "message": "Invalid input: expected \"set_included\""
-                    },
-                    {
-                      "expected": "boolean",
-                      "code": "invalid_type",
-                      "path": [
-                        "value"
-                      ],
-                      "message": "Invalid input: expected boolean, received number"
+                      "origin": "number",
+                      "code": "too_big",
+                      "maximum": 10000,
+                      "inclusive": true,
+                      "path": [],
+                      "message": "Too big: expected number to be <=10000"
                     }
                   ],
                   [
                     {
-                      "code": "invalid_union",
-                      "errors": [
-                        [
-                          {
-                            "origin": "number",
-                            "code": "too_big",
-                            "maximum": 10000,
-                            "inclusive": true,
-                            "path": [],
-                            "message": "Too big: expected number to be <=10000"
-                          }
-                        ],
-                        [
-                          {
-                            "expected": "null",
-                            "code": "invalid_type",
-                            "path": [],
-                            "message": "Invalid input: expected null, received number"
-                          }
-                        ]
-                      ],
-                      "path": [
-                        "value"
-                      ],
-                      "message": "Invalid input"
+                      "expected": "null",
+                      "code": "invalid_type",
+                      "path": [],
+                      "message": "Invalid input: expected null, received number"
                     }
                   ]
                 ],
                 "path": [
                   "decisions",
-                  0
+                  0,
+                  "value"
                 ],
                 "message": "Invalid input"
               }
@@ -811,56 +721,26 @@
                 "errors": [
                   [
                     {
-                      "code": "invalid_value",
-                      "values": [
-                        "set_included"
-                      ],
-                      "path": [
-                        "kind"
-                      ],
-                      "message": "Invalid input: expected \"set_included\""
-                    },
-                    {
-                      "expected": "boolean",
+                      "expected": "int",
+                      "format": "safeint",
                       "code": "invalid_type",
-                      "path": [
-                        "value"
-                      ],
-                      "message": "Invalid input: expected boolean, received number"
+                      "path": [],
+                      "message": "Invalid input: expected int, received number"
                     }
                   ],
                   [
                     {
-                      "code": "invalid_union",
-                      "errors": [
-                        [
-                          {
-                            "expected": "int",
-                            "format": "safeint",
-                            "code": "invalid_type",
-                            "path": [],
-                            "message": "Invalid input: expected int, received number"
-                          }
-                        ],
-                        [
-                          {
-                            "expected": "null",
-                            "code": "invalid_type",
-                            "path": [],
-                            "message": "Invalid input: expected null, received number"
-                          }
-                        ]
-                      ],
-                      "path": [
-                        "value"
-                      ],
-                      "message": "Invalid input"
+                      "expected": "null",
+                      "code": "invalid_type",
+                      "path": [],
+                      "message": "Invalid input: expected null, received number"
                     }
                   ]
                 ],
                 "path": [
                   "decisions",
-                  0
+                  0,
+                  "value"
                 ],
                 "message": "Invalid input"
               }
@@ -898,55 +778,25 @@
                 "errors": [
                   [
                     {
-                      "code": "invalid_value",
-                      "values": [
-                        "set_included"
-                      ],
-                      "path": [
-                        "kind"
-                      ],
-                      "message": "Invalid input: expected \"set_included\""
-                    },
-                    {
-                      "expected": "boolean",
+                      "expected": "number",
                       "code": "invalid_type",
-                      "path": [
-                        "value"
-                      ],
-                      "message": "Invalid input: expected boolean, received string"
+                      "path": [],
+                      "message": "Invalid input: expected number, received string"
                     }
                   ],
                   [
                     {
-                      "code": "invalid_union",
-                      "errors": [
-                        [
-                          {
-                            "expected": "number",
-                            "code": "invalid_type",
-                            "path": [],
-                            "message": "Invalid input: expected number, received string"
-                          }
-                        ],
-                        [
-                          {
-                            "expected": "null",
-                            "code": "invalid_type",
-                            "path": [],
-                            "message": "Invalid input: expected null, received string"
-                          }
-                        ]
-                      ],
-                      "path": [
-                        "value"
-                      ],
-                      "message": "Invalid input"
+                      "expected": "null",
+                      "code": "invalid_type",
+                      "path": [],
+                      "message": "Invalid input: expected null, received string"
                     }
                   ]
                 ],
                 "path": [
                   "decisions",
-                  0
+                  0,
+                  "value"
                 ],
                 "message": "Invalid input"
               }
@@ -984,47 +834,25 @@
                 "errors": [
                   [
                     {
-                      "code": "invalid_value",
-                      "values": [
-                        "set_included"
-                      ],
-                      "path": [
-                        "kind"
-                      ],
-                      "message": "Invalid input: expected \"set_included\""
+                      "expected": "number",
+                      "code": "invalid_type",
+                      "path": [],
+                      "message": "Invalid input: expected number, received boolean"
                     }
                   ],
                   [
                     {
-                      "code": "invalid_union",
-                      "errors": [
-                        [
-                          {
-                            "expected": "number",
-                            "code": "invalid_type",
-                            "path": [],
-                            "message": "Invalid input: expected number, received boolean"
-                          }
-                        ],
-                        [
-                          {
-                            "expected": "null",
-                            "code": "invalid_type",
-                            "path": [],
-                            "message": "Invalid input: expected null, received boolean"
-                          }
-                        ]
-                      ],
-                      "path": [
-                        "value"
-                      ],
-                      "message": "Invalid input"
+                      "expected": "null",
+                      "code": "invalid_type",
+                      "path": [],
+                      "message": "Invalid input: expected null, received boolean"
                     }
                   ]
                 ],
                 "path": [
                   "decisions",
-                  0
+                  0,
+                  "value"
                 ],
                 "message": "Invalid input"
               }
@@ -1061,55 +889,25 @@
                 "errors": [
                   [
                     {
-                      "code": "invalid_value",
-                      "values": [
-                        "set_included"
-                      ],
-                      "path": [
-                        "kind"
-                      ],
-                      "message": "Invalid input: expected \"set_included\""
-                    },
-                    {
-                      "expected": "boolean",
+                      "expected": "number",
                       "code": "invalid_type",
-                      "path": [
-                        "value"
-                      ],
-                      "message": "Invalid input: expected boolean, received undefined"
+                      "path": [],
+                      "message": "Invalid input: expected number, received undefined"
                     }
                   ],
                   [
                     {
-                      "code": "invalid_union",
-                      "errors": [
-                        [
-                          {
-                            "expected": "number",
-                            "code": "invalid_type",
-                            "path": [],
-                            "message": "Invalid input: expected number, received undefined"
-                          }
-                        ],
-                        [
-                          {
-                            "expected": "null",
-                            "code": "invalid_type",
-                            "path": [],
-                            "message": "Invalid input: expected null, received undefined"
-                          }
-                        ]
-                      ],
-                      "path": [
-                        "value"
-                      ],
-                      "message": "Invalid input"
+                      "expected": "null",
+                      "code": "invalid_type",
+                      "path": [],
+                      "message": "Invalid input: expected null, received undefined"
                     }
                   ]
                 ],
                 "path": [
                   "decisions",
-                  0
+                  0,
+                  "value"
                 ],
                 "message": "Invalid input"
               }
@@ -1146,99 +944,26 @@
                 "errors": [
                   [
                     {
-                      "code": "invalid_union",
-                      "errors": [
-                        [
-                          {
-                            "expected": "string",
-                            "code": "invalid_type",
-                            "path": [],
-                            "message": "Invalid input: expected string, received undefined"
-                          }
-                        ],
-                        [
-                          {
-                            "expected": "null",
-                            "code": "invalid_type",
-                            "path": [],
-                            "message": "Invalid input: expected null, received undefined"
-                          }
-                        ]
-                      ],
-                      "path": [
-                        "target",
-                        "source_layer"
-                      ],
-                      "message": "Invalid input"
+                      "expected": "string",
+                      "code": "invalid_type",
+                      "path": [],
+                      "message": "Invalid input: expected string, received undefined"
                     }
                   ],
                   [
                     {
-                      "code": "invalid_value",
-                      "values": [
-                        "set_quantity_override"
-                      ],
-                      "path": [
-                        "kind"
-                      ],
-                      "message": "Invalid input: expected \"set_quantity_override\""
-                    },
-                    {
-                      "code": "invalid_union",
-                      "errors": [
-                        [
-                          {
-                            "expected": "string",
-                            "code": "invalid_type",
-                            "path": [],
-                            "message": "Invalid input: expected string, received undefined"
-                          }
-                        ],
-                        [
-                          {
-                            "expected": "null",
-                            "code": "invalid_type",
-                            "path": [],
-                            "message": "Invalid input: expected null, received undefined"
-                          }
-                        ]
-                      ],
-                      "path": [
-                        "target",
-                        "source_layer"
-                      ],
-                      "message": "Invalid input"
-                    },
-                    {
-                      "code": "invalid_union",
-                      "errors": [
-                        [
-                          {
-                            "expected": "number",
-                            "code": "invalid_type",
-                            "path": [],
-                            "message": "Invalid input: expected number, received boolean"
-                          }
-                        ],
-                        [
-                          {
-                            "expected": "null",
-                            "code": "invalid_type",
-                            "path": [],
-                            "message": "Invalid input: expected null, received boolean"
-                          }
-                        ]
-                      ],
-                      "path": [
-                        "value"
-                      ],
-                      "message": "Invalid input"
+                      "expected": "null",
+                      "code": "invalid_type",
+                      "path": [],
+                      "message": "Invalid input: expected null, received undefined"
                     }
                   ]
                 ],
                 "path": [
                   "decisions",
-                  0
+                  0,
+                  "target",
+                  "source_layer"
                 ],
                 "message": "Invalid input"
               }
@@ -1802,62 +1527,19 @@
             "issues": [
               {
                 "code": "invalid_union",
-                "errors": [
-                  [
-                    {
-                      "code": "invalid_value",
-                      "values": [
-                        "set_included"
-                      ],
-                      "path": [
-                        "kind"
-                      ],
-                      "message": "Invalid input: expected \"set_included\""
-                    }
-                  ],
-                  [
-                    {
-                      "code": "invalid_value",
-                      "values": [
-                        "set_quantity_override"
-                      ],
-                      "path": [
-                        "kind"
-                      ],
-                      "message": "Invalid input: expected \"set_quantity_override\""
-                    },
-                    {
-                      "code": "invalid_union",
-                      "errors": [
-                        [
-                          {
-                            "expected": "number",
-                            "code": "invalid_type",
-                            "path": [],
-                            "message": "Invalid input: expected number, received boolean"
-                          }
-                        ],
-                        [
-                          {
-                            "expected": "null",
-                            "code": "invalid_type",
-                            "path": [],
-                            "message": "Invalid input: expected null, received boolean"
-                          }
-                        ]
-                      ],
-                      "path": [
-                        "value"
-                      ],
-                      "message": "Invalid input"
-                    }
-                  ]
+                "errors": [],
+                "note": "No matching discriminator",
+                "discriminator": "kind",
+                "options": [
+                  "set_included",
+                  "set_quantity_override"
                 ],
                 "path": [
                   "decisions",
-                  0
+                  0,
+                  "kind"
                 ],
-                "message": "Invalid input"
+                "message": "Invalid discriminator value. Expected 'set_included' | 'set_quantity_override'"
               }
             ]
           }
@@ -13736,57 +13418,27 @@
               "errors": [
                 [
                   {
-                    "code": "invalid_value",
-                    "values": [
-                      "set_included"
-                    ],
-                    "path": [
-                      "kind"
-                    ],
-                    "message": "Invalid input: expected \"set_included\""
-                  },
-                  {
-                    "expected": "boolean",
-                    "code": "invalid_type",
-                    "path": [
-                      "value"
-                    ],
-                    "message": "Invalid input: expected boolean, received number"
+                    "origin": "number",
+                    "code": "too_small",
+                    "minimum": 1,
+                    "inclusive": true,
+                    "path": [],
+                    "message": "Too small: expected number to be >=1"
                   }
                 ],
                 [
                   {
-                    "code": "invalid_union",
-                    "errors": [
-                      [
-                        {
-                          "origin": "number",
-                          "code": "too_small",
-                          "minimum": 1,
-                          "inclusive": true,
-                          "path": [],
-                          "message": "Too small: expected number to be >=1"
-                        }
-                      ],
-                      [
-                        {
-                          "expected": "null",
-                          "code": "invalid_type",
-                          "path": [],
-                          "message": "Invalid input: expected null, received number"
-                        }
-                      ]
-                    ],
-                    "path": [
-                      "value"
-                    ],
-                    "message": "Invalid input"
+                    "expected": "null",
+                    "code": "invalid_type",
+                    "path": [],
+                    "message": "Invalid input: expected null, received number"
                   }
                 ]
               ],
               "path": [
                 "decisions",
-                0
+                0,
+                "value"
               ],
               "message": "Invalid input"
             }
@@ -13824,57 +13476,27 @@
               "errors": [
                 [
                   {
-                    "code": "invalid_value",
-                    "values": [
-                      "set_included"
-                    ],
-                    "path": [
-                      "kind"
-                    ],
-                    "message": "Invalid input: expected \"set_included\""
-                  },
-                  {
-                    "expected": "boolean",
-                    "code": "invalid_type",
-                    "path": [
-                      "value"
-                    ],
-                    "message": "Invalid input: expected boolean, received number"
+                    "origin": "number",
+                    "code": "too_small",
+                    "minimum": 1,
+                    "inclusive": true,
+                    "path": [],
+                    "message": "Too small: expected number to be >=1"
                   }
                 ],
                 [
                   {
-                    "code": "invalid_union",
-                    "errors": [
-                      [
-                        {
-                          "origin": "number",
-                          "code": "too_small",
-                          "minimum": 1,
-                          "inclusive": true,
-                          "path": [],
-                          "message": "Too small: expected number to be >=1"
-                        }
-                      ],
-                      [
-                        {
-                          "expected": "null",
-                          "code": "invalid_type",
-                          "path": [],
-                          "message": "Invalid input: expected null, received number"
-                        }
-                      ]
-                    ],
-                    "path": [
-                      "value"
-                    ],
-                    "message": "Invalid input"
+                    "expected": "null",
+                    "code": "invalid_type",
+                    "path": [],
+                    "message": "Invalid input: expected null, received number"
                   }
                 ]
               ],
               "path": [
                 "decisions",
-                0
+                0,
+                "value"
               ],
               "message": "Invalid input"
             }
@@ -13912,57 +13534,27 @@
               "errors": [
                 [
                   {
-                    "code": "invalid_value",
-                    "values": [
-                      "set_included"
-                    ],
-                    "path": [
-                      "kind"
-                    ],
-                    "message": "Invalid input: expected \"set_included\""
-                  },
-                  {
-                    "expected": "boolean",
-                    "code": "invalid_type",
-                    "path": [
-                      "value"
-                    ],
-                    "message": "Invalid input: expected boolean, received number"
+                    "origin": "number",
+                    "code": "too_big",
+                    "maximum": 10000,
+                    "inclusive": true,
+                    "path": [],
+                    "message": "Too big: expected number to be <=10000"
                   }
                 ],
                 [
                   {
-                    "code": "invalid_union",
-                    "errors": [
-                      [
-                        {
-                          "origin": "number",
-                          "code": "too_big",
-                          "maximum": 10000,
-                          "inclusive": true,
-                          "path": [],
-                          "message": "Too big: expected number to be <=10000"
-                        }
-                      ],
-                      [
-                        {
-                          "expected": "null",
-                          "code": "invalid_type",
-                          "path": [],
-                          "message": "Invalid input: expected null, received number"
-                        }
-                      ]
-                    ],
-                    "path": [
-                      "value"
-                    ],
-                    "message": "Invalid input"
+                    "expected": "null",
+                    "code": "invalid_type",
+                    "path": [],
+                    "message": "Invalid input: expected null, received number"
                   }
                 ]
               ],
               "path": [
                 "decisions",
-                0
+                0,
+                "value"
               ],
               "message": "Invalid input"
             }
@@ -14000,56 +13592,26 @@
               "errors": [
                 [
                   {
-                    "code": "invalid_value",
-                    "values": [
-                      "set_included"
-                    ],
-                    "path": [
-                      "kind"
-                    ],
-                    "message": "Invalid input: expected \"set_included\""
-                  },
-                  {
-                    "expected": "boolean",
+                    "expected": "int",
+                    "format": "safeint",
                     "code": "invalid_type",
-                    "path": [
-                      "value"
-                    ],
-                    "message": "Invalid input: expected boolean, received number"
+                    "path": [],
+                    "message": "Invalid input: expected int, received number"
                   }
                 ],
                 [
                   {
-                    "code": "invalid_union",
-                    "errors": [
-                      [
-                        {
-                          "expected": "int",
-                          "format": "safeint",
-                          "code": "invalid_type",
-                          "path": [],
-                          "message": "Invalid input: expected int, received number"
-                        }
-                      ],
-                      [
-                        {
-                          "expected": "null",
-                          "code": "invalid_type",
-                          "path": [],
-                          "message": "Invalid input: expected null, received number"
-                        }
-                      ]
-                    ],
-                    "path": [
-                      "value"
-                    ],
-                    "message": "Invalid input"
+                    "expected": "null",
+                    "code": "invalid_type",
+                    "path": [],
+                    "message": "Invalid input: expected null, received number"
                   }
                 ]
               ],
               "path": [
                 "decisions",
-                0
+                0,
+                "value"
               ],
               "message": "Invalid input"
             }
@@ -14087,55 +13649,25 @@
               "errors": [
                 [
                   {
-                    "code": "invalid_value",
-                    "values": [
-                      "set_included"
-                    ],
-                    "path": [
-                      "kind"
-                    ],
-                    "message": "Invalid input: expected \"set_included\""
-                  },
-                  {
-                    "expected": "boolean",
+                    "expected": "number",
                     "code": "invalid_type",
-                    "path": [
-                      "value"
-                    ],
-                    "message": "Invalid input: expected boolean, received string"
+                    "path": [],
+                    "message": "Invalid input: expected number, received string"
                   }
                 ],
                 [
                   {
-                    "code": "invalid_union",
-                    "errors": [
-                      [
-                        {
-                          "expected": "number",
-                          "code": "invalid_type",
-                          "path": [],
-                          "message": "Invalid input: expected number, received string"
-                        }
-                      ],
-                      [
-                        {
-                          "expected": "null",
-                          "code": "invalid_type",
-                          "path": [],
-                          "message": "Invalid input: expected null, received string"
-                        }
-                      ]
-                    ],
-                    "path": [
-                      "value"
-                    ],
-                    "message": "Invalid input"
+                    "expected": "null",
+                    "code": "invalid_type",
+                    "path": [],
+                    "message": "Invalid input: expected null, received string"
                   }
                 ]
               ],
               "path": [
                 "decisions",
-                0
+                0,
+                "value"
               ],
               "message": "Invalid input"
             }
@@ -14173,47 +13705,25 @@
               "errors": [
                 [
                   {
-                    "code": "invalid_value",
-                    "values": [
-                      "set_included"
-                    ],
-                    "path": [
-                      "kind"
-                    ],
-                    "message": "Invalid input: expected \"set_included\""
+                    "expected": "number",
+                    "code": "invalid_type",
+                    "path": [],
+                    "message": "Invalid input: expected number, received boolean"
                   }
                 ],
                 [
                   {
-                    "code": "invalid_union",
-                    "errors": [
-                      [
-                        {
-                          "expected": "number",
-                          "code": "invalid_type",
-                          "path": [],
-                          "message": "Invalid input: expected number, received boolean"
-                        }
-                      ],
-                      [
-                        {
-                          "expected": "null",
-                          "code": "invalid_type",
-                          "path": [],
-                          "message": "Invalid input: expected null, received boolean"
-                        }
-                      ]
-                    ],
-                    "path": [
-                      "value"
-                    ],
-                    "message": "Invalid input"
+                    "expected": "null",
+                    "code": "invalid_type",
+                    "path": [],
+                    "message": "Invalid input: expected null, received boolean"
                   }
                 ]
               ],
               "path": [
                 "decisions",
-                0
+                0,
+                "value"
               ],
               "message": "Invalid input"
             }
@@ -14250,55 +13760,25 @@
               "errors": [
                 [
                   {
-                    "code": "invalid_value",
-                    "values": [
-                      "set_included"
-                    ],
-                    "path": [
-                      "kind"
-                    ],
-                    "message": "Invalid input: expected \"set_included\""
-                  },
-                  {
-                    "expected": "boolean",
+                    "expected": "number",
                     "code": "invalid_type",
-                    "path": [
-                      "value"
-                    ],
-                    "message": "Invalid input: expected boolean, received undefined"
+                    "path": [],
+                    "message": "Invalid input: expected number, received undefined"
                   }
                 ],
                 [
                   {
-                    "code": "invalid_union",
-                    "errors": [
-                      [
-                        {
-                          "expected": "number",
-                          "code": "invalid_type",
-                          "path": [],
-                          "message": "Invalid input: expected number, received undefined"
-                        }
-                      ],
-                      [
-                        {
-                          "expected": "null",
-                          "code": "invalid_type",
-                          "path": [],
-                          "message": "Invalid input: expected null, received undefined"
-                        }
-                      ]
-                    ],
-                    "path": [
-                      "value"
-                    ],
-                    "message": "Invalid input"
+                    "expected": "null",
+                    "code": "invalid_type",
+                    "path": [],
+                    "message": "Invalid input: expected null, received undefined"
                   }
                 ]
               ],
               "path": [
                 "decisions",
-                0
+                0,
+                "value"
               ],
               "message": "Invalid input"
             }
@@ -14335,99 +13815,26 @@
               "errors": [
                 [
                   {
-                    "code": "invalid_union",
-                    "errors": [
-                      [
-                        {
-                          "expected": "string",
-                          "code": "invalid_type",
-                          "path": [],
-                          "message": "Invalid input: expected string, received undefined"
-                        }
-                      ],
-                      [
-                        {
-                          "expected": "null",
-                          "code": "invalid_type",
-                          "path": [],
-                          "message": "Invalid input: expected null, received undefined"
-                        }
-                      ]
-                    ],
-                    "path": [
-                      "target",
-                      "source_layer"
-                    ],
-                    "message": "Invalid input"
+                    "expected": "string",
+                    "code": "invalid_type",
+                    "path": [],
+                    "message": "Invalid input: expected string, received undefined"
                   }
                 ],
                 [
                   {
-                    "code": "invalid_value",
-                    "values": [
-                      "set_quantity_override"
-                    ],
-                    "path": [
-                      "kind"
-                    ],
-                    "message": "Invalid input: expected \"set_quantity_override\""
-                  },
-                  {
-                    "code": "invalid_union",
-                    "errors": [
-                      [
-                        {
-                          "expected": "string",
-                          "code": "invalid_type",
-                          "path": [],
-                          "message": "Invalid input: expected string, received undefined"
-                        }
-                      ],
-                      [
-                        {
-                          "expected": "null",
-                          "code": "invalid_type",
-                          "path": [],
-                          "message": "Invalid input: expected null, received undefined"
-                        }
-                      ]
-                    ],
-                    "path": [
-                      "target",
-                      "source_layer"
-                    ],
-                    "message": "Invalid input"
-                  },
-                  {
-                    "code": "invalid_union",
-                    "errors": [
-                      [
-                        {
-                          "expected": "number",
-                          "code": "invalid_type",
-                          "path": [],
-                          "message": "Invalid input: expected number, received boolean"
-                        }
-                      ],
-                      [
-                        {
-                          "expected": "null",
-                          "code": "invalid_type",
-                          "path": [],
-                          "message": "Invalid input: expected null, received boolean"
-                        }
-                      ]
-                    ],
-                    "path": [
-                      "value"
-                    ],
-                    "message": "Invalid input"
+                    "expected": "null",
+                    "code": "invalid_type",
+                    "path": [],
+                    "message": "Invalid input: expected null, received undefined"
                   }
                 ]
               ],
               "path": [
                 "decisions",
-                0
+                0,
+                "target",
+                "source_layer"
               ],
               "message": "Invalid input"
             }
@@ -14991,62 +14398,19 @@
           "issues": [
             {
               "code": "invalid_union",
-              "errors": [
-                [
-                  {
-                    "code": "invalid_value",
-                    "values": [
-                      "set_included"
-                    ],
-                    "path": [
-                      "kind"
-                    ],
-                    "message": "Invalid input: expected \"set_included\""
-                  }
-                ],
-                [
-                  {
-                    "code": "invalid_value",
-                    "values": [
-                      "set_quantity_override"
-                    ],
-                    "path": [
-                      "kind"
-                    ],
-                    "message": "Invalid input: expected \"set_quantity_override\""
-                  },
-                  {
-                    "code": "invalid_union",
-                    "errors": [
-                      [
-                        {
-                          "expected": "number",
-                          "code": "invalid_type",
-                          "path": [],
-                          "message": "Invalid input: expected number, received boolean"
-                        }
-                      ],
-                      [
-                        {
-                          "expected": "null",
-                          "code": "invalid_type",
-                          "path": [],
-                          "message": "Invalid input: expected null, received boolean"
-                        }
-                      ]
-                    ],
-                    "path": [
-                      "value"
-                    ],
-                    "message": "Invalid input"
-                  }
-                ]
+              "errors": [],
+              "note": "No matching discriminator",
+              "discriminator": "kind",
+              "options": [
+                "set_included",
+                "set_quantity_override"
               ],
               "path": [
                 "decisions",
-                0
+                0,
+                "kind"
               ],
-              "message": "Invalid input"
+              "message": "Invalid discriminator value. Expected 'set_included' | 'set_quantity_override'"
             }
           ]
         }

@@ -81,6 +81,9 @@ const schemas = load("./schemas.json");
 test("ticket_t_63_contracts_generated_artifact_rejects_drift", () => {
   const actual = readFileSync(new URL("../../packages/contracts/src/rust-wire.generated.ts", import.meta.url), "utf8");
   assert.equal(actual, generate(schemas));
+  assert.doesNotMatch(actual, /isWellFormed/);
+  assert.match(actual, /z\.discriminatedUnion\("kind"/);
+  assert.match(actual, /\[\\uD800-\\uDFFF\]/u);
   const dir = mkdtempSync(join(tmpdir(), "pp-rust-contract-drift-"));
   try {
     const path = join(dir, "drift.ts");
