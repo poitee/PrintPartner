@@ -15,8 +15,8 @@ async function fixture() {
   const auth = new AuthStore(getDb(ports.db.sqlite));
   const owner = auth.createUser({ displayName: "Manifest owner" });
   const foreign = auth.createUser({ displayName: "Other tenant" });
-  const ownerCookie = `pp_session=${auth.createSession(owner.id)}`;
-  const foreignCookie = `pp_session=${auth.createSession(foreign.id)}`;
+  const ownerCookie = `pp_session=${auth.createSession(owner.id, "email")}`;
+  const foreignCookie = `pp_session=${auth.createSession(foreign.id, "email")}`;
   const repo = ports.repository;
   const source = repo.createSource({ name: "Owned manifest source", source_kind: "local" });
   const sourceRoot = join(dataDir, "repos", String(source.id));

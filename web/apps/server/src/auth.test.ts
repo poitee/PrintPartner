@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { getDb, SqliteDatabase } from "./db/client.js";
 import { AppRepository } from "./db/repository.js";
 import { DEFAULT_TENANT_ID } from "./db/schema.js";
+import { toPublicUser } from "./routes/auth-types.js";
 import { AuthStore } from "./services/auth-store.js";
 import { hashPassword, verifyPassword } from "./services/password.js";
 import { tenantStorage } from "./middleware/tenant-context.js";
@@ -31,6 +32,29 @@ describe("password hashing", () => {
 });
 
 describe("AuthStore", () => {
+  it.each(["github", "discord"] as const)("preserves password capability for linked %s sign-ins", (provider) => {
+    const dir = mkdtempSync(join(tmpdir(), "pp-auth-linked-password-"));
+    const sqlite = new SqliteDatabase(dir);
+    sqlite.connect();
+    try {
+      const auth = new AuthStore(getDb(sqlite));
+      const passwordHash = hashPassword("password123");
+      const user = auth.createUser({ email: "linked@example.com", displayName: "Linked", passwordHash });
+      const linked = auth.upsertOAuthUser({ provider, providerUserId: "linked-id", email: user.email, displayName: "Linked" });
+      expect(linked.id).toBe(user.id);
+      expect(linked.passwordHash).toBe(passwordHash);
+      const session = auth.resolveSession(auth.createSession(linked.id, provider));
+      expect(toPublicUser(session!)).toMatchObject({ provider, hasPassword: true });
+
+      const oauthOnly = auth.upsertOAuthUser({ provider, providerUserId: "oauth-only-id", email: null, displayName: "OAuth Only" });
+      const oauthSession = auth.resolveSession(auth.createSession(oauthOnly.id, provider));
+      expect(toPublicUser(oauthSession!)).toMatchObject({ provider, hasPassword: false });
+    } finally {
+      sqlite.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("creates users, sessions, and claims the existing default tenant for the first user", () => {
     const dir = mkdtempSync(join(tmpdir(), "pp-auth-"));
     const sqlite = new SqliteDatabase(dir);
@@ -69,7 +93,7 @@ describe("AuthStore", () => {
       expect(repo.listSources()).toHaveLength(0);
     });
 
-    const raw = auth.createSession(user.id);
+    const raw = auth.createSession(user.id, "email");
     const session = auth.resolveSession(raw);
     expect(session?.user_id).toBe(user.id);
     expect(session?.tenant_id).toBe(user.id);
@@ -221,7 +245,7 @@ describe("AuthStore", () => {
       displayName: "Reset User",
       passwordHash: hashPassword("old-password"),
     });
-    const sessionRaw = auth.createSession(user.id);
+    const sessionRaw = auth.createSession(user.id, "email");
     expect(auth.resolveSession(sessionRaw)).not.toBeNull();
 
     auth.invalidatePasswordResetTokens(user.id);
