@@ -9,10 +9,12 @@ import {
   writeSync,
 } from "node:fs";
 import { createRequire, syncBuiltinESMExports } from "node:module";
+import { constants } from "node:os";
 
 export type ProcessRole = "launcher" | "descendant" | "display" | "worker";
 
 export type SignalResult = "sent" | "refused";
+type RequestedSignal = NodeJS.Signals | number;
 
 type JournalRow =
   | {
@@ -26,13 +28,13 @@ type JournalRow =
       kind: "signal-requested";
       role: ProcessRole;
       pid: number;
-      signal: NodeJS.Signals;
+      signal: RequestedSignal;
       startIdentity: string;
     }
   | {
       kind: "signal-refused";
       pid: number;
-      signal: NodeJS.Signals;
+      signal: RequestedSignal;
       startIdentity: string | null;
       reason: string;
     }
@@ -40,7 +42,7 @@ type JournalRow =
       kind: "signal-sent";
       role: ProcessRole;
       pid: number;
-      signal: NodeJS.Signals;
+      signal: RequestedSignal;
       startIdentity: string;
     }
   | {
@@ -91,8 +93,10 @@ function isRole(value: unknown): value is ProcessRole {
   );
 }
 
-function isSignal(value: unknown): value is NodeJS.Signals {
-  return value === "SIGTERM" || value === "SIGKILL" || value === "SIGINT" || value === "SIGHUP";
+function isSignal(value: unknown): value is RequestedSignal {
+  return typeof value === "number"
+    ? Number.isInteger(value) && value >= 0
+    : typeof value === "string" && Object.hasOwn(constants.signals, value);
 }
 
 function parseRow(value: unknown): JournalRow {
@@ -153,7 +157,7 @@ function parseRow(value: unknown): JournalRow {
     if (code !== null && typeof code !== "number") {
       throw new Error("lifecycle journal has an invalid exit");
     }
-    if (exitSignal !== null && !isSignal(exitSignal)) {
+    if (exitSignal !== null && (typeof exitSignal !== "string" || !isSignal(exitSignal))) {
       throw new Error("lifecycle journal has an invalid exit");
     }
     return {
@@ -249,22 +253,6 @@ function acquire(input: {
   append({ kind: "acquired", ...input });
 }
 
-function normalizeSignal(signal: NodeJS.Signals | number | undefined): NodeJS.Signals {
-  if (signal === undefined || signal === 15 || signal === "SIGTERM") {
-    return "SIGTERM";
-  }
-  if (signal === 9 || signal === "SIGKILL") {
-    return "SIGKILL";
-  }
-  if (signal === 2 || signal === "SIGINT") {
-    return "SIGINT";
-  }
-  if (signal === 1 || signal === "SIGHUP") {
-    return "SIGHUP";
-  }
-  return "SIGTERM";
-}
-
 function isChild(value: unknown): value is ChildProcess {
   return value instanceof ChildProcess;
 }
@@ -320,7 +308,7 @@ function observeChild(child: ChildProcess): void {
   });
 }
 
-export function requestSignal(pid: number, signal: NodeJS.Signals): SignalResult {
+export function requestSignal(pid: number, signal: RequestedSignal): SignalResult {
   const startIdentity = readStartIdentity(pid);
   const owned = startIdentity ? acquiredMatch(pid, startIdentity) : null;
   if (!owned || !startIdentity) {
@@ -366,7 +354,7 @@ export function installOwnedLifecycle(): void {
     this: ChildProcess,
     signal?: NodeJS.Signals | number,
   ): boolean {
-    const normalized = normalizeSignal(signal);
+    const normalized = signal ?? "SIGTERM";
     const pid = this.pid;
     if (!pid) {
       append({

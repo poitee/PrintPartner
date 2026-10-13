@@ -4,6 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "test": "node --import tsx --test src/owned-lifecycle.test.ts && python3 src/run-owned.test.py",
     "smoke": "python3 src/run-owned.py",
     "check-release": "node --import tsx assert-release-exclusion.ts"
   },

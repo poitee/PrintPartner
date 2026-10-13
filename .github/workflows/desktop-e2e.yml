@@ -80,6 +80,8 @@ jobs:
         run: |
           set -euo pipefail
           npm --prefix desktop/e2e ci
+          npm --prefix desktop/e2e test
+          (cd desktop/e2e && npx tsc)
           (
             cd desktop/e2e
             node --import tsx assert-release-exclusion.ts \
