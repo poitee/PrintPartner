@@ -64,6 +64,7 @@ const RECEIPT_FIELDS = new Set([
 ]);
 const MAX_PROCESS_ID = 2_147_483_647;
 let admittedManifestSha256: string | undefined;
+let admittedReceiptPath: string | undefined;
 const LIVE_FORMAT_FIELDS = new Set(["id", "rollback"]);
 const PARTICIPANT_FIELDS = new Set(["id", "kind", "owner", "resources"]);
 const KINDS = new Set(["http", "http_alias", "mcp_action", "job", "startup_watcher", "worker", "migration", "assistant_action"]);
@@ -268,6 +269,12 @@ export function requireSourceSyncParticipant(id: string): undefined {
   if (admittedManifestSha256 !== undefined && admitted.manifestSha256 !== admittedManifestSha256) {
     fail("restart_manifest_changed", "runtime manifest does not match the admitted record");
   }
+  if (admittedReceiptPath !== undefined) {
+    const receipt = readExistingAdmissionReceipt(admittedReceiptPath, admitted);
+    if (receipt === null) {
+      fail("malformed", "admission receipt is not a regular file or cannot be opened");
+    }
+  }
   if (!admitted.participantIds.includes(id)) {
     fail("participant_set_mismatch", `participant set mismatch missing=${JSON.stringify([id])} unexpected=[]`);
   }
@@ -382,6 +389,7 @@ export function beginSourceSyncAdmission(dataDir: string): SourceSyncAdmissionRe
   const existing = readExistingAdmissionReceipt(receiptPath, admitted);
   if (existing) {
     admittedManifestSha256 = existing.manifest_sha256;
+    admittedReceiptPath = receiptPath;
     return existing;
   }
   let receipt: SourceSyncAdmissionReceipt = {
@@ -420,6 +428,7 @@ export function beginSourceSyncAdmission(dataDir: string): SourceSyncAdmissionRe
     closeSync(directory);
   }
   admittedManifestSha256 = receipt.manifest_sha256;
+  admittedReceiptPath = receiptPath;
   return receipt;
 }
 

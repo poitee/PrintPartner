@@ -821,6 +821,17 @@ describe("Source Sync Fastify admission", () => {
     expect(readFileSync(path, "utf8")).toBe(invalidReceipt);
   });
 
+  it("rechecks the persisted receipt at a mutation boundary without rewriting it", () => {
+    const dir = scratch("boundary-receipt");
+    beginSourceSyncAdmission(dir);
+    expect(() => requireSourceSyncParticipant("job.sync")).not.toThrow();
+    const path = sourceSyncAdmissionReceiptPath(dir);
+    const corrupt = "{";
+    writeFileSync(path, corrupt);
+    expect(() => requireSourceSyncParticipant("job.sync")).toThrow(/admission receipt/);
+    expect(readFileSync(path, "utf8")).toBe(corrupt);
+  });
+
   it.each(["symlink", "hardlink"])("ignores a planted receipt temporary %s and preserves its target", (kind) => {
     const dir = scratch(`receipt-${kind}`);
     const manifest = writeManifest(dir, "manifest.json");
