@@ -1,4 +1,4 @@
-use super::Secret;
+use super::{AuthFailure, AuthInputFailure, Secret};
 use anyhow::{Result, anyhow, ensure};
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier, password_hash::SaltString};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -19,9 +19,12 @@ pub(super) fn digest(raw: &str) -> String {
 pub(super) fn validate(password: &Secret) -> Result<()> {
     ensure!(
         password.0.encode_utf16().count() >= 8,
-        "Password must be at least 8 characters"
+        AuthFailure::InvalidInput(AuthInputFailure::PasswordTooShort)
     );
-    ensure!(password.0.len() <= 4096, "Password too long");
+    ensure!(
+        password.0.len() <= 4096,
+        AuthFailure::InvalidInput(AuthInputFailure::TooLong)
+    );
     Ok(())
 }
 pub(super) fn hash(password: &Secret) -> Result<String> {

@@ -2539,7 +2539,8 @@ fn ticket_t_7_migrations_historical_order() {
     let schema_json: serde_json::Value =
         serde_json::from_str(include_str!("../data/schema.json")).unwrap();
     let rust_migrations = schema_json["migrations"].as_array().unwrap();
-    assert_eq!(rust_migrations.len(), 169);
+    // Main has 169 statements. Auth adds sessions.provider.
+    assert_eq!(rust_migrations.len(), 170);
     assert_eq!(schema_json["repair"].as_array().unwrap().len(), 3);
     assert_eq!(schema_json["extras"].as_array().unwrap().len(), 2);
     assert_eq!(schema_json["seeds"].as_array().unwrap().len(), 3);
@@ -2732,11 +2733,12 @@ fn ticket_t_7_migrations_historical_order() {
         let names = historical_diff_names(&diff);
         // legacy_manifest_cutover keeps the ALTER position on schemas 31 and 32.
         // Schema 33+ creates that column in place. The sets match; only the order differs.
-        let expected = if *version < 33 {
-            BTreeSet::from(["projects".to_owned()])
-        } else {
-            BTreeSet::new()
-        };
+        // Historical snapshots create sessions without provider. ALTER appends it,
+        // so sqlite_master text differs from the fresh CREATE while the columns match.
+        let mut expected = BTreeSet::from(["sessions".to_owned()]);
+        if *version < 33 {
+            expected.insert("projects".to_owned());
+        }
         assert_eq!(names, expected, "{label} upgrade vs fresh: {diff:#?}");
         let fresh_columns = table_columns(&fresh_dir.join("print-partner.db"), "projects");
         let upgraded_columns = table_columns(&work.join("print-partner.db"), "projects");
@@ -2765,6 +2767,14 @@ fn ticket_t_7_migrations_historical_order() {
         } else {
             assert_eq!(fresh_columns, upgraded_columns, "{label}");
         }
+        let fresh_sessions = table_columns(&fresh_dir.join("print-partner.db"), "sessions");
+        let upgraded_sessions = table_columns(&work.join("print-partner.db"), "sessions");
+        assert_eq!(fresh_sessions, upgraded_sessions, "{label} sessions");
+        assert_eq!(
+            fresh_sessions.last().map(String::as_str),
+            Some("provider"),
+            "{label}"
+        );
     }
     assert_second_open_keeps_catalog(&fresh_dir, "fresh");
 }
@@ -3289,7 +3299,26 @@ fn ticket_t_7_migrations_matches_node_upgrade() {
             &node_dir.join("print-partner.db"),
             &rust_dir.join("print-partner.db"),
         );
-        assert!(diff.is_empty(), "{label} Node upgrade vs Rust: {diff:#?}");
+        // The pinned Node client predates sessions.provider. Current Rust appends it.
+        let names = historical_diff_names(&diff);
+        assert_eq!(
+            names,
+            BTreeSet::from(["sessions".to_owned()]),
+            "{label} Node upgrade vs Rust: {diff:#?}"
+        );
+        let node_sessions = table_columns(&node_dir.join("print-partner.db"), "sessions");
+        let rust_sessions = table_columns(&rust_dir.join("print-partner.db"), "sessions");
+        assert!(
+            !node_sessions.iter().any(|column| column == "provider"),
+            "{label}"
+        );
+        let mut without_provider = rust_sessions.clone();
+        assert_eq!(
+            without_provider.pop().as_deref(),
+            Some("provider"),
+            "{label}"
+        );
+        assert_eq!(node_sessions, without_provider, "{label}");
         assert_eq!(
             table_columns(&node_dir.join("print-partner.db"), "projects"),
             table_columns(&rust_dir.join("print-partner.db"), "projects"),
