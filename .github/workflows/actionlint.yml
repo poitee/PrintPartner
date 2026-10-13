@@ -13,8 +13,6 @@ on:
 
 permissions:
   contents: read
-  checks: write
-  pull-requests: write
 
 jobs:
   ci-plan:
@@ -29,9 +27,21 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Run actionlint
-        uses: reviewdog/action-actionlint@a8ac3eea598697a830f7d8e701fc9fcbfde88974 # v1.80.0
+      - name: Install pinned native actionlint
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/actionlint_1.7.12_linux_amd64.tar.gz"
+          curl --fail --location --retry 3 --output "$archive" \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $archive" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/actionlint-bin"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/actionlint-bin" actionlint
+          echo "$RUNNER_TEMP/actionlint-bin" >> "$GITHUB_PATH"
+      - name: Install native ShellCheck
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
         with:
-          fail_level: error
-          filter_mode: nofilter
-          reporter: github-check
+          tool: shellcheck@0.11.0
+          fallback: none
+      - name: Run actionlint
+        run: actionlint
