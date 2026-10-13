@@ -1,9 +1,12 @@
 # Rust-to-Zod parity proof
 
 This lane exports draft-7 schemas from native Rust wire DTOs and constrained
-scalar types, then generates separate TypeScript/Zod parsers. It does not change
-production imports, route aliases, workers, transactions or ownership. GRE-445
-remains open until its dependency gates and complete operation switch pass.
+scalar types, then generates TypeScript/Zod parsers. The three proven production
+parsers, `parseSavePlanChoicesRequest`, `parsePlanDraftIdentity`, and
+`parseApplyPlanDraftReceipt`, execute that generated module. Handwritten Zod
+remains the typify export. Route aliases, workers, and transactions stay on
+Node. GRE-445 remains open until its dependency gates and complete operation
+switch pass.
 
 Run from `web/`:
 
@@ -74,6 +77,7 @@ isolated copies of executable inputs and require freshness verification to fail.
 
 This proof does not establish route/worker cutover, failure/restart recovery of
 an operation, WS/MCP protocol parity or dependency completion. Node retains
-production authority throughout this unit.
+route, worker, and transaction authority. The generated module is authoritative
+for the three proven production parsers.
 
 Generated integer parsers normalize negative zero to zero after validation, matching native unsigned serialization. Raw-input controls cover zero-allowed root and nested DTO fields and reject negative zero for positive receipt and array decision quantities. A planted emitter regression must fail exact-output parity.

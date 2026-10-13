@@ -18,7 +18,7 @@ const checks = [];
 function files(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((item) => item.name === "target" || item.name === "node_modules" ? [] : item.isDirectory() ? files(join(directory, item.name)) : [join(directory, item.name)]);
 }
-const sourceFiles = [...files(join(repo, "rust/crates/pp-contracts")), ...files(join(repo, "rust/crates/pp-api-types")), ...files(join(repo, "rust/crates/pp-domain")), ...files(join(web, "scripts/desktop-contracts")), ...files(join(web, "scripts/rust-contracts")), join(web, "packages/contracts/src/plan-drafts.ts"), join(web, "packages/contracts/src/wire-schema.ts"), ...files(join(web, "packages/contracts/test-fixtures/t9")), join(web, "packages/contracts/test-fixtures/desktop/autosave-v1.json"), join(web, "package.json"), join(web, "package-lock.json"), join(repo, "rust/Cargo.toml"), join(repo, "rust/Cargo.lock"), join(repo, "rust/scripts/check-boundaries.py")];
+const sourceFiles = [...files(join(repo, "rust/crates/pp-contracts")), ...files(join(repo, "rust/crates/pp-api-types")), ...files(join(repo, "rust/crates/pp-domain")), ...files(join(web, "scripts/desktop-contracts")), ...files(join(web, "scripts/rust-contracts")), join(web, "packages/contracts/src/plan-drafts.ts"), join(web, "packages/contracts/src/wire-schema.ts"), join(web, "packages/contracts/src/rust-wire.generated.ts"), ...files(join(web, "packages/contracts/test-fixtures/t9")), join(web, "packages/contracts/test-fixtures/desktop/autosave-v1.json"), join(web, "package.json"), join(web, "package-lock.json"), join(repo, "rust/Cargo.toml"), join(repo, "rust/Cargo.lock"), join(repo, "rust/scripts/check-boundaries.py")];
 const sources = Object.fromEntries(sourceFiles.map((path) => [path, sha256(readFileSync(path))]));
 let failure;
 function run(name, executable, args, cwd) {
@@ -33,8 +33,8 @@ try {
   run("rust-version", cargo, ["--version"], repo);
   assert.match(readFileSync(join(output, "rust-version.log"), "utf8"), /^cargo 1\.99\.0\b/, "Use the pinned Rust 1.99.0 toolchain");
   run("regenerate", process.execPath, ["scripts/desktop-contracts/regenerate.mjs"], web);
-  run("generated-diff", "git", ["diff", "--exit-code", "--", "web/scripts/desktop-contracts/schemas", "rust/crates/pp-api-types/src/generated.rs", "web/scripts/rust-contracts/schemas.json", "web/scripts/rust-contracts/generated.ts"], repo);
-  run("generated-untracked", "git", ["ls-files", "--others", "--exclude-standard", "--", "web/scripts/desktop-contracts/schemas", "rust/crates/pp-api-types/src/generated.rs", "web/scripts/rust-contracts/schemas.json", "web/scripts/rust-contracts/generated.ts"], repo);
+  run("generated-diff", "git", ["diff", "--exit-code", "--", "web/scripts/desktop-contracts/schemas", "rust/crates/pp-api-types/src/generated.rs", "web/scripts/rust-contracts/schemas.json", "web/packages/contracts/src/rust-wire.generated.ts"], repo);
+  run("generated-untracked", "git", ["ls-files", "--others", "--exclude-standard", "--", "web/scripts/desktop-contracts/schemas", "rust/crates/pp-api-types/src/generated.rs", "web/scripts/rust-contracts/schemas.json", "web/packages/contracts/src/rust-wire.generated.ts"], repo);
   assert.equal(readFileSync(join(output, "generated-untracked.log"), "utf8").trim(), "", "Untracked generated artifacts: add them to git");
   run("node-semantics", process.execPath, ["--conditions=development", "--import", "tsx", "--test", "scripts/desktop-contracts/semantics.test.mjs"], web);
   run("schemas", process.execPath, ["--conditions=development", "--import", "tsx", "scripts/desktop-contracts/generate.mjs", "--check", output], web);

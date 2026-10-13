@@ -1,7 +1,8 @@
 # T-9 wire generation and semantic boundaries
 
-`web/packages/contracts` Zod remains the wire-contract owner while Node owns
-transactions. `npm run contracts:generate` (from `web`) exports separate draft-7
+The proven save, identity, and receipt parsers execute `rust-wire.generated.ts`.
+Handwritten Zod in `web/packages/contracts` remains the typify export while Node
+owns transactions. `npm run contracts:generate` (from `web`) exports separate draft-7
 input/output schemas and regenerates checked-in `pp-api-types/src/generated.rs`
 with typify **0.5.0**. This pin is compatible with the workspace's serde_json
 1.0.145; generation dependencies are behind the `codegen` feature. Ordinary
@@ -63,4 +64,5 @@ need protocol fixtures for their actual frames and lifecycle; HTTP schema
 coverage cannot establish those protocols. Neither is implied by this generator.
 There is no native-command DTO in this operation. When one is introduced, use
 **ts-rs 12.0.1** only for that small native DTO; do not add tauri-specta.
-Node retains SQL/transaction ownership, route aliases and workers.
+Node retains SQL/transaction ownership, route aliases and workers. The proven
+wire parsers above are the only production ownership switch in this lane.
