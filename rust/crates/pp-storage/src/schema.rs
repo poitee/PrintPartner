@@ -44,7 +44,7 @@ fn guard_unowned_marker(db: &Path, owned: bool) -> Result<()> {
         return Ok(());
     }
     let value = serde_json::from_slice(&std::fs::read(marker)?)?;
-    crate::storage_lease::ensure_stale_owner(&value)
+    crate::lease::ensure_stale_owner(&value)
 }
 
 pub(crate) fn preflight(path: &Path, owned: bool) -> Result<u64> {

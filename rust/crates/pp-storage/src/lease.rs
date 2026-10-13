@@ -1,7 +1,8 @@
-use crate::storage_lease;
-pub use crate::storage_lease::record_child;
+mod guard;
 use anyhow::{Context, Result, ensure};
 use fs2::FileExt;
+pub(crate) use guard::ensure_stale_owner;
+pub use guard::record_child;
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
@@ -21,7 +22,7 @@ pub struct LeaseRelease {
 
 pub struct StorageLease {
     lock: Option<File>,
-    lease_guard: Option<storage_lease::StorageLease>,
+    lease_guard: Option<guard::StorageLease>,
     data_dir: PathBuf,
     runtime_dir: PathBuf,
     lease: String,
@@ -41,11 +42,11 @@ impl StorageLease {
             .open(data_dir.join(".desktop.lock"))?;
         lock.try_lock_exclusive()
             .context("Data directory already owned")?;
-        let lease_guard = storage_lease::StorageLease::acquire(&data_dir)?;
+        let lease_guard = guard::StorageLease::acquire(&data_dir)?;
         let marker_path = data_dir.join(".desktop-owner.json");
         if marker_path.exists() {
             let marker: serde_json::Value = serde_json::from_slice(&std::fs::read(&marker_path)?)?;
-            storage_lease::ensure_stale_owner(&marker)?;
+            ensure_stale_owner(&marker)?;
             std::fs::rename(
                 &marker_path,
                 data_dir.join(".desktop-lease/previous-marker.json"),
@@ -142,15 +143,13 @@ impl StorageLease {
         let runtime_removed =
             !self.runtime_dir.exists() || std::fs::remove_dir(&self.runtime_dir).is_ok();
         let marker = self.data_dir.join(".desktop-owner.json");
-        let marker_removed =
-            runtime_removed && (!marker.exists() || std::fs::remove_file(&marker).is_ok());
-        let lease_removed = runtime_removed
-            && marker_removed
+        let guard_released = runtime_removed
             && self
                 .lease_guard
                 .as_mut()
                 .is_none_or(|guard| guard.release().is_ok());
-        if !lease_removed {
+        let marker_removed = guard_released && std::fs::remove_file(&marker).is_ok();
+        if !runtime_removed || !marker_removed || !guard_released {
             let retained = Self {
                 lock: self.lock.take(),
                 lease_guard: self.lease_guard.take(),

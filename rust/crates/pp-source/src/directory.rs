@@ -15,7 +15,7 @@ impl Directory {
         }
         let mut root = Self(File::from(fs::open(
             "/",
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Self::search_flags() | OFlags::DIRECTORY | OFlags::CLOEXEC,
             Mode::empty(),
         )?));
         for component in path.components() {
@@ -23,12 +23,37 @@ impl Directory {
                 Component::RootDir => {}
                 Component::Normal(name) => {
                     let name = name.to_str().ok_or(Error::UnsafePath)?;
-                    root = root.child(name, false)?;
+                    root = Self(File::from(fs::openat(
+                        &root.0,
+                        name,
+                        Self::search_flags()
+                            | OFlags::DIRECTORY
+                            | OFlags::NOFOLLOW
+                            | OFlags::CLOEXEC,
+                        Mode::empty(),
+                    )?));
                 }
                 _ => return Err(Error::UnsafePath),
             }
         }
-        Ok(root)
+        // Only the selected root needs enumeration and fsync support. Reopen
+        // the pinned directory rather than resolving the configured path again.
+        root.child(".", false)
+    }
+
+    fn search_flags() -> OFlags {
+        #[cfg(target_os = "linux")]
+        {
+            OFlags::PATH
+        }
+        #[cfg(target_os = "macos")]
+        {
+            OFlags::from_bits_retain(libc::O_SEARCH as _)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            OFlags::RDONLY
+        }
     }
 
     pub(crate) fn child(&self, name: &str, create: bool) -> Result<Self> {

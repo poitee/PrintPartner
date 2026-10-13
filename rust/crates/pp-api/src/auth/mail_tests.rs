@@ -19,11 +19,13 @@ enum Mode {
     Success,
     Reject,
     DropAfterData,
+    Blocked,
 }
 struct SmtpFake {
     port: u16,
     messages: Arc<Mutex<Vec<(String, String, String)>>>,
     connections: Arc<AtomicUsize>,
+    release: Arc<tokio::sync::Semaphore>,
     task: tokio::task::JoinHandle<()>,
 }
 impl SmtpFake {
@@ -34,11 +36,14 @@ impl SmtpFake {
         let captured = messages.clone();
         let connections = Arc::new(AtomicUsize::new(0));
         let accepted = connections.clone();
+        let release = Arc::new(tokio::sync::Semaphore::new(0));
+        let smtp_release = release.clone();
         let task = tokio::spawn(async move {
             loop {
                 let (stream, _) = listener.accept().await.unwrap();
                 accepted.fetch_add(1, Ordering::Relaxed);
                 let captured = captured.clone();
+                let release = smtp_release.clone();
                 tokio::spawn(async move {
                     let mut stream = BufReader::new(stream);
                     stream
@@ -83,6 +88,10 @@ impl SmtpFake {
                                 .unwrap()
                                 .push((from.clone(), to.clone(), message));
                             match mode {
+                                Mode::Blocked => {
+                                    let _permit = release.acquire().await.unwrap();
+                                    "250 queued\r\n"
+                                }
                                 Mode::Success => "250 queued\r\n",
                                 Mode::Reject => "550 rejected\r\n",
                                 Mode::DropAfterData => return,
@@ -109,6 +118,7 @@ impl SmtpFake {
             port,
             messages,
             connections,
+            release,
             task,
         }
     }
@@ -122,6 +132,7 @@ impl SmtpFake {
         )))
     }
     async fn close(self) {
+        self.release.add_permits(16);
         self.task.abort();
         let _ = self.task.await;
     }
@@ -198,7 +209,12 @@ async fn smtp_http_failure_keeps_committed_token_without_enumeration_or_retry() 
     log::set_logger(&LOGS).unwrap();
     log::set_max_level(log::LevelFilter::Warn);
     let mut baseline = None;
-    for mode in [Mode::Success, Mode::Reject, Mode::DropAfterData] {
+    for mode in [
+        Mode::Success,
+        Mode::Reject,
+        Mode::DropAfterData,
+        Mode::Blocked,
+    ] {
         let fake = SmtpFake::start(mode).await;
         let directory = directory();
         let owner = WriterOwner::open(&directory, Limits::default()).unwrap().0;
@@ -236,7 +252,11 @@ async fn smtp_http_failure_keeps_committed_token_without_enumeration_or_retry() 
             .await
             .unwrap();
         });
-        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(3))
+            .build()
+            .unwrap();
         assert_eq!(
             client
                 .post(format!("{origin}/auth/register"))
@@ -279,6 +299,29 @@ async fn smtp_http_failure_keeps_committed_token_without_enumeration_or_retry() 
                 .get("dev_reset_url")
                 .is_none()
         );
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let received = !fake.messages.lock().unwrap().is_empty();
+                let logged = !matches!(mode, Mode::Reject)
+                    || LOGS
+                        .0
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .any(|line| line.contains("error_class=smtp_permanent"));
+                if received && logged {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        if matches!(mode, Mode::Blocked) {
+            assert_eq!(fake.release.available_permits(), 0);
+            // Both HTTP responses completed while the SMTP acknowledgement was blocked.
+            fake.release.add_permits(1);
+        }
         if matches!(mode, Mode::Reject) {
             let logs = LOGS.0.lock().unwrap();
             assert!(logs.iter().any(|line| line.contains(

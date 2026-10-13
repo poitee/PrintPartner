@@ -226,8 +226,8 @@ async fn installed_bundle_start_health_shutdown() -> Result<()> {
         runtime_dir: ownership.runtime_dir.clone(),
         lease: ownership.lease.clone(),
         lease_file: ownership.lock.try_clone()?,
-        port,
         record_child: TestOwnership::record_child,
+        port,
     })?;
     let mut status = supervisor.handle.status.clone();
     let (generation, ready_pid) = wait_for_ready(&mut status).await?;
