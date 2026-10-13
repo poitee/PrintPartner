@@ -206,6 +206,18 @@ pub struct CompatHandle {
 }
 
 impl CompatHandle {
+    /// No child endpoint is published. Node-owned routes must fail closed.
+    pub fn unpublished() -> Self {
+        let (_endpoints, endpoint) = watch::channel(None);
+        let (_states, status) = watch::channel(Status::Starting);
+        let (recover, _recovery) = mpsc::channel(1);
+        Self {
+            endpoint,
+            status,
+            recover,
+        }
+    }
+
     pub fn endpoint(&self) -> Option<Arc<Endpoint>> {
         self.endpoint.borrow().clone()
     }

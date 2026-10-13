@@ -352,6 +352,21 @@ fn digest(value: &str) -> [u8; 32] {
 fn error(status: StatusCode, detail: &'static str) -> Response<Body> {
     (status, axum::Json(serde_json::json!({"detail":detail}))).into_response()
 }
+
+fn node_unavailable() -> Response<Body> {
+    let mut response = Response::new(Body::from(
+        r#"{"type":"about:blank","title":"Service Unavailable","status":503,"detail":"Compatibility backend unavailable"}"#,
+    ));
+    *response.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+    let headers = response.headers_mut();
+    headers.insert(
+        "content-type",
+        HeaderValue::from_static("application/problem+json"),
+    );
+    headers.insert("retry-after", HeaderValue::from_static("1"));
+    headers.insert("cache-control", HeaderValue::from_static("no-store"));
+    response
+}
 fn header<'a>(request: &'a Request<Body>, name: &str) -> Option<&'a str> {
     request.headers().get(name)?.to_str().ok()
 }
@@ -659,14 +674,7 @@ async fn handle(
                 .strip_prefix("/api/v1/integrations/")
                 .is_some_and(|tail| !tail.contains('/')));
     let Some(endpoint) = state.compat.endpoint() else {
-        let mut response = error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Compatibility backend unavailable",
-        );
-        response
-            .headers_mut()
-            .insert("retry-after", HeaderValue::from_static("1"));
-        return response;
+        return node_unavailable();
     };
     let untrusted: Vec<_> = request
         .headers()
@@ -1437,6 +1445,9 @@ impl http_body::Body for TrackedBody {
         self.body.size_hint()
     }
 }
+
+#[cfg(test)]
+mod ticket_t_2;
 
 #[cfg(test)]
 mod tests {
