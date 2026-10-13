@@ -16,6 +16,7 @@ import {
 } from "../services/legacy-source-manifest.js";
 import { findSourceManifestPath } from "../services/source-workspace.js";
 import { MAX_BULK_JSON_BODY_BYTES } from "../services/upload-limits.js";
+import { OwnershipAdmissionError, requireSourceSyncParticipant } from "../ownership/source-sync-admission.js";
 
 const MANIFEST_FILE = "print-partner.manifest.yaml";
 
@@ -60,12 +61,17 @@ export async function registerRepoManifestRoutes(
   });
 
   app.put("/sources/:id/repo-manifest", { bodyLimit: MAX_BULK_JSON_BODY_BYTES }, async (request, reply) => {
+    const participant = request.url.startsWith("/api/v1/")
+      ? "http.PUT /api/v1/sources/:id/repo-manifest"
+      : "http.PUT /sources/:id/repo-manifest";
+    const beforePublish = () => requireSourceSyncParticipant(participant);
     const id = Number((request.params as { id: string }).id);
     requireLocalPath(deps.repo, id);
     const body = request.body as { yaml?: string };
     const yaml = String(body.yaml ?? "");
     if (!yaml.trim()) return reply.status(400).send({ detail: "yaml is required" });
     try {
+      beforePublish();
       return await runWithTenantDiskQuota({
         dataDir: deps.diskQuota?.dataDir ?? "", reposDir: deps.repo.reposDir,
         tenantId: request.tenantId, quotaBytes: deps.diskQuota?.quotaBytes ?? null,
@@ -81,6 +87,7 @@ export async function registerRepoManifestRoutes(
             repo: deps.repo,
             sourceId: id,
             manifestYaml: yaml,
+            beforePublish,
           });
         } catch (error) {
           if (error instanceof TenantDiskQuotaError) return reply.status(413).send({ detail: error.message });
@@ -98,6 +105,7 @@ export async function registerRepoManifestRoutes(
               legacy,
               deps.repo.reposDir,
               id,
+              beforePublish,
             );
             if (archived && !archived.matchesObservedContent) {
               request.log.warn(
@@ -106,6 +114,7 @@ export async function registerRepoManifestRoutes(
               );
             }
           } catch (error) {
+            if (error instanceof OwnershipAdmissionError) throw error;
             request.log.warn(
               {
                 sourceId: id,
@@ -130,6 +139,7 @@ export async function registerRepoManifestRoutes(
         };
       });
     } catch (error) {
+      if (error instanceof OwnershipAdmissionError) return reply.status(503).send({ detail: error.message });
       if (error instanceof TenantDiskQuotaError) return reply.status(413).send({ detail: error.message });
       throw error;
     }

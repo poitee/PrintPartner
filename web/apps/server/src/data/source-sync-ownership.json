@@ -79,6 +79,18 @@
       "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"]
     },
     {
+      "id": "http.PUT /sources/:id/repo-manifest",
+      "kind": "http",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "file:source-workspace"]
+    },
+    {
+      "id": "http.PUT /api/v1/sources/:id/repo-manifest",
+      "kind": "http_alias",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "file:source-workspace"]
+    },
+    {
       "id": "mcp.start_sync",
       "kind": "mcp_action",
       "owner": "node",

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, constants, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, constants, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -22,6 +22,8 @@ const SOURCE_SYNC_PARTICIPANT_SPECS = {
   "http.POST /api/v1/jobs/sync": { kind: "http_alias", resources: SYNC_RESOURCES },
   "http.POST /sources": { kind: "http", resources: CREATE_RESOURCES },
   "http.POST /api/v1/sources": { kind: "http_alias", resources: CREATE_RESOURCES },
+  "http.PUT /sources/:id/repo-manifest": { kind: "http", resources: MIGRATION_RESOURCES },
+  "http.PUT /api/v1/sources/:id/repo-manifest": { kind: "http_alias", resources: MIGRATION_RESOURCES },
   "http.POST /assistant/actions/apply": { kind: "http", resources: SYNC_RESOURCES },
   "http.POST /api/v1/assistant/actions/apply": { kind: "http_alias", resources: SYNC_RESOURCES },
   "mcp.start_sync": { kind: "mcp_action", resources: SYNC_RESOURCES },
@@ -334,7 +336,11 @@ export function parseSourceSyncAdmissionReceipt(
 export function beginSourceSyncAdmission(dataDir: string): SourceSyncAdmissionReceipt {
   const admitted = admitSourceSyncManifest(readSourceSyncManifest());
   const receiptPath = sourceSyncAdmissionReceiptPath(dataDir);
-  if (existsSync(receiptPath)) {
+  const receiptEntry = lstatSync(receiptPath, { throwIfNoEntry: false });
+  if (receiptEntry) {
+    if (!receiptEntry.isFile()) {
+      return fail("malformed", "admission receipt is not a regular file");
+    }
     const existing = parseSourceSyncAdmissionReceipt(
       readFileSync(receiptPath, "utf8"),
       admitted.participantIds.length,

@@ -34,6 +34,8 @@ pub const SOURCE_SYNC_PARTICIPANTS: &[&str] = &[
     "http.POST /api/v1/jobs/check-source-updates",
     "http.POST /sources",
     "http.POST /api/v1/sources",
+    "http.PUT /sources/:id/repo-manifest",
+    "http.PUT /api/v1/sources/:id/repo-manifest",
     "http.POST /assistant/actions/apply",
     "http.POST /api/v1/assistant/actions/apply",
     "mcp.start_sync",
@@ -312,7 +314,14 @@ pub fn admit_observed(
         validate_kind(&participant.kind)?;
         if SOURCE_SYNC_PARTICIPANTS.contains(&participant.id.as_str()) {
             let expected = match participant.id.split('.').next() {
-                Some("http") if participant.id.starts_with("http.POST /api/v1/") => "http_alias",
+                Some("http")
+                    if participant
+                        .id
+                        .split_once(' ')
+                        .is_some_and(|(_, path)| path.starts_with("/api/v1/")) =>
+                {
+                    "http_alias"
+                }
                 Some("http") => "http",
                 Some("job") => "job",
                 Some("mcp") => "mcp_action",
@@ -405,7 +414,7 @@ fn expected_resources(id: &str) -> &'static [&'static str] {
             "table:app_events",
         ];
     }
-    if id.starts_with("migration.") {
+    if id.starts_with("migration.") || id.ends_with("/repo-manifest") {
         return &[
             "table:projects",
             "table:source_revisions",
@@ -730,7 +739,17 @@ fn write_or_reuse_receipt(
     admitted: &AdmittedOperation,
 ) -> Result<AdmissionReceipt, AdmissionError> {
     let receipt_path = data_dir.join(RECEIPT_FILE);
-    if receipt_path.is_file() {
+    let receipt_exists = match fs::symlink_metadata(&receipt_path) {
+        Ok(metadata) if metadata.is_file() => true,
+        Ok(_) => {
+            return Err(AdmissionError::Malformed(
+                "admission receipt is not a regular file".into(),
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => return Err(AdmissionError::Malformed(error.to_string())),
+    };
+    if receipt_exists {
         let existing = fs::read_to_string(&receipt_path)
             .map_err(|error| AdmissionError::Malformed(error.to_string()))?;
         let receipt = parse_receipt(&existing, admitted)?;

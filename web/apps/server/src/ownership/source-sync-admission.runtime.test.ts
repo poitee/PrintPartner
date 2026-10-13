@@ -17,7 +17,10 @@ import {
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative, sep } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as legacyManifest from "../services/legacy-source-manifest.js";
+
+vi.mock("../services/legacy-source-manifest.js", { spy: true });
 import Database from "better-sqlite3";
 import { buildApp, createPorts, startServer } from "../app.js";
 import { loadConfig } from "../config.js";
@@ -56,6 +59,7 @@ const previousEnv = {
 };
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const handle of openApps.splice(0)) {
     await handle.app.close();
     await handle.ports.db.close();
@@ -180,6 +184,128 @@ function toolText(body: string): string {
 }
 
 describe("Source Sync Fastify admission", () => {
+  it.each(["dangling-symlink", "valid-symlink", "directory", "fifo"])(
+    "rejects a non-regular startup receipt (%s) without replacing it",
+    async (kind) => {
+      const dir = scratch(`non-regular-${kind}`);
+      const manifest = writeManifest(dir, "admitted.json");
+      const dataDir = join(dir, "data");
+      mkdirSync(dataDir);
+      installManifest(manifest, dataDir);
+      const targetDir = join(dir, "outside");
+      const valid = beginSourceSyncAdmission(targetDir);
+      const target = sourceSyncAdmissionReceiptPath(targetDir);
+      const targetBytes = readFileSync(target);
+      const receiptPath = sourceSyncAdmissionReceiptPath(dataDir);
+      if (kind === "dangling-symlink") symlinkSync(join(dir, "missing"), receiptPath);
+      else if (kind === "valid-symlink") symlinkSync(target, receiptPath);
+      else if (kind === "directory") mkdirSync(receiptPath);
+      else expect(spawnSync("mkfifo", [receiptPath]).status).toBe(0);
+      const entry = lstatSync(receiptPath);
+      const watchers = installedSourceSyncWatchers();
+      await expect(startServer(loadConfig())).rejects.toThrow(/admission receipt is not a regular file/);
+      expect(lstatSync(receiptPath).ino).toBe(entry.ino);
+      expect(lstatSync(receiptPath).mode).toBe(entry.mode);
+      expect(readdirSync(dataDir)).toEqual(["source-sync-admission.json"]);
+      expect(readFileSync(target)).toEqual(targetBytes);
+      expect(JSON.parse(targetBytes.toString())).toEqual(valid);
+      expect(installedSourceSyncWatchers()).toBe(watchers);
+    },
+  );
+
+  it.each(["", "/api/v1"])("guards repo-manifest publication and archival through %s", async (prefix) => {
+    const dir = scratch("repo-manifest");
+    const manifest = writeManifest(dir, "admitted.json");
+    installManifest(manifest, dir);
+    const started = await boot(dir);
+    const repo = started.ports.repository;
+    const reposDir = started.ports.reposDir;
+    if (!repo || !reposDir) throw new Error("Expected self-host Source repository");
+    const source = repo.createSource({ name: "Editable", source_kind: "local" });
+    const workspace = join(reposDir, String(source.id));
+    mkdirSync(workspace, { recursive: true });
+    const legacyPath = join(workspace, "print-partner.manifest.yaml");
+    writeFileSync(legacyPath, "project: legacy\n");
+    writeFileSync(join(workspace, "cube.stl"), "solid cube\nendsolid cube\n");
+    const url = `${prefix}/sources/${source.id}/repo-manifest`;
+    const headers = { authorization: "Bearer test-mcp-key" };
+    const original = readFileSync(manifest, "utf8");
+    writeFileSync(manifest, `${original}\n`);
+    const before = fingerprint(workspace);
+    const rowBefore = repo.getProjectRow(source.id);
+    const revisionsBefore = repo.listSourceRevisions(source.id);
+    const refused = await started.app.inject({ method: "PUT", url, headers, payload: { yaml: "project: denied\n" } });
+    expect(refused.statusCode, refused.body).toBe(503);
+    expect(refused.body).toMatch(/runtime manifest does not match/);
+    expect(fingerprint(workspace)).toBe(before);
+    expect(repo.getProjectRow(source.id)).toEqual(rowBefore);
+    expect(repo.listSourceRevisions(source.id)).toEqual(revisionsBefore);
+    writeFileSync(manifest, original);
+    const admitted = await started.app.inject({ method: "PUT", url, headers, payload: { yaml: "project: admitted\n" } });
+    expect(admitted.statusCode, admitted.body).toBe(200);
+    expect(admitted.json()).toMatchObject({ saved: true });
+    expect(repo.getSource(source.id)?.current_source_revision_id).toEqual(expect.any(Number));
+    expect(existsSync(legacyPath)).toBe(false);
+    const read = await started.app.inject({ method: "GET", url, headers });
+    expect(read.json()).toMatchObject({ yaml: "project: admitted\n" });
+    const archived = readdirSync(workspace).filter((name) => name.startsWith("print-partner.manifest.yaml.migrated-"));
+    expect(archived).toHaveLength(1);
+    expect(readFileSync(join(workspace, archived[0], "print-partner.manifest.yaml.migrated"), "utf8")).toBe("project: legacy\n");
+  });
+
+  it.each([
+    ["", "publication"], ["/api/v1", "publication"],
+    ["", "archival"], ["/api/v1", "archival"],
+  ])("rechecks %s repo-manifest admission before %s", async (prefix, phase) => {
+    const dir = scratch(`repo-manifest-${phase}`);
+    const manifest = writeManifest(dir, "admitted.json");
+    installManifest(manifest, dir);
+    const started = await boot(dir);
+    const repo = started.ports.repository;
+    const reposDir = started.ports.reposDir;
+    if (!repo || !reposDir) throw new Error("Expected self-host Source repository");
+    const source = repo.createSource({ name: "Editable", source_kind: "local" });
+    const workspace = join(reposDir, String(source.id));
+    mkdirSync(workspace, { recursive: true });
+    const legacyPath = join(workspace, "print-partner.manifest.yaml");
+    writeFileSync(legacyPath, "project: legacy\n");
+    writeFileSync(join(workspace, "cube.stl"), "solid cube\nendsolid cube\n");
+    const original = readFileSync(manifest, "utf8");
+    const rowBefore = repo.getProjectRow(source.id);
+    const revisionsBefore = repo.listSourceRevisions(source.id);
+    const treeBefore = fingerprint(workspace);
+    const actualLegacy = await vi.importActual<typeof legacyManifest>("../services/legacy-source-manifest.js");
+    if (phase === "publication") {
+      const inspect = actualLegacy.inspectLegacySourceManifest;
+      vi.spyOn(legacyManifest, "inspectLegacySourceManifest").mockImplementationOnce(async (input) => {
+        const observed = await inspect(input);
+        writeFileSync(manifest, `${original}\n`);
+        return observed;
+      });
+    } else {
+      const archive = actualLegacy.archiveLegacySourceManifest;
+      vi.spyOn(legacyManifest, "archiveLegacySourceManifest").mockImplementationOnce(async (...args) => {
+        writeFileSync(manifest, `${original}\n`);
+        return archive(...args);
+      });
+    }
+    const refused = await started.app.inject({
+      method: "PUT", url: `${prefix}/sources/${source.id}/repo-manifest`,
+      headers: { authorization: "Bearer test-mcp-key" }, payload: { yaml: "project: edited\n" },
+    });
+    expect(refused.statusCode, refused.body).toBe(503);
+    expect(refused.body).toMatch(/runtime manifest does not match/);
+    expect(readFileSync(legacyPath, "utf8")).toBe("project: legacy\n");
+    expect(readdirSync(workspace).filter((name) => name.includes(".migrated-"))).toEqual([]);
+    if (phase === "publication") {
+      expect(repo.getProjectRow(source.id)).toEqual(rowBefore);
+      expect(repo.listSourceRevisions(source.id)).toEqual(revisionsBefore);
+      expect(fingerprint(workspace)).toBe(treeBefore);
+    } else {
+      expect(repo.getSource(source.id)?.current_source_revision_id).toEqual(expect.any(Number));
+    }
+  });
+
   it("rejects dropped resource claims for every participant before receipt creation", () => {
     for (const [index, id] of SOURCE_SYNC_PARTICIPANTS.entries()) {
       const dir = scratch(`wrong-resource-${index}`);

@@ -286,6 +286,43 @@ fn ticket_t_7_ownership_planted_temporaries_do_not_overwrite_targets() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn ticket_t_7_ownership_non_regular_receipts_are_preserved() {
+    use std::os::unix::fs::{MetadataExt, symlink};
+    for kind in ["dangling-symlink", "valid-symlink", "directory", "fifo"] {
+        let dir = scratch(&format!("ticket_t_7_ownership_receipt_{kind}"));
+        let outside = scratch(&format!("ticket_t_7_ownership_outside_{kind}"));
+        boot_source_sync(&outside, bundled_text()).unwrap();
+        let target = outside.join("source-sync-admission.json");
+        let target_bytes = fs::read(&target).unwrap();
+        let receipt_path = dir.join("source-sync-admission.json");
+        match kind {
+            "dangling-symlink" => symlink(outside.join("missing"), &receipt_path).unwrap(),
+            "valid-symlink" => symlink(&target, &receipt_path).unwrap(),
+            "directory" => fs::create_dir(&receipt_path).unwrap(),
+            _ => assert!(
+                std::process::Command::new("mkfifo")
+                    .arg(&receipt_path)
+                    .status()
+                    .unwrap()
+                    .success()
+            ),
+        }
+        let entry = fs::symlink_metadata(&receipt_path).unwrap();
+        let error = boot_source_sync(&dir, bundled_text()).unwrap_err();
+        assert!(
+            matches!(error, AdmissionError::Malformed(ref detail) if detail.contains("admission receipt is not a regular file")),
+            "{kind}: {error}"
+        );
+        let after = fs::symlink_metadata(&receipt_path).unwrap();
+        assert_eq!(after.ino(), entry.ino());
+        assert_eq!(after.mode(), entry.mode());
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+        assert_eq!(fs::read(&target).unwrap(), target_bytes);
+    }
+}
+
 #[test]
 fn ticket_t_7_ownership_conflicting_resource_rejected() {
     let mut value = bundled_value();
