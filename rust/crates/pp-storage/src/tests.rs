@@ -629,6 +629,80 @@ fn public_open_recovers_dead_writer_marker_and_atomic_lease() {
     std::fs::remove_dir_all(path).unwrap();
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn public_open_recovers_unreaped_zombie_owner_and_child() {
+    let path = directory("zombie-reopen");
+    let mut owner = Command::new("sh")
+        .args(["-c", "read line"])
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut child = Command::new("sh")
+        .args(["-c", "read line"])
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let identity = |pid| {
+        let boot = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").unwrap();
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+        let start = stat
+            .rsplit_once(')')
+            .unwrap()
+            .1
+            .split_whitespace()
+            .nth(19)
+            .unwrap();
+        format!("{}:{start}", boot.trim())
+    };
+    let marker = serde_json::json!({
+        "storage_protocol_version": 1, "pid": owner.id(), "process_identity": identity(owner.id()),
+        "child_pid": child.id(), "child_process_identity": identity(child.id()), "instance": "ab".repeat(16),
+    });
+    let bytes = serde_json::to_vec(&marker).unwrap();
+    std::fs::write(path.join(".desktop-owner.json"), &bytes).unwrap();
+    std::fs::create_dir(path.join(".desktop-lease")).unwrap();
+    std::fs::write(path.join(".desktop-lease/owner.json"), &bytes).unwrap();
+    assert!(
+        WriterOwner::open(&path, Limits::default()).is_err(),
+        "live owner must block recovery"
+    );
+    drop(owner.stdin.take());
+    drop(child.stdin.take());
+    for pid in [owner.id(), child.id()] {
+        let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::uninit();
+        assert_eq!(
+            unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    pid,
+                    info.as_mut_ptr(),
+                    libc::WEXITED | libc::WNOWAIT,
+                )
+            },
+            0
+        );
+        assert_eq!(
+            unsafe { libc::kill(pid as i32, 0) },
+            0,
+            "zombie must still have a PID"
+        );
+    }
+    let recovered = WriterOwner::open(&path, Limits::default());
+    // Reap even when the recovery assertion fails.
+    owner.wait().unwrap();
+    child.wait().unwrap();
+    let (recovered, _) = recovered.expect("zombie identities must not block recovery");
+    assert_eq!(
+        std::fs::read(path.join(".desktop-lease/previous-marker.json")).unwrap(),
+        bytes
+    );
+    recovered.shutdown().unwrap();
+    assert!(!path.join(".desktop-owner.json").exists());
+    assert!(!path.join(".desktop-lease").exists());
+    std::fs::remove_dir_all(path).unwrap();
+}
+
 #[test]
 fn unowned_preflight_rejects_live_and_invalid_markers_without_changes() {
     let mut prior = Command::new("/usr/bin/true").spawn().unwrap();

@@ -174,7 +174,7 @@ async fn start_resources(
     // Backend hashing owns its 60s cap. Reserve a separate setup window for
     // spawning Node, recording ownership, and delivering setup after hashing.
     let preflight = tokio::time::timeout(
-        pp_compat::RELEASE_PREFLIGHT + pp_compat::READINESS_OBSERVATION,
+        pp_compat::RELEASE_PREFLIGHT + std::time::Duration::from_secs(5),
         async {
             loop {
                 if *child_readiness_started.borrow() {

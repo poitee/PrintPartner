@@ -433,6 +433,7 @@ fn configure_child(
     let read_fd = read_end.as_raw_fd();
     let write_fd = write_end.as_raw_fd();
     let parent = std::process::id() as libc::pid_t;
+    let (ready_read, ready_write) = parent_death_pipe()?;
     // The watcher belongs to the Rust owner, not Node. It is armed before Node
     // can exec, and lives outside the group it must terminate.
     let watcher = unsafe { libc::fork() };
@@ -441,7 +442,13 @@ fn configure_child(
     }
     if watcher == 0 {
         unsafe {
-            libc::setsid();
+            if libc::setsid() < 0 {
+                libc::_exit(1);
+            }
+            let ready = [1u8];
+            if libc::write(ready_write.as_raw_fd(), ready.as_ptr().cast(), 1) != 1 {
+                libc::_exit(1);
+            }
             close_inherited_except(read_fd);
             let mut pid = 0 as libc::pid_t;
             let mut received = 0;
@@ -482,6 +489,19 @@ fn configure_child(
         write: Some(write_end),
         watcher,
     };
+    drop(ready_write);
+    let mut ready = [0u8];
+    loop {
+        let count = unsafe { libc::read(ready_read.as_raw_fd(), ready.as_mut_ptr().cast(), 1) };
+        if count < 0 && unsafe { parent_errno() } == libc::EINTR {
+            continue;
+        }
+        if count != 1 || ready != [1] {
+            return Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe));
+        }
+        break;
+    }
+    drop(ready_read);
     unsafe {
         command.pre_exec(move || {
             libc::close(read_fd);
@@ -510,19 +530,26 @@ fn configure_child(
 }
 
 impl Process {
-    async fn spawn(spec: &SpawnSpec, capture: &logs::Logs) -> Result<Self> {
+    async fn spawn(
+        spec: &SpawnSpec,
+        capture: &logs::Logs,
+        cancelled: &CancellationToken,
+    ) -> Result<Self> {
         // Verify before spawn and before the ownership marker. A slow hash must
         // fail this budget instead of consuming the 30s probe window.
         let bundle = spec.bundle.clone();
-        let verified = tokio::time::timeout(
-            RELEASE_PREFLIGHT,
-            tokio::task::spawn_blocking(move || release::verify_backend(&bundle)),
-        )
-        .await
-        .context("Release verification exceeded its budget")?;
-        verified
-            .context("Release verification stopped")?
-            .context("Release verification failed")?;
+        tokio::select! {
+            biased;
+            _ = cancelled.cancelled() => bail!("Release verification cancelled"),
+            verified = tokio::time::timeout(
+                RELEASE_PREFLIGHT,
+                tokio::task::spawn_blocking(move || release::verify_backend(&bundle)),
+            ) => {
+                verified.context("Release verification exceeded its budget")?
+                    .context("Release verification stopped")?
+                    .context("Release verification failed")?;
+            }
+        }
         let package_root = release::package_root(&spec.bundle)?;
         let preload = spec
             .bundle
@@ -736,7 +763,7 @@ impl Supervisor {
                 states.send_replace(Status::Starting);
                 child_readiness.send_replace(false);
                 logs.event("compat_starting", 30);
-                let process = Process::spawn(&spec, &logs).await;
+                let process = Process::spawn(&spec, &logs, &cancelled).await;
                 if let Ok(mut process) = process {
                     // Hash and ownership record are done. Probes use the 30s child
                     // budget from this edge, not from the start of verification.
@@ -1153,6 +1180,95 @@ mod tests {
         assert!(node_gone, "stopped Node outlived its force-killed parent");
         assert!(!peer_alive, "Node group member outlived its owner");
         assert!(descendant_gone, "Node subprocess outlived its owner");
+    }
+
+    #[test]
+    fn watcher_is_isolated_before_node_can_spawn() {
+        let lease = std::fs::File::open("/dev/null").unwrap();
+        for _ in 0..32 {
+            let mut command = tokio::process::Command::new("true");
+            let (read, guard) =
+                super::configure_child(&mut command, std::os::fd::AsRawFd::as_raw_fd(&lease))
+                    .unwrap();
+            let session = unsafe { libc::getsid(guard.watcher) };
+            let watcher = guard.watcher;
+            drop(read);
+            drop(guard);
+            assert_eq!(
+                session, watcher,
+                "Node may spawn only after watcher isolation"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn cancellation_interrupts_a_blocked_backend_hash_before_spawn() {
+        use std::os::unix::fs::OpenOptionsExt;
+        let directory =
+            std::env::temp_dir().join(format!("pp-hash-cancel-{}", rand::random::<u64>()));
+        std::fs::create_dir(&directory).unwrap();
+        let fifo = directory.join("node");
+        let name = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        let manifest: serde_json::Value = serde_json::from_slice(include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/bundle-manifest.json"
+        )))
+        .unwrap();
+        let spec = super::SpawnSpec {
+            bundle: super::Bundle {
+                node: fifo.clone(),
+                entry: directory.join("desktop.js"),
+                web_root: directory.clone(),
+                runtime_version: manifest["runtime_version"].as_str().unwrap().into(),
+                commit: manifest["commit"].as_str().unwrap().into(),
+            },
+            data_dir: directory.clone(),
+            runtime_dir: directory.clone(),
+            lease: "test".into(),
+            lease_file: std::fs::File::open("/dev/null").unwrap(),
+            port: 1,
+            record_child: |_, _| panic!("cancelled verification must not record a child"),
+        };
+        let capture = super::logs::Logs::open(directory.join("logs")).unwrap();
+        let cancelled = tokio_util::sync::CancellationToken::new();
+        let stop = cancelled.clone();
+        let mut task =
+            tokio::spawn(async move { super::Process::spawn(&spec, &capture, &stop).await });
+        // Opening the write end proves the verifier reached the real FIFO.
+        // Keep it open without writing so the hash remains blocked on read.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let writer = loop {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&fifo)
+            {
+                Ok(writer) => break writer,
+                Err(error) if error.raw_os_error() == Some(libc::ENXIO) => {
+                    assert!(
+                        tokio::time::Instant::now() < deadline,
+                        "verifier never opened FIFO"
+                    );
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(error) => panic!("FIFO open failed: {error}"),
+            }
+        };
+        cancelled.cancel();
+        let finished = tokio::time::timeout(Duration::from_secs(1), &mut task).await;
+        drop(writer); // Unblock the detached hash before the test runtime shuts down.
+        let completed_promptly = finished.is_ok();
+        let result = match finished {
+            Ok(result) => result.unwrap(),
+            Err(_) => task.await.unwrap(),
+        };
+        std::fs::remove_dir_all(directory).unwrap();
+        assert!(
+            completed_promptly,
+            "cancellation waited for the hash budget"
+        );
+        assert!(result.err().unwrap().to_string().contains("cancelled"));
     }
 
     #[cfg(target_os = "linux")]

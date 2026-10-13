@@ -41,6 +41,13 @@ pub(crate) fn owner_is_stale(pid: u32, identity: Option<&str>) -> bool {
     if result < 0 {
         return std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
     }
+    #[cfg(target_os = "linux")]
+    if std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+        stat.rsplit_once(')')
+            .is_some_and(|(_, fields)| matches!(fields.split_whitespace().next(), Some("Z" | "X")))
+    }) {
+        return true;
+    }
     identity.is_some_and(|identity| process_identity(pid).is_ok_and(|actual| actual != identity))
 }
 
