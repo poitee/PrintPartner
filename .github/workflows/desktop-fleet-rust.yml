@@ -276,8 +276,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python3 -m unittest discover -s rust/scripts -p test_check_rust_test_count.py -v
+          mkdir -p "$RUNNER_TEMP/pp-macos-death-evidence"
           cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --lib
           cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage
-          cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --test runtime_m0 core_death_with_live_child_refuses_standalone_node -- --exact --nocapture
-          cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --test runtime_m0 dead_core_marker_without_child_info_allows_start -- --exact
+          cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --test runtime_m0 core_death_reaps_stopped_node_and_allows_recovery -- --exact --nocapture 2>&1 | tee "$RUNNER_TEMP/pp-macos-death-evidence/core-death.log"
+          python3 rust/scripts/check-rust-test-count.py "$RUNNER_TEMP/pp-macos-death-evidence/core-death.log" --exact core_death_reaps_stopped_node_and_allows_recovery
+          cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --test runtime_m0 dead_core_marker_without_child_info_allows_start -- --exact 2>&1 | tee "$RUNNER_TEMP/pp-macos-death-evidence/marker-recovery.log"
+          python3 rust/scripts/check-rust-test-count.py "$RUNNER_TEMP/pp-macos-death-evidence/marker-recovery.log" --exact dead_core_marker_without_child_info_allows_start
+          cargo test --locked --manifest-path rust/Cargo.toml -p pp-compat --lib tests::separate_group_child_dies_with_force_killed_parent -- --exact --nocapture 2>&1 | tee "$RUNNER_TEMP/pp-macos-death-evidence/separate-group.log"
+          python3 rust/scripts/check-rust-test-count.py "$RUNNER_TEMP/pp-macos-death-evidence/separate-group.log" --exact tests::separate_group_child_dies_with_force_killed_parent
           npm --prefix web run test -w @print-partner/server -- src/desktop-context.test.ts
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: macos-death-evidence-${{ github.run_id }}
+          path: ${{ runner.temp }}/pp-macos-death-evidence/
+          if-no-files-found: error
+          retention-days: 14

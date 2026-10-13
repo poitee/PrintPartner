@@ -887,7 +887,7 @@ mod tests {
     fn node_binary() -> std::path::PathBuf {
         let configured = std::env::var_os("PP_TEST_NODE")
             .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::path::PathBuf::from("/usr/bin/node"));
+            .unwrap_or_else(|| std::path::PathBuf::from("node"));
         if configured.is_absolute() || configured.components().count() > 1 {
             return configured;
         }
@@ -968,6 +968,7 @@ mod tests {
         assert_ne!(super::RELEASE_PREFLIGHT, super::READINESS_OBSERVATION);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn zombie_peer_is_not_running() {
         let mut peer = std::process::Command::new("true").spawn().unwrap();
