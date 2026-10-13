@@ -87,6 +87,12 @@ type JobRunnerOptions = {
   completedJobRetentionMs?: number;
 };
 
+function requireSourceJobAdmission(kind: JobSnapshot["kind"]): void {
+  if (kind === "sync" || kind === "import-scan" || kind === "extract-source-docs" || kind === "check-source-updates") {
+    requireSourceSyncParticipant(`job.${kind}`);
+  }
+}
+
 export class InProcessJobRunner {
   private readonly jobs = new Map<string, JobSnapshot>();
   private readonly jobMeta = new Map<string, JobMeta>();
@@ -230,6 +236,13 @@ export class InProcessJobRunner {
         this.pruneCompletedJobs();
         return;
       }
+      try {
+        requireSourceJobAdmission(event.kind);
+      } catch (error) {
+        if (!(error instanceof OwnershipAdmissionError)) throw error;
+        this.pruneCompletedJobs();
+        return;
+      }
       void dispatchWebhooks(this.repo, event.status === "done" ? "job.done" : "job.error", {
         job_id: event.job_id,
         kind: event.kind,
@@ -266,10 +279,7 @@ export class InProcessJobRunner {
     if (!STARTABLE_JOB_KINDS.has(kind)) {
       throw new Error(`Unsupported job kind: ${kind}`);
     }
-    if (kind === "sync") requireSourceSyncParticipant("job.sync");
-    if (kind === "import-scan") requireSourceSyncParticipant("job.import-scan");
-    if (kind === "extract-source-docs") requireSourceSyncParticipant("job.extract-source-docs");
-    if (kind === "check-source-updates") requireSourceSyncParticipant("job.check-source-updates");
+    requireSourceJobAdmission(kind);
     this.pruneCompletedJobs();
     const jobId = crypto.randomUUID();
     const snap: JobSnapshot = {
@@ -436,6 +446,7 @@ export class InProcessJobRunner {
           }
           return result;
         });
+        requireSourceJobAdmission(kind);
         const doneMessage =
           kind === "export-stl-pack"
             ? exportStlPackJobMessage(result)

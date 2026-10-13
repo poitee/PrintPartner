@@ -27,6 +27,12 @@ import * as webhooks from "../services/webhook-store.js";
 vi.mock("../services/webhook-store.js", { spy: true });
 import { InProcessJobRunner } from "../services/job-runner.js";
 import { syncProjectById } from "../routes/sources.js";
+import * as sourceRoutes from "../routes/sources.js";
+import * as docIndex from "../services/source-docs-index.js";
+import * as updates from "../services/source-update-check.js";
+vi.mock("../routes/sources.js", { spy: true });
+vi.mock("../services/source-docs-index.js", { spy: true });
+vi.mock("../services/source-update-check.js", { spy: true });
 import * as legacyManifest from "../services/legacy-source-manifest.js";
 
 vi.mock("../services/legacy-source-manifest.js", { spy: true });
@@ -470,6 +476,74 @@ describe("Source Sync Fastify admission", () => {
     expect(f.repo.getProjectRow(f.source.id)).toEqual(before);
     expect(f.repo.listSourceRevisions(f.source.id)).toEqual([]);
     expect(readdirSync(f.workspace)).toEqual([]);
+  });
+
+  it.each(["sync", "import-scan", "extract-source-docs", "check-source-updates"] as const)(
+    "refuses successful %s job webhooks when admission changes after the worker finishes", async (kind) => {
+      const f = await localAdmissionFixture(`finished-${kind}`);
+      writeFileSync(join(f.workspace, "README.md"), "# Completed source\n");
+      const dispatch = vi.spyOn(webhooks, "dispatchWebhooks").mockResolvedValue(undefined);
+      if (kind === "sync" || kind === "import-scan") {
+        const actual = await vi.importActual<typeof sourceRoutes>("../routes/sources.js");
+        vi.spyOn(sourceRoutes, "syncProjectById").mockImplementationOnce(async (...args) => {
+          const result = await actual.syncProjectById(...args);
+          writeFileSync(f.manifest, `${f.original}\n`);
+          return result;
+        });
+      } else if (kind === "extract-source-docs") {
+        const actual = await vi.importActual<typeof docIndex>("../services/source-docs-index.js");
+        vi.spyOn(docIndex, "extractPendingPdfsForSource").mockImplementationOnce(async (...args) => {
+          const result = await actual.extractPendingPdfsForSource(...args);
+          writeFileSync(f.manifest, `${f.original}\n`);
+          return result;
+        });
+      } else {
+        const actual = await vi.importActual<typeof updates>("../services/source-update-check.js");
+        vi.spyOn(updates, "checkAllSourceUpdates").mockImplementationOnce(async (...args) => {
+          const result = await actual.checkAllSourceUpdates(...args);
+          writeFileSync(f.manifest, `${f.original}\n`);
+          return result;
+        });
+      }
+      const jobId = await f.started.ports.jobs.start(kind, { project_id: f.source.id, project_ids: [f.source.id] });
+      const result = await waitJob(f.started.app, jobId);
+      expect(result).toMatchObject({ status: "error", error: expect.stringMatching(/runtime manifest does not match/) });
+      expect(dispatch).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses job webhooks when a terminal listener revokes admission", async () => {
+    const f = await localAdmissionFixture("listener-revocation");
+    const dispatch = vi.spyOn(webhooks, "dispatchWebhooks").mockResolvedValue(undefined);
+    const runner = f.started.ports.jobs;
+    if (!(runner instanceof InProcessJobRunner)) throw new Error("Expected in-process jobs");
+    const jobId = await runner.start("sync", { project_ids: [f.source.id] });
+    const unsubscribe = runner.subscribe(jobId, "default", (event) => {
+      if (event.status === "done") writeFileSync(f.manifest, `${f.original}\n`);
+    });
+    const result = await waitJob(f.started.app, jobId);
+    unsubscribe?.();
+    expect(result.status).toBe("done");
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("refuses ordinary job error webhooks after the worker loses admission", async () => {
+    const f = await localAdmissionFixture("ordinary-error-revocation");
+    f.repo.updateSource(f.source.id, { source_kind: "github", url: "invalid" });
+    const dispatch = vi.spyOn(webhooks, "dispatchWebhooks").mockResolvedValue(undefined);
+    const actual = await vi.importActual<typeof sourceRoutes>("../routes/sources.js");
+    vi.spyOn(sourceRoutes, "syncProjectById").mockImplementationOnce(async (...args) => {
+      try {
+        return await actual.syncProjectById(...args);
+      } finally {
+        writeFileSync(f.manifest, `${f.original}\n`);
+      }
+    });
+    const jobId = await f.started.ports.jobs.start("sync", { project_ids: [f.source.id] });
+    const result = await waitJob(f.started.app, jobId);
+    expect(result).toMatchObject({ status: "error", error: expect.any(String) });
+    expect(result.error).not.toMatch(/runtime manifest does not match/);
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it.each([false, true])("marks the job error when the final sync loses admission (earlierSuccess=%s)", async (earlierSuccess) => {
