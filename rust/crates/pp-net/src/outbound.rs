@@ -50,6 +50,17 @@ const SPECIAL_IPV4: &[([u8; 4], u32)] = &[
     ([224, 0, 0, 0], 3),
 ];
 
+// Special-purpose prefixes within global unicast; other special-purpose space is
+// outside 2000::/3. ULA and loopback remain explicit printer-network exceptions.
+// https://www.iana.org/assignments/iana-ipv6-special-registry/
+const SPECIAL_IPV6: &[([u16; 8], u32)] = &[
+    ([0x2001, 0, 0, 0, 0, 0, 0, 0], 23),
+    ([0x2001, 0x0db8, 0, 0, 0, 0, 0, 0], 32),
+    ([0x2002, 0, 0, 0, 0, 0, 0, 0], 16),
+    ([0x2620, 0x004f, 0x8000, 0, 0, 0, 0, 0], 48),
+    ([0x3fff, 0, 0, 0, 0, 0, 0, 0], 20),
+];
+
 pub fn permitted(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => {
@@ -66,15 +77,16 @@ pub fn permitted(ip: IpAddr) -> bool {
             if let Some(ip) = ip.to_ipv4_mapped() {
                 return permitted(IpAddr::V4(ip));
             }
-            // Only global unicast, ULA and explicit loopback; deny embedded IPv4
-            // translation/transition ranges as well as link-local/multicast.
             let first = ip.segments()[0];
-            (ip.is_loopback()
-                || (first & 0xe000 == 0x2000
-                    && first != 0x2002
-                    && ip.segments()[..2] != [0x2001, 0])
-                || first & 0xfe00 == 0xfc00)
-                && ip != std::net::Ipv6Addr::new(0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254)
+            if ip.is_loopback() || first & 0xfe00 == 0xfc00 {
+                return ip != std::net::Ipv6Addr::new(0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254);
+            }
+            let address = u128::from(ip);
+            first & 0xe000 == 0x2000
+                && SPECIAL_IPV6.iter().all(|(base, prefix)| {
+                    let mask = u128::MAX << (128 - *prefix);
+                    address & mask != u128::from(std::net::Ipv6Addr::from(*base))
+                })
         }
     }
 }
@@ -218,6 +230,12 @@ impl HttpGuard {
             .send_request(builder.body(Empty::<Bytes>::new())?)
             .await?;
         let status = response.status().as_u16();
+        if response.status().is_redirection() {
+            return Ok(HttpReply {
+                status,
+                body: Vec::new(),
+            });
+        }
         let body = Limited::new(response.into_body(), self.max_body)
             .collect()
             .await
@@ -453,6 +471,20 @@ mod tests {
             "2002:a9fe:a9fe::1",
             "64:ff9b::a9fe:a9fe",
             "2001::1",
+            "2001:1::1",
+            "2001:2::1",
+            "2001:3::1",
+            "2001:4:112::1",
+            "2001:10::1",
+            "2001:20::1",
+            "2001:30::1",
+            "2001:1ff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:db8::",
+            "2001:db8:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2620:4f:8000::",
+            "2620:4f:8000:ffff:ffff:ffff:ffff:ffff",
+            "3fff::",
+            "3fff:fff:ffff:ffff:ffff:ffff:ffff:ffff",
         ] {
             assert!(!permitted(ip.parse().unwrap()), "{ip}");
             let guard = HttpGuard::new(
@@ -483,6 +515,12 @@ mod tests {
             "::1",
             "fd12::1",
             "2606:4700::1111",
+            "2001:200::1",
+            "2001:db7:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:db9::",
+            "2620:4f:7fff:ffff:ffff:ffff:ffff:ffff",
+            "2620:4f:8001::",
+            "3ffe:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
         ] {
             assert!(permitted(ip.parse().unwrap()));
         }
@@ -522,7 +560,13 @@ mod tests {
     }
     #[tokio::test]
     async fn ticket_t_4_deadline_and_body_limit_and_no_redirect() {
-        for mode in ["stall", "large", "redirect"] {
+        for mode in [
+            "stall",
+            "large",
+            "redirect",
+            "redirect-large",
+            "redirect-stall",
+        ] {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let url = format!("http://{}/", listener.local_addr().unwrap());
             let server = tokio::spawn(async move {
@@ -538,6 +582,14 @@ mod tests {
                     "redirect" => {
                         let _=socket.write_all(b"HTTP/1.1 302 Found\r\nLocation: http://169.254.169.254/\r\nContent-Length: 0\r\n\r\n").await;
                     }
+                    "redirect-large" => {
+                        let _ = socket.write_all(b"HTTP/1.1 302 Found\r\nLocation: /next\r\nContent-Length: 9\r\n\r\n123456789").await;
+                    }
+                    "redirect-stall" => {
+                        socket.write_all(b"HTTP/1.1 302 Found\r\nLocation: /next\r\nContent-Length: 9\r\n\r\n").await.unwrap();
+                        let mut end = [0; 1];
+                        assert_eq!(socket.read(&mut end).await.unwrap(), 0);
+                    }
                     _ => {
                         let mut end = [0; 1];
                         assert_eq!(socket.read(&mut end).await.unwrap(), 0);
@@ -547,7 +599,7 @@ mod tests {
             let guard =
                 HttpGuard::new(Arc::new(SystemResolver), Duration::from_millis(100), 4).unwrap();
             let result = guard.get(&url, None).await;
-            if mode == "redirect" {
+            if mode.starts_with("redirect") {
                 assert_eq!(result.unwrap().status, 302);
             } else {
                 assert!(result.is_err());
