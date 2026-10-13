@@ -78,6 +78,7 @@ export async function extractPendingPdfsForSource(
   projectId: number,
   repoRoot: string,
   options?: {
+    beforePublish?: () => undefined;
     onProgress?: (msg: string, progress: number) => void;
     /** Only extract PDFs at or below this size (bytes). */
     maxSizeBytes?: number;
@@ -99,12 +100,14 @@ export async function extractPendingPdfsForSource(
   let extracted = 0;
   let errors = 0;
   for (let i = 0; i < pending.length; i++) {
+    options?.beforePublish?.();
     const doc = pending[i]!;
     options?.onProgress?.(
       `Extracting ${doc.path} (${i + 1}/${pending.length})`,
       Math.round(((i + 1) / Math.max(pending.length, 1)) * 100),
     );
     const result = await extractPdfText(repoRoot, doc.path, {
+      beforePublish: options?.beforePublish,
       perPage: doc.size_bytes >= PDF_BG_EXTRACT_BYTES,
       cacheRoot: options?.cacheRoot,
       legacyCacheRoots: options?.legacyCacheRoots,
@@ -115,6 +118,7 @@ export async function extractPendingPdfsForSource(
         );
       },
     });
+    options?.beforePublish?.();
     const updated = repo.updateSourceDocExtract(projectId, doc.path, {
       extractStatus: result.status,
       contentHash: result.hash || null,

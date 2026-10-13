@@ -119,6 +119,12 @@
       "kind": "worker",
       "owner": "node",
       "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers", "table:app_settings", "table:app_events"]
+    },
+    {
+      "id": "migration.migrateLegacySourceManifestOverridesForTenant",
+      "kind": "migration",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "file:source-workspace"]
     }
   ]
 }

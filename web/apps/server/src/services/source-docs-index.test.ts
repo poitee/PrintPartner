@@ -1,6 +1,6 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import Fastify from "fastify";
 import { eq } from "drizzle-orm";
 import { afterEach, expect, it, vi } from "vitest";
@@ -10,6 +10,8 @@ import * as schema from "../db/schema.js";
 import { registerSourceDocsRoutes } from "../routes/source-docs.js";
 import { extractPendingPdfsForSource, indexSourceDocsFromDisk } from "./source-docs-index.js";
 import * as pdf from "./pdf-text-extract.js";
+import { beginSourceSyncAdmission, packagedSourceSyncManifestPath } from "../ownership/source-sync-admission.js";
+import { createJobRunner } from "./job-runner.js";
 
 const cleanups: Array<() => Promise<void> | void> = [];
 
@@ -59,6 +61,34 @@ function deferredExtraction() {
   if (!resolve) throw new Error("Extraction promise was not initialized");
   return { promise, resolve };
 }
+
+it("refuses a deferred PDF job's database result after admission changes during parsing", async () => {
+  const f = await fixture();
+  const dataDir = dirname(f.repo.reposDir);
+  const manifest = join(dataDir, "manifest.json");
+  const original = readFileSync(packagedSourceSyncManifestPath(), "utf8");
+  const previous = process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST;
+  try {
+    writeFileSync(manifest, original);
+    process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST = manifest;
+    beginSourceSyncAdmission(dataDir);
+    const before = f.docRow();
+    const extraction = deferredExtraction();
+    const parse = vi.spyOn(pdf, "extractPdfText").mockImplementationOnce(() => extraction.promise);
+    const jobs = createJobRunner(() => f.repo, dataDir);
+    const jobId = await jobs.start("extract-source-docs", { project_id: f.source.id });
+    await vi.waitFor(() => expect(parse).toHaveBeenCalledOnce());
+    writeFileSync(manifest, `${original}\n`);
+    extraction.resolve(extracted(f.oldRoot));
+    await vi.waitFor(async () => {
+      expect(await jobs.get(jobId, "default")).toMatchObject({ status: "error", error: expect.stringMatching(/runtime manifest does not match/) });
+    });
+    expect(f.docRow()).toEqual(before);
+  } finally {
+    if (previous === undefined) delete process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST;
+    else process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST = previous;
+  }
+});
 
 it.each(["background", "request"] as const)("ignores a replaced PDF row when a late %s extraction completes", async (caller) => {
   const f = await fixture();

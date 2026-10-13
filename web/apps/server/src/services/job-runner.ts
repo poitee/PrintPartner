@@ -399,6 +399,7 @@ export class InProcessJobRunner {
             requireSourceSyncParticipant("job.import-scan");
             const projectId = Number(payload.project_id);
             result = await syncProjectById(this.repo, this.deps.reposDir, projectId, undefined, {
+              beforePublish: () => requireSourceSyncParticipant("job.import-scan"),
               maxDocsBytes: this.deps.sourceDocsMaxBytes,
               onProgress: (patch) => this.emit(jobId, patch),
               enqueuePdfExtract: (pid) =>
@@ -512,6 +513,7 @@ export class InProcessJobRunner {
         results.push({
           project_id: id,
           ...(await syncProjectById(this.repo, this.deps.reposDir, id, undefined, {
+            beforePublish: () => requireSourceSyncParticipant("job.sync"),
             maxDocsBytes: this.deps.sourceDocsMaxBytes,
             onProgress: (patch) => this.emit(jobId, patch),
             enqueuePdfExtract: (pid) =>
@@ -558,6 +560,7 @@ export class InProcessJobRunner {
     this.emit(jobId, { message: "Extracting PDF text…", progress: 15 });
     const pdfTextStorage = sourcePdfTextStorage(this.repo, projectId, row.localPath);
     const result = await extractPendingPdfsForSource(this.repo, projectId, row.localPath, {
+      beforePublish: () => requireSourceSyncParticipant("job.extract-source-docs"),
       ...pdfTextStorage,
       onProgress: (msg, progress) => this.emit(jobId, { message: msg, progress }),
     });

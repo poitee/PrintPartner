@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
+  linkSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -9,6 +11,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -177,6 +180,64 @@ function toolText(body: string): string {
 }
 
 describe("Source Sync Fastify admission", () => {
+  it("rejects dropped resource claims for every participant before receipt creation", () => {
+    for (const [index, id] of SOURCE_SYNC_PARTICIPANTS.entries()) {
+      const dir = scratch(`wrong-resource-${index}`);
+      const dataDir = join(dir, "data");
+      const manifest = writeManifest(dir, "wrong-resources.json", (value) => {
+        const participants = value.participants as Array<{ id: string; resources: string[] }>;
+        const participant = participants.find((item) => item.id === id);
+        if (!participant) throw new Error(`Missing fixture participant ${id}`);
+        participant.resources = ["file:placeholder"];
+      });
+      installManifest(manifest, dataDir);
+      expect(() => beginSourceSyncAdmission(dataDir), id).toThrow(/resource set mismatch/);
+      expect(existsSync(dataDir), id).toBe(false);
+    }
+  });
+
+  it("rejects empty-named fields in manifests and receipts without changing data", () => {
+    const dir = scratch("empty-fields");
+    const manifestPath = writeManifest(dir, "manifest.json");
+    const original = readFileSync(manifestPath, "utf8");
+    const manifest = JSON.parse(original) as { live_format: Record<string, unknown>; participants: Array<Record<string, unknown>> };
+    const cases = [
+      { "": true, unknown: true, ...manifest },
+      { ...manifest, live_format: { "": true, ...manifest.live_format } },
+      { ...manifest, participants: [{ "": true, ...manifest.participants[0] }, ...manifest.participants.slice(1)] },
+    ];
+    installManifest(manifestPath, join(dir, "data"));
+    for (const value of cases) {
+      writeFileSync(manifestPath, JSON.stringify(value));
+      expect(() => beginSourceSyncAdmission(join(dir, "data"))).toThrow(/unknown field/);
+      expect(existsSync(join(dir, "data"))).toBe(false);
+    }
+    writeFileSync(manifestPath, original);
+    const receipt = beginSourceSyncAdmission(join(dir, "data"));
+    const invalidReceipt = JSON.stringify({ "": true, unknown: true, ...receipt });
+    const path = sourceSyncAdmissionReceiptPath(join(dir, "data"));
+    writeFileSync(path, invalidReceipt);
+    expect(() => beginSourceSyncAdmission(join(dir, "data"))).toThrow(/admission receipt/);
+    expect(readFileSync(path, "utf8")).toBe(invalidReceipt);
+  });
+
+  it.each(["symlink", "hardlink"])("ignores a planted receipt temporary %s and preserves its target", (kind) => {
+    const dir = scratch(`receipt-${kind}`);
+    const manifest = writeManifest(dir, "manifest.json");
+    installManifest(manifest, dir);
+    const target = join(dir, "unrelated.txt");
+    writeFileSync(target, "untouched data");
+    const planted = `${sourceSyncAdmissionReceiptPath(dir)}.tmp`;
+    if (kind === "symlink") symlinkSync(target, planted);
+    else linkSync(target, planted);
+    const receipt = beginSourceSyncAdmission(dir);
+    expect(readFileSync(target, "utf8")).toBe("untouched data");
+    expect(JSON.parse(readFileSync(sourceSyncAdmissionReceiptPath(dir), "utf8"))).toEqual(receipt);
+    expect(lstatSync(sourceSyncAdmissionReceiptPath(dir)).isFile()).toBe(true);
+    expect(statSync(sourceSyncAdmissionReceiptPath(dir)).nlink).toBe(1);
+    expect(readdirSync(dir).filter((name) => name.endsWith(".tmp"))).toEqual(["source-sync-admission.json.tmp"]);
+  });
+
   it("rejects every participant relabeled with another allowed kind before persisting admission", () => {
     for (const [index, id] of SOURCE_SYNC_PARTICIPANTS.entries()) {
       const dir = scratch(`wrong-kind-${index}`);

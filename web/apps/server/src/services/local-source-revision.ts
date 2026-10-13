@@ -200,6 +200,7 @@ function resourcesWithManifest(
 }
 
 async function materializeLocalSourceWorkingTree(input: {
+  beforePublish?: () => undefined;
   reposDir: string;
   sourceId: number;
   workingTree: string;
@@ -259,6 +260,7 @@ async function materializeLocalSourceWorkingTree(input: {
     }));
     const store = new LocalSourceSnapshotStore({ reposDir: input.reposDir });
     return await store.materialize({
+      beforePublish: input.beforePublish,
       sourceId: input.sourceId,
       upstreamRevisionKey,
       files,
@@ -347,11 +349,13 @@ export async function publishLocalSourceWorkingTree(input: {
 }
 
 export async function publishSourceManifestRevision(input: {
+  beforePublish?: () => undefined;
   repo: AppRepository;
   sourceId: number;
   manifestYaml: string;
   observed?: SourceActivationObservation;
 }): Promise<SourceSummary> {
+  input.beforePublish?.();
   try {
     loadManifestYaml(input.manifestYaml);
   } catch (error) {
@@ -382,6 +386,7 @@ export async function publishSourceManifestRevision(input: {
     }
     snapshot = await new LocalSourceSnapshotStore({ reposDir: input.repo.reposDir })
       .deriveFileReplacement({
+        beforePublish: input.beforePublish,
         sourceId: input.sourceId,
         baseRevisionKey: activeRevision.upstream_revision_key,
         sourceVersion: observed.lastCommitSha,
@@ -393,6 +398,7 @@ export async function publishSourceManifestRevision(input: {
       });
   } else {
     snapshot = await materializeLocalSourceWorkingTree({
+      beforePublish: input.beforePublish,
       reposDir: input.repo.reposDir,
       sourceId: input.sourceId,
       workingTree: source.localPath,
@@ -403,6 +409,7 @@ export async function publishSourceManifestRevision(input: {
     });
   }
 
+  input.beforePublish?.();
   return registerAndActivateSnapshot({
     repo: input.repo,
     sourceId: input.sourceId,

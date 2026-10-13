@@ -13,6 +13,8 @@
 
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -41,6 +43,7 @@ pub const SOURCE_SYNC_PARTICIPANTS: &[&str] = &[
     "job.check-source-updates",
     "startup.startSourceWatcher",
     "worker.startSourceWatcher",
+    "migration.migrateLegacySourceManifestOverridesForTenant",
 ];
 
 const RECEIPT_FILE: &str = "source-sync-admission.json";
@@ -86,6 +89,9 @@ pub enum AdmissionError {
         id: String,
         expected: String,
         actual: String,
+    },
+    ResourceSetMismatch {
+        id: String,
     },
     UnknownLiveFormat {
         value: String,
@@ -157,6 +163,9 @@ impl std::fmt::Display for AdmissionError {
                 formatter,
                 "conflicting ownership for {operation}: {left} vs {right}"
             ),
+            Self::ResourceSetMismatch { id } => {
+                write!(formatter, "participant resource set mismatch for {id}")
+            }
             Self::ConflictingResource { resource } => {
                 write!(formatter, "conflicting resource authority for {resource}")
             }
@@ -309,6 +318,7 @@ pub fn admit_observed(
                 Some("mcp") => "mcp_action",
                 Some("startup") => "startup_watcher",
                 Some("worker") => "worker",
+                Some("migration") => "migration",
                 _ => {
                     return Err(AdmissionError::Malformed(format!(
                         "unclassified participant {}",
@@ -325,6 +335,18 @@ pub fn admit_observed(
             }
         }
         validate_resources(&participant.resources)?;
+        if SOURCE_SYNC_PARTICIPANTS.contains(&participant.id.as_str()) {
+            let expected: BTreeSet<&str> = expected_resources(&participant.id)
+                .iter()
+                .copied()
+                .collect();
+            let actual: BTreeSet<&str> = participant.resources.iter().map(String::as_str).collect();
+            if actual != expected {
+                return Err(AdmissionError::ResourceSetMismatch {
+                    id: participant.id.clone(),
+                });
+            }
+        }
         parsed_participants.push(ParsedParticipant {
             id: &participant.id,
             kind: &participant.kind,
@@ -363,11 +385,49 @@ pub fn admit_observed(
 
 fn validate_kind(kind: &str) -> Result<(), AdmissionError> {
     match kind {
-        "http" | "http_alias" | "mcp_action" | "job" | "startup_watcher" | "worker" => Ok(()),
+        "http" | "http_alias" | "mcp_action" | "job" | "startup_watcher" | "worker"
+        | "migration" => Ok(()),
         other => Err(AdmissionError::UnknownParticipantKind {
             value: other.to_string(),
         }),
     }
+}
+
+fn expected_resources(id: &str) -> &'static [&'static str] {
+    if id == "worker.startSourceWatcher" {
+        return &[
+            "table:projects",
+            "table:source_revisions",
+            "table:source_docs",
+            "file:source-workspace",
+            "file:source-covers",
+            "table:app_settings",
+            "table:app_events",
+        ];
+    }
+    if id.starts_with("migration.") {
+        return &[
+            "table:projects",
+            "table:source_revisions",
+            "file:source-workspace",
+        ];
+    }
+    if id.ends_with("check-source-updates") {
+        return &["table:projects", "table:app_settings", "table:app_events"];
+    }
+    if id.ends_with("extract-source-docs") {
+        return &["table:source_docs", "file:source-workspace"];
+    }
+    if matches!(id, "http.POST /sources" | "http.POST /api/v1/sources") {
+        return &["table:projects", "table:source_revisions"];
+    }
+    &[
+        "table:projects",
+        "table:source_revisions",
+        "table:source_docs",
+        "file:source-workspace",
+        "file:source-covers",
+    ]
 }
 
 fn validate_resources(resources: &[String]) -> Result<(), AdmissionError> {
@@ -691,19 +751,32 @@ fn write_or_reuse_receipt(
     };
     let encoded = serde_json::to_vec_pretty(&receipt)
         .map_err(|error| AdmissionError::Malformed(error.to_string()))?;
-    let temporary = data_dir.join(format!(".{RECEIPT_FILE}.tmp"));
-    {
-        let mut file = fs::File::create(&temporary)
-            .map_err(|error| AdmissionError::Malformed(error.to_string()))?;
+    let temporary = data_dir.join(format!(
+        ".{RECEIPT_FILE}.{}.tmp",
+        hex::encode(rand::random::<[u8; 16]>())
+    ));
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options
+        .open(&temporary)
+        .map_err(|error| AdmissionError::Malformed(error.to_string()))?;
+    let result = (|| {
         file.write_all(&encoded)
             .map_err(|error| AdmissionError::Malformed(error.to_string()))?;
         file.sync_all()
             .map_err(|error| AdmissionError::Malformed(error.to_string()))?;
+        drop(file);
+        fs::rename(&temporary, &receipt_path)
+            .map_err(|error| AdmissionError::Malformed(error.to_string()))?;
+        fs::File::open(data_dir)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| AdmissionError::Malformed(error.to_string()))?;
+        Ok(receipt)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
     }
-    fs::rename(&temporary, &receipt_path)
-        .map_err(|error| AdmissionError::Malformed(error.to_string()))?;
-    fs::File::open(data_dir)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|error| AdmissionError::Malformed(error.to_string()))?;
-    Ok(receipt)
+    result
 }

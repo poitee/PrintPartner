@@ -83,6 +83,7 @@ export type SnapshotFileResponse = {
 };
 
 type MaterializeSourceSnapshotInput = {
+  beforePublish?: () => undefined;
   sourceId: number;
   upstreamRevisionKey: string;
   files: readonly SnapshotFile[];
@@ -91,6 +92,7 @@ type MaterializeSourceSnapshotInput = {
 };
 
 type DeriveFileReplacementInput = {
+  beforePublish?: () => undefined;
   sourceId: number;
   baseRevisionKey: string;
   sourceVersion: string;
@@ -659,6 +661,7 @@ export class LocalSourceSnapshotStore {
       sizeHintBytes: file.sizeBytes,
     }));
     return this.materialize({
+      beforePublish: input.beforePublish,
       sourceId: input.sourceId,
       upstreamRevisionKey,
       files,
@@ -681,6 +684,7 @@ export class LocalSourceSnapshotStore {
   }
 
   async materialize(input: MaterializeSourceSnapshotInput): Promise<PublishedSourceSnapshot> {
+    input.beforePublish?.();
     validateSourceId(input.sourceId);
     validateRevisionKey(input.upstreamRevisionKey);
     const files = normalizeFiles(input.files);
@@ -716,6 +720,7 @@ export class LocalSourceSnapshotStore {
     const publishCandidate = async (): Promise<PublishedSourceSnapshot> => {
       let storedBytes = 0;
       for (const file of files) {
+        input.beforePublish?.();
         const written = await writeSnapshotFile({
           candidateDir,
           file,
@@ -756,6 +761,7 @@ export class LocalSourceSnapshotStore {
       );
 
       try {
+        input.beforePublish?.();
         await this.#dependencies.renameDirectory(candidateDir, finalDir);
       } catch (error) {
         if (hasErrorCode(error, new Set(["EXDEV"]))) {

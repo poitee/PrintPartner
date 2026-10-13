@@ -8,7 +8,7 @@ import { getLogger } from "./logger.js";
 import { tenantStorage, getRequestTenantId } from "../middleware/tenant-context.js";
 import { runWithTenantDiskQuota } from "../lib/tenant-disk-quota.js";
 import { readStoredSourceUpdateIntervalHours } from "./source-monitoring-settings.js";
-import { requireSourceSyncParticipant } from "../ownership/source-sync-admission.js";
+import { OwnershipAdmissionError, requireSourceSyncParticipant } from "../ownership/source-sync-admission.js";
 
 type SourceWatcherSettings = {
   discordWebhookUrl: string | null;
@@ -205,7 +205,9 @@ async function syncUnsyncedSources(
       const result = await runWithTenantDiskQuota({
         dataDir: dirname(reposDir), reposDir, tenantId: getRequestTenantId(),
         quotaBytes, sourceIds: () => repo.listSources().map((item) => item.id),
-      }, () => syncProjectById(repo, reposDir, source.id, coversDir));
+      }, () => syncProjectById(repo, reposDir, source.id, coversDir, {
+        beforePublish: () => requireSourceSyncParticipant("startup.startSourceWatcher"),
+      }));
 
       const settings = getSettings();
       if (settings.discordWebhookUrl && settings.notifyOnSync) {
@@ -227,6 +229,7 @@ async function syncUnsyncedSources(
         stl_count: result.stl_count,
       });
     } catch (err) {
+      if (err instanceof OwnershipAdmissionError) throw err;
       logger.log(
         "warn",
         `[source-watcher] Startup sync failed for ${source.name}: ${err instanceof Error ? err.message : String(err)}`,
@@ -304,7 +307,9 @@ async function runPeriodicUpdateCheck(
         const result = await runWithTenantDiskQuota({
         dataDir: dirname(reposDir), reposDir, tenantId: getRequestTenantId(),
         quotaBytes, sourceIds: () => repo.listSources().map((item) => item.id),
-      }, () => syncProjectById(repo, reposDir, source.id, coversDir));
+      }, () => syncProjectById(repo, reposDir, source.id, coversDir, {
+        beforePublish: () => requireSourceSyncParticipant("worker.startSourceWatcher"),
+      }));
         const updatedRow = repo.getProjectRow(source.id);
         repo.recordAppEvent({
           kind: "source.updated",
@@ -342,6 +347,7 @@ async function runPeriodicUpdateCheck(
           stl_count: result.stl_count,
         });
       } catch (err) {
+        if (err instanceof OwnershipAdmissionError) throw err;
         logger.log(
           "warn",
           `[source-watcher] Auto-sync failed for ${source.name}: ${err instanceof Error ? err.message : String(err)}`,

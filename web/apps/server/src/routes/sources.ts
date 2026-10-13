@@ -713,6 +713,7 @@ export async function syncProjectById(
   projectId: number,
   coversDir = join(dirname(reposDir), "covers"),
   options?: {
+    beforePublish?: () => undefined;
     maxDocsBytes?: number;
     onProgress?: (event: Partial<JobSnapshot>) => void;
     /** When set, enqueue PDF extraction as a follow-up job instead of inline. */
@@ -726,6 +727,8 @@ export async function syncProjectById(
   pdf_extract_job_id?: string;
   postprocess_warning?: string;
 }> {
+  const checkAdmission = options?.beforePublish ?? (() => requireSourceSyncParticipant("job.sync"));
+  checkAdmission();
   const row = repo.getProjectRow(projectId);
   if (!row) throw new Error("Source not found");
   const observed = repo.getSourceActivationObservation(projectId);
@@ -742,6 +745,7 @@ export async function syncProjectById(
         sourceId: projectId,
         token,
         options: {
+          beforePublish: checkAdmission,
           maxStlFiles: 500,
           tag: row.tag,
           maxDocsBytes,
@@ -756,6 +760,7 @@ export async function syncProjectById(
           },
         },
       });
+      checkAdmission();
       const revision = repo.recordSourceRevision({
         sourceId: projectId,
         upstreamRevisionKey: result.snapshot.upstreamRevisionKey,
@@ -792,6 +797,7 @@ export async function syncProjectById(
         if (smallPdfs.length > 0) {
           options?.onProgress?.({ message: "Extracting PDF text…", progress: 92 });
           await extractPendingPdfsForSource(repo, projectId, activePath, {
+            beforePublish: checkAdmission,
             ...pdfTextStorage,
             maxSizeBytes: PDF_BG_EXTRACT_BYTES - 1,
             onProgress: (msg, progress) =>
@@ -805,6 +811,7 @@ export async function syncProjectById(
         } else if (largePdfs.length > 0) {
           options?.onProgress?.({ message: "Extracting large PDF manuals…", progress: 93 });
           await extractPendingPdfsForSource(repo, projectId, activePath, {
+            beforePublish: checkAdmission,
             ...pdfTextStorage,
             minSizeBytes: PDF_BG_EXTRACT_BYTES,
             onProgress: (msg, progress) =>
@@ -812,6 +819,7 @@ export async function syncProjectById(
           });
         }
       } catch (error) {
+        if (error instanceof OwnershipAdmissionError) throw error;
         if (error instanceof TenantDiskQuotaError) throw error;
         postprocess_warning = error instanceof Error ? error.message : String(error);
       }
@@ -819,11 +827,13 @@ export async function syncProjectById(
       const syncedRow = repo.getProjectRow(projectId);
       if (syncedRow) {
         try {
-          await ensureSourceCover(coversDir, toCoverProject(syncedRow));
-        } catch {
+          await ensureSourceCover(coversDir, toCoverProject(syncedRow), { beforePublish: checkAdmission });
+        } catch (error) {
+          if (error instanceof OwnershipAdmissionError) throw error;
           /* cover is best-effort */
         }
       }
+      checkAdmission();
       return {
         stl_count: result.stlPaths.length,
         downloaded: result.downloaded,
@@ -849,6 +859,8 @@ export async function syncProjectById(
     repo.markSourceSynced(projectId, row.lastCommitSha);
     return { stl_count: 0, downloaded: 0, doc_count: 0, docs_downloaded: 0 };
   } catch (error) {
+    if (error instanceof OwnershipAdmissionError) throw error;
+    checkAdmission();
     const current = repo.getSourceActivationObservation(projectId);
     if (JSON.stringify(current) === JSON.stringify(observed)) {
       repo.updateSource(projectId, { metadata: {

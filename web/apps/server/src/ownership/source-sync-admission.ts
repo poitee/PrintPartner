@@ -1,33 +1,40 @@
-import { createHash } from "node:crypto";
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { closeSync, constants, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** Node remains the Source Sync owner. Rust is rejected, not routed back here. */
 export const SOURCE_SYNC_OPERATION = "source.sync";
-const SOURCE_SYNC_PARTICIPANT_KINDS = {
-  "http.POST /jobs/sync": "http",
-  "http.POST /api/v1/jobs/sync": "http_alias",
-  "http.POST /jobs/import-scan": "http",
-  "http.POST /api/v1/jobs/import-scan": "http_alias",
-  "http.POST /jobs/check-source-updates": "http",
-  "http.POST /api/v1/jobs/check-source-updates": "http_alias",
-  "http.POST /jobs/extract-source-docs": "http",
-  "http.POST /api/v1/jobs/extract-source-docs": "http_alias",
-  "http.POST /sources": "http",
-  "http.POST /api/v1/sources": "http_alias",
-  "http.POST /assistant/actions/apply": "http",
-  "http.POST /api/v1/assistant/actions/apply": "http_alias",
-  "mcp.start_sync": "mcp_action",
-  "job.sync": "job",
-  "job.import-scan": "job",
-  "job.check-source-updates": "job",
-  "job.extract-source-docs": "job",
-  "startup.startSourceWatcher": "startup_watcher",
-  "worker.startSourceWatcher": "worker",
+const SYNC_RESOURCES = ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"] as const;
+const UPDATE_RESOURCES = ["table:projects", "table:app_settings", "table:app_events"] as const;
+const DOC_RESOURCES = ["table:source_docs", "file:source-workspace"] as const;
+const CREATE_RESOURCES = ["table:projects", "table:source_revisions"] as const;
+const MIGRATION_RESOURCES = ["table:projects", "table:source_revisions", "file:source-workspace"] as const;
+const WORKER_RESOURCES = ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers", "table:app_settings", "table:app_events"] as const;
+const SOURCE_SYNC_PARTICIPANT_SPECS = {
+  "http.POST /jobs/check-source-updates": { kind: "http", resources: UPDATE_RESOURCES },
+  "http.POST /jobs/extract-source-docs": { kind: "http", resources: DOC_RESOURCES },
+  "http.POST /jobs/import-scan": { kind: "http", resources: SYNC_RESOURCES },
+  "http.POST /jobs/sync": { kind: "http", resources: SYNC_RESOURCES },
+  "http.POST /api/v1/jobs/check-source-updates": { kind: "http_alias", resources: UPDATE_RESOURCES },
+  "http.POST /api/v1/jobs/extract-source-docs": { kind: "http_alias", resources: DOC_RESOURCES },
+  "http.POST /api/v1/jobs/import-scan": { kind: "http_alias", resources: SYNC_RESOURCES },
+  "http.POST /api/v1/jobs/sync": { kind: "http_alias", resources: SYNC_RESOURCES },
+  "http.POST /sources": { kind: "http", resources: CREATE_RESOURCES },
+  "http.POST /api/v1/sources": { kind: "http_alias", resources: CREATE_RESOURCES },
+  "http.POST /assistant/actions/apply": { kind: "http", resources: SYNC_RESOURCES },
+  "http.POST /api/v1/assistant/actions/apply": { kind: "http_alias", resources: SYNC_RESOURCES },
+  "mcp.start_sync": { kind: "mcp_action", resources: SYNC_RESOURCES },
+  "job.check-source-updates": { kind: "job", resources: UPDATE_RESOURCES },
+  "job.extract-source-docs": { kind: "job", resources: DOC_RESOURCES },
+  "job.import-scan": { kind: "job", resources: SYNC_RESOURCES },
+  "job.sync": { kind: "job", resources: SYNC_RESOURCES },
+  "startup.startSourceWatcher": { kind: "startup_watcher", resources: SYNC_RESOURCES },
+  "worker.startSourceWatcher": { kind: "worker", resources: WORKER_RESOURCES },
+  "migration.migrateLegacySourceManifestOverridesForTenant": { kind: "migration", resources: MIGRATION_RESOURCES },
 } as const;
-export const SOURCE_SYNC_PARTICIPANTS = Object.keys(SOURCE_SYNC_PARTICIPANT_KINDS);
-const expectedParticipantKinds = new Map(Object.entries(SOURCE_SYNC_PARTICIPANT_KINDS));
+export const SOURCE_SYNC_PARTICIPANTS: readonly string[] = Object.freeze(Object.keys(SOURCE_SYNC_PARTICIPANT_SPECS));
+const expectedParticipantSpecs = new Map(Object.entries(SOURCE_SYNC_PARTICIPANT_SPECS));
 
 const MANIFEST_FIELDS = new Set(["operation", "owner", "live_format", "participants"]);
 const RECEIPT_FIELDS = new Set([
@@ -42,7 +49,7 @@ const MAX_PROCESS_ID = 2_147_483_647;
 let admittedManifestSha256: string | undefined;
 const LIVE_FORMAT_FIELDS = new Set(["id", "rollback"]);
 const PARTICIPANT_FIELDS = new Set(["id", "kind", "owner", "resources"]);
-const KINDS = new Set(["http", "http_alias", "mcp_action", "job", "startup_watcher", "worker"]);
+const KINDS = new Set(["http", "http_alias", "mcp_action", "job", "startup_watcher", "worker", "migration"]);
 
 export class OwnershipAdmissionError extends Error {
   readonly code: string;
@@ -121,7 +128,7 @@ export function admitSourceSyncManifest(text: string): {
   }
   if (!isRecord(parsed)) return fail("malformed", "malformed ownership manifest: expected object");
   const extra = unknownFields(parsed, MANIFEST_FIELDS);
-  if (extra) return fail("malformed", `malformed ownership manifest: unknown field ${extra}`);
+  if (extra !== null) return fail("malformed", `malformed ownership manifest: unknown field ${extra}`);
   if (parsed.operation !== SOURCE_SYNC_OPERATION) {
     return fail("unknown_operation", `unknown operation ${String(parsed.operation)}`);
   }
@@ -129,7 +136,7 @@ export function admitSourceSyncManifest(text: string): {
     return fail("malformed", "malformed ownership manifest: live_format");
   }
   const liveExtra = unknownFields(parsed.live_format, LIVE_FORMAT_FIELDS);
-  if (liveExtra) return fail("malformed", `malformed ownership manifest: unknown field ${liveExtra}`);
+  if (liveExtra !== null) return fail("malformed", `malformed ownership manifest: unknown field ${liveExtra}`);
   const formatId = parsed.live_format.id;
   if (formatId !== "source-revision-workspace-v1") {
     return fail("unknown_live_format", `unknown live format rollback ${String(formatId)}`);
@@ -152,7 +159,7 @@ export function admitSourceSyncManifest(text: string): {
   for (const entry of parsed.participants) {
     if (!isRecord(entry)) return fail("malformed", "malformed ownership manifest: participant");
     const participantExtra = unknownFields(entry, PARTICIPANT_FIELDS);
-    if (participantExtra) {
+    if (participantExtra !== null) {
       return fail("malformed", `malformed ownership manifest: unknown field ${participantExtra}`);
     }
     if (typeof entry.id !== "string" || entry.id === "") {
@@ -163,9 +170,9 @@ export function admitSourceSyncManifest(text: string): {
     if (typeof entry.kind !== "string" || !KINDS.has(entry.kind)) {
       return fail("unknown_kind", `unknown participant kind ${String(entry.kind)}`);
     }
-    const expectedKind = expectedParticipantKinds.get(entry.id);
-    if (expectedKind !== undefined && entry.kind !== expectedKind) {
-      return fail("participant_kind_mismatch", `participant kind mismatch for ${entry.id}: expected ${expectedKind}, got ${entry.kind}`);
+    const expectedSpec = expectedParticipantSpecs.get(entry.id);
+    if (expectedSpec !== undefined && entry.kind !== expectedSpec.kind) {
+      return fail("participant_kind_mismatch", `participant kind mismatch for ${entry.id}: expected ${expectedSpec.kind}, got ${entry.kind}`);
     }
     if (!Array.isArray(entry.resources) || entry.resources.length === 0) {
       return fail("malformed", "malformed ownership manifest: participant resources must name a table or file");
@@ -176,6 +183,12 @@ export function admitSourceSyncManifest(text: string): {
         return fail("malformed", `malformed ownership manifest: resource ${String(resource)} is not table: or file:`);
       }
       resources.push(resource);
+    }
+    if (expectedSpec) {
+      const actual = new Set(resources);
+      if (actual.size !== expectedSpec.resources.length || expectedSpec.resources.some((resource) => !actual.has(resource))) {
+        return fail("resource_set_mismatch", `participant resource set mismatch for ${entry.id}`);
+      }
     }
     participants.push({
       id: entry.id,
@@ -232,13 +245,22 @@ export function admitSourceSyncManifest(text: string): {
   };
 }
 
-export function requireSourceSyncParticipant(id: string): void {
-  const admitted = admitSourceSyncManifest(readFileSync(defaultSourceSyncManifestPath(), "utf8"));
+export function requireSourceSyncParticipant(id: string): undefined {
+  const admitted = admitSourceSyncManifest(readSourceSyncManifest());
   if (admittedManifestSha256 !== undefined && admitted.manifestSha256 !== admittedManifestSha256) {
     fail("restart_manifest_changed", "runtime manifest does not match the admitted record");
   }
   if (!admitted.participantIds.includes(id)) {
     fail("participant_set_mismatch", `participant set mismatch missing=${JSON.stringify([id])} unexpected=[]`);
+  }
+}
+
+function readSourceSyncManifest(): string {
+  try {
+    return readFileSync(defaultSourceSyncManifestPath(), "utf8");
+  } catch (error) {
+    if (error instanceof OwnershipAdmissionError) throw error;
+    return fail("malformed", "malformed ownership manifest: cannot read Source Sync manifest");
   }
 }
 
@@ -277,7 +299,7 @@ export function parseSourceSyncAdmissionReceipt(
       "malformed ownership manifest: admission receipt is not a single Node admission",
     );
   }
-  if (unknownFields(parsed, RECEIPT_FIELDS)) {
+  if (unknownFields(parsed, RECEIPT_FIELDS) !== null) {
     return fail(
       "malformed",
       "malformed ownership manifest: admission receipt is not a single Node admission",
@@ -310,7 +332,7 @@ export function parseSourceSyncAdmissionReceipt(
 
 /** Admit the bundled manifest and persist one receipt. A later boot reuses it. */
 export function beginSourceSyncAdmission(dataDir: string): SourceSyncAdmissionReceipt {
-  const admitted = admitSourceSyncManifest(readFileSync(defaultSourceSyncManifestPath(), "utf8"));
+  const admitted = admitSourceSyncManifest(readSourceSyncManifest());
   const receiptPath = sourceSyncAdmissionReceiptPath(dataDir);
   if (existsSync(receiptPath)) {
     const existing = parseSourceSyncAdmissionReceipt(
@@ -331,22 +353,28 @@ export function beginSourceSyncAdmission(dataDir: string): SourceSyncAdmissionRe
     participant_count: admitted.participantIds.length,
     manifest_sha256: admitted.manifestSha256,
   };
-  const temporary = `${receiptPath}.tmp`;
+  const temporary = `${receiptPath}.${randomUUID()}.tmp`;
   const payload = Buffer.from(JSON.stringify(receipt, null, 2));
   mkdirSync(dataDir, { recursive: true });
-  const fd = openSync(temporary, "w");
+  const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+  let published = false;
   try {
-    writeFileSync(fd, payload);
-    fsyncSync(fd);
+    try {
+      writeFileSync(fd, payload);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    renameSync(temporary, receiptPath);
+    published = true;
+    const directory = openSync(dataDir, "r");
+    try {
+      fsyncSync(directory);
+    } finally {
+      closeSync(directory);
+    }
   } finally {
-    closeSync(fd);
-  }
-  renameSync(temporary, receiptPath);
-  const directory = openSync(dataDir, "r");
-  try {
-    fsyncSync(directory);
-  } finally {
-    closeSync(directory);
+    if (!published) rmSync(temporary, { force: true });
   }
   admittedManifestSha256 = receipt.manifest_sha256;
   return receipt;

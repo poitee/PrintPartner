@@ -221,8 +221,9 @@ fn ticket_t_7_ownership_all_rust_unsupported() {
 #[test]
 fn ticket_t_7_ownership_single_rust_participant_conflicts() {
     let mut value = bundled_value();
-    set_participant_owner(&mut value, "mcp.start_sync", "rust");
-    set_participant_resources(&mut value, "mcp.start_sync", &["file:mcp-only"]);
+    value["participants"].as_array_mut().unwrap().push(serde_json::json!({
+        "id": "job.disjoint-claim", "kind": "job", "owner": "rust", "resources": ["file:mcp-only"]
+    }));
     let error = admit_observed(
         &serde_json::to_string(&value).unwrap(),
         SOURCE_SYNC_PARTICIPANTS,
@@ -232,6 +233,57 @@ fn ticket_t_7_ownership_single_rust_participant_conflicts() {
         matches!(error, AdmissionError::ConflictingParticipant { .. }),
         "{error}"
     );
+}
+
+#[test]
+fn ticket_t_7_ownership_resource_mismatch_preserves_tree() {
+    let dir = scratch("ticket_t_7_ownership_resources");
+    plant_tree(&dir);
+    let before = fingerprint_tree(&dir).unwrap();
+    for id in SOURCE_SYNC_PARTICIPANTS {
+        let mut value = bundled_value();
+        set_participant_resources(&mut value, id, &["file:placeholder"]);
+        let error = boot_source_sync(&dir, &serde_json::to_string(&value).unwrap()).unwrap_err();
+        assert!(
+            matches!(error, AdmissionError::ResourceSetMismatch { .. }),
+            "{id}: {error}"
+        );
+        assert_eq!(fingerprint_tree(&dir).unwrap(), before);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn ticket_t_7_ownership_planted_temporaries_do_not_overwrite_targets() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+    for kind in ["symlink", "hardlink"] {
+        let dir = scratch(&format!("ticket_t_7_ownership_temporary_{kind}"));
+        let target = dir.join("unrelated.txt");
+        fs::write(&target, "untouched data").unwrap();
+        let planted = dir.join(".source-sync-admission.json.tmp");
+        if kind == "symlink" {
+            symlink(&target, &planted).unwrap();
+        } else {
+            fs::hard_link(&target, &planted).unwrap();
+        }
+        boot_source_sync(&dir, bundled_text()).unwrap();
+        assert_eq!(read(&target), "untouched data");
+        let metadata = fs::symlink_metadata(dir.join("source-sync-admission.json")).unwrap();
+        assert!(metadata.is_file());
+        assert_eq!(metadata.nlink(), 1);
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        let temporary_count = fs::read_dir(&dir)
+            .unwrap()
+            .filter(|item| {
+                item.as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(".tmp")
+            })
+            .count();
+        assert_eq!(temporary_count, 1);
+    }
 }
 
 #[test]
@@ -258,8 +310,12 @@ fn ticket_t_7_ownership_docs_and_covers_conflicts_rejected() {
         "table:app_events",
     ] {
         let mut value = bundled_value();
-        set_participant_owner(&mut value, "job.import-scan", "rust");
-        set_participant_resources(&mut value, "job.import-scan", &[resource]);
+        value["participants"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "id": "job.external-claim", "kind": "job", "owner": "rust", "resources": [resource]
+            }));
         let error = admit_observed(
             &serde_json::to_string(&value).unwrap(),
             SOURCE_SYNC_PARTICIPANTS,
