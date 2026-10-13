@@ -279,7 +279,10 @@ export class InProcessJobRunner {
     if (!STARTABLE_JOB_KINDS.has(kind)) {
       throw new Error(`Unsupported job kind: ${kind}`);
     }
-    requireSourceJobAdmission(kind);
+    if (kind === "sync") requireSourceSyncParticipant("job.sync");
+    if (kind === "import-scan") requireSourceSyncParticipant("job.import-scan");
+    if (kind === "extract-source-docs") requireSourceSyncParticipant("job.extract-source-docs");
+    if (kind === "check-source-updates") requireSourceSyncParticipant("job.check-source-updates");
     this.pruneCompletedJobs();
     const jobId = crypto.randomUUID();
     const snap: JobSnapshot = {
