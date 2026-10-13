@@ -5,15 +5,15 @@ on:
   # No workflow-level paths filter: a PR-level `paths:` skip leaves the
   # "bundle (...)" checks absent and pending if required. The `changes` job
   # decides instead: macOS jobs conclude `skipped` (or, for server-smoke, a
-  # cheap ubuntu stub succeeds) when they are not selected. GitHub accepts
+  # cheap Linux stub succeeds) when they are not selected. GitHub accepts
   # `skipped` for required status checks, so PRs never hang on them.
   #
-  # Hosted macOS is expensive and queues for hours, so it runs post-merge:
-  #   - push to main (both arches), nightly (both arches), manual dispatch;
+  # Runner policy applies to every event; native work is selected below:
+  #   - push to main, nightly, and manual dispatch select native work;
   #   - PRs only when macOS/desktop-native inputs change (arm64 only) or the
   #     PR carries the `ci:macos` label (arm64 only). Intel never runs on PRs.
   pull_request:
-    types: [opened, synchronize, reopened, labeled]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   push:
     branches: [main, master]
   schedule:
@@ -33,32 +33,21 @@ defaults:
     shell: bash
 
 jobs:
+  ci-plan:
+    uses: ./.github/workflows/ci-runner-plan.yml
+
   changes:
-    runs-on: ubuntu-24.04
+    needs: [ci-plan]
+    if: ${{ needs.ci-plan.outputs.linux == 'true' }}
+    runs-on: ${{ fromJSON(needs.ci-plan.outputs.linux-runner) }}
     timeout-minutes: 10
     outputs:
-      mac-mini: ${{ steps.runner.outputs.self-hosted }}
       native: ${{ steps.select.outputs.native }}
       # 'true' when any macOS job should do real work in this run.
       macos: ${{ steps.plan.outputs.macos }}
       # 'true' only off-PR (push to main, nightly, dispatch).
       intel: ${{ steps.plan.outputs.intel }}
     steps:
-      - name: Select arm64 runner
-        id: runner
-        shell: bash
-        env:
-          RUNNER_OPT_IN: ${{ vars.MAC_MINI_RUNNER }}
-          EVENT_NAME: ${{ github.event_name }}
-          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-          REPOSITORY: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          enabled=false
-          if [[ "$RUNNER_OPT_IN" == on && ( "$EVENT_NAME" != pull_request || "$HEAD_REPO" == "$REPOSITORY" ) ]]; then
-            enabled=true
-          fi
-          echo "self-hosted=$enabled" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -72,6 +61,7 @@ jobs:
           HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
         run: |
           python3 -m unittest discover -s scripts -p test_macos_bundle_path_filter.py
+          python3 -m unittest discover -s scripts -p test_ci_runner_policy.py
           python3 scripts/macos-bundle-path-filter.py
       - name: Decide which macOS jobs run
         id: plan
@@ -97,9 +87,9 @@ jobs:
   # Fast Linux gate: macOS runners only start once the shared web build and
   # filter tests pass, so doomed commits never burn a macOS queue slot.
   linux-precheck:
-    needs: changes
-    if: ${{ needs.changes.outputs.macos != 'false' }}
-    runs-on: ubuntu-24.04
+    needs: [ci-plan, changes]
+    if: ${{ (needs.changes.outputs.macos != 'false') && needs.ci-plan.outputs.linux == 'true' }}
+    runs-on: ${{ fromJSON(needs.ci-plan.outputs.linux-runner) }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -120,11 +110,11 @@ jobs:
           git diff --exit-code -- web/package-lock.json
 
   server-smoke:
-    needs: [changes, linux-precheck]
+    needs: [ci-plan, changes, linux-precheck]
+    if: ${{ (!cancelled() && (needs.changes.outputs.macos == 'false' || needs.linux-precheck.result == 'success')) && ((needs.changes.outputs.macos == 'false' && needs.ci-plan.outputs.linux == 'true') || (needs.changes.outputs.macos != 'false' && needs.ci-plan.outputs.macos == 'true')) }}
+    runs-on: ${{ fromJSON(needs.changes.outputs.macos != 'false' && needs.ci-plan.outputs.macos-runner || needs.ci-plan.outputs.linux-runner) }}
     # Report a status on a cheap runner when macOS work is not selected.
     # Unknown/failed selection still runs the full macOS smoke.
-    if: ${{ !cancelled() && (needs.changes.outputs.macos == 'false' || needs.linux-precheck.result == 'success') }}
-    runs-on: ${{ needs.changes.outputs.macos != 'false' && 'macos-26' || 'ubuntu-24.04' }}
     timeout-minutes: 30
     env:
       VITE_PRINT_PARTNER_DESKTOP: '1'
@@ -177,12 +167,12 @@ jobs:
           retention-days: 14
 
   bundle:
+    needs: [ci-plan, changes, linux-precheck]
+    if: ${{ (!cancelled() && needs.changes.outputs.macos != 'false' && needs.linux-precheck.result == 'success') && needs.ci-plan.outputs.macos == 'true' }}
+    runs-on: ${{ fromJSON(needs.ci-plan.outputs.macos-runner) }}
     # Explicit architecture jobs keep both check names present even when skipped.
     name: bundle (macos-26, arm64, arm64, aarch64-apple-darwin, ee35ee364a0c626df7852d9a5bc0c5394b6440772e9...
-    needs: [changes, linux-precheck]
-    # Fail open if selection fails; honor concurrency cancellation.
-    if: ${{ !cancelled() && needs.changes.outputs.macos != 'false' && needs.linux-precheck.result == 'success' }}
-    runs-on: ${{ needs.changes.outputs.mac-mini == 'true' && fromJSON('["self-hosted","macOS","ARM64","mac-mini"]') || 'macos-26' }}
+    # Honor concurrency cancellation and require an approved runner.
     timeout-minutes: 90
     env:
       ARCH: arm64
@@ -317,11 +307,11 @@ jobs:
           compression-level: 0
 
   bundle-intel:
-    name: bundle (macos-26-intel, x86_64, x64, x86_64-apple-darwin, e5386ba6dadc3fbbdcf46c1f95b700f28caf03d...
-    needs: [changes, linux-precheck]
-    # Intel is post-merge only: push to main, nightly, dispatch.
-    if: ${{ !cancelled() && needs.changes.outputs.intel == 'true' && needs.linux-precheck.result == 'success' }}
+    needs: [ci-plan, changes, linux-precheck]
+    if: ${{ (!cancelled() && needs.changes.outputs.intel == 'true' && needs.linux-precheck.result == 'success') && needs.ci-plan.outputs.intel == 'true' }}
     runs-on: macos-26-intel
+    name: bundle (macos-26-intel, x86_64, x64, x86_64-apple-darwin, e5386ba6dadc3fbbdcf46c1f95b700f28caf03d...
+    # Intel is post-merge only: push to main, nightly, dispatch.
     timeout-minutes: 90
     env:
       ARCH: x86_64
@@ -336,9 +326,9 @@ jobs:
     steps: *bundle-steps
 
   macos-storage-gate:
-    needs: [changes, linux-precheck]
-    if: ${{ !cancelled() && needs.changes.outputs.macos != 'false' && needs.linux-precheck.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: macos-latest
+    needs: [ci-plan, changes, linux-precheck]
+    if: ${{ (!cancelled() && needs.changes.outputs.macos != 'false' && needs.linux-precheck.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || needs.ci-plan.outputs.hosted == 'true')) && needs.ci-plan.outputs.macos == 'true' }}
+    runs-on: ${{ fromJSON(needs.ci-plan.outputs.macos-runner) }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

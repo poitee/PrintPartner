@@ -1,0 +1,85 @@
+name: CI runner policy
+
+on:
+  workflow_call:
+    outputs:
+      hosted:
+        value: ${{ jobs.plan.outputs.hosted }}
+      linux:
+        value: ${{ jobs.plan.outputs.linux }}
+      macos:
+        value: ${{ jobs.plan.outputs.macos }}
+      intel:
+        value: ${{ jobs.plan.outputs.intel }}
+      linux-runner:
+        value: ${{ jobs.plan.outputs.linux-runner }}
+      macos-runner:
+        value: ${{ jobs.plan.outputs.macos-runner }}
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    # Fleet bootstrap is permitted even with workload runner variables off.
+    # Forks opt into hosted planning only with the ci:hosted label.
+    # Forks never enter the fleet.
+    if: ${{ !github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository || contains(github.event.pull_request.labels.*.name, 'ci:hosted') }}
+    runs-on: ${{ github.event.pull_request && github.event.pull_request.head.repo.full_name != github.repository && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","linux","fleet"]') }}
+    timeout-minutes: 5
+    outputs:
+      hosted: ${{ steps.select.outputs.hosted }}
+      linux: ${{ steps.select.outputs.linux }}
+      macos: ${{ steps.select.outputs.macos }}
+      intel: ${{ steps.select.outputs.intel }}
+      linux-runner: ${{ steps.select.outputs.linux-runner }}
+      macos-runner: ${{ steps.select.outputs.macos-runner }}
+    steps:
+      - name: Select runners without hosted fallback
+        id: select
+        shell: bash
+        env:
+          HOSTED_CI: ${{ vars.HOSTED_CI }}
+          FLEET_LINUX_RUNNERS: ${{ vars.FLEET_LINUX_RUNNERS }}
+          MAC_MINI_RUNNER: ${{ vars.MAC_MINI_RUNNER }}
+          HOSTED_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'ci:hosted') }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          hosted=false
+          linux=false
+          macos=false
+          intel=false
+          fork=false
+          if [[ "$EVENT_NAME" == pull_request || "$EVENT_NAME" == pull_request_target ]]; then
+            if [[ "$HEAD_REPO" != "$REPOSITORY" ]]; then
+              fork=true
+            fi
+          fi
+          if [[ ( "$fork" == false && "$HOSTED_CI" == on ) || "$HOSTED_LABEL" == true ]]; then
+            hosted=true
+            linux=true
+            macos=true
+            intel=true
+            linux_runner='["ubuntu-latest"]'
+            macos_runner='["macos-26"]'
+          else
+            linux_runner='["self-hosted","linux","fleet"]'
+            macos_runner='["self-hosted","macOS","ARM64","mac-mini"]'
+            if [[ "$fork" == false && "$FLEET_LINUX_RUNNERS" == on ]]; then
+              linux=true
+            fi
+            if [[ "$fork" == false && "$MAC_MINI_RUNNER" == on ]]; then
+              macos=true
+            fi
+          fi
+          {
+            echo "hosted=$hosted"
+            echo "linux=$linux"
+            echo "macos=$macos"
+            echo "intel=$intel"
+            echo "linux-runner=$linux_runner"
+            echo "macos-runner=$macos_runner"
+          } >> "$GITHUB_OUTPUT"

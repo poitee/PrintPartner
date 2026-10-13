@@ -30,6 +30,7 @@ on:
       - ".github/workflows/**"
       - ".github/actions/**"
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
     paths:
       - "web/**"
       - "fixtures/**"
@@ -63,8 +64,13 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  ci-plan:
+    uses: ./.github/workflows/ci-runner-plan.yml
+
   web:
-    runs-on: ubuntu-latest
+    needs: [ci-plan]
+    if: ${{ needs.ci-plan.outputs.linux == 'true' }}
+    runs-on: ${{ fromJSON(needs.ci-plan.outputs.linux-runner) }}
     timeout-minutes: 20
     defaults:
       run:
@@ -104,8 +110,9 @@ jobs:
         run: npm run quality
 
   docker:
-    needs: web
-    runs-on: ubuntu-latest
+    needs: [ci-plan, web]
+    if: ${{ needs.ci-plan.outputs.linux == 'true' }}
+    runs-on: ${{ fromJSON(needs.ci-plan.outputs.linux-runner) }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

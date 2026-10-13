@@ -5,6 +5,7 @@ on:
   push:
     branches: [main, master, "desktop/**"]
     paths:
+      - ".github/workflows/ci-runner-plan.yml"
       - "fixtures/http/routes-inventory.json"
       - "rust/**"
       - "rust-toolchain.toml"
@@ -19,7 +20,9 @@ on:
       - "docs/adr/0006-autosave-text-contract.md"
       - ".github/workflows/desktop-contracts.yml"
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
     paths:
+      - ".github/workflows/ci-runner-plan.yml"
       - "fixtures/http/routes-inventory.json"
       - "rust/**"
       - "rust-toolchain.toml"
@@ -42,31 +45,13 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  runner-plan:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      fleet: ${{ steps.runner.outputs.self-hosted }}
-    steps:
-      - name: Select contracts runner
-        id: runner
-        shell: bash
-        env:
-          RUNNER_OPT_IN: ${{ vars.FLEET_LINUX_RUNNERS }}
-          EVENT_NAME: ${{ github.event_name }}
-          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-          REPOSITORY: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          enabled=false
-          if [[ "$RUNNER_OPT_IN" == on && ( "$EVENT_NAME" != pull_request || "$HEAD_REPO" == "$REPOSITORY" ) ]]; then
-            enabled=true
-          fi
-          echo "self-hosted=$enabled" >> "$GITHUB_OUTPUT"
+  ci-plan:
+    uses: ./.github/workflows/ci-runner-plan.yml
 
   parity:
-    needs: runner-plan
-    runs-on: ${{ needs.runner-plan.outputs.fleet == 'true' && fromJSON('["self-hosted","linux","fleet"]') || 'ubuntu-latest' }}
+    needs: [ci-plan]
+    if: ${{ needs.ci-plan.outputs.linux == 'true' }}
+    runs-on: ${{ fromJSON(needs.ci-plan.outputs.linux-runner) }}
     timeout-minutes: 5
     strategy:
       matrix:
