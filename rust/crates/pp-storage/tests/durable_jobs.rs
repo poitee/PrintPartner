@@ -4831,6 +4831,38 @@ fn ticket_t_28_claims_writer_disk_quota_keeps_the_active_attempt() {
     let pages = owner.database_pages().unwrap();
     assert!(pages > 1, "schema occupies more than one page");
     assert_eq!(owner.admit_disk_quota(pages).unwrap(), pages);
+    // SQLite clamps max_page_count above 0xfffffffe to that maximum and
+    // returns it. A refusal must keep the quota admitted just above.
+    let oversized = owner
+        .admit_disk_quota(u32::MAX)
+        .expect_err("quota above the sqlite page limit");
+    assert!(oversized.to_string().contains("exceeds"), "{oversized:#}");
+    let mut grew_after_oversized = false;
+    for index in 0..32 {
+        match call(
+            &owner,
+            UserOperation::Enqueue {
+                key: format!("oversize-{index}"),
+                payload_version: 1,
+                payload: Payload::CheckSourceUpdates {},
+            },
+        ) {
+            Ok(_) => {
+                if owner.database_pages().unwrap() > pages {
+                    grew_after_oversized = true;
+                    break;
+                }
+            }
+            Err(error) => {
+                assert!(disk_full(&error), "{error:#}");
+                break;
+            }
+        }
+    }
+    assert!(
+        !grew_after_oversized,
+        "refused oversized quota ({oversized}) raised the page limit past {pages}"
+    );
 
     let mut failed_key = None;
     for index in 0..256 {

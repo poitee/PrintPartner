@@ -148,10 +148,16 @@ fn writer_control(connection: &Connection, control: WriterControl) -> Result<u32
             u32::try_from(pages).map_err(|_| anyhow!("Database page count exceeds u32"))
         }
         WriterControl::AdmitDiskQuota(max_pages) => {
+            // SQLite clamps max_page_count: a value below the current page
+            // count becomes that count, and a value above 0xfffffffe becomes
+            // 0xfffffffe. Reject both before the PRAGMA so a refusal leaves
+            // the previous limit unchanged.
+            const SQLITE_MAX_PAGE_COUNT: u32 = 0xffff_fffe;
             ensure!(max_pages > 0, "Disk quota must be positive");
-            // SQLite clamps an undersized max_page_count up to the current
-            // page count and returns that value. Reject first so a refused
-            // quota leaves the previous limit unchanged.
+            ensure!(
+                max_pages <= SQLITE_MAX_PAGE_COUNT,
+                "Disk quota {max_pages} exceeds the SQLite page limit"
+            );
             let pages: i64 = connection.query_row("PRAGMA page_count", [], |row| row.get(0))?;
             ensure!(
                 i64::from(max_pages) >= pages,
