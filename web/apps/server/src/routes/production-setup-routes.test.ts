@@ -352,6 +352,78 @@ describe("production setup routes", () => {
     }
   });
 
+  it("refuses a method change when the recorded label is a slicer copy of the current unit", async () => {
+    const { app, ports, profile, unit } = await plannedBuild("Decorated lock");
+    try {
+      const selection = await app.inject({
+        method: "PATCH",
+        url: `/plans/${profile.id}/production-setup`,
+        payload: {
+          kind: "set_selection",
+          selection: { mode: "custom", selected_unit_tokens: [unit.token] },
+        },
+      });
+      expect(selection.statusCode).toBe(200);
+      const route = await app.inject({
+        method: "PATCH",
+        url: `/plans/${profile.id}/production-setup`,
+        payload: { kind: "set_route", route: "plates" },
+      });
+      expect(route.statusCode).toBe(200);
+      const assignments = await app.inject({
+        method: "PATCH",
+        url: `/plans/${profile.id}/production-setup`,
+        payload: {
+          kind: "replace_printer_assignments",
+          printer_assignments: [{ token: unit.token, printer_id: "printer-one" }],
+        },
+      });
+      expect(assignments.statusCode).toBe(200);
+      const decoratedName = `${unit.objectName}_id_0_copy_0`;
+      const link = createPrinterCheckoffLink(ports.repository, {
+        profile_id: profile.id,
+        integration_id: "unmanaged",
+        printer_id: "printer-one",
+        host_name: "Bench printer",
+        filename: "batch.gcode",
+        units: [{
+          part_id: unit.partId != null && unit.partId > 0 ? unit.partId : 1,
+          unit_index: 0,
+          object_name: decoratedName,
+        }],
+        unlabeled_names: ["shop-floor.gcode"],
+      });
+      if (!link) throw new Error("recorded print was not stored");
+
+      const rejected = await app.inject({
+        method: "PATCH",
+        url: `/plans/${profile.id}/production-setup`,
+        payload: { kind: "set_route", route: "stl" },
+      });
+      expect(rejected.statusCode).toBe(409);
+      expect(rejected.json()).toMatchObject({ code: "production_method_locked" });
+
+      const loaded = await app.inject({
+        method: "GET",
+        url: `/plans/${profile.id}/production-setup`,
+      });
+      expect(loaded.json()).toMatchObject({
+        route: "plates",
+        selection: { mode: "custom", selected_unit_tokens: [unit.token] },
+        printer_assignments: [{ token: unit.token, printer_id: "printer-one" }],
+      });
+      const stored = loadPrinterCheckoffLinks(ports.repository).find((entry) => entry.id === link.id);
+      expect(stored).toMatchObject({
+        filename: "batch.gcode",
+        units: [{ object_name: decoratedName }],
+        unlabeled_names: ["shop-floor.gcode"],
+      });
+    } finally {
+      await app.close();
+      ports.db.close();
+    }
+  });
+
   it("lets a legacy external Build prepare plates after a past file that names no Required unit", async () => {
     const { app, ports, profile, unit } = await plannedBuild("Past file");
     try {

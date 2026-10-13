@@ -1,4 +1,4 @@
-import { lazy, Suspense, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { HOSTED_PLANNING_COMPOSE_NOTE, isHostedPlanning, type ProductionRoute } from "@print-partner/contracts";
 import { requiredUnitTokensInObjectNames } from "@print-partner/domain";
@@ -244,6 +244,13 @@ function ProductionWorkspace() {
     ],
   );
 
+  useEffect(() => {
+    if (!projection.routeLocked) return;
+    setChangingRoute(false);
+    setPendingRouteChange(null);
+    setRouteFailure(null);
+  }, [projection.routeLocked]);
+
   const workspace = workspaceQuery.data;
   const printerCount =
     workspace && workspace.kind !== "empty_plan" ? workspace.printers.length : 0;
@@ -373,6 +380,12 @@ function ProductionWorkspace() {
    * toast, so the problem cannot scroll away or time out.
    */
   const saveRoute = (next: ProductionRoute) => {
+    if (projection.routeLocked && next !== route) {
+      setRouteFailure(null);
+      setChangingRoute(false);
+      setPendingRouteChange(null);
+      return;
+    }
     setRouteFailure(null);
     void productionSetup
       .save({ kind: "set_route", route: next })
@@ -397,6 +410,12 @@ function ProductionWorkspace() {
    * come back.
    */
   const requestRoute = (next: ProductionRoute) => {
+    if (projection.routeLocked) {
+      setChangingRoute(false);
+      setPendingRouteChange(null);
+      setRouteFailure(null);
+      return;
+    }
     if (next === route) {
       setChangingRoute(false);
       return;
@@ -761,7 +780,7 @@ function ProductionWorkspace() {
                 ) : null
               }
             >
-              {route === "external" && !changingRoute ? (
+              {route === "external" && (projection.routeLocked || !changingRoute) ? (
                 <section
                   className="space-y-3"
                   aria-labelledby="past-print-heading"
@@ -780,12 +799,16 @@ function ProductionWorkspace() {
                         Add a past print in Checkoff
                       </Link>
                     </Button>
-                    <Button variant="secondary" onClick={() => setChangingRoute(true)}>
-                      Choose a Production method
-                    </Button>
+                    {projection.routeLocked ? (
+                      <ProductionMethodLockNote profileId={selectedProfileId} />
+                    ) : (
+                      <Button variant="secondary" onClick={() => setChangingRoute(true)}>
+                        Choose a Production method
+                      </Button>
+                    )}
                   </div>
                 </section>
-              ) : route == null || changingRoute ? (
+              ) : !projection.routeLocked && (route == null || changingRoute) ? (
                 <ProductionRouteQuestion
                   key={route ?? "unanswered"}
                   value={route === "external" ? null : route}
@@ -805,7 +828,7 @@ function ProductionWorkspace() {
                       : undefined
                   }
                 />
-              ) : (
+              ) : route != null ? (
                 <>
                   <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                     <p className="text-sm text-foreground">
@@ -816,17 +839,7 @@ function ProductionWorkspace() {
                       // A recorded print covers a Required unit in this package.
                       // GOV.UK advises against disabling a control, so this is
                       // read-only text with the route out, not a dead button.
-                      <p className="text-xs text-muted-foreground">
-                        A file is already at a printer, so the route stays as it is. Track the
-                        printed result in{" "}
-                        <Link
-                          className="font-medium underline underline-offset-2"
-                          to={progressRoute(selectedProfileId)}
-                        >
-                          Checkoff
-                        </Link>
-                        .
-                      </p>
+                      <ProductionMethodLockNote profileId={selectedProfileId} />
                     ) : (
                       // GOV.UK check answers: a Change link says what it
                       // changes to anyone who cannot see which section it sits
@@ -848,6 +861,8 @@ function ProductionWorkspace() {
                     tasks={taskRows}
                   />
                 </>
+              ) : (
+                <ProductionMethodLockNote profileId={selectedProfileId} />
               )}
               {blockedRequest ? (
                 <p className="text-sm text-muted-foreground" role="status">
@@ -931,5 +946,17 @@ function ProductionWorkspace() {
         />
       )}
     </PageShell>
+  );
+}
+
+function ProductionMethodLockNote({ profileId }: { profileId: number | null }) {
+  return (
+    <p className="text-xs text-muted-foreground">
+      A file is already at a printer, so the route stays as it is. Track the printed result in{" "}
+      <Link className="font-medium underline underline-offset-2" to={progressRoute(profileId)}>
+        Checkoff
+      </Link>
+      .
+    </p>
   );
 }

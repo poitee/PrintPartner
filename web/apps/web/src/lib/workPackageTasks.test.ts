@@ -15,6 +15,8 @@ import {
 } from "./workPackageTasks";
 
 const TOKEN_A = `ppu_${"a".repeat(32)}` as RequiredUnitToken;
+const TOKEN_B = `ppu_${"b".repeat(32)}` as RequiredUnitToken;
+const TOKEN_C = `ppu_${"c".repeat(32)}` as RequiredUnitToken;
 
 const printer = {
   id: "printer-1",
@@ -252,6 +254,53 @@ describe("productionTasks on the Plates route", () => {
     expect(byId(tasks, "send-or-start").hint).toBe(
       "Send the file to a printer, or start the print now.",
     );
+  });
+
+  it("keeps Send open when only one of three Required units was recorded", () => {
+    const ready = platesInput({
+      pkg: pkg({
+        unitTokens: [TOKEN_A, TOKEN_B, TOKEN_C],
+        exportArtifact: {
+          jobId: "job-90",
+          plateRevisionNumber: 3,
+          plateCount: 1,
+          bundleUrl: "/exports/a.zip",
+        },
+        slicedFile: { name: "batch.gcode" },
+      }),
+      selectedCount: 3,
+      dispatchedUnitTokens: [TOKEN_A],
+    });
+    const tasks = productionTasks(ready);
+    expect(byId(tasks, "send-or-start").state).toBe("not_started");
+    expect(byId(tasks, "send-or-start").hint).toBe(
+      "Send the file to a printer, or start the print now.",
+    );
+    expect(firstUnfinishedProductionTask({ tasks, route: "plates" })).toBe("send-or-start");
+  });
+
+  it("completes Send only when every Required unit was recorded", () => {
+    const tasks = productionTasks(
+      platesInput({
+        pkg: pkg({
+          unitTokens: [TOKEN_A, TOKEN_B, TOKEN_C],
+          exportArtifact: {
+            jobId: "job-90",
+            plateRevisionNumber: 3,
+            plateCount: 1,
+            bundleUrl: "/exports/a.zip",
+          },
+          slicedFile: { name: "batch.gcode" },
+        }),
+        selectedCount: 3,
+        dispatchedUnitTokens: [TOKEN_B, TOKEN_C, TOKEN_A],
+      }),
+    );
+    expect(byId(tasks, "send-or-start").state).toBe("complete");
+    expect(byId(tasks, "send-or-start").hint).toBe(
+      "This file is at a printer. Track it above and verify it in Checkoff.",
+    );
+    expect(firstUnfinishedProductionTask({ tasks, route: "plates" })).toBe("prepare-plates");
   });
 });
 

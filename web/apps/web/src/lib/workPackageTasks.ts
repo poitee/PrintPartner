@@ -1,4 +1,5 @@
 import type { AcceptedPlateWorkspace, ProductionRoute } from "@print-partner/contracts";
+import { currentPackageDispatchCoverage } from "@print-partner/domain";
 import type { WorkflowTaskState } from "../components/layout/TaskList";
 import type { WorkPackage } from "./workPackageProjection";
 import { productionPlateReadiness } from "./productionSelection";
@@ -200,7 +201,11 @@ function platesTasks(input: PlatesTaskInput): ProductionTask[] {
   const prepared = selected && input.printerCount > 0 && arranged && !isSetup;
   const exported = links.exportArtifact != null;
   const sliced = links.slicedFile != null;
-  const sent = links.unitTokens.some((token) => input.dispatchedUnitTokens.includes(token));
+  const sent =
+    currentPackageDispatchCoverage({
+      packageTokens: links.unitTokens,
+      recordedTokens: input.dispatchedUnitTokens,
+    }) === "full";
 
   const preparationFailed = input.assignError != null || input.plateError != null;
   const preparePlates: ProductionTask = {
