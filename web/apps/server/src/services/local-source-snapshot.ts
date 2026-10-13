@@ -753,6 +753,7 @@ export class LocalSourceSnapshotStore {
         files: content,
       };
       const manifestBytes = `${JSON.stringify(manifest, null, 2)}\n`;
+      input.beforePublish?.();
       chargeTenantDiskBytes(Buffer.byteLength(manifestBytes));
       await writeFile(
         join(candidateDir, SOURCE_SNAPSHOT_MANIFEST_FILE),

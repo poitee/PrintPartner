@@ -240,7 +240,7 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
       }
       return deps.repo.sourceSummaryForClient(newSource);
     } catch (e) {
-      return reply.status(400).send({ detail: e instanceof Error ? e.message : String(e) });
+      return reply.status(e instanceof OwnershipAdmissionError ? 503 : 400).send({ detail: e instanceof Error ? e.message : String(e) });
     }
   });
 
@@ -457,7 +457,7 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
           }
         });
       } catch (error) {
-        return reply.status(error instanceof TenantDiskQuotaError ? 413 : 400)
+        return reply.status(error instanceof OwnershipAdmissionError ? 503 : error instanceof TenantDiskQuotaError ? 413 : 400)
           .send({ detail: error instanceof Error ? error.message : String(error) });
       }
     } finally {
@@ -582,7 +582,7 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
           }
         });
       } catch (error) {
-        return reply.status(error instanceof TenantDiskQuotaError ? 413 : 400)
+        return reply.status(error instanceof OwnershipAdmissionError ? 503 : error instanceof TenantDiskQuotaError ? 413 : 400)
           .send({ detail: error instanceof Error ? error.message : String(error) });
       }
     } finally {

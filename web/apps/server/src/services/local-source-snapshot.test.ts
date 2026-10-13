@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
+import * as fsPromises from "node:fs/promises";
+import { beginSourceSyncAdmission, packagedSourceSyncManifestPath, requireSourceSyncParticipant } from "../ownership/source-sync-admission.js";
+vi.mock("node:fs/promises", { spy: true });
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -65,6 +68,43 @@ afterEach(async () => {
 });
 
 describe("LocalSourceSnapshotStore", () => {
+  it("does not write snapshot metadata after admission changes during the final stream", async () => {
+    const reposDir = tempReposDir();
+    const manifest = join(reposDir, "ownership.json");
+    const original = readFileSync(packagedSourceSyncManifestPath(), "utf8");
+    const previous = process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST;
+    const actualFs = await vi.importActual<typeof fsPromises>("node:fs/promises");
+    const metadataWrites: string[] = [];
+    try {
+      writeFileSync(manifest, original);
+      process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST = manifest;
+      beginSourceSyncAdmission(reposDir);
+      vi.mocked(fsPromises.writeFile).mockImplementation(async (...args) => {
+        if (String(args[0]).endsWith(SOURCE_SNAPSHOT_MANIFEST_FILE)) metadataWrites.push(String(args[0]));
+        return actualFs.writeFile(...args);
+      });
+      const store = new LocalSourceSnapshotStore({ reposDir });
+      const part = file("cube.stl", "stl", "solid cube");
+      await expect(store.materialize({
+        sourceId: 1, upstreamRevisionKey: "admission-stream", files: [part.descriptor], selection: selection(),
+        beforePublish: () => requireSourceSyncParticipant("job.sync"),
+        openFile: async () => ({
+          contentLengthBytes: part.content.length,
+          stream: Readable.from((async function* () {
+            yield part.content;
+            writeFileSync(manifest, `${original}\n`);
+          })()),
+        }),
+      })).rejects.toThrow(/runtime manifest does not match/);
+      expect(metadataWrites).toEqual([]);
+      expect(await candidateNames(reposDir, 1)).toEqual([]);
+      expect(existsSync(join(reposDir, "1/revisions/admission-stream"))).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST;
+      else process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST = previous;
+    }
+  });
+
   it("publishes a canonical snapshot by renaming a candidate inside the revision root", async () => {
     const reposDir = tempReposDir();
     const observedRenames: Array<{ from: string; to: string }> = [];

@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, relative, sep } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import AdmZip from "adm-zip";
+import * as archiveImport from "../services/archive-import.js";
 import * as docScan from "../services/source-docs-scan.js";
 import { InProcessJobRunner } from "../services/job-runner.js";
 import { syncProjectById } from "../routes/sources.js";
@@ -26,6 +27,7 @@ import * as legacyManifest from "../services/legacy-source-manifest.js";
 
 vi.mock("../services/legacy-source-manifest.js", { spy: true });
 vi.mock("../services/source-docs-scan.js", { spy: true });
+vi.mock("../services/archive-import.js", { spy: true });
 import Database from "better-sqlite3";
 import { buildApp, createPorts, startServer } from "../app.js";
 import { loadConfig } from "../config.js";
@@ -247,6 +249,51 @@ function multipartUpload(kind: "zip" | "files") {
 }
 
 describe("Source Sync Fastify admission", () => {
+  it.each([
+    ["", "missing"], ["/api/v1", "missing"],
+    ["", "malformed"], ["/api/v1", "malformed"],
+    ["", "replaced"], ["/api/v1", "replaced"],
+  ])("returns 503 for %s source creation when ownership is %s", async (prefix, kind) => {
+    const f = await localAdmissionFixture("outage-status");
+    const before = f.repo.listSources();
+    if (kind === "missing") rmSync(f.manifest);
+    else writeFileSync(f.manifest, kind === "malformed" ? "null" : `${f.original}\n`);
+    const rejected = await f.started.app.inject({
+      method: "POST", url: `${prefix}/sources`, headers: { authorization: "Bearer test-mcp-key" },
+      payload: { name: "Unavailable", source_kind: "local" },
+    });
+    expect(rejected.statusCode, rejected.body).toBe(503);
+    expect(f.repo.listSources()).toEqual(before);
+    writeFileSync(f.manifest, f.original);
+    const invalid = await f.started.app.inject({
+      method: "POST", url: `${prefix}/sources`, headers: { authorization: "Bearer test-mcp-key" },
+      payload: { name: "", source_kind: "local" },
+    });
+    expect(invalid.statusCode, invalid.body).toBe(400);
+    expect(f.repo.listSources()).toEqual(before);
+  });
+
+  it.each([["", "zip"], ["/api/v1", "zip"], ["", "files"], ["/api/v1", "files"]] as const)(
+    "returns 503 when admission changes during %s upload-%s streaming", async (prefix, kind) => {
+      const f = await localAdmissionFixture("stream-outage-status");
+      const before = f.repo.getProjectRow(f.source.id);
+      const actual = await vi.importActual<typeof archiveImport>("../services/archive-import.js");
+      vi.spyOn(archiveImport, "streamSourceUpload").mockImplementationOnce(async (...args) => {
+        const bytes = await actual.streamSourceUpload(...args);
+        writeFileSync(f.manifest, `${f.original}\n`);
+        return bytes;
+      });
+      const rejected = await f.started.app.inject({
+        method: "POST", url: `${prefix}/sources/${f.source.id}/upload-${kind}`, ...multipartUpload(kind),
+      });
+      expect(rejected.statusCode, rejected.body).toBe(503);
+      expect(rejected.body).toMatch(/runtime manifest does not match/);
+      expect(f.repo.getProjectRow(f.source.id)).toEqual(before);
+      expect(f.repo.listSourceRevisions(f.source.id)).toEqual([]);
+      expect(readdirSync(f.workspace)).toEqual([]);
+    },
+  );
+
   it.each([["", "zip"], ["/api/v1", "zip"], ["", "files"], ["/api/v1", "files"]] as const)(
     "admits %s local upload-%s and refuses publication after manifest replacement", async (prefix, kind) => {
       const f = await localAdmissionFixture("upload-admission");
@@ -254,7 +301,7 @@ describe("Source Sync Fastify admission", () => {
       const before = f.repo.getProjectRow(f.source.id);
       writeFileSync(f.manifest, `${f.original}\n`);
       const refused = await f.started.app.inject({ method: "POST", url, ...multipartUpload(kind) });
-      expect(refused.statusCode).toBeGreaterThanOrEqual(400);
+      expect(refused.statusCode).toBe(503);
       expect(refused.body).toMatch(/runtime manifest does not match/);
       expect(f.repo.getProjectRow(f.source.id)).toEqual(before);
       expect(f.repo.listSourceRevisions(f.source.id)).toEqual([]);
@@ -299,7 +346,7 @@ describe("Source Sync Fastify admission", () => {
     writeFileSync(f.manifest, `${f.original}\n`);
     for (const suffix of ["docs", "docs/manual.pdf", "cover"]) {
       const refused = await f.started.app.inject({ method: "GET", url: `${base}/${suffix}`, headers });
-      expect(refused.statusCode, refused.body).toBeGreaterThanOrEqual(400);
+      expect(refused.statusCode, refused.body).toBe(503);
       expect(refused.body).toMatch(/runtime manifest does not match/);
     }
     expect(f.repo.listSourceDocs(f.source.id)).toEqual(docsBefore);
@@ -357,7 +404,7 @@ describe("Source Sync Fastify admission", () => {
         method: "POST", url: `${prefix}/sources`, headers: { authorization: "Bearer test-mcp-key" },
         payload: { name: "Compensated source", source_kind: "github", url: "https://github.com/example/fixture" },
       });
-      expect(rejected.statusCode, rejected.body).toBe(400);
+      expect(rejected.statusCode, rejected.body).toBe(503);
       expect(rejected.body).toMatch(/runtime manifest does not match/);
       expect(f.repo.listSources()).toEqual([]);
       expect(jobs.listJobs({}, "default")).toEqual([]);
@@ -914,7 +961,7 @@ describe("Source Sync Fastify admission", () => {
       url: "/sources",
       payload: { name: "Should not exist", source_kind: "local" },
     });
-    expect(refused.statusCode).toBe(400);
+    expect(refused.statusCode).toBe(503);
     expect(refused.body).toMatch(/conflicting ownership/);
     for (const url of ["/jobs/import-scan", "/api/v1/jobs/import-scan", "/jobs/extract-source-docs", "/api/v1/jobs/extract-source-docs", "/jobs/check-source-updates", "/api/v1/jobs/check-source-updates"]) {
       const refusedImport = await started.app.inject({

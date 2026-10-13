@@ -68,6 +68,7 @@ const PARTICIPANT_FIELDS = new Set(["id", "kind", "owner", "resources"]);
 const KINDS = new Set(["http", "http_alias", "mcp_action", "job", "startup_watcher", "worker", "migration", "assistant_action"]);
 
 export class OwnershipAdmissionError extends Error {
+  readonly statusCode = 503;
   readonly code: string;
 
   constructor(code: string, message: string) {
