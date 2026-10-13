@@ -166,7 +166,10 @@ jobs:
     needs: [changes, linux-precheck]
     # Fail open if selection fails; honor concurrency cancellation.
     if: ${{ !cancelled() && needs.changes.outputs.macos != 'false' && needs.linux-precheck.result == 'success' }}
-    runs-on: macos-26
+    # Chad's Mac mini (self-hosted, launchd) takes arm64 bundles when the repo
+    # variable MAC_MINI_RUNNER is 'on'. Never for fork PRs (public repo). Set
+    # the variable to anything else to fall back to hosted macos-26.
+    runs-on: ${{ (vars.MAC_MINI_RUNNER == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","macOS","ARM64","mac-mini"]') || 'macos-26' }}
     timeout-minutes: 90
     env:
       ARCH: arm64
