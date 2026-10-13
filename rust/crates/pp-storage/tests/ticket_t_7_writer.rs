@@ -458,7 +458,7 @@ fn run_node_probe(
         assert_eq!(ready["event"], "ready", "{ready}");
         let pid = u32::try_from(ready["pid"].as_u64().unwrap()).unwrap();
         if mode == "orphan" {
-            write_orphan_marker(dir, pid, &linux_process_identity(pid));
+            write_orphan_marker(dir, pid, &child_process_identity(pid));
         } else {
             record_child(dir, pid).unwrap();
         }
@@ -495,17 +495,25 @@ fn assert_stable_fingerprint(event: &serde_json::Value) {
     }
 }
 
-fn linux_process_identity(pid: u32) -> String {
-    let boot = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").unwrap();
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
-    let start = stat
-        .rsplit_once(')')
-        .unwrap()
-        .1
-        .split_whitespace()
-        .nth(19)
-        .unwrap();
-    format!("{}:{start}", boot.trim())
+fn child_process_identity(pid: u32) -> String {
+    #[cfg(target_os = "linux")]
+    {
+        let boot = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").unwrap();
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+        let start = stat
+            .rsplit_once(')')
+            .unwrap()
+            .1
+            .split_whitespace()
+            .nth(19)
+            .unwrap();
+        return format!("{}:{start}", boot.trim());
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = pid;
+        format!("instance:{}", hex::encode(rand::random::<[u8; 16]>()))
+    }
 }
 
 fn exited_pid() -> u32 {
@@ -669,7 +677,7 @@ fn ticket_t_7_writer_node_live_child_keeps_a_dead_owner_exclusive() {
 
     let mut sleeper = StopProcess(Some(Command::new("sleep").arg("120").spawn().unwrap()));
     let child_pid = sleeper.0.as_ref().unwrap().id();
-    write_orphan_marker(&dir, child_pid, &linux_process_identity(child_pid));
+    write_orphan_marker(&dir, child_pid, &child_process_identity(child_pid));
     let refused = run_node_probe("foreign", &dir, &web, &node, &probe);
     assert_eq!(refused["event"], "refused", "{refused}");
     assert!(
