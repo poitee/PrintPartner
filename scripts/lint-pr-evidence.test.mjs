@@ -6407,4 +6407,17 @@ test('r37-parenthetical-prose-is-not-a-startup-source', () => {
   }
   assertBannedCommand('case $x in a) curl 3232235856 ;; esac');
   assertBannedCommand('(curl 3232235856)');
+  for (const command of [
+    'case x in a|x) . script.sh ;; esac',
+    'if true; then case x in x) . script.sh ;; esac; fi',
+    'while true; do case x in x) . script.sh ;; esac; done',
+    'curl --data ${PAYLOAD:->(case x in a|x) . script.sh ;; esac)} http://example.test',
+  ]) {
+    const result = lintPrEvidence(commandEvidence(command));
+    assert.equal(result.ok, false, command);
+    assert.match(result.errors.join('\n'), /shell startup source|external process/);
+  }
+  const indented = bodyWithEvidence('Exemption: none\n- Steps followed to produce the evidence:\n  case study in (progress). The report is attached.\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json');
+  const prose = lintPrEvidence(indented);
+  assert.equal(prose.ok, true, prose.errors.join('\n'));
 });

@@ -1852,6 +1852,28 @@ function readParenGroup(value, openIndex) {
   let index = openIndex + 1;
   let depth = 1;
   let quote = null;
+  // A case-pattern ")" is not the process substitution's closer.
+  let caseState = "none";
+  let word = "";
+  let atCommandStart = true;
+  const finishWord = () => {
+    if (!word) return;
+    const text = word;
+    word = "";
+    if (!atCommandStart) {
+      if (text === "in" && caseState === "saw-case") caseState = "saw-in";
+      else if (caseState === "saw-in") caseState = "pattern";
+      else if (caseState === "pattern") caseState = "none";
+      return;
+    }
+    if (text === "case") caseState = "saw-case";
+    else if (text === "esac") caseState = "none";
+    else if (text === "in" && caseState === "saw-case") caseState = "saw-in";
+    else if (caseState === "saw-in" || caseState === "pattern") caseState = "pattern";
+    else if (caseState === "saw-case") caseState = "none";
+    if (text === "then" || text === "else" || text === "do" || text === "elif") return;
+    atCommandStart = false;
+  };
   while (index < limit && depth > 0) {
     const ch = value[index];
     if (quote) {
@@ -1864,6 +1886,7 @@ function readParenGroup(value, openIndex) {
       continue;
     }
     if (ch === "'" || ch === '"') {
+      word = "";
       quote = ch;
       index += 1;
       continue;
@@ -1872,8 +1895,39 @@ function readParenGroup(value, openIndex) {
       index += index + 1 < limit ? 2 : 1;
       continue;
     }
-    if (ch === "(") depth += 1;
-    else if (ch === ")") depth -= 1;
+    if (ch === "(") {
+      finishWord();
+      if (caseState !== "saw-in") depth += 1;
+      atCommandStart = true;
+      index += 1;
+      continue;
+    }
+    if (ch === ")") {
+      finishWord();
+      if (caseState === "saw-in" || caseState === "pattern") {
+        caseState = "arm";
+        atCommandStart = true;
+        index += 1;
+        continue;
+      }
+      depth -= 1;
+      atCommandStart = true;
+      index += 1;
+      continue;
+    }
+    if (/[\s;|&]/.test(ch)) {
+      finishWord();
+      if (ch === ";" && caseState === "arm" && value[index + 1] === ";") {
+        caseState = "saw-in";
+        index += 1;
+      } else if (ch === "|" && (caseState === "saw-in" || caseState === "pattern" || caseState === "arm")) {
+        // Pattern alternation, or a pipeline that stays in the arm.
+      } else if ((ch === ";" || ch === "|" || ch === "&") && caseState !== "arm") caseState = "none";
+      if (ch !== " " && ch !== "\t") atCommandStart = true;
+      index += 1;
+      continue;
+    }
+    word += ch;
     index += 1;
   }
   return { end: index, closed: depth === 0 };
@@ -1977,15 +2031,66 @@ function readParameterExpansion(value, start) {
     const limit = Math.min(value.length, start + 256);
     let index = start + 2;
     let depth = 1;
+    let parenDepth = 0;
+    let caseState = "none";
+    let word = "";
+    let atCommandStart = true;
+    const finishWord = () => {
+      if (!word) return;
+      const text = word;
+      word = "";
+      if (!atCommandStart) {
+        if (text === "in" && caseState === "saw-case") caseState = "saw-in";
+        else if (caseState === "saw-in") caseState = "pattern";
+        else if (caseState === "pattern") caseState = "none";
+        return;
+      }
+      if (text === "case") caseState = "saw-case";
+      else if (text === "esac") caseState = "none";
+      else if (text === "in" && caseState === "saw-case") caseState = "saw-in";
+      else if (caseState === "saw-in" || caseState === "pattern") caseState = "pattern";
+      else if (caseState === "saw-case") caseState = "none";
+      if (text === "then" || text === "else" || text === "do" || text === "elif") return;
+      atCommandStart = false;
+    };
     while (index < limit && depth > 0) {
       const ch = value[index];
       if (ch === "\\" && index + 1 < limit) {
+        word = "";
         index += 2;
         continue;
       }
-      if (ch === "{") depth += 1;
-      else if (ch === "}") depth -= 1;
-      else if (depth === 1 && (ch === "\n" || ch === ";" || ch === "|" || ch === "&" || ch === "`")) break;
+      if (ch === "{") { finishWord(); depth += 1; index += 1; continue; }
+      if (ch === "}") { finishWord(); depth -= 1; index += 1; continue; }
+      if (ch === "(") {
+        finishWord();
+        if (caseState !== "saw-in") parenDepth += 1;
+        atCommandStart = true;
+        index += 1;
+        continue;
+      }
+      if (ch === ")") {
+        finishWord();
+        if (caseState === "saw-in" || caseState === "pattern") caseState = "arm";
+        else if (parenDepth > 0) parenDepth -= 1;
+        atCommandStart = true;
+        index += 1;
+        continue;
+      }
+      if (depth === 1 && parenDepth === 0 && (ch === "\n" || ch === ";" || ch === "|" || ch === "&" || ch === "`")) break;
+      if (/[\s;|&]/.test(ch)) {
+        finishWord();
+        if (ch === ";" && caseState === "arm" && value[index + 1] === ";") {
+          caseState = "saw-in";
+          index += 1;
+        } else if (ch === "|" && (caseState === "saw-in" || caseState === "pattern" || caseState === "arm")) {
+          // alternation inside the parameter word
+        } else if ((ch === ";" || ch === "|" || ch === "&") && caseState !== "arm") caseState = "none";
+        if (ch !== " " && ch !== "\t") atCommandStart = true;
+        index += 1;
+        continue;
+      }
+      word += ch;
       index += 1;
     }
     let fallback = null;
@@ -2032,6 +2137,7 @@ function shellWords(value, { commandTokens = false } = {}) {
   let atCommandStart = true;
   let caseState = "none";
   let breakChar = "";
+  let cursor = 0;
   let fenceFrom = -1;
   let fenceTo = -1;
   let fenceHit = false;
@@ -2061,18 +2167,40 @@ function shellWords(value, { commandTokens = false } = {}) {
     if (text === "case") caseState = "saw-case";
     else if (text === "esac") caseState = "none";
     else if (text === "in" && caseState === "saw-case") caseState = "saw-in";
-    else if (caseState === "saw-in") caseState = "pattern";
-    else if (caseState === "pattern" || caseState === "saw-case") caseState = "none";
+    else if (caseState === "saw-in" || caseState === "pattern") caseState = "pattern";
+    else if (caseState === "saw-case") caseState = "none";
+    // these keywords introduce the next command instead of taking it as an argument
+    if (text === "then" || text === "else" || text === "do" || text === "elif") return;
     atCommandStart = false;
+  };
+  // A capitalized sentence after "." is prose, even when the line also matches a case arm.
+  const proseSentence = (from) => {
+    const lineEnd = value.indexOf("\n", from);
+    const limit = lineEnd === -1 ? value.length : lineEnd;
+    const line = value.slice(from, limit);
+    if (line.includes(";;") || /(^|[\s;|&])esac($|[\s;|&])/.test(line)) return false;
+    const words = [];
+    let index = from;
+    while (index < limit && words.length < 8) {
+      while (index < limit && (value[index] === " " || value[index] === "\t")) index += 1;
+      if (index >= limit || /[;|&<>()]/.test(value[index])) break;
+      let token = "";
+      while (index < limit && !/[\s;|&<>()]/.test(value[index])) token += value[index++];
+      if (token) words.push(token);
+    }
+    return words.length >= 2 && /^[A-Z][a-z]+$/.test(words[0]) && words.every((token) => /^[A-Za-z]+\.?$/.test(token));
   };
   // Returns how many extra separator characters this break consumes.
   const noteBreak = (ch, index) => {
     let skip = 0;
+    const inPattern = caseState === "saw-in" || caseState === "pattern";
     const optionalCaseParen = ch === "(" && caseState === "saw-in";
-    if (ch === ")" && (caseState === "saw-in" || caseState === "pattern")) caseState = "arm";
+    if (ch === ")" && inPattern) caseState = "arm";
     else if (ch === ";" && caseState === "arm" && value[index + 1] === ";") {
       caseState = "saw-in";
       skip = 1;
+    } else if (ch === "|" && (inPattern || caseState === "arm")) {
+      // "|" alternates case patterns. Inside an arm it is a pipeline, not a new statement.
     } else if (!optionalCaseParen && (ch === "(" || ch === ";" || ch === "|" || ch === "&") && caseState !== "arm") {
       caseState = "none";
     }
@@ -2082,8 +2210,9 @@ function shellWords(value, { commandTokens = false } = {}) {
   };
   const flush = () => {
     if (word || (commandTokens && wordStarted)) {
-      const sentenceDot = commandTokens && atCommandStart && (breakChar === ")" || breakChar === "}")
-        && caseState !== "arm" && !wordProtected && word === ".";
+      const boundary = breakChar === ")" || breakChar === "}";
+      const sentenceDot = commandTokens && atCommandStart && boundary && !wordProtected && word === "."
+        && (caseState !== "arm" || proseSentence(cursor));
       if (!sentenceDot) {
         if (commandTokens) noteCommandWord(word);
         const assignable = !nameQuoted && /^[A-Za-z_][\w]*\+?=/.test(word);
@@ -2119,6 +2248,7 @@ function shellWords(value, { commandTokens = false } = {}) {
     wordIndirect = null;
   };
   for (let index = 0; index < value.length; index += 1) {
+    cursor = index;
     const ch = value[index];
     if (quote !== "'" && ch === "$" && value[index + 1] === "(" && value[index + 2] === "(") {
       const expansion = readStaticArithmetic(value, index, quote);
@@ -2213,6 +2343,9 @@ function shellWords(value, { commandTokens = false } = {}) {
         }
         if (parameter.dynamicFallback) wordDynamicFallback = true;
         if (parameter.fallbackSource && /\$\(|`|<\(|>\(/.test(parameter.fallbackSource)) {
+          // The whole fallback is shell text. A case-pattern ")" can close a
+          // process substitution early, so the commands after it must be scanned too.
+          substitutionBodies.push(parameter.fallbackSource);
           for (const inner of shellWords(parameter.fallbackSource, { commandTokens: true })) {
             if (inner?.substitutionBodies) substitutionBodies.push(...inner.substitutionBodies);
           }
