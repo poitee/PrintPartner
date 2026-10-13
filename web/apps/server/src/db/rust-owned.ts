@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ownerIsStale, processIdentity } from "../storage-lease.js";
+import { processIdentity } from "../storage-lease.js";
 import { currentSchemaVersion } from "./schema.js";
 import { readSchemaVersion } from "./upgrade-guard.js";
 
@@ -44,6 +44,38 @@ function isRustOwnerMarker(value: unknown): value is RustOwnerMarker {
   return true;
 }
 
+function recordedIdentity(marker: RustOwnerMarker, key: "process_identity" | "child_process_identity"): string | undefined {
+  const value = marker[key];
+  if (typeof value !== "string" || value.length === 0) return undefined;
+  return value;
+}
+
+// Linux compares boot_id:starttime. Elsewhere Rust stores a private instance token
+// that Node cannot recompute, so two instance tokens still name one live process.
+function processStillOwnsIdentity(pid: number, identity: string | undefined): boolean {
+  try {
+    process.kill(pid, 0);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+  if (!identity) return true;
+  let actual: string;
+  try {
+    actual = processIdentity(pid);
+  } catch {
+    return true;
+  }
+  if (actual === identity) return true;
+  return actual.startsWith("instance:") && identity.startsWith("instance:");
+}
+
+function recordedChildIsLive(marker: RustOwnerMarker): boolean {
+  if (marker.child_pid === undefined) return false;
+  const identity = recordedIdentity(marker, "child_process_identity");
+  if (!identity) return true;
+  return processStillOwnsIdentity(marker.child_pid, identity);
+}
+
 function readLiveRustMarker(dataDir: string): RustOwnerMarker | null {
   const markerPath = join(dataDir, ".desktop-owner.json");
   if (!existsSync(markerPath)) return null;
@@ -54,23 +86,16 @@ function readLiveRustMarker(dataDir: string): RustOwnerMarker | null {
     return null;
   }
   if (!isRustOwnerMarker(parsed)) return null;
-  const processIdentityValue =
-    "process_identity" in parsed && typeof parsed.process_identity === "string"
-      ? parsed.process_identity
-      : undefined;
-  if (ownerIsStale({ pid: parsed.pid, process_identity: processIdentityValue })) return null;
+  const ownerLive = processStillOwnsIdentity(parsed.pid, recordedIdentity(parsed, "process_identity"));
+  if (!ownerLive && !recordedChildIsLive(parsed)) return null;
   return parsed;
 }
 
 function isRecordedChild(marker: RustOwnerMarker): boolean {
-  if (marker.child_pid !== process.pid || typeof marker.child_process_identity !== "string") {
-    return false;
-  }
-  try {
-    return processIdentity(process.pid) === marker.child_process_identity;
-  } catch {
-    return false;
-  }
+  if (marker.child_pid !== process.pid) return false;
+  const identity = recordedIdentity(marker, "child_process_identity");
+  if (!identity) return false;
+  return processStillOwnsIdentity(process.pid, identity);
 }
 
 export function rustOwnedCopy(dataDir: string): RustOwnedCopy {

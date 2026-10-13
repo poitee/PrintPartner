@@ -303,7 +303,7 @@ function fingerprint() {
   }
 }
 
-if (mode === "child" || mode === "bootstrap") {
+if (mode === "child" || mode === "bootstrap" || mode === "orphan") {
   emit({ event: "ready", pid: process.pid });
   readFileSync(0);
 }
@@ -453,11 +453,15 @@ fn run_node_probe(
         let stderr = stderr_thread.join().unwrap();
         panic!("node probe exited {status} before an event:\n{stderr}");
     }
-    let event_line = if mode == "child" || mode == "bootstrap" {
+    let event_line = if mode == "child" || mode == "bootstrap" || mode == "orphan" {
         let ready = parse_event(&first, "");
         assert_eq!(ready["event"], "ready", "{ready}");
         let pid = u32::try_from(ready["pid"].as_u64().unwrap()).unwrap();
-        record_child(dir, pid).unwrap();
+        if mode == "orphan" {
+            write_orphan_marker(dir, pid, &linux_process_identity(pid));
+        } else {
+            record_child(dir, pid).unwrap();
+        }
         writeln!(stdin, "go").unwrap();
         drop(stdin);
         let (line, _) = read_event_line(stdout);
@@ -489,6 +493,62 @@ fn assert_stable_fingerprint(event: &serde_json::Value) {
     for name in ["printer_profiles", "process_profiles", "filament_profiles"] {
         assert!(names.contains(&name), "{names:?}");
     }
+}
+
+fn linux_process_identity(pid: u32) -> String {
+    let boot = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").unwrap();
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+    let start = stat
+        .rsplit_once(')')
+        .unwrap()
+        .1
+        .split_whitespace()
+        .nth(19)
+        .unwrap();
+    format!("{}:{start}", boot.trim())
+}
+
+fn exited_pid() -> u32 {
+    let mut child = Command::new("sh").arg("-c").arg("exit 0").spawn().unwrap();
+    let pid = child.id();
+    let status = child.wait().unwrap();
+    assert!(status.success());
+    pid
+}
+
+fn write_orphan_marker(dir: &Path, child_pid: u32, child_identity: &str) {
+    let marker = serde_json::json!({
+        "storage_protocol_version": 1,
+        "pid": exited_pid(),
+        "process_identity": "prior",
+        "child_pid": child_pid,
+        "child_process_identity": child_identity,
+    });
+    std::fs::write(dir.join(".desktop-owner.json"), marker.to_string()).unwrap();
+}
+
+fn release_database(dir: &Path, owner: WriterOwner) {
+    let runtime = std::fs::read(dir.join(".desktop-owner.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|marker| marker["runtime_dir"].as_str().map(PathBuf::from));
+    owner.shutdown().unwrap();
+    if let Some(runtime) = runtime {
+        let _ = std::fs::remove_dir_all(runtime);
+    }
+    assert!(dir.join("print-partner.db").exists());
+    assert!(!dir.join(".desktop-owner.json").exists());
+}
+
+fn sequence_of(event: &serde_json::Value, side: &str, name: &str) -> i64 {
+    event[side]["sequences"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == name)
+        .unwrap()["seq"]
+        .as_i64()
+        .unwrap()
 }
 
 fn release_owner(dir: &Path, owner: WriterOwner) {
@@ -590,6 +650,46 @@ fn ticket_t_7_writer_node_child_bootstraps_a_lease_without_a_database() {
         assert!(names.contains(&name), "{event}");
     }
     lease.release();
+    std::fs::remove_dir_all(&dir).unwrap();
+    remove_probe(&probe);
+}
+
+#[test]
+fn ticket_t_7_writer_node_live_child_keeps_a_dead_owner_exclusive() {
+    let web = web_root();
+    let node = server_node(&web);
+    let probe = write_probe(&web);
+    let dir = temp_dir("node-orphan");
+    let (owner, _) = WriterOwner::open(&dir, Limits::default()).unwrap();
+    release_database(&dir, owner);
+    let event = run_node_probe("orphan", &dir, &web, &node, &probe);
+    assert_eq!(event["event"], "connected", "{event}");
+    assert_eq!(event["before"]["version"], "34", "{event}");
+    assert_stable_fingerprint(&event);
+
+    let mut sleeper = StopProcess(Some(Command::new("sleep").arg("120").spawn().unwrap()));
+    let child_pid = sleeper.0.as_ref().unwrap().id();
+    write_orphan_marker(&dir, child_pid, &linux_process_identity(child_pid));
+    let refused = run_node_probe("foreign", &dir, &web, &node, &probe);
+    assert_eq!(refused["event"], "refused", "{refused}");
+    assert!(
+        refused["message"]
+            .as_str()
+            .unwrap()
+            .contains("will not migrate or write"),
+        "{refused}"
+    );
+    assert_stable_fingerprint(&refused);
+    let mut held = sleeper.0.take().unwrap();
+    let _ = held.kill();
+    let _ = held.wait();
+    let reopened = run_node_probe("foreign", &dir, &web, &node, &probe);
+    assert_eq!(reopened["event"], "connected", "{reopened}");
+    assert!(
+        sequence_of(&reopened, "after", "printer_profiles")
+            > sequence_of(&reopened, "before", "printer_profiles"),
+        "{reopened}"
+    );
     std::fs::remove_dir_all(&dir).unwrap();
     remove_probe(&probe);
 }
