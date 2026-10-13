@@ -35,9 +35,20 @@ impl Drop for PreflightCopy {
     }
 }
 
+fn guard_unowned_marker(db: &Path, owned: bool) -> Result<()> {
+    if owned {
+        return Ok(());
+    }
+    let marker = db.parent().unwrap().join(".desktop-owner.json");
+    if !marker.exists() {
+        return Ok(());
+    }
+    let value = serde_json::from_slice(&std::fs::read(marker)?)?;
+    crate::storage_lease::ensure_stale_owner(&value)
+}
+
 pub(crate) fn preflight(path: &Path, owned: bool) -> Result<u64> {
-    let marker = path.parent().unwrap().join(".desktop-owner.json");
-    ensure!(owned || !marker.exists(), "Data directory already owned");
+    guard_unowned_marker(path, owned)?;
     if !path.exists() || path.metadata()?.len() == 0 {
         return Ok(0);
     }
@@ -70,7 +81,7 @@ pub(crate) fn preflight(path: &Path, owned: bool) -> Result<u64> {
         source == capture()?,
         "Database changed during preflight capture"
     );
-    ensure!(owned || !marker.exists(), "Data directory already owned");
+    guard_unowned_marker(path, owned)?;
     let conn = Connection::open(copy.0.join("print-partner.db"))?;
     let integrity: String = conn.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
     ensure!(

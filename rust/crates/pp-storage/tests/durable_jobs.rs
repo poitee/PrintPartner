@@ -1437,6 +1437,111 @@ fn ticket_t_28_recovery_lost_claim_reply_is_fenced_on_orderly_restart() {
     owner.shutdown().unwrap();
 }
 #[test]
+fn ticket_t_28_claims_crash_retry_fences_stale_updates() {
+    const CHILD_DIR: &str = "PP_GRE408_CRASH_DIR";
+    if let Some(path) = std::env::var_os(CHILD_DIR) {
+        let path = PathBuf::from(path);
+        let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
+        let queued = enqueue(&owner, "crash-retry", Payload::CheckSourceUpdates {});
+        let worker = owner.job_worker(admission()).unwrap();
+        let (claimed, _) = worker.claim().unwrap().unwrap();
+        assert_eq!(claimed.job_id, queued.job_id);
+        // process::exit skips Drop, so the owner marker and running claim stay behind.
+        std::process::exit(28);
+    }
+
+    let path = directory();
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "ticket_t_28_claims_crash_retry_fences_stale_updates",
+            "--nocapture",
+        ])
+        .env(CHILD_DIR, &path)
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(28),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let raw = readonly(&path);
+    let documents = raw
+        .prepare("SELECT document FROM durable_jobs")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(documents.len(), 1);
+    let crashed: JobRecord = serde_json::from_str(&documents[0]).unwrap();
+    assert_eq!(crashed.state, PersistentState::Running);
+    assert_eq!(crashed.attempt, 1);
+    assert_eq!(crashed.generation, 1);
+    let job_id = crashed.job_id;
+    drop(raw);
+
+    let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
+    let duplicate = enqueue(&owner, "crash-retry", Payload::CheckSourceUpdates {});
+    assert_eq!(duplicate.job_id, job_id);
+    let worker = owner.job_worker(admission()).unwrap();
+    let (claimed, mut lease) = worker.claim().unwrap().unwrap();
+    assert_eq!(claimed.job_id, job_id);
+    assert_eq!(claimed.attempt, 2);
+    assert_eq!(claimed.generation, 3);
+    assert!(worker.claim().unwrap().is_none());
+
+    let history = |owner: &WriterOwner| match call(
+        owner,
+        UserOperation::History {
+            job_id: job_id.clone(),
+            before_version: None,
+            limit: 200,
+        },
+    )
+    .unwrap()
+    {
+        Outcome::History(entries) => entries
+            .into_iter()
+            .map(|entry| (entry.version, entry.state, entry.event))
+            .collect::<Vec<_>>(),
+        _ => panic!("history"),
+    };
+    let mut stale = lease.clone();
+    worker
+        .update(&mut lease, WorkerOperation::Heartbeat)
+        .unwrap();
+    let before_record = serde_json::to_value(get(&owner, &job_id)).unwrap();
+    let before_history = history(&owner);
+    for operation in [WorkerOperation::Heartbeat, WorkerOperation::Finish(None)] {
+        let error = worker.update(&mut stale, operation).unwrap_err();
+        assert!(error.to_string().contains("Stale attempt fence"), "{error}");
+    }
+    assert_eq!(
+        serde_json::to_value(get(&owner, &job_id)).unwrap(),
+        before_record
+    );
+    assert_eq!(history(&owner), before_history);
+
+    let done = worker
+        .update(&mut lease, WorkerOperation::Finish(None))
+        .unwrap();
+    assert_eq!(done.state, PersistentState::Succeeded);
+    assert_eq!(done.attempt, 2);
+    assert_eq!(done.generation, 3);
+    owner.shutdown().unwrap();
+
+    let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
+    let persisted = get(&owner, &job_id);
+    assert_eq!(persisted.state, PersistentState::Succeeded);
+    assert_eq!(persisted.attempt, 2);
+    assert_eq!(persisted.generation, 3);
+    assert_eq!(persisted.state_version, done.state_version);
+    owner.shutdown().unwrap();
+}
+#[test]
 fn ticket_t_28_recovery_reconciliation_records_authenticated_subject() {
     let (_, owner) = fixture();
     let (identity, token) = register(&owner, "reconcile@example.com");

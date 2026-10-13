@@ -45,19 +45,7 @@ impl StorageLease {
         let marker_path = data_dir.join(".desktop-owner.json");
         if marker_path.exists() {
             let marker: serde_json::Value = serde_json::from_slice(&std::fs::read(&marker_path)?)?;
-            let pid = marker["pid"]
-                .as_u64()
-                .filter(|pid| *pid > 0 && *pid <= i32::MAX as u64)
-                .context("Invalid prior writer PID")? as u32;
-            ensure!(
-                storage_lease::owner_is_stale(pid, marker["process_identity"].as_str())
-                    && (marker["kind"] == "standalone"
-                        || (marker["storage_protocol_version"].as_u64() == Some(1)
-                            && marker.get("child_pid").is_none()
-                            && marker.get("child_process_identity").is_none())
-                        || storage_lease::child_is_stale(&marker)),
-                "A prior writer may still be alive"
-            );
+            storage_lease::ensure_stale_owner(&marker)?;
             std::fs::rename(
                 &marker_path,
                 data_dir.join(".desktop-lease/previous-marker.json"),
