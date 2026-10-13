@@ -48,7 +48,9 @@ export async function registerProductionSetupRoutes(
     }
     if (parsed.data.kind === "set_route") {
       const current = loadProductionSetup(deps.repo, profileId);
-      if (parsed.data.route !== current.route) {
+      // An unanswered Build has no method to preserve. The first saved route
+      // is allowed; a later change is what the recorded print locks.
+      if (current.route != null && parsed.data.route !== current.route) {
         const workspace = deps.repo.readAcceptedPlateWorkspaceInput(profileId);
         if (workspace.kind === "transaction_unavailable" || workspace.kind === "accepted_state_unavailable") {
           return reply.status(503).send({

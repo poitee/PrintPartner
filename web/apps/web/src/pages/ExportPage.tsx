@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { HOSTED_PLANNING_COMPOSE_NOTE, isHostedPlanning, type ProductionRoute } from "@print-partner/contracts";
-import { requiredUnitTokensInObjectNames } from "@print-partner/domain";
+import { recordedTokensForCurrentDispatch } from "@print-partner/domain";
 import { FileArchive } from "lucide-react";
 import BuildSummaryHeader from "../components/build/BuildSummaryHeader";
 import PageHeader from "../components/layout/PageHeader";
@@ -49,7 +49,9 @@ import {
   clearProductionSelectionGroup,
   productionPlateReadiness,
   productionSelectableUnits,
+  samePackageTokens,
   selectedProductionTokens,
+  storedPackageTokens,
   toggleProductionUnit,
 } from "../lib/productionSelection";
 import {
@@ -244,12 +246,14 @@ function ProductionWorkspace() {
     ],
   );
 
+  const routeChangeLocked = projection.routeLocked && route != null;
+
   useEffect(() => {
-    if (!projection.routeLocked) return;
+    if (!routeChangeLocked) return;
     setChangingRoute(false);
     setPendingRouteChange(null);
     setRouteFailure(null);
-  }, [projection.routeLocked]);
+  }, [routeChangeLocked]);
 
   const workspace = workspaceQuery.data;
   const printerCount =
@@ -276,15 +280,19 @@ function ProductionWorkspace() {
           totalUnitCount: selectableUnits.length,
           printerCount,
           sendPrinterCount: sendFleetQuery.data?.sendCount ?? 0,
-          dispatchedUnitTokens: requiredUnitTokensInObjectNames(
-            (checkoffLinksQuery.data ?? [])
+          dispatchedUnitTokens: recordedTokensForCurrentDispatch({
+            records: (checkoffLinksQuery.data ?? [])
               .filter((link) =>
-                selectedProfileId != null &&
-                link.profile_id === selectedProfileId &&
-                link.state !== "dismissed",
+                selectedProfileId != null && link.profile_id === selectedProfileId,
               )
-              .flatMap((link) => link.units.map((unit) => unit.object_name)),
-          ),
+              .map((link) => ({
+                state: link.state,
+                objectNames: link.units.map((unit) => unit.object_name),
+              })),
+            completedTokens: selectableUnits
+              .filter((unit) => unit.completed)
+              .map((unit) => unit.token),
+          }),
           exportError: exportFailure?.message ?? null,
           sendError: sendFailure?.message ?? null,
           plateError: plateFailure?.message ?? null,
@@ -315,7 +323,7 @@ function ProductionWorkspace() {
     printerCount,
     projection,
     route,
-    selectableUnits.length,
+    selectableUnits,
     selectedProfileId,
     selectedTokens.length,
     sendFailure,
@@ -372,35 +380,42 @@ function ProductionWorkspace() {
 
   /**
    * The answer is durable, so it goes straight to the production setup. The
-   * command names only `route`, which is how the Required-unit selection survives
-   * a switch: nothing else in the record is touched, and SC 3.3.7 Redundant
-   * Entry is satisfied without asking the operator to choose units again.
+   * route command names only `route`, so a switch does not clear the selection.
+   * When the page is showing a different package than the one stored — Checkoff's
+   * "Prepare remaining units" link does this without saving — that package is
+   * saved first. The server then locks the method the operator is looking at.
    *
    * A failed save keeps the answer on screen with an inline Retry rather than a
    * toast, so the problem cannot scroll away or time out.
    */
   const saveRoute = (next: ProductionRoute) => {
-    if (projection.routeLocked && next !== route) {
+    if (routeChangeLocked && next !== route) {
       setRouteFailure(null);
       setChangingRoute(false);
       setPendingRouteChange(null);
       return;
     }
     setRouteFailure(null);
-    void productionSetup
-      .save({ kind: "set_route", route: next })
-      .then(() => {
-        setPendingRouteChange(null);
-        setChangingRoute(false);
-      })
-      .catch((error: unknown) => {
-        setRouteFailure({
-          message: `Could not save how you want to make these units: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-          retry: () => saveRoute(next),
+    const displayed = selectedTokens;
+    const stored = storedPackageTokens(setup?.selection, selectableUnits);
+    void (async () => {
+      if (setup != null && !samePackageTokens(stored, displayed)) {
+        await productionSetup.save({
+          kind: "set_selection",
+          selection: { mode: "custom", selected_unit_tokens: [...displayed] },
         });
+      }
+      await productionSetup.save({ kind: "set_route", route: next });
+      setPendingRouteChange(null);
+      setChangingRoute(false);
+    })().catch((error: unknown) => {
+      setRouteFailure({
+        message: `Could not save how you want to make these units: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        retry: () => saveRoute(next),
       });
+    });
   };
 
   /**
@@ -410,7 +425,7 @@ function ProductionWorkspace() {
    * come back.
    */
   const requestRoute = (next: ProductionRoute) => {
-    if (projection.routeLocked) {
+    if (routeChangeLocked) {
       setChangingRoute(false);
       setPendingRouteChange(null);
       setRouteFailure(null);
@@ -780,7 +795,7 @@ function ProductionWorkspace() {
                 ) : null
               }
             >
-              {route === "external" && (projection.routeLocked || !changingRoute) ? (
+              {route === "external" && (routeChangeLocked || !changingRoute) ? (
                 <section
                   className="space-y-3"
                   aria-labelledby="past-print-heading"
@@ -808,7 +823,7 @@ function ProductionWorkspace() {
                     )}
                   </div>
                 </section>
-              ) : !projection.routeLocked && (route == null || changingRoute) ? (
+              ) : !routeChangeLocked && (route == null || changingRoute) ? (
                 <ProductionRouteQuestion
                   key={route ?? "unanswered"}
                   value={route === "external" ? null : route}

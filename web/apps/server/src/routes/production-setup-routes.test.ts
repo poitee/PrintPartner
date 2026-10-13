@@ -424,6 +424,55 @@ describe("production setup routes", () => {
     }
   });
 
+  it("lets an unanswered Build save its first route after a recorded print", async () => {
+    const { app, ports, profile, unit } = await plannedBuild("First route");
+    try {
+      const link = createPrinterCheckoffLink(ports.repository, {
+        profile_id: profile.id,
+        integration_id: "unmanaged",
+        printer_id: "printer-one",
+        host_name: "Bench printer",
+        filename: "batch.gcode",
+        units: [{
+          part_id: unit.partId != null && unit.partId > 0 ? unit.partId : 1,
+          unit_index: 0,
+          object_name: unit.objectName,
+        }],
+      });
+      if (!link) throw new Error("recorded print was not stored");
+
+      const saved = await app.inject({
+        method: "PATCH",
+        url: `/plans/${profile.id}/production-setup`,
+        payload: { kind: "set_route", route: "plates" },
+      });
+      expect(saved.statusCode).toBe(200);
+      expect(saved.json().route).toBe("plates");
+
+      const rejected = await app.inject({
+        method: "PATCH",
+        url: `/plans/${profile.id}/production-setup`,
+        payload: { kind: "set_route", route: "stl" },
+      });
+      expect(rejected.statusCode).toBe(409);
+      expect(rejected.json()).toMatchObject({ code: "production_method_locked" });
+
+      const loaded = await app.inject({
+        method: "GET",
+        url: `/plans/${profile.id}/production-setup`,
+      });
+      expect(loaded.json()).toMatchObject({ route: "plates" });
+      const stored = loadPrinterCheckoffLinks(ports.repository).find((entry) => entry.id === link.id);
+      expect(stored).toMatchObject({
+        filename: "batch.gcode",
+        units: [{ object_name: unit.objectName }],
+      });
+    } finally {
+      await app.close();
+      ports.db.close();
+    }
+  });
+
   it("lets a legacy external Build prepare plates after a past file that names no Required unit", async () => {
     const { app, ports, profile, unit } = await plannedBuild("Past file");
     try {

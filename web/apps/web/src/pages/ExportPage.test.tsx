@@ -10,6 +10,7 @@ import {
   type AcceptedPlateWorkspace,
   type ProductionPrinterAssignment,
   type ProductionRoute,
+  type ProductionSelection,
   type RequiredUnitToken,
 } from "@print-partner/contracts";
 import type { PrinterCheckoffLink } from "../api/endpoints/checkoff";
@@ -95,6 +96,7 @@ const state = {
   checkoffLinks: [] as PrinterCheckoffLink[],
   route: "plates" as ProductionRoute | null,
   printerAssignments: [] as ProductionPrinterAssignment[],
+  selection: null as ProductionSelection | null,
   selectedTokens: null as ReadonlySet<RequiredUnitToken> | null,
   save: vi.fn<(patch: unknown) => Promise<unknown>>(),
 };
@@ -193,6 +195,7 @@ vi.mock("../queries/productionSetup", () => ({
       ...defaultProductionSetup(profileId),
       route: state.route,
       printer_assignments: state.printerAssignments,
+      ...(state.selection ? { selection: state.selection } : {}),
     },
     isPending: false,
     saving: false,
@@ -263,6 +266,7 @@ beforeEach(() => {
   state.checkoffLinks = [];
   state.route = "plates";
   state.printerAssignments = [];
+  state.selection = null;
   state.selectedTokens = null;
   state.save = vi.fn(() => Promise.resolve(undefined));
 });
@@ -455,6 +459,39 @@ describe("ExportPage work packages", () => {
     expect(screen.queryByRole("button", { name: "Change production method" })).toBeNull();
   });
 
+  it("keeps Send open when a finished unit is chosen again", async () => {
+    if (readyWorkspace.kind !== "ready") throw new Error("expected ready plates");
+    const plate = readyWorkspace.plates[0];
+    if (!plate) throw new Error("expected a plate");
+    const finished = { ...unit(TOKEN_A), completed: true };
+    state.workspace = {
+      ...readyWorkspace,
+      plates: [{ ...plate, units: [finished] }],
+    };
+    state.exportRecords = [exportRecord()];
+    state.selectedTokens = new Set([TOKEN_A]);
+    state.checkoffLinks = [{ ...checkoffLink(), state: "verified" }];
+    renderAt("/export");
+    fireEvent.click(await screen.findByRole("button", { name: "Choose test sliced file" }));
+    expect(screen.getByText("Send the file to a printer, or start the print now.")).toBeTruthy();
+    expect(screen.queryByText("This file is at a printer. Track it above and verify it in Checkoff.")).toBeNull();
+
+    cleanup();
+    state.checkoffLinks = [
+      { ...checkoffLink(), state: "verified" },
+      {
+        ...checkoffLink(),
+        id: "link-2",
+        state: "watching",
+        saw_active: false,
+        filename: "replacement.gcode",
+      },
+    ];
+    renderAt("/export");
+    fireEvent.click(await screen.findByRole("button", { name: "Choose test sliced file" }));
+    expect(screen.getByText("This file is at a printer. Track it above and verify it in Checkoff.")).toBeTruthy();
+  });
+
   it("blocks every task with a reason when the Build has no Required units", () => {
     state.workspace = { kind: "empty_plan" };
     renderAt("/export");
@@ -636,6 +673,43 @@ describe("ExportPage route question", () => {
     fireEvent.click(screen.getByRole("button", { name: "Keep this route" }));
     expect(state.save).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("asks for the first method when a recorded print exists and no route is saved", async () => {
+    state.route = null;
+    state.checkoffLinks = [checkoffLink()];
+    renderAt("/export");
+    expect(screen.queryByText(/A file is already at a printer, so the route stays as it is/)).toBeNull();
+    chooseRoute(/Generate 3MF plates/);
+    continueOn();
+    await waitFor(() => expect(state.save).toHaveBeenCalledWith({
+      kind: "set_route",
+      route: "plates",
+    }));
+  });
+
+  it("saves the displayed package before the route when it differs from the stored one", async () => {
+    if (setupWorkspace.kind !== "setup") throw new Error("expected setup");
+    const open = setupWorkspace.units[0];
+    if (!open) throw new Error("expected a unit");
+    state.workspace = {
+      ...setupWorkspace,
+      units: [open, { ...open, token: TOKEN_B, object_name: `bracket__${TOKEN_B}` }],
+    };
+    state.selection = { mode: "custom", selected_unit_tokens: [TOKEN_A, TOKEN_B] };
+    state.selectedTokens = new Set([TOKEN_B]);
+    renderAt("/export");
+    fireEvent.click(screen.getByRole("button", { name: "Change production method" }));
+    chooseRoute(/Download sorted STL files/);
+    continueOn();
+    await waitFor(() => expect(state.save).toHaveBeenCalledTimes(2));
+    expect(state.save.mock.calls).toEqual([
+      [{
+        kind: "set_selection",
+        selection: { mode: "custom", selected_unit_tokens: [TOKEN_B] },
+      }],
+      [{ kind: "set_route", route: "stl" }],
+    ]);
   });
 
   it("closes an open plates method question when the current package becomes locked", () => {

@@ -38,6 +38,39 @@ export function requiredUnitTokensInObjectNames(
   return tokens;
 }
 
+const CONSUMED_PRINT_STATES = new Set(["verified", "applied"]);
+
+/**
+ * Tokens that still belong to the print attempt being prepared.
+ *
+ * An open unit counts every non-dismissed record. A finished unit can be
+ * chosen again; its verified or applied record belongs to the attempt that
+ * finished it, so that record does not cover the new one. A later watching,
+ * failed, or awaiting record does.
+ */
+export function recordedTokensForCurrentDispatch(input: {
+  records: readonly {
+    state: string;
+    objectNames: readonly (string | null | undefined)[];
+  }[];
+  completedTokens: readonly string[];
+}): string[] {
+  const completed = new Set(input.completedTokens);
+  const tokens: string[] = [];
+  const seen = new Set<string>();
+  for (const record of input.records) {
+    if (record.state === "dismissed") continue;
+    const consumed = CONSUMED_PRINT_STATES.has(record.state);
+    for (const token of requiredUnitTokensInObjectNames(record.objectNames)) {
+      if (consumed && completed.has(token)) continue;
+      if (seen.has(token)) continue;
+      seen.add(token);
+      tokens.push(token);
+    }
+  }
+  return tokens;
+}
+
 /**
  * How much of the package being prepared is named by recorded dispatch links.
  * One recorded unit is partial: the remaining units still need Send. Full

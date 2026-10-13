@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   currentPackageDispatchCoverage,
   recordedPrintsLockProductionMethod,
+  recordedTokensForCurrentDispatch,
   requiredUnitTokensInObjectNames,
 } from "./production-unit-identity.js";
 
@@ -69,6 +70,35 @@ describe("recordedPrintsLockProductionMethod", () => {
         ],
       }),
     ).toBe(false);
+  });
+});
+
+describe("recordedTokensForCurrentDispatch", () => {
+  it("drops a finished unit's verified record and keeps a later send", () => {
+    expect(recordedTokensForCurrentDispatch({
+      completedTokens: [TOKEN_A],
+      records: [
+        { state: "verified", objectNames: [`bracket__${TOKEN_A}`] },
+        { state: "applied", objectNames: [`bracket__${TOKEN_A}_id_0_copy_0`] },
+      ],
+    })).toEqual([]);
+    expect(recordedTokensForCurrentDispatch({
+      completedTokens: [TOKEN_A],
+      records: [
+        { state: "verified", objectNames: [`bracket__${TOKEN_A}`] },
+        { state: "watching", objectNames: [`bracket__${TOKEN_A}__instance_1`] },
+      ],
+    })).toEqual([TOKEN_A]);
+  });
+
+  it("keeps a verified record for a unit that is still open", () => {
+    expect(recordedTokensForCurrentDispatch({
+      completedTokens: [TOKEN_B],
+      records: [
+        { state: "verified", objectNames: [`bracket__${TOKEN_A}`, `clip__${TOKEN_B}`] },
+        { state: "dismissed", objectNames: [`frame__${TOKEN_C}`] },
+      ],
+    })).toEqual([TOKEN_A]);
   });
 });
 

@@ -156,7 +156,7 @@ export type PlatesTaskInput = TaskInputBase &
     printerCount: number;
     /** Printers with a linked host, the only ones a sliced file can go to. */
     sendPrinterCount: number;
-    /** Required-unit tokens named by non-dismissed recorded prints for this Build. */
+    /** Required-unit tokens the current print attempt still has to cover. */
     dispatchedUnitTokens: readonly string[];
     exportError: string | null;
     sendError: string | null;
