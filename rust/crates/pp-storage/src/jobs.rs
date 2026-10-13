@@ -1619,6 +1619,236 @@ mod tests {
         }
     }
 
+    static REJECT_NEXT_COMMIT: AtomicBool = AtomicBool::new(false);
+
+    unsafe extern "C" fn reject_next_commit(_: *mut std::ffi::c_void) -> i32 {
+        i32::from(REJECT_NEXT_COMMIT.swap(false, Ordering::SeqCst))
+    }
+
+    fn enqueue_job(connection: &mut Connection, key: &str) -> JobRecord {
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .unwrap();
+        let Outcome::Job(job, LocalCommit::Committed) = user(
+            &tx,
+            "default",
+            "disk-full-claim",
+            UserOperation::Enqueue {
+                key: key.into(),
+                payload_version: 1,
+                payload: Payload::CheckSourceUpdates {},
+            },
+        )
+        .unwrap() else {
+            panic!("enqueue");
+        };
+        tx.commit().unwrap();
+        job
+    }
+
+    fn claim_command(worker: &str) -> Command {
+        Command::Claim {
+            worker: worker.into(),
+            admission: Arc::new(WorkerAdmission {
+                kinds: vec![(JobKind::CheckSourceUpdates, 4)],
+                total: 4,
+                per_resource: 4,
+                lease_seconds: 60,
+            }),
+        }
+    }
+
+    fn job_row(connection: &Connection, id: &str) -> (String, i64, i64) {
+        let (state, generation, document): (String, i64, String) = connection
+            .query_row(
+                "SELECT state,generation,document FROM durable_jobs WHERE id=?1",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        let attempt = decode(&document).unwrap().attempt;
+        (state, generation, attempt)
+    }
+
+    #[test]
+    fn ticket_t_28_claims_disk_full_claim_keeps_one_active_attempt() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(include_str!("jobs/schema.sql"))
+            .unwrap();
+        let held = enqueue_job(&mut connection, "held");
+        let Outcome::Claimed(Some((claimed, _))) =
+            execute(&mut connection, claim_command("holder")).unwrap()
+        else {
+            panic!("held claim");
+        };
+        assert_eq!(claimed.job_id, held.job_id);
+        assert_eq!(claimed.attempt, 1);
+        let victim = enqueue_job(&mut connection, "victim");
+        let pages: i64 = connection
+            .query_row("PRAGMA page_count", [], |row| row.get(0))
+            .unwrap();
+        connection
+            .pragma_update(None, "max_page_count", pages)
+            .unwrap();
+        let mut stored = decode(
+            &connection
+                .query_row(
+                    "SELECT document FROM durable_jobs WHERE id=?1",
+                    [&victim.job_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        let mut width = 64;
+        let mut blocked = false;
+        while width <= 8192 {
+            stored.recovery = Some("a".repeat(width));
+            let encoded = encode(&stored).unwrap();
+            let tx = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .unwrap();
+            match tx.execute(
+                "UPDATE durable_jobs SET document=?1 WHERE id=?2",
+                params![encoded, victim.job_id],
+            ) {
+                Ok(_) => {
+                    tx.commit().unwrap();
+                    width += 64;
+                }
+                Err(error) => {
+                    assert!(
+                        matches!(
+                            error,
+                            rusqlite::Error::SqliteFailure(code, _)
+                                if code.code == rusqlite::ErrorCode::DiskFull
+                        ),
+                        "{error:?}"
+                    );
+                    blocked = true;
+                    break;
+                }
+            }
+        }
+        assert!(blocked, "page budget never rejected a larger job document");
+        let error = match execute(&mut connection, claim_command("second")) {
+            Err(error) => error,
+            Ok(_) => panic!("in-flight claim committed under the page budget"),
+        };
+        assert!(
+            matches!(
+                error.downcast_ref::<rusqlite::Error>(),
+                Some(rusqlite::Error::SqliteFailure(code, _))
+                    if code.code == rusqlite::ErrorCode::DiskFull
+            ),
+            "{error:?}"
+        );
+        assert_eq!(
+            job_row(&connection, &held.job_id),
+            ("running".into(), claimed.generation, 1)
+        );
+        assert_eq!(
+            job_row(&connection, &victim.job_id),
+            ("queued".into(), 0, 0)
+        );
+        let running: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM durable_jobs WHERE state='running'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(running, 1);
+        let limit: i64 = connection
+            .query_row("PRAGMA max_page_count", [], |row| row.get(0))
+            .unwrap();
+        connection
+            .pragma_update(None, "max_page_count", limit + 64)
+            .unwrap();
+        let Outcome::Claimed(Some((retried, _))) =
+            execute(&mut connection, claim_command("second")).unwrap()
+        else {
+            panic!("claim after raising the quota");
+        };
+        assert_eq!(retried.job_id, victim.job_id);
+        assert_eq!(retried.attempt, 1);
+        assert_eq!(
+            job_row(&connection, &held.job_id),
+            ("running".into(), claimed.generation, 1)
+        );
+        let running: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM durable_jobs WHERE state='running'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(running, 2);
+    }
+
+    #[test]
+    fn ticket_t_28_claims_commit_unknown_rolls_back_in_flight_claim() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(include_str!("jobs/schema.sql"))
+            .unwrap();
+        let held = enqueue_job(&mut connection, "held");
+        let Outcome::Claimed(Some((claimed, _))) =
+            execute(&mut connection, claim_command("holder")).unwrap()
+        else {
+            panic!("held claim");
+        };
+        assert_eq!(claimed.job_id, held.job_id);
+        let victim = enqueue_job(&mut connection, "victim");
+        REJECT_NEXT_COMMIT.store(true, Ordering::SeqCst);
+        unsafe {
+            rusqlite::ffi::sqlite3_commit_hook(
+                connection.handle(),
+                Some(reject_next_commit),
+                std::ptr::null_mut(),
+            );
+        }
+        let error = match execute(&mut connection, claim_command("second")) {
+            Err(error) => error,
+            Ok(_) => panic!("in-flight claim committed"),
+        };
+        assert_eq!(
+            error.downcast_ref::<JobFailure>(),
+            Some(&JobFailure::CommitUnknown)
+        );
+        unsafe {
+            rusqlite::ffi::sqlite3_commit_hook(connection.handle(), None, std::ptr::null_mut());
+        }
+        assert_eq!(
+            job_row(&connection, &held.job_id),
+            ("running".into(), claimed.generation, 1)
+        );
+        assert_eq!(
+            job_row(&connection, &victim.job_id),
+            ("queued".into(), 0, 0)
+        );
+        let running: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM durable_jobs WHERE state='running'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(running, 1);
+        let Outcome::Claimed(Some((retried, _))) =
+            execute(&mut connection, claim_command("second")).unwrap()
+        else {
+            panic!("claim after the commit failure");
+        };
+        assert_eq!(retried.job_id, victim.job_id);
+        assert_eq!(retried.attempt, 1);
+        assert_eq!(
+            job_row(&connection, &held.job_id),
+            ("running".into(), claimed.generation, 1)
+        );
+    }
+
     #[test]
     fn job_document_exact_size_limit_saves_and_decodes() {
         let mut connection = Connection::open_in_memory().unwrap();
