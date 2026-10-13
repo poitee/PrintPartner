@@ -4808,6 +4808,25 @@ fn ticket_t_28_claims_writer_disk_quota_keeps_the_active_attempt() {
         .admit_disk_quota(1)
         .expect_err("quota below the database size");
     assert!(refused.to_string().contains("below"), "{refused:#}");
+    // SQLite clamps an undersized max_page_count to the current size. A refusal
+    // must leave the previous limit in place so later writes can still grow.
+    let before = owner.database_pages().unwrap();
+    let mut grew = false;
+    for index in 0..64 {
+        enqueue(
+            &owner,
+            &format!("grow-{index}"),
+            Payload::CheckSourceUpdates {},
+        );
+        if owner.database_pages().unwrap() > before {
+            grew = true;
+            break;
+        }
+    }
+    assert!(
+        grew,
+        "refused disk quota froze the database at {before} pages"
+    );
 
     let pages = owner.database_pages().unwrap();
     assert!(pages > 1, "schema occupies more than one page");

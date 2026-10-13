@@ -149,6 +149,14 @@ fn writer_control(connection: &Connection, control: WriterControl) -> Result<u32
         }
         WriterControl::AdmitDiskQuota(max_pages) => {
             ensure!(max_pages > 0, "Disk quota must be positive");
+            // SQLite clamps an undersized max_page_count up to the current
+            // page count and returns that value. Reject first so a refused
+            // quota leaves the previous limit unchanged.
+            let pages: i64 = connection.query_row("PRAGMA page_count", [], |row| row.get(0))?;
+            ensure!(
+                i64::from(max_pages) >= pages,
+                "Disk quota {max_pages} is below the current database size"
+            );
             connection.pragma_update(None, "max_page_count", i64::from(max_pages))?;
             let applied: i64 =
                 connection.query_row("PRAGMA max_page_count", [], |row| row.get(0))?;
