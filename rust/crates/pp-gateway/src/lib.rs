@@ -383,6 +383,21 @@ fn digest(value: &str) -> [u8; 32] {
 fn error(status: StatusCode, detail: &'static str) -> Response<Body> {
     (status, axum::Json(serde_json::json!({"detail":detail}))).into_response()
 }
+
+fn node_unavailable() -> Response<Body> {
+    let mut response = Response::new(Body::from(
+        r#"{"type":"about:blank","title":"Service Unavailable","status":503,"detail":"Compatibility backend unavailable"}"#,
+    ));
+    *response.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+    let headers = response.headers_mut();
+    headers.insert(
+        "content-type",
+        HeaderValue::from_static("application/problem+json"),
+    );
+    headers.insert("retry-after", HeaderValue::from_static("1"));
+    headers.insert("cache-control", HeaderValue::from_static("no-store"));
+    response
+}
 fn header<'a>(request: &'a Request<Body>, name: &str) -> Option<&'a str> {
     request.headers().get(name)?.to_str().ok()
 }
@@ -649,6 +664,15 @@ async fn handle(
         // host left on Node until GRE-359), so those forward to Node without waiting.
         let mut route = state.watchers.lock().await.route(&id);
         if route_needs_snapshot(&route) {
+            // No published child can produce a snapshot. This is the unready
+            // compat route, not a monitoring outage on a live backend.
+            if state.compat.endpoint().is_none() {
+                return node_unavailable();
+            }
+            // The regression test waits here, while this read still sees a child
+            // and the snapshot flight is blocked.
+            #[cfg(test)]
+            ticket_t_2::note_published_refresh();
             // Detached so a client disconnect cannot cut a reconcile short.
             // Concurrent misses share that one refresh; a recorded snapshot then
             // routes confirmed non-Moonraker ids without another queue wait.
@@ -659,6 +683,11 @@ async fn handle(
                 .await;
             route = state.watchers.lock().await.route(&id);
             if route_needs_snapshot(&route) {
+                // The child can exit during the refresh. That is still an unready
+                // compat route, not a monitoring outage on a live backend.
+                if state.compat.endpoint().is_none() {
+                    return node_unavailable();
+                }
                 // Never fall back to on-demand Node polling for a known HTTP Moonraker
                 // id, nor guess when no valid snapshot exists.
                 return error(
@@ -690,14 +719,7 @@ async fn handle(
                 .strip_prefix("/api/v1/integrations/")
                 .is_some_and(|tail| !tail.contains('/')));
     let Some(endpoint) = state.compat.endpoint() else {
-        let mut response = error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Compatibility backend unavailable",
-        );
-        response
-            .headers_mut()
-            .insert("retry-after", HeaderValue::from_static("1"));
-        return response;
+        return node_unavailable();
     };
     let untrusted: Vec<_> = request
         .headers()
@@ -1468,6 +1490,9 @@ impl http_body::Body for TrackedBody {
         self.body.size_hint()
     }
 }
+
+#[cfg(test)]
+mod ticket_t_2;
 
 #[cfg(test)]
 mod tests {
