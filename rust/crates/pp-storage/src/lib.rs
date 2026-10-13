@@ -1,8 +1,10 @@
 pub mod auth;
 pub mod catalog;
+pub mod checkoff_progress;
 pub mod jobs;
 pub mod lease;
 pub mod read_model;
+pub mod required_units;
 mod schema;
 mod storage_lease;
 
@@ -61,6 +63,14 @@ enum Work {
     Backup(PathBuf),
 }
 enum Envelope {
+    RequiredUnits {
+        command: required_units::Command,
+        reply: mpsc::Sender<Result<pp_contracts::reconciliation::Outcome>>,
+    },
+    Checkoff {
+        command: checkoff_progress::Command,
+        reply: mpsc::Sender<Result<checkoff_progress::Response>>,
+    },
     Read {
         command: read_model::Command,
         reply: mpsc::Sender<Result<read_model::Batch>>,
@@ -339,6 +349,12 @@ impl WriterOwner {
                     }
                 };
                 match envelope {
+                    Envelope::RequiredUnits { command, reply } => {
+                        let _ = reply.send(required_units::execute(&mut connection, command));
+                    }
+                    Envelope::Checkoff { command, reply } => {
+                        let _ = reply.send(checkoff_progress::execute(&mut connection, command));
+                    }
                     Envelope::Read { command, reply } => {
                         let _ = reply.send(read_model::execute(&mut connection, command));
                     }

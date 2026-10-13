@@ -1,5 +1,5 @@
 mod context;
-mod graph;
+pub(crate) mod graph;
 pub use context::{CapturedContext, PlateRef, RevisionRef, UnitHistory};
 pub mod views;
 pub mod workflow;

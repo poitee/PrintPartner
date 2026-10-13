@@ -1,5 +1,6 @@
 import http.client
 import json
+import os
 from pathlib import Path
 import re
 import select
@@ -10,6 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = Path(__file__).resolve().parents[2]
 COMMIT = json.loads((ROOT / 'rust/bundle-manifest.json').read_text())['commit']
+NODE = os.environ.get("PP_TEST_NODE", "/usr/bin/node")
 FAMILIES = {'/integrations/:id/spoolman/filaments', '/integrations/:id/spoolman/spools',
             '/plans/:id/review', '/plans/:id/role-filaments', '/plans/:id/checkoff'}
 
@@ -42,7 +44,7 @@ def main():
     thread.start()
     process = subprocess.Popen([
         str(ROOT / 'rust/target/debug/pp-server'), '--data', str(fixture / 'data'),
-        '--web', str(ROOT / 'web'), '--node', '/usr/bin/node', '--commit', COMMIT,
+        '--web', str(ROOT / 'web'), '--node', NODE, '--commit', COMMIT,
         '--test-credential-file', str(credentials),
     ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     cookie = None

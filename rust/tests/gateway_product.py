@@ -19,6 +19,7 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
 COMMIT = json.loads((ROOT / "rust/bundle-manifest.json").read_text())["commit"]
+NODE = os.environ.get("PP_TEST_NODE", "/usr/bin/node")
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -31,7 +32,7 @@ def main():
     credentials = fixture / "credentials.json"
     process = subprocess.Popen([
         str(ROOT / "rust/target/debug/pp-server"), "--data", str(fixture / "data"),
-        "--web", str(ROOT / "web"), "--node", "/usr/bin/node", "--commit", COMMIT,
+        "--web", str(ROOT / "web"), "--node", NODE, "--commit", COMMIT,
         "--test-credential-file", str(credentials),
     ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     opener = urllib.request.build_opener(NoRedirect)
@@ -176,14 +177,14 @@ def main():
         assert export[:2] == b"PK"
         assert "attachment" in headers["Content-Disposition"]
         assert headers["Content-Type"].startswith("application/zip")
-        ws = subprocess.run(["/usr/bin/node", str(ROOT / "rust/tests/gateway_ws.mjs")],
+        ws = subprocess.run([NODE, str(ROOT / "rust/tests/gateway_ws.mjs")],
                             input=json.dumps({"origin": origin, "cookie": cookie, "job_id": job["job_id"]}),
                             text=True, capture_output=True, timeout=30)
         assert ws.returncode == 0, ws.stderr
         websocket = json.loads(ws.stdout)
         streams = None
         def hold_websocket():
-            live = subprocess.Popen(["/usr/bin/node", str(ROOT / "rust/tests/gateway_ws.mjs")], stdin=subprocess.PIPE,
+            live = subprocess.Popen([NODE, str(ROOT / "rust/tests/gateway_ws.mjs")], stdin=subprocess.PIPE,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             live.stdin.write(json.dumps({"origin": origin, "cookie": cookie, "mode": "hold"}))
             live.stdin.close()

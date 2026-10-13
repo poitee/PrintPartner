@@ -1,0 +1,4 @@
+{
+  "extends": "../desktop-parity/tsconfig.json",
+  "include": ["*.mts", "../../apps/server/src/app.ts"]
+}
