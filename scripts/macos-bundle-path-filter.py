@@ -33,6 +33,32 @@ def is_native_input(path):
                         "bun.lock", "bun.lockb"})
 
 
+# Pull requests only pay for hosted macOS when macOS/desktop-native inputs
+# change. Everything else (web, server, generic Rust) is covered by the Linux
+# jobs on the PR and by the full macOS run on push to main and nightly.
+MACOS_PR_PREFIXES = (
+    "rust/crates/pp-desktop/", "rust/crates/pp-compat/",
+    "rust/crates/pp-source/", "rust/crates/pp-storage/",
+    "rust/scripts/desktop-bundle.sh", "rust/scripts/stage-desktop.py",
+    "rust/scripts/assemble-macos-resources.py", "rust/scripts/check-macos-bundle.py",
+    "rust/scripts/macos_addon_slices.py", "rust/scripts/build-desktop-manifest.py",
+    "rust/scripts/native-sdk.sh", "rust/scripts/native-process-probe.py",
+    "rust/scripts/workflow-smoke", ".github/workflows/desktop-native-macos.yml",
+    "scripts/macos-bundle-path-filter.py", "scripts/test_macos_bundle_path_filter.py",
+)
+MACOS_PR_FILES = {"rust-toolchain.toml", "rust/Cargo.lock", "rust/Cargo.toml",
+                  "web/package-lock.json", "web/package.json"}
+
+
+def is_macos_pr_input(path):
+    """Narrow PR filter: macOS/desktop-native paths and native dependency locks."""
+    if not is_native_input(path):
+        return False
+    lowered = path.lower()
+    return (path.startswith(MACOS_PR_PREFIXES) or path in MACOS_PR_FILES
+            or "macos" in lowered or "darwin" in lowered or "tauri" in lowered)
+
+
 def select_native(event, base, head):
     if event == "workflow_dispatch" or not re.fullmatch(r"[0-9a-f]{40}", base):
         return True
@@ -46,7 +72,8 @@ def select_native(event, base, head):
     if event != "pull_request":
         command.append(head)
     paths = subprocess.check_output(command).decode("utf-8", errors="surrogateescape").split("\0")
-    return any(is_native_input(path) for path in paths if path)
+    selector = is_macos_pr_input if event == "pull_request" else is_native_input
+    return any(selector(path) for path in paths if path)
 
 
 if __name__ == "__main__":
