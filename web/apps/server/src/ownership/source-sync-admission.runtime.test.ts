@@ -832,6 +832,13 @@ describe("Source Sync Fastify admission", () => {
     expect(readFileSync(path, "utf8")).toBe(corrupt);
   });
 
+  it("does not keep a receipt session after its data directory is removed", () => {
+    const dir = scratch("removed-session");
+    beginSourceSyncAdmission(dir);
+    rmSync(dir, { recursive: true, force: true });
+    expect(() => requireSourceSyncParticipant("job.sync")).not.toThrow();
+  });
+
   it.each(["symlink", "hardlink"])("ignores a planted receipt temporary %s and preserves its target", (kind) => {
     const dir = scratch(`receipt-${kind}`);
     const manifest = writeManifest(dir, "manifest.json");

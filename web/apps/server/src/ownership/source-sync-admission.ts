@@ -270,9 +270,15 @@ export function requireSourceSyncParticipant(id: string): undefined {
     fail("restart_manifest_changed", "runtime manifest does not match the admitted record");
   }
   if (admittedReceiptPath !== undefined) {
-    const receipt = readExistingAdmissionReceipt(admittedReceiptPath, admitted);
-    if (receipt === null) {
-      fail("malformed", "admission receipt is not a regular file or cannot be opened");
+    // A deleted data directory is a finished session. A missing or non-regular
+    // receipt inside a live directory still refuses the mutation.
+    if (!existsSync(dirname(admittedReceiptPath))) {
+      admittedReceiptPath = undefined;
+    } else {
+      const receipt = readExistingAdmissionReceipt(admittedReceiptPath, admitted);
+      if (receipt === null) {
+        fail("malformed", "admission receipt is not a regular file or cannot be opened");
+      }
     }
   }
   if (!admitted.participantIds.includes(id)) {
