@@ -123,7 +123,7 @@ impl SmtpFake {
         }
     }
     fn mailer(&self) -> ResetMailer {
-        ResetMailer(Some((
+        ResetMailer::new(Some((
             AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous("127.0.0.1")
                 .port(self.port)
                 .timeout(Some(Duration::from_secs(5)))
@@ -187,6 +187,123 @@ async fn smtp_delivers_real_envelope_subject_link_and_reports_uncertain_send() {
     }
 }
 
+#[tokio::test]
+async fn failure_counter_is_shared_and_disabled_mail_does_not_count() {
+    let disabled = ResetMailer::disabled();
+    assert_eq!(
+        disabled
+            .deliver("invalid", "https://example.com/private")
+            .await,
+        Delivery::Unsent
+    );
+    assert_eq!(disabled.delivery_failure_count(), 0);
+    let fake = SmtpFake::start(Mode::Success).await;
+    let mail = fake.mailer();
+    assert_eq!(
+        mail.clone()
+            .deliver("invalid", "https://example.com/private")
+            .await,
+        Delivery::FailedOrUnknown
+    );
+    assert_eq!(mail.delivery_failure_count(), 1);
+    assert_eq!(fake.connections.load(Ordering::Relaxed), 0);
+    fake.close().await;
+}
+
+#[tokio::test]
+async fn accepted_reset_delivery_drains_after_http_shutdown() {
+    let fake = SmtpFake::start(Mode::Blocked).await;
+    let directory = directory();
+    let owner = WriterOwner::open(&directory, Limits::default()).unwrap().0;
+    let auth = owner
+        .auth_with_policy(AuthPolicy {
+            registration: RegistrationPolicy::Open,
+            session_tenant: SessionTenantPolicy::AccountTenant,
+            first_user: FirstUserTenant::NewUser,
+        })
+        .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let mail = fake.mailer();
+    let router = auth_router(
+        AuthHttpConfig::new(
+            &origin,
+            CookieTransport::LoopbackHttp,
+            true,
+            Some("https://canonical.example"),
+            false,
+        )
+        .unwrap(),
+        auth,
+        ProviderClient::new(None, None).unwrap(),
+        mail.clone(),
+    );
+    let (stop, rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(async {
+            let _ = rx.await;
+        })
+        .await
+        .unwrap();
+    });
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    assert_eq!(
+        client
+            .post(format!("{origin}/auth/register"))
+            .header("Origin", &origin)
+            .json(&json!({"email":"shutdown@example.com", "password":"password-good"}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    assert_eq!(
+        client
+            .post(format!("{origin}/auth/forgot-password"))
+            .header("Origin", &origin)
+            .json(&json!({"email":"shutdown@example.com"}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while fake.messages.lock().unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    stop.send(()).unwrap();
+    server.await.unwrap();
+    let draining_mail = mail.clone();
+    let mut drain = tokio::spawn(async move {
+        draining_mail.drain_deliveries().await;
+    });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), &mut drain)
+            .await
+            .is_err()
+    );
+    fake.release.add_permits(1);
+    tokio::time::timeout(DELIVERY_TIMEOUT + Duration::from_secs(1), drain)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(mail.delivery_failure_count(), 0);
+    assert_eq!(fake.connections.load(Ordering::Relaxed), 1);
+    mail.drain_deliveries().await;
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(directory).unwrap();
+    fake.close().await;
+}
+
 struct CapturedLogs(Mutex<Vec<String>>);
 static LOGS: CapturedLogs = CapturedLogs(Mutex::new(Vec::new()));
 impl log::Log for CapturedLogs {
@@ -227,6 +344,7 @@ async fn smtp_http_failure_keeps_committed_token_without_enumeration_or_retry() 
             .unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let origin = format!("http://{}", listener.local_addr().unwrap());
+        let mail = fake.mailer();
         let router = auth_router(
             AuthHttpConfig::new(
                 &origin,
@@ -238,7 +356,7 @@ async fn smtp_http_failure_keeps_committed_token_without_enumeration_or_retry() 
             .unwrap(),
             auth,
             ProviderClient::new(None, None).unwrap(),
-            fake.mailer(),
+            mail.clone(),
         );
         let (stop, rx) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {
@@ -321,6 +439,9 @@ async fn smtp_http_failure_keeps_committed_token_without_enumeration_or_retry() 
             assert_eq!(fake.release.available_permits(), 0);
             // Both HTTP responses completed while the SMTP acknowledgement was blocked.
             fake.release.add_permits(1);
+        }
+        if matches!(mode, Mode::Reject) {
+            assert_eq!(mail.delivery_failure_count(), 1);
         }
         if matches!(mode, Mode::Reject) {
             let logs = LOGS.0.lock().unwrap();
@@ -522,7 +643,7 @@ async fn smtp_rustls_encrypts_data_and_rejects_untrusted_certificate() {
             .add_root_certificate(Certificate::from_der(cert).unwrap())
             .build_rustls()
             .unwrap();
-        let mailer = ResetMailer(Some((
+        let mailer = ResetMailer::new(Some((
             AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous("127.0.0.1")
                 .port(port)
                 .tls(match security {
