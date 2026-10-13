@@ -64,6 +64,7 @@ pub enum Outcome {
     ExecutionConflict {
         operations: Vec<ExecutionConflict>,
     },
+    TransactionUnavailable,
     TokenAllocationFailed,
     IdempotencyConflict,
 }

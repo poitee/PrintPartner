@@ -108,3 +108,70 @@ fn draft_requests_reject_authority_fields_and_preserve_source_state_default() {
             .is_ok()
     );
 }
+
+#[test]
+fn transition_lifecycle_version_reserves_room_for_increment() {
+    let request = |version| json!({"kind":"transition","draft_id":1,"transition":"abandon","expected_lifecycle_version":version});
+    assert!(serde_json::from_value::<Request>(request(2_147_483_646u64)).is_ok());
+    for version in [2_147_483_647u64, u32::MAX as u64] {
+        assert!(serde_json::from_value::<Request>(request(version)).is_err());
+    }
+}
+
+#[test]
+fn edit_batches_validate_targets_and_preserve_distinct_fields() {
+    let included = |ids| json!({"kind":"set_included","draft_part_ids":ids,"value":true});
+    let quantity = |ids| json!({"kind":"set_quantity_override","draft_part_ids":ids,"value":null});
+    let request = |decisions| json!({"kind":"edit","draft_id":1,"expected_snapshot_digest":"a".repeat(64),"decisions":decisions});
+    for decisions in [
+        json!([]),
+        json!([included(json!([]))]),
+        json!([included(json!([1, 1]))]),
+        json!([included(json!([1])), included(json!([1, 2]))]),
+        json!([quantity(json!([1])), quantity(json!([1]))]),
+    ] {
+        assert!(serde_json::from_value::<Request>(request(decisions)).is_err());
+    }
+    let valid = request(json!([included(json!([1, 2])), quantity(json!([2]))]));
+    let parsed: Request = serde_json::from_value(valid.clone()).unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap(), valid);
+    let valid_limit = request(json!(
+        (1..=10000)
+            .map(|id| included(json!([id])))
+            .collect::<Vec<_>>()
+    ));
+    assert!(serde_json::from_value::<Request>(valid_limit).is_ok());
+    let overflow = request(json!(
+        (1..=10001)
+            .map(|id| included(json!([id])))
+            .collect::<Vec<_>>()
+    ));
+    assert!(serde_json::from_value::<Request>(overflow).is_err());
+}
+
+#[test]
+fn source_map_ids_are_safe_for_javascript() {
+    for field in [
+        "part_choices_by_source_id",
+        "excluded_paths_by_source_id",
+        "included_paths_by_source_id",
+    ] {
+        let entries = if field == "part_choices_by_source_id" {
+            json!({})
+        } else {
+            json!([])
+        };
+        let mut value = json!({});
+        value[field] = json!({"9007199254740991":entries.clone()});
+        assert!(serde_json::from_value::<RecomputeOptions>(value.clone()).is_ok());
+        value[field] = json!({"9007199254740992":entries});
+        assert!(serde_json::from_value::<RecomputeOptions>(value).is_err());
+    }
+}
+
+#[test]
+fn publication_preserves_transaction_unavailable_outcome() {
+    let value = json!({"kind":"transaction_unavailable"});
+    let parsed: pp_contracts::publication::Outcome = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap(), value);
+}

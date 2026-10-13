@@ -1,5 +1,6 @@
-use crate::autosave::PositiveId;
+use crate::autosave::{PositiveId, WireInteger};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -13,7 +14,7 @@ pub enum Request {
     Edit {
         draft_id: PositiveId,
         expected_snapshot_digest: crate::autosave::Digest,
-        decisions: Vec<EditDecision>,
+        decisions: EditDecisions,
     },
     Rebase {
         idempotency_key: String,
@@ -45,7 +46,7 @@ pub enum Request {
     Transition {
         draft_id: PositiveId,
         transition: Transition,
-        expected_lifecycle_version: u32,
+        expected_lifecycle_version: WireInteger<0, 2_147_483_646>,
     },
 }
 
@@ -86,11 +87,12 @@ pub struct ExpectedDraft {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum EditDecision {
     SetIncluded {
-        draft_part_ids: Vec<PositiveId>,
+        draft_part_ids: DraftPartIds,
         value: bool,
     },
     SetQuantityOverride {
-        draft_part_ids: Vec<PositiveId>,
+        draft_part_ids: DraftPartIds,
+        #[serde(deserialize_with = "crate::reconciliation::required_nullable")]
         value: Option<crate::autosave::Quantity>,
     },
 }
@@ -98,8 +100,67 @@ impl EditDecision {
     pub fn ids(&self) -> &[PositiveId] {
         match self {
             Self::SetIncluded { draft_part_ids, .. }
-            | Self::SetQuantityOverride { draft_part_ids, .. } => draft_part_ids,
+            | Self::SetQuantityOverride { draft_part_ids, .. } => draft_part_ids.as_slice(),
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(try_from = "Vec<PositiveId>")]
+pub struct DraftPartIds(Vec<PositiveId>);
+
+impl DraftPartIds {
+    pub fn new(ids: Vec<PositiveId>) -> Result<Self, &'static str> {
+        let mut unique = HashSet::new();
+        if ids.is_empty() || !ids.iter().all(|id| unique.insert(id.get())) {
+            return Err("part targets must be nonempty and unique");
+        }
+        Ok(Self(ids))
+    }
+
+    pub fn as_slice(&self) -> &[PositiveId] {
+        &self.0
+    }
+}
+
+impl TryFrom<Vec<PositiveId>> for DraftPartIds {
+    type Error = &'static str;
+
+    fn try_from(ids: Vec<PositiveId>) -> Result<Self, Self::Error> {
+        Self::new(ids)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(try_from = "Vec<EditDecision>")]
+pub struct EditDecisions(Vec<EditDecision>);
+
+impl EditDecisions {
+    pub fn new(decisions: Vec<EditDecision>) -> Result<Self, &'static str> {
+        if !(1..=10_000).contains(&decisions.len()) {
+            return Err("edit batch must contain 1 to 10000 decisions");
+        }
+        let mut targets = HashSet::new();
+        for decision in &decisions {
+            for id in decision.ids() {
+                if !targets.insert((std::mem::discriminant(decision), id.get())) {
+                    return Err("a part field may be edited only once per batch");
+                }
+            }
+        }
+        Ok(Self(decisions))
+    }
+
+    pub fn as_slice(&self) -> &[EditDecision] {
+        &self.0
+    }
+}
+
+impl TryFrom<Vec<EditDecision>> for EditDecisions {
+    type Error = &'static str;
+
+    fn try_from(decisions: Vec<EditDecision>) -> Result<Self, Self::Error> {
+        Self::new(decisions)
     }
 }
 
@@ -138,7 +199,9 @@ fn source_map<'de, T: Deserialize<'de>, D: serde::Deserializer<'de>>(
             let mut sources = std::collections::BTreeMap::new();
             for (key, value) in entries {
                 let id = key.parse::<i64>().map_err(serde::de::Error::custom)?;
-                if id <= 0 || key != id.to_string() {
+                PositiveId::new(u64::try_from(id).map_err(serde::de::Error::custom)?)
+                    .map_err(serde::de::Error::custom)?;
+                if key != id.to_string() {
                     return Err(serde::de::Error::custom(
                         "source id must be a canonical positive integer",
                     ));
