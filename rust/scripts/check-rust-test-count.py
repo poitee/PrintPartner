@@ -20,8 +20,8 @@ def main():
         parser.exit(1, "Required Rust tests did not complete successfully\n")
     if args.exact:
         _, passed, _, ignored = results[-1]
-        named = re.search(r"^test " + re.escape(args.exact) + r" \.\.\.", output, re.MULTILINE)
-        if not named or int(passed) != 1 or int(ignored) != 0:
+        names = re.findall(r"test (\S+) \.\.\.", output)
+        if len(results) != 1 or names != [args.exact] or int(passed) != 1 or int(ignored) != 0:
             parser.exit(1, f"Required Rust test {args.exact!r} did not execute exactly once\n")
         count = 1
     else:

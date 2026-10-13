@@ -13,13 +13,14 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
 COMMIT = json.loads((ROOT / "rust/bundle-manifest.json").read_text())["commit"]
+NODE = os.environ.get("PP_TEST_NODE", "/usr/bin/node")
 
 
 def main():
     fixture = Path(tempfile.mkdtemp(prefix="pp-lifecycle-m0-"))
     credentials = fixture / "credentials.json"
     runtime = subprocess.Popen([str(ROOT / "rust/target/debug/pp-server"), "--data", str(fixture / "data"),
-                               "--web", str(ROOT / "web"), "--node", "/usr/bin/node", "--commit", COMMIT,
+                               "--web", str(ROOT / "web"), "--node", NODE, "--commit", COMMIT,
                                "--test-credential-file", str(credentials)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                env=dict(os.environ, NODE_OPTIONS="--require=/nonexistent-pp-parent-injection.cjs",
                                         NODE_PATH="/nonexistent-pp-parent-modules", PP_PARENT_ONLY_SECRET="synthetic-test-value"))
@@ -46,7 +47,7 @@ def main():
         direct("x-pp-principal: 7b7d\r\nx-pp-signature: " + "00" * 32 + "\r\n")
         for entry in ("index.js", "db/migrate.js", "mcp/stdio-server.js"):
             env = dict(os.environ, PRINT_PARTNER_DATA_DIR=str(fixture / "data"), HOST="127.0.0.1", PORT="0")
-            child = subprocess.run(["/usr/bin/node", str(ROOT / "web/apps/server/dist/current" / entry)], env=env, cwd=ROOT / "web", capture_output=True, timeout=15)
+            child = subprocess.run([NODE, str(ROOT / "web/apps/server/dist/current" / entry)], env=env, cwd=ROOT / "web", capture_output=True, timeout=15)
             assert child.returncode != 0, entry
             assert b"already owned" in child.stderr or b"owned by the desktop runtime" in child.stderr, (entry, child.stderr[:200])
         child_pid = int(subprocess.check_output(["ps", "--no-headers", "-o", "pid", "--ppid", str(runtime.pid)], text=True).strip())

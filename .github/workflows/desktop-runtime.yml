@@ -63,12 +63,13 @@ jobs:
           rustup toolchain install 1.99.0 --profile minimal
           rustc --version --verbose > "$PP_EVIDENCE/rust-version.txt"
           python3 -m unittest discover -s rust/scripts -p test_check_rust_test_count.py -v
-          sudo ln -sf "$(command -v node)" /usr/bin/node
-          test "$(/usr/bin/node --version)" = v24.21.0
-          /usr/bin/node -p 'JSON.stringify({node:process.version,abi:process.versions.modules,os:process.platform,arch:process.arch})' > "$PP_EVIDENCE/node-version.json"
+          node_executable=$(node -p process.execPath)
+          echo "PP_TEST_NODE=$node_executable" >> "$GITHUB_ENV"
+          test "$("$node_executable" --version)" = v24.21.0
+          "$node_executable" -p 'JSON.stringify({node:process.version,abi:process.versions.modules,os:process.platform,arch:process.arch})' > "$PP_EVIDENCE/node-version.json"
           npm --prefix web ci 2>&1 | tee "$PP_EVIDENCE/npm-ci.log"
           npm --prefix web run build 2>&1 | tee "$PP_EVIDENCE/desktop-build.log"
-          python3 rust/scripts/build-desktop-manifest.py --web web --node /usr/bin/node --output rust/bundle-manifest.json --commit "$GITHUB_SHA" 2>&1 | tee "$PP_EVIDENCE/manifest.log"
+          python3 rust/scripts/build-desktop-manifest.py --web web --node "$node_executable" --output rust/bundle-manifest.json --commit "$GITHUB_SHA" 2>&1 | tee "$PP_EVIDENCE/manifest.log"
           cp rust/bundle-manifest.json "$PP_EVIDENCE/bundle-manifest.json"
       - name: Build real server and check crate boundaries
         run: |

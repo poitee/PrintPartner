@@ -16,6 +16,7 @@ from urllib.parse import quote
 
 ROOT = Path(__file__).resolve().parents[2]
 COMMIT = json.loads((ROOT / "rust/bundle-manifest.json").read_text())["commit"]
+NODE = os.environ.get("PP_TEST_NODE", "/usr/bin/node")
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -28,7 +29,7 @@ def main():
     credentials = fixture / "credentials.json"
     process = subprocess.Popen([
         str(ROOT / "rust/target/debug/pp-server"), "--data", str(fixture / "data"),
-        "--web", str(ROOT / "web"), "--node", "/usr/bin/node", "--commit", COMMIT,
+        "--web", str(ROOT / "web"), "--node", NODE, "--commit", COMMIT,
         "--test-credential-file", str(credentials),
     ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     opener = urllib.request.build_opener(NoRedirect)
