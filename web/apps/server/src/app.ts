@@ -1,5 +1,6 @@
 import { moonrakerHostSnapshot } from "./moonraker-host-snapshot.js";
 import { acquireDataDirectory, desktopContext, desktopPrincipal, registerDesktopBoundary } from "./desktop-context.js";
+import { rustOwnedCopy } from "./db/rust-owned.js";
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
@@ -570,7 +571,8 @@ export async function startServer(config: ServerConfig) {
   const releaseOwner = acquireDataDirectory(config.dataDir);
   try {
     validateProductionConfig(config);
-    if (!config.databaseUrl) {
+    const rustOwned = rustOwnedCopy(config.dataDir).kind !== "absent";
+    if (!config.databaseUrl && !rustOwned) {
       const preparation = await prepareSqliteUpgrade({
         dataDir: config.dataDir,
         appVersion: config.version,
@@ -592,7 +594,7 @@ export async function startServer(config: ServerConfig) {
       await ports.db.connect();
 
       // One-time migration: move print_outcomes blob → print_job_parts SQL rows.
-      if (ports.repository) {
+      if (!rustOwned && ports.repository) {
         try {
           const { migratePrintOutcomesBlob } = await import(
             "./services/printer-outcomes-store.js"
@@ -604,7 +606,7 @@ export async function startServer(config: ServerConfig) {
       }
 
       // Best-effort: upsert Advisor notes from shipped/imported domain pack onto matching sources.
-      if (ports.repository) {
+      if (!rustOwned && ports.repository) {
         try {
           const { backfillAdvisorNotesFromDomainPack } = await import(
             "./assistant/domain-pack.js"

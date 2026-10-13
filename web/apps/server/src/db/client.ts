@@ -8,6 +8,7 @@ import { schemaMigrations } from "./migrations-sqlite.js";
 import { seedStarterProfiles } from "./seed-starter-profiles.js";
 import { repairSourceRevisionTenantOwnershipSqlite } from "./source-revision-tenant-repair.js";
 import { assertUpgradableSchemaVersion, readSchemaVersion } from "./upgrade-guard.js";
+import { assertSupportedRustSchema, rustOwnedCopy } from "./rust-owned.js";
 
 export type DrizzleDb = BetterSQLite3Database<typeof schema>;
 
@@ -28,10 +29,17 @@ export class SqliteDatabase {
   }
 
   connect(): void {
+    const ownership = rustOwnedCopy(this.dataDir);
+    if (ownership.kind !== "absent") {
+      assertSupportedRustSchema(this.dbPath);
+      if (ownership.kind === "foreign") {
+        throw new Error("Rust owns this data directory; Node will not migrate or write");
+      }
+    }
     mkdirSync(dirname(this.dbPath), { recursive: true });
     const sqlite = new Database(this.dbPath);
     try {
-      assertUpgradableSchemaVersion(readSchemaVersion(sqlite));
+      if (ownership.kind === "absent") assertUpgradableSchemaVersion(readSchemaVersion(sqlite));
     } catch (error) {
       sqlite.close();
       throw error;
@@ -46,6 +54,7 @@ export class SqliteDatabase {
     this.sqlite.pragma("journal_mode = WAL");
     this.sqlite.pragma("foreign_keys = ON");
     this.drizzle = drizzle(this.sqlite, { schema });
+    if (ownership.kind === "child") return;
     this.runMigrations();
     seedStarterProfiles(this.sqlite);
   }
