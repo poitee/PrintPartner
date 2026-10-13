@@ -254,6 +254,38 @@ describe("projectWorkPackages routeLocked", () => {
     expect(projection.routeLocked).toBe(false);
     expect(projection.active[0]?.links.unitTokens).toEqual([TOKEN_A]);
   });
+
+
+  it("locks the current package when a slicer wrapper names a selected unit", () => {
+    for (const objectName of [
+      `part__${TOKEN_A}_id_0_copy_0`,
+      `part__${TOKEN_A}_instance_1`,
+      `part__${TOKEN_A} (Instance 2)`,
+    ]) {
+      const projection = projectWorkPackages(input({
+        checkoffLinks: [checkoffLink({
+          units: [{ part_id: 3, unit_index: 0, object_name: objectName }],
+        })],
+      }));
+      expect(projection.routeLocked).toBe(true);
+      expect(projection.active[0]?.links.unitTokens).toEqual([TOKEN_A]);
+    }
+  });
+
+  it("does not lock a dismissed wrapper or a wrapped unit outside the current package", () => {
+    expect(projectWorkPackages(input({
+      checkoffLinks: [checkoffLink({
+        state: "dismissed",
+        units: [{ part_id: 3, unit_index: 0, object_name: `part__${TOKEN_A}_id_0_copy_0` }],
+      })],
+    })).routeLocked).toBe(false);
+    expect(projectWorkPackages(input({
+      selectedTokens: [TOKEN_B],
+      checkoffLinks: [checkoffLink({
+        units: [{ part_id: 3, unit_index: 0, object_name: `part__${TOKEN_A}_instance_1` }],
+      })],
+    })).routeLocked).toBe(false);
+  });
 });
 
 describe("projectWorkPackages bench status on the Plates route", () => {

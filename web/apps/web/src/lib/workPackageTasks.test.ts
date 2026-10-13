@@ -15,6 +15,7 @@ import {
 } from "./workPackageTasks";
 
 const TOKEN_A = `ppu_${"a".repeat(32)}` as RequiredUnitToken;
+const TOKEN_B = `ppu_${"b".repeat(32)}` as RequiredUnitToken;
 
 const printer = {
   id: "printer-1",
@@ -252,6 +253,126 @@ describe("productionTasks on the Plates route", () => {
     expect(byId(tasks, "send-or-start").hint).toBe(
       "Send the file to a printer, or start the print now.",
     );
+  });
+
+
+  it("keeps Send unfinished when one unit of the current package was sent", () => {
+    const tasks = productionTasks(
+      platesInput({
+        selectedCount: 2,
+        pkg: pkg({
+          unitTokens: [TOKEN_A, TOKEN_B],
+          exportArtifact: {
+            jobId: "job-90",
+            plateRevisionNumber: 3,
+            plateCount: 2,
+            bundleUrl: "/exports/a.zip",
+          },
+          slicedFile: { name: "other-plate.gcode" },
+        }),
+        dispatchedUnitTokens: [TOKEN_A],
+      }),
+    );
+    expect(byId(tasks, "send-or-start").state).toBe("not_started");
+    expect(byId(tasks, "send-or-start").hint).toBe(
+      "Send the file to a printer, or start the print now.",
+    );
+    expect(firstUnfinishedProductionTask({ tasks, route: "plates" })).toBe("send-or-start");
+  });
+
+  it("completes Send only when every unit in the current package was sent", () => {
+    const tasks = productionTasks(
+      platesInput({
+        selectedCount: 2,
+        pkg: pkg({
+          unitTokens: [TOKEN_A, TOKEN_B],
+          exportArtifact: {
+            jobId: "job-90",
+            plateRevisionNumber: 3,
+            plateCount: 2,
+            bundleUrl: "/exports/a.zip",
+          },
+          slicedFile: { name: "batch.gcode" },
+        }),
+        dispatchedUnitTokens: [TOKEN_A, TOKEN_B],
+      }),
+    );
+    expect(byId(tasks, "send-or-start").state).toBe("complete");
+    expect(byId(tasks, "send-or-start").hint).toBe(
+      "This file is at a printer. Track it above and verify it in Checkoff.",
+    );
+  });
+
+  it("leaves Send unfinished when nothing in the package was sent", () => {
+    const tasks = productionTasks(
+      platesInput({
+        selectedCount: 2,
+        pkg: pkg({
+          unitTokens: [TOKEN_A, TOKEN_B],
+          exportArtifact: {
+            jobId: "job-90",
+            plateRevisionNumber: 3,
+            plateCount: 2,
+            bundleUrl: "/exports/a.zip",
+          },
+          slicedFile: { name: "batch.gcode" },
+        }),
+        dispatchedUnitTokens: [],
+      }),
+    );
+    expect(byId(tasks, "send-or-start").state).toBe("not_started");
+  });
+
+  it("does not treat an empty package as sent", () => {
+    const tasks = productionTasks(
+      platesInput({
+        selectedCount: 0,
+        pkg: pkg({
+          unitTokens: [],
+          exportArtifact: {
+            jobId: "job-90",
+            plateRevisionNumber: 3,
+            plateCount: 1,
+            bundleUrl: "/exports/a.zip",
+          },
+          slicedFile: { name: "batch.gcode" },
+        }),
+        dispatchedUnitTokens: [TOKEN_A],
+      }),
+    );
+    expect(byId(tasks, "send-or-start").state).toBe("not_started");
+  });
+
+  it("keeps a 20000-unit package incomplete until every selected token was sent", () => {
+    const tokens = Array.from({ length: 20_000 }, (_, index) => (
+      `ppu_${index.toString(16).padStart(32, "0")}` as RequiredUnitToken
+    ));
+    const readyToSend = {
+      unitTokens: tokens,
+      exportArtifact: {
+        jobId: "job-90",
+        plateRevisionNumber: 3,
+        plateCount: 1,
+        bundleUrl: "/exports/a.zip",
+      },
+      slicedFile: { name: "batch.gcode" },
+    };
+    const partial = productionTasks(
+      platesInput({
+        selectedCount: tokens.length,
+        pkg: pkg(readyToSend),
+        dispatchedUnitTokens: tokens.slice(0, 1),
+      }),
+    );
+    expect(byId(partial, "send-or-start").state).toBe("not_started");
+    const covered = productionTasks(
+      platesInput({
+        selectedCount: tokens.length,
+        pkg: pkg(readyToSend),
+        dispatchedUnitTokens: tokens,
+      }),
+    );
+    expect(byId(covered, "send-or-start").state).toBe("complete");
   });
 });
 
