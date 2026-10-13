@@ -1071,6 +1071,18 @@ class ForceKillTest(unittest.TestCase):
 
 
 class GuardReleaseTest(unittest.TestCase):
+    def test_normal_commands_reap_their_watchers(self):
+        verify = load_verify()
+        for _ in range(3):
+            process = verify.guarded_popen([sys.executable, "-c", "pass"])
+            watcher = process.guard[2]
+            self.assertEqual(process.wait(timeout=5), 0)
+            verify.release_guard(process.guard)
+            self.assertEqual(watcher.returncode, 0)
+            with self.assertRaises(ChildProcessError):
+                os.waitpid(watcher.pid, os.WNOHANG)
+
+
     def _session_leader(self):
         # The subject is this interpreter, stopped only by the guard under test.
         leader = subprocess.Popen(

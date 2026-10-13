@@ -402,11 +402,11 @@ async fn wrong_release_is_rejected_before_storage_or_child() {
     let mut wrong = launch(data.clone());
     wrong.bundle.runtime_version = "0.0.0-web".into();
     let error = CoreRuntime::start(wrong).await.err().unwrap();
-    assert!(error.to_string().contains("Requested release differs"));
+    assert!(format!("{error:#}").contains("Requested release differs"));
     let mut wrong = launch(data.clone());
     wrong.bundle.commit = "0".repeat(40);
     let error = CoreRuntime::start(wrong).await.err().unwrap();
-    assert!(error.to_string().contains("Requested release differs"));
+    assert!(format!("{error:#}").contains("Requested release differs"));
     assert!(!data.join(".desktop-owner.json").exists());
     let runtime = CoreRuntime::start(launch(data)).await.unwrap();
     runtime.shutdown().await;
@@ -1085,8 +1085,8 @@ fn core_death_reaps_stopped_node_and_allows_recovery() {
             "stopped Node outlived the force-killed owner"
         );
         assert!(
-            peer_is_running(group_peer.as_mut().unwrap()),
-            "group peer was killed with the Node pid"
+            !peer_is_running(group_peer.as_mut().unwrap()),
+            "Node group member outlived its owner"
         );
         assert_eq!(std::fs::read(&marker_path).unwrap(), contents);
         let input = launch(data.clone());
@@ -1126,8 +1126,8 @@ fn core_death_reaps_stopped_node_and_allows_recovery() {
         }
         assert!(caller.block_on(runtime.shutdown()).complete());
         assert!(
-            peer_is_running(group_peer.as_mut().unwrap()),
-            "recovery killed the old group peer"
+            !peer_is_running(group_peer.as_mut().unwrap()),
+            "old Node group member survived recovery"
         );
     }));
     let _ = core.kill();

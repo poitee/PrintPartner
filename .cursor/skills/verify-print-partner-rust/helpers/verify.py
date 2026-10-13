@@ -217,6 +217,16 @@ PR_SET_PDEATHSIG = 1
 GUARD_RELEASE = b"\x00"
 GUARD_SOURCE = ("import os, signal, sys\n"
                 "fd, group = int(sys.argv[1]), int(sys.argv[2])\n"
+                "if group == 0:\n"
+                "    number = bytearray()\n"
+                "    while True:\n"
+                "        chunk = os.read(fd, 1)\n"
+                "        if not chunk:\n"
+                "            raise SystemExit(0)\n"
+                "        if chunk == b'\\n':\n"
+                "            break\n"
+                "        number.extend(chunk)\n"
+                "    group = int(number)\n"
                 "released = False\n"
                 "while True:\n"
                 "    chunk = os.read(fd, 1)\n"
@@ -248,8 +258,8 @@ def parent_death_signal(launcher):
 
 
 def guard_group(group, read_fd, done_fd):
-    # Called in the child after setsid, before exec can create descendants. The watcher
-    # inherits only the read end, so launcher death is observable even during setup.
+    # Spawned by the launcher before the command. Only the read end is inherited;
+    # the launcher can reap this watcher after normal release.
     return subprocess.Popen([sys.executable, "-I", "-c", GUARD_SOURCE, str(read_fd), str(group)],
                             pass_fds=(read_fd,), start_new_session=True,
                             stdin=subprocess.DEVNULL, stdout=done_fd, stderr=subprocess.DEVNULL)
@@ -259,47 +269,52 @@ def guarded_popen(args, **kwargs):
     read_fd, write_fd = os.pipe()
     done_fd, done_write = os.pipe()
     death_signal = parent_death_signal(os.getpid())
+    watcher = None
 
     def arm():
         if death_signal is not None:
             death_signal()
+        # Publish the new session before exec can create descendants. The
+        # already-running watcher reads this identity before watching for EOF.
+        os.write(write_fd, f"{os.getpgrp()}\n".encode())
         os.close(write_fd)
-        # Retain the watcher Popen until exec replaces this child.
-        arm.watcher = guard_group(os.getpgrp(), read_fd, done_write)
-        os.close(read_fd)
-        os.close(done_write)
 
     try:
+        watcher = guard_group(0, read_fd, done_write)
         process = subprocess.Popen(args, start_new_session=True, preexec_fn=arm,
-                                   pass_fds=(read_fd, write_fd, done_write), **kwargs)
+                                   pass_fds=(write_fd,), **kwargs)
     except BaseException:
         os.close(write_fd)
         os.close(done_fd)
+        if watcher is not None:
+            watcher.wait()
         raise
     finally:
         os.close(read_fd)
         os.close(done_write)
-    process.guard = (done_fd, write_fd)
+    process.guard = (done_fd, write_fd, watcher)
     return process
 
 
 def release_guard(guard):
-    done_fd, write_fd = guard
+    done_fd, write_fd, *watchers = guard
     try:
-        pending = GUARD_RELEASE
-        while pending:
-            try:
-                written = os.write(write_fd, pending)
-            except InterruptedError:
-                continue
-            pending = pending[written:]
-    finally:
-        os.close(write_fd)
-    try:
+        try:
+            pending = GUARD_RELEASE
+            while pending:
+                try:
+                    written = os.write(write_fd, pending)
+                except InterruptedError:
+                    continue
+                pending = pending[written:]
+        finally:
+            os.close(write_fd)
         while os.read(done_fd, 1):
             pass
     finally:
         os.close(done_fd)
+        for watcher in watchers:
+            watcher.wait()
 
 
 def run(root, *args, env=None, stdout=None, timeout=600):

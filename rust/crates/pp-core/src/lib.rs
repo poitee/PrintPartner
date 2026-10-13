@@ -171,29 +171,34 @@ async fn start_resources(
     owner.retain_on_drop();
     let mut status = supervisor.handle.status.clone();
     let mut child_readiness_started = supervisor.handle.child_readiness_started.clone();
-    let preflight = tokio::time::timeout(pp_compat::RELEASE_PREFLIGHT, async {
-        loop {
-            if *child_readiness_started.borrow() {
-                return Ok(());
-            }
-            match *status.borrow() {
-                CoreStatus::Guarded | CoreStatus::Stopped | CoreStatus::Failed => {
-                    bail!("Compatibility startup failed");
+    // Backend hashing owns its 60s cap. Reserve a separate setup window for
+    // spawning Node, recording ownership, and delivering setup after hashing.
+    let preflight = tokio::time::timeout(
+        pp_compat::RELEASE_PREFLIGHT + pp_compat::READINESS_OBSERVATION,
+        async {
+            loop {
+                if *child_readiness_started.borrow() {
+                    return Ok(());
                 }
-                CoreStatus::Starting | CoreStatus::Backoff { .. } | CoreStatus::Stopping => {}
-                CoreStatus::Ready { .. } => return Ok(()),
-            }
-            tokio::select! {
-                biased;
-                changed = child_readiness_started.changed() => {
-                    changed.context("Compatibility supervisor unavailable")?;
+                match *status.borrow() {
+                    CoreStatus::Guarded | CoreStatus::Stopped | CoreStatus::Failed => {
+                        bail!("Compatibility startup failed");
+                    }
+                    CoreStatus::Starting | CoreStatus::Backoff { .. } | CoreStatus::Stopping => {}
+                    CoreStatus::Ready { .. } => return Ok(()),
                 }
-                changed = status.changed() => {
-                    changed.context("Compatibility supervisor unavailable")?;
+                tokio::select! {
+                    biased;
+                    changed = child_readiness_started.changed() => {
+                        changed.context("Compatibility supervisor unavailable")?;
+                    }
+                    changed = status.changed() => {
+                        changed.context("Compatibility supervisor unavailable")?;
+                    }
                 }
             }
-        }
-    })
+        },
+    )
     .await;
     if !matches!(preflight, Ok(Ok(()))) {
         if supervisor.shutdown().await.is_ok() {
@@ -203,7 +208,7 @@ async fn start_resources(
         }
         return match preflight {
             Ok(Err(error)) => Err(error),
-            _ => bail!("Release verification did not finish before its budget"),
+            _ => bail!("Compatibility child setup did not finish before its budget"),
         };
     }
     let ready = tokio::time::timeout(pp_compat::READINESS_OBSERVATION, async {
