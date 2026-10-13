@@ -135,6 +135,49 @@ describe("printer upload interrupted by shutdown", () => {
     expect(getPrinterSendQueueItem(f.repo, item.id)?.state).toBe("done");
   });
 
+  it("does not record the original upload as success when a retry takes the queue row", async () => {
+    const f = await fixture();
+    const item = f.enqueue("retried-early", true);
+    let finishOriginal: (result: { ok: true; started: true; remote_path: string }) => void = () => {
+      throw new Error("Original upload gate was not created");
+    };
+    let finishRetry: (result: { ok: true; started: true; remote_path: string }) => void = () => {
+      throw new Error("Retry upload gate was not created");
+    };
+    f.upload
+      .mockReturnValueOnce(new Promise((resolve) => {
+        finishOriginal = resolve;
+      }))
+      .mockReturnValueOnce(new Promise((resolve) => {
+        finishRetry = resolve;
+      }));
+
+    const first = await dispatchPrinterSendQueueItem(f.repo, f.exportsDir, item.id, f.dispatchDeps);
+    if ("error" in first) throw new Error(first.error);
+    await vi.waitFor(() => expect(f.upload).toHaveBeenCalledOnce());
+
+    expect(interruptInFlightPrinterSends(f.repo).map((row) => row.id)).toEqual([item.id]);
+    const retried = await dispatchPrinterSendQueueItem(f.repo, f.exportsDir, item.id, f.dispatchDeps);
+    if ("error" in retried) throw new Error(retried.error);
+    await vi.waitFor(() => expect(f.upload).toHaveBeenCalledTimes(2));
+
+    finishOriginal({ ok: true, started: true, remote_path: "plate.gcode" });
+    const original = await f.jobs.waitForTerminal(first.job_id, 3000, "default");
+    expect(original.status).toBe("error");
+    expect(original.error).toBe(INTERRUPTED_PRINTER_SEND_ERROR);
+    expect(existsSync(item.artifact_path)).toBe(true);
+    expect(readFileSync(item.artifact_path, "utf8")).toBe(f.artifact);
+    expect(getPrinterSendQueueItem(f.repo, item.id)).toMatchObject({
+      state: "sending",
+      upload_job_id: retried.job_id,
+    });
+
+    finishRetry({ ok: true, started: true, remote_path: "plate.gcode" });
+    expect((await f.jobs.waitForTerminal(retried.job_id, 3000, "default")).status).toBe("done");
+    expect(f.upload).toHaveBeenCalledTimes(2);
+    expect(getPrinterSendQueueItem(f.repo, item.id)?.state).toBe("done");
+  });
+
   it("does not record a direct printer upload as success when shutdown interrupts it", async () => {
     const f = await fixture();
     const artifactDir = join(f.exportsDir, "printer-uploads", "direct");

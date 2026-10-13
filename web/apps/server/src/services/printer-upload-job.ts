@@ -86,7 +86,7 @@ export async function runPrinterUploadJob(
     if (printerUploadsAreHalted()) {
       throw new Error(INTERRUPTED_PRINTER_SEND_ERROR);
     }
-    const result = await runPrinterUploadJobInner(repo, input, emit);
+    const result = await runPrinterUploadJobInner(repo, input, emit, ownedAtStart);
     succeeded = true;
     return result;
   } finally {
@@ -100,6 +100,7 @@ async function runPrinterUploadJobInner(
   repo: AppRepository,
   input: PrinterUploadJobInput,
   emit: PrinterUploadJobEmit,
+  ownedAtStart: ReturnType<typeof queueSendRow>,
 ): Promise<Record<string, unknown>> {
   const fleet = loadFleet(repo);
   const machine = fleet.find((m) => m.id === input.printer_id);
@@ -163,7 +164,13 @@ async function runPrinterUploadJobInner(
     throw new Error(INTERRUPTED_PRINTER_SEND_ERROR);
   }
   const ownedAfterUpload = queueSendRow(repo, input);
-  if (ownedAfterUpload && ownedAfterUpload.state !== "sending") {
+  const lostOwnedSend = ownedAtStart?.state === "sending"
+    && (
+      !ownedAfterUpload
+      || ownedAfterUpload.id !== ownedAtStart.id
+      || ownedAfterUpload.state !== "sending"
+    );
+  if (lostOwnedSend || (ownedAfterUpload && ownedAfterUpload.state !== "sending")) {
     throw new Error(INTERRUPTED_PRINTER_SEND_ERROR);
   }
 
