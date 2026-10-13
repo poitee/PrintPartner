@@ -4141,14 +4141,7 @@ export async function applyAssistantAction(
         break;
       }
       case "start_sync": {
-        try {
-          requireSourceSyncParticipant("mcp.start_sync");
-        } catch (error) {
-          if (error instanceof OwnershipAdmissionError) {
-            return { ok: false, detail: error.message };
-          }
-          throw error;
-        }
+        requireSourceSyncParticipant("mcp.start_sync");
         const ids: number[] = [];
         if (Array.isArray(action.params.project_ids)) {
           for (const raw of action.params.project_ids) {

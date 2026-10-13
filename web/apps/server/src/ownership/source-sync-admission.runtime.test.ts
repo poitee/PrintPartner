@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, relative, sep } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import AdmZip from "adm-zip";
+import * as assistantTools from "../assistant/tools.js";
 import * as localRevision from "../services/local-source-revision.js";
 import * as archiveImport from "../services/archive-import.js";
 import * as docScan from "../services/source-docs-scan.js";
@@ -30,6 +31,7 @@ vi.mock("../services/legacy-source-manifest.js", { spy: true });
 vi.mock("../services/source-docs-scan.js", { spy: true });
 vi.mock("../services/archive-import.js", { spy: true });
 vi.mock("../services/local-source-revision.js", { spy: true });
+vi.mock("../assistant/tools.js", { spy: true });
 import Database from "better-sqlite3";
 import { buildApp, createPorts, startServer } from "../app.js";
 import { loadConfig } from "../config.js";
@@ -232,6 +234,21 @@ async function localAdmissionFixture(name: string) {
   return { dir, manifest, original: readFileSync(manifest, "utf8"), started, repo, source, workspace };
 }
 
+function linkedProfileProbe(f: Awaited<ReturnType<typeof localAdmissionFixture>>) {
+  const profile = f.repo.createProfile("Linked imported rules", f.source.id);
+  const probe = new Database(join(f.dir, "print-partner.db"));
+  probe.prepare("UPDATE build_profiles SET config_modified_at = ? WHERE id = ?").run("2000-01-01T00:00:00.000Z", profile.id);
+  probe.close();
+  return { id: profile.id, modifiedAt: () => {
+    const read = new Database(join(f.dir, "print-partner.db"), { readonly: true });
+    try {
+      const value = read.prepare("SELECT config_modified_at FROM build_profiles WHERE id = ?").pluck().get(profile.id);
+      if (typeof value !== "string") throw new Error("Expected profile configuration timestamp");
+      return value;
+    } finally { read.close(); }
+  } };
+}
+
 function multipartUpload(kind: "zip" | "files") {
   const boundary = "pp-admission-upload";
   const field = kind === "zip" ? "file" : "files";
@@ -299,6 +316,7 @@ describe("Source Sync Fastify admission", () => {
   it.each([["", "zip"], ["/api/v1", "zip"], ["", "files"], ["/api/v1", "files"]] as const)(
     "admits %s local upload-%s and refuses publication after manifest replacement", async (prefix, kind) => {
       const f = await localAdmissionFixture("upload-admission");
+      const profile = linkedProfileProbe(f);
       const url = `${prefix}/sources/${f.source.id}/upload-${kind}`;
       const before = f.repo.getProjectRow(f.source.id);
       writeFileSync(f.manifest, `${f.original}\n`);
@@ -312,12 +330,14 @@ describe("Source Sync Fastify admission", () => {
       const admitted = await f.started.app.inject({ method: "POST", url, ...multipartUpload(kind) });
       expect(admitted.statusCode, admitted.body).toBe(200);
       expect(f.repo.listSourceRevisions(f.source.id)).toHaveLength(1);
+      expect(profile.modifiedAt()).not.toBe("2000-01-01T00:00:00.000Z");
       expect(f.repo.getSource(f.source.id)?.current_source_revision_id).toEqual(expect.any(Number));
     },
   );
 
   it("admits assistant file import and rejects it after manifest replacement", async () => {
     const f = await localAdmissionFixture("assistant-import-admission");
+    const profile = linkedProfileProbe(f);
     const action = {
       id: "local-import", type: "propose_import_source_files", plan_id: 0, label: "Import", summary: "Import local files",
       params: { source_id: f.source.id, files: [{ path: "cube.stl", content_base64: Buffer.from("solid cube\nendsolid cube\n").toString("base64") }] },
@@ -333,6 +353,53 @@ describe("Source Sync Fastify admission", () => {
     expect(admitted.statusCode, admitted.body).toBe(200);
     expect(admitted.json()).toMatchObject({ ok: true });
     expect(f.repo.listSourceRevisions(f.source.id)).toHaveLength(1);
+    expect(profile.modifiedAt()).not.toBe("2000-01-01T00:00:00.000Z");
+  });
+
+  it.each(["", "/api/v1"])("preserves 503 after %s assistant start_sync passes the route guard", async (prefix) => {
+    const f = await localAdmissionFixture("assistant-sync-outage");
+    const actual = await vi.importActual<typeof assistantTools>("../assistant/tools.js");
+    vi.spyOn(assistantTools, "applyAssistantAction").mockImplementationOnce(async (...args) => {
+      await Promise.resolve();
+      writeFileSync(f.manifest, `${f.original}\n`);
+      return actual.applyAssistantAction(...args);
+    });
+    const response = await f.started.app.inject({
+      method: "POST", url: `${prefix}/assistant/actions/apply`, headers: { authorization: "Bearer test-mcp-key" },
+      payload: { action: { id: "sync", type: "start_sync", plan_id: 0, label: "Sync", summary: "Sync", params: { project_ids: [f.source.id] } } },
+    });
+    expect(response.statusCode, response.body).toBe(503);
+    expect(response.body).toMatch(/runtime manifest does not match/);
+    const jobs = f.started.ports.jobs;
+    if (!(jobs instanceof InProcessJobRunner)) throw new Error("Expected local runner");
+    expect(jobs.listJobs({}, "default")).toEqual([]);
+  });
+
+  it("rejects missing or conflicting profile-table claims before admission", () => {
+    const ids = SOURCE_SYNC_PARTICIPANTS.filter((id) => id.endsWith("/upload-zip") || id.endsWith("/upload-files") || id === "assistant.propose_import_source_files");
+    expect(ids).toHaveLength(5);
+    for (const [index, id] of ids.entries()) {
+      const dir = scratch(`profile-claim-${index}`);
+      const dataDir = join(dir, "data");
+      const manifest = writeManifest(dir, "missing.json", (value) => {
+        const participants = value.participants as Array<{ id: string; resources: string[] }>;
+        const participant = participants.find((item) => item.id === id);
+        if (!participant) throw new Error("Missing import participant");
+        participant.resources = participant.resources.filter((resource) => resource !== "table:build_profiles");
+      });
+      installManifest(manifest, dataDir);
+      expect(() => beginSourceSyncAdmission(dataDir)).toThrow(/resource set mismatch/);
+      expect(existsSync(dataDir)).toBe(false);
+    }
+    const dir = scratch("conflicting-profile-claim");
+    const dataDir = join(dir, "data");
+    const manifest = writeManifest(dir, "conflict.json", (value) => {
+      const participants = value.participants as unknown[];
+      participants.push({ id: "job.other-profile-owner", kind: "job", owner: "rust", resources: ["table:build_profiles"] });
+    });
+    installManifest(manifest, dataDir);
+    expect(() => beginSourceSyncAdmission(dataDir)).toThrow(/conflicting resource authority for table:build_profiles/);
+    expect(existsSync(dataDir)).toBe(false);
   });
 
   it.each([

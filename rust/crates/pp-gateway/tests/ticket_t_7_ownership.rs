@@ -236,6 +236,46 @@ fn ticket_t_7_ownership_single_rust_participant_conflicts() {
 }
 
 #[test]
+fn ticket_t_7_ownership_import_profile_claims_are_required() {
+    let dir = scratch("ticket_t_7_ownership_profile_claims");
+    plant_tree(&dir);
+    let before = fingerprint_tree(&dir).unwrap();
+    for id in SOURCE_SYNC_PARTICIPANTS.iter().filter(|id| {
+        id.ends_with("/upload-zip")
+            || id.ends_with("/upload-files")
+            || **id == "assistant.propose_import_source_files"
+    }) {
+        let mut value = bundled_value();
+        let participant = value["participants"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|item| item["id"] == *id)
+            .unwrap();
+        participant["resources"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|resource| resource != "table:build_profiles");
+        let error = boot_source_sync(&dir, &serde_json::to_string(&value).unwrap()).unwrap_err();
+        assert!(
+            matches!(error, AdmissionError::ResourceSetMismatch { .. }),
+            "{id}: {error}"
+        );
+        assert_eq!(fingerprint_tree(&dir).unwrap(), before);
+    }
+    let mut value = bundled_value();
+    value["participants"].as_array_mut().unwrap().push(serde_json::json!({
+        "id": "job.other-profile-owner", "kind": "job", "owner": "rust", "resources": ["table:build_profiles"]
+    }));
+    let error = boot_source_sync(&dir, &serde_json::to_string(&value).unwrap()).unwrap_err();
+    assert!(
+        matches!(error, AdmissionError::ConflictingResource { ref resource } if resource == "table:build_profiles"),
+        "{error}"
+    );
+    assert_eq!(fingerprint_tree(&dir).unwrap(), before);
+}
+
+#[test]
 fn ticket_t_7_ownership_resource_mismatch_preserves_tree() {
     let dir = scratch("ticket_t_7_ownership_resources");
     plant_tree(&dir);

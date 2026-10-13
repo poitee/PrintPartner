@@ -6,11 +6,12 @@ import { fileURLToPath } from "node:url";
 /** Node remains the Source Sync owner. Rust is rejected, not routed back here. */
 export const SOURCE_SYNC_OPERATION = "source.sync";
 const SYNC_RESOURCES = ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"] as const;
+const UPLOAD_RESOURCES = [...SYNC_RESOURCES, "table:build_profiles"] as const;
 const UPDATE_RESOURCES = ["table:projects", "table:app_settings", "table:app_events"] as const;
 const DOC_RESOURCES = ["table:source_docs", "file:source-workspace"] as const;
 const INDEX_RESOURCES = ["table:source_docs"] as const;
 const COVER_RESOURCES = ["file:source-covers"] as const;
-const LOCAL_RESOURCES = ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace"] as const;
+const LOCAL_RESOURCES = ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "table:build_profiles"] as const;
 const CREATE_RESOURCES = ["table:projects", "table:source_revisions"] as const;
 const MIGRATION_RESOURCES = ["table:projects", "table:source_revisions", "file:source-workspace"] as const;
 const WORKER_RESOURCES = ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers", "table:app_settings", "table:app_events"] as const;
@@ -29,10 +30,10 @@ const SOURCE_SYNC_PARTICIPANT_SPECS = {
   "http.PUT /api/v1/sources/:id/repo-manifest": { kind: "http_alias", resources: MIGRATION_RESOURCES },
   "http.POST /assistant/actions/apply": { kind: "http", resources: SYNC_RESOURCES },
   "http.POST /api/v1/assistant/actions/apply": { kind: "http_alias", resources: SYNC_RESOURCES },
-  "http.POST /sources/:id/upload-zip": { kind: "http", resources: SYNC_RESOURCES },
-  "http.POST /api/v1/sources/:id/upload-zip": { kind: "http_alias", resources: SYNC_RESOURCES },
-  "http.POST /sources/:id/upload-files": { kind: "http", resources: SYNC_RESOURCES },
-  "http.POST /api/v1/sources/:id/upload-files": { kind: "http_alias", resources: SYNC_RESOURCES },
+  "http.POST /sources/:id/upload-zip": { kind: "http", resources: UPLOAD_RESOURCES },
+  "http.POST /api/v1/sources/:id/upload-zip": { kind: "http_alias", resources: UPLOAD_RESOURCES },
+  "http.POST /sources/:id/upload-files": { kind: "http", resources: UPLOAD_RESOURCES },
+  "http.POST /api/v1/sources/:id/upload-files": { kind: "http_alias", resources: UPLOAD_RESOURCES },
   "http.GET /sources/:id/docs": { kind: "http", resources: INDEX_RESOURCES },
   "http.GET /api/v1/sources/:id/docs": { kind: "http_alias", resources: INDEX_RESOURCES },
   "http.GET /sources/:id/docs/*": { kind: "http", resources: DOC_RESOURCES },

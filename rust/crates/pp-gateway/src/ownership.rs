@@ -415,6 +415,16 @@ fn validate_kind(kind: &str) -> Result<(), AdmissionError> {
 }
 
 fn expected_resources(id: &str) -> &'static [&'static str] {
+    if id.ends_with("/upload-zip") || id.ends_with("/upload-files") {
+        return &[
+            "table:projects",
+            "table:source_revisions",
+            "table:source_docs",
+            "file:source-workspace",
+            "file:source-covers",
+            "table:build_profiles",
+        ];
+    }
     if id.ends_with("/cover") {
         return &["file:source-covers"];
     }
@@ -430,6 +440,7 @@ fn expected_resources(id: &str) -> &'static [&'static str] {
             "table:source_revisions",
             "table:source_docs",
             "file:source-workspace",
+            "table:build_profiles",
         ];
     }
     if id == "worker.startSourceWatcher" {

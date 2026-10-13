@@ -94,25 +94,25 @@
       "id": "http.POST /sources/:id/upload-zip",
       "kind": "http",
       "owner": "node",
-      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"]
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers", "table:build_profiles"]
     },
     {
       "id": "http.POST /api/v1/sources/:id/upload-zip",
       "kind": "http_alias",
       "owner": "node",
-      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"]
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers", "table:build_profiles"]
     },
     {
       "id": "http.POST /sources/:id/upload-files",
       "kind": "http",
       "owner": "node",
-      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"]
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers", "table:build_profiles"]
     },
     {
       "id": "http.POST /api/v1/sources/:id/upload-files",
       "kind": "http_alias",
       "owner": "node",
-      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"]
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers", "table:build_profiles"]
     },
     {
       "id": "http.GET /sources/:id/docs",
@@ -154,7 +154,7 @@
       "id": "assistant.propose_import_source_files",
       "kind": "assistant_action",
       "owner": "node",
-      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace"]
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "table:build_profiles"]
     },
     {
       "id": "mcp.start_sync",
