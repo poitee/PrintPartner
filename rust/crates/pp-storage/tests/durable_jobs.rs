@@ -4,7 +4,7 @@ use pp_storage::{
     auth::{self, AuthPolicy, FirstUserTenant, RegistrationPolicy, Secret, SessionTenantPolicy},
     jobs::*,
 };
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, ErrorCode, OpenFlags};
 use std::{
     path::PathBuf,
     sync::{Arc, Barrier, atomic::AtomicBool},
@@ -4774,5 +4774,157 @@ fn empty_scoped_sync_does_not_reserve_any_source() {
     let (_, lease) = worker.claim().unwrap().unwrap();
     assert!(source_lease(&worker, &lease, Some(id)).is_err());
     assert!(source_lease(&worker, &lease, None).is_err());
+    owner.shutdown().unwrap();
+}
+
+fn disk_full(error: &anyhow::Error) -> bool {
+    matches!(
+        error.downcast_ref::<rusqlite::Error>(),
+        Some(rusqlite::Error::SqliteFailure(code, _)) if code.code == ErrorCode::DiskFull
+    )
+}
+
+#[test]
+fn ticket_t_28_claims_writer_disk_quota_keeps_the_active_attempt() {
+    let (_path, owner) = fixture();
+    let worker = owner
+        .job_worker(WorkerAdmission {
+            kinds: vec![(JobKind::CheckSourceUpdates, 1), (JobKind::Sync, 1)],
+            total: 4,
+            per_resource: 4,
+            lease_seconds: 60,
+        })
+        .unwrap();
+    let held = enqueue(&owner, "held", Payload::CheckSourceUpdates {});
+    let (claimed, _lease) = worker.claim().unwrap().unwrap();
+    assert_eq!(claimed.job_id, held.job_id);
+    assert_eq!(claimed.attempt, 1);
+    assert_eq!(claimed.state, PersistentState::Running);
+    let victim = enqueue(&owner, "victim", Payload::Sync { project_ids: None });
+    assert_eq!(victim.attempt, 0);
+    assert_eq!(victim.state, PersistentState::Queued);
+
+    let refused = owner
+        .admit_disk_quota(1)
+        .expect_err("quota below the database size");
+    assert!(refused.to_string().contains("below"), "{refused:#}");
+    // SQLite clamps an undersized max_page_count to the current size. A refusal
+    // must leave the previous limit in place so later writes can still grow.
+    let before = owner.database_pages().unwrap();
+    let mut grew = false;
+    for index in 0..64 {
+        enqueue(
+            &owner,
+            &format!("grow-{index}"),
+            Payload::CheckSourceUpdates {},
+        );
+        if owner.database_pages().unwrap() > before {
+            grew = true;
+            break;
+        }
+    }
+    assert!(
+        grew,
+        "refused disk quota froze the database at {before} pages"
+    );
+
+    let pages = owner.database_pages().unwrap();
+    assert!(pages > 1, "schema occupies more than one page");
+    assert_eq!(owner.admit_disk_quota(pages).unwrap(), pages);
+    // SQLite clamps max_page_count above 0xfffffffe to that maximum and
+    // returns it. A refusal must keep the quota admitted just above.
+    let oversized = owner
+        .admit_disk_quota(u32::MAX)
+        .expect_err("quota above the sqlite page limit");
+    assert!(oversized.to_string().contains("exceeds"), "{oversized:#}");
+    let mut grew_after_oversized = false;
+    for index in 0..32 {
+        match call(
+            &owner,
+            UserOperation::Enqueue {
+                key: format!("oversize-{index}"),
+                payload_version: 1,
+                payload: Payload::CheckSourceUpdates {},
+            },
+        ) {
+            Ok(_) => {
+                if owner.database_pages().unwrap() > pages {
+                    grew_after_oversized = true;
+                    break;
+                }
+            }
+            Err(error) => {
+                assert!(disk_full(&error), "{error:#}");
+                break;
+            }
+        }
+    }
+    assert!(
+        !grew_after_oversized,
+        "refused oversized quota ({oversized}) raised the page limit past {pages}"
+    );
+
+    let mut failed_key = None;
+    for index in 0..256 {
+        let key = format!("fill-{index}");
+        match call(
+            &owner,
+            UserOperation::Enqueue {
+                key: key.clone(),
+                payload_version: 1,
+                payload: Payload::CheckSourceUpdates {},
+            },
+        ) {
+            Ok(_) => {}
+            Err(error) => {
+                assert!(disk_full(&error), "{error:#}");
+                failed_key = Some(key);
+                break;
+            }
+        }
+    }
+    let failed_key = failed_key.expect("admitted disk quota must reject a job write");
+
+    let still = get(&owner, &held.job_id);
+    assert_eq!(still.attempt, claimed.attempt);
+    assert_eq!(still.generation, claimed.generation);
+    assert_eq!(still.state_version, claimed.state_version);
+    assert_eq!(still.state, PersistentState::Running);
+    let queued = get(&owner, &victim.job_id);
+    assert_eq!(queued.attempt, 0);
+    assert_eq!(queued.generation, 0);
+    assert_eq!(queued.state, PersistentState::Queued);
+    match call(
+        &owner,
+        UserOperation::History {
+            job_id: victim.job_id.clone(),
+            before_version: None,
+            limit: 20,
+        },
+    )
+    .unwrap()
+    {
+        Outcome::History(entries) => {
+            assert!(entries.iter().all(|entry| entry.event != "claimed"));
+        }
+        _ => panic!("history"),
+    }
+    let still = get(&owner, &held.job_id);
+    assert_eq!(still.attempt, 1);
+    assert_eq!(still.generation, claimed.generation);
+    assert_eq!(still.state, PersistentState::Running);
+
+    assert_eq!(owner.admit_disk_quota(pages + 64).unwrap(), pages + 64);
+    let (retried, _) = worker.claim().unwrap().unwrap();
+    assert_eq!(retried.job_id, victim.job_id);
+    assert_eq!(retried.attempt, 1);
+    assert_eq!(retried.state, PersistentState::Running);
+    let still = get(&owner, &held.job_id);
+    assert_eq!(still.attempt, 1);
+    assert_eq!(still.generation, claimed.generation);
+
+    let created = enqueue(&owner, &failed_key, Payload::CheckSourceUpdates {});
+    let replayed = enqueue(&owner, &failed_key, Payload::CheckSourceUpdates {});
+    assert_eq!(replayed.job_id, created.job_id);
     owner.shutdown().unwrap();
 }
