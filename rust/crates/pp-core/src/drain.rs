@@ -104,6 +104,7 @@ pub(crate) async fn reject_and_wait<G, F>(
     gate: &ShutdownGate,
     reject_gateway: impl FnOnce(),
     gateway_idle: F,
+    disarm_restarts: impl FnOnce(),
 ) -> (bool, bool)
 where
     F: FnOnce(Duration) -> G,
@@ -111,6 +112,7 @@ where
 {
     gate.reject_new();
     reject_gateway();
+    disarm_restarts();
     tokio::join!(gate.wait_idle(bound), gateway_idle(bound))
 }
 
@@ -140,6 +142,7 @@ mod tests {
                     false
                 }
             },
+            || {},
         )
         .await;
         assert!(gate.track().is_err());
@@ -148,5 +151,32 @@ mod tests {
         assert!(!gateway_idle);
         drop(work);
         assert!(gate.wait_idle(Duration::from_millis(20)).await);
+    }
+
+    #[tokio::test]
+    async fn ticket_t_3_drain_disarms_restarts_before_the_shared_wait() {
+        let gate = ShutdownGate::new();
+        let disarmed = AtomicBool::new(false);
+        let bound = Duration::from_millis(20);
+        let (tracked_idle, _gateway_idle) = reject_and_wait(
+            bound,
+            &gate,
+            || {},
+            |bound| {
+                let disarmed_when_wait_built = disarmed.load(Ordering::SeqCst);
+                async move {
+                    assert!(
+                        disarmed_when_wait_built,
+                        "restarts were still allowed when the shared wait was built"
+                    );
+                    tokio::time::sleep(bound).await;
+                    true
+                }
+            },
+            || disarmed.store(true, Ordering::SeqCst),
+        )
+        .await;
+        assert!(tracked_idle);
+        assert!(disarmed.load(Ordering::SeqCst));
     }
 }

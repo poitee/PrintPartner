@@ -340,6 +340,7 @@ async fn stop_resources(resources: Resources) -> ShutdownReceipt {
         &resources.gate,
         || resources.gateway.begin_drain(),
         |bound| resources.gateway.wait_idle(bound),
+        || resources.supervisor.disarm_restarts(),
     )
     .await;
     resources.gateway.finish_drain();

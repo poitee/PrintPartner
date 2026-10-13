@@ -17,7 +17,10 @@ use std::{
     os::unix::process::ExitStatusExt,
     path::PathBuf,
     process::{ExitStatus, Stdio},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
@@ -170,7 +173,7 @@ impl Endpoint {
         Ok(response.map(Body::new))
     }
 
-    async fn ready(&self, bundle: &Bundle) -> bool {
+    async fn ready(&self, bundle: &Bundle, cancelled: &CancellationToken) -> bool {
         let probe = async {
             let response = self
                 .forward(Request::builder().uri("/health").body(Body::empty())?)
@@ -192,10 +195,13 @@ impl Endpoint {
             }
             Ok::<(), anyhow::Error>(())
         };
-        matches!(
-            tokio::time::timeout(Duration::from_secs(2), probe).await,
-            Ok(Ok(()))
-        )
+        tokio::select! {
+            biased;
+            _ = cancelled.cancelled() => false,
+            result = tokio::time::timeout(Duration::from_secs(2), probe) => {
+                matches!(result, Ok(Ok(())))
+            }
+        }
     }
 }
 
@@ -221,7 +227,12 @@ impl CompatHandle {
 pub struct Supervisor {
     pub handle: CompatHandle,
     stop: CancellationToken,
+    restarts_disarmed: Arc<AtomicBool>,
     task: Option<JoinHandle<Result<()>>>,
+}
+
+fn restarts_blocked(cancelled: &CancellationToken, disarmed: &AtomicBool) -> bool {
+    !drain::restarts_allowed(cancelled.is_cancelled() || disarmed.load(Ordering::Acquire))
 }
 
 struct Process {
@@ -554,11 +565,13 @@ impl Supervisor {
         let (recover, mut recovery) = mpsc::channel(1);
         let stop = CancellationToken::new();
         let cancelled = stop.clone();
+        let restarts_disarmed = Arc::new(AtomicBool::new(false));
+        let disarmed = Arc::clone(&restarts_disarmed);
         let task = tokio::spawn(async move {
             let mut crashes = std::collections::VecDeque::new();
             let mut attempt = 0;
             loop {
-                if cancelled.is_cancelled() {
+                if restarts_blocked(&cancelled, &disarmed) {
                     break;
                 }
                 states.send_replace(Status::Starting);
@@ -578,7 +591,7 @@ impl Supervisor {
                             observed_exit = Some(status);
                             break;
                         }
-                        if process.endpoint.ready(&spec.bundle).await {
+                        if process.endpoint.ready(&spec.bundle, &cancelled).await {
                             ready = true;
                             break;
                         }
@@ -607,7 +620,7 @@ impl Supervisor {
                                     break;
                                 },
                                 _ = tokio::time::sleep(Duration::from_secs(10)) => {
-                                    if process.endpoint.ready(&spec.bundle).await { failures = 0; } else { failures += 1; }
+                                    if process.endpoint.ready(&spec.bundle, &cancelled).await { failures = 0; } else { failures += 1; }
                                     if failures >= 3 { break; }
                                 }
                             }
@@ -637,7 +650,7 @@ impl Supervisor {
                 } else if cancelled.is_cancelled() {
                     break;
                 }
-                if !drain::restarts_allowed(cancelled.is_cancelled()) {
+                if restarts_blocked(&cancelled, &disarmed) {
                     break;
                 }
                 let now = tokio::time::Instant::now();
@@ -669,9 +682,15 @@ impl Supervisor {
                 recover,
             },
             stop,
+            restarts_disarmed,
             task: Some(task),
         })
     }
+
+    pub fn disarm_restarts(&self) {
+        self.restarts_disarmed.store(true, Ordering::Release);
+    }
+
     pub async fn shutdown(mut self) -> Result<()> {
         self.stop.cancel();
         if let Some(task) = self.task.take() {
@@ -1020,6 +1039,129 @@ mod tests {
         );
         assert!(outcome.rejected);
         assert!(outcome.group_absent);
+    }
+
+    #[test]
+    fn ticket_t_3_drain_disarmed_restarts_block_before_cancel() {
+        let cancelled = tokio_util::sync::CancellationToken::new();
+        let disarmed = AtomicBool::new(false);
+        assert!(!super::restarts_blocked(&cancelled, &disarmed));
+        disarmed.store(true, Ordering::Release);
+        assert!(super::restarts_blocked(&cancelled, &disarmed));
+        assert!(!cancelled.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn ticket_t_3_drain_ready_probe_returns_when_shutdown_cancels() {
+        let dir = std::env::temp_dir().join(format!("pp-t3-ready-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).unwrap();
+        let socket = dir.join("compat.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
+        let held = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let _ = accepted_tx.send(());
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            drop(stream);
+        });
+        let endpoint = super::Endpoint {
+            socket,
+            generation: "t3-drain".to_owned(),
+            key: [0; 32],
+            connections: Arc::new(super::Connections::new()),
+        };
+        let bundle = super::Bundle {
+            node: std::path::PathBuf::from("node"),
+            entry: std::path::PathBuf::from("entry"),
+            web_root: dir.clone(),
+            runtime_version: "0".to_owned(),
+            commit: "0".to_owned(),
+        };
+        let cancelled = tokio_util::sync::CancellationToken::new();
+        let probe_cancel = cancelled.clone();
+        let probe = tokio::spawn(async move { endpoint.ready(&bundle, &probe_cancel).await });
+        accepted_rx.await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let started = std::time::Instant::now();
+        cancelled.cancel();
+        let ready = probe.await.unwrap();
+        let elapsed = started.elapsed();
+        assert!(!ready);
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "health probe kept running after cancel: {elapsed:?}"
+        );
+        held.abort();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn ticket_t_3_drain_reaps_group_when_leader_wait_fails() {
+        let dir = std::env::temp_dir().join(format!("pp-t3-reap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).unwrap();
+        let pidfile = dir.join("grand.pid");
+        let script = format!(
+            "trap '' TERM; sh -c 'trap \"\" TERM; while true; do sleep 300; done' & echo $! > '{}'; wait",
+            pidfile.display()
+        );
+        let mut command = tokio::process::Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg(script)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0)
+            .kill_on_drop(true);
+        let mut child = command.spawn().unwrap();
+        let pid = child.id().unwrap();
+        let grand = wait_for_live_pid(&pidfile).await;
+        unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+        let collected = unsafe { libc::waitpid(pid as i32, std::ptr::null_mut(), 0) };
+        assert_eq!(collected, pid as i32);
+        let started = std::time::Instant::now();
+        let result = super::drain::drive_shutdown_group(
+            &mut child,
+            pid,
+            false,
+            Duration::from_secs(2),
+            None,
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "leader wait was expected to fail: {result:?}"
+        );
+        assert!(
+            !super::drain::process_alive(grand),
+            "grandchild survived a failed leader wait"
+        );
+        assert!(super::drain::process_group_absent(pid));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    async fn wait_for_live_pid(path: &std::path::Path) -> u32 {
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            if let Ok(text) = std::fs::read_to_string(path)
+                && let Ok(pid) = text.trim().parse::<u32>()
+                && super::drain::process_alive(pid)
+            {
+                return pid;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "grandchild was not started"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
     }
 
     #[test]

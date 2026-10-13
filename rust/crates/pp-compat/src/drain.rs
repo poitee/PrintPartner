@@ -66,6 +66,14 @@ pub fn reject_and_arm_eof(
     }
 }
 
+struct GroupKill(u32);
+
+impl Drop for GroupKill {
+    fn drop(&mut self) {
+        reap_process_group(self.0);
+    }
+}
+
 pub async fn drive_shutdown_group(
     child: &mut Child,
     pid: u32,
@@ -74,37 +82,50 @@ pub async fn drive_shutdown_group(
     already_exited: Option<ExitStatus>,
 ) -> Result<GroupStopReport> {
     let started = tokio::time::Instant::now();
-    let (exit, sigterm_sent, grace_exhausted) = if let Some(status) = already_exited {
-        (GroupExit::Observed(status), false, false)
+    // A failed leader wait must not skip the group SIGKILL. Drop covers every
+    // return, including the ones that used to leave via `?`.
+    let _kill_group_on_return = GroupKill(pid);
+    let mut failure = None;
+    let mut exit = None;
+    let mut sigterm_sent = false;
+    let mut grace_exhausted = false;
+    if let Some(status) = already_exited {
+        exit = Some(GroupExit::Observed(status));
     } else {
         reap_process_group_signal(pid, libc::SIGTERM);
+        sigterm_sent = true;
         match tokio::time::timeout(grace, child.wait()).await {
-            Ok(result) => (
-                GroupExit::Observed(result.context("Child reap failed")?),
-                true,
-                false,
-            ),
+            Ok(Ok(status)) => exit = Some(GroupExit::Observed(status)),
+            Ok(Err(error)) => {
+                failure = Some(anyhow::Error::from(error).context("Child reap failed"));
+            }
             Err(_) => {
+                grace_exhausted = true;
                 reap_process_group(pid);
                 let _ = child.start_kill();
                 match tokio::time::timeout(GROUP_REAP, child.wait()).await {
-                    Ok(result) => (
-                        GroupExit::Forced(result.context("Child reap failed")?),
-                        true,
-                        true,
-                    ),
+                    Ok(Ok(status)) => exit = Some(GroupExit::Forced(status)),
+                    Ok(Err(error)) => {
+                        failure = Some(anyhow::Error::from(error).context("Child reap failed"));
+                    }
                     Err(error) => {
-                        let _ = wait_until_group_absent(pid).await;
-                        return Err(error).context("Child reap timed out");
+                        failure = Some(anyhow::Error::from(error).context("Child reap timed out"));
                     }
                 }
             }
         }
-    };
+    }
     reap_process_group(pid);
     let group_absent = wait_until_group_absent(pid).await.is_ok();
+    if let Some(error) = failure {
+        return Err(if group_absent {
+            error
+        } else {
+            error.context("Process group still present")
+        });
+    }
     Ok(GroupStopReport {
-        exit,
+        exit: exit.context("Compatibility child outcome unavailable")?,
         eof_closed,
         sigterm_sent,
         grace_exhausted,
