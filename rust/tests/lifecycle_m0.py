@@ -28,7 +28,9 @@ def main():
         assert select.select([runtime.stdout], [], [], 40)[0]
         origin = runtime.stdout.readline().strip()
         assert origin.startswith("http://127.0.0.1:")
-        marker = json.loads((fixture / "data/.desktop-owner.json").read_text())
+        marker_path = fixture / "data/.desktop-owner.json"
+        marker_bytes = marker_path.read_bytes()
+        marker = json.loads(marker_bytes)
         sockets = list(Path(marker["runtime_dir"]).glob("*.sock"))
         assert len(sockets) == 1
         assert sockets[0].stat().st_mode & 0o777 == 0o600
@@ -49,23 +51,26 @@ def main():
             child = subprocess.run(["/usr/bin/node", str(ROOT / "web/apps/server/dist/current" / entry)], env=env, cwd=ROOT / "web", capture_output=True, timeout=15)
             assert child.returncode != 0, entry
             assert b"already owned" in child.stderr or b"owned by the desktop runtime" in child.stderr, (entry, child.stderr[:200])
-        child_pid = int(subprocess.check_output(["ps", "--no-headers", "-o", "pid", "--ppid", str(runtime.pid)], text=True).strip())
+        child_pid = marker["child_pid"]
+        assert marker["pid"] == runtime.pid
+        assert child_pid != runtime.pid
         child_environment = Path(f"/proc/{child_pid}/environ").read_bytes().split(b"\0")
         for name in (b"NODE_OPTIONS", b"NODE_PATH", b"PP_PARENT_ONLY_SECRET"):
             assert not any(entry.startswith(name + b"=") for entry in child_environment), name
         descendant = subprocess.Popen(["sleep", "120"], process_group=child_pid)
+        parent_pid = runtime.pid
         os.kill(runtime.pid, signal.SIGKILL)
         runtime.wait(timeout=5)
         deadline = time.monotonic() + 12
         while time.monotonic() < deadline:
             status = Path(f"/proc/{child_pid}/stat")
             child_dead = not status.exists() or status.read_text().split()[2] == "Z"
-            if child_dead and descendant.poll() is not None and not (fixture / "data/.desktop-owner.json").exists():
+            if child_dead and descendant.poll() is not None:
                 break
             time.sleep(.05)
         assert child_dead, "Node survived parent death"
         assert descendant.poll() is not None, "descendant survived parent death"
-        assert not (fixture / "data/.desktop-owner.json").exists(), "ownership marker survived parent death"
+        assert marker_path.read_bytes() == marker_bytes, "crash altered the ownership marker"
         import fcntl
         with (fixture / "data/.desktop.lock").open("rb") as lock:
             while True:
@@ -80,11 +85,26 @@ def main():
         token = json.loads(credentials.read_text())["bootstrap_url"].split("token=", 1)[1].encode()
         assert token not in logs
         assert b"x-pp-principal" not in logs and b"x-pp-signature" not in logs
+        # Forced death leaves ownership evidence for the next owner to retire.
+        # Recovery must admit a new Node child and normal shutdown must clean up.
+        credentials.unlink()
+        runtime = subprocess.Popen(runtime.args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        assert select.select([runtime.stdout], [], [], 40)[0], "recovery readiness timed out"
+        recovered_origin = runtime.stdout.readline().strip()
+        assert recovered_origin == origin, "recovery changed the persisted origin"
+        recovered_marker = json.loads(marker_path.read_text())
+        assert recovered_marker["child_pid"] != child_pid
+        assert (fixture / "data/.desktop-lease/previous-marker.json").read_bytes() == marker_bytes
+        runtime.terminate()
+        _, stderr = runtime.communicate(timeout=17)
+        assert runtime.returncode == 0, stderr
+        assert not marker_path.exists(), "ownership marker survived clean recovery shutdown"
         print(json.dumps({"proof_class": "headless_unsigned", "case": "parent_death_and_private_boundary", "fixture": str(fixture),
-                          "parent_pid": runtime.pid, "child_pid": child_pid, "descendant_pid": descendant.pid,
+                          "parent_pid": parent_pid, "child_pid": child_pid, "descendant_pid": descendant.pid,
                           "direct_uds_denied": True, "forged_principal_denied": True, "standalone_writers_denied": 3,
                           "child_terminated": child_dead, "descendant_reaped": descendant.poll() is not None, "lock_reacquired": True,
-                          "bootstrap_absent_from_logs": True, "parent_environment_injection_denied": True}))
+                          "bootstrap_absent_from_logs": True, "parent_environment_injection_denied": True,
+                          "crash_marker_preserved": True, "recovery_shutdown_clean": True}))
     finally:
         if runtime.poll() is None:
             runtime.terminate()
