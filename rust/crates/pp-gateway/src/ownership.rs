@@ -24,12 +24,15 @@ pub const SOURCE_SYNC_OPERATION: &str = "source.sync";
 pub const SOURCE_SYNC_PARTICIPANTS: &[&str] = &[
     "http.POST /jobs/sync",
     "http.POST /api/v1/jobs/sync",
+    "http.POST /jobs/import-scan",
+    "http.POST /api/v1/jobs/import-scan",
     "http.POST /sources",
     "http.POST /api/v1/sources",
     "http.POST /assistant/actions/apply",
     "http.POST /api/v1/assistant/actions/apply",
     "mcp.start_sync",
     "job.sync",
+    "job.import-scan",
     "startup.startSourceWatcher",
     "worker.startSourceWatcher",
 ];
@@ -654,6 +657,9 @@ fn write_or_reuse_receipt(
             .map_err(|error| AdmissionError::Malformed(error.to_string()))?;
     }
     fs::rename(&temporary, &receipt_path)
+        .map_err(|error| AdmissionError::Malformed(error.to_string()))?;
+    fs::File::open(data_dir)
+        .and_then(|directory| directory.sync_all())
         .map_err(|error| AdmissionError::Malformed(error.to_string()))?;
     Ok(receipt)
 }

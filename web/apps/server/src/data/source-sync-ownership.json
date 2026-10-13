@@ -7,16 +7,28 @@
   },
   "participants": [
     {
+      "id": "http.POST /jobs/import-scan",
+      "kind": "http",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"]
+    },
+    {
       "id": "http.POST /jobs/sync",
       "kind": "http",
       "owner": "node",
-      "resources": ["table:projects", "table:source_revisions", "file:source-workspace"]
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"]
+    },
+    {
+      "id": "http.POST /api/v1/jobs/import-scan",
+      "kind": "http_alias",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"]
     },
     {
       "id": "http.POST /api/v1/jobs/sync",
       "kind": "http_alias",
       "owner": "node",
-      "resources": ["table:projects", "table:source_revisions", "file:source-workspace"]
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"]
     },
     {
       "id": "http.POST /sources",
@@ -34,37 +46,43 @@
       "id": "http.POST /assistant/actions/apply",
       "kind": "http",
       "owner": "node",
-      "resources": ["table:projects", "table:source_revisions", "file:source-workspace"]
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"]
     },
     {
       "id": "http.POST /api/v1/assistant/actions/apply",
       "kind": "http_alias",
       "owner": "node",
-      "resources": ["table:projects", "table:source_revisions", "file:source-workspace"]
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"]
     },
     {
       "id": "mcp.start_sync",
       "kind": "mcp_action",
       "owner": "node",
-      "resources": ["table:projects", "table:source_revisions", "file:source-workspace"]
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"]
+    },
+    {
+      "id": "job.import-scan",
+      "kind": "job",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"]
     },
     {
       "id": "job.sync",
       "kind": "job",
       "owner": "node",
-      "resources": ["table:projects", "table:source_revisions", "file:source-workspace"]
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"]
     },
     {
       "id": "startup.startSourceWatcher",
       "kind": "startup_watcher",
       "owner": "node",
-      "resources": ["table:projects", "table:source_revisions", "file:source-workspace"]
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"]
     },
     {
       "id": "worker.startSourceWatcher",
       "kind": "worker",
       "owner": "node",
-      "resources": ["table:projects", "table:source_revisions", "file:source-workspace"]
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"]
     }
   ]
 }

@@ -259,6 +259,7 @@ export class InProcessJobRunner {
       throw new Error(`Unsupported job kind: ${kind}`);
     }
     if (kind === "sync") requireSourceSyncParticipant("job.sync");
+    if (kind === "import-scan") requireSourceSyncParticipant("job.import-scan");
     this.pruneCompletedJobs();
     const jobId = crypto.randomUUID();
     const snap: JobSnapshot = {
@@ -393,6 +394,7 @@ export class InProcessJobRunner {
             requireSourceSyncParticipant("job.sync");
             result = await this.runSync(jobId, payload);
           } else if (kind === "import-scan") {
+            requireSourceSyncParticipant("job.import-scan");
             const projectId = Number(payload.project_id);
             result = await syncProjectById(this.repo, this.deps.reposDir, projectId, undefined, {
               maxDocsBytes: this.deps.sourceDocsMaxBytes,

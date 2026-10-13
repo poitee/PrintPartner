@@ -126,10 +126,10 @@ function fingerprint(dir: string): string {
   return hash.digest("hex");
 }
 
-async function waitJob(app: AppHandle["app"], jobId: string): Promise<{ status?: string; result?: { synced?: number } }> {
+async function waitJob(app: AppHandle["app"], jobId: string): Promise<{ status?: string; error?: string; result?: { synced?: number } }> {
   for (let attempt = 0; attempt < 50; attempt += 1) {
     const response = await app.inject({ method: "GET", url: `/jobs/${jobId}` });
-    const job = response.json() as { status?: string; result?: { synced?: number } };
+    const job = response.json() as { status?: string; error?: string; result?: { synced?: number } };
     if (job.status === "done" || job.status === "error" || job.status === "cancelled") return job;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
@@ -356,6 +356,17 @@ describe("Source Sync Fastify admission", () => {
     });
     expect(alias.statusCode).toBe(200);
     const aliasJob = (alias.json() as { job_id: string }).job_id;
+    const importJobs: string[] = [];
+    for (const url of ["/jobs/import-scan", "/api/v1/jobs/import-scan"]) {
+      const imported = await started.app.inject({
+        method: "POST",
+        url,
+        headers: { authorization: "Bearer test-mcp-key" },
+        payload: { project_id: source.id },
+      });
+      expect(imported.statusCode, imported.body).toBe(200);
+      importJobs.push(imported.json().job_id);
+    }
 
     const headers = {
       "content-type": "application/json",
@@ -426,10 +437,36 @@ describe("Source Sync Fastify admission", () => {
       expect(job.status).toBe("done");
       expect(job.result?.synced).toBeGreaterThan(0);
     }
+    for (const jobId of importJobs) {
+      expect((await waitJob(started.app, jobId)).status).toBe("done");
+    }
     const listed = await started.app.inject({ method: "GET", url: `/sources/${source.id}` });
     expect(listed.statusCode).toBe(200);
     expect((listed.json() as { last_synced_at: string | null }).last_synced_at).toBeTruthy();
     expect(createHash("sha256").update(readFileSync(fixture)).digest("hex")).toBe(fixtureHash);
+
+    const beforeReplacement = fingerprint(dir);
+    const originalManifest = readFileSync(manifest, "utf8");
+    const queuedImport = await started.ports.jobs.start("import-scan", { project_id: source.id });
+    writeFileSync(manifest, `${originalManifest}\n`);
+    for (const url of ["/jobs/sync", "/api/v1/jobs/sync", "/jobs/import-scan", "/api/v1/jobs/import-scan"]) {
+      const refused = await started.app.inject({
+        method: "POST",
+        url,
+        headers: { authorization: "Bearer test-mcp-key" },
+        payload: { project_ids: [source.id], project_id: source.id },
+      });
+      expect(refused.statusCode, refused.body).toBe(503);
+      expect(refused.body).toMatch(/runtime manifest does not match/);
+    }
+    await expect(started.ports.jobs.start("import-scan", { project_id: source.id }))
+      .rejects.toThrow(/runtime manifest does not match/);
+    expect(await waitJob(started.app, queuedImport)).toMatchObject({
+      status: "error",
+      error: expect.stringMatching(/runtime manifest does not match/),
+    });
+    writeFileSync(manifest, originalManifest);
+    expect(fingerprint(dir)).toBe(beforeReplacement);
 
     const conflicted = writeManifest(dir, "conflict.json", (value) => {
       const participants = value.participants as Array<Record<string, unknown>>;
@@ -445,6 +482,16 @@ describe("Source Sync Fastify admission", () => {
     });
     expect(refused.statusCode).toBe(400);
     expect(refused.body).toMatch(/conflicting ownership/);
+    for (const url of ["/jobs/import-scan", "/api/v1/jobs/import-scan"]) {
+      const refusedImport = await started.app.inject({
+        method: "POST",
+        url,
+        headers: { authorization: "Bearer test-mcp-key" },
+        payload: { project_id: source.id },
+      });
+      expect(refusedImport.statusCode).toBe(503);
+      expect(refusedImport.body).toMatch(/conflicting ownership/);
+    }
     const sources = (await started.app.inject({ method: "GET", url: "/sources" })).json() as {
       sources: Array<{ name: string }>;
     };
@@ -589,7 +636,6 @@ describe("Source Sync Fastify admission", () => {
     expect(statSync(manifest).isFile()).toBe(true);
     const proof = join(current, "prove-layout.mjs");
     const dataDir = join(layout, "data");
-    mkdirSync(dataDir);
     writeFileSync(
       proof,
       [

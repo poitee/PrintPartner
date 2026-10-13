@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, fsyncSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -8,12 +8,15 @@ export const SOURCE_SYNC_OPERATION = "source.sync";
 export const SOURCE_SYNC_PARTICIPANTS = [
   "http.POST /jobs/sync",
   "http.POST /api/v1/jobs/sync",
+  "http.POST /jobs/import-scan",
+  "http.POST /api/v1/jobs/import-scan",
   "http.POST /sources",
   "http.POST /api/v1/sources",
   "http.POST /assistant/actions/apply",
   "http.POST /api/v1/assistant/actions/apply",
   "mcp.start_sync",
   "job.sync",
+  "job.import-scan",
   "startup.startSourceWatcher",
   "worker.startSourceWatcher",
 ] as const;
@@ -28,6 +31,7 @@ const RECEIPT_FIELDS = new Set([
   "manifest_sha256",
 ]);
 const MAX_PROCESS_ID = 2_147_483_647;
+let admittedManifestSha256: string | undefined;
 const LIVE_FORMAT_FIELDS = new Set(["id", "rollback"]);
 const PARTICIPANT_FIELDS = new Set(["id", "kind", "owner", "resources"]);
 const KINDS = new Set(["http", "http_alias", "mcp_action", "job", "startup_watcher", "worker"]);
@@ -218,6 +222,9 @@ export function admitSourceSyncManifest(text: string): {
 
 export function requireSourceSyncParticipant(id: string): void {
   const admitted = admitSourceSyncManifest(readFileSync(defaultSourceSyncManifestPath(), "utf8"));
+  if (admittedManifestSha256 !== undefined && admitted.manifestSha256 !== admittedManifestSha256) {
+    fail("restart_manifest_changed", "runtime manifest does not match the admitted record");
+  }
   if (!admitted.participantIds.includes(id)) {
     fail("participant_set_mismatch", `participant set mismatch missing=${JSON.stringify([id])} unexpected=[]`);
   }
@@ -301,6 +308,7 @@ export function beginSourceSyncAdmission(dataDir: string): SourceSyncAdmissionRe
     if (existing.manifest_sha256 !== admitted.manifestSha256) {
       return fail("restart_manifest_changed", "restart manifest does not match the admitted record");
     }
+    admittedManifestSha256 = existing.manifest_sha256;
     return existing;
   }
   const receipt: SourceSyncAdmissionReceipt = {
@@ -313,6 +321,7 @@ export function beginSourceSyncAdmission(dataDir: string): SourceSyncAdmissionRe
   };
   const temporary = `${receiptPath}.tmp`;
   const payload = JSON.stringify(receipt, null, 2);
+  mkdirSync(dataDir, { recursive: true });
   const fd = openSync(temporary, "w");
   try {
     writeSync(fd, payload);
@@ -321,6 +330,13 @@ export function beginSourceSyncAdmission(dataDir: string): SourceSyncAdmissionRe
     closeSync(fd);
   }
   renameSync(temporary, receiptPath);
+  const directory = openSync(dataDir, "r");
+  try {
+    fsyncSync(directory);
+  } finally {
+    closeSync(directory);
+  }
+  admittedManifestSha256 = receipt.manifest_sha256;
   return receipt;
 }
 

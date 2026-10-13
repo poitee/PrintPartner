@@ -76,6 +76,15 @@ export async function registerJobRoutes(
   });
 
   app.post("/jobs/import-scan", async (request, reply) => {
+    try {
+      requireSourceSyncParticipant("http.POST /jobs/import-scan");
+      requireSourceSyncParticipant("http.POST /api/v1/jobs/import-scan");
+    } catch (error) {
+      if (error instanceof OwnershipAdmissionError) {
+        return reply.status(503).send({ detail: error.message });
+      }
+      throw error;
+    }
     if (await refuseIfHostedQuotaExceeded(reply, request.tenantId)) return;
     const body = request.body as { project_id?: number };
     const job_id = await jobs.start("import-scan", { project_id: body.project_id }, request.tenantId);

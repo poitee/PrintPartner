@@ -193,6 +193,24 @@ fn ticket_t_7_ownership_conflicting_resource_rejected() {
 }
 
 #[test]
+fn ticket_t_7_ownership_docs_and_covers_conflicts_rejected() {
+    for resource in ["table:source_docs", "file:source-covers"] {
+        let mut value = bundled_value();
+        set_participant_owner(&mut value, "job.import-scan", "rust");
+        set_participant_resources(&mut value, "job.import-scan", &[resource]);
+        let error = admit_observed(
+            &serde_json::to_string(&value).unwrap(),
+            SOURCE_SYNC_PARTICIPANTS,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, AdmissionError::ConflictingResource { .. }),
+            "{resource}: {error}"
+        );
+    }
+}
+
+#[test]
 fn ticket_t_7_ownership_incompatible_rollback_preserves_tree() {
     let mut value = bundled_value();
     value["live_format"]["rollback"] = serde_json::json!("incompatible");
