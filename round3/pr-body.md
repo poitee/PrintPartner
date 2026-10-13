@@ -18,7 +18,7 @@ Head `8f06f75a9ad2fbc433d3c3244f50b92a2b70871f`. One tests-only file, 93 added l
 
 Formatting, Clippy and diff checks pass. The integrated production-code receipts below remain 155 storage tests and nine Core marker cases; those broader tests were not rerun for this isolated test addition. This SQLite component test does not claim public WriterOwner disk-quota admission or the CommitUnknown protocol.
 
-Grok Build round 2 passed the scoped restart correction at 9/10 but rated full GRE-408 readiness 6/10. Final round 3 will score this exact head after the disk-full test and evidence corrections. All 28 job aliases remain compat-owned and no production durable job client/worker is wired. GRE-408 stays In Progress while full readiness is unresolved. New-head CI is pending.
+Grok Build round 2 passed the scoped restart correction at 9/10 but rated full GRE-408 readiness 6/10. Final Grok Build round 3 posted [9/10 for the scoped correction and 6/10 for full GRE-408 readiness](https://github.com/poitee/PrintPartner/pull/134#issuecomment-6149026938). The full issue is not ready; the three-round review limit is reached. All 28 job aliases remain compat-owned and no production durable job client/worker is wired. GRE-408 remains In Progress because mandatory route/worker cutover is absent. Final readback reports the PR mergeable with no conflicts, 13 passing checks and five pending checks, and no failing checks. No complete CI pass or merge is claimed.
 
 The precise Core setup failure wording and the append-only canonical red-log correction are reflected in the current artifact notes and decision trail. No PR merge or force push.
 
@@ -760,6 +760,7 @@ The macOS `bundle` jobs (run 38087268848) failed at `git diff --exit-code` becau
 > 
 > <sup>Reviewed by [Cursor Bugbot](https://cursor.com/bugbot) for commit 2ea4066bda32d85d907d2296a240addaa66d15a5. Bugbot is set up for automated code reviews on this repo. Configure [here](https://www.cursor.com/dashboard/bugbot).</sup>
 <!-- /CURSOR_SUMMARY -->
+
 
 
 
