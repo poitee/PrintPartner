@@ -874,6 +874,15 @@ describe("Source Sync Fastify admission", () => {
     expect(result.stdout).toContain(`Preserved concurrent ${scenario} admission`);
   });
 
+  it.each(["symlink", "fifo", "directory", "after-open"])("validates the opened receipt during %s replacement", (scenario) => {
+    const dir = scratch(`receipt-read-${scenario}`);
+    const result = spawnSync(process.execPath, [
+      "--experimental-strip-types", join(sourceDir, "fixtures/receipt-read-race.mjs"), dir, scenario,
+    ], { encoding: "utf8", timeout: 3_000 });
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain(`Validated opened receipt during ${scenario} replacement`);
+  });
+
   it("publishes a complete reusable receipt when filesystem writes are short", () => {
     const dir = scratch("short-writes");
     const proof = join(dir, "short-writes.mjs");

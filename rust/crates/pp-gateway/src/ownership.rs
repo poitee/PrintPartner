@@ -18,7 +18,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
 };
 
@@ -778,23 +778,47 @@ fn read_existing_receipt(
     receipt_path: &Path,
     admitted: &AdmittedOperation,
 ) -> Result<Option<AdmissionReceipt>, AdmissionError> {
-    match fs::symlink_metadata(receipt_path) {
-        Ok(metadata) if metadata.is_file() => {}
-        Ok(_) => {
-            return Err(AdmissionError::Malformed(
-                "admission receipt is not a regular file".into(),
-            ));
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(AdmissionError::Malformed(error.to_string())),
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(0x00200000); // FILE_FLAG_OPEN_REPARSE_POINT
     }
-    let existing = fs::read_to_string(receipt_path)
+    let file = match options.open(receipt_path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(AdmissionError::Malformed(format!(
+                "admission receipt is not a regular file or cannot be opened: {error}"
+            )));
+        }
+    };
+    read_opened_receipt(file, admitted).map(Some)
+}
+
+fn read_opened_receipt(
+    mut file: fs::File,
+    admitted: &AdmittedOperation,
+) -> Result<AdmissionReceipt, AdmissionError> {
+    let metadata = file
+        .metadata()
+        .map_err(|error| AdmissionError::Malformed(error.to_string()))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(AdmissionError::Malformed(
+            "admission receipt is not a regular file".into(),
+        ));
+    }
+    let mut existing = String::new();
+    file.read_to_string(&mut existing)
         .map_err(|error| AdmissionError::Malformed(error.to_string()))?;
     let receipt = parse_receipt(&existing, admitted)?;
     if receipt.manifest_sha256 != admitted.manifest_sha256 {
         return Err(AdmissionError::RestartManifestChanged);
     }
-    Ok(Some(receipt))
+    Ok(receipt)
 }
 
 fn publish_receipt(
@@ -868,6 +892,26 @@ fn write_or_reuse_receipt(
 #[cfg(test)]
 mod receipt_publication_tests {
     use super::*;
+
+    #[test]
+    fn reads_the_validated_descriptor_after_path_replacement()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = std::env::temp_dir().join(format!(
+            "pp-receipt-read-{}",
+            hex::encode(rand::random::<[u8; 16]>())
+        ));
+        fs::create_dir_all(&dir)?;
+        let winner = boot_source_sync(&dir, BUNDLED_SOURCE_SYNC_MANIFEST)?;
+        let admitted = admit_observed(BUNDLED_SOURCE_SYNC_MANIFEST, SOURCE_SYNC_PARTICIPANTS)?;
+        let path = dir.join(RECEIPT_FILE);
+        let file = fs::File::open(&path)?;
+        fs::rename(&path, dir.join("original.json"))?;
+        fs::write(&path, "{replacement")?;
+        assert_eq!(read_opened_receipt(file, &admitted)?, winner);
+        assert_eq!(fs::read_to_string(&path)?, "{replacement");
+        fs::remove_dir_all(&dir)?;
+        Ok(())
+    }
 
     #[test]
     fn preserves_and_validates_a_concurrent_winner() -> Result<(), Box<dyn std::error::Error>> {

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, constants, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, linkSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, fsyncSync, mkdirSync, openSync, readFileSync, linkSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -352,18 +352,27 @@ function readExistingAdmissionReceipt(
   receiptPath: string,
   admitted: ReturnType<typeof admitSourceSyncManifest>,
 ): SourceSyncAdmissionReceipt | null {
-  const receiptEntry = lstatSync(receiptPath, { throwIfNoEntry: false });
-  if (!receiptEntry) return null;
-  if (!receiptEntry.isFile()) {
-    return fail("malformed", "admission receipt is not a regular file");
+  let fd: number;
+  try {
+    fd = openSync(receiptPath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch (error) {
+    if (isRecord(error) && error.code === "ENOENT") return null;
+    return fail("malformed", "admission receipt is not a regular file or cannot be opened");
   }
-  const existing = parseSourceSyncAdmissionReceipt(
-    readFileSync(receiptPath, "utf8"), admitted.participantIds.length,
-  );
-  if (existing.manifest_sha256 !== admitted.manifestSha256) {
-    return fail("restart_manifest_changed", "restart manifest does not match the admitted record");
+  try {
+    if (!fstatSync(fd).isFile()) {
+      return fail("malformed", "admission receipt is not a regular file");
+    }
+    const existing = parseSourceSyncAdmissionReceipt(
+      readFileSync(fd, "utf8"), admitted.participantIds.length,
+    );
+    if (existing.manifest_sha256 !== admitted.manifestSha256) {
+      return fail("restart_manifest_changed", "restart manifest does not match the admitted record");
+    }
+    return existing;
+  } finally {
+    closeSync(fd);
   }
-  return existing;
 }
 
 /** Admit the bundled manifest and persist one receipt. A later boot reuses it. */

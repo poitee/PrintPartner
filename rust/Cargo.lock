@@ -3001,6 +3001,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "libc",
  "pp-compat",
  "pp-drivers",
  "pp-net",

@@ -330,7 +330,13 @@ fn ticket_t_7_ownership_planted_temporaries_do_not_overwrite_targets() {
 #[test]
 fn ticket_t_7_ownership_non_regular_receipts_are_preserved() {
     use std::os::unix::fs::{MetadataExt, symlink};
-    for kind in ["dangling-symlink", "valid-symlink", "directory", "socket"] {
+    for kind in [
+        "dangling-symlink",
+        "valid-symlink",
+        "directory",
+        "socket",
+        "fifo",
+    ] {
         let dir = if kind == "socket" {
             let dir = PathBuf::from("/tmp").join(format!(
                 "pp-receipt-{}",
@@ -350,6 +356,13 @@ fn ticket_t_7_ownership_non_regular_receipts_are_preserved() {
             "dangling-symlink" => symlink(outside.join("missing"), &receipt_path).unwrap(),
             "valid-symlink" => symlink(&target, &receipt_path).unwrap(),
             "directory" => fs::create_dir(&receipt_path).unwrap(),
+            "fifo" => assert!(
+                std::process::Command::new("mkfifo")
+                    .arg(&receipt_path)
+                    .status()
+                    .unwrap()
+                    .success()
+            ),
             _ => {}
         }
         let _socket = if kind == "socket" {
