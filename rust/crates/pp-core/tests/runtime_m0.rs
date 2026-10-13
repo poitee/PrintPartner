@@ -700,6 +700,7 @@ async fn stable_child_resets_backoff_without_erasing_rapid_crash_escalation() {
         launch(temporary("stable-backoff")),
         SupervisorConfig {
             crash_guard_window: window,
+            ..SupervisorConfig::default()
         },
     )
     .await

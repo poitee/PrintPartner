@@ -1,6 +1,7 @@
 mod acl;
 pub mod archive;
 mod directory;
+pub mod media;
 mod path_policy;
 mod unicode16;
 

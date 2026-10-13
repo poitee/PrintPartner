@@ -1596,12 +1596,7 @@ fn ticket_t_7_migrations() {
             assert_eq!(std::fs::read(backup.unwrap()).unwrap(), bytes);
         }
         let reopened_graph = read_schema_graph(&work.join("print-partner.db"));
-        let mut reopened_diff = graph_diff(&node_graph, &reopened_graph);
-        // Seed replay uses INSERT OR IGNORE. SQLite can advance sqlite_sequence.seq
-        // while the named rows stay in place. Any other row payload still fails the diff.
-        if sequence_identities(&node_graph) == sequence_identities(&reopened_graph) {
-            reopened_diff.retain(|line| line != "rows sqlite_sequence");
-        }
+        let reopened_diff = graph_diff(&node_graph, &reopened_graph);
         assert!(
             reopened_diff.is_empty(),
             "{name} reopen: {reopened_diff:#?}"
@@ -1779,6 +1774,203 @@ fn ticket_t_7_writer_reads_wal_full_and_rejects_reader_writes() {
     );
     drop(read);
     owner.shutdown().unwrap();
+}
+
+fn sqlite_sequence_rows(connection: &Connection) -> Vec<(String, i64)> {
+    let present: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'sqlite_sequence')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    if !present {
+        return Vec::new();
+    }
+    let mut statement = connection
+        .prepare("SELECT name, seq FROM sqlite_sequence ORDER BY name")
+        .unwrap();
+    statement
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .map(|row| row.unwrap())
+        .collect()
+}
+
+#[test]
+fn ticket_t_7_writer_reopen_keeps_starter_seed_sequences() {
+    let path = directory("t7-seed-sequence");
+    let clock = "2026-10-02T00:00:00.000Z";
+    let (owner, _) = WriterOwner::open_at(&path, Limits::default(), clock).unwrap();
+    let read = owner.client().reader(Duration::ZERO).unwrap();
+    let conn = read.connection.as_ref().unwrap();
+    assert_eq!(pragma_value(conn, "query_only"), 1);
+    let write_error = conn
+        .execute("DELETE FROM printer_profiles", [])
+        .unwrap_err()
+        .to_string();
+    assert!(
+        write_error.to_lowercase().contains("readonly"),
+        "{write_error}"
+    );
+    let through_pool = sqlite_sequence_rows(conn);
+    assert!(
+        through_pool
+            .iter()
+            .any(|(name, _)| name == "printer_profiles")
+            && through_pool
+                .iter()
+                .any(|(name, _)| name == "process_profiles")
+            && through_pool
+                .iter()
+                .any(|(name, _)| name == "filament_profiles"),
+        "starter seeds did not allocate sequences: {through_pool:?}"
+    );
+    drop(read);
+    owner.shutdown().unwrap();
+
+    let db = path.join("print-partner.db");
+    let raw = Connection::open(&db).unwrap();
+    assert_eq!(
+        sqlite_sequence_rows(&raw),
+        through_pool,
+        "raw connection that skips startup moved sqlite_sequence"
+    );
+    drop(raw);
+
+    let (owner, _) = WriterOwner::open_at(&path, Limits::default(), clock).unwrap();
+    owner.shutdown().unwrap();
+    let raw = Connection::open(&db).unwrap();
+    assert_eq!(
+        sqlite_sequence_rows(&raw),
+        through_pool,
+        "second WriterOwner open advanced sqlite_sequence"
+    );
+
+    let edited = raw
+        .execute(
+            "UPDATE filament_profiles SET resolved_flat_config = 'edited'
+              WHERE tenant_id = 'default' AND name = 'Generic PLA'",
+            [],
+        )
+        .unwrap();
+    assert_eq!(edited, 1);
+    let deleted = raw
+        .execute(
+            "DELETE FROM printer_profiles
+              WHERE tenant_id = 'default' AND name = 'Generic FDM Machine'",
+            [],
+        )
+        .unwrap();
+    assert_eq!(deleted, 1);
+    assert_eq!(
+        sqlite_sequence_rows(&raw),
+        through_pool,
+        "raw starter edit changed sqlite_sequence"
+    );
+    let previous_printer = through_pool
+        .iter()
+        .find(|(name, _)| name == "printer_profiles")
+        .unwrap()
+        .1;
+    drop(raw);
+
+    let (owner, _) = WriterOwner::open_at(&path, Limits::default(), clock).unwrap();
+    owner.shutdown().unwrap();
+    let raw = Connection::open(&db).unwrap();
+    let pla: String = raw
+        .query_row(
+            "SELECT resolved_flat_config FROM filament_profiles
+              WHERE tenant_id = 'default' AND name = 'Generic PLA'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(pla, "edited");
+    let restored_id: i64 = raw
+        .query_row(
+            "SELECT id FROM printer_profiles
+              WHERE tenant_id = 'default' AND name = 'Generic FDM Machine'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(restored_id, previous_printer + 1);
+    let mut expected = through_pool;
+    expected
+        .iter_mut()
+        .find(|(name, _)| name == "printer_profiles")
+        .unwrap()
+        .1 = previous_printer + 1;
+    assert_eq!(sqlite_sequence_rows(&raw), expected);
+}
+
+fn user_version(connection: &Connection) -> i64 {
+    connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap()
+}
+
+fn starter_row_counts(connection: &Connection) -> Vec<(String, i64)> {
+    ["filament_profiles", "printer_profiles", "process_profiles"]
+        .into_iter()
+        .map(|table| {
+            let count: i64 = connection
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            (table.to_owned(), count)
+        })
+        .collect()
+}
+
+#[test]
+fn ticket_t_7_writer_replays_an_existing_node_seed_only_once() {
+    let path = directory("t7-node-seed-replay");
+    let clock = "2026-10-02T00:00:00.000Z";
+    let (owner, _) = WriterOwner::open_at(&path, Limits::default(), clock).unwrap();
+    owner.shutdown().unwrap();
+    let db = path.join("print-partner.db");
+    let raw = Connection::open(&db).unwrap();
+    assert_eq!(user_version(&raw), 1);
+    // A generated schema-31 input is a Node database that already contains the
+    // starters and has not recorded this Rust replay. Clearing the latch
+    // reproduces that input.
+    raw.execute_batch("PRAGMA user_version = 0").unwrap();
+    let before = sqlite_sequence_rows(&raw);
+    let counts = starter_row_counts(&raw);
+    drop(raw);
+
+    let (owner, _) = WriterOwner::open_at(&path, Limits::default(), clock).unwrap();
+    owner.shutdown().unwrap();
+    let raw = Connection::open(&db).unwrap();
+    assert_eq!(user_version(&raw), 1);
+    let replayed = sqlite_sequence_rows(&raw);
+    for (name, count) in &counts {
+        let old = before.iter().find(|(row, _)| row == name).unwrap().1;
+        let new = replayed.iter().find(|(row, _)| row == name).unwrap().1;
+        assert_eq!(new, old + count, "{name}");
+    }
+    for (name, seq) in &before {
+        if counts.iter().any(|(starter, _)| starter == name) {
+            continue;
+        }
+        assert_eq!(
+            replayed
+                .iter()
+                .find(|(row, _)| row == name)
+                .map(|(_, value)| *value),
+            Some(*seq),
+            "{name} moved during the one Node-equivalent replay"
+        );
+    }
+    drop(raw);
+
+    let (owner, _) = WriterOwner::open_at(&path, Limits::default(), clock).unwrap();
+    owner.shutdown().unwrap();
+    let raw = Connection::open(&db).unwrap();
+    assert_eq!(sqlite_sequence_rows(&raw), replayed);
 }
 
 fn pragma_value(connection: &Connection, name: &str) -> i64 {

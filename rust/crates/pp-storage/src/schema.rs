@@ -235,14 +235,28 @@ pub(crate) fn initialize(
     if version < 34 {
         conn.execute("INSERT INTO app_settings(tenant_id,key,value) VALUES('default','schema_version','34') ON CONFLICT(tenant_id,key) DO UPDATE SET value=excluded.value",[])?;
     }
-    for group in data.seeds {
+    // Node's fixture builder connects once to create the input and again to
+    // create the expected database. The first Rust open must repeat that
+    // INSERT OR IGNORE pass, including the sequence bump for rows that
+    // already exist. user_version is unused by Node and is not part of the
+    // schema graph, so it records that this one pass already happened.
+    // Later opens only insert a missing starter. Another ignore pass would
+    // allocate rowids for rows that are already there.
+    let replayed: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    let groups = data.seeds;
+    let last = groups.len().saturating_sub(1);
+    for (index, group) in groups.into_iter().enumerate() {
         let tx = conn.transaction()?;
-        let sql = format!(
-            "INSERT OR IGNORE INTO {}({}) VALUES({})",
-            group.table,
-            group.columns.join(","),
-            vec!["?"; group.columns.len()].join(",")
-        );
+        let sql = if replayed >= STARTER_SEED_REPLAY {
+            starter_seed_insert_sql(&group.table, &group.columns)?
+        } else {
+            format!(
+                "INSERT OR IGNORE INTO {}({}) VALUES({})",
+                group.table,
+                group.columns.join(","),
+                vec!["?"; group.columns.len()].join(",")
+            )
+        };
         for row in group.rows {
             let values = row
                 .into_iter()
@@ -263,6 +277,9 @@ pub(crate) fn initialize(
                 })
                 .collect::<Result<Vec<_>>>()?;
             tx.execute(&sql, rusqlite::params_from_iter(values))?;
+        }
+        if replayed < STARTER_SEED_REPLAY && index == last {
+            tx.execute_batch(&format!("PRAGMA user_version = {STARTER_SEED_REPLAY}"))?;
         }
         tx.commit()?;
     }
@@ -352,8 +369,38 @@ fn canonical_migration<'a>(migrations: &'a [String], needle: &str) -> Result<&'a
     Ok(found)
 }
 
+const STARTER_SEED_REPLAY: i64 = 1;
+
 fn quote_sql_ident(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+fn starter_seed_insert_sql(table: &str, columns: &[String]) -> Result<String> {
+    let tenant = columns
+        .iter()
+        .position(|column| column == "tenant_id")
+        .ok_or_else(|| anyhow::anyhow!("Starter seed {table} has no tenant_id"))?;
+    let name = columns
+        .iter()
+        .position(|column| column == "name")
+        .ok_or_else(|| anyhow::anyhow!("Starter seed {table} has no name"))?;
+    let quoted_table = quote_sql_ident(table);
+    let column_list = columns
+        .iter()
+        .map(|column| quote_sql_ident(column))
+        .collect::<Vec<_>>()
+        .join(",");
+    let placeholders = (1..=columns.len())
+        .map(|index| format!("?{index}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    Ok(format!(
+        "INSERT INTO {quoted_table} ({column_list}) SELECT {placeholders} WHERE NOT EXISTS (SELECT 1 FROM {quoted_table} WHERE {} = ?{} AND {} = ?{})",
+        quote_sql_ident("tenant_id"),
+        tenant + 1,
+        quote_sql_ident("name"),
+        name + 1,
+    ))
 }
 
 fn rebuild_legacy_plan_revision_inputs(conn: &mut Connection, migrations: &[String]) -> Result<()> {

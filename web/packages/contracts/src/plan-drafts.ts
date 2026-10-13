@@ -1,6 +1,18 @@
 import { z } from "zod";
 import { boundaryRefinement } from "./wire-schema.js";
 import { acceptedPlanBasisSchema } from "./accepted-plates.js";
+import {
+  applyPlanDraftReceiptSchema as rustApplyPlanDraftReceiptSchema,
+  planDraftIdentitySchema as rustPlanDraftIdentitySchema,
+  savePlanChoicesRequestSchema as rustSavePlanChoicesRequestSchema,
+} from "./rust-wire.generated.js";
+
+/** Proven wire parsers. Handwritten schemas below remain the typify export. */
+export const rustOwnedWireParsers = {
+  parseSavePlanChoicesRequest: rustSavePlanChoicesRequestSchema,
+  parseApplyPlanDraftReceipt: rustApplyPlanDraftReceiptSchema,
+  parsePlanDraftIdentity: rustPlanDraftIdentitySchema,
+} as const;
 
 const positiveId = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 const nonnegativeVersion = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
@@ -248,7 +260,7 @@ export const savePlanChoicesRequestSchema = z.strictObject({
 export type SavePlanChoicesRequest = z.infer<typeof savePlanChoicesRequestSchema>;
 
 export function parseSavePlanChoicesRequest(value: unknown): SavePlanChoicesRequest {
-  return savePlanChoicesRequestSchema.parse(value);
+  return rustOwnedWireParsers.parseSavePlanChoicesRequest.parse(value);
 }
 
 const abandonPlanDraftRequestSchema = z.strictObject({
@@ -317,11 +329,11 @@ export function parseApplyPlanDraftRequest(value: unknown): ApplyPlanDraftReques
 }
 
 export function parseApplyPlanDraftReceipt(value: unknown): ApplyPlanDraftReceipt {
-  return applyPlanDraftReceiptSchema.parse(value);
+  return rustOwnedWireParsers.parseApplyPlanDraftReceipt.parse(value);
 }
 
 export function parsePlanDraftIdentity(value: unknown): PlanDraftIdentity {
-  return planDraftIdentitySchema.parse(value);
+  return rustOwnedWireParsers.parsePlanDraftIdentity.parse(value);
 }
 
 export function parseAbandonPlanDraftRequest(value: unknown): AbandonPlanDraftRequest {

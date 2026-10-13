@@ -7,8 +7,13 @@ import { URL, pathToFileURL, fileURLToPath } from "node:url";
 import test from "node:test";
 import { spawnSync } from "node:child_process";
 import { generate } from "./generate.mjs";
-import * as generated from "./generated.ts";
-import { parseSavePlanChoicesRequest } from "../../packages/contracts/src/plan-drafts.ts";
+import * as generated from "../../packages/contracts/src/rust-wire.generated.ts";
+import {
+  parseApplyPlanDraftReceipt,
+  parsePlanDraftIdentity,
+  parseSavePlanChoicesRequest,
+  rustOwnedWireParsers,
+} from "../../packages/contracts/src/plan-drafts.ts";
 
 const load = (path) => JSON.parse(readFileSync(new URL(path, import.meta.url), "utf8"));
 const probe = load("../../packages/contracts/test-fixtures/t9/semantics.json").cases;
@@ -35,6 +40,21 @@ for (const row of wireCases) test(`ticket_t_63_contracts_node_wire_boundary: ${r
   if (row.outcome.kind === "accepted") assert.deepEqual(parseSavePlanChoicesRequest(input), row.outcome.parsed);
   else assert.throws(() => parseSavePlanChoicesRequest(input));
 });
+const productionParsers = {
+  parseSavePlanChoicesRequest,
+  parseApplyPlanDraftReceipt,
+  parsePlanDraftIdentity,
+};
+test("ticket_t_63_contracts_production_parsers_are_rust_owned", () => {
+  assert.equal(rustOwnedWireParsers.parseSavePlanChoicesRequest, generated.savePlanChoicesRequestSchema);
+  assert.equal(rustOwnedWireParsers.parseApplyPlanDraftReceipt, generated.applyPlanDraftReceiptSchema);
+  assert.equal(rustOwnedWireParsers.parsePlanDraftIdentity, generated.planDraftIdentitySchema);
+  for (const row of zeroCases) {
+    const input = JSON.parse(row.raw_input);
+    if (row.outcome.kind === "accepted") assert.deepEqual(productionParsers[row.parser](input), row.outcome.parsed);
+    else assert.throws(() => productionParsers[row.parser](input));
+  }
+});
 function mismatchCount(module) {
   const schemas = parsers(module);
   return rows.filter((row) => {
@@ -59,8 +79,11 @@ test("ticket_t_63_contracts_generated_integral_float_safe_max_receipt", () => {
 });
 const schemas = load("./schemas.json");
 test("ticket_t_63_contracts_generated_artifact_rejects_drift", () => {
-  const actual = readFileSync(new URL("./generated.ts", import.meta.url), "utf8");
+  const actual = readFileSync(new URL("../../packages/contracts/src/rust-wire.generated.ts", import.meta.url), "utf8");
   assert.equal(actual, generate(schemas));
+  assert.doesNotMatch(actual, /isWellFormed/);
+  assert.match(actual, /z\.discriminatedUnion\("kind"/);
+  assert.match(actual, /\[\\uD800-\\uDFFF\]/u);
   const dir = mkdtempSync(join(tmpdir(), "pp-rust-contract-drift-"));
   try {
     const path = join(dir, "drift.ts");
