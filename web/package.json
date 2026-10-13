@@ -40,6 +40,9 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@print-partner/contracts": "*",
+    "drizzle-orm": "^0.45.2",
+    "typescript": "^6.0.3",
+    "@fastify/cookie": "^11.0.2",
     "concurrently": "^10.0.4",
     "eslint": "^10.10.0",
     "eslint-plugin-react-hooks": "^7.1.1",
