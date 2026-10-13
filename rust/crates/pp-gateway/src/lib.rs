@@ -50,6 +50,14 @@ struct Sessions {
     sessions: HashSet<[u8; 32]>,
 }
 
+impl Sessions {
+    fn begin_drain(&mut self) {
+        self.draining = true;
+        self.bootstrap = None;
+        self.sessions.clear();
+    }
+}
+
 #[derive(Deserialize)]
 struct Manifest {
     routes: Vec<Operation>,
@@ -259,30 +267,52 @@ impl Gateway {
         self.drain_for(MUTATION_DRAIN).await;
     }
 
-    pub async fn drain_for(&self, bound: Duration) {
+    pub fn begin_drain(&self) {
         self.state.watcher_cancelled.cancel();
-        {
-            let mut access = self.state.access.lock().expect("Session mutex poisoned");
-            access.draining = true;
-            access.bootstrap = None;
-            access.sessions.clear();
-        }
-        let _ = tokio::time::timeout(bound, async {
-            while self
-                .state
-                .access
-                .lock()
-                .expect("Session mutex poisoned")
-                .active
-                > 0
-            {
-                tokio::time::sleep(Duration::from_millis(10)).await;
+        self.state
+            .access
+            .lock()
+            .expect("Session mutex poisoned")
+            .begin_drain();
+    }
+
+    pub fn wait_idle(
+        &self,
+        bound: Duration,
+    ) -> impl std::future::Future<Output = bool> + Send + '_ {
+        async move {
+            let started = tokio::time::Instant::now();
+            loop {
+                if self.inflight() == 0 {
+                    return true;
+                }
+                let left = bound.saturating_sub(started.elapsed());
+                if left.is_zero() {
+                    return self.inflight() == 0;
+                }
+                tokio::time::sleep(left.min(Duration::from_millis(10))).await;
             }
-        })
-        .await;
+        }
+    }
+
+    pub fn finish_drain(&self) {
         self.state.watcher_cancelled.cancel();
         self.state.cancelled.cancel();
         self.state.relays.close();
+    }
+
+    pub async fn drain_for(&self, bound: Duration) {
+        self.begin_drain();
+        let _ = self.wait_idle(bound).await;
+        self.finish_drain();
+    }
+
+    fn inflight(&self) -> usize {
+        self.state
+            .access
+            .lock()
+            .expect("Session mutex poisoned")
+            .active
     }
     pub async fn stop(self) -> Result<()> {
         self.state.watcher_cancelled.cancel();
@@ -1487,6 +1517,34 @@ mod tests {
     }
 
     #[test]
+    fn ticket_t_3_drain_begin_drain_rejects_admission_while_work_is_active() {
+        use super::*;
+        let access = Arc::new(Mutex::new(Sessions {
+            draining: false,
+            active: 0,
+            bootstrap: Some((
+                [1; 32],
+                tokio::time::Instant::now() + Duration::from_secs(60),
+            )),
+            sessions: HashSet::from([digest("session")]),
+        }));
+        let held = Admission::acquire(&access, Some("session")).unwrap();
+        access.lock().unwrap().begin_drain();
+        assert!(matches!(
+            Admission::acquire(&access, Some("session")),
+            Err(StatusCode::SERVICE_UNAVAILABLE)
+        ));
+        let state = access.lock().unwrap();
+        assert!(state.draining);
+        assert!(state.bootstrap.is_none());
+        assert!(state.sessions.is_empty());
+        assert_eq!(state.active, 1);
+        drop(state);
+        drop(held);
+        assert_eq!(access.lock().unwrap().active, 0);
+    }
+
+    #[test]
     fn admission_and_drain_share_one_barrier() {
         use super::*;
         for _ in 0..16 {
@@ -1514,8 +1572,7 @@ mod tests {
             start.wait();
             let admitted_before_drain = {
                 let mut state = access.lock().unwrap();
-                state.draining = true;
-                state.sessions.clear();
+                state.begin_drain();
                 state.active
             };
             assert!(matches!(

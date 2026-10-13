@@ -118,11 +118,13 @@ async fn ticket_t_3_drain_rejects_new_work_and_does_not_resend() {
     let gate = ShutdownGate::new();
     let work = gate.track().unwrap();
     let resent = Arc::new(AtomicUsize::new(0));
-    let cancel = gate.cancellation();
+    let cancel = work.cancellation();
+    assert!(!cancel.is_cancelled());
+    let task_cancel = cancel.clone();
     let resent_task = resent.clone();
     let handle = tokio::spawn(async move {
         tokio::select! {
-            _ = cancel.cancelled() => drop(work),
+            _ = task_cancel.cancelled() => drop(work),
             _ = tokio::time::sleep(Duration::from_secs(30)) => {
                 resent_task.fetch_add(1, Ordering::SeqCst);
                 drop(work);
@@ -130,6 +132,7 @@ async fn ticket_t_3_drain_rejects_new_work_and_does_not_resend() {
         }
     });
     gate.reject_new();
+    assert!(cancel.is_cancelled());
     assert!(gate.track().is_err());
     let started = Instant::now();
     assert!(gate.wait_idle(Duration::from_secs(5)).await);

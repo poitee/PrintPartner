@@ -24,6 +24,12 @@ pub struct TrackedShutdownWork {
     gate: ShutdownGate,
 }
 
+impl TrackedShutdownWork {
+    pub fn cancellation(&self) -> CancellationToken {
+        self.gate.cancellation()
+    }
+}
+
 impl ShutdownGate {
     pub fn new() -> Self {
         Self {
@@ -90,5 +96,57 @@ impl Drop for TrackedShutdownWork {
 impl Default for ShutdownGate {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+pub(crate) async fn reject_and_wait<G, F>(
+    bound: Duration,
+    gate: &ShutdownGate,
+    reject_gateway: impl FnOnce(),
+    gateway_idle: F,
+) -> (bool, bool)
+where
+    F: FnOnce(Duration) -> G,
+    G: std::future::Future<Output = bool>,
+{
+    gate.reject_new();
+    reject_gateway();
+    tokio::join!(gate.wait_idle(bound), gateway_idle(bound))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[tokio::test]
+    async fn ticket_t_3_drain_rejects_gateway_before_tracked_idle() {
+        let gate = ShutdownGate::new();
+        let work = gate.track().unwrap();
+        let admitted = AtomicBool::new(true);
+        let bound = Duration::from_millis(40);
+        let (tracked_idle, gateway_idle) = reject_and_wait(
+            bound,
+            &gate,
+            || admitted.store(false, Ordering::SeqCst),
+            |bound| {
+                let closed_when_wait_built = !admitted.load(Ordering::SeqCst);
+                async move {
+                    assert!(
+                        closed_when_wait_built,
+                        "gateway admissions were still open when the shared wait was built"
+                    );
+                    tokio::time::sleep(bound).await;
+                    false
+                }
+            },
+        )
+        .await;
+        assert!(gate.track().is_err());
+        assert!(!admitted.load(Ordering::SeqCst));
+        assert!(!tracked_idle);
+        assert!(!gateway_idle);
+        drop(work);
+        assert!(gate.wait_idle(Duration::from_millis(20)).await);
     }
 }

@@ -335,16 +335,14 @@ impl CoreRuntime {
 }
 
 async fn stop_resources(resources: Resources) -> ShutdownReceipt {
-    let deadline = tokio::time::Instant::now() + MUTATION_DRAIN;
-    resources.gate.reject_new();
-    let _ = resources
-        .gate
-        .wait_idle(deadline.saturating_duration_since(tokio::time::Instant::now()))
-        .await;
-    resources
-        .gateway
-        .drain_for(deadline.saturating_duration_since(tokio::time::Instant::now()))
-        .await;
+    let _ = drain::reject_and_wait(
+        MUTATION_DRAIN,
+        &resources.gate,
+        || resources.gateway.begin_drain(),
+        |bound| resources.gateway.wait_idle(bound),
+    )
+    .await;
+    resources.gateway.finish_drain();
     let compat_reaped = resources.supervisor.shutdown().await.is_ok();
     let gateway_stopped = resources.gateway.stop().await.is_ok();
     let mut receipt = ShutdownReceipt {
