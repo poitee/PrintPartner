@@ -188,6 +188,29 @@ test("unreferenced database state fails parity against itself", () => {
   envelope.normalized = normalize(raw.capture, raw.data_directory);
   assert.throws(() => compare(copy, structuredClone(copy)), /Unreferenced state/);
 });
+test("no-write route with a different after state fails parity against itself", () => {
+  const corrupt = changed((capture) => {
+    const route = named(capture, "route_cases", "changed-payload-same-key");
+    assert.equal(route.before, route.after);
+    assert.notEqual(capture.initial_state, route.before);
+    route.after = capture.initial_state;
+  });
+  assert.throws(
+    () => compare(corrupt, structuredClone(corrupt)),
+    /route_cases\.changed-payload-same-key: exact-database-and-file-no-write/,
+  );
+});
+test("publication route with identical before and after states fails parity against itself", () => {
+  const corrupt = changed((capture) => {
+    const route = named(capture, "route_cases", "bound-http-final-inclusion-and-quantity");
+    assert.notEqual(route.before, route.after);
+    route.after = route.before;
+  });
+  assert.throws(
+    () => compare(corrupt, structuredClone(corrupt)),
+    /route_cases\.bound-http-final-inclusion-and-quantity: one-publication/,
+  );
+});
 test("file digest drift fails parity against itself", () => {
   const corrupt = changed((capture) => {
     const states = object(capture.states);
