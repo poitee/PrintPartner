@@ -611,7 +611,7 @@ async fn handle(
     {
         // The last valid snapshot proves an id is not Moonraker (or is an HTTPS/redirect
         // host left on Node until GRE-359), so those forward to Node without waiting.
-        let mut route = state.watchers.lock().await.route(id);
+        let mut route = state.watchers.lock().await.route(&id);
         if route_needs_snapshot(&route) {
             // Detached so a client disconnect cannot cut a reconcile short.
             // Concurrent misses share that one refresh; a recorded snapshot then
@@ -621,7 +621,7 @@ async fn handle(
                 .watcher_tasks
                 .spawn(async move { refresh_watchers(&refreshing).await })
                 .await;
-            route = state.watchers.lock().await.route(id);
+            route = state.watchers.lock().await.route(&id);
             if route_needs_snapshot(&route) {
                 // Never fall back to on-demand Node polling for a known HTTP Moonraker
                 // id, nor guess when no valid snapshot exists.
@@ -742,10 +742,13 @@ async fn handle(
     }
 }
 
-fn moonraker_status_id(path: &str) -> Option<&str> {
+fn moonraker_status_id(path: &str) -> Option<String> {
     let tail = path.strip_prefix("/api/v1/integrations/")?;
     let id = tail.strip_suffix("/status")?;
-    (!id.is_empty() && !id.contains('/')).then_some(id)
+    if id.is_empty() || id.contains('/') {
+        return None;
+    }
+    pp_net::target::decode_segment(id).ok()
 }
 fn route_needs_snapshot(route: &Route) -> bool {
     matches!(route, Route::NoSnapshot | Route::Unavailable)
@@ -1148,6 +1151,34 @@ mod snapshot_membership_tests {
         assert!(after_commit.await.unwrap());
         assert_eq!(reads.load(Ordering::SeqCst), 2);
         assert_eq!(applied.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn encoded_status_ids_use_snapshot_membership() {
+        let mut watchers = pp_drivers::moonraker::Watchers::new().unwrap();
+        for (id, segment) in [
+            ("café printer", "caf%c3%a9%20printer"),
+            ("printer ?#", "printer%20%3f%23"),
+        ] {
+            watchers
+                .replace(vec![pp_drivers::moonraker::Host {
+                    id: id.into(),
+                    base_url: "http://printer.test".into(),
+                    api_key: None,
+                    enabled: false,
+                }])
+                .await
+                .unwrap();
+            let uri = format!("/api/v1/integrations/{segment}/status")
+                .parse()
+                .unwrap();
+            let canonical = pp_net::target::CanonicalTarget::parse(&uri).unwrap();
+            let decoded = super::moonraker_status_id(&canonical.path).unwrap();
+            assert!(
+                matches!(watchers.route(&decoded), Route::Cached(_)),
+                "{segment}"
+            );
+        }
     }
 
     #[tokio::test]
