@@ -28,7 +28,7 @@ let sources = mode === "--check" ? sourceHashes() : null;
 
 const cargo = process.env.CARGO ?? "cargo";
 const schema = join(web, "scripts/rust-contracts/schemas.json");
-const output = join(web, "scripts/rust-contracts/generated.ts");
+const output = join(web, "packages/contracts/src/rust-wire.generated.ts");
 run("rust-export", cargo, ["run", "--locked", "--manifest-path", "rust/Cargo.toml", "-p", "pp-api-types", "--features", "codegen", "--bin", "export-rust-contracts", "--", mode, schema]);
 run("zod-generation", process.execPath, ["scripts/rust-contracts/generate.mjs", mode, schema, output], web);
 if (mode === "--check") {
@@ -43,7 +43,7 @@ if (mode === "--check") {
   assert.equal(original.length, 50);
   assert.deepEqual(frozen, original.map(({name, parser, raw_input, input, outcome}) => ({name, parser, ...(raw_input ? {raw_input} : {input}), outcome})), "Shared T9 supplemental corpus drift");
   run("generated-parity-controls", process.execPath, ["--conditions=development", "--import", "tsx", "--test", "scripts/rust-contracts/semantics.test.mjs", "scripts/rust-contracts/receipts.test.mjs"], web);
-  run("generated-typecheck", process.execPath, ["node_modules/typescript/bin/tsc", "--noEmit", "--strict", "--skipLibCheck", "--target", "es2023", "--lib", "es2024", "--module", "nodenext", "--moduleResolution", "nodenext", "scripts/rust-contracts/generated.ts"], web);
+  run("generated-typecheck", process.execPath, ["node_modules/typescript/bin/tsc", "--noEmit", "--strict", "--skipLibCheck", "--target", "es2023", "--lib", "es2024", "--module", "nodenext", "--moduleResolution", "nodenext", "packages/contracts/src/rust-wire.generated.ts"], web);
   run("native-independent-parity", cargo, ["test", "--locked", "--manifest-path", "rust/Cargo.toml", "-p", "pp-api-types", "--features", "codegen", "--test", "ticket_t_63_contracts", "--", "ticket_t_63_contracts"]);
   const nativeLog = readFileSync(join(receipts, "native-independent-parity.log"), "utf8");
   const counts = /test result: ok\. (\d+) passed; 0 failed/.exec(nativeLog);
