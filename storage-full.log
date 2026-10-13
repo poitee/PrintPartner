@@ -1,0 +1,158 @@
+    Blocking waiting for file lock on package cache
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.59s
+────────────
+ Nextest run ID 54f03bd8-655c-47f8-864e-c2a809db8a7f with nextest profile: default
+    Starting 151 tests across 10 binaries
+        PASS [   1.397s] (  1/151) pp-storage auth::tests::bounded_auth_workers_and_cancelled_queue_do_not_write
+        PASS [  12.591s] (  2/151) pp-storage auth::tests::ticket_t_17_transaction_cas_rejects_verified_login_after_public_reset
+        PASS [  15.934s] (  3/151) pp-storage auth::tests::verified_short_legacy_password_logs_in_without_rehashing
+        PASS [   0.013s] (  4/151) pp-storage catalog::tests::ticket_t_59_catalog_private_full_queue_retains_unreleased_work
+        PASS [   0.044s] (  5/151) pp-storage jobs::tests::job_document_exact_size_limit_saves_and_decodes
+        PASS [   0.073s] (  6/151) pp-storage jobs::tests::job_document_over_size_limit_rejects_without_any_writes
+        PASS [   0.023s] (  7/151) pp-storage storage_lease::tests::child_marker_requires_complete_info_and_a_stale_child
+        PASS [   0.018s] (  8/151) pp-storage storage_lease::tests::matching_process_identity_remains_live
+        PASS [   0.065s] (  9/151) pp-storage tests::ahead_and_old_versions_reject_before_side_effects
+        PASS [   0.940s] ( 10/151) pp-storage tests::backup_cannot_replace_the_open_database
+        PASS [   1.553s] ( 11/151) pp-storage tests::backup_includes_uncheckpointed_wal
+        PASS [   1.457s] ( 12/151) pp-storage tests::backup_rejects_managed_trees_aliases_and_existing_files
+        PASS [   1.117s] ( 13/151) pp-storage tests::backup_survives_missing_runtime_without_relaxing_destination_checks
+        PASS [   1.003s] ( 14/151) pp-storage tests::directory_lease_cleanup_failure_retains_lock_until_retry
+        PASS [   1.079s] ( 15/151) pp-storage tests::failed_cleanup_retains_marker_and_lock_until_explicit_retry
+        PASS [   1.186s] ( 16/151) pp-storage tests::queue_cancellation_reply_loss_and_shutdown_drain
+        PASS [   1.031s] ( 17/151) pp-storage tests::reader_pool_resets_pragmas_rejects_writes_and_is_bounded
+        PASS [   0.588s] ( 18/151) pp-storage tests::reopen_preserves_the_pre_upgrade_backup
+        PASS [   1.075s] ( 19/151) pp-storage tests::settings_are_atomic_and_tenant_scoped
+        PASS [   0.031s] ( 20/151) pp-storage tests::unproved_closure_cannot_be_released_by_cleanup_retry
+        PASS [   0.236s] ( 21/151) pp-storage tests::wal_only_unsupported_versions_preserve_every_input_file
+        PASS [   1.373s] ( 22/151) pp-storage::auth_operations resolved_oauth_session_preserves_authenticated_provider_after_reopen
+        PASS [   2.849s] ( 23/151) pp-storage::auth_operations session_provider_migrates_old_rows_and_rejects_unknown_values
+        PASS [  12.403s] ( 24/151) pp-storage::auth_operations ticket_t_17_credentials
+        PASS [   1.321s] ( 25/151) pp-storage::auth_operations ticket_t_17_hostile_costs_reject_before_hashing
+        PASS [   3.856s] ( 26/151) pp-storage::auth_operations ticket_t_17_identity_and_tenant_keys
+        PASS [   3.697s] ( 27/151) pp-storage::auth_operations ticket_t_17_key_collection_growth_rejects_atomically
+        PASS [   2.391s] ( 28/151) pp-storage::auth_operations ticket_t_17_key_rotation_rollback
+        PASS [   3.602s] ( 29/151) pp-storage::auth_operations ticket_t_17_missing_and_expired_sessions
+        PASS [   7.359s] ( 30/151) pp-storage::auth_operations ticket_t_17_reset_rollback_and_cancellation
+        PASS [   3.628s] ( 31/151) pp-storage::auth_operations ticket_t_17_sessions
+        PASS [  11.060s] ( 32/151) pp-storage::catalog_operations catalog_key_audit_commits_protected_deletion_outcomes_and_rolls_back_errors
+        PASS [   0.914s] ( 33/151) pp-storage::catalog_operations catalog_rename_requires_a_name_and_preserves_unique_index_enforcement
+        PASS [   1.362s] ( 34/151) pp-storage::catalog_operations ticket_t_59_catalog_build_json_and_scoped_note_references
+        PASS [   1.650s] ( 35/151) pp-storage::catalog_operations ticket_t_59_catalog_categories_naming_and_import_invalidation
+        PASS [   1.138s] ( 36/151) pp-storage::catalog_operations ticket_t_59_catalog_crud_owner_restart_and_cancelled_lost_reply
+        PASS [   1.395s] ( 37/151) pp-storage::catalog_operations ticket_t_59_catalog_deletion_retains_files_and_counts_docs
+        PASS [   1.289s] ( 38/151) pp-storage::catalog_operations ticket_t_59_catalog_immutable_and_reference_graphs
+        PASS [   1.889s] ( 39/151) pp-storage::catalog_operations ticket_t_59_catalog_legacy_names_cannot_be_renamed_out_of_history
+        PASS [   2.298s] ( 40/151) pp-storage::catalog_operations ticket_t_59_catalog_metadata_rejection_and_legacy_bytes
+        PASS [   0.013s] ( 41/151) pp-storage::catalog_operations ticket_t_59_catalog_no_payload_paths_or_forged_authority
+        PASS [   1.225s] ( 42/151) pp-storage::catalog_operations ticket_t_59_catalog_public_backpressure
+        PASS [   1.689s] ( 43/151) pp-storage::catalog_operations ticket_t_59_catalog_regex_complexity_rejection_preserves_writer_and_settings
+        PASS [   1.548s] ( 44/151) pp-storage::catalog_operations ticket_t_59_catalog_rejections_preserve_rows_and_import_transaction
+        PASS [   3.690s] ( 45/151) pp-storage::catalog_operations ticket_t_59_catalog_session_key_owner_isolation_and_revocation
+        PASS [   0.922s] ( 46/151) pp-storage::catalog_operations ticket_t_59_catalog_work_delete_ordering
+        PASS [   0.938s] ( 47/151) pp-storage::catalog_operations ticket_t_59_catalog_work_races_delete_through_shared_writer
+        PASS [   0.978s] ( 48/151) pp-storage::durable_jobs active_and_failed_parents_cannot_authorize_start
+        PASS [   1.520s] ( 49/151) pp-storage::durable_jobs admitted_unconfirmed_upload_reaches_uploaded_only
+        PASS [   3.382s] ( 50/151) pp-storage::durable_jobs archived_enqueue_replay_rejects_mismatched_identity_without_writes
+        PASS [   2.958s] ( 51/151) pp-storage::durable_jobs archived_parent_tenant_and_child_binding_corruptions_fail_without_writes
+        PASS [   1.448s] ( 52/151) pp-storage::durable_jobs archived_started_child_blocks_new_key_and_replays_original_key
+        PASS [   1.594s] ( 53/151) pp-storage::durable_jobs archived_uploaded_only_document_keeps_denied_and_confirmed_effect_facts
+        PASS [   1.102s] ( 54/151) pp-storage::durable_jobs bound_printer_start_finish_none_uses_confirmed_start_receipt
+        PASS [   1.007s] ( 55/151) pp-storage::durable_jobs confirmed_combined_receipt_cannot_be_rewritten
+        PASS [   1.243s] ( 56/151) pp-storage::durable_jobs confirmed_spoolman_rejects_changed_or_denied_outcome
+        PASS [   1.182s] ( 57/151) pp-storage::durable_jobs confirmed_spoolman_settles_to_upload_receipt_and_subject_audit
+        PASS [   1.587s] ( 58/151) pp-storage::durable_jobs denied_effect_on_running_fails_get
+        PASS [   1.091s] ( 59/151) pp-storage::durable_jobs denied_start_child_failure_allows_only_a_fresh_deliberate_key
+        PASS [   1.457s] ( 60/151) pp-storage::durable_jobs denied_start_settles_uploaded_only_and_authorizes_bound_child
+        PASS [   1.115s] ( 61/151) pp-storage::durable_jobs denying_spoolman_deduction_preserves_confirmed_print
+        PASS [   1.319s] ( 62/151) pp-storage::durable_jobs duplicate_confirmed_upload_parent_rejects_read_and_bind_but_allows_restart
+        PASS [   1.253s] ( 63/151) pp-storage::durable_jobs effect_outcome_wire_is_legacy_compatible_and_omits_false
+        PASS [   1.132s] ( 64/151) pp-storage::durable_jobs empty_scoped_sync_does_not_reserve_any_source
+        PASS [   1.280s] ( 65/151) pp-storage::durable_jobs filename_grouping_normalizes_before_hashing_and_persistence
+        PASS [   1.218s] ( 66/151) pp-storage::durable_jobs filename_grouping_rejects_padded_reserved_labels_before_admission
+        PASS [   1.382s] ( 67/151) pp-storage::durable_jobs gre_526_startup_and_load_skip_and_log_invalid_saved_rows
+        PASS [   1.551s] ( 68/151) pp-storage::durable_jobs integration_drop_and_orderly_restart_keep_source_reservations
+        PASS [   1.777s] ( 69/151) pp-storage::durable_jobs integration_individual_uncertain_reservation_survives_restart_and_matching_success
+        PASS [   2.117s] ( 70/151) pp-storage::durable_jobs integration_source_bridge_expiry_and_cancelled_admission
+        PASS [   1.173s] ( 71/151) pp-storage::durable_jobs integration_source_bridge_rejects_foreign_worker_missing_source_and_non_source_attempt
+        PASS [   1.017s] ( 72/151) pp-storage::durable_jobs integration_source_id_reservations_and_live_lease_have_distinct_lifetimes
+        PASS [   2.641s] ( 73/151) pp-storage::durable_jobs integration_wildcard_lookup_and_reservations_are_tenant_owned
+        PASS [   3.706s] ( 74/151) pp-storage::durable_jobs integration_wildcard_uncertainty_and_abandon_guard_until_matching_resolution
+        PASS [  17.719s] ( 75/151) pp-storage::durable_jobs invalid_attempts_do_not_consume_worker_capacity_but_keep_printer_reservations
+        PASS [  27.584s] ( 76/151) pp-storage::durable_jobs invalid_persisted_effect_outcomes_fail_closed
+        PASS [   1.462s] ( 77/151) pp-storage::durable_jobs legacy_scoped_sync_wildcard_column_reopens_with_payload_scope
+        PASS [   1.334s] ( 78/151) pp-storage::durable_jobs list_limit_skips_invalid_newest_rows_and_returns_a_usable_cursor
+        PASS [   1.098s] ( 79/151) pp-storage::durable_jobs live_child_binding_corruption_fails_get
+        PASS [   1.132s] ( 80/151) pp-storage::durable_jobs non_uploaded_confirmed_receipt_mismatch_fails_get
+        PASS [   1.554s] ( 81/151) pp-storage::durable_jobs persisted_effect_outcome_truth_table_accepts_exactly_three_shapes
+        PASS [   1.464s] ( 82/151) pp-storage::durable_jobs printer_finish_rejects_ancillary_result_then_accepts_primary_receipt
+        PASS [  19.842s] ( 83/151) pp-storage::durable_jobs reachable_printer_reconciliation_truth_table_has_no_stranded_shape
+        PASS [   1.223s] ( 84/151) pp-storage::durable_jobs reconciliation_does_not_infer_start_or_combined_outcomes
+        PASS [   2.553s] ( 85/151) pp-storage::durable_jobs retained_parent_rejects_embedded_job_id_mismatch_without_writes
+        PASS [   1.607s] ( 86/151) pp-storage::durable_jobs schema35_auxiliary_indexes_install_and_reopen
+        PASS [   1.251s] ( 87/151) pp-storage::durable_jobs scoped_sync_reserves_and_leases_only_listed_sources
+        PASS [   1.792s] ( 88/151) pp-storage::durable_jobs split_printer_upload_reconciles_to_uploaded_only
+        PASS [   1.168s] ( 89/151) pp-storage::durable_jobs spoolman_before_upload_settles_without_order_dependence
+        PASS [   1.175s] ( 90/151) pp-storage::durable_jobs start_child_cannot_finish_without_confirmed_start
+        PASS [   1.162s] ( 91/151) pp-storage::durable_jobs start_child_rejects_wrong_target_and_basis
+        PASS [   1.261s] ( 92/151) pp-storage::durable_jobs succeeded_and_nonprinter_parents_cannot_authorize_start
+        PASS [   1.161s] ( 93/151) pp-storage::durable_jobs ticket_t_28_claims_cancel_before_admission_running_and_effect
+        PASS [   1.259s] ( 94/151) pp-storage::durable_jobs ticket_t_28_claims_duplicate_concurrent_enqueue_and_no_handler_admission
+        PASS [   1.184s] ( 95/151) pp-storage::durable_jobs ticket_t_28_claims_duplicate_conflict_and_concurrent_claims
+        PASS [   2.141s] ( 96/151) pp-storage::durable_jobs ticket_t_28_claims_expired_lease_fences_old_worker
+        PASS [   1.136s] ( 97/151) pp-storage::durable_jobs ticket_t_28_claims_invalid_payloads_fail_before_writes
+        PASS [   1.151s] ( 98/151) pp-storage::durable_jobs ticket_t_28_claims_kind_resource_capacity_and_source_intent
+        PASS [   1.223s] ( 99/151) pp-storage::durable_jobs ticket_t_28_claims_list_filters_pagination_and_history
+        PASS [   1.048s] (100/151) pp-storage::durable_jobs ticket_t_28_claims_lost_reply_drain_and_backup_committed_job
+        PASS [   1.385s] (101/151) pp-storage::durable_jobs ticket_t_28_claims_ordinary_transaction_error_rolls_back
+        PASS [   3.520s] (102/151) pp-storage::durable_jobs ticket_t_28_claims_real_auth_tenant_policy_and_revocation
+        PASS [   3.225s] (103/151) pp-storage::durable_jobs ticket_t_28_claims_schema35_corruption_and36_preserve_input_bytes
+        PASS [   1.757s] (104/151) pp-storage::durable_jobs ticket_t_28_claims_schema35_migration_rollback_and_backup_restart
+        PASS [   3.795s] (105/151) pp-storage::durable_jobs ticket_t_28_claims_single_account_maps_default_and_physical_owner_is_opaque
+        PASS [   0.047s] (106/151) pp-storage::durable_jobs ticket_t_28_claims_wire_job_kinds_match_existing_contract
+        PASS [   1.139s] (107/151) pp-storage::durable_jobs ticket_t_28_recovery_abandon_keeps_uncertain_proof_and_resource_lock
+        PASS [   1.509s] (108/151) pp-storage::durable_jobs ticket_t_28_recovery_confirmed_local_candidate_requires_exact_receipt
+        PASS [  15.047s] (109/151) pp-storage::durable_jobs ticket_t_28_recovery_every_existing_kind_has_incomplete_intent_policy
+        PASS [   4.244s] (110/151) pp-storage::durable_jobs ticket_t_28_recovery_global_and_per_tenant_history_limits
+        PASS [   1.831s] (111/151) pp-storage::durable_jobs ticket_t_28_recovery_lost_claim_reply_is_fenced_on_orderly_restart
+        PASS [   1.449s] (112/151) pp-storage::durable_jobs ticket_t_28_recovery_old_completed_history_expires_but_uncertainty_survives
+        PASS [   1.124s] (113/151) pp-storage::durable_jobs ticket_t_28_recovery_orderly_restart_and_subject_bound_reconciliation
+        PASS [   1.091s] (114/151) pp-storage::durable_jobs ticket_t_28_recovery_receipts_duplicate_effects_and_finish
+        PASS [   2.510s] (115/151) pp-storage::durable_jobs ticket_t_28_recovery_reconciliation_records_authenticated_subject
+        PASS [   1.222s] (116/151) pp-storage::durable_jobs ticket_t_28_recovery_retention_preserves_uncertainty_and_idempotency
+        PASS [   1.191s] (117/151) pp-storage::durable_jobs ticket_t_28_recovery_success_requires_effect_receipts
+        PASS [   1.380s] (118/151) pp-storage::durable_jobs unresolved_spoolman_settles_by_either_explicit_decision
+        PASS [   8.650s] (119/151) pp-storage::durable_jobs uploaded_only_does_not_consume_active_queue_capacity
+        PASS [   2.763s] (120/151) pp-storage::durable_jobs uploaded_only_parent_authorizes_one_bound_start_without_reupload
+        PASS [   1.394s] (121/151) pp-storage::durable_jobs uploaded_only_parent_is_inert
+        PASS [   1.105s] (122/151) pp-storage::durable_jobs uploaded_only_persisted_proof_rejects_independent_corruptions
+        PASS [   1.500s] (123/151) pp-storage::durable_jobs uploaded_only_result_tamper_rejects_decode_and_child_binding
+        PASS [   0.565s] (124/151) pp-storage::ticket_t_61_read_model read_model_folder_rule_without_functional_class_matches_catalog_digest
+        PASS [   0.307s] (125/151) pp-storage::ticket_t_61_read_model read_model_plan_configuration_freshness_does_not_make_sources_stale
+        PASS [   0.297s] (126/151) pp-storage::ticket_t_61_read_model ticket_t_61_read_model_admission_bounds
+        PASS [   0.026s] (127/151) pp-storage::ticket_t_61_read_model ticket_t_61_read_model_collation_matches_measured_node
+        PASS [   0.612s] (128/151) pp-storage::ticket_t_61_read_model ticket_t_61_read_model_digest
+        PASS [   1.806s] (129/151) pp-storage::ticket_t_61_read_model ticket_t_61_read_model_entire_batch_one_wal_snapshot
+        PASS [   0.021s] (130/151) pp-storage::ticket_t_61_read_model ticket_t_61_read_model_fixture_has_recorded_hash
+        PASS [   0.563s] (131/151) pp-storage::ticket_t_61_read_model ticket_t_61_read_model_foreign_and_missing_are_indistinguishable
+        PASS [   0.628s] (132/151) pp-storage::ticket_t_61_read_model ticket_t_61_read_model_foreign_progress
+        PASS [   0.580s] (133/151) pp-storage::ticket_t_61_read_model ticket_t_61_read_model_input_tenant
+        PASS [   4.968s] (134/151) pp-storage::ticket_t_61_read_model ticket_t_61_read_model_js_canonical_timestamp
+        PASS [   0.474s] (135/151) pp-storage::ticket_t_61_read_model ticket_t_61_read_model_key_route_is_authorized_by_secret_only
+        PASS [   0.589s] (136/151) pp-storage::ticket_t_61_read_model ticket_t_61_read_model_mapping_digest
+        PASS [   0.301s] (137/151) pp-storage::ticket_t_61_read_model ticket_t_61_read_model_missing_observations_are_errors
+        PASS [   0.272s] (138/151) pp-storage::ticket_t_61_read_model ticket_t_61_read_model_missing_snapshot
+        PASS [   0.607s] (139/151) pp-storage::ticket_t_61_read_model ticket_t_61_read_model_missing_unit
+        PASS [   0.325s] (140/151) pp-storage::ticket_t_61_read_model ticket_t_61_read_model_node_graph_no_writes
+        PASS [   0.671s] (141/151) pp-storage::ticket_t_61_read_model ticket_t_61_read_model_partial_unit_set
+        PASS [   4.098s] (142/151) pp-storage::ticket_t_61_read_model ticket_t_61_read_model_plate_and_history_corruption_is_explicit
+        PASS [   0.751s] (143/151) pp-storage::ticket_t_61_read_model ticket_t_61_read_model_pointer
+        PASS [   0.657s] (144/151) pp-storage::ticket_t_61_read_model ticket_t_61_read_model_progress
+        PASS [   0.628s] (145/151) pp-storage::ticket_t_61_read_model ticket_t_61_read_model_projection
+        PASS [   0.608s] (146/151) pp-storage::ticket_t_61_read_model ticket_t_61_read_model_revision_tenant
+        PASS [   0.480s] (147/151) pp-storage::ticket_t_61_read_model ticket_t_61_read_model_revocation_and_restart
+        PASS [   0.627s] (148/151) pp-storage::ticket_t_61_read_model ticket_t_61_read_model_source_digest
+        PASS [   0.596s] (149/151) pp-storage::ticket_t_61_read_model ticket_t_61_read_model_text_budget
+        PASS [   0.666s] (150/151) pp-storage::ticket_t_61_read_model ticket_t_61_read_model_unsafe_snapshot
+        PASS [   0.018s] (151/151) pp-storage::ticket_t_61_read_model ticket_t_61_read_model_workflow_rejects_unsafe_numbers
+────────────
+     Summary [ 342.549s] 151 tests run: 151 passed, 0 skipped

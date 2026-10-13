@@ -1,0 +1,20 @@
+   Compiling pp-storage v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre408-claims-20261013/rust/crates/pp-storage)
+    Building [=======================> ] 130/131: durable_jobs(test)              Finished `test` profile [unoptimized + debuginfo] target(s) in 4.55s
+     Running tests/durable_jobs.rs (target/debug/deps/durable_jobs-fdeaceffb1a0bb33)
+
+running 1 test
+
+thread 'ticket_t_28_claims_crash_retry_fences_stale_updates' (2113340) panicked at crates/pp-storage/tests/durable_jobs.rs:1486:66:
+called `Result::unwrap()` on an `Err` value: Data directory already owned
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test ticket_t_28_claims_crash_retry_fences_stale_updates ... FAILED
+
+failures:
+
+failures:
+    ticket_t_28_claims_crash_retry_fences_stale_updates
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 76 filtered out; finished in 1.10s
+
+error: test failed, to rerun pass `-p pp-storage --test durable_jobs`
+EXIT:101

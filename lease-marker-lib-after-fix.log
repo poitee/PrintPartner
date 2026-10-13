@@ -1,0 +1,16 @@
+   Compiling pp-storage v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre408-claims-20261013/rust/crates/pp-storage)
+    Building [=======================> ] 124/125: pp_storage(test)                Finished `test` profile [unoptimized + debuginfo] target(s) in 12.28s
+     Running unittests src/lib.rs (target/debug/deps/pp_storage-1295389ebe7c486e)
+
+running 7 tests
+test storage_lease::tests::matching_process_identity_remains_live ... ok
+test storage_lease::tests::child_marker_requires_complete_info_and_a_stale_child ... ok
+test tests::unproved_closure_cannot_be_released_by_cleanup_retry ... ok
+test tests::ahead_and_old_versions_reject_before_side_effects ... ok
+test tests::wal_only_unsupported_versions_preserve_every_input_file ... ok
+test tests::failed_cleanup_retains_marker_and_lock_until_explicit_retry ... ok
+test tests::directory_lease_cleanup_failure_retains_lock_until_retry ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 1.12s
+
+EXIT:0

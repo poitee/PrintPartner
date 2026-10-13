@@ -1,0 +1,50 @@
+    Blocking waiting for file lock on build directory
+   Compiling syn v3.0.6
+   Compiling cc v1.5.1
+   Compiling serde_core v1.0.228
+   Compiling libsqlite3-sys v0.38.2
+   Compiling synstructure v0.14.0
+   Compiling zerofrom-derive v0.1.8
+   Compiling yoke-derive v0.8.4
+   Compiling zerofrom v0.1.8
+   Compiling zerovec-derive v0.11.6
+   Compiling yoke v0.8.3
+   Compiling displaydoc v0.2.7
+   Compiling zerotrie v0.2.5
+   Compiling zerovec v0.11.8
+   Compiling tinystr v0.8.4
+   Compiling icu_locale_core v2.3.0
+   Compiling potential_utf v0.1.6
+   Compiling icu_provider v2.3.1
+   Compiling icu_collections v2.3.0
+   Compiling serde_json v1.0.145
+   Compiling memchr v2.8.3
+   Compiling icu_normalizer v2.3.0
+   Compiling icu_properties v2.3.0
+   Compiling icu_locale_fallback v2.3.0
+   Compiling bitflags v2.13.2
+   Compiling rusqlite v0.40.2
+   Compiling serde v1.0.228
+   Compiling icu_collator v2.3.1
+   Compiling regress v0.11.1
+   Compiling pp-storage v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre408-claims-20261013/rust/crates/pp-storage)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 49.51s
+────────────
+ Nextest run ID 90d113e5-2526-4cf7-b8c3-65d60c77892b with nextest profile: default
+    Starting 14 tests across 10 binaries (137 tests skipped)
+        PASS [   1.703s] ( 1/14) pp-storage::durable_jobs ticket_t_28_claims_duplicate_concurrent_enqueue_and_no_handler_admission
+        PASS [   1.716s] ( 2/14) pp-storage::durable_jobs ticket_t_28_claims_invalid_payloads_fail_before_writes
+        PASS [   1.747s] ( 3/14) pp-storage::durable_jobs ticket_t_28_claims_cancel_before_admission_running_and_effect
+        PASS [   1.765s] ( 4/14) pp-storage::durable_jobs ticket_t_28_claims_list_filters_pagination_and_history
+        PASS [   1.833s] ( 5/14) pp-storage::durable_jobs ticket_t_28_claims_kind_resource_capacity_and_source_intent
+        PASS [   1.841s] ( 6/14) pp-storage::durable_jobs ticket_t_28_claims_duplicate_conflict_and_concurrent_claims
+        PASS [   0.017s] ( 7/14) pp-storage::durable_jobs ticket_t_28_claims_wire_job_kinds_match_existing_contract
+        PASS [   1.859s] ( 8/14) pp-storage::durable_jobs ticket_t_28_claims_lost_reply_drain_and_backup_committed_job
+        PASS [   2.824s] ( 9/14) pp-storage::durable_jobs ticket_t_28_claims_expired_lease_fences_old_worker
+        PASS [   2.563s] (10/14) pp-storage::durable_jobs ticket_t_28_claims_ordinary_transaction_error_rolls_back
+        PASS [   2.905s] (11/14) pp-storage::durable_jobs ticket_t_28_claims_schema35_migration_rollback_and_backup_restart
+        PASS [   4.825s] (12/14) pp-storage::durable_jobs ticket_t_28_claims_real_auth_tenant_policy_and_revocation
+        PASS [   4.893s] (13/14) pp-storage::durable_jobs ticket_t_28_claims_single_account_maps_default_and_physical_owner_is_opaque
+        PASS [   4.980s] (14/14) pp-storage::durable_jobs ticket_t_28_claims_schema35_corruption_and36_preserve_input_bytes
+────────────
+     Summary [   6.731s] 14 tests run: 14 passed, 137 skipped

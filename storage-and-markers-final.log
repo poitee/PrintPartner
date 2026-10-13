@@ -1,0 +1,53 @@
+   Compiling syn v3.0.6
+   Compiling sync_wrapper v1.0.2
+   Compiling axum-core v0.5.6
+   Compiling synstructure v0.14.0
+   Compiling zerovec-derive v0.11.6
+   Compiling zerofrom-derive v0.1.8
+   Compiling yoke-derive v0.8.4
+   Compiling zerofrom v0.1.8
+   Compiling displaydoc v0.2.7
+   Compiling yoke v0.8.3
+   Compiling tokio-macros v2.7.2
+   Compiling zerovec v0.11.8
+   Compiling tinystr v0.8.4
+   Compiling icu_locale_core v2.3.0
+   Compiling potential_utf v0.1.6
+   Compiling zerotrie v0.2.5
+   Compiling icu_collections v2.3.0
+   Compiling icu_provider v2.3.1
+   Compiling tokio v1.53.1
+   Compiling icu_properties v2.3.0
+   Compiling icu_normalizer v2.3.0
+   Compiling icu_locale_fallback v2.3.0
+   Compiling icu_collator v2.3.1
+   Compiling pp-storage v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre408-claims-20261013/rust/crates/pp-storage)
+   Compiling futures-macro v0.3.34
+   Compiling futures-util v0.3.34
+   Compiling thiserror-impl v2.0.21
+   Compiling thiserror v2.0.21
+   Compiling tungstenite v0.29.0
+   Compiling hyper v1.7.0
+   Compiling hyper-util v0.1.17
+   Compiling tokio-tungstenite v0.29.0
+   Compiling tower v0.5.3
+   Compiling axum v0.8.9
+   Compiling tokio-util v0.7.16
+   Compiling tower-http v0.6.11
+   Compiling pp-compat v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre408-claims-20261013/rust/crates/pp-compat)
+   Compiling pp-net v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre408-claims-20261013/rust/crates/pp-net)
+   Compiling pp-gateway v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre408-claims-20261013/rust/crates/pp-gateway)
+   Compiling pp-core v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre408-claims-20261013/rust/crates/pp-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 52.81s
+────────────
+ Nextest run ID f3e32a80-ee99-4d12-852a-790acee33b95 with nextest profile: default
+    Starting 161 tests across 12 binaries (14 tests skipped)
+        SLOW [> 60.000s] (───────) pp-core::runtime_m0 childless_core_marker_without_known_protocol_refuses_start
+        PASS [  82.214s] (  1/161) pp-core::runtime_m0 childless_core_marker_without_known_protocol_refuses_start
+        PASS [  26.846s] (  2/161) pp-core::runtime_m0 crash_left_marker_allows_later_start
+  Cancelling due to interrupt: 1 test still running
+      SIGINT [  32.223s] (  3/161) pp-core::runtime_m0 dead_core_marker_with_partial_or_invalid_child_info_refuses_start
+────────────
+     Summary [ 141.295s] 3/161 tests run: 2 passed (1 slow), 1 failed, 14 skipped
+warning: 158/161 tests were not run due to interrupt
+error: test run failed

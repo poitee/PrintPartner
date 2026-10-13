@@ -1,0 +1,17 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.65s
+     Running tests/runtime_m0.rs (target/debug/deps/runtime_m0-56d9e6938bbd82b7)
+
+running 9 tests
+test live_marker_owner_still_blocks_start ... ok
+test dead_core_marker_without_child_info_allows_start ... ok
+test desktop_marker_with_both_processes_dead_allows_start ... ok
+test crash_left_marker_allows_later_start ... ok
+test stale_owner_recovery_admits_only_one_concurrent_start ... ok
+test reused_pid_with_different_identity_recovers_marker_and_lease ... ok
+test childless_core_marker_without_known_protocol_refuses_start ... ok
+test dead_core_marker_with_partial_or_invalid_child_info_refuses_start ... ok
+test core_death_with_live_child_refuses_standalone_node ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 50.36s
+
+EXIT:0

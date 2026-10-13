@@ -1,0 +1,54 @@
+   Compiling aws-lc-rs v1.18.1
+   Compiling aws-lc-sys v0.45.0
+   Compiling pp-compat v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre408-claims-20261013/rust/crates/pp-compat)
+   Compiling rustls v0.23.45
+   Compiling regex v1.13.1
+   Compiling caseless v0.2.2
+   Compiling pp-source v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre408-claims-20261013/rust/crates/pp-source)
+   Compiling rustls-webpki v0.103.15
+   Compiling pp-domain v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre408-claims-20261013/rust/crates/pp-domain)
+   Compiling tokio-rustls v0.26.6
+   Compiling pp-net v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre408-claims-20261013/rust/crates/pp-net)
+   Compiling base64 v0.23.1
+   Compiling openssl-probe v0.2.1
+   Compiling rustls-native-certs v0.8.4
+   Compiling rustls-platform-verifier v0.7.1
+   Compiling email-encoding v0.4.2
+   Compiling hyper-rustls v0.27.10
+   Compiling pp-api-types v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre408-claims-20261013/rust/crates/pp-api-types)
+   Compiling webpki-roots v1.0.9
+   Compiling nom v8.0.0
+   Compiling async-trait v0.1.92
+   Compiling email_address v0.2.9
+   Compiling fastrand v2.5.0
+   Compiling quoted_printable v0.5.2
+   Compiling pp-gateway v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre408-claims-20261013/rust/crates/pp-gateway)
+   Compiling lettre v0.11.23
+   Compiling reqwest v0.13.5
+   Compiling pp-contracts v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre408-claims-20261013/rust/crates/pp-contracts)
+   Compiling pp-core v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre408-claims-20261013/rust/crates/pp-core)
+   Compiling pp-drivers v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre408-claims-20261013/rust/crates/pp-drivers)
+   Compiling pp-services v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre408-claims-20261013/rust/crates/pp-services)
+   Compiling pp-api v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre408-claims-20261013/rust/crates/pp-api)
+   Compiling pp-server v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre408-claims-20261013/rust/crates/pp-server)
+   Compiling pp-storage v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre408-claims-20261013/rust/crates/pp-storage)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 08s
+────────────
+ Nextest run ID 6181f7d7-ec9f-4923-80f4-3be82ae13c69 with nextest profile: default
+    Starting 14 tests across 34 binaries (243 tests skipped)
+        PASS [   2.834s] ( 1/14) pp-storage::durable_jobs ticket_t_28_claims_invalid_payloads_fail_before_writes
+        PASS [   2.865s] ( 2/14) pp-storage::durable_jobs ticket_t_28_claims_list_filters_pagination_and_history
+        PASS [   2.900s] ( 3/14) pp-storage::durable_jobs ticket_t_28_claims_duplicate_concurrent_enqueue_and_no_handler_admission
+        PASS [   2.931s] ( 4/14) pp-storage::durable_jobs ticket_t_28_claims_cancel_before_admission_running_and_effect
+        PASS [   2.931s] ( 5/14) pp-storage::durable_jobs ticket_t_28_claims_kind_resource_capacity_and_source_intent
+        PASS [   2.958s] ( 6/14) pp-storage::durable_jobs ticket_t_28_claims_duplicate_conflict_and_concurrent_claims
+        PASS [   0.029s] ( 7/14) pp-storage::durable_jobs ticket_t_28_claims_wire_job_kinds_match_existing_contract
+        PASS [   3.056s] ( 8/14) pp-storage::durable_jobs ticket_t_28_claims_lost_reply_drain_and_backup_committed_job
+        PASS [   4.073s] ( 9/14) pp-storage::durable_jobs ticket_t_28_claims_expired_lease_fences_old_worker
+        PASS [   1.915s] (10/14) pp-storage::durable_jobs ticket_t_28_claims_ordinary_transaction_error_rolls_back
+        PASS [   2.790s] (11/14) pp-storage::durable_jobs ticket_t_28_claims_schema35_migration_rollback_and_backup_restart
+        PASS [   3.970s] (12/14) pp-storage::durable_jobs ticket_t_28_claims_single_account_maps_default_and_physical_owner_is_opaque
+        PASS [   4.403s] (13/14) pp-storage::durable_jobs ticket_t_28_claims_real_auth_tenant_policy_and_revocation
+        PASS [   4.744s] (14/14) pp-storage::durable_jobs ticket_t_28_claims_schema35_corruption_and36_preserve_input_bytes
+────────────
+     Summary [   7.650s] 14 tests run: 14 passed, 243 skipped

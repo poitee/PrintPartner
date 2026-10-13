@@ -1,0 +1,213 @@
+diff --git a/rust/crates/pp-storage/src/lease.rs b/rust/crates/pp-storage/src/lease.rs
+index f7ec7b7f..2cb96702 100644
+--- a/rust/crates/pp-storage/src/lease.rs
++++ b/rust/crates/pp-storage/src/lease.rs
+@@ -45,19 +45,7 @@ impl StorageLease {
+         let marker_path = data_dir.join(".desktop-owner.json");
+         if marker_path.exists() {
+             let marker: serde_json::Value = serde_json::from_slice(&std::fs::read(&marker_path)?)?;
+-            let pid = marker["pid"]
+-                .as_u64()
+-                .filter(|pid| *pid > 0 && *pid <= i32::MAX as u64)
+-                .context("Invalid prior writer PID")? as u32;
+-            ensure!(
+-                storage_lease::owner_is_stale(pid, marker["process_identity"].as_str())
+-                    && (marker["kind"] == "standalone"
+-                        || (marker["storage_protocol_version"].as_u64() == Some(1)
+-                            && marker.get("child_pid").is_none()
+-                            && marker.get("child_process_identity").is_none())
+-                        || storage_lease::child_is_stale(&marker)),
+-                "A prior writer may still be alive"
+-            );
++            storage_lease::ensure_stale_owner(&marker)?;
+             std::fs::rename(
+                 &marker_path,
+                 data_dir.join(".desktop-lease/previous-marker.json"),
+diff --git a/rust/crates/pp-storage/src/schema.rs b/rust/crates/pp-storage/src/schema.rs
+index 6b54e775..2b264f3d 100644
+--- a/rust/crates/pp-storage/src/schema.rs
++++ b/rust/crates/pp-storage/src/schema.rs
+@@ -35,9 +35,20 @@ impl Drop for PreflightCopy {
+     }
+ }
+ 
++fn guard_unowned_marker(db: &Path, owned: bool) -> Result<()> {
++    if owned {
++        return Ok(());
++    }
++    let marker = db.parent().unwrap().join(".desktop-owner.json");
++    if !marker.exists() {
++        return Ok(());
++    }
++    let value = serde_json::from_slice(&std::fs::read(marker)?)?;
++    crate::storage_lease::ensure_stale_owner(&value)
++}
++
+ pub(crate) fn preflight(path: &Path, owned: bool) -> Result<u64> {
+-    let marker = path.parent().unwrap().join(".desktop-owner.json");
+-    ensure!(owned || !marker.exists(), "Data directory already owned");
++    guard_unowned_marker(path, owned)?;
+     if !path.exists() || path.metadata()?.len() == 0 {
+         return Ok(0);
+     }
+@@ -70,7 +81,7 @@ pub(crate) fn preflight(path: &Path, owned: bool) -> Result<u64> {
+         source == capture()?,
+         "Database changed during preflight capture"
+     );
+-    ensure!(owned || !marker.exists(), "Data directory already owned");
++    guard_unowned_marker(path, owned)?;
+     let conn = Connection::open(copy.0.join("print-partner.db"))?;
+     let integrity: String = conn.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
+     ensure!(
+diff --git a/rust/crates/pp-storage/src/storage_lease.rs b/rust/crates/pp-storage/src/storage_lease.rs
+index 57eb91c0..8ada8c08 100644
+--- a/rust/crates/pp-storage/src/storage_lease.rs
++++ b/rust/crates/pp-storage/src/storage_lease.rs
+@@ -1,6 +1,4 @@
+-#[cfg(target_os = "linux")]
+-use anyhow::Context;
+-use anyhow::{Result, bail};
++use anyhow::{Context, Result, bail};
+ use serde::{Deserialize, Serialize};
+ use std::{
+     io::Write,
+@@ -71,6 +69,23 @@ pub fn record_child(directory: &Path, pid: u32) -> Result<()> {
+     Ok(())
+ }
+ 
++pub(crate) fn ensure_stale_owner(marker: &serde_json::Value) -> Result<()> {
++    let pid = marker["pid"]
++        .as_u64()
++        .filter(|pid| *pid > 0 && *pid <= i32::MAX as u64)
++        .context("Invalid prior writer PID")? as u32;
++    anyhow::ensure!(
++        owner_is_stale(pid, marker["process_identity"].as_str())
++            && (marker["kind"] == "standalone"
++                || (marker["storage_protocol_version"].as_u64() == Some(1)
++                    && marker.get("child_pid").is_none()
++                    && marker.get("child_process_identity").is_none())
++                || child_is_stale(marker)),
++        "A prior writer may still be alive"
++    );
++    Ok(())
++}
++
+ pub(crate) fn child_is_stale(marker: &serde_json::Value) -> bool {
+     let Some(pid) = marker["child_pid"]
+         .as_u64()
+diff --git a/rust/crates/pp-storage/tests/durable_jobs.rs b/rust/crates/pp-storage/tests/durable_jobs.rs
+index 3730e05e..d903ecd2 100644
+--- a/rust/crates/pp-storage/tests/durable_jobs.rs
++++ b/rust/crates/pp-storage/tests/durable_jobs.rs
+@@ -1437,6 +1437,111 @@ fn ticket_t_28_recovery_lost_claim_reply_is_fenced_on_orderly_restart() {
+     owner.shutdown().unwrap();
+ }
+ #[test]
++fn ticket_t_28_claims_crash_retry_fences_stale_updates() {
++    const CHILD_DIR: &str = "PP_GRE408_CRASH_DIR";
++    if let Some(path) = std::env::var_os(CHILD_DIR) {
++        let path = PathBuf::from(path);
++        let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
++        let queued = enqueue(&owner, "crash-retry", Payload::CheckSourceUpdates {});
++        let worker = owner.job_worker(admission()).unwrap();
++        let (claimed, _) = worker.claim().unwrap().unwrap();
++        assert_eq!(claimed.job_id, queued.job_id);
++        // process::exit skips Drop, so the owner marker and running claim stay behind.
++        std::process::exit(28);
++    }
++
++    let path = directory();
++    let output = std::process::Command::new(std::env::current_exe().unwrap())
++        .args([
++            "--exact",
++            "ticket_t_28_claims_crash_retry_fences_stale_updates",
++            "--nocapture",
++        ])
++        .env(CHILD_DIR, &path)
++        .output()
++        .unwrap();
++    assert_eq!(
++        output.status.code(),
++        Some(28),
++        "stdout: {}\nstderr: {}",
++        String::from_utf8_lossy(&output.stdout),
++        String::from_utf8_lossy(&output.stderr)
++    );
++    let raw = readonly(&path);
++    let documents = raw
++        .prepare("SELECT document FROM durable_jobs")
++        .unwrap()
++        .query_map([], |row| row.get::<_, String>(0))
++        .unwrap()
++        .collect::<Result<Vec<_>, _>>()
++        .unwrap();
++    assert_eq!(documents.len(), 1);
++    let crashed: JobRecord = serde_json::from_str(&documents[0]).unwrap();
++    assert_eq!(crashed.state, PersistentState::Running);
++    assert_eq!(crashed.attempt, 1);
++    assert_eq!(crashed.generation, 1);
++    let job_id = crashed.job_id;
++    drop(raw);
++
++    let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
++    let duplicate = enqueue(&owner, "crash-retry", Payload::CheckSourceUpdates {});
++    assert_eq!(duplicate.job_id, job_id);
++    let worker = owner.job_worker(admission()).unwrap();
++    let (claimed, mut lease) = worker.claim().unwrap().unwrap();
++    assert_eq!(claimed.job_id, job_id);
++    assert_eq!(claimed.attempt, 2);
++    assert_eq!(claimed.generation, 3);
++    assert!(worker.claim().unwrap().is_none());
++
++    let history = |owner: &WriterOwner| match call(
++        owner,
++        UserOperation::History {
++            job_id: job_id.clone(),
++            before_version: None,
++            limit: 200,
++        },
++    )
++    .unwrap()
++    {
++        Outcome::History(entries) => entries
++            .into_iter()
++            .map(|entry| (entry.version, entry.state, entry.event))
++            .collect::<Vec<_>>(),
++        _ => panic!("history"),
++    };
++    let mut stale = lease.clone();
++    worker
++        .update(&mut lease, WorkerOperation::Heartbeat)
++        .unwrap();
++    let before_record = serde_json::to_value(get(&owner, &job_id)).unwrap();
++    let before_history = history(&owner);
++    for operation in [WorkerOperation::Heartbeat, WorkerOperation::Finish(None)] {
++        let error = worker.update(&mut stale, operation).unwrap_err();
++        assert!(error.to_string().contains("Stale attempt fence"), "{error}");
++    }
++    assert_eq!(
++        serde_json::to_value(get(&owner, &job_id)).unwrap(),
++        before_record
++    );
++    assert_eq!(history(&owner), before_history);
++
++    let done = worker
++        .update(&mut lease, WorkerOperation::Finish(None))
++        .unwrap();
++    assert_eq!(done.state, PersistentState::Succeeded);
++    assert_eq!(done.attempt, 2);
++    assert_eq!(done.generation, 3);
++    owner.shutdown().unwrap();
++
++    let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
++    let persisted = get(&owner, &job_id);
++    assert_eq!(persisted.state, PersistentState::Succeeded);
++    assert_eq!(persisted.attempt, 2);
++    assert_eq!(persisted.generation, 3);
++    assert_eq!(persisted.state_version, done.state_version);
++    owner.shutdown().unwrap();
++}
++#[test]
+ fn ticket_t_28_recovery_reconciliation_records_authenticated_subject() {
+     let (_, owner) = fixture();
+     let (identity, token) = register(&owner, "reconcile@example.com");

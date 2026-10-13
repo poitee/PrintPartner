@@ -1,0 +1,6 @@
+{
+  "rust/crates/pp-storage/src/lease.rs": "1842fe9764d5e1a2f49cec54f15b59f2a42c6c0c22209912c24404c1fb4ab869",
+  "rust/crates/pp-storage/src/schema.rs": "3ac5710bbcb5f8e05a10e9bc7e43135ebe7862037787ba4cffbdf2a62d5b1b46",
+  "rust/crates/pp-storage/src/storage_lease.rs": "0a65563a3e481a2a15b19c7ccb46ba66b7038bc409d13d103e1087312c6b6517",
+  "rust/crates/pp-storage/tests/durable_jobs.rs": "1522677a528448b96a3523c4fffd638d906a10b174832e3034811853d5b7b068"
+}

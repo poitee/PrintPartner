@@ -1,0 +1,291 @@
+{
+  "head": "2254b567a48f12f9de8fc4f23321695753ca66cf",
+  "job_route_count": 28,
+  "job_owners": [
+    "compat"
+  ],
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/api/v1/jobs",
+      "owner": "compat",
+      "effect": "external_effect",
+      "operation": "GET /jobs current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "Conservatively guarded GET/HEAD: no audited pure-read exception; provider or local effects may occur"
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/jobs",
+      "owner": "compat",
+      "effect": "external_effect",
+      "operation": "GET /jobs current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "Conservatively guarded GET/HEAD: no audited pure-read exception; provider or local effects may occur"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/jobs/:id",
+      "owner": "compat",
+      "effect": "external_effect",
+      "operation": "GET /jobs/:param current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "Conservatively guarded GET/HEAD: no audited pure-read exception; provider or local effects may occur"
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/jobs/:id",
+      "owner": "compat",
+      "effect": "external_effect",
+      "operation": "GET /jobs/:param current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "Conservatively guarded GET/HEAD: no audited pure-read exception; provider or local effects may occur"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/jobs/check-source-updates",
+      "owner": "compat",
+      "effect": "external_effect",
+      "operation": "POST /jobs/check-source-updates current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "May start provider work, background acquisition or external delivery"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/jobs/export-accepted-plate-3mf",
+      "owner": "compat",
+      "effect": "local_commit",
+      "operation": "POST /jobs/export-accepted-plate-3mf current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "Node owns the complete local transaction or file publication"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/jobs/export-checklist-html",
+      "owner": "compat",
+      "effect": "local_commit",
+      "operation": "POST /jobs/export-checklist-html current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "Node owns the complete local transaction or file publication"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/jobs/export-direct-3mf",
+      "owner": "compat",
+      "effect": "local_commit",
+      "operation": "POST /jobs/export-direct-3mf current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "Node owns the complete local transaction or file publication"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/jobs/export-kit-bundle",
+      "owner": "compat",
+      "effect": "local_commit",
+      "operation": "POST /jobs/export-kit-bundle current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "Node owns the complete local transaction or file publication"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/jobs/export-stl-pack",
+      "owner": "compat",
+      "effect": "local_commit",
+      "operation": "POST /jobs/export-stl-pack current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "Node owns the complete local transaction or file publication"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/jobs/extract-source-docs",
+      "owner": "compat",
+      "effect": "external_effect",
+      "operation": "POST /jobs/extract-source-docs current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "May start provider work, background acquisition or external delivery"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/jobs/import-scan",
+      "owner": "compat",
+      "effect": "local_commit",
+      "operation": "POST /jobs/import-scan current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "Node owns the complete local transaction or file publication"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/jobs/printer-upload",
+      "owner": "compat",
+      "effect": "external_effect",
+      "operation": "POST /jobs/printer-upload current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "May start provider work, background acquisition or external delivery"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/jobs/sync",
+      "owner": "compat",
+      "effect": "external_effect",
+      "operation": "POST /jobs/sync current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "May start provider work, background acquisition or external delivery"
+    },
+    {
+      "method": "GET",
+      "path": "/jobs/:id",
+      "owner": "compat",
+      "effect": "external_effect",
+      "operation": "GET /jobs/:param current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "Conservatively guarded GET/HEAD: no audited pure-read exception; provider or local effects may occur"
+    },
+    {
+      "method": "HEAD",
+      "path": "/jobs/:id",
+      "owner": "compat",
+      "effect": "external_effect",
+      "operation": "GET /jobs/:param current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "Conservatively guarded GET/HEAD: no audited pure-read exception; provider or local effects may occur"
+    },
+    {
+      "method": "POST",
+      "path": "/jobs/check-source-updates",
+      "owner": "compat",
+      "effect": "external_effect",
+      "operation": "POST /jobs/check-source-updates current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "May start provider work, background acquisition or external delivery"
+    },
+    {
+      "method": "POST",
+      "path": "/jobs/export-accepted-plate-3mf",
+      "owner": "compat",
+      "effect": "local_commit",
+      "operation": "POST /jobs/export-accepted-plate-3mf current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "Node owns the complete local transaction or file publication"
+    },
+    {
+      "method": "POST",
+      "path": "/jobs/export-checklist-html",
+      "owner": "compat",
+      "effect": "local_commit",
+      "operation": "POST /jobs/export-checklist-html current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "Node owns the complete local transaction or file publication"
+    },
+    {
+      "method": "POST",
+      "path": "/jobs/export-direct-3mf",
+      "owner": "compat",
+      "effect": "local_commit",
+      "operation": "POST /jobs/export-direct-3mf current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "Node owns the complete local transaction or file publication"
+    },
+    {
+      "method": "POST",
+      "path": "/jobs/export-kit-bundle",
+      "owner": "compat",
+      "effect": "local_commit",
+      "operation": "POST /jobs/export-kit-bundle current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "Node owns the complete local transaction or file publication"
+    },
+    {
+      "method": "POST",
+      "path": "/jobs/export-stl-pack",
+      "owner": "compat",
+      "effect": "local_commit",
+      "operation": "POST /jobs/export-stl-pack current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "Node owns the complete local transaction or file publication"
+    },
+    {
+      "method": "POST",
+      "path": "/jobs/extract-source-docs",
+      "owner": "compat",
+      "effect": "external_effect",
+      "operation": "POST /jobs/extract-source-docs current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "May start provider work, background acquisition or external delivery"
+    },
+    {
+      "method": "POST",
+      "path": "/jobs/import-scan",
+      "owner": "compat",
+      "effect": "local_commit",
+      "operation": "POST /jobs/import-scan current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "Node owns the complete local transaction or file publication"
+    },
+    {
+      "method": "POST",
+      "path": "/jobs/printer-upload",
+      "owner": "compat",
+      "effect": "external_effect",
+      "operation": "POST /jobs/printer-upload current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "May start provider work, background acquisition or external delivery"
+    },
+    {
+      "method": "POST",
+      "path": "/jobs/sync",
+      "owner": "compat",
+      "effect": "external_effect",
+      "operation": "POST /jobs/sync current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "May start provider work, background acquisition or external delivery"
+    },
+    {
+      "method": "GET",
+      "path": "/ws/jobs/:jobId",
+      "owner": "compat",
+      "effect": "external_effect",
+      "operation": "GET /ws/jobs/:param current",
+      "contract": "current",
+      "websocket": true,
+      "effect_reason": "Conservatively guarded GET/HEAD: no audited pure-read exception; provider or local effects may occur"
+    },
+    {
+      "method": "HEAD",
+      "path": "/ws/jobs/:jobId",
+      "owner": "compat",
+      "effect": "external_effect",
+      "operation": "GET /ws/jobs/:param current",
+      "contract": "current",
+      "websocket": true,
+      "effect_reason": "Conservatively guarded GET/HEAD: no audited pure-read exception; provider or local effects may occur"
+    }
+  ],
+  "services": "//! Move deferred until after #171.\n",
+  "api": "pub mod auth;\n"
+}

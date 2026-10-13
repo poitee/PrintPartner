@@ -1,0 +1,16 @@
+✔ empty Evidence fails with a missing, empty, or none exemption (5.982754ms)
+✔ empty Evidence passes with any exemption reason (2.993745ms)
+✔ non-empty Evidence passes without required fields or artifacts (0.805122ms)
+✔ comments and template placeholders count as empty Evidence (1.071514ms)
+✔ missing Evidence heading fails without an exemption and passes with a reason (0.615662ms)
+✔ other sections and exemption metadata do not fill Evidence (0.55371ms)
+✔ commented or fenced headings and exemptions do not supply metadata (0.64343ms)
+✔ comments around real Evidence and CRLF headings are accepted (0.555729ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 8
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 249.636301
