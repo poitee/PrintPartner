@@ -77,4 +77,7 @@ export function compare(left: Json, right: Json): void {
     equal(normalize(raw.capture, raw.data_directory), corpus.normalized, "Raw and normalized evidence differ");
   }
   equal(a.normalized, b.normalized, "$.normalized");
+  for (const [id, state] of Object.entries(object(object(a.normalized).states))) {
+    assert.equal(digest(canonical(state)), id, `State hash mismatch: ${id}`);
+  }
 }
