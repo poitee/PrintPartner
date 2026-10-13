@@ -1905,6 +1905,74 @@ fn ticket_t_7_writer_reopen_keeps_starter_seed_sequences() {
     assert_eq!(sqlite_sequence_rows(&raw), expected);
 }
 
+fn user_version(connection: &Connection) -> i64 {
+    connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap()
+}
+
+fn starter_row_counts(connection: &Connection) -> Vec<(String, i64)> {
+    ["filament_profiles", "printer_profiles", "process_profiles"]
+        .into_iter()
+        .map(|table| {
+            let count: i64 = connection
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            (table.to_owned(), count)
+        })
+        .collect()
+}
+
+#[test]
+fn ticket_t_7_writer_replays_an_existing_node_seed_only_once() {
+    let path = directory("t7-node-seed-replay");
+    let clock = "2026-10-02T00:00:00.000Z";
+    let (owner, _) = WriterOwner::open_at(&path, Limits::default(), clock).unwrap();
+    owner.shutdown().unwrap();
+    let db = path.join("print-partner.db");
+    let raw = Connection::open(&db).unwrap();
+    assert_eq!(user_version(&raw), 1);
+    // A generated schema-31 input is a Node database that already contains the
+    // starters and has not recorded this Rust replay. Clearing the latch
+    // reproduces that input.
+    raw.execute_batch("PRAGMA user_version = 0").unwrap();
+    let before = sqlite_sequence_rows(&raw);
+    let counts = starter_row_counts(&raw);
+    drop(raw);
+
+    let (owner, _) = WriterOwner::open_at(&path, Limits::default(), clock).unwrap();
+    owner.shutdown().unwrap();
+    let raw = Connection::open(&db).unwrap();
+    assert_eq!(user_version(&raw), 1);
+    let replayed = sqlite_sequence_rows(&raw);
+    for (name, count) in &counts {
+        let old = before.iter().find(|(row, _)| row == name).unwrap().1;
+        let new = replayed.iter().find(|(row, _)| row == name).unwrap().1;
+        assert_eq!(new, old + count, "{name}");
+    }
+    for (name, seq) in &before {
+        if counts.iter().any(|(starter, _)| starter == name) {
+            continue;
+        }
+        assert_eq!(
+            replayed
+                .iter()
+                .find(|(row, _)| row == name)
+                .map(|(_, value)| *value),
+            Some(*seq),
+            "{name} moved during the one Node-equivalent replay"
+        );
+    }
+    drop(raw);
+
+    let (owner, _) = WriterOwner::open_at(&path, Limits::default(), clock).unwrap();
+    owner.shutdown().unwrap();
+    let raw = Connection::open(&db).unwrap();
+    assert_eq!(sqlite_sequence_rows(&raw), replayed);
+}
+
 fn pragma_value(connection: &Connection, name: &str) -> i64 {
     connection
         .pragma_query_value(None, name, |row| row.get(0))
