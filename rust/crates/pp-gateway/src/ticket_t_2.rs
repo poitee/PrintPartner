@@ -143,6 +143,17 @@ async fn ticket_t_2_unready_node_routes_return_problem_json_and_keep_rust_surfac
     .await;
     assert_unready_problem(observation.0, &observation.1, &observation.2);
 
+    let status_route = exchange(
+        &origin,
+        "/api/v1/integrations/printer-1/status",
+        "GET",
+        Some(&cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_unready_problem(status_route.0, &status_route.1, &status_route.2);
+
     let mutation = exchange(
         &origin,
         "/api/v1/filaments/custom",

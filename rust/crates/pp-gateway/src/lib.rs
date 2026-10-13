@@ -633,6 +633,11 @@ async fn handle(
         // host left on Node until GRE-359), so those forward to Node without waiting.
         let mut route = state.watchers.lock().await.route(&id);
         if route_needs_snapshot(&route) {
+            // No published child can produce a snapshot. This is the unready
+            // compat route, not a monitoring outage on a live backend.
+            if state.compat.endpoint().is_none() {
+                return node_unavailable();
+            }
             // Detached so a client disconnect cannot cut a reconcile short.
             // Concurrent misses share that one refresh; a recorded snapshot then
             // routes confirmed non-Moonraker ids without another queue wait.
