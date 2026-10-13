@@ -1527,6 +1527,99 @@ mod tests {
     }
 
     #[test]
+    fn ticket_t_28_claims_sqlite_full_enqueue_rolls_back_and_retries() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(include_str!("jobs/schema.sql"))
+            .unwrap();
+        let pages: i64 = connection
+            .query_row("PRAGMA page_count", [], |row| row.get(0))
+            .unwrap();
+        connection
+            .pragma_update(None, "max_page_count", pages)
+            .unwrap();
+        let enqueue = |key: &str| UserOperation::Enqueue {
+            key: key.into(),
+            payload_version: 1,
+            payload: Payload::CheckSourceUpdates {},
+        };
+        let mut committed = 0_i64;
+        let mut failed_key = None;
+        for index in 0..128 {
+            let key = format!("disk-full-{index}");
+            let result = {
+                let tx = connection
+                    .transaction_with_behavior(TransactionBehavior::Immediate)
+                    .unwrap();
+                match user(&tx, "default", "disk-full-test", enqueue(&key)) {
+                    Ok(outcome) => tx.commit().map(|()| outcome).map_err(anyhow::Error::from),
+                    Err(error) => Err(error),
+                }
+            };
+            match result {
+                Ok(_) => committed += 1,
+                Err(error) => {
+                    assert!(
+                        matches!(error.downcast_ref::<rusqlite::Error>(),
+                        Some(rusqlite::Error::SqliteFailure(code, _))
+                            if code.code == rusqlite::ErrorCode::DiskFull),
+                        "{error:?}"
+                    );
+                    failed_key = Some(key);
+                    break;
+                }
+            }
+        }
+        let failed_key = failed_key.expect("SQLite page budget must produce SQLITE_FULL");
+        for table in ["durable_jobs", "durable_job_keys", "durable_job_history"] {
+            let count: i64 = connection
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(count, committed, "partial enqueue in {table}");
+        }
+        let failed_keys: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM durable_job_keys WHERE key=?1",
+                [&failed_key],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(failed_keys, 0);
+        connection
+            .pragma_update(None, "max_page_count", pages + 64)
+            .unwrap();
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .unwrap();
+        let Outcome::Job(retried, LocalCommit::Committed) =
+            user(&tx, "default", "disk-full-test", enqueue(&failed_key)).unwrap()
+        else {
+            panic!("retry must commit one job");
+        };
+        tx.commit().unwrap();
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .unwrap();
+        let Outcome::Job(duplicate, LocalCommit::ReadOnly) =
+            user(&tx, "default", "disk-full-test", enqueue(&failed_key)).unwrap()
+        else {
+            panic!("duplicate must replay the committed job");
+        };
+        tx.commit().unwrap();
+        assert_eq!(duplicate.job_id, retried.job_id);
+        for table in ["durable_jobs", "durable_job_keys", "durable_job_history"] {
+            let count: i64 = connection
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(count, committed + 1, "retry duplicated {table}");
+        }
+    }
+
+    #[test]
     fn job_document_exact_size_limit_saves_and_decodes() {
         let mut connection = Connection::open_in_memory().unwrap();
         connection
