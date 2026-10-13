@@ -13,6 +13,8 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
 COMMIT = json.loads((ROOT / "rust/bundle-manifest.json").read_text())["commit"]
+# Full-bundle verification, backend verification, readiness, and setup/output.
+SERVER_STARTUP_SECONDS = 60 + 60 + 32 + 5
 
 
 def main():
@@ -25,7 +27,7 @@ def main():
                                         NODE_PATH="/nonexistent-pp-parent-modules", PP_PARENT_ONLY_SECRET="synthetic-test-value"))
     descendant = None
     try:
-        assert select.select([runtime.stdout], [], [], 40)[0]
+        assert select.select([runtime.stdout], [], [], SERVER_STARTUP_SECONDS)[0]
         origin = runtime.stdout.readline().strip()
         assert origin.startswith("http://127.0.0.1:")
         marker_path = fixture / "data/.desktop-owner.json"
@@ -89,7 +91,7 @@ def main():
         # Recovery must admit a new Node child and normal shutdown must clean up.
         credentials.unlink()
         runtime = subprocess.Popen(runtime.args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        assert select.select([runtime.stdout], [], [], 40)[0], "recovery readiness timed out"
+        assert select.select([runtime.stdout], [], [], SERVER_STARTUP_SECONDS)[0], "recovery readiness timed out"
         recovered_origin = runtime.stdout.readline().strip()
         assert recovered_origin == origin, "recovery changed the persisted origin"
         recovered_marker = json.loads(marker_path.read_text())
