@@ -1,5 +1,7 @@
 # Protected runtime foundation
 
+The [desktop rebuild flag](../docs/desktop-rebuild.md) gates the GRE-595 rebuild and defaults to off.
+
 The Rust lint ratchet runs with ast-grep 0.50.0:
 
 ```sh

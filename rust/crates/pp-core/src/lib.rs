@@ -14,6 +14,9 @@ use std::{
 use tokio::net::TcpListener;
 
 mod drain;
+mod rebuild;
+
+pub use rebuild::DesktopRebuild;
 
 pub use drain::{ShutdownGate, TrackedShutdownWork};
 pub use pp_compat::drain::{
@@ -104,6 +107,7 @@ impl CoreHandle {
 }
 
 pub struct CoreRuntime {
+    desktop_rebuild: DesktopRebuild,
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     completion: Option<tokio::sync::oneshot::Receiver<ShutdownReceipt>>,
     worker: Option<std::thread::JoinHandle<()>>,
@@ -238,6 +242,7 @@ impl CoreRuntime {
         input: DesktopLaunch,
         compat_config: SupervisorConfig,
     ) -> Result<Self> {
+        let desktop_rebuild = DesktopRebuild::from_env();
         let (started, startup) = tokio::sync::oneshot::channel();
         let (stop, stopped) = tokio::sync::oneshot::channel();
         let (completed, completion) = tokio::sync::oneshot::channel();
@@ -290,6 +295,7 @@ impl CoreRuntime {
         let (origin, handle, launch, shutdown_requested) =
             startup.await.context("Core owner startup failed")??;
         Ok(Self {
+            desktop_rebuild,
             stop: Some(stop),
             completion: Some(completion),
             worker: Some(worker),
@@ -299,6 +305,10 @@ impl CoreRuntime {
             shutdown_requested,
         })
     }
+    pub fn desktop_rebuild(&self) -> DesktopRebuild {
+        self.desktop_rebuild
+    }
+
     pub fn origin(&self) -> &str {
         &self.origin
     }
