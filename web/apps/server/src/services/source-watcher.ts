@@ -311,6 +311,7 @@ async function runPeriodicUpdateCheck(
         beforePublish: () => requireSourceSyncParticipant("worker.startSourceWatcher"),
       }));
         const updatedRow = repo.getProjectRow(source.id);
+        requireSourceSyncParticipant("worker.startSourceWatcher");
         repo.recordAppEvent({
           kind: "source.updated",
           actorType: "source",
@@ -353,6 +354,7 @@ async function runPeriodicUpdateCheck(
           `[source-watcher] Auto-sync failed for ${source.name}: ${err instanceof Error ? err.message : String(err)}`,
         );
         const currentSettings = getSettings();
+        requireSourceSyncParticipant("worker.startSourceWatcher");
         repo.recordAppEvent({
           kind: "source.sync_failed",
           actorType: "source",

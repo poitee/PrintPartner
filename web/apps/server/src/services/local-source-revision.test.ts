@@ -51,6 +51,7 @@ function fixture() {
 describe("publishLocalSourceWorkingTree", () => {
   it("refuses local publication when admission changes during staging", async () => {
     const f = fixture();
+    writeFileSync(join(f.workingTree, "z.stl"), "solid second\nendsolid second\n");
     const manifest = join(f.dir, "ownership.json");
     const original = readFileSync(packagedSourceSyncManifestPath(), "utf8");
     const previous = process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST;
@@ -60,7 +61,7 @@ describe("publishLocalSourceWorkingTree", () => {
       writeFileSync(manifest, original);
       process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST = manifest;
       beginSourceSyncAdmission(f.dir);
-      vi.mocked(fsPromises.copyFile).mockImplementationOnce(async (...args) => {
+      const copy = vi.mocked(fsPromises.copyFile).mockImplementationOnce(async (...args) => {
         await actualFs.copyFile(...args);
         writeFileSync(manifest, `${original}\n`);
       });
@@ -68,6 +69,7 @@ describe("publishLocalSourceWorkingTree", () => {
         repo: f.repo, reposDir: f.sqlite.reposDir, sourceId: f.source.id, workingTree: f.workingTree,
         beforePublish: () => requireSourceSyncParticipant("assistant.propose_import_source_files"),
       })).rejects.toThrow(/runtime manifest does not match/);
+      expect(copy).toHaveBeenCalledTimes(1);
       expect(f.repo.getProjectRow(f.source.id)).toEqual(before);
       expect(f.repo.listSourceRevisions(f.source.id)).toEqual([]);
       const workspace = join(f.sqlite.reposDir, String(f.source.id));

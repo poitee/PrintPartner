@@ -222,6 +222,7 @@ async function materializeLocalSourceWorkingTree(input: {
   });
   input.beforePublish?.();
   await mkdir(sourceWorkspace, { recursive: true });
+  input.beforePublish?.();
   const stagingRoot = await mkdtemp(join(sourceWorkspace, ".local-source-"));
   try {
     for (const file of liveFiles) {
@@ -233,11 +234,14 @@ async function materializeLocalSourceWorkingTree(input: {
       }
       const stagedPath = resolveUnderRoot(stagingRoot, file.relativePath);
       if (!stagedPath) throw new Error(`Unsafe Source snapshot path: ${file.relativePath}`);
+      input.beforePublish?.();
       await mkdir(dirname(stagedPath), { recursive: true });
+      input.beforePublish?.();
       chargeTenantDiskBytes(file.sizeHintBytes);
       await copyFile(file.absolutePath, stagedPath);
     }
     if (input.manifestYaml !== undefined) {
+      input.beforePublish?.();
       chargeTenantDiskBytes(Buffer.byteLength(input.manifestYaml));
       await writeFile(
         join(stagingRoot, SOURCE_MANIFEST_FILENAME),
