@@ -183,6 +183,7 @@ async function syncUnsyncedSources(
   getSettings: () => SourceWatcherSettings,
   quotaBytes: number | null,
 ): Promise<void> {
+  requireSourceSyncParticipant("startup.startSourceWatcher");
   const logger = getLogger();
   const sources = repo
     .listSources()
@@ -198,6 +199,7 @@ async function syncUnsyncedSources(
   const coversDir = join(dirname(reposDir), "covers");
 
   for (const source of sources) {
+    requireSourceSyncParticipant("startup.startSourceWatcher");
     try {
       logger.log("info", `[source-watcher] Auto-syncing new source: ${source.name} (id=${source.id})`);
       const result = await runWithTenantDiskQuota({
@@ -260,6 +262,7 @@ async function runPeriodicUpdateCheck(
   getSettings: () => SourceWatcherSettings,
   quotaBytes: number | null,
 ): Promise<void> {
+  requireSourceSyncParticipant("worker.startSourceWatcher");
   const logger = getLogger();
   const settings = getSettings();
 
@@ -294,6 +297,7 @@ async function runPeriodicUpdateCheck(
     const previousSha = row?.lastCommitSha ?? null;
 
     if (settings.autoSyncUpdates) {
+      requireSourceSyncParticipant("worker.startSourceWatcher");
       // Auto-sync
       try {
         logger.log("info", `[source-watcher] Auto-syncing updated source: ${source.name}`);
