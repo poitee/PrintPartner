@@ -276,22 +276,17 @@ impl Gateway {
             .begin_drain();
     }
 
-    pub fn wait_idle(
-        &self,
-        bound: Duration,
-    ) -> impl std::future::Future<Output = bool> + Send + '_ {
-        async move {
-            let started = tokio::time::Instant::now();
-            loop {
-                if self.inflight() == 0 {
-                    return true;
-                }
-                let left = bound.saturating_sub(started.elapsed());
-                if left.is_zero() {
-                    return self.inflight() == 0;
-                }
-                tokio::time::sleep(left.min(Duration::from_millis(10))).await;
+    pub async fn wait_idle(&self, bound: Duration) -> bool {
+        let started = tokio::time::Instant::now();
+        loop {
+            if self.inflight() == 0 {
+                return true;
             }
+            let left = bound.saturating_sub(started.elapsed());
+            if left.is_zero() {
+                return self.inflight() == 0;
+            }
+            tokio::time::sleep(left.min(Duration::from_millis(10))).await;
         }
     }
 
