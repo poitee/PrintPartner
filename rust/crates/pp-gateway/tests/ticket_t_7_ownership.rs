@@ -356,13 +356,12 @@ fn ticket_t_7_ownership_non_regular_receipts_are_preserved() {
             "dangling-symlink" => symlink(outside.join("missing"), &receipt_path).unwrap(),
             "valid-symlink" => symlink(&target, &receipt_path).unwrap(),
             "directory" => fs::create_dir(&receipt_path).unwrap(),
-            "fifo" => assert!(
-                std::process::Command::new("mkfifo")
-                    .arg(&receipt_path)
-                    .status()
-                    .unwrap()
-                    .success()
-            ),
+            "fifo" => {
+                use std::os::unix::ffi::OsStrExt;
+                let path = std::ffi::CString::new(receipt_path.as_os_str().as_bytes()).unwrap();
+                // SAFETY: path is a live, nul-terminated string for this syscall.
+                assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+            }
             _ => {}
         }
         let _socket = if kind == "socket" {
