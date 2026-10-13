@@ -76,19 +76,54 @@ function recordedChildIsLive(marker: RustOwnerMarker): boolean {
   return processStillOwnsIdentity(marker.child_pid, identity);
 }
 
-function readLiveRustMarker(dataDir: string): RustOwnerMarker | null {
+type MarkerFile =
+  | { readonly kind: "missing" }
+  | { readonly kind: "unreadable" }
+  | { readonly kind: "other" }
+  | { readonly kind: "live"; readonly marker: RustOwnerMarker };
+
+function readMarkerFile(dataDir: string): MarkerFile {
   const markerPath = join(dataDir, ".desktop-owner.json");
-  if (!existsSync(markerPath)) return null;
+  if (!existsSync(markerPath)) return { kind: "missing" };
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(markerPath, "utf8"));
   } catch {
-    return null;
+    return { kind: "unreadable" };
   }
-  if (!isRustOwnerMarker(parsed)) return null;
+  if (!isRustOwnerMarker(parsed)) return { kind: "other" };
   const ownerLive = processStillOwnsIdentity(parsed.pid, recordedIdentity(parsed, "process_identity"));
-  if (!ownerLive && !recordedChildIsLive(parsed)) return null;
-  return parsed;
+  if (!ownerLive && !recordedChildIsLive(parsed)) return { kind: "other" };
+  return { kind: "live", marker: parsed };
+}
+
+function isLeaseOwner(value: unknown): value is { pid: number; process_identity?: string } {
+  if (typeof value !== "object" || value === null || !("pid" in value) || !isPid(value.pid)) return false;
+  if (
+    "process_identity" in value &&
+    value.process_identity !== undefined &&
+    typeof value.process_identity !== "string"
+  ) {
+    return false;
+  }
+  return true;
+}
+
+// The lease directory is published before the owner marker. A live other process
+// holding it already owns the copy, including while the marker is still being written.
+function leaseBlocksOtherWriters(dataDir: string): boolean {
+  const ownerPath = join(dataDir, ".desktop-lease", "owner.json");
+  if (!existsSync(ownerPath)) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(ownerPath, "utf8"));
+  } catch {
+    return true;
+  }
+  if (!isLeaseOwner(parsed)) return true;
+  const identity = typeof parsed.process_identity === "string" ? parsed.process_identity : undefined;
+  if (parsed.pid === process.pid && processStillOwnsIdentity(parsed.pid, identity)) return false;
+  return processStillOwnsIdentity(parsed.pid, identity);
 }
 
 function isRecordedChild(marker: RustOwnerMarker): boolean {
@@ -99,10 +134,13 @@ function isRecordedChild(marker: RustOwnerMarker): boolean {
 }
 
 export function rustOwnedCopy(dataDir: string): RustOwnedCopy {
-  const marker = readLiveRustMarker(dataDir);
-  if (!marker) return { kind: "absent" };
-  if (isRecordedChild(marker)) return { kind: "child" };
-  return { kind: "foreign" };
+  const marker = readMarkerFile(dataDir);
+  if (marker.kind === "live") {
+    if (isRecordedChild(marker.marker)) return { kind: "child" };
+    return { kind: "foreign" };
+  }
+  if (marker.kind === "unreadable" || leaseBlocksOtherWriters(dataDir)) return { kind: "foreign" };
+  return { kind: "absent" };
 }
 
 /** True only when the file exists and app_settings already stamps the supported schema. */

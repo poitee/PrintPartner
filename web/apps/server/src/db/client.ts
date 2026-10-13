@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import * as schema from "./schema.js";
 import { currentSchemaVersion, schemaVersionKey } from "./schema.js";
@@ -31,7 +31,7 @@ export class SqliteDatabase {
   connect(): void {
     const ownership = rustOwnedCopy(this.dataDir);
     if (ownership.kind === "foreign") {
-      assertSupportedRustSchema(this.dbPath);
+      if (existsSync(this.dbPath)) assertSupportedRustSchema(this.dbPath);
       throw new Error("Rust owns this data directory; Node will not migrate or write");
     }
     // The desktop lease records this process before any SQL file exists.
