@@ -696,7 +696,7 @@ async fn handle(
                 // Read the committed Node configuration; never replay a mutation.
                 tokio::select! { biased;
                     _ = state.watcher_cancelled.cancelled() => {},
-                    _ = refresh_watchers(&state) => {},
+                    _ = state.snapshot_flight.fresh(&state.watcher_cancelled, || apply_snapshot(&state)) => {},
                 }
             }
             if response.status() == StatusCode::SWITCHING_PROTOCOLS
@@ -782,6 +782,22 @@ impl SnapshotFlight {
             slot: Mutex::new(None),
         }
     }
+    /// Mutations must read again after any pre-commit flight, never reuse its result.
+    async fn fresh<F, Fut>(&self, cancelled: &CancellationToken, lead: F) -> bool
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = bool>,
+    {
+        let pending = { flight_slot(&self.slot).clone() };
+        if let Some(flight) = pending {
+            let _ = wait_shared_snapshot(flight, cancelled).await;
+        }
+        if cancelled.is_cancelled() {
+            return false;
+        }
+        lead().await
+    }
+
     /// The first caller runs `lead`. Everyone already waiting shares that result.
     async fn share<F, Fut>(&self, cancelled: &CancellationToken, lead: F) -> bool
     where
@@ -1073,6 +1089,66 @@ mod snapshot_membership_tests {
     use std::time::{Duration, Instant};
     use tokio::sync::Mutex;
     use tokio_util::sync::CancellationToken;
+
+    #[tokio::test]
+    async fn mutation_reads_committed_configuration_after_a_precommit_flight() {
+        let flight = Arc::new(SnapshotFlight::new());
+        let configured = Arc::new(AtomicUsize::new(1));
+        let applied = Arc::new(AtomicUsize::new(0));
+        let reads = Arc::new(AtomicUsize::new(0));
+        let cancel = CancellationToken::new();
+        let (captured_tx, captured_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let before_commit = {
+            let (flight, configured, applied, reads, cancel) = (
+                flight.clone(),
+                configured.clone(),
+                applied.clone(),
+                reads.clone(),
+                cancel.clone(),
+            );
+            tokio::spawn(async move {
+                flight
+                    .share(&cancel, || async {
+                        let snapshot = configured.load(Ordering::SeqCst);
+                        reads.fetch_add(1, Ordering::SeqCst);
+                        captured_tx.send(snapshot).unwrap();
+                        release_rx.await.unwrap();
+                        applied.store(snapshot, Ordering::SeqCst);
+                        true
+                    })
+                    .await
+            })
+        };
+        assert_eq!(captured_rx.await.unwrap(), 1);
+        configured.store(2, Ordering::SeqCst);
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let after_commit = {
+            let (flight, configured, applied, reads, cancel) = (
+                flight.clone(),
+                configured.clone(),
+                applied.clone(),
+                reads.clone(),
+                cancel.clone(),
+            );
+            tokio::spawn(async move {
+                started_tx.send(()).unwrap();
+                flight
+                    .fresh(&cancel, || async {
+                        reads.fetch_add(1, Ordering::SeqCst);
+                        applied.store(configured.load(Ordering::SeqCst), Ordering::SeqCst);
+                        true
+                    })
+                    .await
+            })
+        };
+        started_rx.await.unwrap();
+        release_tx.send(()).unwrap();
+        assert!(before_commit.await.unwrap());
+        assert!(after_commit.await.unwrap());
+        assert_eq!(reads.load(Ordering::SeqCst), 2);
+        assert_eq!(applied.load(Ordering::SeqCst), 2);
+    }
 
     #[tokio::test]
     async fn three_non_moonraker_misses_share_one_slow_snapshot() {
