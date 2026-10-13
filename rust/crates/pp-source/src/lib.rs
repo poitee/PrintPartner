@@ -1030,6 +1030,13 @@ mod tests {
         }
     }
 
+    fn entry_names(dir: &std::path::Path) -> BTreeSet<String> {
+        fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect()
+    }
+
     #[test]
     fn unicode16_manifest_stays_readable_while_new_writes_reject_it() {
         use sha2::Digest;
@@ -1133,7 +1140,12 @@ mod tests {
         assert_eq!(published.files[0].path.as_str(), legacy);
         assert_eq!(published.selection.omitted_files[0].path.as_str(), omitted);
         assert_eq!(fs::read(revision.join(&legacy)).unwrap(), content);
-        assert!(!revision.join("\u{00E0}\u{1ADD}.stl").exists());
+        // Case-sensitive APFS still resolves the Unicode 17 spelling to this
+        // file, so Path::exists cannot prove the stored name. The directory
+        // entry itself must stay the Unicode 16 bytes.
+        let stored = entry_names(&revision);
+        assert!(stored.contains(&legacy));
+        assert!(!stored.contains("\u{00E0}\u{1ADD}.stl"));
         assert!(
             source
                 .materialize(
@@ -1227,14 +1239,63 @@ mod tests {
         fs::write(revision.join(&legacy), legacy_bytes).unwrap();
         fs::write(revision.join(&composed), composed_bytes).unwrap();
         fs::write(revision.join(MANIFEST), &encoded).unwrap();
+        // macOS 26 case-sensitive APFS is still normalization-insensitive, and
+        // its normalizer equates this Unicode 17 pair. The second write then
+        // replaces the first file. Load must report the snapshot corrupt
+        // instead of returning one file under both names.
+        let stored = entry_names(&revision);
+        let distinct = stored.contains(&legacy) && stored.contains(&composed);
 
         let input = LocalFiles::open(&root.join("input")).unwrap();
         let mut source = TenantRepos::open("tenant".into(), &root.join("repos"))
             .unwrap()
             .source(42)
             .unwrap();
-        let published = source
-            .materialize(
+        let published = source.materialize(
+            SnapshotRequest {
+                upstream_revision_key: "pair-rev".into(),
+                files: vec![SelectedFile {
+                    path: SourcePath::try_from("part.stl".to_owned()).unwrap(),
+                    kind: FileKind::Stl,
+                    size_hint_bytes: None,
+                }],
+                selection: Selection {
+                    max_stl_files: 10,
+                    max_documentation_bytes: 1000,
+                    omitted_files: vec![],
+                },
+            },
+            &input,
+            ArtifactBudget::new(1024 * 1024, 1024 * 1024).unwrap(),
+        );
+        if !distinct {
+            assert!(matches!(published, Err(Error::CorruptSnapshot)));
+            assert_eq!(
+                stored.iter().filter(|name| name.ends_with(".stl")).count(),
+                1
+            );
+            return;
+        }
+        let published = published.unwrap();
+        assert_eq!(published.publication, Publication::Reused);
+        let mut names: Vec<_> = published
+            .files
+            .iter()
+            .map(|file| file.path.as_str().to_owned())
+            .collect();
+        names.sort();
+        let mut expected = vec![legacy.clone(), composed.clone()];
+        expected.sort();
+        assert_eq!(names, expected);
+        assert_eq!(fs::read(revision.join(&legacy)).unwrap(), legacy_bytes);
+        assert_eq!(fs::read(revision.join(&composed)).unwrap(), composed_bytes);
+        assert_eq!(fs::read(revision.join(MANIFEST)).unwrap(), encoded);
+        assert_eq!(fs::read_dir(&revision).unwrap().count(), 3);
+        // One directory entry for the pair is the case-sensitive APFS result.
+        // Reload must stay corrupt after that entry disappears.
+        fs::remove_file(revision.join(&composed)).unwrap();
+        assert!(matches!(
+            source.materialize(
                 SnapshotRequest {
                     upstream_revision_key: "pair-rev".into(),
                     files: vec![SelectedFile {
@@ -1250,21 +1311,8 @@ mod tests {
                 },
                 &input,
                 ArtifactBudget::new(1024 * 1024, 1024 * 1024).unwrap(),
-            )
-            .unwrap();
-        assert_eq!(published.publication, Publication::Reused);
-        let mut names: Vec<_> = published
-            .files
-            .iter()
-            .map(|file| file.path.as_str().to_owned())
-            .collect();
-        names.sort();
-        let mut expected = vec![legacy.clone(), composed.clone()];
-        expected.sort();
-        assert_eq!(names, expected);
-        assert_eq!(fs::read(revision.join(&legacy)).unwrap(), legacy_bytes);
-        assert_eq!(fs::read(revision.join(&composed)).unwrap(), composed_bytes);
-        assert_eq!(fs::read(revision.join(MANIFEST)).unwrap(), encoded);
-        assert_eq!(fs::read_dir(&revision).unwrap().count(), 3);
+            ),
+            Err(Error::CorruptSnapshot)
+        ));
     }
 }
