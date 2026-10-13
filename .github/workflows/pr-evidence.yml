@@ -15,8 +15,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Execute only the protected base checker, never PR-controlled code.
-          ref: ${{ github.event.pull_request.base.sha }}
+          # Stack bases may predate the checker. Execute trusted default-branch
+          # tooling for every PR, never code from the PR head or its stack base.
+          ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:

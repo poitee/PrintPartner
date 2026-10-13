@@ -60,15 +60,26 @@ async fn bind_origin(owner: &StorageLease) -> Result<TcpListener> {
 
 pub struct CoreHandle {
     compat: CompatHandle,
+    monitoring: pp_gateway::MonitoringControl,
 }
 impl Clone for CoreHandle {
     fn clone(&self) -> Self {
         Self {
             compat: self.compat.clone(),
+            monitoring: self.monitoring.clone(),
         }
     }
 }
 impl CoreHandle {
+    /// Power adapters can cancel/join status sockets before acknowledging sleep.
+    /// Hide-to-tray deliberately leaves monitoring running.
+    pub async fn suspend_monitoring(&self) {
+        self.monitoring.suspend().await;
+    }
+    pub fn resume_monitoring(&self) {
+        self.monitoring.resume();
+    }
+
     pub fn subscribe(&self) -> tokio::sync::watch::Receiver<pp_compat::Status> {
         self.compat.status.clone()
     }
@@ -241,6 +252,7 @@ impl CoreRuntime {
                             resources.gateway.origin().to_owned(),
                             CoreHandle {
                                 compat: resources.supervisor.handle.clone(),
+                                monitoring: resources.gateway.monitoring_control(),
                             },
                             launch,
                             requested_by_adapter,

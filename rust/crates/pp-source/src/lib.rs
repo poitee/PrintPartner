@@ -3,6 +3,7 @@ pub mod archive;
 mod directory;
 pub mod media;
 mod path_policy;
+mod unicode16;
 
 #[cfg(all(test, target_os = "macos"))]
 #[path = "../tests/support/process.rs"]
@@ -23,6 +24,7 @@ use std::{
     sync::{Arc, Mutex, PoisonError},
 };
 use unicode_normalization::UnicodeNormalization;
+use unicode16::nfc16;
 
 pub const MANIFEST: &str = ".printpartner-source-snapshot.json";
 pub const MAX_CONTENT_BYTES: u64 = 1024 * 1024 * 1024;
@@ -109,23 +111,26 @@ impl From<serde_json::Error> for Error {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct SourcePath(String);
+fn source_path_structure(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 4096
+        && !value.contains(['\\', '\0', ':'])
+        && !value.starts_with('/')
+        && value.split('/').count() <= 64
+        && value.split('/').next() != Some(MANIFEST)
+        && value
+            .split('/')
+            .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
+}
 impl TryFrom<String> for SourcePath {
     type Error = Error;
     fn try_from(value: String) -> Result<Self> {
-        if value.is_empty()
-            || value.len() > 4096
-            || value.contains(['\\', '\0', ':'])
-            || value.starts_with('/')
-            || value.nfc().collect::<String>() != value
-            || value
-                .split('/')
-                .any(|s| s.is_empty() || s == "." || s == "..")
-            || value.split('/').count() > 64
-            || value.split('/').next() == Some(MANIFEST)
-        {
-            return Err(Error::UnsafePath);
+        // New requests and new publications stay on Unicode 17 NFC.
+        if source_path_structure(&value) && value.nfc().collect::<String>() == value {
+            Ok(Self(value))
+        } else {
+            Err(Error::UnsafePath)
         }
-        Ok(Self(value))
     }
 }
 impl From<SourcePath> for String {
@@ -136,6 +141,19 @@ impl From<SourcePath> for String {
 impl SourcePath {
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// A path stored before the Unicode 17 pin. Unicode 17 NFC is still
+    /// accepted. A Unicode 16 NFC spelling is accepted only here, so a new
+    /// `SnapshotRequest` cannot persist it.
+    fn from_persisted(value: String) -> Result<Self> {
+        if source_path_structure(&value)
+            && (value.nfc().collect::<String>() == value || nfc16(&value) == value)
+        {
+            Ok(Self(value))
+        } else {
+            Err(Error::UnsafePath)
+        }
     }
 }
 
@@ -191,8 +209,81 @@ pub struct SnapshotRequest {
     pub files: Vec<SelectedFile>,
     pub selection: Selection,
 }
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoredContentFile {
+    path: String,
+    kind: FileKind,
+    size_bytes: u64,
+    sha256: String,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoredOmittedFile {
+    path: String,
+    kind: FileKind,
+    size_hint_bytes: Option<u64>,
+    reason: OmissionReason,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoredSelection {
+    max_stl_files: u64,
+    max_documentation_bytes: u64,
+    omitted_files: Vec<StoredOmittedFile>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoredManifest {
+    version: u8,
+    upstream_revision_key: String,
+    manifest_digest: String,
+    selection: StoredSelection,
+    files: Vec<StoredContentFile>,
+}
+impl TryFrom<StoredManifest> for Manifest {
+    type Error = Error;
+    fn try_from(value: StoredManifest) -> Result<Self> {
+        let files = value
+            .files
+            .into_iter()
+            .map(|file| {
+                Ok(ContentFile {
+                    path: SourcePath::from_persisted(file.path)?,
+                    kind: file.kind,
+                    size_bytes: file.size_bytes,
+                    sha256: file.sha256,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let omitted_files = value
+            .selection
+            .omitted_files
+            .into_iter()
+            .map(|file| {
+                Ok(OmittedFile {
+                    path: SourcePath::from_persisted(file.path)?,
+                    kind: file.kind,
+                    size_hint_bytes: file.size_hint_bytes,
+                    reason: file.reason,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            version: value.version,
+            upstream_revision_key: value.upstream_revision_key,
+            manifest_digest: value.manifest_digest,
+            selection: Selection {
+                max_stl_files: value.selection.max_stl_files,
+                max_documentation_bytes: value.selection.max_documentation_bytes,
+                omitted_files,
+            },
+            files,
+        })
+    }
+}
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", try_from = "StoredManifest")]
 struct Manifest {
     version: u8,
     upstream_revision_key: String,
@@ -395,9 +486,19 @@ fn legacy_only_collision(files: &[SelectedFile]) -> bool {
     })
 }
 fn validate_request(request: &mut SnapshotRequest) -> Result<()> {
-    validate_request_with(request, true)
+    validate_request_policy(request, true, false)
 }
 fn validate_request_with(request: &mut SnapshotRequest, selected_collisions: bool) -> Result<()> {
+    validate_request_policy(request, selected_collisions, false)
+}
+fn validate_persisted_request(request: &mut SnapshotRequest) -> Result<()> {
+    validate_request_policy(request, true, true)
+}
+fn validate_request_policy(
+    request: &mut SnapshotRequest,
+    selected_collisions: bool,
+    persisted_unicode16: bool,
+) -> Result<()> {
     validate_revision(&request.upstream_revision_key)?;
     if request.files.len() + request.selection.omitted_files.len() > MAX_ENTRIES
         || request.selection.max_stl_files > MAX_SAFE_INTEGER
@@ -407,7 +508,11 @@ fn validate_request_with(request: &mut SnapshotRequest, selected_collisions: boo
     }
     // Snapshot destinations share one spelling per ASCII-lowercased folder,
     // so only folder spellings that canonicalize together may differ.
-    let mut paths = PathCollisions::merging_folder_case();
+    let mut paths = if persisted_unicode16 {
+        PathCollisions::persisted_unicode16()
+    } else {
+        PathCollisions::merging_folder_case()
+    };
     for file in &request.files {
         if file.size_hint_bytes.is_some_and(|n| n > MAX_SAFE_INTEGER) {
             return Err(Error::Limit);
@@ -467,11 +572,27 @@ fn copy_hash(mut input: impl Read, mut output: impl Write, limit: u64) -> Result
     }
     Ok((count, hex::encode(hash.finalize())))
 }
+#[derive(Clone, Copy)]
+enum TreeIdentity {
+    /// New publication listings. Unicode 17 NFC, rejected unless that form is a new write.
+    Unicode17,
+    /// Version-1 listings. Unicode 16 NFC keeps historically distinct names distinct.
+    Unicode16,
+}
+
+fn listing_key(path: &str, identity: TreeIdentity) -> String {
+    match identity {
+        TreeIdentity::Unicode17 => path.nfc().collect(),
+        TreeIdentity::Unicode16 => nfc16(path),
+    }
+}
+
 fn tree_paths(
     dir: &Directory,
     prefix: &str,
     result: &mut BTreeSet<String>,
     depth: usize,
+    identity: TreeIdentity,
 ) -> Result<()> {
     if depth > 64 {
         return Err(Error::Limit);
@@ -486,14 +607,23 @@ fn tree_paths(
         // HFS+ may enumerate decomposed names even though the manifest uses
         // NFC. Normalize only the comparison path; open the original entry
         // relative to the pinned directory with NOFOLLOW below.
-        let path = format!("{prefix}{}", name.nfc().collect::<String>());
-        SourcePath::try_from(path.clone())?;
+        let path = format!("{prefix}{}", listing_key(&name, identity));
+        match identity {
+            TreeIdentity::Unicode17 => {
+                SourcePath::try_from(path.clone())?;
+            }
+            TreeIdentity::Unicode16 => {
+                if !source_path_structure(&path) {
+                    return Err(Error::UnsafePath);
+                }
+            }
+        }
         match dir.child(&name, false) {
             Ok(child) => {
                 if !result.insert(format!("{path}/")) {
                     return Err(Error::CorruptSnapshot);
                 }
-                tree_paths(&child, &format!("{path}/"), result, depth + 1)?;
+                tree_paths(&child, &format!("{path}/"), result, depth + 1, identity)?;
                 child.sync()?;
             }
             Err(_) => {
@@ -506,13 +636,16 @@ fn tree_paths(
     }
     Ok(())
 }
-fn expected_paths(files: &[ContentFile]) -> BTreeSet<String> {
+fn expected_paths(files: &[ContentFile], identity: TreeIdentity) -> BTreeSet<String> {
     let mut paths = BTreeSet::new();
     for file in files {
-        paths.insert(file.path.0.clone());
+        // Open the stored spelling. Publication compares Unicode 17 NFC.
+        // A version-1 load compares Unicode 16 NFC so a pair that Unicode 17
+        // collapses stays two files.
+        paths.insert(listing_key(file.path.as_str(), identity));
         let mut parent = file.path.as_str();
         while let Some((prefix, _)) = parent.rsplit_once('/') {
-            paths.insert(format!("{prefix}/"));
+            paths.insert(format!("{}/", listing_key(prefix, identity)));
             parent = prefix;
         }
     }
@@ -683,8 +816,8 @@ impl SourceRoot {
         file.write_all(&encoded)?;
         file.sync_all()?;
         let mut paths = BTreeSet::new();
-        tree_paths(candidate, "", &mut paths, 0)?;
-        if paths != expected_paths(&manifest.files) {
+        tree_paths(candidate, "", &mut paths, 0, TreeIdentity::Unicode17)?;
+        if paths != expected_paths(&manifest.files, TreeIdentity::Unicode17) {
             return Err(Error::CorruptSnapshot);
         }
         candidate.sync()?;
@@ -715,7 +848,7 @@ impl SourceRoot {
                 .collect(),
             selection: manifest.selection.clone(),
         };
-        let ambiguous = match validate_request(&mut request) {
+        let ambiguous = match validate_persisted_request(&mut request) {
             Err(Error::DuplicatePath) if legacy_only_collision(&request.files) => {
                 // Every other request constraint must still hold.
                 validate_request_with(&mut request, false)?;
@@ -737,8 +870,8 @@ impl SourceRoot {
             return Err(Error::CorruptSnapshot);
         }
         let mut actual = BTreeSet::new();
-        tree_paths(existing, "", &mut actual, 0)?;
-        if actual != expected_paths(&manifest.files) {
+        tree_paths(existing, "", &mut actual, 0, TreeIdentity::Unicode16)?;
+        if actual != expected_paths(&manifest.files, TreeIdentity::Unicode16) {
             return Err(Error::CorruptSnapshot);
         }
         let mut bytes = 0;
@@ -807,7 +940,13 @@ mod tests {
         }
         fn paths(&self) -> Result<BTreeSet<String>> {
             let mut paths = BTreeSet::new();
-            tree_paths(&Directory::open_root(&self.0)?, "", &mut paths, 0)?;
+            tree_paths(
+                &Directory::open_root(&self.0)?,
+                "",
+                &mut paths,
+                0,
+                TreeIdentity::Unicode17,
+            )?;
             Ok(paths)
         }
     }
@@ -890,5 +1029,291 @@ mod tests {
             Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
             Err(error) => panic!("{error}"),
         }
+    }
+
+    fn entry_names(dir: &std::path::Path) -> BTreeSet<String> {
+        fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn unicode16_manifest_stays_readable_while_new_writes_reject_it() {
+        use sha2::Digest;
+        use std::os::unix::fs::PermissionsExt;
+
+        let legacy = "a\u{1ADD}\u{0300}.stl".to_owned();
+        let omitted = "notes\u{1ADD}\u{0300}.md".to_owned();
+        assert!(SourcePath::try_from(legacy.clone()).is_err());
+        assert!(SourcePath::try_from("\u{00E0}\u{1ADD}.stl".to_owned()).is_ok());
+        assert!(SourcePath::from_persisted("cafe\u{301}.stl".to_owned()).is_err());
+
+        let content = b"solid";
+        let files = vec![ContentFile {
+            path: SourcePath::from_persisted(legacy.clone()).unwrap(),
+            kind: FileKind::Stl,
+            size_bytes: content.len() as u64,
+            sha256: hex::encode(sha2::Sha256::digest(content)),
+        }];
+        let manifest = Manifest {
+            version: 1,
+            upstream_revision_key: "legacy-rev".into(),
+            manifest_digest: hex::encode(sha2::Sha256::digest(serde_json::to_vec(&files).unwrap())),
+            selection: Selection {
+                max_stl_files: 10,
+                max_documentation_bytes: 1000,
+                omitted_files: vec![OmittedFile {
+                    path: SourcePath::from_persisted(omitted.clone()).unwrap(),
+                    kind: FileKind::Md,
+                    size_hint_bytes: None,
+                    reason: OmissionReason::DocumentationByteBudget,
+                }],
+            },
+            files,
+        };
+        let mut encoded = serde_json::to_vec_pretty(&manifest).unwrap();
+        encoded.push(b'\n');
+        let decoded: Manifest = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(decoded.files[0].path.as_str(), legacy);
+        assert_eq!(decoded.selection.omitted_files[0].path.as_str(), omitted);
+
+        let root = std::env::temp_dir().join(format!(
+            "pp-source-unicode16-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&root).unwrap();
+        let cleanup = root.clone();
+        struct Remove(std::path::PathBuf);
+        impl Drop for Remove {
+            fn drop(&mut self) {
+                fs::remove_dir_all(&self.0).unwrap();
+            }
+        }
+        let _remove = Remove(cleanup);
+        for dir in ["repos", "input"] {
+            let path = root.join(dir);
+            fs::create_dir(&path).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+        let root = fs::canonicalize(root).unwrap();
+        let revision = root.join("repos/42/revisions/legacy-rev");
+        fs::create_dir_all(&revision).unwrap();
+        fs::write(revision.join(&legacy), content).unwrap();
+        fs::write(revision.join(MANIFEST), &encoded).unwrap();
+        let decomposed = root.join("repos/42/revisions/decomposed-rev");
+        fs::create_dir_all(&decomposed).unwrap();
+        fs::write(decomposed.join("cafe\u{301}.stl"), b"x").unwrap();
+        fs::write(
+            decomposed.join(MANIFEST),
+            br#"{"version":1,"upstreamRevisionKey":"decomposed-rev","manifestDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","selection":{"maxStlFiles":1,"maxDocumentationBytes":1,"omittedFiles":[]},"files":[{"path":"cafe\u0301.stl","kind":"stl","sizeBytes":1,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}"#,
+        )
+        .unwrap();
+
+        let input = LocalFiles::open(&root.join("input")).unwrap();
+        let mut source = TenantRepos::open("tenant".into(), &root.join("repos"))
+            .unwrap()
+            .source(42)
+            .unwrap();
+        let request = |key: &str| SnapshotRequest {
+            upstream_revision_key: key.into(),
+            files: vec![SelectedFile {
+                path: SourcePath::try_from("part.stl".to_owned()).unwrap(),
+                kind: FileKind::Stl,
+                size_hint_bytes: None,
+            }],
+            selection: Selection {
+                max_stl_files: 10,
+                max_documentation_bytes: 1000,
+                omitted_files: vec![],
+            },
+        };
+        let published = source
+            .materialize(
+                request("legacy-rev"),
+                &input,
+                ArtifactBudget::new(1024 * 1024, 1024 * 1024).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(published.publication, Publication::Reused);
+        assert_eq!(published.files[0].path.as_str(), legacy);
+        assert_eq!(published.selection.omitted_files[0].path.as_str(), omitted);
+        assert_eq!(fs::read(revision.join(&legacy)).unwrap(), content);
+        // Case-sensitive APFS still resolves the Unicode 17 spelling to this
+        // file, so Path::exists cannot prove the stored name. The directory
+        // entry itself must stay the Unicode 16 bytes.
+        let stored = entry_names(&revision);
+        assert!(stored.contains(&legacy));
+        assert!(!stored.contains("\u{00E0}\u{1ADD}.stl"));
+        assert!(
+            source
+                .materialize(
+                    request("decomposed-rev"),
+                    &input,
+                    ArtifactBudget::new(1024 * 1024, 1024 * 1024).unwrap(),
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn unicode16_distinct_pair_stays_byte_exact_while_new_writes_still_collide() {
+        use sha2::Digest;
+        use std::os::unix::fs::PermissionsExt;
+
+        let legacy = "a\u{1ADD}\u{0300}.stl".to_owned();
+        let composed = "\u{00E0}\u{1ADD}.stl".to_owned();
+        assert!(SourcePath::try_from(legacy.clone()).is_err());
+        assert!(SourcePath::try_from(composed.clone()).is_ok());
+        let legacy_path = SourcePath::from_persisted(legacy.clone()).unwrap();
+        let composed_path = SourcePath::from_persisted(composed.clone()).unwrap();
+        let mut publication = PathCollisions::merging_folder_case();
+        publication.insert(&composed_path, false).unwrap();
+        assert!(matches!(
+            publication.insert(&legacy_path, false),
+            Err(Error::DuplicatePath)
+        ));
+        let mut persisted = PathCollisions::persisted_unicode16();
+        persisted.insert(&composed_path, false).unwrap();
+        persisted.insert(&legacy_path, false).unwrap();
+        assert!(serde_json::from_str::<SnapshotRequest>(&format!(
+            r#"{{"upstreamRevisionKey":"new-rev","files":[{{"path":{},"kind":"stl"}}],"selection":{{"maxStlFiles":1,"maxDocumentationBytes":1,"omittedFiles":[]}}}}"#,
+            serde_json::to_string(&legacy).unwrap()
+        ))
+        .is_err());
+
+        let legacy_bytes = b"legacy-solid";
+        let composed_bytes = b"composed-solid";
+        let mut files = vec![
+            ContentFile {
+                path: legacy_path,
+                kind: FileKind::Stl,
+                size_bytes: legacy_bytes.len() as u64,
+                sha256: hex::encode(sha2::Sha256::digest(legacy_bytes)),
+            },
+            ContentFile {
+                path: composed_path,
+                kind: FileKind::Stl,
+                size_bytes: composed_bytes.len() as u64,
+                sha256: hex::encode(sha2::Sha256::digest(composed_bytes)),
+            },
+        ];
+        files.sort_by(|a, b| compare_paths(a.path.as_str(), b.path.as_str()));
+        let manifest = Manifest {
+            version: 1,
+            upstream_revision_key: "pair-rev".into(),
+            manifest_digest: hex::encode(sha2::Sha256::digest(serde_json::to_vec(&files).unwrap())),
+            selection: Selection {
+                max_stl_files: 10,
+                max_documentation_bytes: 1000,
+                omitted_files: vec![],
+            },
+            files,
+        };
+        let mut encoded = serde_json::to_vec_pretty(&manifest).unwrap();
+        encoded.push(b'\n');
+
+        let root = std::env::temp_dir().join(format!(
+            "pp-source-unicode16-pair-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&root).unwrap();
+        struct Remove(std::path::PathBuf);
+        impl Drop for Remove {
+            fn drop(&mut self) {
+                fs::remove_dir_all(&self.0).unwrap();
+            }
+        }
+        let _remove = Remove(root.clone());
+        for dir in ["repos", "input"] {
+            let path = root.join(dir);
+            fs::create_dir(&path).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+        let root = fs::canonicalize(root).unwrap();
+        let revision = root.join("repos/42/revisions/pair-rev");
+        fs::create_dir_all(&revision).unwrap();
+        fs::write(revision.join(&legacy), legacy_bytes).unwrap();
+        fs::write(revision.join(&composed), composed_bytes).unwrap();
+        fs::write(revision.join(MANIFEST), &encoded).unwrap();
+        // macOS 26 case-sensitive APFS is still normalization-insensitive, and
+        // its normalizer equates this Unicode 17 pair. The second write then
+        // replaces the first file. Load must report the snapshot corrupt
+        // instead of returning one file under both names.
+        let stored = entry_names(&revision);
+        let distinct = stored.contains(&legacy) && stored.contains(&composed);
+
+        let input = LocalFiles::open(&root.join("input")).unwrap();
+        let mut source = TenantRepos::open("tenant".into(), &root.join("repos"))
+            .unwrap()
+            .source(42)
+            .unwrap();
+        let published = source.materialize(
+            SnapshotRequest {
+                upstream_revision_key: "pair-rev".into(),
+                files: vec![SelectedFile {
+                    path: SourcePath::try_from("part.stl".to_owned()).unwrap(),
+                    kind: FileKind::Stl,
+                    size_hint_bytes: None,
+                }],
+                selection: Selection {
+                    max_stl_files: 10,
+                    max_documentation_bytes: 1000,
+                    omitted_files: vec![],
+                },
+            },
+            &input,
+            ArtifactBudget::new(1024 * 1024, 1024 * 1024).unwrap(),
+        );
+        if !distinct {
+            assert!(matches!(published, Err(Error::CorruptSnapshot)));
+            assert_eq!(
+                stored.iter().filter(|name| name.ends_with(".stl")).count(),
+                1
+            );
+            return;
+        }
+        let published = published.unwrap();
+        assert_eq!(published.publication, Publication::Reused);
+        let mut names: Vec<_> = published
+            .files
+            .iter()
+            .map(|file| file.path.as_str().to_owned())
+            .collect();
+        names.sort();
+        let mut expected = vec![legacy.clone(), composed.clone()];
+        expected.sort();
+        assert_eq!(names, expected);
+        assert_eq!(fs::read(revision.join(&legacy)).unwrap(), legacy_bytes);
+        assert_eq!(fs::read(revision.join(&composed)).unwrap(), composed_bytes);
+        assert_eq!(fs::read(revision.join(MANIFEST)).unwrap(), encoded);
+        assert_eq!(fs::read_dir(&revision).unwrap().count(), 3);
+        // One directory entry for the pair is the case-sensitive APFS result.
+        // Reload must stay corrupt after that entry disappears.
+        fs::remove_file(revision.join(&composed)).unwrap();
+        assert!(matches!(
+            source.materialize(
+                SnapshotRequest {
+                    upstream_revision_key: "pair-rev".into(),
+                    files: vec![SelectedFile {
+                        path: SourcePath::try_from("part.stl".to_owned()).unwrap(),
+                        kind: FileKind::Stl,
+                        size_hint_bytes: None,
+                    }],
+                    selection: Selection {
+                        max_stl_files: 10,
+                        max_documentation_bytes: 1000,
+                        omitted_files: vec![],
+                    },
+                },
+                &input,
+                ArtifactBudget::new(1024 * 1024, 1024 * 1024).unwrap(),
+            ),
+            Err(Error::CorruptSnapshot)
+        ));
     }
 }

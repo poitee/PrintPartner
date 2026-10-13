@@ -146,7 +146,8 @@ pub fn unicode_version_fixtures() -> Vec<UnicodeVersionFixture> {
 
 // All 34 Unicode 17 nonzero-combining-class additions, each paired with six
 // older marks in both orders. The golden spellings were checked against the
-// actual Rust and Node normalizers; see source-path-replay.md and GRE-555.
+// actual Rust and Node normalizers; both use Unicode 17 (GRE-555). See
+// source-path-replay.md.
 fn unicode_version_path() -> impl Strategy<Value = String> {
     (
         valid_path(),

@@ -9,6 +9,10 @@ publish = false
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
+tokio.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
 
 [dev-dependencies]
 proptest = "=1.12.0"

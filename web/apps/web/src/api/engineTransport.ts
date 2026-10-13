@@ -36,6 +36,11 @@ function errorDetail(value: unknown): string | undefined {
   return typeof detail === "string" && detail.trim() ? detail : undefined;
 }
 
+function isCurrentPasswordRejection(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || !("code" in value)) return false;
+  return value.code === "current_password_rejected";
+}
+
 async function failedResponseBody(response: Response): Promise<unknown> {
   try {
     const value: unknown = await response.json();
@@ -53,11 +58,11 @@ async function engineResponse(input: EngineRequest): Promise<Response> {
     signal: input.signal,
     credentials: "include",
   });
-  if (response.status === 401) {
-    notifyEngineUnauthorized();
-  }
   if (!response.ok) {
     const body = await failedResponseBody(response);
+    if (response.status === 401 && !isCurrentPasswordRejection(body)) {
+      notifyEngineUnauthorized();
+    }
     const fallback = input.failureMessage ?? `Engine ${input.path} failed`;
     throw new EngineHttpError(
       errorDetail(body) ?? `${fallback}: ${response.status}`,

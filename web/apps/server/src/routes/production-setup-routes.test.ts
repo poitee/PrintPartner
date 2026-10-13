@@ -1,10 +1,16 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createSelfHostPorts } from "../adapters/self-host/index.js";
 import { buildApp } from "../app.js";
 import { loadConfig } from "../config.js";
+import {
+  createPrinterCheckoffLink,
+  loadPrinterCheckoffLinks,
+  updatePrinterCheckoffLink,
+} from "../services/printer-checkoff-store.js";
+import { acceptPlanForTest } from "../test/accept-plan.js";
 
 const directories: string[] = [];
 
@@ -23,6 +29,28 @@ async function fixture() {
   await ports.db.connect();
   const app = await buildApp(loadConfig(), ports);
   return { app, ports };
+}
+
+async function plannedBuild(name: string) {
+  const { app, ports } = await fixture();
+  const root = process.env.PRINT_PARTNER_DATA_DIR;
+  if (!root) throw new Error("missing data dir");
+  const repo = ports.repository;
+  const source = repo.createSource({ name: `${name} source`, url: "https://example.test/lock" });
+  const sourceRoot = join(root, "repos", String(source.id));
+  mkdirSync(sourceRoot, { recursive: true });
+  writeFileSync(join(sourceRoot, "bracket.stl"), "solid bracket\nendsolid bracket\n");
+  repo.updateSource(source.id, { local_path: sourceRoot });
+  const profile = repo.createProfile(name, source.id);
+  const accepted = acceptPlanForTest(repo, profile.id);
+  if (!accepted.merged) throw new Error(accepted.reason ?? "plan not accepted");
+  const workspace = repo.readAcceptedPlateWorkspaceInput(profile.id);
+  if (workspace.kind !== "setup" && workspace.kind !== "ready") {
+    throw new Error(workspace.kind);
+  }
+  const unit = workspace.units[0];
+  if (!unit) throw new Error("no required unit");
+  return { app, ports, profile, unit };
 }
 
 describe("production setup routes", () => {
@@ -237,6 +265,264 @@ describe("production setup routes", () => {
         payload: { kind: "set_route", route: "plate" },
       });
       expect(rejected.statusCode).toBe(400);
+    } finally {
+      await app.close();
+      ports.db.close();
+    }
+  });
+
+  it("refuses a method change when a recorded print covers the current Required units", async () => {
+    const { app, ports, profile, unit } = await plannedBuild("Locked units");
+    try {
+      const selection = await app.inject({
+        method: "PATCH",
+        url: `/plans/${profile.id}/production-setup`,
+        payload: {
+          kind: "set_selection",
+          selection: { mode: "custom", selected_unit_tokens: [unit.token] },
+        },
+      });
+      expect(selection.statusCode).toBe(200);
+      const route = await app.inject({
+        method: "PATCH",
+        url: `/plans/${profile.id}/production-setup`,
+        payload: { kind: "set_route", route: "plates" },
+      });
+      expect(route.statusCode).toBe(200);
+      const assignments = await app.inject({
+        method: "PATCH",
+        url: `/plans/${profile.id}/production-setup`,
+        payload: {
+          kind: "replace_printer_assignments",
+          printer_assignments: [{ token: unit.token, printer_id: "printer-one" }],
+        },
+      });
+      expect(assignments.statusCode).toBe(200);
+      const link = createPrinterCheckoffLink(ports.repository, {
+        profile_id: profile.id,
+        integration_id: "unmanaged",
+        printer_id: "printer-one",
+        host_name: "Bench printer",
+        filename: "batch.gcode",
+        units: [{
+          part_id: unit.partId != null && unit.partId > 0 ? unit.partId : 1,
+          unit_index: 0,
+          object_name: unit.objectName,
+        }],
+      });
+      if (!link) throw new Error("recorded print was not stored");
+      const verified = updatePrinterCheckoffLink(ports.repository, link.id, {
+        state: "verified",
+        units_marked: 1,
+      });
+      expect(verified?.state).toBe("verified");
+
+      const same = await app.inject({
+        method: "PATCH",
+        url: `/plans/${profile.id}/production-setup`,
+        payload: { kind: "set_route", route: "plates" },
+      });
+      expect(same.statusCode).toBe(200);
+      const rejected = await app.inject({
+        method: "PATCH",
+        url: `/plans/${profile.id}/production-setup`,
+        payload: { kind: "set_route", route: "stl" },
+      });
+      expect(rejected.statusCode).toBe(409);
+      expect(rejected.json()).toMatchObject({ code: "production_method_locked" });
+
+      const loaded = await app.inject({
+        method: "GET",
+        url: `/plans/${profile.id}/production-setup`,
+      });
+      expect(loaded.json()).toMatchObject({
+        route: "plates",
+        selection: { mode: "custom", selected_unit_tokens: [unit.token] },
+        printer_assignments: [{ token: unit.token, printer_id: "printer-one" }],
+      });
+      const stored = loadPrinterCheckoffLinks(ports.repository).find((entry) => entry.id === link.id);
+      expect(stored).toMatchObject({
+        state: "verified",
+        filename: "batch.gcode",
+        units: [{ object_name: unit.objectName }],
+      });
+    } finally {
+      await app.close();
+      ports.db.close();
+    }
+  });
+
+  it("refuses a method change when the recorded label is a slicer copy of the current unit", async () => {
+    const { app, ports, profile, unit } = await plannedBuild("Decorated lock");
+    try {
+      const selection = await app.inject({
+        method: "PATCH",
+        url: `/plans/${profile.id}/production-setup`,
+        payload: {
+          kind: "set_selection",
+          selection: { mode: "custom", selected_unit_tokens: [unit.token] },
+        },
+      });
+      expect(selection.statusCode).toBe(200);
+      const route = await app.inject({
+        method: "PATCH",
+        url: `/plans/${profile.id}/production-setup`,
+        payload: { kind: "set_route", route: "plates" },
+      });
+      expect(route.statusCode).toBe(200);
+      const assignments = await app.inject({
+        method: "PATCH",
+        url: `/plans/${profile.id}/production-setup`,
+        payload: {
+          kind: "replace_printer_assignments",
+          printer_assignments: [{ token: unit.token, printer_id: "printer-one" }],
+        },
+      });
+      expect(assignments.statusCode).toBe(200);
+      const decoratedName = `${unit.objectName}_id_0_copy_0`;
+      const link = createPrinterCheckoffLink(ports.repository, {
+        profile_id: profile.id,
+        integration_id: "unmanaged",
+        printer_id: "printer-one",
+        host_name: "Bench printer",
+        filename: "batch.gcode",
+        units: [{
+          part_id: unit.partId != null && unit.partId > 0 ? unit.partId : 1,
+          unit_index: 0,
+          object_name: decoratedName,
+        }],
+        unlabeled_names: ["shop-floor.gcode"],
+      });
+      if (!link) throw new Error("recorded print was not stored");
+
+      const rejected = await app.inject({
+        method: "PATCH",
+        url: `/plans/${profile.id}/production-setup`,
+        payload: { kind: "set_route", route: "stl" },
+      });
+      expect(rejected.statusCode).toBe(409);
+      expect(rejected.json()).toMatchObject({ code: "production_method_locked" });
+
+      const loaded = await app.inject({
+        method: "GET",
+        url: `/plans/${profile.id}/production-setup`,
+      });
+      expect(loaded.json()).toMatchObject({
+        route: "plates",
+        selection: { mode: "custom", selected_unit_tokens: [unit.token] },
+        printer_assignments: [{ token: unit.token, printer_id: "printer-one" }],
+      });
+      const stored = loadPrinterCheckoffLinks(ports.repository).find((entry) => entry.id === link.id);
+      expect(stored).toMatchObject({
+        filename: "batch.gcode",
+        units: [{ object_name: decoratedName }],
+        unlabeled_names: ["shop-floor.gcode"],
+      });
+    } finally {
+      await app.close();
+      ports.db.close();
+    }
+  });
+
+  it("lets an unanswered Build save its first route after a recorded print", async () => {
+    const { app, ports, profile, unit } = await plannedBuild("First route");
+    try {
+      const link = createPrinterCheckoffLink(ports.repository, {
+        profile_id: profile.id,
+        integration_id: "unmanaged",
+        printer_id: "printer-one",
+        host_name: "Bench printer",
+        filename: "batch.gcode",
+        units: [{
+          part_id: unit.partId != null && unit.partId > 0 ? unit.partId : 1,
+          unit_index: 0,
+          object_name: unit.objectName,
+        }],
+      });
+      if (!link) throw new Error("recorded print was not stored");
+
+      const saved = await app.inject({
+        method: "PATCH",
+        url: `/plans/${profile.id}/production-setup`,
+        payload: { kind: "set_route", route: "plates" },
+      });
+      expect(saved.statusCode).toBe(200);
+      expect(saved.json().route).toBe("plates");
+
+      const rejected = await app.inject({
+        method: "PATCH",
+        url: `/plans/${profile.id}/production-setup`,
+        payload: { kind: "set_route", route: "stl" },
+      });
+      expect(rejected.statusCode).toBe(409);
+      expect(rejected.json()).toMatchObject({ code: "production_method_locked" });
+
+      const loaded = await app.inject({
+        method: "GET",
+        url: `/plans/${profile.id}/production-setup`,
+      });
+      expect(loaded.json()).toMatchObject({ route: "plates" });
+      const stored = loadPrinterCheckoffLinks(ports.repository).find((entry) => entry.id === link.id);
+      expect(stored).toMatchObject({
+        filename: "batch.gcode",
+        units: [{ object_name: unit.objectName }],
+      });
+    } finally {
+      await app.close();
+      ports.db.close();
+    }
+  });
+
+  it("lets a legacy external Build prepare plates after a past file that names no Required unit", async () => {
+    const { app, ports, profile, unit } = await plannedBuild("Past file");
+    try {
+      const link = createPrinterCheckoffLink(ports.repository, {
+        profile_id: profile.id,
+        integration_id: "unmanaged",
+        printer_id: "loose-printer",
+        host_name: "Unmanaged",
+        filename: "shop-floor.gcode",
+        units: [{ part_id: 1, unit_index: 0, object_name: "shop-floor.gcode" }],
+        unlabeled_names: ["shop-floor.gcode"],
+      });
+      if (!link) throw new Error("past file was not stored");
+      const selection = await app.inject({
+        method: "PATCH",
+        url: `/plans/${profile.id}/production-setup`,
+        payload: {
+          kind: "set_selection",
+          selection: { mode: "custom", selected_unit_tokens: [unit.token] },
+        },
+      });
+      expect(selection.statusCode).toBe(200);
+      const external = await app.inject({
+        method: "PATCH",
+        url: `/plans/${profile.id}/production-setup`,
+        payload: { kind: "set_route", route: "external" },
+      });
+      expect(external.statusCode).toBe(200);
+      const saved = await app.inject({
+        method: "PATCH",
+        url: `/plans/${profile.id}/production-setup`,
+        payload: { kind: "set_route", route: "plates" },
+      });
+      expect(saved.statusCode).toBe(200);
+      expect(saved.json().route).toBe("plates");
+      const loaded = await app.inject({
+        method: "GET",
+        url: `/plans/${profile.id}/production-setup`,
+      });
+      expect(loaded.json()).toMatchObject({
+        route: "plates",
+        selection: { mode: "custom", selected_unit_tokens: [unit.token] },
+      });
+      const stored = loadPrinterCheckoffLinks(ports.repository).find((entry) => entry.id === link.id);
+      expect(stored).toMatchObject({
+        filename: "shop-floor.gcode",
+        state: "watching",
+        units: [{ object_name: "shop-floor.gcode" }],
+        unlabeled_names: ["shop-floor.gcode"],
+      });
     } finally {
       await app.close();
       ports.db.close();

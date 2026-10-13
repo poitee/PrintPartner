@@ -3,6 +3,7 @@ import { Readable, Transform, type TransformCallback } from "node:stream";
 import { cancelResponseBody } from "../lib/bounded-response.js";
 import {
   LocalSourceSnapshotStore,
+  releaseSharedSnapshot,
   sourceRelativePath,
   type OmittedSnapshotFile,
   type PublishedSourceSnapshot,
@@ -418,6 +419,8 @@ type SyncGithubSourceInput = {
   sourceId: number;
   token?: string | null;
   options?: SyncGithubOptions;
+  /** Route activation holds the snapshot until success or rollback. Direct callers leave this unset. */
+  retainSnapshot?: boolean;
 };
 
 function snapshotKind(path: string): SnapshotFileKind | null {
@@ -564,7 +567,10 @@ export async function syncGithubSource(input: SyncGithubSourceInput): Promise<Sy
     docs: metadataBlobs.length + selectedDocs.length,
   };
   const progress = { stls: 0, docs: 0 };
-  const store = new LocalSourceSnapshotStore({ reposDir });
+  const store = new LocalSourceSnapshotStore({
+    reposDir,
+    retainUntilRelease: input.retainSnapshot === true,
+  });
   const snapshot = await store.materialize({
     sourceId,
     upstreamRevisionKey: githubSnapshotRevisionKey(commitSha, metadataPaths),
@@ -601,29 +607,34 @@ export async function syncGithubSource(input: SyncGithubSourceInput): Promise<Sy
     },
   });
 
-  const snapshotStls = snapshot.files.filter((file) => file.kind === "stl");
-  const snapshotDocs = snapshot.files.filter(
-    (file) => file.kind !== "stl" && file.kind !== "artifact",
-  );
-  const docEntries: SyncDocEntry[] = snapshotDocs.map((entry) => {
-    const kind = classifyDocPath(entry.path);
-    if (!kind) throw new Error(`Published snapshot has an invalid document path: ${entry.path}`);
-    return { path: entry.path, kind, sizeBytes: entry.sizeBytes };
-  });
-  const docsSkippedBytes = snapshot.selection.omittedFiles.reduce(
-    (sum, file) => sum + (file.sizeHintBytes ?? 0),
-    0,
-  );
+  try {
+    const snapshotStls = snapshot.files.filter((file) => file.kind === "stl");
+    const snapshotDocs = snapshot.files.filter(
+      (file) => file.kind !== "stl" && file.kind !== "artifact",
+    );
+    const docEntries: SyncDocEntry[] = snapshotDocs.map((entry) => {
+      const kind = classifyDocPath(entry.path);
+      if (!kind) throw new Error(`Published snapshot has an invalid document path: ${entry.path}`);
+      return { path: entry.path, kind, sizeBytes: entry.sizeBytes };
+    });
+    const docsSkippedBytes = snapshot.selection.omittedFiles.reduce(
+      (sum, file) => sum + (file.sizeHintBytes ?? 0),
+      0,
+    );
 
-  return {
-    commitSha,
-    snapshot,
-    stlPaths: snapshotStls.map((file) => file.path),
-    downloaded: snapshotStls.length,
-    docPaths: docEntries,
-    docsDownloaded: snapshotDocs.length,
-    docsSkippedBytes,
-  };
+    return {
+      commitSha,
+      snapshot,
+      stlPaths: snapshotStls.map((file) => file.path),
+      downloaded: snapshotStls.length,
+      docPaths: docEntries,
+      docsDownloaded: snapshotDocs.length,
+      docsSkippedBytes,
+    };
+  } catch (error) {
+    if (input.retainSnapshot) releaseSharedSnapshot(snapshot);
+    throw error;
+  }
 }
 
 export { classifyDocPath };

@@ -10,18 +10,28 @@ import { sourceRelativePath, SOURCE_SNAPSHOT_MANIFEST_FILE as manifest }
 import { replayCorpus } from './source-path-replay.mjs';
 
 const corpusOf = (...cases) => ({
-  seed: 'regression', generated: 0, rust_unicode_version: [16, 0, 0],
+  seed: 'regression', generated: 0, rust_unicode_version: [17, 0, 0],
   cases: cases.map((c) => ({ origin: 'fixture', rustReferenceAccepts: c.rustAccepts, ...c })),
 });
 const run = (corpus, validator = sourceRelativePath) => replayCorpus(corpus, validator, manifest);
 
-test('colon difference is retained with the complete path and follow-up', () => {
+test('a different Unicode patch version fails the version guard', () => {
+  const [major, minor = 0, patch = 0] = process.versions.unicode.split('.').map(Number);
+  const report = run({
+    ...corpusOf({ path: 'part.stl', rustNfc: 'part.stl', rustAccepts: true }),
+    rust_unicode_version: [major, minor, patch + 1],
+  });
+  assert.equal(report.unicodeVersionsMatch, false);
+});
+
+test('colon difference is retained with the complete path and documented rule', () => {
   const report = run(corpusOf({ path: 'a:b.stl', rustNfc: 'a:b.stl', rustAccepts: false }));
   assert.equal(report.mismatches, 1);
   assert.equal(report.knownRustStricter, 1);
   assert.equal(report.unexpectedMismatches, 0);
   assert.equal(report.mismatchCases[0].path, 'a:b.stl');
-  assert.match(report.mismatchCases[0].followUp, /GRE-555/);
+  assert.deepEqual(report.mismatchCases[0].rustOnlyRules, ['colon']);
+  assert.match(report.rustOnlyRules.colon.documented, /pp-source\/README\.md/);
 });
 
 test('a colon cannot excuse a Node parser that silently normalizes NFD', () => {
@@ -33,23 +43,28 @@ test('a colon cannot excuse a Node parser that silently normalizes NFD', () => {
   assert.equal(report.mismatchCases[0].nodeSharedAccepts, false);
 });
 
-test('Unicode drift is recorded even when a colon makes both parsers reject', () => {
+test('Unicode 16 drift fails even when a colon makes both parsers reject', () => {
+  // Unicode 16 treated U+1ADD as a starter, so NFC left these spellings unchanged.
   const plain = 'a\u1add\u0300.stl';
   const colon = 'a\u1add\u0300:.stl';
-  const report = run(corpusOf(
-    { path: plain, rustNfc: plain, rustAccepts: true },
-    { path: colon, rustNfc: colon, rustAccepts: false },
-  ));
+  const report = run({
+    ...corpusOf(
+      { path: plain, rustNfc: plain, rustAccepts: true },
+      { path: colon, rustNfc: colon, rustAccepts: false },
+    ),
+    rust_unicode_version: [16, 0, 0],
+  });
+  assert.equal(report.unicodeVersionsMatch, false);
   assert.equal(report.mismatches, 1);
-  assert.equal(report.knownUnicodeMismatches, 1);
   assert.equal(report.normalizationDifferences, 2);
-  assert.equal(report.unexpectedMismatches, 0);
+  assert.equal(report.unexpectedMismatches, 2);
+  assert.ok(report.unexpectedCases.every((c) => c.errors.includes('Unclassified NFC difference')));
   assert.equal(report.normalizationCases[1].path, colon);
   assert.equal(report.normalizationCases[1].rustSharedAccepts, true);
   assert.equal(report.normalizationCases[1].nodeSharedAccepts, false);
 });
 
-test('a different Unicode reordering is not excused by U+1ADD or a colon', () => {
+test('a Unicode reordering difference is not excused by a colon', () => {
   const path = 'a\u1add\u0303:.stl';
   const report = run(corpusOf({ path, rustNfc: path, rustAccepts: false }));
   assert.equal(report.mismatches, 0);
@@ -75,17 +90,44 @@ test('all bound mismatches retain exact inputs and classifications', () => {
     && c.classification === 'known-rust-stricter' && !c.rustAccepts && c.nodeAccepts));
 });
 
-test('all confirmed Unicode 16-to-17 probes retain their expected outcomes', () => {
+test('all Unicode 16-to-17 probes agree between Rust and Node', () => {
   const fixtures = JSON.parse(readFileSync(new URL(
     '../../crates/pp-source/tests/fixtures/source-path-unicode-16-17.json', import.meta.url,
   ), 'utf8'));
   assert.equal(fixtures.length, 408);
   const report = run(corpusOf(...fixtures.map((c) => ({ ...c, rustAccepts: c.accept }))));
-  assert.equal(report.mismatches, 113);
-  assert.equal(report.knownUnicodeMismatches, 113);
+  assert.equal(report.unicodeVersionsMatch, true);
+  assert.equal(report.mismatches, 0);
+  assert.equal(report.normalizationDifferences, 0);
   assert.equal(report.unexpectedMismatches, 0);
   for (const fixture of fixtures) {
     assert.equal(fixture.path.normalize('NFC'), fixture.nodeNfc, fixture.path);
+    assert.equal(fixture.rustNfc, fixture.nodeNfc, fixture.path);
+    assert.equal(fixture.accept, fixture.nodeAccept, fixture.path);
+  }
+});
+
+test('the CLI exits 1 when Rust and Node Unicode versions differ', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'source-path-version-'));
+  try {
+    const corpusPath = join(directory, 'corpus.json');
+    const reportPath = join(directory, 'report.json');
+    writeFileSync(corpusPath, JSON.stringify({
+      ...corpusOf({ path: 'part.stl', rustNfc: 'part.stl', rustAccepts: true }),
+      rust_unicode_version: [16, 0, 0],
+    }));
+    const result = spawnSync(process.execPath, [
+      fileURLToPath(new URL('./source-path-replay.mjs', import.meta.url)),
+      fileURLToPath(new URL('../../../web/apps/server/dist/current/services/local-source-snapshot.js', import.meta.url)),
+      corpusPath, reportPath,
+    ], { encoding: 'utf8' });
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /Rust Unicode 16\.0\.0 differs from Node Unicode/);
+    const report = JSON.parse(readFileSync(reportPath, 'utf8'));
+    assert.equal(report.unexpectedMismatches, 0);
+    assert.equal(report.unicodeVersionsMatch, false);
+  } finally {
+    rmSync(directory, { recursive: true });
   }
 });
 
