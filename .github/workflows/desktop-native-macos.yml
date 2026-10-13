@@ -4,18 +4,29 @@ on:
   workflow_dispatch:
   # No workflow-level paths filter: a PR-level `paths:` skip leaves the
   # "bundle (...)" checks absent and pending if required. The `changes` job
-  # decides instead: both architecture jobs conclude `skipped` when no native
-  # inputs changed. GitHub accepts this conclusion for required status checks.
+  # decides instead: macOS jobs conclude `skipped` (or, for server-smoke, a
+  # cheap ubuntu stub succeeds) when they are not selected. GitHub accepts
+  # `skipped` for required status checks, so PRs never hang on them.
+  #
+  # Hosted macOS is expensive and queues for hours, so it runs post-merge:
+  #   - push to main (both arches), nightly (both arches), manual dispatch;
+  #   - PRs only when macOS/desktop-native inputs change (arm64 only) or the
+  #     PR carries the `ci:macos` label (arm64 only). Intel never runs on PRs.
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
   push:
     branches: [main, master]
+  schedule:
+    - cron: '17 7 * * *'
 
 permissions:
   contents: read
 
+# One run per ref: a newer push supersedes an older run (PRs and main alike).
+# Nightly runs get their own group so a merge cannot cancel them.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'schedule' && 'nightly' || github.ref }}
+  cancel-in-progress: true
 
 defaults:
   run:
@@ -27,6 +38,10 @@ jobs:
     timeout-minutes: 10
     outputs:
       native: ${{ steps.select.outputs.native }}
+      # 'true' when any macOS job should do real work in this run.
+      macos: ${{ steps.plan.outputs.macos }}
+      # 'true' only off-PR (push to main, nightly, dispatch).
+      intel: ${{ steps.plan.outputs.intel }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -42,13 +57,58 @@ jobs:
         run: |
           python3 -m unittest discover -s scripts -p test_macos_bundle_path_filter.py
           python3 scripts/macos-bundle-path-filter.py
+      - name: Decide which macOS jobs run
+        id: plan
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          NATIVE: ${{ steps.select.outputs.native }}
+          HAS_LABEL: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:macos') }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" != pull_request ]]; then
+            macos=true intel=true
+          elif [[ "$HAS_LABEL" == true || "$NATIVE" != false ]]; then
+            # Fail open: an unknown selection still runs arm64.
+            macos=true intel=false
+          else
+            macos=false intel=false
+          fi
+          echo "macos=$macos" >> "$GITHUB_OUTPUT"
+          echo "intel=$intel" >> "$GITHUB_OUTPUT"
+          echo "macOS jobs: $macos (intel: $intel; native inputs: $NATIVE; ci:macos label: $HAS_LABEL)" >> "$GITHUB_STEP_SUMMARY"
+
+  # Fast Linux gate: macOS runners only start once the shared web build and
+  # filter tests pass, so doomed commits never burn a macOS queue slot.
+  linux-precheck:
+    needs: changes
+    if: ${{ needs.changes.outputs.macos != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.21.0'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build desktop web assets on Linux
+        env:
+          VITE_PRINT_PARTNER_DESKTOP: '1'
+        run: |
+          set -euo pipefail
+          npm --prefix web ci
+          npm --prefix web run build
+          git diff --exit-code -- web/package-lock.json
 
   server-smoke:
-    needs: changes
-    # Report a status on a cheap runner when native inputs did not change.
+    needs: [changes, linux-precheck]
+    # Report a status on a cheap runner when macOS work is not selected.
     # Unknown/failed selection still runs the full macOS smoke.
-    if: ${{ !cancelled() }}
-    runs-on: ${{ needs.changes.outputs.native != 'false' && 'macos-26' || 'ubuntu-24.04' }}
+    if: ${{ !cancelled() && (needs.changes.outputs.macos == 'false' || needs.linux-precheck.result == 'success') }}
+    runs-on: ${{ needs.changes.outputs.macos != 'false' && 'macos-26' || 'ubuntu-24.04' }}
     timeout-minutes: 30
     env:
       VITE_PRINT_PARTNER_DESKTOP: '1'
@@ -62,15 +122,15 @@ jobs:
           set -euo pipefail
           bash rust/scripts/workflow-smoke-pgrep-test.sh
       - name: Skip native server smoke (no native inputs changed)
-        if: needs.changes.outputs.native == 'false'
+        if: needs.changes.outputs.macos == 'false'
         run: echo "No native inputs changed; macOS pp-server smoke skipped." >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        if: needs.changes.outputs.native != 'false'
+        if: needs.changes.outputs.macos != 'false'
         with:
           node-version: '24.21.0'
           architecture: arm64
       - name: Build desktop assets and pp-server
-        if: needs.changes.outputs.native != 'false'
+        if: needs.changes.outputs.macos != 'false'
         run: |
           set -euo pipefail
           export PP_EVIDENCE="$RUNNER_TEMP/server-smoke-evidence"
@@ -88,12 +148,12 @@ jobs:
           cargo build --manifest-path rust/Cargo.toml --locked -p pp-server 2>&1 | tee "$PP_EVIDENCE/server-build.log"
           git diff --exit-code -- rust/Cargo.lock web/package-lock.json
       - name: Smoke pp-server on loopback
-        if: needs.changes.outputs.native != 'false'
+        if: needs.changes.outputs.macos != 'false'
         run: |
           set -euo pipefail
           bash rust/scripts/workflow-smoke.sh rust/target/debug/pp-server "$(command -v node)" 2>&1 | tee "$PP_EVIDENCE/workflow-smoke.log"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: ${{ always() && needs.changes.outputs.native != 'false' }}
+        if: ${{ always() && needs.changes.outputs.macos != 'false' }}
         with:
           name: native-macos-server-smoke-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/server-smoke-evidence/
@@ -103,9 +163,9 @@ jobs:
   bundle:
     # Explicit architecture jobs keep both check names present even when skipped.
     name: bundle (macos-26, arm64, arm64, aarch64-apple-darwin, ee35ee364a0c626df7852d9a5bc0c5394b6440772e9...
-    needs: changes
+    needs: [changes, linux-precheck]
     # Fail open if selection fails; honor concurrency cancellation.
-    if: ${{ !cancelled() && needs.changes.outputs.native != 'false' }}
+    if: ${{ !cancelled() && needs.changes.outputs.macos != 'false' && needs.linux-precheck.result == 'success' }}
     runs-on: macos-26
     timeout-minutes: 90
     env:
@@ -259,8 +319,9 @@ jobs:
 
   bundle-intel:
     name: bundle (macos-26-intel, x86_64, x64, x86_64-apple-darwin, e5386ba6dadc3fbbdcf46c1f95b700f28caf03d...
-    needs: changes
-    if: ${{ !cancelled() && needs.changes.outputs.native != 'false' }}
+    needs: [changes, linux-precheck]
+    # Intel is post-merge only: push to main, nightly, dispatch.
+    if: ${{ !cancelled() && needs.changes.outputs.intel == 'true' && needs.linux-precheck.result == 'success' }}
     runs-on: macos-26-intel
     timeout-minutes: 90
     env:
@@ -274,3 +335,73 @@ jobs:
       CARGO_PROFILE_RELEASE_DEBUG: '0'
       npm_config_build_from_source: 'true'
     steps: *bundle-steps
+
+  macos-storage-gate:
+    needs: [changes, linux-precheck]
+    if: ${{ !cancelled() && needs.changes.outputs.macos != 'false' && needs.linux-precheck.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Fetch pinned historical schema commits
+        shell: bash
+        run: rust/scripts/fetch-historical-schema-commits.sh
+      - name: Install pinned storage-fixture Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22.23.3'
+      - name: Record storage-fixture executable
+        shell: bash
+        run: |
+          test "$(node --version)" = v22.23.3
+          echo "PP_SCHEMA_PARITY_NODE=$(node -p process.execPath)" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.21.0'
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: rust -> target
+      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        with:
+          tool: nextest
+      - name: Verify source Unicode and case regressions on macOS
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Intact legacy snapshots can contain names that default APFS aliases.
+          # Keep their bytes distinct so the suite exercises migration policy.
+          fixture_root=$(mktemp -d "$RUNNER_TEMP/pp-source-case.XXXXXX")
+          fixture_mount="$fixture_root/mount"
+          mkdir "$fixture_mount"
+          # One archive test retains two 256 MiB copies alongside parallel fixtures.
+          hdiutil create -size 4g -type SPARSE -fs 'Case-sensitive APFS' \
+            -volname pp-source-fixtures "$fixture_root/fixtures.sparseimage"
+          hdiutil attach -nobrowse -owners on -mountpoint "$fixture_mount" \
+            "$fixture_root/fixtures.sparseimage"
+          trap 'hdiutil detach "$fixture_mount"' EXIT
+          df -h "$fixture_mount"
+          mkdir "$fixture_mount/tmp"
+          TMPDIR="$fixture_mount/tmp" cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-source
+      - name: Install locked dependencies and build measured desktop assets
+        shell: bash
+        env:
+          VITE_PRINT_PARTNER_DESKTOP: '1'
+        run: |
+          set -euo pipefail
+          npm --prefix web ci
+          npm --prefix web rebuild better-sqlite3
+          cargo fetch --locked --manifest-path rust/Cargo.toml
+          npm --prefix web run build
+          echo "PP_TEST_NODE=$(command -v node)" >> "$GITHUB_ENV"
+          python3 rust/scripts/build-desktop-manifest.py --web web --node "$(command -v node)" --output rust/bundle-manifest.json --commit "$GITHUB_SHA"
+      - name: Verify macOS identity and core-death storage gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --lib
+          cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage
+          cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --test runtime_m0 core_death_with_live_child_refuses_standalone_node -- --exact --nocapture
+          cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --test runtime_m0 dead_core_marker_without_child_info_allows_start -- --exact
+          npm --prefix web run test -w @print-partner/server -- src/desktop-context.test.ts

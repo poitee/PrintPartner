@@ -92,6 +92,26 @@ function assertClosedStateGraph(capture: { [key: string]: Json }): void {
   for (const id of Object.keys(states)) assert(referenced.has(id), `Unreferenced state ${id}`);
 }
 
+function assertRouteStateInvariants(capture: { [key: string]: Json }): void {
+  const routes = capture.route_cases;
+  assert(Array.isArray(routes), "route_cases");
+  routes.forEach((entry, index) => {
+    const route = object(entry);
+    const name = typeof route.name === "string" ? route.name : String(index);
+    const label = `route_cases.${name}`;
+    const invariants = route.invariants;
+    assert(Array.isArray(invariants), `${label}: invariants`);
+    const before = stateId(route.before, `${label}.before`);
+    const after = stateId(route.after, `${label}.after`);
+    if (invariants.includes("exact-database-and-file-no-write")) {
+      assert.equal(before, after, `${label}: exact-database-and-file-no-write requires identical before and after states`);
+    }
+    if (invariants.includes("one-publication")) {
+      assert.notEqual(before, after, `${label}: one-publication requires different before and after states`);
+    }
+  });
+}
+
 export function compare(left: Json, right: Json): void {
   const a = object(left);
   const b = object(right);
@@ -111,4 +131,5 @@ export function compare(left: Json, right: Json): void {
     assert.equal(digest(canonical(state)), id, `State hash mismatch: ${id}`);
   }
   assertClosedStateGraph(normalized);
+  assertRouteStateInvariants(normalized);
 }
