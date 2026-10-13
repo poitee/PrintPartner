@@ -575,8 +575,8 @@ export async function startServer(config: ServerConfig) {
     const childAlreadyCurrent =
       ownership.kind === "child" &&
       databaseSchemaIsCurrent(join(config.dataDir, "print-partner.db"));
-    const skipRustStartup = ownership.kind === "foreign" || childAlreadyCurrent;
-    if (!config.databaseUrl && !skipRustStartup) {
+    const skipSchemaStartup = ownership.kind === "foreign" || childAlreadyCurrent;
+    if (!config.databaseUrl && !skipSchemaStartup) {
       const preparation = await prepareSqliteUpgrade({
         dataDir: config.dataDir,
         appVersion: config.version,
@@ -597,8 +597,9 @@ export async function startServer(config: ServerConfig) {
     try {
       await ports.db.connect();
 
-      // One-time migration: move print_outcomes blob → print_job_parts SQL rows.
-      if (!skipRustStartup && ports.repository) {
+      // Rust schema setup does not copy these Node-only rows, so a child on
+      // schema 34 still has to run them. They are idempotent.
+      if (ownership.kind !== "foreign" && ports.repository) {
         try {
           const { migratePrintOutcomesBlob } = await import(
             "./services/printer-outcomes-store.js"
@@ -609,8 +610,7 @@ export async function startServer(config: ServerConfig) {
         }
       }
 
-      // Best-effort: upsert Advisor notes from shipped/imported domain pack onto matching sources.
-      if (!skipRustStartup && ports.repository) {
+      if (ownership.kind !== "foreign" && ports.repository) {
         try {
           const { backfillAdvisorNotesFromDomainPack } = await import(
             "./assistant/domain-pack.js"
