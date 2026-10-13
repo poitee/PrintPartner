@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -13,6 +13,8 @@ import {
   measureTenantDiskUsage,
   TenantDiskQuotaError,
 } from "./tenant-disk-quota.js";
+
+import { createSourceUploadStaging } from "../services/archive-import.js";
 
 const dirs: string[] = [];
 
@@ -136,4 +138,21 @@ it("permits cleanup of existing overage while refusing every new byte", async ()
     rmSync(join(root, "old"));
   });
   expect(await measureTenantDiskUsage({ ...input, sourceIds: [] })).toBe(0);
+});
+
+it("counts abandoned upload bytes only for their tenant and refuses the next write", async () => {
+  const input = quotaFixture("tenant-a");
+  const sourcesDir = join(input.dataDir, "sources");
+  const own = createSourceUploadStaging(sourcesDir, "tenant-a");
+  const other = createSourceUploadStaging(sourcesDir, "tenant-a/../b");
+  mkdirSync(join(sourcesDir, "7", "files"), { recursive: true });
+  writeFileSync(join(sourcesDir, "7", "files", "keep.stl"), "12345");
+  writeFileSync(join(own, "upload.zip"), Buffer.alloc(1000));
+  writeFileSync(join(other, "upload.zip"), Buffer.alloc(2000));
+  symlinkSync(other, join(own, "other-tenant"));
+  expect(await measureTenantDiskUsage({ ...input, sourceIds: [7] })).toBe(1005);
+  expect(await measureTenantDiskUsage({ ...input, tenantId: "tenant-a/../b", sourceIds: [] })).toBe(2000);
+  await expect(runWithTenantDiskQuota({
+    ...input, sourceIds: () => [7], quotaBytes: 1005,
+  }, async () => chargeTenantDiskBytes(1))).rejects.toBeInstanceOf(TenantDiskQuotaError);
 });

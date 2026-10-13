@@ -130,6 +130,33 @@ describe("legacy Source manifest migration", () => {
     }
   });
 
+  it("retains legacy overrides when publication transactions are unsupported", async () => {
+    const { sqlite, repo } = fixture();
+    const source = repo.createSource({ name: "Unsupported migration", source_kind: "github" });
+    const workspace = sourceWorkspaceRoot(repo.reposDir, source.id);
+    mkdirSync(workspace, { recursive: true });
+    const legacyPath = legacySourceManifestOverridePath(repo.reposDir, source.id);
+    writeFileSync(legacyPath, "project: retained\nparts: []\n");
+    const before = repo.getProjectRow(source.id);
+    vi.spyOn(repo, "canPublishSourceRevision").mockReturnValue(false);
+    try {
+      const report = await migrateLegacySourceManifestOverrides(repo);
+      expect(report).toEqual({
+        migrated: [],
+        retained: [{
+          sourceId: source.id, legacyPath,
+          reason: "Source revision publication is unavailable on experimental PostgreSQL because atomic publication transactions are not supported.",
+        }],
+      });
+      expect(repo.getProjectRow(source.id)).toEqual(before);
+      expect(repo.listSourceRevisions(source.id)).toEqual([]);
+      expect(readFileSync(legacyPath, "utf8")).toBe("project: retained\nparts: []\n");
+      expect(readdirSync(workspace)).toEqual(["print-partner.manifest.yaml"]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
   it("atomically claims concurrently replaced legacy bytes without deleting them", async () => {
     const { sqlite, repo } = fixture();
     const source = repo.createSource({ name: "Atomic claim", source_kind: "local" });

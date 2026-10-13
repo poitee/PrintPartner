@@ -6,14 +6,19 @@ use axum::{
     response::IntoResponse,
     serve::Listener,
 };
+use http_body_util::BodyExt;
 use pp_compat::CompatHandle;
+use pp_drivers::moonraker::{Host, Route, Watchers};
 use pp_net::target;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashSet,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 use tokio::{net::TcpListener, task::JoinHandle};
@@ -72,6 +77,15 @@ enum EffectClass {
 }
 
 struct GatewayState {
+    watchers: tokio::sync::Mutex<Watchers>,
+    snapshot_refresh: tokio::sync::Mutex<()>,
+    snapshot_revision: AtomicU64,
+    /// One in-flight Node snapshot. Concurrent status misses join it instead of
+    /// each waiting out the queue deadline and reading the snapshot again.
+    snapshot_flight: SnapshotFlight,
+    watcher_cancelled: CancellationToken,
+    watcher_tasks: TaskTracker,
+    monitoring_suspended: tokio::sync::watch::Sender<bool>,
     origin: String,
     host: String,
     cookie_name: String,
@@ -83,6 +97,20 @@ struct GatewayState {
     relays: TaskTracker,
     cancelled: CancellationToken,
     shutdown_requested: CancellationToken,
+}
+
+/// Native power adapters call suspend before sleep and resume after wake.
+/// Window visibility must never call this control.
+#[derive(Clone)]
+pub struct MonitoringControl(Arc<GatewayState>);
+impl MonitoringControl {
+    pub async fn suspend(&self) {
+        self.0.monitoring_suspended.send_replace(true);
+        self.0.watchers.lock().await.stop().await;
+    }
+    pub fn resume(&self) {
+        self.0.monitoring_suspended.send_replace(false);
+    }
 }
 
 pub struct Gateway {
@@ -118,6 +146,13 @@ impl Gateway {
             "{origin}/__desktop/bootstrap?token={token}"
         )));
         let state = Arc::new(GatewayState {
+            watchers: tokio::sync::Mutex::new(Watchers::new()?),
+            snapshot_refresh: tokio::sync::Mutex::new(()),
+            snapshot_revision: AtomicU64::new(0),
+            snapshot_flight: SnapshotFlight::new(),
+            watcher_cancelled: CancellationToken::new(),
+            watcher_tasks: TaskTracker::new(),
+            monitoring_suspended: tokio::sync::watch::channel(false).0,
             origin,
             host,
             cookie_name: format!("pp_desktop_{}", address.port()),
@@ -137,6 +172,30 @@ impl Gateway {
             relays: TaskTracker::new(),
             cancelled: CancellationToken::new(),
             shutdown_requested: CancellationToken::new(),
+        });
+        let monitoring = state.clone();
+        state.watcher_tasks.spawn(async move {
+            let mut suspension = monitoring.monitoring_suspended.subscribe();
+            loop {
+                if *suspension.borrow_and_update() {
+                    monitoring.watchers.lock().await.stop().await;
+                    tokio::select! { biased;
+                        _=monitoring.watcher_cancelled.cancelled()=>break,
+                        _=suspension.changed()=>continue,
+                    }
+                }
+                tokio::select! { biased;
+                    _ = monitoring.watcher_cancelled.cancelled() => break,
+                    _ = suspension.changed() => continue,
+                    _ = refresh_watchers(&monitoring) => {},
+                }
+                tokio::select! { biased;
+                    _ = monitoring.watcher_cancelled.cancelled() => break,
+                    _ = suspension.changed() => continue,
+                    _ = tokio::time::sleep(Duration::from_secs(1)) => {},
+                }
+            }
+            monitoring.watchers.lock().await.stop().await;
         });
         let stop = CancellationToken::new();
         let stopping = stop.clone();
@@ -192,12 +251,16 @@ impl Gateway {
             .take()
             .context("Launch target already transferred")
     }
+    pub fn monitoring_control(&self) -> MonitoringControl {
+        MonitoringControl(self.state.clone())
+    }
     pub fn shutdown_requested(&self) -> ShutdownRequested {
         ShutdownRequested {
             token: self.state.shutdown_requested.clone(),
         }
     }
     pub async fn drain(&self) {
+        self.state.watcher_cancelled.cancel();
         {
             let mut access = self.state.access.lock().expect("Session mutex poisoned");
             access.draining = true;
@@ -217,10 +280,14 @@ impl Gateway {
             }
         })
         .await;
+        self.state.watcher_cancelled.cancel();
         self.state.cancelled.cancel();
         self.state.relays.close();
     }
     pub async fn stop(self) -> Result<()> {
+        self.state.watcher_cancelled.cancel();
+        self.state.watcher_tasks.close();
+        self.state.watcher_tasks.wait().await;
         self.stop.cancel();
         let mut task = self.task;
         let listener = match tokio::time::timeout(Duration::from_secs(1), &mut task).await {
@@ -236,6 +303,7 @@ impl Gateway {
                 }
             }
         };
+        self.state.watcher_cancelled.cancel();
         self.state.cancelled.cancel();
         self.state.relays.close();
         listener?;
@@ -459,6 +527,7 @@ async fn handle(
             .expect("Session mutex poisoned")
             .sessions
             .clear();
+        state.watcher_cancelled.cancel();
         state.cancelled.cancel();
         state.shutdown_requested.cancel();
         return axum::Json(serde_json::json!({"ok":true})).into_response();
@@ -548,6 +617,53 @@ async fn handle(
             "Origin required for operation with effects",
         );
     }
+    if matches!(request.method().as_str(), "GET" | "HEAD")
+        && let Some(id) = moonraker_status_id(&path)
+    {
+        // The last valid snapshot proves an id is not Moonraker (or is an HTTPS/redirect
+        // host left on Node until GRE-359), so those forward to Node without waiting.
+        let mut route = state.watchers.lock().await.route(&id);
+        if route_needs_snapshot(&route) {
+            // Detached so a client disconnect cannot cut a reconcile short.
+            // Concurrent misses share that one refresh; a recorded snapshot then
+            // routes confirmed non-Moonraker ids without another queue wait.
+            let refreshing = state.clone();
+            let _ = state
+                .watcher_tasks
+                .spawn(async move { refresh_watchers(&refreshing).await })
+                .await;
+            route = state.watchers.lock().await.route(&id);
+            if route_needs_snapshot(&route) {
+                // Never fall back to on-demand Node polling for a known HTTP Moonraker
+                // id, nor guess when no valid snapshot exists.
+                return error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Printer monitoring unavailable",
+                );
+            }
+        }
+        if let Route::Cached(status) = route {
+            let mut response = axum::Json(status).into_response();
+            response
+                .headers_mut()
+                .insert("cache-control", HeaderValue::from_static("no-store"));
+            if request.method() == "HEAD" {
+                // Keep GET's representation length even though HEAD has no body.
+                if let Some(length) = http_body::Body::size_hint(response.body()).exact() {
+                    response
+                        .headers_mut()
+                        .insert("content-length", HeaderValue::from(length));
+                }
+                *response.body_mut() = Body::empty();
+            }
+            return response;
+        }
+    }
+    let integrations_changed = matches!(request.method().as_str(), "POST" | "PATCH" | "DELETE")
+        && (path == "/api/v1/integrations"
+            || path
+                .strip_prefix("/api/v1/integrations/")
+                .is_some_and(|tail| !tail.contains('/')));
     let Some(endpoint) = state.compat.endpoint() else {
         let mut response = error(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -587,6 +703,29 @@ async fn handle(
     };
     match result {
         Ok(mut response) => {
+            if integrations_changed && response.status().is_success() {
+                // Older reads may not restore settings after a committed mutation.
+                state.snapshot_revision.fetch_add(1, Ordering::SeqCst);
+                let cause = if path == "/api/v1/integrations" {
+                    SnapshotCause::Create
+                } else {
+                    SnapshotCause::Update
+                };
+                // Read committed configuration; failure invalidates old monitoring.
+                // Finish reconciliation even if the requesting client disconnects.
+                let refreshing = state.clone();
+                let _ = state
+                    .watcher_tasks
+                    .spawn(async move {
+                        refreshing
+                            .snapshot_flight
+                            .fresh(&refreshing.watcher_cancelled, || {
+                                apply_snapshot(&refreshing, cause)
+                            })
+                            .await
+                    })
+                    .await;
+            }
             if response.status() == StatusCode::SWITCHING_PROTOCOLS
                 && let Some(inbound) = inbound_upgrade
             {
@@ -630,9 +769,328 @@ async fn handle(
     }
 }
 
+fn moonraker_status_id(path: &str) -> Option<String> {
+    let tail = path.strip_prefix("/api/v1/integrations/")?;
+    let id = tail.strip_suffix("/status")?;
+    if id.is_empty() || id.contains('/') {
+        return None;
+    }
+    pp_net::target::decode_segment(id).ok()
+}
+fn route_needs_snapshot(route: &Route) -> bool {
+    matches!(route, Route::NoSnapshot | Route::Unavailable)
+}
+/// Joiners wait out one in-flight read. The cap is the old queue deadline plus
+/// that read's own budget, so a shared 1.2s snapshot does not fail the third caller.
+const SNAPSHOT_FLIGHT_WAIT: Duration = Duration::from_secs(4);
+struct SnapshotFlight {
+    slot: Mutex<Option<tokio::sync::watch::Receiver<Option<bool>>>>,
+}
+struct FlightCleanup<'a> {
+    slot: &'a Mutex<Option<tokio::sync::watch::Receiver<Option<bool>>>>,
+    tx: tokio::sync::watch::Sender<Option<bool>>,
+    published: bool,
+}
+impl Drop for FlightCleanup<'_> {
+    fn drop(&mut self) {
+        if !self.published {
+            let _ = self.tx.send(Some(false));
+        }
+        *flight_slot(self.slot) = None;
+    }
+}
+fn flight_slot(
+    mutex: &Mutex<Option<tokio::sync::watch::Receiver<Option<bool>>>>,
+) -> std::sync::MutexGuard<'_, Option<tokio::sync::watch::Receiver<Option<bool>>>> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+impl SnapshotFlight {
+    fn new() -> Self {
+        Self {
+            slot: Mutex::new(None),
+        }
+    }
+    /// Mutations must read again after any pre-commit flight, never reuse its result.
+    async fn fresh<F, Fut>(&self, cancelled: &CancellationToken, lead: F) -> bool
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = bool>,
+    {
+        let pending = { flight_slot(&self.slot).clone() };
+        if let Some(flight) = pending {
+            let _ = wait_shared_snapshot(flight, cancelled).await;
+        }
+        if cancelled.is_cancelled() {
+            return false;
+        }
+        lead().await
+    }
+
+    /// The first caller runs `lead`. Everyone already waiting shares that result.
+    async fn share<F, Fut>(&self, cancelled: &CancellationToken, lead: F) -> bool
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = bool>,
+    {
+        let (tx, rx) = tokio::sync::watch::channel(None);
+        // Drop the guard before any await. A std mutex guard is not Send.
+        let joined = {
+            let mut slot = flight_slot(&self.slot);
+            if let Some(flight) = slot.clone() {
+                Some(flight)
+            } else {
+                *slot = Some(rx);
+                None
+            }
+        };
+        if let Some(flight) = joined {
+            return wait_shared_snapshot(flight, cancelled).await;
+        }
+        let mut cleanup = FlightCleanup {
+            slot: &self.slot,
+            tx,
+            published: false,
+        };
+        let result = lead().await;
+        let _ = cleanup.tx.send(Some(result));
+        cleanup.published = true;
+        result
+    }
+}
+async fn wait_shared_snapshot(
+    mut flight: tokio::sync::watch::Receiver<Option<bool>>,
+    cancelled: &CancellationToken,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + SNAPSHOT_FLIGHT_WAIT;
+    loop {
+        if let Some(done) = *flight.borrow() {
+            return done;
+        }
+        tokio::select! {
+            biased;
+            _ = cancelled.cancelled() => return false,
+            _ = tokio::time::sleep_until(deadline) => return false,
+            changed = flight.changed() => {
+                if changed.is_err() {
+                    return false;
+                }
+            }
+        }
+    }
+}
+async fn snapshot_refresh_guard<'a>(
+    mutex: &'a tokio::sync::Mutex<()>,
+    cancelled: &CancellationToken,
+    deadline: tokio::time::Instant,
+) -> Option<(tokio::sync::MutexGuard<'a, ()>, tokio::time::Instant)> {
+    tokio::select! { biased;
+        _ = cancelled.cancelled() => None,
+        guard = tokio::time::timeout_at(deadline, mutex.lock()) => guard.ok().map(|guard|
+            (guard, tokio::time::Instant::now() + Duration::from_secs(2))),
+    }
+}
+/// Slow/unavailable Node keeps last-known-good pollers this long before stopping them.
+const SNAPSHOT_GRACE: Duration = Duration::from_secs(10);
+#[derive(Clone, Copy)]
+enum SnapshotCause {
+    Periodic,
+    Create,
+    Update,
+}
+
+#[derive(Clone, Copy)]
+enum SnapshotError {
+    /// Timeout, restart or 5xx: routine refreshes may keep valid pollers briefly.
+    Unavailable,
+    /// Denied (4xx) or unparseable: fail closed immediately.
+    Invalid,
+    /// A mutation committed while this read was in flight; discard its result.
+    Superseded,
+}
+async fn refresh_watchers(state: &GatewayState) -> bool {
+    let cancelled = state.watcher_cancelled.clone();
+    state
+        .snapshot_flight
+        .share(&cancelled, || {
+            apply_snapshot(state, SnapshotCause::Periodic)
+        })
+        .await
+}
+async fn apply_snapshot(state: &GatewayState, cause: SnapshotCause) -> bool {
+    let revision = state.snapshot_revision.load(Ordering::SeqCst);
+    // Serialize snapshots without blocking already-cached reads on the Node round trip.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    // Queue contention must not shorten the independent Node-read budget.
+    let Some((_refresh, read_deadline)) =
+        snapshot_refresh_guard(&state.snapshot_refresh, &state.watcher_cancelled, deadline).await
+    else {
+        if !matches!(cause, SnapshotCause::Periodic) {
+            state.watchers.lock().await.invalidate().await;
+        }
+        return false;
+    };
+    let snapshot = tokio::select! { biased;
+        _ = state.watcher_cancelled.cancelled() => return false,
+        snapshot = tokio::time::timeout_at(read_deadline, async {
+            let endpoint = state.compat.endpoint().ok_or(SnapshotError::Unavailable)?;
+            let request = Request::builder()
+                .uri("/__desktop/moonraker-hosts")
+                .body(Body::empty())
+                .map_err(|_| SnapshotError::Invalid)?;
+            let response = endpoint
+                .forward(request)
+                .await
+                .map_err(|_| SnapshotError::Unavailable)?;
+            if response.status().is_client_error() {
+                return Err(SnapshotError::Invalid);
+            }
+            if !response.status().is_success() {
+                return Err(SnapshotError::Unavailable);
+            }
+            let body = http_body_util::Limited::new(
+                response.into_body(),
+                pp_drivers::moonraker::MAX_SNAPSHOT_BYTES,
+            )
+            .collect()
+            .await
+            .map_err(|_| SnapshotError::Unavailable)?
+            .to_bytes();
+            serde_json::from_slice::<Vec<Host>>(&body).map_err(|_| SnapshotError::Invalid)
+        }) => snapshot.unwrap_or(Err(SnapshotError::Unavailable)),
+    };
+    let mut watchers = state.watchers.lock().await;
+    if *state.monitoring_suspended.borrow() || state.watcher_cancelled.is_cancelled() {
+        if matches!(cause, SnapshotCause::Periodic) {
+            watchers.stop().await;
+        } else {
+            watchers.invalidate().await;
+        }
+        return false;
+    }
+    if state.snapshot_revision.load(Ordering::SeqCst) != revision {
+        return apply_host_snapshot(&mut watchers, Err(SnapshotError::Superseded), cause).await;
+    }
+    apply_host_snapshot(&mut watchers, snapshot, cause).await
+}
+
+async fn apply_host_snapshot(
+    watchers: &mut Watchers,
+    snapshot: Result<Vec<Host>, SnapshotError>,
+    cause: SnapshotCause,
+) -> bool {
+    match snapshot {
+        Ok(hosts) if hosts.len() > pp_drivers::moonraker::MAX_HOSTS => {
+            let grace = if matches!(cause, SnapshotCause::Update) {
+                Duration::ZERO
+            } else {
+                SNAPSHOT_GRACE
+            };
+            watchers.over_cap(&hosts, grace).await;
+            false
+        }
+        Ok(hosts) => watchers.replace(hosts).await.is_ok(),
+        Err(SnapshotError::Unavailable) if matches!(cause, SnapshotCause::Periodic) => {
+            watchers.snapshot_unavailable(SNAPSHOT_GRACE).await;
+            false
+        }
+        Err(SnapshotError::Superseded) if matches!(cause, SnapshotCause::Periodic) => false,
+        Err(_) => {
+            watchers.invalidate().await;
+            false
+        }
+    }
+}
+
 #[cfg(test)]
 mod spa_tests {
     use super::is_spa_client_path;
+
+    #[tokio::test]
+    async fn ticket_t_4_queued_refresh_keeps_full_read_budget() {
+        use std::time::Duration;
+        use tokio::time::{Instant, timeout_at};
+        let mutex = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let (first, first_deadline) =
+            super::snapshot_refresh_guard(&mutex, &cancel, Instant::now() + Duration::from_secs(2))
+                .await
+                .unwrap();
+        let queued_mutex = mutex.clone();
+        let queued = tokio::spawn(async move {
+            let (_second, read_deadline) = super::snapshot_refresh_guard(
+                &queued_mutex,
+                &cancel,
+                Instant::now() + Duration::from_secs(2),
+            )
+            .await
+            .unwrap();
+            assert!(read_deadline.duration_since(Instant::now()) > Duration::from_millis(1900));
+            // This healthy 1.2s read would time out with the queue's remaining 0.8s.
+            timeout_at(
+                read_deadline,
+                tokio::time::sleep(Duration::from_millis(1200)),
+            )
+            .await
+            .unwrap();
+        });
+        timeout_at(
+            first_deadline,
+            tokio::time::sleep(Duration::from_millis(1200)),
+        )
+        .await
+        .unwrap();
+        drop(first);
+        queued.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn ticket_t_4_snapshot_queue_deadline_and_shutdown_cancellation() {
+        let mutex = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+        let held = mutex.lock().await;
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let mut queued = tokio::task::JoinSet::new();
+        for _ in 0..8 {
+            let mutex = mutex.clone();
+            let cancel = cancel.clone();
+            queued.spawn(async move {
+                super::snapshot_refresh_guard(
+                    &mutex,
+                    &cancel,
+                    tokio::time::Instant::now() + std::time::Duration::from_millis(50),
+                )
+                .await
+                .is_none()
+            });
+        }
+        tokio::time::timeout(std::time::Duration::from_millis(200), async {
+            while let Some(result) = queued.join_next().await {
+                assert!(result.unwrap());
+            }
+        })
+        .await
+        .unwrap();
+        let pending = super::snapshot_refresh_guard(
+            &mutex,
+            &cancel,
+            tokio::time::Instant::now() + std::time::Duration::from_secs(2),
+        );
+        tokio::pin!(pending);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), &mut pending)
+                .await
+                .is_err()
+        );
+        cancel.cancel();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), pending)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        drop(held);
+    }
 
     #[test]
     fn spa_client_paths_match_the_node_router() {
@@ -684,6 +1142,277 @@ mod spa_tests {
         ] {
             assert!(!is_spa_client_path(path), "unexpected SPA path: {path}");
         }
+    }
+}
+
+#[cfg(test)]
+mod snapshot_membership_tests {
+    use super::{
+        SnapshotCause, SnapshotError, SnapshotFlight, apply_host_snapshot, route_needs_snapshot,
+    };
+    use pp_drivers::moonraker::{Host, Route, Watchers};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use std::time::{Duration, Instant};
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    #[tokio::test]
+    async fn failed_mutation_reconciliation_stops_precommit_polling() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let seen = calls.clone();
+        let server = tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut request = [0; 4096];
+                if socket.read(&mut request).await.unwrap() == 0 {
+                    continue;
+                }
+                seen.fetch_add(1, Ordering::SeqCst);
+                let _ = socket
+                    .write_all(b"HTTP/1.1 503 Unavailable\r\nContent-Length: 0\r\n\r\n")
+                    .await;
+            }
+        });
+        let guard = pp_net::outbound::HttpGuard::new(
+            Arc::new(pp_net::outbound::SystemResolver),
+            Duration::from_millis(500),
+            4096,
+        )
+        .unwrap();
+        let mut watchers = Watchers::with_guard(guard, Duration::from_millis(20));
+        for (cause, failure) in [
+            (SnapshotCause::Create, SnapshotError::Unavailable),
+            (SnapshotCause::Update, SnapshotError::Unavailable),
+            (SnapshotCause::Update, SnapshotError::Superseded),
+        ] {
+            let before = calls.load(Ordering::SeqCst);
+            watchers
+                .replace(vec![Host {
+                    id: "printer".into(),
+                    base_url: endpoint.clone(),
+                    api_key: None,
+                    enabled: true,
+                }])
+                .await
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(1), async {
+                while calls.load(Ordering::SeqCst) == before {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            // An ordinary timeout/5xx keeps a valid poller through grace.
+            assert!(
+                !apply_host_snapshot(
+                    &mut watchers,
+                    Err(SnapshotError::Unavailable),
+                    SnapshotCause::Periodic
+                )
+                .await
+            );
+            assert!(matches!(watchers.route("printer"), Route::Cached(_)));
+            // Once Node commits a mutation, that same failure cannot retain old settings.
+            assert!(!apply_host_snapshot(&mut watchers, Err(failure), cause).await);
+            assert_eq!(watchers.route("printer"), Route::NoSnapshot);
+            let stopped = calls.load(Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                stopped,
+                "old endpoint polled after failed reconciliation"
+            );
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn over_cap_updates_stop_old_pollers_but_creation_keeps_grace() {
+        let mut watchers = Watchers::new().unwrap();
+        let host = Host {
+            id: "printer".into(),
+            base_url: "http://printer.test".into(),
+            api_key: None,
+            enabled: false,
+        };
+        watchers.replace(vec![host.clone()]).await.unwrap();
+        let overflow: Vec<_> = (0..=pp_drivers::moonraker::MAX_HOSTS)
+            .map(|index| Host {
+                id: if index == 0 {
+                    "printer".into()
+                } else {
+                    format!("new-{index}")
+                },
+                ..host.clone()
+            })
+            .collect();
+        assert!(
+            !apply_host_snapshot(&mut watchers, Ok(overflow.clone()), SnapshotCause::Create).await
+        );
+        assert!(matches!(watchers.route("printer"), Route::Cached(_)));
+        assert_eq!(watchers.route("new-128"), Route::Unavailable);
+        assert!(!apply_host_snapshot(&mut watchers, Ok(overflow), SnapshotCause::Update).await);
+        assert_eq!(watchers.route("printer"), Route::Unavailable);
+        assert_eq!(watchers.route("new-128"), Route::Unavailable);
+        assert_eq!(watchers.route("prusa"), Route::Node);
+    }
+
+    #[tokio::test]
+    async fn mutation_reads_committed_configuration_after_a_precommit_flight() {
+        let flight = Arc::new(SnapshotFlight::new());
+        let configured = Arc::new(AtomicUsize::new(1));
+        let applied = Arc::new(AtomicUsize::new(0));
+        let reads = Arc::new(AtomicUsize::new(0));
+        let cancel = CancellationToken::new();
+        let (captured_tx, captured_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let before_commit = {
+            let (flight, configured, applied, reads, cancel) = (
+                flight.clone(),
+                configured.clone(),
+                applied.clone(),
+                reads.clone(),
+                cancel.clone(),
+            );
+            tokio::spawn(async move {
+                flight
+                    .share(&cancel, || async {
+                        let snapshot = configured.load(Ordering::SeqCst);
+                        reads.fetch_add(1, Ordering::SeqCst);
+                        captured_tx.send(snapshot).unwrap();
+                        release_rx.await.unwrap();
+                        applied.store(snapshot, Ordering::SeqCst);
+                        true
+                    })
+                    .await
+            })
+        };
+        assert_eq!(captured_rx.await.unwrap(), 1);
+        configured.store(2, Ordering::SeqCst);
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let after_commit = {
+            let (flight, configured, applied, reads, cancel) = (
+                flight.clone(),
+                configured.clone(),
+                applied.clone(),
+                reads.clone(),
+                cancel.clone(),
+            );
+            tokio::spawn(async move {
+                started_tx.send(()).unwrap();
+                flight
+                    .fresh(&cancel, || async {
+                        reads.fetch_add(1, Ordering::SeqCst);
+                        applied.store(configured.load(Ordering::SeqCst), Ordering::SeqCst);
+                        true
+                    })
+                    .await
+            })
+        };
+        started_rx.await.unwrap();
+        release_tx.send(()).unwrap();
+        assert!(before_commit.await.unwrap());
+        assert!(after_commit.await.unwrap());
+        assert_eq!(reads.load(Ordering::SeqCst), 2);
+        assert_eq!(applied.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn encoded_status_ids_use_snapshot_membership() {
+        let mut watchers = pp_drivers::moonraker::Watchers::new().unwrap();
+        for (id, segment) in [
+            ("café printer", "caf%c3%a9%20printer"),
+            ("printer ?#", "printer%20%3f%23"),
+        ] {
+            watchers
+                .replace(vec![pp_drivers::moonraker::Host {
+                    id: id.into(),
+                    base_url: "http://printer.test".into(),
+                    api_key: None,
+                    enabled: false,
+                }])
+                .await
+                .unwrap();
+            let uri = format!("/api/v1/integrations/{segment}/status")
+                .parse()
+                .unwrap();
+            let canonical = pp_net::target::CanonicalTarget::parse(&uri).unwrap();
+            let decoded = super::moonraker_status_id(&canonical.path).unwrap();
+            assert!(
+                matches!(watchers.route(&decoded), Route::Cached(_)),
+                "{segment}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn three_non_moonraker_misses_share_one_slow_snapshot() {
+        let flight = Arc::new(SnapshotFlight::new());
+        let watchers = Arc::new(Mutex::new(Watchers::new().unwrap()));
+        let runs = Arc::new(AtomicUsize::new(0));
+        let cancel = CancellationToken::new();
+        let mut tasks = tokio::task::JoinSet::new();
+        for id in ["prusa", "bambu", "ha"] {
+            let (flight, watchers, runs, cancel) = (
+                flight.clone(),
+                watchers.clone(),
+                runs.clone(),
+                cancel.clone(),
+            );
+            tasks.spawn(async move {
+                let started = Instant::now();
+                let mut route = watchers.lock().await.route(id);
+                if route_needs_snapshot(&route) {
+                    let (watchers, runs) = (watchers.clone(), runs.clone());
+                    flight
+                        .share(&cancel, || {
+                            let (watchers, runs) = (watchers.clone(), runs.clone());
+                            async move {
+                                runs.fetch_add(1, Ordering::SeqCst);
+                                tokio::time::sleep(Duration::from_millis(1200)).await;
+                                let mut guard = watchers.lock().await;
+                                guard
+                                    .replace(vec![Host {
+                                        id: "printer".into(),
+                                        base_url: "http://printer.test".into(),
+                                        api_key: None,
+                                        enabled: false,
+                                    }])
+                                    .await
+                                    .unwrap();
+                                true
+                            }
+                        })
+                        .await;
+                    route = watchers.lock().await.route(id);
+                }
+                (id, route, started.elapsed())
+            });
+        }
+        let mut elapsed = Vec::new();
+        while let Some(joined) = tasks.join_next().await {
+            let (id, route, took) = joined.unwrap();
+            assert_eq!(route, Route::Node, "{id}");
+            assert!(!route_needs_snapshot(&route), "{id}");
+            elapsed.push(took);
+        }
+        assert_eq!(runs.load(Ordering::SeqCst), 1, "snapshot reads");
+        let slowest = elapsed.into_iter().max().unwrap();
+        assert!(
+            slowest < Duration::from_millis(2500),
+            "third caller waited {slowest:?} for a shared 1.2s snapshot"
+        );
+        let later = Instant::now();
+        let route = watchers.lock().await.route("prusa");
+        assert_eq!(route, Route::Node);
+        assert!(!route_needs_snapshot(&route));
+        assert!(later.elapsed() < Duration::from_millis(200));
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
     }
 }
 

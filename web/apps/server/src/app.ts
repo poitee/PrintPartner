@@ -1,4 +1,5 @@
-import { acquireDataDirectory, desktopContext, registerDesktopBoundary } from "./desktop-context.js";
+import { moonrakerHostSnapshot } from "./moonraker-host-snapshot.js";
+import { acquireDataDirectory, desktopContext, desktopPrincipal, registerDesktopBoundary } from "./desktop-context.js";
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
@@ -215,6 +216,19 @@ async function configureApp(app: FastifyInstance, config: ServerConfig, ports: R
   const authStore = resolveAuthStore(ports, config);
   const boardStore = resolveBoardStore(ports, config);
   const repository = resolveRepository(ports);
+  // Private UDS-only snapshot for the Rust status watcher. The desktop boundary
+  // authenticates the signed principal; the public gateway does not admit this path.
+  if (desktopContext() && repository) {
+    app.get("/__desktop/moonraker-hosts", async (request, reply) => {
+      if (!desktopPrincipal(request)) return reply.code(403).send({ detail: "Desktop principal required" });
+      const raw = repository.getSetting("integrations");
+      const hosts = moonrakerHostSnapshot(raw);
+      // 4xx: malformed stored settings fail closed immediately. 5xx stays reserved
+      // for a snapshot the gateway may keep using through the grace period.
+      if (!hosts) return reply.code(400).send({ detail: "Host snapshot invalid" });
+      return hosts;
+    });
+  }
   const planning = hostedPlanningPolicy(config.deployMode);
   setPrivateOutboundDenied(!planning.allowPrivateOutbound);
   if (planning.hostedPlanning) {

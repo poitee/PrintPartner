@@ -13,6 +13,10 @@
       ],
       "project": [
         "scripts/**"
+      ],
+      "ignoreDependencies": [
+        "fflate",
+        "@print-partner/domain"
       ]
     },
     "apps/server": {
@@ -62,6 +66,9 @@
     }
   },
   "ignoreUnresolved": [
-    "../apps/server/dist/current/db/client-postgres.js"
+    "../apps/server/dist/current/db/client-postgres.js",
+    "../apps/server/dist/current/app.js",
+    "../apps/server/dist/current/config.js",
+    "../apps/server/dist/current/lib/tenant-disk-quota.js"
   ]
 }

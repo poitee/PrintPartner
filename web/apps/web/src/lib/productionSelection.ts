@@ -3,8 +3,11 @@ import type {
   AcceptedPlateSetupUnit,
   AcceptedPlateUnplacedUnit,
   AcceptedPlateWorkspace,
+  ProductionSelection,
   RequiredUnitToken,
 } from "@print-partner/contracts";
+
+const REQUIRED_UNIT_TOKEN = /^ppu_[0-9a-f]{32}$/;
 
 export type ProductionSelectableUnit =
   | AcceptedPlateSetupUnit
@@ -63,6 +66,32 @@ export function selectedProductionTokens(
   selection: ReadonlySet<RequiredUnitToken>,
 ): RequiredUnitToken[] {
   return units.filter((unit) => selection.has(unit.token)).map((unit) => unit.token);
+}
+
+/**
+ * Tokens the server will lock against for the selection it has stored.
+ * This follows `currentPackageRequiredUnitTokens` in the production-setup route:
+ * a custom selection keeps its saved tokens, and all-incomplete drops finished units.
+ */
+export function storedPackageTokens(
+  selection: ProductionSelection | undefined,
+  units: readonly { token: string; completed?: boolean }[],
+): string[] {
+  if (selection == null || selection.mode === "all_incomplete") {
+    return units
+      .filter((unit) => unit.completed !== true && REQUIRED_UNIT_TOKEN.test(unit.token))
+      .map((unit) => unit.token);
+  }
+  const available = new Set(units.map((unit) => unit.token));
+  return selection.selected_unit_tokens.filter(
+    (token) => available.has(token) && REQUIRED_UNIT_TOKEN.test(token),
+  );
+}
+
+export function samePackageTokens(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false;
+  const seen = new Set(left);
+  return seen.size === right.length && right.every((token) => seen.has(token));
 }
 
 export function toggleProductionUnit(

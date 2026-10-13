@@ -1,0 +1,661 @@
+//! Status-only HTTP: resolve once, check every answer, connect only to checked IPs.
+//! LAN/loopback printers are intentional; metadata/link-local, unspecified,
+//! multicast and reserved targets are forbidden. No proxy, redirects or TLS downgrade.
+use anyhow::{Context, Result, ensure};
+use axum::http::{Request, Uri};
+use http_body_util::{BodyExt, Empty, Limited};
+use hyper::body::Bytes;
+use hyper_util::rt::TokioIo;
+use std::{
+    future::Future,
+    net::{IpAddr, SocketAddr},
+    pin::Pin,
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
+use tokio::net::TcpStream;
+
+pub type Resolution = Pin<Box<dyn Future<Output = Result<Vec<IpAddr>>> + Send>>;
+pub trait Resolver: Send + Sync {
+    fn resolve(&self, host: String) -> Resolution;
+}
+pub struct SystemResolver;
+impl Resolver for SystemResolver {
+    fn resolve(&self, host: String) -> Resolution {
+        Box::pin(async move {
+            Ok(tokio::net::lookup_host((host.as_str(), 0))
+                .await?
+                .map(|a| a.ip())
+                .collect())
+        })
+    }
+}
+
+// IANA IPv4 Special-Purpose Address Registry, plus multicast/reserved space.
+// https://www.iana.org/assignments/iana-ipv4-special-registry/
+// RFC 1918 private addresses and 127/8 are explicit printer-network exceptions.
+const SPECIAL_IPV4: &[([u8; 4], u32)] = &[
+    ([0, 0, 0, 0], 8),
+    ([100, 64, 0, 0], 10),
+    ([169, 254, 0, 0], 16),
+    ([192, 0, 0, 0], 24),
+    ([192, 0, 2, 0], 24),
+    ([192, 31, 196, 0], 24),
+    ([192, 52, 193, 0], 24),
+    ([192, 88, 99, 0], 24),
+    ([192, 175, 48, 0], 24),
+    ([198, 18, 0, 0], 15),
+    ([198, 51, 100, 0], 24),
+    ([203, 0, 113, 0], 24),
+    ([224, 0, 0, 0], 3),
+];
+
+// Special-purpose prefixes within global unicast; other special-purpose space is
+// outside 2000::/3. ULA and loopback remain explicit printer-network exceptions.
+// https://www.iana.org/assignments/iana-ipv6-special-registry/
+const SPECIAL_IPV6: &[([u16; 8], u32)] = &[
+    ([0x2001, 0, 0, 0, 0, 0, 0, 0], 23),
+    ([0x2001, 0x0db8, 0, 0, 0, 0, 0, 0], 32),
+    ([0x2002, 0, 0, 0, 0, 0, 0, 0], 16),
+    ([0x2620, 0x004f, 0x8000, 0, 0, 0, 0, 0], 48),
+    ([0x3fff, 0, 0, 0, 0, 0, 0, 0], 20),
+];
+
+pub fn permitted(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            if ip.is_private() || ip.is_loopback() {
+                return true;
+            }
+            let address = u32::from(ip);
+            SPECIAL_IPV4.iter().all(|(base, prefix)| {
+                let mask = u32::MAX << (32 - *prefix);
+                address & mask != u32::from_be_bytes(*base)
+            })
+        }
+        IpAddr::V6(ip) => {
+            if let Some(ip) = ip.to_ipv4_mapped() {
+                return permitted(IpAddr::V4(ip));
+            }
+            let first = ip.segments()[0];
+            if ip.is_loopback() || first & 0xfe00 == 0xfc00 {
+                return ip != std::net::Ipv6Addr::new(0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254);
+            }
+            let address = u128::from(ip);
+            first & 0xe000 == 0x2000
+                && SPECIAL_IPV6.iter().all(|(base, prefix)| {
+                    let mask = u128::MAX << (128 - *prefix);
+                    address & mask != u128::from(std::net::Ipv6Addr::from(*base))
+                })
+        }
+    }
+}
+
+trait WallClock: Send + Sync {
+    fn now(&self) -> SystemTime;
+}
+struct SystemClock;
+impl WallClock for SystemClock {
+    fn now(&self) -> SystemTime {
+        SystemTime::now()
+    }
+}
+#[derive(Clone)]
+pub struct HttpGuard {
+    resolver: Arc<dyn Resolver>,
+    deadline: Duration,
+    max_body: usize,
+    clock: Arc<dyn WallClock>,
+}
+#[derive(Debug)]
+pub struct HttpReply {
+    pub status: u16,
+    pub body: Vec<u8>,
+}
+impl HttpGuard {
+    pub fn new(resolver: Arc<dyn Resolver>, deadline: Duration, max_body: usize) -> Result<Self> {
+        ensure!(
+            !deadline.is_zero() && deadline <= Duration::from_secs(30),
+            "Invalid deadline"
+        );
+        ensure!(
+            max_body > 0 && max_body <= 2 * 1024 * 1024,
+            "Invalid body limit"
+        );
+        Ok(Self {
+            resolver,
+            deadline,
+            max_body,
+            clock: Arc::new(SystemClock),
+        })
+    }
+    pub async fn get(&self, url: &str, api_key: Option<&str>) -> Result<HttpReply> {
+        let deadline = self.clock.now() + self.deadline;
+        // Tokio's monotonic clock may pause during system sleep. Also bound wall
+        // time, so resumed requests are dropped instead of publishing stale data.
+        let wall_timeout = async {
+            loop {
+                if self.clock.now() >= deadline {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50).min(self.deadline)).await;
+            }
+        };
+        let result = tokio::time::timeout(self.deadline, async {
+            tokio::select! { biased;
+                _=wall_timeout=>anyhow::bail!("HTTP wall deadline"),
+                result=self.get_inner(url,api_key)=>result,
+            }
+        })
+        .await
+        .context("HTTP deadline")?;
+        ensure!(self.clock.now() < deadline, "HTTP wall deadline");
+        result
+    }
+
+    async fn get_inner(&self, url: &str, api_key: Option<&str>) -> Result<HttpReply> {
+        let uri: Uri = url.parse()?;
+        ensure!(
+            uri.scheme_str() == Some("http"),
+            "Only explicit HTTP status URLs supported"
+        );
+        let authority = uri.authority().context("Missing host")?;
+        ensure!(
+            !authority.as_str().contains('@'),
+            "Credentials in URL denied"
+        );
+        let host = uri
+            .host()
+            .context("Missing host")?
+            .trim_start_matches('[')
+            .trim_end_matches(']');
+        ensure!(
+            uri.port().is_none() || uri.port_u16().is_some(),
+            "Invalid port"
+        );
+        let port = uri.port_u16().unwrap_or(80);
+        ensure!(port != 0, "Invalid port");
+        let addresses = if let Ok(ip) = host.parse::<IpAddr>() {
+            vec![ip]
+        } else {
+            self.resolver.resolve(host.into()).await?
+        };
+        ensure!(
+            !addresses.is_empty()
+                && addresses.len() <= 32
+                && addresses.iter().all(|ip| permitted(*ip)),
+            "Prohibited DNS answer"
+        );
+        // Race only the checked, pinned addresses. The request deadline bounds
+        // the whole race, and dropping the JoinSet cancels every losing socket.
+        let stream = connect_addresses(
+            addresses
+                .into_iter()
+                .map(|ip| SocketAddr::new(ip, port))
+                .collect(),
+            TcpStream::connect,
+        )
+        .await?;
+        let (mut sender, connection) =
+            hyper::client::conn::http1::handshake(TokioIo::new(stream)).await?;
+        let task = tokio::spawn(connection);
+        // Abort on body/read timeout, cancellation, errors, and successful completion.
+        struct Connection(tokio::task::JoinHandle<Result<(), hyper::Error>>);
+        impl Drop for Connection {
+            fn drop(&mut self) {
+                self.0.abort();
+            }
+        }
+        let _connection = Connection(task);
+        let mut builder = Request::builder()
+            .method("GET")
+            .uri(uri.path_and_query().map_or("/", |p| p.as_str()))
+            .header("host", authority.as_str())
+            .header("connection", "close");
+        if let Some(key) = api_key.filter(|key| !key.is_empty() && *key != "****") {
+            let jwt = key.split('.').count() == 3
+                && key.split('.').all(|segment| {
+                    !segment.is_empty()
+                        && segment
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b))
+                });
+            builder = if jwt {
+                builder.header("authorization", format!("Bearer {key}"))
+            } else {
+                builder.header("x-api-key", key)
+            };
+        }
+        let response = sender
+            .send_request(builder.body(Empty::<Bytes>::new())?)
+            .await?;
+        let status = response.status().as_u16();
+        if response.status().is_redirection() {
+            return Ok(HttpReply {
+                status,
+                body: Vec::new(),
+            });
+        }
+        let body = Limited::new(response.into_body(), self.max_body)
+            .collect()
+            .await
+            .map_err(|_| anyhow::anyhow!("HTTP body unavailable or oversized"))?
+            .to_bytes()
+            .to_vec();
+        Ok(HttpReply { status, body })
+    }
+}
+
+async fn connect_addresses<T, F>(
+    addresses: Vec<SocketAddr>,
+    connect: impl Fn(SocketAddr) -> F,
+) -> Result<T>
+where
+    T: Send + 'static,
+    F: Future<Output = std::io::Result<T>> + Send + 'static,
+{
+    let mut attempts = tokio::task::JoinSet::new();
+    for address in addresses {
+        // SocketAddr cannot trigger another DNS lookup, including retries.
+        attempts.spawn(connect(address));
+    }
+    while let Some(attempt) = attempts.join_next().await {
+        if let Ok(Ok(stream)) = attempt {
+            return Ok(stream);
+        }
+    }
+    anyhow::bail!("Host unavailable")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    struct Fake {
+        calls: Arc<AtomicUsize>,
+        answers: Vec<IpAddr>,
+    }
+    impl Resolver for Fake {
+        fn resolve(&self, _: String) -> Resolution {
+            let count = self.calls.fetch_add(1, Ordering::SeqCst);
+            let answers = if count == 0 {
+                self.answers.clone()
+            } else {
+                vec!["169.254.169.254".parse().unwrap()]
+            };
+            Box::pin(async move { Ok(answers) })
+        }
+    }
+    #[tokio::test]
+    async fn ticket_t_4_stalled_first_address_does_not_hide_reachable_answer() {
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let completed = tokio::time::timeout(
+            Duration::from_millis(200),
+            connect_addresses(
+                vec![
+                    "127.0.0.1:1".parse().unwrap(),
+                    "127.0.0.2:1".parse().unwrap(),
+                ],
+                |address| {
+                    let dropped = dropped.clone();
+                    async move {
+                        if address.ip().to_string() == "127.0.0.1" {
+                            struct PendingAttempt(Arc<AtomicUsize>);
+                            impl Drop for PendingAttempt {
+                                fn drop(&mut self) {
+                                    self.0.fetch_add(1, Ordering::SeqCst);
+                                }
+                            }
+                            let _pending = PendingAttempt(dropped);
+                            std::future::pending::<()>().await;
+                        }
+                        // Let the first attempt start before this one succeeds.
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                        Ok(address)
+                    }
+                },
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(completed.ip().to_string(), "127.0.0.2");
+        tokio::time::timeout(Duration::from_millis(200), async {
+            while dropped.load(Ordering::SeqCst) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+    #[tokio::test]
+    async fn special_purpose_ipv4_blocks_fail_before_connecting() {
+        for (first, last) in [
+            ("100.64.0.0", "100.127.255.255"),
+            ("192.31.196.0", "192.31.196.255"),
+            ("192.52.193.0", "192.52.193.255"),
+            ("192.88.99.0", "192.88.99.255"),
+            ("192.175.48.0", "192.175.48.255"),
+            ("198.51.100.0", "198.51.100.255"),
+            ("203.0.113.0", "203.0.113.255"),
+        ] {
+            for raw in [
+                first.to_string(),
+                last.to_string(),
+                format!("::ffff:{first}"),
+            ] {
+                let ip: IpAddr = raw.parse().unwrap();
+                assert!(!permitted(ip), "{raw}");
+                let guard = HttpGuard::new(
+                    Arc::new(Fake {
+                        calls: Arc::default(),
+                        answers: vec!["127.0.0.1".parse().unwrap(), ip],
+                    }),
+                    Duration::from_secs(1),
+                    100,
+                )
+                .unwrap();
+                let error = guard.get("http://printer.test:1/", None).await.unwrap_err();
+                assert!(
+                    error.to_string().contains("Prohibited DNS answer"),
+                    "{raw}: {error}"
+                );
+                let literal = match ip {
+                    IpAddr::V4(ip) => format!("http://{ip}:1/"),
+                    IpAddr::V6(ip) => format!("http://[{ip}]:1/"),
+                };
+                let error = guard.get(&literal, None).await.unwrap_err();
+                assert!(
+                    error.to_string().contains("Prohibited DNS answer"),
+                    "{raw}: {error}"
+                );
+            }
+        }
+        for raw in [
+            "10.0.0.1",
+            "172.16.0.1",
+            "172.31.255.254",
+            "192.168.1.1",
+            "127.0.0.1",
+            "100.63.255.255",
+            "100.128.0.0",
+            "192.31.195.255",
+            "192.31.197.0",
+            "198.51.99.255",
+            "198.51.101.0",
+            "203.0.112.255",
+            "203.0.114.0",
+        ] {
+            assert!(permitted(raw.parse().unwrap()), "{raw}");
+        }
+    }
+
+    #[tokio::test]
+    async fn moonraker_auth_requires_three_nonempty_jwt_segments() {
+        for (key, expected_header, forbidden_header) in [
+            (
+                "abc.def.ghi",
+                "authorization: Bearer abc.def.ghi",
+                "x-api-key:",
+            ),
+            ("abc..def", "x-api-key: abc..def", "authorization:"),
+            (".abc.def", "x-api-key: .abc.def", "authorization:"),
+            ("abc.def.", "x-api-key: abc.def.", "authorization:"),
+            ("..", "x-api-key: ..", "authorization:"),
+            (
+                "plain-api-key",
+                "x-api-key: plain-api-key",
+                "authorization:",
+            ),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                loop {
+                    let mut chunk = [0; 1024];
+                    let count = stream.read(&mut chunk).await.unwrap();
+                    assert!(count > 0);
+                    bytes.extend_from_slice(&chunk[..count]);
+                    if bytes.windows(4).any(|part| part == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                stream
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                    )
+                    .await
+                    .unwrap();
+                String::from_utf8(bytes).unwrap()
+            });
+            let guard =
+                HttpGuard::new(Arc::new(SystemResolver), Duration::from_secs(1), 100).unwrap();
+            assert_eq!(
+                guard
+                    .get(&format!("http://{address}/"), Some(key))
+                    .await
+                    .unwrap()
+                    .status,
+                200
+            );
+            let request = server.await.unwrap();
+            assert!(request.contains(expected_header), "{key}: {request}");
+            assert!(!request.contains(forbidden_header), "{key}: {request}");
+        }
+    }
+
+    #[tokio::test]
+    async fn ticket_t_4_prohibited_and_mixed_dns_answers() {
+        for ip in [
+            "0.0.0.0",
+            "0.1.2.3",
+            "169.254.169.254",
+            "169.254.1.1",
+            "224.0.0.1",
+            "255.255.255.255",
+            "100.100.100.200",
+            "192.0.0.1",
+            "192.0.0.255",
+            "192.0.2.1",
+            "198.18.0.1",
+            "198.19.255.254",
+            "::ffff:192.0.2.1",
+            "::",
+            "fe80::1",
+            "ff02::1",
+            "fd00:ec2::254",
+            "::ffff:169.254.169.254",
+            "2002:a9fe:a9fe::1",
+            "64:ff9b::a9fe:a9fe",
+            "2001::1",
+            "2001:1::1",
+            "2001:2::1",
+            "2001:3::1",
+            "2001:4:112::1",
+            "2001:10::1",
+            "2001:20::1",
+            "2001:30::1",
+            "2001:1ff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:db8::",
+            "2001:db8:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2620:4f:8000::",
+            "2620:4f:8000:ffff:ffff:ffff:ffff:ffff",
+            "3fff::",
+            "3fff:fff:ffff:ffff:ffff:ffff:ffff:ffff",
+        ] {
+            assert!(!permitted(ip.parse().unwrap()), "{ip}");
+            let guard = HttpGuard::new(
+                Arc::new(Fake {
+                    calls: Arc::default(),
+                    answers: vec!["127.0.0.1".parse().unwrap(), ip.parse().unwrap()],
+                }),
+                Duration::from_secs(1),
+                100,
+            )
+            .unwrap();
+            assert!(
+                guard
+                    .get("http://printer.test:1/", None)
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Prohibited")
+            );
+        }
+        for ip in [
+            "127.0.0.1",
+            "192.168.1.4",
+            "192.0.1.1",
+            "198.17.0.1",
+            "198.20.0.1",
+            "10.0.0.1",
+            "::1",
+            "fd12::1",
+            "2606:4700::1111",
+            "2001:200::1",
+            "2001:db7:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:db9::",
+            "2620:4f:7fff:ffff:ffff:ffff:ffff:ffff",
+            "2620:4f:8001::",
+            "3ffe:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+        ] {
+            assert!(permitted(ip.parse().unwrap()));
+        }
+    }
+    #[tokio::test]
+    async fn ticket_t_4_pins_dns_and_rechecks_next_request() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let guard = HttpGuard::new(
+            Arc::new(Fake {
+                calls: calls.clone(),
+                answers: vec!["127.0.0.1".parse().unwrap()],
+            }),
+            Duration::from_secs(1),
+            100,
+        )
+        .unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut data = [0; 1024];
+            let len = socket.read(&mut data).await.unwrap();
+            let request = String::from_utf8_lossy(&data[..len]);
+            assert!(request.contains("host: printer.test:"));
+            assert!(request.starts_with("GET /printer/objects/query"));
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
+                .await
+                .unwrap();
+        });
+        let url = format!("http://printer.test:{port}/printer/objects/query");
+        assert_eq!(guard.get(&url, None).await.unwrap().body, b"{}");
+        server.await.unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(guard.get(&url, None).await.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+    #[tokio::test]
+    async fn ticket_t_4_deadline_and_body_limit_and_no_redirect() {
+        for mode in [
+            "stall",
+            "large",
+            "redirect",
+            "redirect-large",
+            "redirect-stall",
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}/", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut data = [0; 1024];
+                let _ = socket.read(&mut data).await;
+                match mode {
+                    "large" => {
+                        let _ = socket
+                            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 9\r\n\r\n123456789")
+                            .await;
+                    }
+                    "redirect" => {
+                        let _=socket.write_all(b"HTTP/1.1 302 Found\r\nLocation: http://169.254.169.254/\r\nContent-Length: 0\r\n\r\n").await;
+                    }
+                    "redirect-large" => {
+                        let _ = socket.write_all(b"HTTP/1.1 302 Found\r\nLocation: /next\r\nContent-Length: 9\r\n\r\n123456789").await;
+                    }
+                    "redirect-stall" => {
+                        socket.write_all(b"HTTP/1.1 302 Found\r\nLocation: /next\r\nContent-Length: 9\r\n\r\n").await.unwrap();
+                        let mut end = [0; 1];
+                        assert_eq!(socket.read(&mut end).await.unwrap(), 0);
+                    }
+                    _ => {
+                        let mut end = [0; 1];
+                        assert_eq!(socket.read(&mut end).await.unwrap(), 0);
+                    }
+                }
+            });
+            let guard =
+                HttpGuard::new(Arc::new(SystemResolver), Duration::from_millis(100), 4).unwrap();
+            let result = guard.get(&url, None).await;
+            if mode.starts_with("redirect") {
+                assert_eq!(result.unwrap().status, 302);
+            } else {
+                assert!(result.is_err());
+            }
+            tokio::time::timeout(Duration::from_secs(1), server)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+    }
+    #[tokio::test]
+    async fn ticket_t_4_dns_deadline_and_url_policy() {
+        struct Hung;
+        impl Resolver for Hung {
+            fn resolve(&self, _: String) -> Resolution {
+                Box::pin(std::future::pending())
+            }
+        }
+        let guard = HttpGuard::new(Arc::new(Hung), Duration::from_millis(50), 1024).unwrap();
+        let started = tokio::time::Instant::now();
+        assert!(guard.get("http://printer.test/", None).await.is_err());
+        assert!(started.elapsed() < Duration::from_millis(250));
+        for url in [
+            "https://printer.test/",
+            "http://user:password@printer.test/",
+            "ftp://printer.test/",
+            "/printer/objects/query",
+        ] {
+            assert!(guard.get(url, None).await.is_err());
+        }
+    }
+    #[tokio::test]
+    async fn ticket_t_4_sleep_does_not_extend_socket_deadline() {
+        struct JumpClock(AtomicUsize);
+        impl WallClock for JumpClock {
+            fn now(&self) -> SystemTime {
+                SystemTime::UNIX_EPOCH + Duration::from_secs(self.0.load(Ordering::SeqCst) as u64)
+            }
+        }
+        let clock = Arc::new(JumpClock(AtomicUsize::new(0)));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let mut guard =
+            HttpGuard::new(Arc::new(SystemResolver), Duration::from_secs(5), 1024).unwrap();
+        guard.clock = clock.clone();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut data = [0; 1024];
+            let _ = socket.read(&mut data).await.unwrap();
+            clock.0.store(60, Ordering::SeqCst); // OS sleep advances wall time without Tokio time.
+            let mut end = [0; 1];
+            assert_eq!(socket.read(&mut end).await.unwrap(), 0);
+        });
+        let started = tokio::time::Instant::now();
+        assert!(guard.get(&url, None).await.is_err());
+        assert!(started.elapsed() < Duration::from_millis(250));
+        server.await.unwrap();
+    }
+}

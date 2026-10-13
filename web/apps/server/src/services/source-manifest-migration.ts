@@ -8,6 +8,7 @@ import {
 import {
   InvalidSourceManifestError,
   SourceManifestContentUnavailableError,
+  SOURCE_PUBLICATION_UNAVAILABLE_DETAIL,
   publishSourceManifestRevision,
 } from "./local-source-revision.js";
 
@@ -69,6 +70,15 @@ export async function migrateLegacySourceManifestOverrides(
         sourceId: source.id,
         legacyPath: observedLegacy.legacyPath,
         reason: observedLegacy.reason,
+      });
+      continue;
+    }
+
+    if (!repo.canPublishSourceRevision()) {
+      retained.push({
+        sourceId: source.id,
+        legacyPath: observedLegacy.legacyPath,
+        reason: SOURCE_PUBLICATION_UNAVAILABLE_DETAIL,
       });
       continue;
     }

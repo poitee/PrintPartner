@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { lstat, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import * as fsPromises from "node:fs/promises";
 import { beginSourceSyncAdmission, packagedSourceSyncManifestPath, requireSourceSyncParticipant } from "../ownership/source-sync-admission.js";
 vi.mock("node:fs/promises", { spy: true });
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -16,10 +16,14 @@ import {
   LocalSourceSnapshotStore,
   MAX_SOURCE_SNAPSHOT_BYTES,
   SOURCE_SNAPSHOT_MANIFEST_FILE,
+  releaseSharedSnapshot,
+  sharedSnapshotHolderCount,
   sourceRelativePath,
   type SnapshotFile,
   type SnapshotSelection,
 } from "./local-source-snapshot.js";
+
+vi.mock("node:fs/promises", { spy: true });
 
 const roots: string[] = [];
 
@@ -703,5 +707,149 @@ describe("LocalSourceSnapshotStore", () => {
     ).rejects.toThrow("Duplicate Source snapshot path");
     expect(openFile).not.toHaveBeenCalled();
     expect(await candidateNames(reposDir, 14)).toEqual([]);
+  });
+
+  it("keeps a same-digest directory when its creator releases during the existence check", async () => {
+    const reposDir = tempReposDir();
+    const creator = new LocalSourceSnapshotStore({ reposDir, retainUntilRelease: true });
+    const part = file("part.stl", "stl", "geometry");
+    const created = await creator.materialize({
+      sourceId: 42,
+      upstreamRevisionKey: "same-digest",
+      files: [part.descriptor],
+      selection: selection(),
+      openFile: async () => response(part.content),
+    });
+    const { lstat: actualLstat } = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    let sawDirectory = false;
+    vi.mocked(lstat).mockImplementation(async (path, options) => {
+      const stat = await actualLstat(path, options);
+      if (!sawDirectory && resolve(String(path)) === resolve(created.absolutePath)) {
+        sawDirectory = true;
+        releaseSharedSnapshot(created);
+        if (sharedSnapshotHolderCount(created.absolutePath) === 0) {
+          rmSync(created.absolutePath, { recursive: true, force: true });
+        }
+      }
+      return stat;
+    });
+    const reuser = new LocalSourceSnapshotStore({ reposDir, retainUntilRelease: true });
+    try {
+      const reused = await reuser.materialize({
+        sourceId: 42,
+        upstreamRevisionKey: "same-digest",
+        files: [part.descriptor],
+        selection: selection(),
+        openFile: async () => response(Buffer.from("should not replace geometry")),
+      });
+      expect(sawDirectory).toBe(true);
+      expect(reused.publication).toBe("reused");
+      expect(reused.manifestDigest).toBe(created.manifestDigest);
+      expect(readFileSync(join(reused.absolutePath, "part.stl"), "utf8")).toBe("geometry");
+      expect(sharedSnapshotHolderCount(reused.absolutePath)).toBe(1);
+      releaseSharedSnapshot(reused);
+      expect(sharedSnapshotHolderCount(reused.absolutePath)).toBe(0);
+    } finally {
+      vi.mocked(lstat).mockRestore();
+      releaseSharedSnapshot(created);
+    }
+  });
+
+  it("keeps a same-digest directory when its creator releases during a rename collision", async () => {
+    const reposDir = tempReposDir();
+    const creator = new LocalSourceSnapshotStore({ reposDir, retainUntilRelease: true });
+    const part = file("part.stl", "stl", "geometry");
+    const created = await creator.materialize({
+      sourceId: 43,
+      upstreamRevisionKey: "same-digest-collision",
+      files: [part.descriptor],
+      selection: selection(),
+      openFile: async () => response(part.content),
+    });
+    const { lstat: actualLstat } = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    let hidDirectory = false;
+    let sawDirectory = false;
+    vi.mocked(lstat).mockImplementation(async (path, options) => {
+      if (!hidDirectory && resolve(String(path)) === resolve(created.absolutePath)) {
+        hidDirectory = true;
+        throw Object.assign(new Error("missing"), { code: "ENOENT" });
+      }
+      const stat = await actualLstat(path, options);
+      if (!sawDirectory && resolve(String(path)) === resolve(created.absolutePath)) {
+        sawDirectory = true;
+        releaseSharedSnapshot(created);
+        if (sharedSnapshotHolderCount(created.absolutePath) === 0) {
+          rmSync(created.absolutePath, { recursive: true, force: true });
+        }
+      }
+      return stat;
+    });
+    const reuser = new LocalSourceSnapshotStore({
+      reposDir,
+      retainUntilRelease: true,
+      dependencies: {
+        renameDirectory: async () => {
+          throw Object.assign(new Error("exists"), { code: "EEXIST" });
+        },
+      },
+    });
+    try {
+      const reused = await reuser.materialize({
+        sourceId: 43,
+        upstreamRevisionKey: "same-digest-collision",
+        files: [part.descriptor],
+        selection: selection(),
+        openFile: async () => response(part.content),
+      });
+      expect(hidDirectory).toBe(true);
+      expect(sawDirectory).toBe(true);
+      expect(reused.publication).toBe("reused");
+      expect(readFileSync(join(reused.absolutePath, "part.stl"), "utf8")).toBe("geometry");
+      releaseSharedSnapshot(reused);
+      expect(sharedSnapshotHolderCount(created.absolutePath)).toBe(0);
+    } finally {
+      vi.mocked(lstat).mockRestore();
+      releaseSharedSnapshot(created);
+    }
+  });
+
+  it("drops an unreferenced digest after a missing reuse claim is released", async () => {
+    const reposDir = tempReposDir();
+    const store = new LocalSourceSnapshotStore({ reposDir, retainUntilRelease: true });
+    const loser = file("loser.stl", "stl", "loser-bytes");
+    const winner = file("winner.stl", "stl", "winner-bytes");
+    const lost = await store.materialize({
+      sourceId: 8,
+      upstreamRevisionKey: "digest-loser",
+      files: [loser.descriptor],
+      selection: selection(),
+      openFile: async () => response(loser.content),
+    });
+    const kept = await store.materialize({
+      sourceId: 8,
+      upstreamRevisionKey: "digest-winner",
+      files: [winner.descriptor],
+      selection: selection(),
+      openFile: async () => response(winner.content),
+    });
+    const absent = join(reposDir, "8", "revisions", "digest-absent");
+    await expect(store.materialize({
+      sourceId: 8,
+      upstreamRevisionKey: "digest-absent",
+      files: [loser.descriptor],
+      selection: selection(),
+      openFile: async () => {
+        throw new Error("stop before publish");
+      },
+    })).rejects.toThrow("stop before publish");
+    expect(sharedSnapshotHolderCount(absent)).toBe(0);
+    expect(existsSync(absent)).toBe(false);
+    releaseSharedSnapshot(lost);
+    expect(sharedSnapshotHolderCount(lost.absolutePath)).toBe(0);
+    rmSync(lost.absolutePath, { recursive: true, force: true });
+    expect(existsSync(lost.absolutePath)).toBe(false);
+    expect(readFileSync(join(kept.absolutePath, "winner.stl"), "utf8")).toBe("winner-bytes");
+    releaseSharedSnapshot(kept);
+    expect(sharedSnapshotHolderCount(kept.absolutePath)).toBe(0);
   });
 });

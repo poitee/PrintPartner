@@ -7,6 +7,27 @@ import shutil
 import subprocess
 import sys
 
+NATIVE_NODE_HEADERS = frozenset({
+    b'\x7fELF',
+    b'\xfe\xed\xfa\xcf',
+    b'\xcf\xfa\xed\xfe',
+    b'\xfe\xed\xfa\xce',
+    b'\xce\xfa\xed\xfe',
+    b'\xca\xfe\xba\xbe',
+    b'\xbe\xba\xfe\xca',
+    b'\xca\xfe\xba\xbf',
+    b'\xbf\xba\xfe\xca',
+})
+
+if '--self-test' in sys.argv[1:]:
+    import unittest
+    suite = unittest.defaultTestLoader.discover(
+        str(pathlib.Path(__file__).resolve().parent),
+        pattern='test_stage_desktop.py',
+    )
+    raise SystemExit(0 if unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful() else 1)
+
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--web', type=pathlib.Path, required=True)
 parser.add_argument('--node', type=pathlib.Path, required=True)
@@ -17,7 +38,27 @@ source = args.web.resolve(strict=True)
 stage = args.output.absolute()
 if stage.exists():
     parser.error('Stage must be a new directory')
-node_identity = json.loads(subprocess.check_output([str(args.node), '-p',
+
+def reject_node(path):
+    parser.error(
+        'supply the native pinned Node 24.21.0 ABI 137 runtime '
+        '(Linux ELF or macOS Mach-O), not a dispatcher script: ' + str(path))
+
+def native_node_binary(path):
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError:
+        parser.error('Node runtime does not exist: ' + str(path))
+    if not resolved.is_file():
+        reject_node(path)
+    with resolved.open('rb') as handle:
+        header = handle.read(4)
+    if header not in NATIVE_NODE_HEADERS:
+        reject_node(path)
+    return resolved
+
+node_binary = native_node_binary(args.node)
+node_identity = json.loads(subprocess.check_output([str(node_binary), '-p',
     'JSON.stringify({version:process.version,abi:process.versions.modules,os:process.platform,arch:process.arch})'], text=True))
 if node_identity['version'] != 'v24.21.0' or node_identity['abi'] != '137':
     parser.error('Node 24.21.0 ABI 137 is required')
@@ -30,7 +71,7 @@ node_relative = pathlib.Path('MacOS/printpartner-node' if system == 'macos' else
 web = stage / web_relative
 node = stage / node_relative
 node.parent.mkdir(parents=True)
-shutil.copy2(args.node, node)
+shutil.copy2(node_binary, node)
 for path in ['apps/server/dist/current', 'apps/web/dist', 'packages/contracts/dist/current', 'packages/domain/dist/current']:
     shutil.copytree(source / path, web / path)
 for path in ['package.json', 'package-lock.json', 'apps/server/package.json',

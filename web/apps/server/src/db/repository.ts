@@ -1196,6 +1196,10 @@ export class AppRepository {
     return this.syncSqlite ? this.transaction(read, "deferred") : read();
   }
 
+  canPublishSourceRevision(): boolean {
+    return this.syncSqlite;
+  }
+
   canMutateAcceptedPlan(): boolean {
     return this.syncSqlite;
   }
@@ -2908,6 +2912,21 @@ export class AppRepository {
       .where(and(eq(this.schema.sourceRevisions.tenantId, this.tenantId), eq(this.schema.sourceRevisions.id, id)))
       .get();
     return row ? sourceRevision(row) : null;
+  }
+
+  /** Revision locators for cleanup. A deleted Source has no row and no references. */
+  sourceRevisionSnapshotLocators(sourceId: number): string[] {
+    return this.db
+      .select({ snapshotLocator: this.schema.sourceRevisions.snapshotLocator })
+      .from(this.schema.sourceRevisions)
+      .where(
+        and(
+          eq(this.schema.sourceRevisions.tenantId, this.tenantId),
+          eq(this.schema.sourceRevisions.projectId, sourceId),
+        ),
+      )
+      .all()
+      .map((row) => row.snapshotLocator);
   }
 
   listSourceRevisions(sourceId: number): SourceRevision[] {
