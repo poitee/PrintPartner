@@ -226,6 +226,7 @@ export async function registerAssistantRoutes(
           hostedPlanning: hostedPlanningPolicy(deps.config.deployMode).hostedPlanning,
         }));
       } catch (error) {
+        if (error instanceof OwnershipAdmissionError) return sendProblem(reply, 503, "Service Unavailable", error.message);
         if (error instanceof TenantDiskQuotaError) return sendProblem(reply, 413, "Payload Too Large", error.message);
         request.log.error(
           { failure: "unexpected", actionType: action.type, planId: action.plan_id },

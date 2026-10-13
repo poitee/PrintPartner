@@ -714,6 +714,7 @@ export class LocalSourceSnapshotStore {
       };
     }
 
+    input.beforePublish?.();
     const candidateDir = await mkdtemp(
       join(revisionsRoot, `.candidate-${input.upstreamRevisionKey}-`),
     );

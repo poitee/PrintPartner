@@ -34,7 +34,7 @@ import { runWithTenantDiskQuota, withoutTenantDiskQuota, TenantDiskQuotaError } 
 import { runPrinterUploadJob } from "./printer-upload-job.js";
 import { reconcileSendQueueJobResult } from "./printer-send-queue.js";
 import { getLogger } from "./logger.js";
-import { requireSourceSyncParticipant } from "../ownership/source-sync-admission.js";
+import { OwnershipAdmissionError, requireSourceSyncParticipant } from "../ownership/source-sync-admission.js";
 import {
   ACCEPTED_PLATE_EXPORT_LIMITS,
   materializeAcceptedPlateExport,
@@ -521,7 +521,7 @@ export class InProcessJobRunner {
           })),
         });
       } catch (e) {
-        if (e instanceof TenantDiskQuotaError) throw e;
+        if (e instanceof OwnershipAdmissionError || e instanceof TenantDiskQuotaError) throw e;
         const errMsg = e instanceof Error ? e.message : String(e);
         const isRateLimit = /rate limit exceeded/i.test(errMsg);
         const friendly = isRateLimit

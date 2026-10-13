@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, relative, sep } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import AdmZip from "adm-zip";
+import * as localRevision from "../services/local-source-revision.js";
 import * as archiveImport from "../services/archive-import.js";
 import * as docScan from "../services/source-docs-scan.js";
 import { InProcessJobRunner } from "../services/job-runner.js";
@@ -28,6 +29,7 @@ import * as legacyManifest from "../services/legacy-source-manifest.js";
 vi.mock("../services/legacy-source-manifest.js", { spy: true });
 vi.mock("../services/source-docs-scan.js", { spy: true });
 vi.mock("../services/archive-import.js", { spy: true });
+vi.mock("../services/local-source-revision.js", { spy: true });
 import Database from "better-sqlite3";
 import { buildApp, createPorts, startServer } from "../app.js";
 import { loadConfig } from "../config.js";
@@ -322,6 +324,7 @@ describe("Source Sync Fastify admission", () => {
     };
     writeFileSync(f.manifest, `${f.original}\n`);
     const refused = await f.started.app.inject({ method: "POST", url: "/assistant/actions/apply", payload: { action } });
+    expect(refused.statusCode, refused.body).toBe(503);
     expect(refused.body).toMatch(/runtime manifest does not match/);
     expect(f.repo.listSourceRevisions(f.source.id)).toEqual([]);
     expect(readdirSync(f.workspace)).toEqual([]);
@@ -330,6 +333,60 @@ describe("Source Sync Fastify admission", () => {
     expect(admitted.statusCode, admitted.body).toBe(200);
     expect(admitted.json()).toMatchObject({ ok: true });
     expect(f.repo.listSourceRevisions(f.source.id)).toHaveLength(1);
+  });
+
+  it.each([
+    ["", "missing"], ["/api/v1", "missing"], ["", "malformed"], ["/api/v1", "malformed"],
+    ["", "replaced"], ["/api/v1", "replaced"], ["", "during-publication"], ["/api/v1", "during-publication"],
+  ])("preserves 503 for %s assistant import when admission changes %s", async (prefix, phase) => {
+    const f = await localAdmissionFixture("assistant-outage");
+    const before = f.repo.getProjectRow(f.source.id);
+    if (phase === "missing") rmSync(f.manifest);
+    else if (phase !== "during-publication") writeFileSync(f.manifest, phase === "malformed" ? "null" : `${f.original}\n`);
+    else {
+      const actual = await vi.importActual<typeof localRevision>("../services/local-source-revision.js");
+      vi.spyOn(localRevision, "publishLocalSourceWorkingTree").mockImplementationOnce(async (input) => {
+        await Promise.resolve();
+        writeFileSync(f.manifest, `${f.original}\n`);
+        return actual.publishLocalSourceWorkingTree(input);
+      });
+    }
+    const response = await f.started.app.inject({
+      method: "POST", url: `${prefix}/assistant/actions/apply`, headers: { authorization: "Bearer test-mcp-key" },
+      payload: { action: { id: "import", type: "propose_import_source_files", plan_id: 0, label: "Import", summary: "Import", params: {
+        source_id: f.source.id, files: [{ path: "cube.stl", content_base64: Buffer.from("solid cube\nendsolid cube\n").toString("base64") }],
+      } } },
+    });
+    expect(response.statusCode, response.body).toBe(503);
+    expect(response.body).toMatch(/ownership manifest|runtime manifest does not match/);
+    expect(f.repo.getProjectRow(f.source.id)).toEqual(before);
+    expect(f.repo.listSourceRevisions(f.source.id)).toEqual([]);
+    expect(readdirSync(f.workspace)).toEqual([]);
+  });
+
+  it.each([false, true])("marks the job error when the final sync loses admission (earlierSuccess=%s)", async (earlierSuccess) => {
+    const f = await localAdmissionFixture("final-sync-outage");
+    writeFileSync(join(f.workspace, "README.md"), "# Final document\n");
+    const ids: number[] = [];
+    if (earlierSuccess) {
+      const previous = f.repo.createSource({ name: "Earlier source", source_kind: "local" });
+      mkdirSync(join(f.repo.reposDir, String(previous.id)), { recursive: true });
+      ids.push(previous.id);
+    }
+    ids.push(f.source.id);
+    const before = f.repo.getProjectRow(f.source.id);
+    const actual = await vi.importActual<typeof docScan>("../services/source-docs-scan.js");
+    vi.spyOn(docScan, "walkSourceDocs").mockImplementation((path) => {
+      const docs = actual.walkSourceDocs(path);
+      if (path === f.workspace) writeFileSync(f.manifest, `${f.original}\n`);
+      return docs;
+    });
+    const jobId = await f.started.ports.jobs.start("sync", { project_ids: ids });
+    const result = await waitJob(f.started.app, jobId);
+    expect(result).toMatchObject({ status: "error", error: expect.stringMatching(/runtime manifest does not match/) });
+    expect(f.repo.getProjectRow(f.source.id)).toEqual(before);
+    expect(f.repo.listSourceDocs(f.source.id)).toEqual([]);
+    if (earlierSuccess) expect(f.repo.getSource(ids[0])?.last_synced_at).toBeTruthy();
   });
 
   it.each(["", "/api/v1"])("guards %s document and cover cache writes while serving admitted cached reads", async (prefix) => {

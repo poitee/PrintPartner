@@ -3364,7 +3364,7 @@ export async function applyAssistantAction(
             },
           };
         } catch (error) {
-          if (error instanceof TenantDiskQuotaError) throw error;
+          if (error instanceof OwnershipAdmissionError || error instanceof TenantDiskQuotaError) throw error;
           return { ok: false, detail: error instanceof Error ? error.message : String(error) };
         } finally {
           rmSync(staging, { recursive: true, force: true });
@@ -4592,6 +4592,7 @@ export async function applyAssistantAction(
     }
     return outcome;
   } catch (error) {
+    if (error instanceof OwnershipAdmissionError) return { ok: false, status: 503, detail: error.message };
     if (error instanceof TenantDiskQuotaError) throw error;
     if (action.type !== "archive_plan") {
       return {

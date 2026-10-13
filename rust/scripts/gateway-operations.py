@@ -42,7 +42,7 @@ def planted_ownership_error(document):
     operations = document.get('operations')
     if isinstance(operations, dict):
         for name, body in operations.items():
-            entries = body.get('participants', []) if isinstance(body, dict) else None
+            entries = body.get('participants') if isinstance(body, dict) else None
             if not isinstance(entries, list):
                 return 'ownership admission: malformed ownership manifest'
             for entry in entries:

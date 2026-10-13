@@ -144,6 +144,42 @@ fn ticket_t_7_ownership_python_unknown_kind_preserves_registry() {
 }
 
 #[test]
+fn ticket_t_7_ownership_python_operation_requires_participants() {
+    let dir = scratch("ticket_t_7_ownership_python_missing_participants");
+    let operations = repo_root().join("rust/crates/pp-gateway/operations.json");
+    let before = fs::read(&operations).unwrap();
+    for body in [
+        serde_json::json!({}),
+        serde_json::json!({"participants": null}),
+        serde_json::json!({"participants": "bad"}),
+    ] {
+        let inventory = serde_json::json!({
+            "routes": [],
+            "workers": [{"operation": "source.sync", "owner": "node"}],
+            "startup": [{"operation": "source.sync", "owner": "node"}],
+            "mcp": [{"operation": "source.sync", "owner": "node"}],
+            "operations": {"source.sync": body}
+        });
+        let path = dir.join("inventory.json");
+        fs::write(&path, serde_json::to_vec(&inventory).unwrap()).unwrap();
+        for checking in [false, true] {
+            let mut command = Command::new("python3");
+            command
+                .arg(repo_root().join("rust/scripts/gateway-operations.py"))
+                .arg(&path);
+            if checking {
+                command.arg("--check");
+            }
+            let output = command.output().unwrap();
+            let text = command_text(&output);
+            assert!(!output.status.success(), "{text}");
+            assert!(text.contains("malformed ownership manifest"), "{text}");
+            assert_eq!(fs::read(&operations).unwrap(), before);
+        }
+    }
+}
+
+#[test]
 fn ticket_t_7_ownership_python_self_test_unchanged() {
     let output = Command::new("python3")
         .arg(repo_root().join("rust/scripts/gateway-operations.py"))

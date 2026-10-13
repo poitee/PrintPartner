@@ -68,6 +68,40 @@ afterEach(async () => {
 });
 
 describe("LocalSourceSnapshotStore", () => {
+  it("does not create a candidate after admission changes during revision-root creation", async () => {
+    const reposDir = tempReposDir();
+    const manifest = join(reposDir, "ownership.json");
+    const original = readFileSync(packagedSourceSyncManifestPath(), "utf8");
+    const previous = process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST;
+    const actualFs = await vi.importActual<typeof fsPromises>("node:fs/promises");
+    const candidates: string[] = [];
+    try {
+      writeFileSync(manifest, original);
+      process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST = manifest;
+      beginSourceSyncAdmission(reposDir);
+      vi.mocked(fsPromises.mkdir).mockImplementationOnce(async (...args) => {
+        const result = await actualFs.mkdir(...args);
+        writeFileSync(manifest, `${original}\n`);
+        return result;
+      });
+      vi.mocked(fsPromises.mkdtemp).mockImplementation(async (...args) => {
+        candidates.push(String(args[0]));
+        return actualFs.mkdtemp(...args);
+      });
+      const part = file("cube.stl", "stl", "solid cube");
+      await expect(new LocalSourceSnapshotStore({ reposDir }).materialize({
+        sourceId: 1, upstreamRevisionKey: "candidate-admission", files: [part.descriptor], selection: selection(),
+        beforePublish: () => requireSourceSyncParticipant("job.sync"),
+        openFile: async () => response(part.content),
+      })).rejects.toThrow(/runtime manifest does not match/);
+      expect(candidates).toEqual([]);
+      expect(await candidateNames(reposDir, 1)).toEqual([]);
+    } finally {
+      if (previous === undefined) delete process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST;
+      else process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST = previous;
+    }
+  });
+
   it("does not write snapshot metadata after admission changes during the final stream", async () => {
     const reposDir = tempReposDir();
     const manifest = join(reposDir, "ownership.json");
