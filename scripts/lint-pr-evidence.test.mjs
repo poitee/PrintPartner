@@ -6373,3 +6373,38 @@ test('r36-fallback-endpoint-after-shell-glob-and-in-data', () => {
   assertSafeCommand('curl {32322358,32322359}${TAIL:-55}');
   assertSafeCommand('curl --data "${PAYLOAD:-{3232235856,3232235857}}" http://example.test');
 });
+
+test('r37-output-process-substitution-request-data-fallback', () => {
+  assertBannedCommand('curl --data ${PAYLOAD:->(curl 3232235856)} http://example.test');
+  assertBannedCommand('curl --data "${PAYLOAD:->(curl 3232235856)}" http://example.test');
+  assertBannedCommand('curl --data >(curl 3232235856) http://example.test');
+  assertSafeCommand("curl --data '${PAYLOAD:->(curl 3232235856)}' http://example.test");
+  assertSafeCommand('curl --data ${PAYLOAD:->(printf 3232235856)} http://example.test');
+  assertSafeCommand('curl --data >(printf 3232235856) http://example.test');
+});
+
+test('r37-parenthetical-prose-is-not-a-startup-source', () => {
+  for (const steps of [
+    'Ran the focused tests (all passed). The report is attached.',
+    'Ran the focused tests (all passed). the report is attached.',
+  ]) {
+    const result = lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ${steps}\n- Result observed: passed\n- Screenshot / recording / verify-skill output or trace: trace.json`));
+    assert.equal(result.ok, true, result.errors.join('\n'));
+  }
+  for (const command of [
+    '. script.sh',
+    'true; . script.sh',
+    '(true); . script.sh',
+    'case $x in a) . script.sh ;; esac',
+    'case $x in a). script.sh ;; esac',
+    'case $x in\na) . script.sh\nesac',
+    '. <(printf curl)',
+    'builtin . script.sh',
+  ]) {
+    const result = lintPrEvidence(commandEvidence(command));
+    assert.equal(result.ok, false, command);
+    assert.match(result.errors.join('\n'), /shell startup source|external process/);
+  }
+  assertBannedCommand('case $x in a) curl 3232235856 ;; esac');
+  assertBannedCommand('(curl 3232235856)');
+});

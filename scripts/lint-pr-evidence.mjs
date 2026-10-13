@@ -2027,6 +2027,11 @@ function shellWords(value, { commandTokens = false } = {}) {
   let wordReplacements = [];
   let wordDynamicFallback = false;
   let wordIndirect = null;
+  // A ")" or "}" does not start a command, so a following "." is sentence
+  // punctuation. A case arm is the exception: "case x in a) . file" is real.
+  let atCommandStart = true;
+  let caseState = "none";
+  let breakChar = "";
   let fenceFrom = -1;
   let fenceTo = -1;
   let fenceHit = false;
@@ -2046,23 +2051,57 @@ function shellWords(value, { commandTokens = false } = {}) {
     word += text;
     braceText += protectedText ? text.replace(/[\\{},.]/g, (ch) => "\\" + ch) : text;
   };
+  const noteCommandWord = (text) => {
+    if (!atCommandStart) {
+      if (text === "in" && caseState === "saw-case") caseState = "saw-in";
+      else if (caseState === "saw-in") caseState = "pattern";
+      else if (caseState === "pattern") caseState = "none";
+      return;
+    }
+    if (text === "case") caseState = "saw-case";
+    else if (text === "esac") caseState = "none";
+    else if (text === "in" && caseState === "saw-case") caseState = "saw-in";
+    else if (caseState === "saw-in") caseState = "pattern";
+    else if (caseState === "pattern" || caseState === "saw-case") caseState = "none";
+    atCommandStart = false;
+  };
+  // Returns how many extra separator characters this break consumes.
+  const noteBreak = (ch, index) => {
+    let skip = 0;
+    const optionalCaseParen = ch === "(" && caseState === "saw-in";
+    if (ch === ")" && (caseState === "saw-in" || caseState === "pattern")) caseState = "arm";
+    else if (ch === ";" && caseState === "arm" && value[index + 1] === ";") {
+      caseState = "saw-in";
+      skip = 1;
+    } else if (!optionalCaseParen && (ch === "(" || ch === ";" || ch === "|" || ch === "&") && caseState !== "arm") {
+      caseState = "none";
+    }
+    breakChar = ch;
+    atCommandStart = true;
+    return skip;
+  };
   const flush = () => {
     if (word || (commandTokens && wordStarted)) {
-      const assignable = !nameQuoted && /^[A-Za-z_][\w]*\+?=/.test(word);
-      words.push(commandTokens ? {
-        text: word,
-        plain: !wordProtected,
-        braceText,
-        unresolved: wordUnresolved,
-        substitution: wordSubstitution,
-        parameters: wordParameters,
-        assignable,
-        substitutionBodies,
-        processSource: wordProcessSource,
-        replacements: wordReplacements,
-        dynamicFallback: wordDynamicFallback,
-        indirect: wordIndirect,
-      } : word);
+      const sentenceDot = commandTokens && atCommandStart && (breakChar === ")" || breakChar === "}")
+        && caseState !== "arm" && !wordProtected && word === ".";
+      if (!sentenceDot) {
+        if (commandTokens) noteCommandWord(word);
+        const assignable = !nameQuoted && /^[A-Za-z_][\w]*\+?=/.test(word);
+        words.push(commandTokens ? {
+          text: word,
+          plain: !wordProtected,
+          braceText,
+          unresolved: wordUnresolved,
+          substitution: wordSubstitution,
+          parameters: wordParameters,
+          assignable,
+          substitutionBodies,
+          processSource: wordProcessSource,
+          replacements: wordReplacements,
+          dynamicFallback: wordDynamicFallback,
+          indirect: wordIndirect,
+        } : word);
+      }
     }
     word = "";
     braceText = "";
@@ -2103,7 +2142,11 @@ function shellWords(value, { commandTokens = false } = {}) {
     // A fence line is three or more backticks. Those ticks stay separators, and the marker tells the caller to drop retained assignments.
     if (quote === null && ch === "`" && fenceAt(index)) {
       flush();
-      if (commandTokens) words.push({ fence: true });
+      if (commandTokens) {
+        breakChar = "`";
+        atCommandStart = true;
+        words.push({ fence: true });
+      }
       continue;
     }
     if (quote !== "'" && ch === "`") {
@@ -2117,8 +2160,9 @@ function shellWords(value, { commandTokens = false } = {}) {
       index = substitution.end - 1;
       continue;
     }
-    // Bash process substitution is one filename operand, not a redirect plus a subshell.
-    if (quote === null && ch === "<" && value[index + 1] === "(") {
+    // Bash process substitution, in either direction, is one filename operand.
+    const outputProcess = ch === ">" && value[index - 1] !== ">";
+    if (quote === null && value[index + 1] === "(" && (ch === "<" || outputProcess)) {
       const group = readParenGroup(value, index + 1);
       append(value.slice(index, group.end), true);
       wordProcessSource = true;
@@ -2129,12 +2173,19 @@ function shellWords(value, { commandTokens = false } = {}) {
     }
     if (quote === null && !wordStarted && (ch === "{" || ch === "}") && (index + 1 === value.length || /[\s;|&<>()]/.test(value[index + 1]))) {
       flush();
-      if (commandTokens) words.push(null);
+      if (commandTokens) {
+        breakChar = ch;
+        atCommandStart = true;
+        words.push(null);
+      }
       continue;
     }
     if (quote === null && /[\s;|&<>()]/.test(ch)) {
       flush();
-      if (commandTokens && /[\n\r;|&<>()]/.test(ch)) words.push(null);
+      if (commandTokens && /[\n\r;|&<>()]/.test(ch)) {
+        index += noteBreak(ch, index);
+        words.push(null);
+      }
       continue;
     }
     if (quote === null && ch === "#" && !wordStarted) {
@@ -2161,7 +2212,7 @@ function shellWords(value, { commandTokens = false } = {}) {
             braceFallback: protectedFallback });
         }
         if (parameter.dynamicFallback) wordDynamicFallback = true;
-        if (parameter.fallbackSource && /\$\(|`|<\(/.test(parameter.fallbackSource)) {
+        if (parameter.fallbackSource && /\$\(|`|<\(|>\(/.test(parameter.fallbackSource)) {
           for (const inner of shellWords(parameter.fallbackSource, { commandTokens: true })) {
             if (inner?.substitutionBodies) substitutionBodies.push(...inner.substitutionBodies);
           }
