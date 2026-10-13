@@ -33,9 +33,9 @@ it("projects an oversized Moonraker row before the snapshot is serialized", () =
   expect(moonrakerHostSnapshot(JSON.stringify([healthy, maxUrl, hugeUrl, hugeKey, wide]))).toEqual([
     { id: "ok", base_url: "http://printer", api_key: "secret", enabled: true },
     { id: "max", base_url: "h".repeat(4096), api_key: "k", enabled: true },
-    { id: "big", base_url: "", api_key: null, enabled: false },
-    { id: "key", base_url: "", api_key: null, enabled: false },
-    { id: "wide", base_url: "", api_key: null, enabled: false },
+    { id: "big", base_url: "", api_key: null, enabled: true },
+    { id: "key", base_url: "", api_key: null, enabled: true },
+    { id: "wide", base_url: "", api_key: null, enabled: true },
   ]);
 });
 
@@ -51,4 +51,24 @@ it.each([undefined, null, 123, true, {}, [], "", "x".repeat(257), "é".repeat(12
 it("accepts a nonempty Moonraker id at the UTF-8 byte limit", () => {
   const id = "é".repeat(128);
   expect(moonrakerHostSnapshot(JSON.stringify([{ id, type: "moonraker" }]))?.[0]?.id).toBe(id);
+});
+
+it("bounds an escaped ID-only overflow response and rejects larger inventories", () => {
+  const hosts = Array.from({ length: 2048 }, (_, index) => ({
+    id: `${String(index).padStart(4, "0")}${"\u0001".repeat(252)}`,
+    type: "moonraker",
+  }));
+  const projected = moonrakerHostSnapshot(JSON.stringify(hosts));
+  expect(projected).toHaveLength(2048);
+  const rustLimit = 128 * (6 * (256 + 2 * 4096) + 128) + 2;
+  expect(Buffer.byteLength(JSON.stringify(projected), "utf8")).toBeLessThan(rustLimit);
+  expect(moonrakerHostSnapshot(JSON.stringify([...hosts, { id: "new", type: "moonraker" }]))).toBeNull();
+});
+it("keeps oversized enabled rows unavailable and actual disabled rows disabled", () => {
+  const enabled = { id: "big", type: "moonraker", config: { base_url: "h".repeat(4097) } };
+  const disabled = { ...enabled, id: "disabled", config: { ...enabled.config, enabled: false } };
+  expect(moonrakerHostSnapshot(JSON.stringify([enabled, disabled]))).toEqual([
+    { id: "big", base_url: "", api_key: null, enabled: true },
+    { id: "disabled", base_url: "", api_key: null, enabled: false },
+  ]);
 });

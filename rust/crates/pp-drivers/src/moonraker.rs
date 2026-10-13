@@ -153,12 +153,12 @@ impl Watchers {
             self.invalidate().await;
             anyhow::bail!("Invalid host snapshot");
         };
-        // Unusable or oversized rows stay known without a polling slot, so only
-        // those ids fail closed. Node projects oversized rows with an empty endpoint.
+        // Enabled unusable or oversized rows stay known without a polling slot,
+        // so only those ids fail closed. Disabled rows need no usable endpoint.
         let wanted: HashMap<_, _> = hosts
             .into_iter()
             .filter(|h| {
-                !h.base_url.trim().is_empty()
+                (!h.enabled || !h.base_url.trim().is_empty())
                     && h.base_url.len() <= MAX_CONFIG_BYTES
                     && h.api_key
                         .as_ref()
@@ -715,6 +715,24 @@ mod tests {
         assert_eq!(watchers.route("prusa"), Route::Node);
     }
     #[tokio::test]
+    async fn disabled_empty_endpoints_cache_offline_without_polling() {
+        let mut watchers = Watchers::new().unwrap();
+        for endpoint in ["", "   "] {
+            let mut disabled = host(endpoint.into());
+            disabled.enabled = false;
+            watchers.replace(vec![disabled]).await.unwrap();
+            assert_eq!(
+                watchers.route("host"),
+                Route::Cached(Status::offline("Integration disabled"))
+            );
+            assert!(watchers.hosts["host"].task.is_none());
+        }
+        watchers.replace(vec![host(String::new())]).await.unwrap();
+        assert_eq!(watchers.route("host"), Route::Unavailable);
+        assert!(watchers.hosts.is_empty());
+    }
+
+    #[tokio::test]
     async fn gre_335_oversized_row_only_fails_its_own_id() {
         let mut watchers = Watchers::new().unwrap();
         let mut healthy = host("http://printer.test".into());
@@ -732,6 +750,7 @@ mod tests {
         let projected = Host {
             id: "projected".into(),
             base_url: String::new(),
+            enabled: true,
             ..healthy.clone()
         };
         watchers
