@@ -75,6 +75,10 @@ The Fastify server provides:
 - streamable HTTP MCP
 - authentication and tenant boundaries when multi-user mode is enabled
 
+Source upload and local manifest publication require a native atomic transaction. Experimental Postgres rejects these operations before staging or mutation because its synchronous bridge opens a separate connection for each statement. SQLite uses an immediate transaction for publication.
+
+Upload staging directories include an encoded tenant identifier. Quota scans count retained staging for that tenant and ignore symlinks. Older unscoped `.upload-*` directories have no ownership metadata and require operator attribution before their bytes can enter a tenant quota.
+
 Long-running work returns a job id. The job runner persists state and publishes progress to connected clients.
 
 ### `@print-partner/contracts`

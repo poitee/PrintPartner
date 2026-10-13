@@ -9,6 +9,7 @@ import {
 import {
   InvalidSourceManifestError,
   publishSourceManifestRevision,
+  SOURCE_PUBLICATION_UNAVAILABLE_DETAIL,
 } from "../services/local-source-revision.js";
 import {
   archiveLegacySourceManifest,
@@ -60,6 +61,9 @@ export async function registerRepoManifestRoutes(
   });
 
   app.put("/sources/:id/repo-manifest", { bodyLimit: MAX_BULK_JSON_BODY_BYTES }, async (request, reply) => {
+    if (!deps.repo.canPublishSourceRevision()) {
+      return reply.status(503).send({ detail: SOURCE_PUBLICATION_UNAVAILABLE_DETAIL });
+    }
     const id = Number((request.params as { id: string }).id);
     requireLocalPath(deps.repo, id);
     const body = request.body as { yaml?: string };

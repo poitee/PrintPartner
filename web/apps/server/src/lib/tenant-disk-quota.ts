@@ -3,7 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { join, resolve } from "node:path";
 import type { FastifyReply } from "fastify";
 import { sendProblem } from "./api-error.js";
-import { tenantExportDirectory } from "./secure-path.js";
+import { tenantExportDirectory, tenantSourceUploadPrefix } from "./secure-path.js";
 import { sourceWorkspaceRoot } from "../services/source-filesystem-policy.js";
 
 const TENANT_DISK_QUOTA_DETAIL =
@@ -114,6 +114,17 @@ export async function measureTenantDiskUsage(input: {
   for (const sourceId of input.sourceIds) {
     sourceBytes += await measureDirectoryBytes(sourceWorkspaceRoot(input.reposDir, sourceId));
     sourceBytes += await measureDirectoryBytes(join(input.dataDir, "sources", String(sourceId)));
+  }
+  const sourcesRoot = join(input.dataDir, "sources");
+  const stagingPrefix = tenantSourceUploadPrefix(input.tenantId);
+  const entries = await readdir(sourcesRoot).catch((error: unknown) => {
+    if (isMissing(error)) return [];
+    throw error;
+  });
+  for (const name of entries) {
+    if (name.startsWith(stagingPrefix)) {
+      sourceBytes += await measureDirectoryBytes(join(sourcesRoot, name));
+    }
   }
   const total = exportBytes + sourceBytes;
   if (!Number.isSafeInteger(total)) {
