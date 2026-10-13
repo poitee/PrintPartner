@@ -113,6 +113,16 @@ struct Principal<'a> {
 }
 
 impl Endpoint {
+    /// Socket endpoint with no child. Tests drop publication while a refresh is blocked on it.
+    pub fn bound_to(socket: impl Into<PathBuf>) -> Arc<Self> {
+        Arc::new(Self {
+            socket: socket.into(),
+            generation: "test-generation".into(),
+            key: [9; 32],
+            connections: Arc::new(Connections::new()),
+        })
+    }
+
     pub async fn forward(&self, mut request: Request<Body>) -> Result<Response<Body>> {
         let admitted = self.connections.admit()?;
         let target = request
@@ -210,6 +220,35 @@ pub struct CompatHandle {
 }
 
 impl CompatHandle {
+    /// No child endpoint is published. Node-owned routes must fail closed.
+    pub fn unpublished() -> Self {
+        let (_endpoints, endpoint) = watch::channel(None);
+        let (_states, status) = watch::channel(Status::Starting);
+        let (recover, _recovery) = mpsc::channel(1);
+        Self {
+            endpoint,
+            status,
+            recover,
+        }
+    }
+
+    /// Caller replaces the published child. `None` is an unpublished backend.
+    pub fn replaceable(
+        endpoint: Option<Arc<Endpoint>>,
+    ) -> (Self, watch::Sender<Option<Arc<Endpoint>>>) {
+        let (tx, rx) = watch::channel(endpoint);
+        let (_states, status) = watch::channel(Status::Starting);
+        let (recover, _recovery) = mpsc::channel(1);
+        (
+            Self {
+                endpoint: rx,
+                status,
+                recover,
+            },
+            tx,
+        )
+    }
+
     pub fn endpoint(&self) -> Option<Arc<Endpoint>> {
         self.endpoint.borrow().clone()
     }

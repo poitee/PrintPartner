@@ -181,7 +181,7 @@ async fn start_resources(
             lease: owner.secret().to_owned(),
             lease_file: owner.clone_file()?,
             port: listener.local_addr()?.port(),
-            record_child: StorageLease::record_child,
+            record_child: pp_storage::lease::record_child,
         },
         compat_config,
     )?;

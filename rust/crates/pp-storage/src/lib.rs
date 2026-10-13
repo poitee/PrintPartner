@@ -64,6 +64,7 @@ enum Envelope {
     },
     Auth {
         command: auth::Command,
+        policy: auth::AuthPolicy,
         reply: mpsc::Sender<Result<auth::Reply>>,
     },
 }
@@ -318,8 +319,12 @@ impl WriterOwner {
                     Envelope::Setting { work, reply } => {
                         let _ = reply.send(execute(&mut connection, work));
                     }
-                    Envelope::Auth { command, reply } => {
-                        let _ = reply.send(auth::execute(&mut connection, command));
+                    Envelope::Auth {
+                        command,
+                        policy,
+                        reply,
+                    } => {
+                        let _ = reply.send(auth::execute(&mut connection, command, policy));
                     }
                 }
             }
