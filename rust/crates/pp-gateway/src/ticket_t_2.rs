@@ -1,6 +1,16 @@
 #![cfg(test)]
 
-use std::{net::SocketAddr, path::PathBuf};
+use std::{
+    net::SocketAddr,
+    path::PathBuf,
+    sync::atomic::{AtomicBool, Ordering},
+};
+
+pub(super) static REFRESH_AFTER_PUBLISHED: AtomicBool = AtomicBool::new(false);
+
+pub(super) fn note_published_refresh() {
+    REFRESH_AFTER_PUBLISHED.store(true, Ordering::SeqCst);
+}
 
 use axum::{
     body::Body,
@@ -184,5 +194,61 @@ async fn ticket_t_2_unready_node_routes_return_problem_json_and_keep_rust_surfac
         "a rejected mutation must not publish another backend"
     );
 
+    gateway.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn ticket_t_2_status_refresh_unpublish_returns_problem_json() {
+    REFRESH_AFTER_PUBLISHED.store(false, Ordering::SeqCst);
+    let sock = std::env::temp_dir().join(format!("pp-t2-refresh-{}.sock", std::process::id()));
+    let _ = std::fs::remove_file(&sock);
+    let listener = tokio::net::UnixListener::bind(&sock).unwrap();
+    let (held_tx, held_rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let _ = held_tx.send(stream);
+    });
+    let (compat, publication) =
+        CompatHandle::replaceable(Some(pp_compat::Endpoint::bound_to(&sock)));
+    let assets = Assets::create();
+    let tcp = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+        .await
+        .unwrap();
+    let mut gateway = super::Gateway::start(tcp, assets.0.clone(), compat).unwrap();
+    let origin = gateway.origin().to_owned();
+    let launch = gateway.take_launch_target().unwrap().into_url();
+    let bootstrap = launch.strip_prefix(&origin).unwrap().to_owned();
+    let (status, headers, _) = exchange(&origin, &bootstrap, "GET", None, None, None).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let cookie = session_cookie(&headers);
+    let held = tokio::time::timeout(std::time::Duration::from_secs(2), held_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    let origin_for_status = origin.clone();
+    let status_task = tokio::spawn(async move {
+        exchange(
+            &origin_for_status,
+            "/api/v1/integrations/printer-1/status",
+            "GET",
+            Some(&cookie),
+            None,
+            None,
+        )
+        .await
+    });
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    while !REFRESH_AFTER_PUBLISHED.load(Ordering::SeqCst) {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "status read never passed the publication check"
+        );
+        tokio::task::yield_now().await;
+    }
+    publication.send(None).unwrap();
+    drop(held);
+    let status_route = status_task.await.unwrap();
+    assert_unready_problem(status_route.0, &status_route.1, &status_route.2);
+    let _ = std::fs::remove_file(&sock);
     gateway.stop().await.unwrap();
 }

@@ -638,6 +638,10 @@ async fn handle(
             if state.compat.endpoint().is_none() {
                 return node_unavailable();
             }
+            // The regression test waits here, while this read still sees a child
+            // and the snapshot flight is blocked.
+            #[cfg(test)]
+            ticket_t_2::note_published_refresh();
             // Detached so a client disconnect cannot cut a reconcile short.
             // Concurrent misses share that one refresh; a recorded snapshot then
             // routes confirmed non-Moonraker ids without another queue wait.
@@ -648,6 +652,11 @@ async fn handle(
                 .await;
             route = state.watchers.lock().await.route(&id);
             if route_needs_snapshot(&route) {
+                // The child can exit during the refresh. That is still an unready
+                // compat route, not a monitoring outage on a live backend.
+                if state.compat.endpoint().is_none() {
+                    return node_unavailable();
+                }
                 // Never fall back to on-demand Node polling for a known HTTP Moonraker
                 // id, nor guess when no valid snapshot exists.
                 return error(
