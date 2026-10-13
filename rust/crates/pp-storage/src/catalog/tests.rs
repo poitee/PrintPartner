@@ -18,6 +18,7 @@ fn ticket_t_59_catalog_private_full_queue_retains_unreleased_work() {
         }),
         changed: Condvar::new(),
         capacity: 1,
+        job_admission: Mutex::new(None),
     });
     let readers = Arc::new(ReaderPool {
         state: Mutex::new(ReaderState {

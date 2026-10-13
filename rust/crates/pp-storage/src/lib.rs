@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod catalog;
+pub mod jobs;
 pub mod lease;
 pub mod read_model;
 mod schema;
@@ -71,6 +72,10 @@ enum Envelope {
         command: catalog::Command,
         reply: mpsc::Sender<Result<catalog::Outcome>>,
     },
+    Jobs {
+        command: jobs::Command,
+        reply: mpsc::Sender<Result<jobs::Outcome>>,
+    },
     Setting {
         work: Work,
         reply: mpsc::Sender<Result<bool>>,
@@ -89,6 +94,7 @@ struct Shared {
     queue: Mutex<Queue>,
     changed: Condvar,
     capacity: usize,
+    job_admission: Mutex<Option<Arc<jobs::WorkerAdmission>>>,
 }
 #[derive(Clone)]
 pub struct SettingsClient {
@@ -284,6 +290,7 @@ impl WriterOwner {
             std::fs::create_dir_all(lease.data_dir().join(name))?;
         }
         let (mut connection, ready) = schema::initialize(&path, version, seed_timestamp)?;
+        jobs::recover(&mut connection)?;
         let mut idle = Vec::new();
         for _ in 0..limits.readers {
             let reader = Connection::open_with_flags(
@@ -308,6 +315,7 @@ impl WriterOwner {
             }),
             changed: Condvar::new(),
             capacity: limits.queued_writes,
+            job_admission: Mutex::new(None),
         });
         let worker = shared.clone();
         let mut catalog_state = catalog::State::new(lease.data_dir().to_owned());
@@ -347,6 +355,9 @@ impl WriterOwner {
                                 _ => Err(anyhow!("Unexpected catalog reply")),
                             });
                         let _ = reply.send(result);
+                    }
+                    Envelope::Jobs { command, reply } => {
+                        let _ = reply.send(jobs::execute(&mut connection, command));
                     }
                     Envelope::Setting { work, reply } => {
                         let _ = reply.send(execute(&mut connection, work));
