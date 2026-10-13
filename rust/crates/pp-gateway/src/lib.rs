@@ -15,7 +15,10 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::HashSet,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 use tokio::{net::TcpListener, task::JoinHandle};
@@ -74,6 +77,7 @@ enum EffectClass {
 struct GatewayState {
     watchers: tokio::sync::Mutex<Watchers>,
     snapshot_refresh: tokio::sync::Mutex<()>,
+    snapshot_revision: AtomicU64,
     /// One in-flight Node snapshot. Concurrent status misses join it instead of
     /// each waiting out the queue deadline and reading the snapshot again.
     snapshot_flight: SnapshotFlight,
@@ -138,6 +142,7 @@ impl Gateway {
         let state = Arc::new(GatewayState {
             watchers: tokio::sync::Mutex::new(Watchers::new()?),
             snapshot_refresh: tokio::sync::Mutex::new(()),
+            snapshot_revision: AtomicU64::new(0),
             snapshot_flight: SnapshotFlight::new(),
             watcher_cancelled: CancellationToken::new(),
             watcher_tasks: TaskTracker::new(),
@@ -693,11 +698,27 @@ async fn handle(
     match result {
         Ok(mut response) => {
             if integrations_changed && response.status().is_success() {
-                // Read the committed Node configuration; never replay a mutation.
-                tokio::select! { biased;
-                    _ = state.watcher_cancelled.cancelled() => {},
-                    _ = state.snapshot_flight.fresh(&state.watcher_cancelled, || apply_snapshot(&state)) => {},
-                }
+                // Older reads may not restore settings after a committed mutation.
+                state.snapshot_revision.fetch_add(1, Ordering::SeqCst);
+                let cause = if path == "/api/v1/integrations" {
+                    SnapshotCause::Create
+                } else {
+                    SnapshotCause::Update
+                };
+                // Read committed configuration; failure invalidates old monitoring.
+                // Finish reconciliation even if the requesting client disconnects.
+                let refreshing = state.clone();
+                let _ = state
+                    .watcher_tasks
+                    .spawn(async move {
+                        refreshing
+                            .snapshot_flight
+                            .fresh(&refreshing.watcher_cancelled, || {
+                                apply_snapshot(&refreshing, cause)
+                            })
+                            .await
+                    })
+                    .await;
             }
             if response.status() == StatusCode::SWITCHING_PROTOCOLS
                 && let Some(inbound) = inbound_upgrade
@@ -866,26 +887,42 @@ async fn snapshot_refresh_guard<'a>(
 }
 /// Slow/unavailable Node keeps last-known-good pollers this long before stopping them.
 const SNAPSHOT_GRACE: Duration = Duration::from_secs(10);
+#[derive(Clone, Copy)]
+enum SnapshotCause {
+    Periodic,
+    Create,
+    Update,
+}
+
+#[derive(Clone, Copy)]
 enum SnapshotError {
-    /// Timeout, restart or 5xx: the config pollers hold was valid, so keep it briefly.
+    /// Timeout, restart or 5xx: routine refreshes may keep valid pollers briefly.
     Unavailable,
     /// Denied (4xx) or unparseable: fail closed immediately.
     Invalid,
+    /// A mutation committed while this read was in flight; discard its result.
+    Superseded,
 }
 async fn refresh_watchers(state: &GatewayState) -> bool {
     let cancelled = state.watcher_cancelled.clone();
     state
         .snapshot_flight
-        .share(&cancelled, || apply_snapshot(state))
+        .share(&cancelled, || {
+            apply_snapshot(state, SnapshotCause::Periodic)
+        })
         .await
 }
-async fn apply_snapshot(state: &GatewayState) -> bool {
+async fn apply_snapshot(state: &GatewayState, cause: SnapshotCause) -> bool {
+    let revision = state.snapshot_revision.load(Ordering::SeqCst);
     // Serialize snapshots without blocking already-cached reads on the Node round trip.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     // Queue contention must not shorten the independent Node-read budget.
     let Some((_refresh, read_deadline)) =
         snapshot_refresh_guard(&state.snapshot_refresh, &state.watcher_cancelled, deadline).await
     else {
+        if !matches!(cause, SnapshotCause::Periodic) {
+            state.watchers.lock().await.invalidate().await;
+        }
         return false;
     };
     let snapshot = tokio::select! { biased;
@@ -919,21 +956,42 @@ async fn apply_snapshot(state: &GatewayState) -> bool {
     };
     let mut watchers = state.watchers.lock().await;
     if *state.monitoring_suspended.borrow() || state.watcher_cancelled.is_cancelled() {
-        watchers.stop().await;
+        if matches!(cause, SnapshotCause::Periodic) {
+            watchers.stop().await;
+        } else {
+            watchers.invalidate().await;
+        }
         return false;
     }
+    if state.snapshot_revision.load(Ordering::SeqCst) != revision {
+        return apply_host_snapshot(&mut watchers, Err(SnapshotError::Superseded), cause).await;
+    }
+    apply_host_snapshot(&mut watchers, snapshot, cause).await
+}
+
+async fn apply_host_snapshot(
+    watchers: &mut Watchers,
+    snapshot: Result<Vec<Host>, SnapshotError>,
+    cause: SnapshotCause,
+) -> bool {
     match snapshot {
         Ok(hosts) if hosts.len() > pp_drivers::moonraker::MAX_HOSTS => {
-            watchers.over_cap(&hosts, SNAPSHOT_GRACE).await;
+            let grace = if matches!(cause, SnapshotCause::Update) {
+                Duration::ZERO
+            } else {
+                SNAPSHOT_GRACE
+            };
+            watchers.over_cap(&hosts, grace).await;
             false
         }
         Ok(hosts) => watchers.replace(hosts).await.is_ok(),
-        Err(SnapshotError::Invalid) => {
-            watchers.invalidate().await;
+        Err(SnapshotError::Unavailable) if matches!(cause, SnapshotCause::Periodic) => {
+            watchers.snapshot_unavailable(SNAPSHOT_GRACE).await;
             false
         }
-        Err(SnapshotError::Unavailable) => {
-            watchers.snapshot_unavailable(SNAPSHOT_GRACE).await;
+        Err(SnapshotError::Superseded) if matches!(cause, SnapshotCause::Periodic) => false,
+        Err(_) => {
+            watchers.invalidate().await;
             false
         }
     }
@@ -1083,7 +1141,9 @@ mod spa_tests {
 
 #[cfg(test)]
 mod snapshot_membership_tests {
-    use super::{SnapshotFlight, route_needs_snapshot};
+    use super::{
+        SnapshotCause, SnapshotError, SnapshotFlight, apply_host_snapshot, route_needs_snapshot,
+    };
     use pp_drivers::moonraker::{Host, Route, Watchers};
     use std::sync::{
         Arc,
@@ -1092,6 +1152,109 @@ mod snapshot_membership_tests {
     use std::time::{Duration, Instant};
     use tokio::sync::Mutex;
     use tokio_util::sync::CancellationToken;
+
+    #[tokio::test]
+    async fn failed_mutation_reconciliation_stops_precommit_polling() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let seen = calls.clone();
+        let server = tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut request = [0; 4096];
+                if socket.read(&mut request).await.unwrap() == 0 {
+                    continue;
+                }
+                seen.fetch_add(1, Ordering::SeqCst);
+                let _ = socket
+                    .write_all(b"HTTP/1.1 503 Unavailable\r\nContent-Length: 0\r\n\r\n")
+                    .await;
+            }
+        });
+        let guard = pp_net::outbound::HttpGuard::new(
+            Arc::new(pp_net::outbound::SystemResolver),
+            Duration::from_millis(500),
+            4096,
+        )
+        .unwrap();
+        let mut watchers = Watchers::with_guard(guard, Duration::from_millis(20));
+        for (cause, failure) in [
+            (SnapshotCause::Create, SnapshotError::Unavailable),
+            (SnapshotCause::Update, SnapshotError::Unavailable),
+            (SnapshotCause::Update, SnapshotError::Superseded),
+        ] {
+            let before = calls.load(Ordering::SeqCst);
+            watchers
+                .replace(vec![Host {
+                    id: "printer".into(),
+                    base_url: endpoint.clone(),
+                    api_key: None,
+                    enabled: true,
+                }])
+                .await
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(1), async {
+                while calls.load(Ordering::SeqCst) == before {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            // An ordinary timeout/5xx keeps a valid poller through grace.
+            assert!(
+                !apply_host_snapshot(
+                    &mut watchers,
+                    Err(SnapshotError::Unavailable),
+                    SnapshotCause::Periodic
+                )
+                .await
+            );
+            assert!(matches!(watchers.route("printer"), Route::Cached(_)));
+            // Once Node commits a mutation, that same failure cannot retain old settings.
+            assert!(!apply_host_snapshot(&mut watchers, Err(failure), cause).await);
+            assert_eq!(watchers.route("printer"), Route::NoSnapshot);
+            let stopped = calls.load(Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                stopped,
+                "old endpoint polled after failed reconciliation"
+            );
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn over_cap_updates_stop_old_pollers_but_creation_keeps_grace() {
+        let mut watchers = Watchers::new().unwrap();
+        let host = Host {
+            id: "printer".into(),
+            base_url: "http://printer.test".into(),
+            api_key: None,
+            enabled: false,
+        };
+        watchers.replace(vec![host.clone()]).await.unwrap();
+        let overflow: Vec<_> = (0..=pp_drivers::moonraker::MAX_HOSTS)
+            .map(|index| Host {
+                id: if index == 0 {
+                    "printer".into()
+                } else {
+                    format!("new-{index}")
+                },
+                ..host.clone()
+            })
+            .collect();
+        assert!(
+            !apply_host_snapshot(&mut watchers, Ok(overflow.clone()), SnapshotCause::Create).await
+        );
+        assert!(matches!(watchers.route("printer"), Route::Cached(_)));
+        assert_eq!(watchers.route("new-128"), Route::Unavailable);
+        assert!(!apply_host_snapshot(&mut watchers, Ok(overflow), SnapshotCause::Update).await);
+        assert_eq!(watchers.route("printer"), Route::Unavailable);
+        assert_eq!(watchers.route("new-128"), Route::Unavailable);
+        assert_eq!(watchers.route("prusa"), Route::Node);
+    }
 
     #[tokio::test]
     async fn mutation_reads_committed_configuration_after_a_precommit_flight() {
