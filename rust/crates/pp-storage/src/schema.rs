@@ -237,12 +237,10 @@ pub(crate) fn initialize(
     }
     for group in data.seeds {
         let tx = conn.transaction()?;
-        let sql = format!(
-            "INSERT OR IGNORE INTO {}({}) VALUES({})",
-            group.table,
-            group.columns.join(","),
-            vec!["?"; group.columns.len()].join(",")
-        );
+        // INSERT OR IGNORE still allocates an AUTOINCREMENT rowid before the
+        // unique (tenant_id, name) conflict, so every reopen moved sqlite_sequence.
+        // A SELECT that matches no row does not allocate.
+        let sql = starter_seed_insert_sql(&group.table, &group.columns)?;
         for row in group.rows {
             let values = row
                 .into_iter()
@@ -354,6 +352,34 @@ fn canonical_migration<'a>(migrations: &'a [String], needle: &str) -> Result<&'a
 
 fn quote_sql_ident(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+fn starter_seed_insert_sql(table: &str, columns: &[String]) -> Result<String> {
+    let tenant = columns
+        .iter()
+        .position(|column| column == "tenant_id")
+        .ok_or_else(|| anyhow::anyhow!("Starter seed {table} has no tenant_id"))?;
+    let name = columns
+        .iter()
+        .position(|column| column == "name")
+        .ok_or_else(|| anyhow::anyhow!("Starter seed {table} has no name"))?;
+    let quoted_table = quote_sql_ident(table);
+    let column_list = columns
+        .iter()
+        .map(|column| quote_sql_ident(column))
+        .collect::<Vec<_>>()
+        .join(",");
+    let placeholders = (1..=columns.len())
+        .map(|index| format!("?{index}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    Ok(format!(
+        "INSERT INTO {quoted_table} ({column_list}) SELECT {placeholders} WHERE NOT EXISTS (SELECT 1 FROM {quoted_table} WHERE {} = ?{} AND {} = ?{})",
+        quote_sql_ident("tenant_id"),
+        tenant + 1,
+        quote_sql_ident("name"),
+        name + 1,
+    ))
 }
 
 fn rebuild_legacy_plan_revision_inputs(conn: &mut Connection, migrations: &[String]) -> Result<()> {
