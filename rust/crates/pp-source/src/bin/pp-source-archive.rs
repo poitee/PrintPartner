@@ -1,7 +1,7 @@
 use pp_source::{
     ArtifactBudget, FileKind, LocalFiles, SelectedFile, Selection, SnapshotRequest, SourcePath,
     TenantRepos,
-    archive::{ArchiveLimits, ZipInput},
+    archive::{ArchiveError, ArchiveLimits, ZipInput},
 };
 use serde::Deserialize;
 use std::{
@@ -65,16 +65,25 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             omitted_files: vec![],
         },
     };
-    let snapshot = source.materialize(
-        request,
-        archive.files(),
-        ArtifactBudget::new(
-            command.limits.max_inflated_bytes + 8 * 1024 * 1024,
-            command.limits.max_inflated_bytes,
-        )?,
-    )?;
-    let output = serde_json::json!({"extraction":archive.receipt(),"snapshot":snapshot});
-    archive.discard()?;
+    let operation: Result<serde_json::Value, pp_source::Error> = ArtifactBudget::new(
+        command.limits.max_inflated_bytes + 8 * 1024 * 1024,
+        command.limits.max_inflated_bytes,
+    )
+    .and_then(|budget| source.materialize(request, archive.files(), budget))
+    .map(|snapshot| serde_json::json!({"extraction":archive.receipt(),"snapshot":snapshot}));
+    let cleanup = archive.discard();
+    let output = match (operation, cleanup) {
+        (Ok(output), Ok(())) => output,
+        (Err(error), Ok(())) => return Err(error.into()),
+        (Ok(_), Err(error)) => return Err(error.into()),
+        (Err(operation), Err(cleanup)) => {
+            return Err(ArchiveError::Cleanup {
+                operation: Box::new(ArchiveError::Source(operation)),
+                cleanup: Box::new(cleanup),
+            }
+            .into());
+        }
+    };
     println!("{}", serde_json::to_string(&output)?);
     Ok(())
 }

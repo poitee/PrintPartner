@@ -47,6 +47,7 @@ pub struct SpawnSpec {
     pub lease: String,
     pub lease_file: std::fs::File,
     pub port: u16,
+    pub record_child: fn(&std::path::Path, u32) -> Result<()>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -56,7 +57,9 @@ pub enum Status {
     Ready { generation: String, pid: u32 },
     Backoff { attempt: usize },
     Guarded,
+    Stopping,
     Stopped,
+    Failed,
 }
 
 #[derive(Clone)]
@@ -268,10 +271,14 @@ impl CleanupErrors {
 
 fn validate_stop_outcome(outcome: StopOutcome, intent: StopIntent) -> Result<()> {
     match outcome {
+        StopOutcome::Observed(_) | StopOutcome::ForcedAfterTimeout(_)
+            if matches!(intent, StopIntent::Restart) =>
+        {
+            Ok(())
+        }
         StopOutcome::ForcedAfterTimeout(status) => {
             bail!("Compatibility child required parent-forced termination: {status}")
         }
-        StopOutcome::Observed(_) if matches!(intent, StopIntent::Restart) => Ok(()),
         StopOutcome::Observed(status)
             if status.success() || status.signal() == Some(libc::SIGKILL) =>
         {
@@ -329,14 +336,17 @@ impl Process {
             .env_remove("NODE_OPTIONS")
             .env_remove("NODE_PATH")
             .current_dir(&spec.bundle.web_root)
+            .env_clear()
+            .envs(
+                ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ"]
+                    .iter()
+                    .filter_map(|name| std::env::var_os(name).map(|value| (*name, value))),
+            )
             .env("PP_COMMIT", release::manifest()?.commit)
             .env("PRINT_PARTNER_UPDATE_CHECK", "0")
             .env("AI_ENABLED", "0")
             .env("HOST", "127.0.0.1")
             .env("DEPLOY_MODE", "self-host")
-            .env_remove("DATABASE_URL")
-            .env_remove("MULTI_USER")
-            .env_remove("PRINT_PARTNER_DATA_DIR")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -352,6 +362,14 @@ impl Process {
             });
         }
         let mut child = command.spawn().context("Could not start bundled Node")?;
+        // Persist ownership before the child can receive setup or open storage.
+        if let Err(error) =
+            (spec.record_child)(&spec.data_dir, child.id().context("Missing child PID")?)
+        {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            return Err(error.context("Could not record child ownership"));
+        }
         let mut stdin = child.stdin.take().context("Missing parent-liveness pipe")?;
         let setup = serde_json::json!({ "version":1, "data_dir":spec.data_dir, "socket_path":endpoint.socket,
             "generation":endpoint.generation, "key":hex::encode(key), "lease":spec.lease, "parent_pid":std::process::id(), "port":spec.port });
@@ -466,8 +484,28 @@ pub fn backoff(attempt: usize) -> Duration {
     Duration::from_millis([500, 1000, 2000, 4000, 8000, 30_000][attempt.min(5)])
 }
 
+/// Timing policy owned by an individual compatibility supervisor.
+#[derive(Clone, Copy, Debug)]
+pub struct SupervisorConfig {
+    /// Ready time required to reset backoff, and age beyond which crashes expire.
+    pub crash_guard_window: Duration,
+}
+
+impl Default for SupervisorConfig {
+    fn default() -> Self {
+        Self {
+            crash_guard_window: Duration::from_secs(120),
+        }
+    }
+}
+
 impl Supervisor {
     pub fn start(spec: SpawnSpec) -> Result<Self> {
+        Self::start_with_config(spec, SupervisorConfig::default())
+    }
+
+    /// Start with a per-instance timing policy; `start` uses production defaults.
+    pub fn start_with_config(spec: SpawnSpec, config: SupervisorConfig) -> Result<Self> {
         let logs = logs::Logs::open(spec.data_dir.join("logs"))?;
         let (endpoints, endpoint) = watch::channel(None);
         let (states, status) = watch::channel(Status::Starting);
@@ -516,6 +554,7 @@ impl Supervisor {
                             generation: process.endpoint.generation.clone(),
                             pid,
                         });
+                        let ready_since = tokio::time::Instant::now();
                         let mut failures = 0;
                         loop {
                             tokio::select! {
@@ -531,9 +570,21 @@ impl Supervisor {
                                 }
                             }
                         }
+                        // Preserve escalation for repeated crashes, but forget old failures
+                        // once the child has stayed ready for the crash-guard window.
+                        if ready_since.elapsed() >= config.crash_guard_window {
+                            attempt = 0;
+                        }
                     }
                     endpoints.send_replace(None);
-                    let stop_intent = process.stop(observed_exit, &cancelled).await?;
+                    states.send_replace(Status::Stopping);
+                    let stop_intent = match process.stop(observed_exit, &cancelled).await {
+                        Ok(intent) => intent,
+                        Err(error) => {
+                            states.send_replace(Status::Failed);
+                            return Err(error);
+                        }
+                    };
                     logs.event("compat_reaped", 30);
                     if stop_intent == StopIntent::PlannedShutdown {
                         break;
@@ -545,7 +596,7 @@ impl Supervisor {
                 crashes.push_back(now);
                 while crashes
                     .front()
-                    .is_some_and(|t| now.duration_since(*t) > Duration::from_secs(120))
+                    .is_some_and(|t| now.duration_since(*t) > config.crash_guard_window)
                 {
                     crashes.pop_front();
                 }
@@ -644,6 +695,22 @@ mod tests {
         assert_eq!(
             super::classify_stop_outcome(
                 super::StopOutcome::Observed(std::process::ExitStatus::from_raw(libc::SIGABRT)),
+                &active,
+            )
+            .unwrap(),
+            super::StopIntent::Restart
+        );
+    }
+
+    #[test]
+    fn forced_exit_without_cancellation_still_restarts() {
+        let active = tokio_util::sync::CancellationToken::new();
+
+        assert_eq!(
+            super::classify_stop_outcome(
+                super::StopOutcome::ForcedAfterTimeout(std::process::ExitStatus::from_raw(
+                    libc::SIGKILL,
+                )),
                 &active,
             )
             .unwrap(),
@@ -787,7 +854,15 @@ mod tests {
                 )),
                 super::StopIntent::Restart,
             )
-            .is_err()
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn production_crash_guard_window() {
+        assert_eq!(
+            super::SupervisorConfig::default().crash_guard_window,
+            std::time::Duration::from_secs(120)
         );
     }
 

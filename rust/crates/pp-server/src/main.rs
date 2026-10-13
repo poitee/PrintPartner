@@ -63,8 +63,13 @@ async fn main() -> Result<()> {
         }
     }
     println!("{}", runtime.origin());
+    let shutdown_requested = runtime.shutdown_requested();
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-    tokio::select! {_ = tokio::signal::ctrl_c()=>{},_ = terminate.recv()=>{}}
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = terminate.recv() => {}
+        _ = shutdown_requested => {}
+    }
     let receipt = runtime.shutdown().await;
     anyhow::ensure!(receipt.complete(), "Desktop shutdown incomplete");
     Ok(())

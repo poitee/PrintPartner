@@ -19,6 +19,7 @@ pub struct DesktopLaunch {
     pub assets: PathBuf,
 }
 
+pub use pp_compat::SupervisorConfig;
 pub use pp_compat::{Bundle as VerifiedBundle, Status as CoreStatus};
 pub use pp_gateway::LaunchTarget as DesktopLaunchTarget;
 
@@ -83,6 +84,7 @@ pub struct CoreRuntime {
     origin: String,
     handle: CoreHandle,
     launch: Option<LaunchTarget>,
+    shutdown_requested: pp_gateway::ShutdownRequested,
 }
 struct Resources {
     gateway: Gateway,
@@ -121,7 +123,10 @@ impl ShutdownReceipt {
     }
 }
 
-async fn start_resources(input: DesktopLaunch) -> Result<Resources> {
+async fn start_resources(
+    input: DesktopLaunch,
+    compat_config: SupervisorConfig,
+) -> Result<Resources> {
     let assets = input
         .assets
         .canonicalize()
@@ -129,23 +134,28 @@ async fn start_resources(input: DesktopLaunch) -> Result<Resources> {
     pp_compat::verify_bundle(&input.bundle, &assets)?;
     let mut owner = StorageLease::acquire(&input.data_dir)?;
     let listener = bind_origin(&owner).await?;
-    let supervisor = Supervisor::start(SpawnSpec {
-        bundle: input.bundle,
-        data_dir: owner.data_dir().to_owned(),
-        runtime_dir: owner.runtime_dir().to_owned(),
-        lease: owner.secret().to_owned(),
-        lease_file: owner.clone_file()?,
-        port: listener.local_addr()?.port(),
-    })?;
+    let supervisor = Supervisor::start_with_config(
+        SpawnSpec {
+            bundle: input.bundle,
+            data_dir: owner.data_dir().to_owned(),
+            runtime_dir: owner.runtime_dir().to_owned(),
+            lease: owner.secret().to_owned(),
+            lease_file: owner.clone_file()?,
+            port: listener.local_addr()?.port(),
+            record_child: pp_storage::lease::record_child,
+        },
+        compat_config,
+    )?;
     owner.retain_on_drop();
     let mut status = supervisor.handle.status.clone();
     let ready = tokio::time::timeout(Duration::from_secs(32), async {
         loop {
-            if matches!(*status.borrow(), CoreStatus::Ready { .. }) {
-                return Ok(());
-            }
-            if matches!(*status.borrow(), CoreStatus::Guarded | CoreStatus::Stopped) {
-                bail!("Compatibility startup failed");
+            match *status.borrow() {
+                CoreStatus::Ready { .. } => return Ok(()),
+                CoreStatus::Guarded | CoreStatus::Stopped | CoreStatus::Failed => {
+                    bail!("Compatibility startup failed");
+                }
+                CoreStatus::Starting | CoreStatus::Backoff { .. } | CoreStatus::Stopping => {}
             }
             status
                 .changed()
@@ -182,6 +192,14 @@ async fn start_resources(input: DesktopLaunch) -> Result<Resources> {
 
 impl CoreRuntime {
     pub async fn start(input: DesktopLaunch) -> Result<Self> {
+        Self::start_with_compat_config(input, SupervisorConfig::default()).await
+    }
+
+    /// Start with a per-instance compatibility timing policy.
+    pub async fn start_with_compat_config(
+        input: DesktopLaunch,
+        compat_config: SupervisorConfig,
+    ) -> Result<Self> {
         let (started, startup) = tokio::sync::oneshot::channel();
         let (stop, stopped) = tokio::sync::oneshot::channel();
         let (completed, completion) = tokio::sync::oneshot::channel();
@@ -199,13 +217,15 @@ impl CoreRuntime {
                     }
                 };
                 runtime.block_on(async move {
-                    let mut resources = match start_resources(input).await {
+                    let mut resources = match start_resources(input, compat_config).await {
                         Ok(resources) => resources,
                         Err(error) => {
                             let _ = started.send(Err(error));
                             return;
                         }
                     };
+                    let requested_by_gateway = resources.gateway.shutdown_requested();
+                    let requested_by_adapter = requested_by_gateway.clone();
                     let public = resources.gateway.take_launch_target().map(|launch| {
                         (
                             resources.gateway.origin().to_owned(),
@@ -213,17 +233,22 @@ impl CoreRuntime {
                                 compat: resources.supervisor.handle.clone(),
                             },
                             launch,
+                            requested_by_adapter,
                         )
                     });
                     if started.send(public).is_ok() {
-                        let _ = stopped.await;
+                        tokio::select! {
+                            _ = stopped => {}
+                            _ = requested_by_gateway.wait() => {}
+                        }
                     }
                     let receipt = stop_resources(resources).await;
                     let _ = completed.send(receipt);
                 });
             })
             .context("Core owner thread unavailable")?;
-        let (origin, handle, launch) = startup.await.context("Core owner startup failed")??;
+        let (origin, handle, launch, shutdown_requested) =
+            startup.await.context("Core owner startup failed")??;
         Ok(Self {
             stop: Some(stop),
             completion: Some(completion),
@@ -231,6 +256,7 @@ impl CoreRuntime {
             origin,
             handle,
             launch: Some(launch),
+            shutdown_requested,
         })
     }
     pub fn origin(&self) -> &str {
@@ -243,6 +269,10 @@ impl CoreRuntime {
         self.launch
             .take()
             .context("Launch target already transferred")
+    }
+    pub fn shutdown_requested(&self) -> impl std::future::Future<Output = ()> + Send + 'static {
+        let requested = self.shutdown_requested.clone();
+        async move { requested.wait().await }
     }
     pub async fn shutdown(mut self) -> ShutdownReceipt {
         if let Some(stop) = self.stop.take() {

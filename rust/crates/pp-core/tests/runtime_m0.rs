@@ -4,7 +4,7 @@ use axum::{
 };
 use http_body_util::BodyExt;
 use hyper_util::rt::TokioIo;
-use pp_core::{CoreRuntime, CoreStatus, DesktopLaunch, VerifiedBundle};
+use pp_core::{CoreRuntime, CoreStatus, DesktopLaunch, SupervisorConfig, VerifiedBundle};
 use std::{path::PathBuf, time::Duration};
 
 fn launch(data: PathBuf) -> DesktopLaunch {
@@ -12,18 +12,22 @@ fn launch(data: PathBuf) -> DesktopLaunch {
         .join("../../..")
         .canonicalize()
         .unwrap();
+    let manifest = std::env::var_os("PP_DESKTOP_RELEASE_MANIFEST")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| root.join("rust/bundle-manifest.json"));
     let release: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(root.join("rust/bundle-manifest.json")).unwrap())
-            .unwrap();
+        serde_json::from_slice(&std::fs::read(manifest).unwrap()).unwrap();
     let web = root.join("web");
     DesktopLaunch {
         data_dir: data,
         assets: web.join("apps/web/dist"),
         bundle: VerifiedBundle {
-            node: PathBuf::from("/usr/bin/node"),
+            node: std::env::var_os("PP_TEST_NODE")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("/usr/bin/node")),
             entry: web.join("apps/server/dist/current/desktop.js"),
             web_root: web,
-            runtime_version: "3.3.0-web".into(),
+            runtime_version: release["runtime_version"].as_str().unwrap().into(),
             commit: release["commit"].as_str().unwrap().into(),
         },
     }
@@ -136,7 +140,10 @@ async fn protected_real_node_lifecycle() {
     let health: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(health["authenticated"], true);
     assert_eq!(health["authentication_required"], true);
-    assert_eq!(health["version"], "3.3.0-web");
+    assert_eq!(
+        health["version"],
+        launch(data.clone()).bundle.runtime_version
+    );
     let (status, _, bytes) =
         request(&origin, "/auth/me", "GET", Some(cookie), None, None, None).await;
     assert_eq!(status, StatusCode::OK);
@@ -205,7 +212,12 @@ async fn protected_real_node_lifecycle() {
     assert_eq!(marker["pid"], std::process::id());
     let child_pid = match runtime.handle().subscribe().borrow().clone() {
         CoreStatus::Ready { pid, .. } => pid,
-        _ => panic!("not ready"),
+        CoreStatus::Starting
+        | CoreStatus::Backoff { .. }
+        | CoreStatus::Guarded
+        | CoreStatus::Stopping
+        | CoreStatus::Stopped
+        | CoreStatus::Failed => panic!("not ready"),
     };
     let receipt = tokio::time::timeout(Duration::from_secs(16), runtime.shutdown())
         .await
@@ -219,6 +231,113 @@ async fn protected_real_node_lifecycle() {
     println!(
         "{}",
         serde_json::json!({"proof_class":"headless_unsigned","case":"protected_real_node_lifecycle","origin":origin,"child_reaped":true,"persisted_origin":true,"build_id":build["id"],"data_dir":data})
+    );
+}
+
+#[tokio::test]
+async fn authenticated_logout_requests_complete_shutdown() {
+    use fs2::FileExt;
+
+    let data = temporary("logout");
+    let mut runtime = CoreRuntime::start(launch(data.clone()))
+        .await
+        .expect("real Node reaches verified readiness");
+    let origin = runtime.origin().to_owned();
+    let target = runtime.take_launch_target().unwrap().into_url();
+    let bootstrap = target.strip_prefix(&origin).unwrap();
+    let (status, headers, _) = request(&origin, bootstrap, "GET", None, None, None, None).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let cookie = headers["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    assert_eq!(
+        request(&origin, bootstrap, "GET", None, None, None, None)
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    for (cookie, host, foreign, expected) in [
+        (None, None, None, StatusCode::UNAUTHORIZED),
+        (
+            Some(cookie),
+            Some("foreign.invalid"),
+            None,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            Some(cookie),
+            None,
+            Some("http://foreign.invalid"),
+            StatusCode::FORBIDDEN,
+        ),
+    ] {
+        assert_eq!(
+            request(&origin, "/auth/logout", "POST", cookie, host, foreign, None,)
+                .await
+                .0,
+            expected
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), runtime.shutdown_requested())
+                .await
+                .is_err(),
+            "rejected logout requested shutdown"
+        );
+    }
+    let marker: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(data.join(".desktop-owner.json")).unwrap()).unwrap();
+    let runtime_dir = PathBuf::from(marker["runtime_dir"].as_str().unwrap());
+    let child_pid = match runtime.handle().subscribe().borrow().clone() {
+        CoreStatus::Ready { pid, .. } => pid,
+        CoreStatus::Starting
+        | CoreStatus::Backoff { .. }
+        | CoreStatus::Guarded
+        | CoreStatus::Stopping
+        | CoreStatus::Stopped
+        | CoreStatus::Failed => panic!("not ready"),
+    };
+    let first = runtime.shutdown_requested();
+    let second = runtime.shutdown_requested();
+    let (status, _, body) = request(
+        &origin,
+        "/auth/logout",
+        "POST",
+        Some(cookie),
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+        serde_json::json!({"ok":true})
+    );
+    tokio::time::timeout(Duration::from_secs(1), first)
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(1), second)
+        .await
+        .unwrap();
+    let receipt = tokio::time::timeout(Duration::from_secs(16), runtime.shutdown())
+        .await
+        .unwrap();
+    assert!(receipt.complete(), "incomplete receipt: {receipt:?}");
+    assert_eq!(unsafe { libc::kill(child_pid as i32, 0) }, -1);
+    assert!(!data.join(".desktop-owner.json").exists());
+    assert!(!runtime_dir.exists());
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(data.join(".desktop.lock"))
+        .unwrap();
+    lock.try_lock_exclusive().unwrap();
+    println!(
+        "{}",
+        serde_json::json!({"proof_class":"headless_unsigned","case":"authenticated_logout_requests_complete_shutdown","receipt":receipt,"child_reaped":true,"marker_removed":true,"runtime_removed":true,"lock_reacquired":true})
     );
 }
 
@@ -428,6 +547,106 @@ async fn changed_or_missing_built_artifacts_are_rejected() {
 }
 
 #[tokio::test]
+async fn cleanup_error_publishes_failed_and_preserves_failure() {
+    let data = temporary("compat-cleanup-status");
+    let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    let handle = runtime.handle();
+    let mut state = handle.subscribe();
+    let pid = match *state.borrow() {
+        CoreStatus::Ready { pid, .. } => pid,
+        CoreStatus::Starting
+        | CoreStatus::Backoff { .. }
+        | CoreStatus::Guarded
+        | CoreStatus::Stopping
+        | CoreStatus::Stopped
+        | CoreStatus::Failed => panic!("Runtime was not ready"),
+    };
+    let marker: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(data.join(".desktop-owner.json")).unwrap()).unwrap();
+    let directory = PathBuf::from(marker["runtime_dir"].as_str().unwrap());
+    let socket = std::fs::read_dir(&directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "sock")
+        })
+        .unwrap();
+    std::fs::rename(&socket, directory.join("retained-socket")).unwrap();
+    std::fs::create_dir(&socket).unwrap();
+    assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGKILL) }, 0);
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            if matches!(*state.borrow(), CoreStatus::Failed) {
+                break;
+            }
+            state.changed().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    assert!(handle.recover_compat().await.is_err());
+    let receipt = runtime.shutdown().await;
+    assert!(!receipt.complete());
+    assert!(receipt.errors.contains(&"compat_cleanup_unproved"));
+    assert!(socket.is_dir());
+    println!(
+        "{}",
+        serde_json::json!({"case":"compat_cleanup_terminal_status", "failed":true, "receipt":receipt})
+    );
+}
+
+#[tokio::test]
+async fn stable_child_resets_backoff_without_erasing_rapid_crash_escalation() {
+    let window = Duration::from_secs(1);
+    let stable_time = window + Duration::from_millis(100);
+    let runtime = CoreRuntime::start_with_compat_config(
+        launch(temporary("stable-backoff")),
+        SupervisorConfig {
+            crash_guard_window: window,
+        },
+    )
+    .await
+    .unwrap();
+    let mut state = runtime.handle().subscribe();
+    let mut prior_pid = 0;
+    for (index, expected) in [0, 1, 0].into_iter().enumerate() {
+        let pid = loop {
+            if let CoreStatus::Ready { pid, .. } = *state.borrow()
+                && pid != prior_pid
+            {
+                break pid;
+            }
+            tokio::time::timeout(Duration::from_secs(20), state.changed())
+                .await
+                .unwrap()
+                .unwrap();
+        };
+        prior_pid = pid;
+        if index == 2 {
+            tokio::time::sleep(stable_time).await;
+        }
+        assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGKILL) }, 0);
+        let attempt = loop {
+            if let CoreStatus::Backoff { attempt } = *state.borrow() {
+                break attempt;
+            }
+            tokio::time::timeout(Duration::from_secs(20), state.changed())
+                .await
+                .unwrap()
+                .unwrap();
+        };
+        assert_eq!(attempt, expected);
+    }
+    let receipt = runtime.shutdown().await;
+    assert!(receipt.complete());
+    println!(
+        "{}",
+        serde_json::json!({"case":"stable_backoff_reset", "observed_attempts":[0,1,0], "window_ms":window.as_millis(), "stable_ms":stable_time.as_millis(), "receipt":receipt})
+    );
+}
+
+#[tokio::test]
 async fn unexpected_marker_directory_is_preserved_and_reported() {
     let data = temporary("cleanup-failure");
     let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
@@ -459,7 +678,12 @@ fn drop_after_caller_runtime_teardown_reaps_writer_and_descendant() {
         .unwrap();
     let pid = match *runtime.handle().subscribe().borrow() {
         CoreStatus::Ready { pid, .. } => pid,
-        _ => panic!("not ready"),
+        CoreStatus::Starting
+        | CoreStatus::Backoff { .. }
+        | CoreStatus::Guarded
+        | CoreStatus::Stopping
+        | CoreStatus::Stopped
+        | CoreStatus::Failed => panic!("not ready"),
     };
     let marker: serde_json::Value =
         serde_json::from_slice(&std::fs::read(data.join(".desktop-owner.json")).unwrap()).unwrap();
@@ -486,6 +710,7 @@ fn drop_after_caller_runtime_teardown_reaps_writer_and_descendant() {
             && child_reaped
             && !data.join(".desktop-owner.json").exists()
             && !runtime_dir.exists()
+            && lock.try_lock_exclusive().is_ok()
         {
             break;
         }
@@ -495,9 +720,438 @@ fn drop_after_caller_runtime_teardown_reaps_writer_and_descendant() {
         );
         std::thread::sleep(Duration::from_millis(10));
     }
-    lock.try_lock_exclusive().unwrap();
     println!(
         "{}",
         serde_json::json!({"case":"drop_after_runtime_teardown","child_pid":pid,"descendant_pid":descendant_pid,"child_reaped":true,"descendant_reaped":true,"marker_removed":true,"runtime_removed":true,"lock_reacquired":true})
     );
+}
+
+#[tokio::test]
+async fn crash_left_marker_allows_later_start() {
+    let data = temporary("stale-owner");
+    std::fs::create_dir_all(&data).unwrap();
+    let mut child = std::process::Command::new("/bin/sh")
+        .args(["-c", "exit 0"])
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    child.wait().unwrap();
+    std::fs::write(
+        data.join(".desktop-owner.json"),
+        serde_json::json!({"pid": pid, "kind": "standalone"}).to_string(),
+    )
+    .unwrap();
+    let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    assert!(matches!(
+        *runtime.handle().subscribe().borrow(),
+        CoreStatus::Ready { .. }
+    ));
+    assert!(runtime.shutdown().await.complete());
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+#[tokio::test]
+async fn live_marker_owner_still_blocks_start() {
+    let data = temporary("live-marker-owner");
+    std::fs::create_dir_all(&data).unwrap();
+    let marker = data.join(".desktop-owner.json");
+    let contents = serde_json::json!({"pid": std::process::id(), "kind": "standalone"}).to_string();
+    std::fs::write(&marker, &contents).unwrap();
+    assert!(CoreRuntime::start(launch(data.clone())).await.is_err());
+    assert_eq!(std::fs::read_to_string(marker).unwrap(), contents);
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+#[tokio::test]
+async fn compatibility_cleanup_failure_reports_failed_instead_of_ready() {
+    let data = temporary("compat-cleanup-failure");
+    let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    let state = runtime.handle().subscribe();
+    assert!(matches!(*state.borrow(), CoreStatus::Ready { .. }));
+    let marker: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(data.join(".desktop-owner.json")).unwrap()).unwrap();
+    let runtime_dir = PathBuf::from(marker["runtime_dir"].as_str().unwrap());
+    let socket = std::fs::read_dir(&runtime_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.extension().is_some_and(|ext| ext == "sock"))
+        .unwrap();
+    std::fs::remove_file(&socket).unwrap();
+    std::fs::create_dir(&socket).unwrap();
+    let receipt = runtime.shutdown().await;
+    assert!(!receipt.compat_reaped);
+    assert!(!receipt.complete());
+    assert!(receipt.errors.contains(&"compat_cleanup_unproved"));
+    assert!(matches!(*state.borrow(), CoreStatus::Failed));
+    std::fs::remove_dir_all(runtime_dir).unwrap();
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+#[tokio::test]
+async fn stale_owner_recovery_admits_only_one_concurrent_start() {
+    let data = temporary("stale-owner-race");
+    std::fs::create_dir_all(&data).unwrap();
+    let mut child = std::process::Command::new("/bin/sh")
+        .args(["-c", "exit 0"])
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    child.wait().unwrap();
+    std::fs::write(
+        data.join(".desktop-owner.json"),
+        serde_json::json!({"pid": pid, "kind": "standalone"}).to_string(),
+    )
+    .unwrap();
+    let (first, second) = tokio::join!(
+        CoreRuntime::start(launch(data.clone())),
+        CoreRuntime::start(launch(data.clone()))
+    );
+    let runtime = match (first, second) {
+        (Ok(runtime), Err(_)) | (Err(_), Ok(runtime)) => runtime,
+        _ => panic!("exactly one concurrent owner must acquire storage"),
+    };
+    assert!(runtime.shutdown().await.complete());
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+#[tokio::test]
+async fn reused_pid_with_different_identity_recovers_marker_and_lease() {
+    let data = temporary("reused-pid");
+    std::fs::create_dir_all(data.join(".desktop-lease")).unwrap();
+    let owner = serde_json::json!({"pid": std::process::id(), "kind": "standalone", "process_identity": "prior-boot:prior-start", "instance": "ab".repeat(16)});
+    std::fs::write(data.join(".desktop-owner.json"), owner.to_string()).unwrap();
+    std::fs::write(data.join(".desktop-lease/owner.json"), owner.to_string()).unwrap();
+    let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    let current: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(data.join(".desktop-owner.json")).unwrap()).unwrap();
+    assert_ne!(current["process_identity"], owner["process_identity"]);
+    assert!(CoreRuntime::start(launch(data.clone())).await.is_err());
+    assert!(runtime.shutdown().await.complete());
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+#[tokio::test]
+async fn desktop_manifest_and_icons_are_served_as_assets() {
+    let data = temporary("desktop-icons");
+    let mut runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    let bootstrap = runtime.take_launch_target().unwrap().into_url();
+    let (_, headers, _) = request(
+        runtime.origin(),
+        bootstrap.strip_prefix(runtime.origin()).unwrap(),
+        "GET",
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    let cookie = headers["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    for (path, expected_type) in [
+        ("/manifest.json", "application/manifest+json"),
+        ("/icons/icon-192.png", "image/png"),
+        ("/icons/icon-512.png", "image/png"),
+        ("/icons/icon.svg", "image/svg+xml"),
+    ] {
+        let (status, headers, bytes) = request(
+            runtime.origin(),
+            path,
+            "GET",
+            Some(cookie),
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        assert_eq!(headers["content-type"], expected_type);
+        assert!(!bytes.is_empty());
+    }
+    let (status, _, _) = request(
+        runtime.origin(),
+        "/icons/../../Cargo.toml",
+        "GET",
+        Some(cookie),
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(runtime.shutdown().await.complete());
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+// Run as a subprocess so SIGKILL ends the actual Rust owner, not the test runner.
+#[tokio::test]
+async fn core_process_fixture() {
+    let Some(data) = std::env::var_os("PP_CORE_DEATH_FIXTURE") else {
+        return;
+    };
+    let _runtime = CoreRuntime::start(launch(data.into())).await.unwrap();
+    println!("PP_CORE_READY");
+    use std::io::Write;
+    std::io::stdout().flush().unwrap();
+    std::future::pending::<()>().await;
+}
+
+#[test]
+fn core_death_with_live_child_refuses_standalone_node() {
+    use std::io::{BufRead, BufReader};
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    let data = temporary("core-death-live-child");
+    let mut core = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "core_process_fixture", "--nocapture"])
+        .env("PP_CORE_DEATH_FIXTURE", &data)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut child_pid = None;
+    let mut group_peer = None;
+    let mut runtime_dir = None;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let output = BufReader::new(core.stdout.take().unwrap());
+        assert!(
+            output
+                .lines()
+                .any(|line| line.unwrap().contains("PP_CORE_READY"))
+        );
+        let marker_path = data.join(".desktop-owner.json");
+        let contents = std::fs::read(&marker_path).unwrap();
+        let marker: serde_json::Value = serde_json::from_slice(&contents).unwrap();
+        assert_eq!(marker["pid"], core.id());
+        let pid = marker["child_pid"].as_u64().unwrap() as i32;
+        child_pid = Some(pid);
+        runtime_dir = Some(PathBuf::from(marker["runtime_dir"].as_str().unwrap()));
+        assert!(
+            !marker["child_process_identity"]
+                .as_str()
+                .unwrap()
+                .is_empty()
+        );
+        // Keep the group non-orphaned after core death. Otherwise POSIX sends
+        // SIGHUP/SIGCONT to the stopped group, killing the child before the check.
+        group_peer = Some(
+            Command::new("sleep")
+                .arg("60")
+                .process_group(pid)
+                .spawn()
+                .unwrap(),
+        );
+        // Freeze the child with its DB open to deterministically hold the shutdown window.
+        assert_eq!(unsafe { libc::kill(pid, libc::SIGSTOP) }, 0);
+        // waitpid cannot observe this non-child on macOS; ps works on both hosts.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let state = Command::new("ps")
+                .args(["-o", "stat=", "-p", &pid.to_string()])
+                .output()
+                .unwrap();
+            if String::from_utf8_lossy(&state.stdout).contains('T') {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "child did not stop");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        core.kill().unwrap();
+        core.wait().unwrap();
+        assert_eq!(unsafe { libc::kill(pid, 0) }, 0, "child must remain alive");
+        for legacy in [false, true] {
+            let contents = if legacy {
+                let mut legacy_marker = marker.clone();
+                let fields = legacy_marker.as_object_mut().unwrap();
+                fields.remove("storage_protocol_version");
+                fields.remove("child_pid");
+                fields.remove("child_process_identity");
+                let bytes = serde_json::to_vec(&legacy_marker).unwrap();
+                std::fs::write(&marker_path, &bytes).unwrap();
+                bytes
+            } else {
+                contents.clone()
+            };
+            let input = launch(data.clone());
+            let mut standalone = Command::new(input.bundle.node)
+                .arg(
+                    input
+                        .bundle
+                        .web_root
+                        .join("apps/server/dist/current/index.js"),
+                )
+                .current_dir(&input.bundle.web_root)
+                .env("PRINT_PARTNER_DATA_DIR", &data)
+                .env("HOST", "127.0.0.1")
+                .env("PORT", "0")
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(15);
+            while standalone.try_wait().unwrap().is_none() {
+                if std::time::Instant::now() >= deadline {
+                    let _ = standalone.kill();
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let standalone = standalone.wait_with_output().unwrap();
+            assert_eq!(
+                unsafe { libc::kill(pid, 0) },
+                0,
+                "child must survive the entire refusal check"
+            );
+            assert!(!standalone.status.success());
+            assert!(
+                String::from_utf8_lossy(&standalone.stderr).contains("already owned"),
+                "{}",
+                String::from_utf8_lossy(&standalone.stderr)
+            );
+            assert_eq!(std::fs::read(&marker_path).unwrap(), contents);
+            // The Rust startup must obey the same two-process marker gate.
+            let caller = tokio::runtime::Runtime::new().unwrap();
+            assert!(
+                caller
+                    .block_on(CoreRuntime::start(launch(data.clone())))
+                    .is_err()
+            );
+            assert_eq!(std::fs::read(&marker_path).unwrap(), contents);
+        }
+    }));
+    let _ = core.kill();
+    let _ = core.wait();
+    if let Some(pid) = child_pid {
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+        }
+    }
+    if let Some(mut peer) = group_peer {
+        let _ = peer.kill();
+        let _ = peer.wait();
+    }
+    if let Some(path) = runtime_dir {
+        let _ = std::fs::remove_dir_all(path);
+    }
+    let _ = std::fs::remove_dir_all(data);
+    if let Err(error) = result {
+        std::panic::resume_unwind(error);
+    }
+}
+
+#[tokio::test]
+async fn dead_core_marker_without_child_info_allows_start() {
+    let data = temporary("missing-child-info");
+    std::fs::create_dir_all(&data).unwrap();
+    let mut dead = std::process::Command::new("/bin/sh")
+        .args(["-c", "exit 0"])
+        .spawn()
+        .unwrap();
+    let pid = dead.id();
+    dead.wait().unwrap();
+    let marker = data.join(".desktop-owner.json");
+    let contents =
+        serde_json::json!({"storage_protocol_version": 1, "pid": pid, "process_identity": "prior", "lease_hash": "cd".repeat(32)})
+            .to_string();
+    std::fs::write(&marker, &contents).unwrap();
+    let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    assert_eq!(
+        std::fs::read_to_string(data.join(".desktop-lease/previous-marker.json")).unwrap(),
+        contents
+    );
+    let current: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&marker).unwrap()).unwrap();
+    assert_eq!(current["storage_protocol_version"], 1);
+    assert!(current["child_pid"].as_u64().is_some());
+    assert!(runtime.shutdown().await.complete());
+    assert!(!marker.exists());
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+#[tokio::test]
+async fn dead_core_marker_with_partial_or_invalid_child_info_refuses_start() {
+    let data = temporary("invalid-child-info");
+    std::fs::create_dir_all(&data).unwrap();
+    let mut dead = std::process::Command::new("/bin/sh")
+        .args(["-c", "exit 0"])
+        .spawn()
+        .unwrap();
+    let pid = dead.id();
+    dead.wait().unwrap();
+    let marker = data.join(".desktop-owner.json");
+    for child in [
+        serde_json::json!({"child_pid": pid}),
+        serde_json::json!({"child_process_identity": "prior"}),
+        serde_json::json!({"child_pid": null, "child_process_identity": null}),
+        serde_json::json!({"child_pid": 0, "child_process_identity": "prior"}),
+        serde_json::json!({"child_pid": pid, "child_process_identity": ""}),
+    ] {
+        let mut owner = serde_json::json!({"storage_protocol_version": 1, "pid": pid, "process_identity": "prior", "lease_hash": "cd".repeat(32)});
+        owner
+            .as_object_mut()
+            .unwrap()
+            .extend(child.as_object().unwrap().clone());
+        let contents = owner.to_string();
+        std::fs::write(&marker, &contents).unwrap();
+        assert!(CoreRuntime::start(launch(data.clone())).await.is_err());
+        assert_eq!(std::fs::read_to_string(&marker).unwrap(), contents);
+    }
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+#[tokio::test]
+async fn childless_core_marker_without_known_protocol_refuses_start() {
+    let data = temporary("legacy-childless");
+    std::fs::create_dir_all(&data).unwrap();
+    let mut dead = std::process::Command::new("/bin/sh")
+        .args(["-c", "exit 0"])
+        .spawn()
+        .unwrap();
+    let pid = dead.id();
+    dead.wait().unwrap();
+    let marker = data.join(".desktop-owner.json");
+    for version in [
+        serde_json::json!({}),
+        serde_json::json!({"storage_protocol_version": 0}),
+        serde_json::json!({"storage_protocol_version": 2}),
+        serde_json::json!({"storage_protocol_version": "1"}),
+        serde_json::json!({"storage_protocol_version": null}),
+    ] {
+        let mut owner = serde_json::json!({"pid": pid, "process_identity": "prior", "lease_hash": "cd".repeat(32)});
+        owner
+            .as_object_mut()
+            .unwrap()
+            .extend(version.as_object().unwrap().clone());
+        let contents = owner.to_string();
+        std::fs::write(&marker, &contents).unwrap();
+        assert!(CoreRuntime::start(launch(data.clone())).await.is_err());
+        assert_eq!(std::fs::read_to_string(&marker).unwrap(), contents);
+    }
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+#[tokio::test]
+async fn desktop_marker_with_both_processes_dead_allows_start() {
+    let data = temporary("both-processes-dead");
+    std::fs::create_dir_all(&data).unwrap();
+    let mut dead = std::process::Command::new("/bin/sh")
+        .args(["-c", "exit 0"])
+        .spawn()
+        .unwrap();
+    let pid = dead.id();
+    dead.wait().unwrap();
+    std::fs::write(
+        data.join(".desktop-owner.json"),
+        serde_json::json!({
+            "pid": pid, "process_identity": "prior-core", "child_pid": pid,
+            "child_process_identity": "prior-child", "lease_hash": "cd".repeat(32)
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    assert!(runtime.shutdown().await.complete());
+    std::fs::remove_dir_all(data).unwrap();
 }

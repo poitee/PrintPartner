@@ -78,8 +78,10 @@ fn main() -> Result<()> {
     let before = graph(directory)?;
     let mut results = Vec::new();
     let mut failed = false;
+    let mut writer_opens = 0;
     for _ in 0..2 {
         let (owner, _) = WriterOwner::open(directory, Limits::default())?;
+        writer_opens += 1;
         let command = ReconciliationCommand::new(
             profile,
             draft,
@@ -106,7 +108,7 @@ fn main() -> Result<()> {
     }
     println!(
         "{}",
-        json!({"first":results[0],"restart":results.get(1),"graph_before":before,"graph_after":graph(directory)?})
+        json!({"first":results[0],"restart":results.get(1),"graph_before":before,"graph_after":graph(directory)?,"writer_opens":writer_opens})
     );
     ensure!(!failed, "Reconciliation fixture operation failed");
     Ok(())

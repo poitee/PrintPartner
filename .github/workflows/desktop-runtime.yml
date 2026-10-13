@@ -62,6 +62,7 @@ jobs:
           set -euo pipefail
           rustup toolchain install 1.99.0 --profile minimal
           rustc --version --verbose > "$PP_EVIDENCE/rust-version.txt"
+          python3 -m unittest discover -s rust/scripts -p test_check_rust_test_count.py -v
           sudo ln -sf "$(command -v node)" /usr/bin/node
           test "$(/usr/bin/node --version)" = v24.21.0
           /usr/bin/node -p 'JSON.stringify({node:process.version,abi:process.versions.modules,os:process.platform,arch:process.arch})' > "$PP_EVIDENCE/node-version.json"
@@ -72,23 +73,38 @@ jobs:
       - name: Build real server and check crate boundaries
         run: |
           set -euo pipefail
-          cargo build --manifest-path rust/Cargo.toml --locked -p pp-server 2>&1 | tee "$PP_EVIDENCE/server-build.log"
+          cargo build --manifest-path rust/Cargo.toml --locked -p pp-api -p pp-server 2>&1 | tee "$PP_EVIDENCE/server-build.log"
           python3 rust/scripts/check-boundaries.py --self-test 2>&1 | tee "$PP_EVIDENCE/boundaries.log"
           cargo fmt --manifest-path rust/Cargo.toml --all --check 2>&1 | tee "$PP_EVIDENCE/fmt.log"
           git diff --exit-code -- rust/Cargo.lock web/package-lock.json
-      - name: Run seven ordinary Core lifecycle tests
+      - name: Run required Core lifecycle acceptance
         run: |
           set -euo pipefail
-          cargo test --manifest-path rust/Cargo.toml --locked -p pp-core --test runtime_m0 -- --nocapture --test-threads=1 --skip crash_guard_stops_after_five_failures_and_recovers_explicitly 2>&1 | tee "$PP_EVIDENCE/core-runtime.log"
+          cargo test --manifest-path rust/Cargo.toml --locked -p pp-core --test runtime_m0 -- --nocapture --test-threads=1 2>&1 | tee "$PP_EVIDENCE/core-runtime.log"
+          python3 rust/scripts/check-rust-test-count.py "$PP_EVIDENCE/core-runtime.log"
       - name: Run backend units and lint
         run: |
           set -euo pipefail
-          cargo test --manifest-path rust/Cargo.toml --locked -p pp-core -p pp-compat -p pp-gateway -p pp-server --lib --bins 2>&1 | tee "$PP_EVIDENCE/backend-units.log"
-          cargo clippy --manifest-path rust/Cargo.toml --locked -p pp-core -p pp-compat -p pp-gateway -p pp-server --all-targets -- -D warnings 2>&1 | tee "$PP_EVIDENCE/backend-clippy.log"
-      - name: Verify gateway effects
+          cargo test --manifest-path rust/Cargo.toml --locked -p pp-api -p pp-core -p pp-compat -p pp-gateway -p pp-server --lib --bins 2>&1 | tee "$PP_EVIDENCE/backend-units.log"
+          cargo test --manifest-path rust/Cargo.toml --locked -p pp-api --test auth_http 2>&1 | tee "$PP_EVIDENCE/pp-api-http.log"
+          python3 rust/scripts/check-rust-test-count.py "$PP_EVIDENCE/pp-api-http.log"
+          cargo test --manifest-path rust/Cargo.toml --locked -p pp-storage --lib 2>&1 | tee "$PP_EVIDENCE/pp-storage.log"
+          python3 rust/scripts/check-rust-test-count.py "$PP_EVIDENCE/pp-storage.log"
+          cargo clippy --manifest-path rust/Cargo.toml --locked -p pp-api -p pp-core -p pp-compat -p pp-gateway -p pp-server --all-targets -- -D warnings 2>&1 | tee "$PP_EVIDENCE/backend-clippy.log"
+      - name: Verify authenticated workflow and process cleanup
+        run: |
+          set -euo pipefail
+          python3 rust/tests/workflow_m0.py 2>&1 | tee "$PP_EVIDENCE/workflow.log"
+          python3 rust/tests/lifecycle_m0.py 2>&1 | tee "$PP_EVIDENCE/lifecycle.log"
+      - name: Verify gateway effects and product routes
         run: |
           set -euo pipefail
           python3 rust/tests/gateway_effects.py 2>&1 | tee "$PP_EVIDENCE/gateway-effects.log"
+          python3 rust/tests/gateway_product.py 2>&1 | tee "$PP_EVIDENCE/gateway-product.log"
+      - name: Verify gateway streaming and shutdown
+        run: |
+          set -euo pipefail
+          python3 rust/tests/gateway_product.py --streams 2>&1 | tee "$PP_EVIDENCE/gateway-streams.log"
       - name: Preserve final inventory and lockfile state
         if: always()
         run: |

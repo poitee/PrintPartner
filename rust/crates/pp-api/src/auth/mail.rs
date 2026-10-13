@@ -54,14 +54,35 @@ impl ResetMailer {
             return Delivery::Unsent;
         };
         let Ok(to) = to.parse::<Mailbox>() else {
-            return Delivery::FailedOrUnknown;
+            return failed("invalid_recipient");
         };
-        let Ok(message) = Message::builder().from(from.clone()).to(to).subject("Reset your Print Partner password").body(format!("You requested a password reset for your Print Partner account.\n\nOpen this link to choose a new password (valid for 1 hour):\n{url}\n\nIf you did not request this, you can ignore this email.\n")) else { return Delivery::FailedOrUnknown; };
+        let Ok(message) = Message::builder().from(from.clone()).to(to).subject("Reset your Print Partner password").body(format!("You requested a password reset for your Print Partner account.\n\nOpen this link to choose a new password (valid for 1 hour):\n{url}\n\nIf you did not request this, you can ignore this email.\n")) else { return failed("message_build"); };
         match tokio::time::timeout(Duration::from_secs(15), transport.send(message)).await {
             Ok(Ok(_)) => Delivery::Sent,
-            _ => Delivery::FailedOrUnknown,
+            Ok(Err(error)) => failed(if error.is_timeout() {
+                "timeout"
+            } else if error.is_permanent() {
+                "smtp_permanent"
+            } else if error.is_transient() {
+                "smtp_transient"
+            } else if error.is_tls() {
+                "tls"
+            } else if error.is_response() {
+                "smtp_response"
+            } else if error.is_client() {
+                "client"
+            } else {
+                "transport"
+            }),
+            Err(_) => failed("timeout"),
         }
     }
+}
+
+fn failed(error_class: &str) -> Delivery {
+    // Never format the provider error: it can contain recipient or message data.
+    log::warn!(target: "pp_api::reset_mail", "Password reset mail delivery failed; provider=smtp error_class={error_class}");
+    Delivery::FailedOrUnknown
 }
 
 #[cfg(test)]

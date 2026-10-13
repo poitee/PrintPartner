@@ -385,7 +385,13 @@ impl Payload {
             Self::ImportScan { project_id } | Self::ExtractSourceDocs { project_id } => {
                 format!("source:{project_id}")
             }
-            Self::Sync { .. } | Self::CheckSourceUpdates {} => "source:*".into(),
+            Self::Sync {
+                project_ids: Some(ids),
+            } => format!(
+                "source-set:{}",
+                ids.iter().map(u64::to_string).collect::<Vec<_>>().join(",")
+            ),
+            Self::Sync { project_ids: None } | Self::CheckSourceUpdates {} => "source:*".into(),
             _ => String::new(),
         }
     }
