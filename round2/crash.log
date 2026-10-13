@@ -1,0 +1,8 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.45s
+     Running tests/durable_jobs.rs (rust/target/debug/deps/durable_jobs-fdeaceffb1a0bb33)
+
+running 1 test
+test ticket_t_28_claims_crash_retry_fences_stale_updates ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 76 filtered out; finished in 1.84s
+

@@ -1,0 +1,28 @@
+   Compiling pp-storage v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre408-claims-20261013/rust/crates/pp-storage)
+   Compiling pp-source v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre408-claims-20261013/rust/crates/pp-source)
+   Compiling pp-compat v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre408-claims-20261013/rust/crates/pp-compat)
+   Compiling pp-gateway v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre408-claims-20261013/rust/crates/pp-gateway)
+   Compiling pp-api v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre408-claims-20261013/rust/crates/pp-api)
+   Compiling pp-core v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre408-claims-20261013/rust/crates/pp-core)
+   Compiling pp-server v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre408-claims-20261013/rust/crates/pp-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 54.56s
+────────────
+ Nextest run ID 7aa7b65d-e292-4b3e-ba42-17a3a2fb5696 with nextest profile: default
+    Starting 15 tests across 34 binaries (248 tests skipped)
+        PASS [   1.517s] ( 1/15) pp-storage::durable_jobs ticket_t_28_claims_invalid_payloads_fail_before_writes
+        PASS [   1.599s] ( 2/15) pp-storage::durable_jobs ticket_t_28_claims_duplicate_conflict_and_concurrent_claims
+        PASS [   1.601s] ( 3/15) pp-storage::durable_jobs ticket_t_28_claims_duplicate_concurrent_enqueue_and_no_handler_admission
+        PASS [   1.602s] ( 4/15) pp-storage::durable_jobs ticket_t_28_claims_list_filters_pagination_and_history
+        PASS [   1.647s] ( 5/15) pp-storage::durable_jobs ticket_t_28_claims_cancel_before_admission_running_and_effect
+        PASS [   1.704s] ( 6/15) pp-storage::durable_jobs ticket_t_28_claims_kind_resource_capacity_and_source_intent
+        PASS [   2.294s] ( 7/15) pp-storage::durable_jobs ticket_t_28_claims_crash_retry_fences_stale_updates
+        PASS [   0.020s] ( 8/15) pp-storage::durable_jobs ticket_t_28_claims_wire_job_kinds_match_existing_contract
+        PASS [   2.704s] ( 9/15) pp-storage::durable_jobs ticket_t_28_claims_expired_lease_fences_old_worker
+        PASS [   1.797s] (10/15) pp-storage::durable_jobs ticket_t_28_claims_lost_reply_drain_and_backup_committed_job
+        PASS [   2.002s] (11/15) pp-storage::durable_jobs ticket_t_28_claims_ordinary_transaction_error_rolls_back
+        PASS [   2.464s] (12/15) pp-storage::durable_jobs ticket_t_28_claims_schema35_migration_rollback_and_backup_restart
+        PASS [   4.090s] (13/15) pp-storage::durable_jobs ticket_t_28_claims_real_auth_tenant_policy_and_revocation
+        PASS [   4.127s] (14/15) pp-storage::durable_jobs ticket_t_28_claims_schema35_corruption_and36_preserve_input_bytes
+        PASS [   4.095s] (15/15) pp-storage::durable_jobs ticket_t_28_claims_single_account_maps_default_and_physical_owner_is_opaque
+────────────
+     Summary [   5.802s] 15 tests run: 15 passed, 248 skipped

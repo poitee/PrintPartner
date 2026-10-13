@@ -1,0 +1,65 @@
+   Compiling pp-storage v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre408-claims-20261013/rust/crates/pp-storage)
+   Compiling pp-core v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre408-claims-20261013/rust/crates/pp-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 21.69s
+     Running tests/runtime_m0.rs (rust/target/debug/deps/runtime_m0-56d9e6938bbd82b7)
+
+running 9 tests
+test desktop_marker_with_both_processes_dead_allows_start ... FAILED
+test reused_pid_with_different_identity_recovers_marker_and_lease ... FAILED
+
+thread 'core_process_fixture' (2127223) panicked at crates/pp-core/tests/runtime_m0.rs:888:66:
+called `Result::unwrap()` on an `Err` value: Release artifact content mismatch
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test dead_core_marker_without_child_info_allows_start ... FAILED
+test core_death_with_live_child_refuses_standalone_node ... FAILED
+test live_marker_owner_still_blocks_start ... ok
+test crash_left_marker_allows_later_start ... FAILED
+test stale_owner_recovery_admits_only_one_concurrent_start ... FAILED
+test dead_core_marker_with_partial_or_invalid_child_info_refuses_start ... ok
+test childless_core_marker_without_known_protocol_refuses_start ... ok
+
+failures:
+
+---- desktop_marker_with_both_processes_dead_allows_start stdout ----
+
+thread 'desktop_marker_with_both_processes_dead_allows_start' (2127214) panicked at crates/pp-core/tests/runtime_m0.rs:1147:66:
+called `Result::unwrap()` on an `Err` value: Release artifact content mismatch
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- reused_pid_with_different_identity_recovers_marker_and_lease stdout ----
+
+thread 'reused_pid_with_different_identity_recovers_marker_and_lease' (2127216) panicked at crates/pp-core/tests/runtime_m0.rs:817:66:
+called `Result::unwrap()` on an `Err` value: Release artifact content mismatch
+
+---- dead_core_marker_without_child_info_allows_start stdout ----
+
+thread 'dead_core_marker_without_child_info_allows_start' (2127213) panicked at crates/pp-core/tests/runtime_m0.rs:1052:66:
+called `Result::unwrap()` on an `Err` value: Release artifact content mismatch
+
+---- core_death_with_live_child_refuses_standalone_node stdout ----
+
+thread 'core_death_with_live_child_refuses_standalone_node' (2127210) panicked at crates/pp-core/tests/runtime_m0.rs:912:9:
+assertion failed: output.lines().any(|line| line.unwrap().contains("PP_CORE_READY"))
+
+---- crash_left_marker_allows_later_start stdout ----
+
+thread 'crash_left_marker_allows_later_start' (2127211) panicked at crates/pp-core/tests/runtime_m0.rs:737:66:
+called `Result::unwrap()` on an `Err` value: Release artifact content mismatch
+
+---- stale_owner_recovery_admits_only_one_concurrent_start stdout ----
+
+thread 'stale_owner_recovery_admits_only_one_concurrent_start' (2127239) panicked at crates/pp-core/tests/runtime_m0.rs:804:14:
+exactly one concurrent owner must acquire storage
+
+
+failures:
+    core_death_with_live_child_refuses_standalone_node
+    crash_left_marker_allows_later_start
+    dead_core_marker_without_child_info_allows_start
+    desktop_marker_with_both_processes_dead_allows_start
+    reused_pid_with_different_identity_recovers_marker_and_lease
+    stale_owner_recovery_admits_only_one_concurrent_start
+
+test result: FAILED. 3 passed; 6 failed; 0 ignored; 0 measured; 14 filtered out; finished in 13.05s
+
+error: test failed, to rerun pass `-p pp-core --test runtime_m0`
