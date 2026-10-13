@@ -10,8 +10,21 @@ import {
   getPrinterSendQueueItem,
   listActivePrinterSendQueue,
   loadPrinterSendQueue,
+  PRINTER_SEND_QUEUE_SETTINGS_KEY,
   updatePrinterSendQueueItem,
 } from "./printer-send-queue-store.js";
+
+let printerUploadsHalted = false;
+
+/** True after shutdown has refused further printer-upload success in this process. */
+export function printerUploadsAreHalted(): boolean {
+  return printerUploadsHalted;
+}
+
+/** Test-only. A new process starts unhalted; tests share one process. */
+export function resetPrinterUploadHaltForTests(): void {
+  printerUploadsHalted = false;
+}
 
 type StartPrinterUploadJob = (payload: {
   printer_id: string;
@@ -249,9 +262,20 @@ type ShutdownPorts = {
 };
 
 export function interruptPrinterUploadsOnShutdown(source: ShutdownPorts): PrinterSendQueueItem[] {
+  printerUploadsHalted = true;
   const repo = source.repository ?? source.db?.defaultRepository ?? null;
   if (!repo) return [];
-  return tenantStorage.run("default", () => interruptInFlightPrinterSends(repo));
+  const tenantIds = new Set<string>(["default"]);
+  if (typeof repo.listTenantIdsForSetting === "function") {
+    for (const tenantId of repo.listTenantIdsForSetting(PRINTER_SEND_QUEUE_SETTINGS_KEY)) {
+      tenantIds.add(tenantId);
+    }
+  }
+  const changed: PrinterSendQueueItem[] = [];
+  for (const tenantId of tenantIds) {
+    changed.push(...tenantStorage.run(tenantId, () => interruptInFlightPrinterSends(repo)));
+  }
+  return changed;
 }
 
 export async function reconcilePrinterSendsAgainstLiveJobs(

@@ -1924,6 +1924,15 @@ export class AppRepository {
     return true;
   }
 
+  listTenantIdsForSetting(key: string): string[] {
+    const rows = this.db
+      .select({ tenantId: this.schema.appSettings.tenantId })
+      .from(this.schema.appSettings)
+      .where(eq(this.schema.appSettings.key, key))
+      .all();
+    return [...new Set(rows.map((row) => row.tenantId).filter((tenantId) => tenantId.trim()))];
+  }
+
   getSetting(key: string, defaultValue: string | null = null): string | null {
     const row = this.db
       .select()

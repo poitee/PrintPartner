@@ -9,7 +9,7 @@ import { getIntegrationConfig } from "../integrations/store.js";
 import { createPrinterCheckoffLink } from "./printer-checkoff-store.js";
 import { resolvePlanIdForPrinterFetch } from "./printer-plan-bind.js";
 import { loadFleet } from "./printer-fleet.js";
-import { INTERRUPTED_PRINTER_SEND_ERROR } from "./printer-send-queue.js";
+import { INTERRUPTED_PRINTER_SEND_ERROR, printerUploadsAreHalted } from "./printer-send-queue.js";
 import { listActivePrinterSendQueue } from "./printer-send-queue-store.js";
 
 const ALLOWED_EXTENSIONS = new Set([".gcode", ".bgcode", ".gco"]);
@@ -83,11 +83,16 @@ export async function runPrinterUploadJob(
   const queuedArtifact = ownedAtStart?.state === "sending";
   let succeeded = false;
   try {
+    if (printerUploadsAreHalted()) {
+      throw new Error(INTERRUPTED_PRINTER_SEND_ERROR);
+    }
     const result = await runPrinterUploadJobInner(repo, input, emit);
     succeeded = true;
     return result;
   } finally {
-    if (succeeded || !queuedArtifact) cleanupPrinterUploadArtifactDir(input.artifact_path);
+    if (succeeded || (!queuedArtifact && !printerUploadsAreHalted())) {
+      cleanupPrinterUploadArtifactDir(input.artifact_path);
+    }
   }
 }
 
@@ -153,6 +158,9 @@ async function runPrinterUploadJobInner(
 
   if (!result.ok) {
     throw new Error(result.message ?? "Printer upload failed");
+  }
+  if (printerUploadsAreHalted()) {
+    throw new Error(INTERRUPTED_PRINTER_SEND_ERROR);
   }
   const ownedAfterUpload = queueSendRow(repo, input);
   if (ownedAfterUpload && ownedAfterUpload.state !== "sending") {
