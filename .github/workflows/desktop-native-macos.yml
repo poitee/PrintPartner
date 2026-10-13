@@ -37,12 +37,28 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
+      mac-mini: ${{ steps.runner.outputs.self-hosted }}
       native: ${{ steps.select.outputs.native }}
       # 'true' when any macOS job should do real work in this run.
       macos: ${{ steps.plan.outputs.macos }}
       # 'true' only off-PR (push to main, nightly, dispatch).
       intel: ${{ steps.plan.outputs.intel }}
     steps:
+      - name: Select arm64 runner
+        id: runner
+        shell: bash
+        env:
+          RUNNER_OPT_IN: ${{ vars.MAC_MINI_RUNNER }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          enabled=false
+          if [[ "$RUNNER_OPT_IN" == on && ( "$EVENT_NAME" != pull_request || "$HEAD_REPO" == "$REPOSITORY" ) ]]; then
+            enabled=true
+          fi
+          echo "self-hosted=$enabled" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -166,10 +182,7 @@ jobs:
     needs: [changes, linux-precheck]
     # Fail open if selection fails; honor concurrency cancellation.
     if: ${{ !cancelled() && needs.changes.outputs.macos != 'false' && needs.linux-precheck.result == 'success' }}
-    # Chad's Mac mini (self-hosted, launchd) takes arm64 bundles when the repo
-    # variable MAC_MINI_RUNNER is 'on'. Never for fork PRs (public repo). Set
-    # the variable to anything else to fall back to hosted macos-26.
-    runs-on: ${{ (vars.MAC_MINI_RUNNER == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","macOS","ARM64","mac-mini"]') || 'macos-26' }}
+    runs-on: ${{ needs.changes.outputs.mac-mini == 'true' && fromJSON('["self-hosted","macOS","ARM64","mac-mini"]') || 'macos-26' }}
     timeout-minutes: 90
     env:
       ARCH: arm64

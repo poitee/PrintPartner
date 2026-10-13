@@ -42,10 +42,31 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  runner-plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      fleet: ${{ steps.runner.outputs.self-hosted }}
+    steps:
+      - name: Select contracts runner
+        id: runner
+        shell: bash
+        env:
+          RUNNER_OPT_IN: ${{ vars.FLEET_LINUX_RUNNERS }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          enabled=false
+          if [[ "$RUNNER_OPT_IN" == on && ( "$EVENT_NAME" != pull_request || "$HEAD_REPO" == "$REPOSITORY" ) ]]; then
+            enabled=true
+          fi
+          echo "self-hosted=$enabled" >> "$GITHUB_OUTPUT"
+
   parity:
-    # Fleet VM runners (VM 135/136, ephemeral, no sudo/docker) when the repo
-    # variable FLEET_LINUX_RUNNERS is 'on'; never for fork PRs. Otherwise hosted.
-    runs-on: ${{ (vars.FLEET_LINUX_RUNNERS == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","fleet"]') || 'ubuntu-latest' }}
+    needs: runner-plan
+    runs-on: ${{ needs.runner-plan.outputs.fleet == 'true' && fromJSON('["self-hosted","linux","fleet"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     strategy:
       matrix:
