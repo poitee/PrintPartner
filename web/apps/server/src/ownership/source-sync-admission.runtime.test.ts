@@ -832,11 +832,16 @@ describe("Source Sync Fastify admission", () => {
     expect(readFileSync(path, "utf8")).toBe(corrupt);
   });
 
-  it("does not keep a receipt session after its data directory is removed", () => {
+  it("keeps refusing the receipt after its data directory disappears and returns", () => {
     const dir = scratch("removed-session");
     beginSourceSyncAdmission(dir);
     rmSync(dir, { recursive: true, force: true });
-    expect(() => requireSourceSyncParticipant("job.sync")).not.toThrow();
+    expect(() => requireSourceSyncParticipant("job.sync")).toThrow(/admission receipt/);
+    mkdirSync(dir);
+    const corrupt = "{";
+    writeFileSync(sourceSyncAdmissionReceiptPath(dir), corrupt);
+    expect(() => requireSourceSyncParticipant("job.sync")).toThrow(/admission receipt/);
+    expect(readFileSync(sourceSyncAdmissionReceiptPath(dir), "utf8")).toBe(corrupt);
   });
 
   it.each(["symlink", "hardlink"])("ignores a planted receipt temporary %s and preserves its target", (kind) => {
