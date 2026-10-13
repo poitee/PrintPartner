@@ -17,6 +17,8 @@ class RustTestCountTest(unittest.TestCase):
 #[test] fn required_test() { assert_eq!(1 + 1, 2); }
 #[test] #[ignore] fn ignored_test() { panic!("must not execute"); }
 #[test] fn failing_test() { panic!("deliberate failure"); }
+#[test] fn noisy_test() { print!("without_newline"); }
+#[test] fn diagnostic_test() { println!("test ignored_test ... ignored"); }
 """)
         cls.binary = cls.root / "fixture"
         subprocess.run(["rustc", "--test", str(source), "-o", str(cls.binary)], check=True)
@@ -28,7 +30,7 @@ class RustTestCountTest(unittest.TestCase):
 
     def run_guard(self, selector, expected=None, prefix=""):
         execution = subprocess.run(
-            [str(self.binary), selector, "--exact"], capture_output=True, text=True
+            [str(self.binary), selector, "--exact", "--nocapture"], capture_output=True, text=True
         )
         log = self.root / "test.log"
         log.write_text(prefix + execution.stdout)
@@ -80,6 +82,21 @@ class RustTestCountTest(unittest.TestCase):
         ).stdout
         _, guard = self.run_guard("obsolete_test", "required_test", prefix=previous)
         self.assertEqual(guard.returncode, 1)
+
+    def test_ignored_report_cannot_borrow_another_suite_success(self):
+        previous = subprocess.run(
+            [str(self.binary), "ignored_test", "--exact"], capture_output=True, text=True
+        ).stdout
+        _, guard = self.run_guard("required_test", "ignored_test", prefix=previous)
+        self.assertEqual(guard.returncode, 1)
+
+    def test_diagnostic_cannot_impersonate_an_executed_test(self):
+        _, guard = self.run_guard("diagnostic_test", "ignored_test")
+        self.assertEqual(guard.returncode, 1)
+
+    def test_nocapture_output_without_newline_is_accepted(self):
+        _, guard = self.run_guard("noisy_test", "noisy_test")
+        self.assertEqual(guard.returncode, 0, guard.stderr)
 
 
 if __name__ == "__main__":

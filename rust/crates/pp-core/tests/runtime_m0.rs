@@ -992,7 +992,7 @@ fn linux_proc_state(pid: u32) -> Option<char> {
     {
         let text = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
         let close = text.rfind(')')?;
-        return text[close + 1..].split_whitespace().next()?.chars().next();
+        text[close + 1..].split_whitespace().next()?.chars().next()
     }
     #[cfg(not(target_os = "linux"))]
     {

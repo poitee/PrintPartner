@@ -921,7 +921,7 @@ mod tests {
         {
             let text = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
             let close = text.rfind(')')?;
-            return text[close + 1..].split_whitespace().next()?.chars().next();
+            text[close + 1..].split_whitespace().next()?.chars().next()
         }
         #[cfg(not(target_os = "linux"))]
         {
@@ -985,6 +985,7 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(1));
         }
+        peer.wait().unwrap();
         assert!(
             saw_zombie,
             "expected kill(pid, 0) to see a zombie before try_wait reaped it"
