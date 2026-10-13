@@ -5,7 +5,9 @@ import {
   initialMissingSelection,
   initialProductionSelection,
   productionSelectableUnits,
+  samePackageTokens,
   selectedProductionTokens,
+  storedPackageTokens,
   toggleProductionUnit,
 } from "./productionSelection";
 
@@ -123,5 +125,31 @@ describe("productionSelection", () => {
       second,
       third,
     ]);
+  });
+});
+
+describe("storedPackageTokens", () => {
+  const units = [
+    { token, completed: false },
+    { token: second, completed: true },
+  ];
+
+  it("drops finished units from an all-incomplete package", () => {
+    expect(storedPackageTokens({ mode: "all_incomplete" }, units)).toEqual([token]);
+    expect(storedPackageTokens(undefined, units)).toEqual([token]);
+  });
+
+  it("keeps a saved custom package, including a finished unit that is still available", () => {
+    expect(storedPackageTokens({
+      mode: "custom",
+      selected_unit_tokens: [second, token, third],
+    }, units)).toEqual([second, token]);
+  });
+});
+
+describe("samePackageTokens", () => {
+  it("ignores order and rejects a different package", () => {
+    expect(samePackageTokens([token, second], [second, token])).toBe(true);
+    expect(samePackageTokens([token, second], [token])).toBe(false);
   });
 });
