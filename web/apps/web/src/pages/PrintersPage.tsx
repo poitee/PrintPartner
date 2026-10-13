@@ -259,10 +259,10 @@ export default function PrintersPage() {
                           {status?.ip_address ?? (host ? configuredHost(host) : undefined) ?? "Unavailable"}
                         </dd>
                       </div>
-                      <div>
+                      {status?.uptime_seconds != null && <div>
                         <dt className="text-muted-foreground">Uptime</dt>
-                        <dd className="mt-0.5 font-mono">{formatUptime(status?.uptime_seconds)}</dd>
-                      </div>
+                        <dd className="mt-0.5 font-mono">{formatUptime(status.uptime_seconds)}</dd>
+                      </div>}
                     </dl>
                     )}
                     {status?.progress != null && !hostedPlanning ? (

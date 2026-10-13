@@ -5,3 +5,13 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
+
+[dependencies]
+anyhow.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+pp-net = { path = "../pp-net" }
+pp-api-types = { path = "../pp-api-types" }
+axum.workspace = true

@@ -15,6 +15,33 @@ fn hex(byte: u8) -> Option<u8> {
     }
 }
 
+/// Decode one route segment using the same validation as canonical targets.
+pub fn decode_segment(segment: &str) -> Result<String> {
+    let mut decoded = Vec::new();
+    let mut bytes = segment.bytes();
+    while let Some(byte) = bytes.next() {
+        let value = if byte == b'%' {
+            let high = bytes.next().and_then(hex).context("Malformed encoding")?;
+            let low = bytes.next().and_then(hex).context("Malformed encoding")?;
+            high * 16 + low
+        } else {
+            byte
+        };
+        ensure!(
+            !matches!(value, b'/' | b'\\' | b'%'),
+            "Ambiguous path character"
+        );
+        decoded.push(value);
+    }
+    let text = String::from_utf8(decoded).context("Invalid UTF-8 segment")?;
+    ensure!(
+        !text.chars().any(char::is_control),
+        "Control character in path"
+    );
+    ensure!(text != "." && text != "..", "Traversal segment");
+    Ok(text)
+}
+
 impl CanonicalTarget {
     pub fn parse(uri: &Uri) -> Result<Self> {
         ensure!(
@@ -31,29 +58,8 @@ impl CanonicalTarget {
             if index > 0 {
                 path.push('/');
             }
-            let mut decoded = Vec::new();
-            let mut bytes = segment.bytes();
-            while let Some(byte) = bytes.next() {
-                let value = if byte == b'%' {
-                    let high = bytes.next().and_then(hex).context("Malformed encoding")?;
-                    let low = bytes.next().and_then(hex).context("Malformed encoding")?;
-                    high * 16 + low
-                } else {
-                    byte
-                };
-                ensure!(
-                    !matches!(value, b'/' | b'\\' | b'%'),
-                    "Ambiguous path character"
-                );
-                decoded.push(value);
-            }
-            let text = std::str::from_utf8(&decoded).context("Invalid UTF-8 segment")?;
-            ensure!(
-                !text.chars().any(char::is_control),
-                "Control character in path"
-            );
-            ensure!(text != "." && text != "..", "Traversal segment");
-            for byte in decoded {
+            let text = decode_segment(segment)?;
+            for byte in text.bytes() {
                 if byte.is_ascii_alphanumeric() || b"-._~!$&'()*+,;=:@".contains(&byte) {
                     path.push(char::from(byte));
                 } else {

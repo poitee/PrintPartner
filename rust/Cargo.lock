@@ -2979,6 +2979,16 @@ dependencies = [
 [[package]]
 name = "pp-drivers"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "pp-api-types",
+ "pp-net",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+]
 
 [[package]]
 name = "pp-gateway"
@@ -2988,9 +2998,11 @@ dependencies = [
  "axum",
  "hex",
  "http-body",
+ "http-body-util",
  "hyper",
  "hyper-util",
  "pp-compat",
+ "pp-drivers",
  "pp-net",
  "rand 0.9.5",
  "serde",
@@ -3007,7 +3019,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "proptest",
+ "tokio",
 ]
 
 [[package]]
