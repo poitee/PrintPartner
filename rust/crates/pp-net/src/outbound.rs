@@ -31,20 +31,36 @@ impl Resolver for SystemResolver {
     }
 }
 
+// IANA IPv4 Special-Purpose Address Registry, plus multicast/reserved space.
+// https://www.iana.org/assignments/iana-ipv4-special-registry/
+// RFC 1918 private addresses and 127/8 are explicit printer-network exceptions.
+const SPECIAL_IPV4: &[([u8; 4], u32)] = &[
+    ([0, 0, 0, 0], 8),
+    ([100, 64, 0, 0], 10),
+    ([169, 254, 0, 0], 16),
+    ([192, 0, 0, 0], 24),
+    ([192, 0, 2, 0], 24),
+    ([192, 31, 196, 0], 24),
+    ([192, 52, 193, 0], 24),
+    ([192, 88, 99, 0], 24),
+    ([192, 175, 48, 0], 24),
+    ([198, 18, 0, 0], 15),
+    ([198, 51, 100, 0], 24),
+    ([203, 0, 113, 0], 24),
+    ([224, 0, 0, 0], 3),
+];
+
 pub fn permitted(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => {
-            let [a, b, c, _] = ip.octets();
-            // 192.0.0.0/24, 192.0.2.0/24, and 198.18.0.0/15 are special-purpose.
-            // Private (including 192.168.0.0/16) and loopback stay permitted.
-            let protocol_assignment = a == 192 && b == 0 && (c == 0 || c == 2);
-            let benchmarking = a == 198 && (b == 18 || b == 19);
-            a != 0
-                && a < 224
-                && !(a == 169 && b == 254)
-                && !protocol_assignment
-                && !benchmarking
-                && ip != std::net::Ipv4Addr::new(100, 100, 100, 200)
+            if ip.is_private() || ip.is_loopback() {
+                return true;
+            }
+            let address = u32::from(ip);
+            SPECIAL_IPV4.iter().all(|(base, prefix)| {
+                let mask = u32::MAX << (32 - *prefix);
+                address & mask != u32::from_be_bytes(*base)
+            })
         }
         IpAddr::V6(ip) => {
             if let Some(ip) = ip.to_ipv4_mapped() {
@@ -186,9 +202,12 @@ impl HttpGuard {
             .header("connection", "close");
         if let Some(key) = api_key.filter(|key| !key.is_empty() && *key != "****") {
             let jwt = key.split('.').count() == 3
-                && key
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b));
+                && key.split('.').all(|segment| {
+                    !segment.is_empty()
+                        && segment
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b))
+                });
             builder = if jwt {
                 builder.header("authorization", format!("Bearer {key}"))
             } else {
@@ -292,6 +311,124 @@ mod tests {
         .await
         .unwrap();
     }
+    #[tokio::test]
+    async fn special_purpose_ipv4_blocks_fail_before_connecting() {
+        for (first, last) in [
+            ("100.64.0.0", "100.127.255.255"),
+            ("192.31.196.0", "192.31.196.255"),
+            ("192.52.193.0", "192.52.193.255"),
+            ("192.88.99.0", "192.88.99.255"),
+            ("192.175.48.0", "192.175.48.255"),
+            ("198.51.100.0", "198.51.100.255"),
+            ("203.0.113.0", "203.0.113.255"),
+        ] {
+            for raw in [
+                first.to_string(),
+                last.to_string(),
+                format!("::ffff:{first}"),
+            ] {
+                let ip: IpAddr = raw.parse().unwrap();
+                assert!(!permitted(ip), "{raw}");
+                let guard = HttpGuard::new(
+                    Arc::new(Fake {
+                        calls: Arc::default(),
+                        answers: vec!["127.0.0.1".parse().unwrap(), ip],
+                    }),
+                    Duration::from_secs(1),
+                    100,
+                )
+                .unwrap();
+                let error = guard.get("http://printer.test:1/", None).await.unwrap_err();
+                assert!(
+                    error.to_string().contains("Prohibited DNS answer"),
+                    "{raw}: {error}"
+                );
+                let literal = match ip {
+                    IpAddr::V4(ip) => format!("http://{ip}:1/"),
+                    IpAddr::V6(ip) => format!("http://[{ip}]:1/"),
+                };
+                let error = guard.get(&literal, None).await.unwrap_err();
+                assert!(
+                    error.to_string().contains("Prohibited DNS answer"),
+                    "{raw}: {error}"
+                );
+            }
+        }
+        for raw in [
+            "10.0.0.1",
+            "172.16.0.1",
+            "172.31.255.254",
+            "192.168.1.1",
+            "127.0.0.1",
+            "100.63.255.255",
+            "100.128.0.0",
+            "192.31.195.255",
+            "192.31.197.0",
+            "198.51.99.255",
+            "198.51.101.0",
+            "203.0.112.255",
+            "203.0.114.0",
+        ] {
+            assert!(permitted(raw.parse().unwrap()), "{raw}");
+        }
+    }
+
+    #[tokio::test]
+    async fn moonraker_auth_requires_three_nonempty_jwt_segments() {
+        for (key, expected_header, forbidden_header) in [
+            (
+                "abc.def.ghi",
+                "authorization: Bearer abc.def.ghi",
+                "x-api-key:",
+            ),
+            ("abc..def", "x-api-key: abc..def", "authorization:"),
+            (".abc.def", "x-api-key: .abc.def", "authorization:"),
+            ("abc.def.", "x-api-key: abc.def.", "authorization:"),
+            ("..", "x-api-key: ..", "authorization:"),
+            (
+                "plain-api-key",
+                "x-api-key: plain-api-key",
+                "authorization:",
+            ),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                loop {
+                    let mut chunk = [0; 1024];
+                    let count = stream.read(&mut chunk).await.unwrap();
+                    assert!(count > 0);
+                    bytes.extend_from_slice(&chunk[..count]);
+                    if bytes.windows(4).any(|part| part == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                stream
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                    )
+                    .await
+                    .unwrap();
+                String::from_utf8(bytes).unwrap()
+            });
+            let guard =
+                HttpGuard::new(Arc::new(SystemResolver), Duration::from_secs(1), 100).unwrap();
+            assert_eq!(
+                guard
+                    .get(&format!("http://{address}/"), Some(key))
+                    .await
+                    .unwrap()
+                    .status,
+                200
+            );
+            let request = server.await.unwrap();
+            assert!(request.contains(expected_header), "{key}: {request}");
+            assert!(!request.contains(forbidden_header), "{key}: {request}");
+        }
+    }
+
     #[tokio::test]
     async fn ticket_t_4_prohibited_and_mixed_dns_answers() {
         for ip in [
