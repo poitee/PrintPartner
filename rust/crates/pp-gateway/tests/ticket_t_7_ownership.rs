@@ -290,8 +290,17 @@ fn ticket_t_7_ownership_planted_temporaries_do_not_overwrite_targets() {
 #[test]
 fn ticket_t_7_ownership_non_regular_receipts_are_preserved() {
     use std::os::unix::fs::{MetadataExt, symlink};
-    for kind in ["dangling-symlink", "valid-symlink", "directory", "fifo"] {
-        let dir = scratch(&format!("ticket_t_7_ownership_receipt_{kind}"));
+    for kind in ["dangling-symlink", "valid-symlink", "directory", "socket"] {
+        let dir = if kind == "socket" {
+            let dir = PathBuf::from("/tmp").join(format!(
+                "pp-receipt-{}",
+                hex::encode(rand::random::<[u8; 8]>())
+            ));
+            fs::create_dir(&dir).unwrap();
+            dir
+        } else {
+            scratch(&format!("ticket_t_7_ownership_receipt_{kind}"))
+        };
         let outside = scratch(&format!("ticket_t_7_ownership_outside_{kind}"));
         boot_source_sync(&outside, bundled_text()).unwrap();
         let target = outside.join("source-sync-admission.json");
@@ -301,14 +310,13 @@ fn ticket_t_7_ownership_non_regular_receipts_are_preserved() {
             "dangling-symlink" => symlink(outside.join("missing"), &receipt_path).unwrap(),
             "valid-symlink" => symlink(&target, &receipt_path).unwrap(),
             "directory" => fs::create_dir(&receipt_path).unwrap(),
-            _ => assert!(
-                std::process::Command::new("mkfifo")
-                    .arg(&receipt_path)
-                    .status()
-                    .unwrap()
-                    .success()
-            ),
+            _ => {}
         }
+        let _socket = if kind == "socket" {
+            Some(std::os::unix::net::UnixListener::bind(&receipt_path).unwrap())
+        } else {
+            None
+        };
         let entry = fs::symlink_metadata(&receipt_path).unwrap();
         let error = boot_source_sync(&dir, bundled_text()).unwrap_err();
         assert!(
@@ -320,6 +328,10 @@ fn ticket_t_7_ownership_non_regular_receipts_are_preserved() {
         assert_eq!(after.mode(), entry.mode());
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
         assert_eq!(fs::read(&target).unwrap(), target_bytes);
+        if kind == "socket" {
+            drop(_socket);
+            fs::remove_dir_all(&dir).unwrap();
+        }
     }
 }
 
