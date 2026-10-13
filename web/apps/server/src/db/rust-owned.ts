@@ -5,7 +5,7 @@ import { ownerIsStale, processIdentity } from "../storage-lease.js";
 import { currentSchemaVersion } from "./schema.js";
 import { readSchemaVersion } from "./upgrade-guard.js";
 
-export type RustOwnedCopy =
+type RustOwnedCopy =
   | { readonly kind: "absent" }
   | { readonly kind: "foreign" }
   | { readonly kind: "child" };
@@ -78,6 +78,17 @@ export function rustOwnedCopy(dataDir: string): RustOwnedCopy {
   if (!marker) return { kind: "absent" };
   if (isRecordedChild(marker)) return { kind: "child" };
   return { kind: "foreign" };
+}
+
+/** True only when the file exists and app_settings already stamps the supported schema. */
+export function databaseSchemaIsCurrent(dbPath: string): boolean {
+  if (!existsSync(dbPath)) return false;
+  const sqlite = new Database(dbPath, { readonly: true, fileMustExist: true });
+  try {
+    return readSchemaVersion(sqlite) === currentSchemaVersion;
+  } finally {
+    sqlite.close();
+  }
 }
 
 export function assertSupportedRustSchema(dbPath: string): void {

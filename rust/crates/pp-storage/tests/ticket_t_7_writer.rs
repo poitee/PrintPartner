@@ -1,5 +1,6 @@
 use pp_storage::{
-    Limits, Setting, SettingCommand, SettingSnapshot, WriterOwner, lease::record_child,
+    Limits, Setting, SettingCommand, SettingSnapshot, WriterOwner,
+    lease::{StorageLease, record_child},
 };
 use std::{
     io::{BufRead, BufReader, Read, Write},
@@ -302,7 +303,7 @@ function fingerprint() {
   }
 }
 
-if (mode === "child") {
+if (mode === "child" || mode === "bootstrap") {
   emit({ event: "ready", pid: process.pid });
   readFileSync(0);
 }
@@ -325,7 +326,7 @@ if (mode === "unsupported") {
   }
 }
 
-const before = fingerprint();
+const before = mode === "bootstrap" ? null : fingerprint();
 const database = new SqliteDatabase(dataDir);
 try {
   database.connect();
@@ -333,7 +334,8 @@ try {
   database.close();
   emit({ event: "connected", before, after });
 } catch (error) {
-  const after = fingerprint();
+  let after = null;
+  try { after = fingerprint(); } catch { after = null; }
   emit({
     event: "refused",
     message: error instanceof Error ? error.message : String(error),
@@ -451,7 +453,7 @@ fn run_node_probe(
         let stderr = stderr_thread.join().unwrap();
         panic!("node probe exited {status} before an event:\n{stderr}");
     }
-    let event_line = if mode == "child" {
+    let event_line = if mode == "child" || mode == "bootstrap" {
         let ready = parse_event(&first, "");
         assert_eq!(ready["event"], "ready", "{ready}");
         let pid = u32::try_from(ready["pid"].as_u64().unwrap()).unwrap();
@@ -563,5 +565,31 @@ fn ticket_t_7_writer_node_child_asserts_schema_without_migrating() {
     assert_eq!(event["before"]["version"], "34", "{event}");
     assert_stable_fingerprint(&event);
     release_owner(&dir, owner);
+    remove_probe(&probe);
+}
+
+#[test]
+fn ticket_t_7_writer_node_child_bootstraps_a_lease_without_a_database() {
+    let web = web_root();
+    let node = server_node(&web);
+    let probe = write_probe(&web);
+    let dir = temp_dir("node-bootstrap");
+    let lease = StorageLease::acquire(&dir).unwrap();
+    assert!(!dir.join("print-partner.db").exists());
+    let event = run_node_probe("bootstrap", &dir, &web, &node, &probe);
+    assert_eq!(event["event"], "connected", "{event}");
+    assert!(event["before"].is_null(), "{event}");
+    assert_eq!(event["after"]["version"], "34", "{event}");
+    let names: Vec<&str> = event["after"]["sequences"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["name"].as_str().unwrap())
+        .collect();
+    for name in ["printer_profiles", "process_profiles", "filament_profiles"] {
+        assert!(names.contains(&name), "{event}");
+    }
+    lease.release();
+    std::fs::remove_dir_all(&dir).unwrap();
     remove_probe(&probe);
 }

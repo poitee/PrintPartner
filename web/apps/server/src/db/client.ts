@@ -8,7 +8,7 @@ import { schemaMigrations } from "./migrations-sqlite.js";
 import { seedStarterProfiles } from "./seed-starter-profiles.js";
 import { repairSourceRevisionTenantOwnershipSqlite } from "./source-revision-tenant-repair.js";
 import { assertUpgradableSchemaVersion, readSchemaVersion } from "./upgrade-guard.js";
-import { assertSupportedRustSchema, rustOwnedCopy } from "./rust-owned.js";
+import { assertSupportedRustSchema, databaseSchemaIsCurrent, rustOwnedCopy } from "./rust-owned.js";
 
 export type DrizzleDb = BetterSQLite3Database<typeof schema>;
 
@@ -30,16 +30,18 @@ export class SqliteDatabase {
 
   connect(): void {
     const ownership = rustOwnedCopy(this.dataDir);
-    if (ownership.kind !== "absent") {
+    if (ownership.kind === "foreign") {
       assertSupportedRustSchema(this.dbPath);
-      if (ownership.kind === "foreign") {
-        throw new Error("Rust owns this data directory; Node will not migrate or write");
-      }
+      throw new Error("Rust owns this data directory; Node will not migrate or write");
     }
+    // The desktop lease records this process before any SQL file exists.
+    // Skip migrations only after Rust has already stamped the supported schema.
+    const childAlreadyCurrent =
+      ownership.kind === "child" && databaseSchemaIsCurrent(this.dbPath);
     mkdirSync(dirname(this.dbPath), { recursive: true });
     const sqlite = new Database(this.dbPath);
     try {
-      if (ownership.kind === "absent") assertUpgradableSchemaVersion(readSchemaVersion(sqlite));
+      if (!childAlreadyCurrent) assertUpgradableSchemaVersion(readSchemaVersion(sqlite));
     } catch (error) {
       sqlite.close();
       throw error;
@@ -54,7 +56,7 @@ export class SqliteDatabase {
     this.sqlite.pragma("journal_mode = WAL");
     this.sqlite.pragma("foreign_keys = ON");
     this.drizzle = drizzle(this.sqlite, { schema });
-    if (ownership.kind === "child") return;
+    if (childAlreadyCurrent) return;
     this.runMigrations();
     seedStarterProfiles(this.sqlite);
   }
