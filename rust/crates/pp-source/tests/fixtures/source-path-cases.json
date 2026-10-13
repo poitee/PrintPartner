@@ -236,8 +236,8 @@
  },
  {
   "path": "a᫝̀.stl",
-  "accept": true,
-  "note": "GRE-555: Unicode 16 accepts, Node Unicode 17 rejects after NFC reordering"
+  "accept": false,
+  "note": "GRE-555: Unicode 17 NFC reorders U+1ADD after U+0300; Unicode 16 Rust accepted this"
  },
  {
   "path": "à᫝.stl",
@@ -247,7 +247,7 @@
  {
   "path": "a᫝̀:.stl",
   "accept": false,
-  "note": "GRE-555: NFC divergence plus Rust-only colon; both decisions reject, NFC evidence must survive"
+  "note": "GRE-555: non-NFC plus Rust-only colon; both reject with the same NFC spelling"
  },
  {
   "path": "á:.stl",
