@@ -425,7 +425,7 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
           if (!deps.repo.getProjectRow(id)) return reply.status(404).send({ detail: "Source not found" });
           try {
             beforePublish();
-            const extractDir = writeUploadedZip(stagedZip, deps.sourcesDir, id);
+            const extractDir = writeUploadedZip(stagedZip, join(staging, "extracted"), id);
             const { suggestedImportRules, stlCount } = finalizeUploadedSource(extractDir);
             const existingRules = deps.repo.getProjectRow(id)?.importedPaths;
             const hasRules =
@@ -451,9 +451,7 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
               suggested_import_rules: suggestedImportRules,
             };
           } finally {
-            if (deps.hostedPlanning) {
-              await rm(join(deps.sourcesDir, String(id)), { recursive: true, force: true });
-            }
+            await rm(join(staging, "extracted", String(id)), { recursive: true, force: true });
           }
         });
       } catch (error) {
@@ -549,7 +547,7 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
           if (!deps.repo.getProjectRow(id)) return reply.status(404).send({ detail: "Source not found" });
           try {
             beforePublish();
-            const result = writeUploadedFiles(uploads, deps.sourcesDir, id);
+            const result = writeUploadedFiles(uploads, join(staging, "extracted"), id);
 
             const existingRules = deps.repo.getProjectRow(id)?.importedPaths;
             const hasRules =
@@ -576,9 +574,7 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
               suggested_import_rules: result.suggestedImportRules,
             };
           } finally {
-            if (deps.hostedPlanning) {
-              await rm(join(deps.sourcesDir, String(id)), { recursive: true, force: true });
-            }
+            await rm(join(staging, "extracted", String(id)), { recursive: true, force: true });
           }
         });
       } catch (error) {

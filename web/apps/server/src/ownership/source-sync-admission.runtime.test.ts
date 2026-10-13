@@ -292,6 +292,45 @@ describe("Source Sync Fastify admission", () => {
     expect(f.repo.listSources()).toEqual(before);
   });
 
+  it.each([
+    ["", "zip"], ["/api/v1", "zip"], ["", "files"], ["/api/v1", "files"],
+    ["assistant", "files"], ["assistant", "zip"],
+  ] as const)("preserves the previous uploaded tree when %s %s publication loses admission", async (prefix, kind) => {
+    const f = await localAdmissionFixture("preserve-upload-tree");
+    const sourcesDir = join(f.dir, "sources");
+    const legacyTree = join(sourcesDir, String(f.source.id), "files");
+    mkdirSync(legacyTree, { recursive: true });
+    writeFileSync(join(legacyTree, "previous.stl"), "solid previous\nendsolid previous\n");
+    writeFileSync(join(legacyTree, "notes.md"), "Original uploaded documentation");
+    f.repo.updateSource(f.source.id, { local_path: legacyTree });
+    const before = f.repo.getProjectRow(f.source.id);
+    const treeBefore = fingerprint(sourcesDir);
+    const actual = await vi.importActual<typeof localRevision>("../services/local-source-revision.js");
+    vi.spyOn(localRevision, "publishLocalSourceWorkingTree").mockImplementationOnce(async (input) => {
+      const publication = actual.publishLocalSourceWorkingTree(input);
+      await Promise.resolve();
+      writeFileSync(f.manifest, `${f.original}\n`);
+      return publication;
+    });
+    let response;
+    if (prefix === "assistant") {
+      const params = kind === "files"
+        ? { source_id: f.source.id, files: [{ path: "cube.stl", content_base64: Buffer.from("solid cube\nendsolid cube\n").toString("base64") }] }
+        : (() => { const archive = new AdmZip(); archive.addFile("cube.stl", Buffer.from("solid cube\nendsolid cube\n")); return { source_id: f.source.id, archive_base64: archive.toBuffer().toString("base64") }; })();
+      response = await f.started.app.inject({ method: "POST", url: "/assistant/actions/apply", payload: { action: {
+        id: "import", type: "propose_import_source_files", plan_id: 0, label: "Import", summary: "Import", params,
+      } } });
+    } else {
+      response = await f.started.app.inject({ method: "POST", url: `${prefix}/sources/${f.source.id}/upload-${kind}`, ...multipartUpload(kind) });
+    }
+    expect(response.statusCode, response.body).toBe(503);
+    expect(f.repo.getProjectRow(f.source.id)).toEqual(before);
+    expect(f.repo.listSourceRevisions(f.source.id)).toEqual([]);
+    await vi.waitFor(() => expect(readdirSync(sourcesDir)).toEqual([String(f.source.id)]));
+    expect(fingerprint(sourcesDir)).toBe(treeBefore);
+    expect(readFileSync(join(legacyTree, "previous.stl"), "utf8")).toBe("solid previous\nendsolid previous\n");
+  });
+
   it.each([["", "zip"], ["/api/v1", "zip"], ["", "files"], ["/api/v1", "files"]] as const)(
     "returns 503 when admission changes during %s upload-%s streaming", async (prefix, kind) => {
       const f = await localAdmissionFixture("stream-outage-status");

@@ -3320,7 +3320,7 @@ export async function applyAssistantAction(
             if (buffer.length > MAX_MCP_INLINE_FILE_BYTES) return { ok: false, detail: MCP_INLINE_UPLOAD_TOO_LARGE_DETAIL };
             const stagedZip = join(staging, "upload.zip");
             writeFileSync(stagedZip, buffer);
-            workingTree = writeUploadedZip(stagedZip, sourcesDir, sourceId);
+            workingTree = writeUploadedZip(stagedZip, join(staging, "extracted"), sourceId);
             const finalized = finalizeUploadedSource(workingTree);
             importedFiles = 1;
             stlCount = finalized.stlCount;
@@ -3342,7 +3342,7 @@ export async function applyAssistantAction(
               writeFileSync(path, buffer);
               files.push({ relativePath, path });
             }
-            const written = writeUploadedFiles(files, sourcesDir, sourceId);
+            const written = writeUploadedFiles(files, join(staging, "extracted"), sourceId);
             workingTree = written.extractDir;
             importedFiles = written.fileCount;
             stlCount = written.stlCount;
@@ -3368,7 +3368,6 @@ export async function applyAssistantAction(
           return { ok: false, detail: error instanceof Error ? error.message : String(error) };
         } finally {
           rmSync(staging, { recursive: true, force: true });
-          if (deps.hostedPlanning) rmSync(join(sourcesDir, String(sourceId)), { recursive: true, force: true });
         }
         break;
       }

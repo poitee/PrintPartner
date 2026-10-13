@@ -212,6 +212,7 @@ async function syncUnsyncedSources(
       const settings = getSettings();
       if (settings.discordWebhookUrl && settings.notifyOnSync) {
         const row = repo.getProjectRow(source.id);
+        requireSourceSyncParticipant("startup.startSourceWatcher");
         await sendDiscordNotification(settings.discordWebhookUrl, "source.synced", {
           sourceName: source.name,
           sourceUrl: source.url,
@@ -220,6 +221,7 @@ async function syncUnsyncedSources(
           stlCount: result.stl_count,
         });
       }
+      requireSourceSyncParticipant("startup.startSourceWatcher");
       await dispatchWebhooks(repo, "source.synced", {
         source_id: source.id,
         source_name: source.name,
@@ -237,6 +239,7 @@ async function syncUnsyncedSources(
       const settings = getSettings();
       if (settings.discordWebhookUrl && settings.notifyOnSync) {
         const row = repo.getProjectRow(source.id);
+        requireSourceSyncParticipant("startup.startSourceWatcher");
         await sendDiscordNotification(settings.discordWebhookUrl, "source.sync_failed", {
           sourceName: source.name,
           sourceUrl: source.url,
@@ -244,6 +247,7 @@ async function syncUnsyncedSources(
           error: err instanceof Error ? err.message : String(err),
         }).catch(() => {});
       }
+      requireSourceSyncParticipant("startup.startSourceWatcher");
       await dispatchWebhooks(repo, "source.sync_failed", {
         source_id: source.id,
         source_name: source.name,
@@ -329,6 +333,7 @@ async function runPeriodicUpdateCheck(
 
         const currentSettings = getSettings();
         if (currentSettings.discordWebhookUrl && currentSettings.notifyOnUpdate) {
+          requireSourceSyncParticipant("worker.startSourceWatcher");
           await sendDiscordNotification(currentSettings.discordWebhookUrl, "source.updated", {
             sourceName: source.name,
             sourceUrl: source.url,
@@ -338,6 +343,7 @@ async function runPeriodicUpdateCheck(
             stlCount: result.stl_count,
           });
         }
+        requireSourceSyncParticipant("worker.startSourceWatcher");
         await dispatchWebhooks(repo, "source.updated", {
           source_id: source.id,
           source_name: source.name,
@@ -368,6 +374,7 @@ async function runPeriodicUpdateCheck(
           },
         });
         if (currentSettings.discordWebhookUrl) {
+          requireSourceSyncParticipant("worker.startSourceWatcher");
           await sendDiscordNotification(currentSettings.discordWebhookUrl, "source.sync_failed", {
             sourceName: source.name,
             sourceUrl: source.url,
@@ -375,6 +382,7 @@ async function runPeriodicUpdateCheck(
             error: err instanceof Error ? err.message : String(err),
           }).catch(() => {});
         }
+        requireSourceSyncParticipant("worker.startSourceWatcher");
         await dispatchWebhooks(repo, "source.sync_failed", {
           source_id: source.id,
           source_name: source.name,
@@ -385,12 +393,14 @@ async function runPeriodicUpdateCheck(
       }
     } else if (settings.discordWebhookUrl && settings.notifyOnUpdate) {
       // Notify but don't sync
+      requireSourceSyncParticipant("worker.startSourceWatcher");
       await sendDiscordNotification(settings.discordWebhookUrl, "source.update_available", {
         sourceName: source.name,
         sourceUrl: source.url,
         branch: row?.branch ?? source.branch ?? "main",
         commitSha: previousSha,
       });
+      requireSourceSyncParticipant("worker.startSourceWatcher");
       await dispatchWebhooks(repo, "source.update_available", {
         source_id: source.id,
         source_name: source.name,
@@ -400,6 +410,7 @@ async function runPeriodicUpdateCheck(
       });
     } else {
       // No Discord configured — still fire webhook if registered
+      requireSourceSyncParticipant("worker.startSourceWatcher");
       await dispatchWebhooks(repo, "source.update_available", {
         source_id: source.id,
         source_name: source.name,

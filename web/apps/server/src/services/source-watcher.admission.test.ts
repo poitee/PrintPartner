@@ -9,12 +9,78 @@ import {
   packagedSourceSyncManifestPath,
 } from "../ownership/source-sync-admission.js";
 import * as sync from "../routes/sources.js";
+import * as discord from "./discord-notify.js";
+import * as webhooks from "./webhook-store.js";
 import * as updates from "./source-update-check.js";
 vi.mock("../routes/sources.js", { spy: true });
 vi.mock("./source-update-check.js", { spy: true });
+vi.mock("./discord-notify.js", { spy: true });
+vi.mock("./webhook-store.js", { spy: true });
 import { startSourceWatcher } from "./source-watcher.js";
 
 describe("Source watcher runtime admission", () => {
+  it.each(["startup-success", "startup-failure", "periodic-success", "periodic-failure", "notify-only", "webhook-only"])(
+    "refuses post-sync webhooks after admission changes during %s delivery", async (phase) => {
+      const dir = mkdtempSync(join(tmpdir(), "pp-watcher-delivery-"));
+      const sqlite = new SqliteDatabase(dir);
+      const previous = process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST;
+      const startup = phase.startsWith("startup");
+      let watcher: ReturnType<typeof startSourceWatcher> | undefined;
+      try {
+        sqlite.connect();
+        const repo = new AppRepository(getDb(sqlite), undefined, sqlite.reposDir);
+        const source = repo.createSource({ name: "Delivery source", source_kind: startup || phase.endsWith("failure") ? "github" : "local", url: "invalid" });
+        mkdirSync(join(sqlite.reposDir, String(source.id)), { recursive: true });
+        if (!startup) repo.updateSource(source.id, { last_synced_at: new Date().toISOString(), last_commit_sha: "previous" });
+        repo.setSetting("source_update_check_hours", "1");
+        const manifest = join(dir, "ownership.json");
+        const original = readFileSync(packagedSourceSyncManifestPath(), "utf8");
+        writeFileSync(manifest, original);
+        process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST = manifest;
+        beginSourceSyncAdmission(dir);
+        if (!startup) {
+          const actual = await vi.importActual<typeof updates>("./source-update-check.js");
+          vi.spyOn(updates, "checkAllSourceUpdates").mockImplementationOnce(async (...args) => {
+            const result = await actual.checkAllSourceUpdates(...args);
+            repo.updateSource(source.id, { metadata: { remote_update_status: "updates_available" } });
+            if (phase === "webhook-only") writeFileSync(manifest, `${original}\n`);
+            return { ...result, updates_available: 1 };
+          });
+        } else if (phase === "startup-success") {
+          const actual = await vi.importActual<typeof sync>("../routes/sources.js");
+          vi.spyOn(sync, "syncProjectById").mockImplementationOnce(async (...args) => {
+            repo.updateSource(source.id, { source_kind: "local" });
+            return actual.syncProjectById(...args);
+          });
+        }
+        const notify = vi.spyOn(discord, "sendDiscordNotification").mockImplementation(async () => {
+          await Promise.resolve();
+          writeFileSync(manifest, `${original}\n`);
+          return { ok: true, status: 204, attempts: 1 };
+        });
+        const dispatch = vi.spyOn(webhooks, "dispatchWebhooks").mockResolvedValue(undefined);
+        vi.useFakeTimers();
+        watcher = startSourceWatcher({
+          repo, reposDir: sqlite.reposDir, listTenantIds: () => ["default"],
+          getSettings: () => ({ discordWebhookUrl: phase === "webhook-only" ? null : "https://example.test/discord", notifyOnUpdate: true, notifyOnSync: true, autoSyncUpdates: phase.startsWith("periodic") }),
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(startup ? 7_000 : 3_600_000);
+        expect(notify).toHaveBeenCalledTimes(phase === "webhook-only" ? 0 : 1);
+        expect(dispatch).not.toHaveBeenCalled();
+      } finally {
+        watcher?.stop();
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+        vi.clearAllMocks();
+        if (previous === undefined) delete process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST;
+        else process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST = previous;
+        sqlite.close();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it.each(["success", "failure"])("refuses watcher events when admission changes after sync %s", async (outcome) => {
     const dir = mkdtempSync(join(tmpdir(), "pp-watcher-events-"));
     const sqlite = new SqliteDatabase(dir);
