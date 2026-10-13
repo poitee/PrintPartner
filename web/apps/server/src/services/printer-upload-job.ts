@@ -9,6 +9,7 @@ import { getIntegrationConfig } from "../integrations/store.js";
 import { createPrinterCheckoffLink } from "./printer-checkoff-store.js";
 import { resolvePlanIdForPrinterFetch } from "./printer-plan-bind.js";
 import { loadFleet } from "./printer-fleet.js";
+import { INTERRUPTED_PRINTER_SEND_ERROR } from "./printer-send-queue.js";
 import { listActivePrinterSendQueue } from "./printer-send-queue-store.js";
 
 const ALLOWED_EXTENSIONS = new Set([".gcode", ".bgcode", ".gco"]);
@@ -63,16 +64,23 @@ type PrinterUploadJobEmit = (patch: {
   progress?: number;
 }) => void;
 
+function queueSendRow(repo: AppRepository, input: PrinterUploadJobInput) {
+  if (input.upload_job_id === undefined) return null;
+  return listActivePrinterSendQueue(repo).find((item) =>
+    item.upload_job_id === input.upload_job_id &&
+    item.artifact_path === input.artifact_path) ?? null;
+}
+
 export async function runPrinterUploadJob(
   repo: AppRepository,
   input: PrinterUploadJobInput,
   emit: PrinterUploadJobEmit,
 ): Promise<Record<string, unknown>> {
-  const queuedArtifact = input.upload_job_id !== undefined &&
-    listActivePrinterSendQueue(repo).some((item) =>
-      item.state === "sending" &&
-      item.upload_job_id === input.upload_job_id &&
-      item.artifact_path === input.artifact_path);
+  const ownedAtStart = queueSendRow(repo, input);
+  if (ownedAtStart && ownedAtStart.state !== "sending") {
+    throw new Error(INTERRUPTED_PRINTER_SEND_ERROR);
+  }
+  const queuedArtifact = ownedAtStart?.state === "sending";
   let succeeded = false;
   try {
     const result = await runPrinterUploadJobInner(repo, input, emit);
@@ -145,6 +153,10 @@ async function runPrinterUploadJobInner(
 
   if (!result.ok) {
     throw new Error(result.message ?? "Printer upload failed");
+  }
+  const ownedAfterUpload = queueSendRow(repo, input);
+  if (ownedAfterUpload && ownedAfterUpload.state !== "sending") {
+    throw new Error(INTERRUPTED_PRINTER_SEND_ERROR);
   }
 
   emit({

@@ -3,6 +3,7 @@ import type { PrinterHostStatus, PrinterSendQueueItem } from "@print-partner/con
 import type { PrinterMachine } from "@print-partner/domain";
 import type { AppRepository } from "../db/repository.js";
 import { getIntegrationConfig } from "../integrations/store.js";
+import { tenantStorage } from "../middleware/tenant-context.js";
 import { loadFleet } from "./printer-fleet.js";
 import {
   assertPrinterUploadArtifactPath,
@@ -209,7 +210,7 @@ export async function drainPrinterSendQueue(
   return results;
 }
 
-const INTERRUPTED_PRINTER_SEND_ERROR =
+export const INTERRUPTED_PRINTER_SEND_ERROR =
   "Interrupted by process restart. Printer outcome is unknown, so this send was not marked successful. The staged file remains for an explicit retry. This process will not retry a print on its own.";
 
 function interruptSendingItem(
@@ -227,6 +228,12 @@ function interruptSendingItem(
 export function reconcilePrinterSendsAfterProcessStart(
   repo: AppRepository,
 ): PrinterSendQueueItem[] {
+  return interruptInFlightPrinterSends(repo);
+}
+
+export function interruptInFlightPrinterSends(
+  repo: AppRepository,
+): PrinterSendQueueItem[] {
   const changed: PrinterSendQueueItem[] = [];
   for (const item of loadPrinterSendQueue(repo)) {
     if (item.state !== "sending") continue;
@@ -234,6 +241,17 @@ export function reconcilePrinterSendsAfterProcessStart(
     if (updated) changed.push(updated);
   }
   return changed;
+}
+
+type ShutdownPorts = {
+  repository?: AppRepository | null;
+  db?: { defaultRepository?: AppRepository | null };
+};
+
+export function interruptPrinterUploadsOnShutdown(source: ShutdownPorts): PrinterSendQueueItem[] {
+  const repo = source.repository ?? source.db?.defaultRepository ?? null;
+  if (!repo) return [];
+  return tenantStorage.run("default", () => interruptInFlightPrinterSends(repo));
 }
 
 export async function reconcilePrinterSendsAgainstLiveJobs(
