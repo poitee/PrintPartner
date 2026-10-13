@@ -34,6 +34,8 @@
     "fixture:storage:prepare": "node --conditions=development --import tsx scripts/storage-fixtures/prepare.mts",
     "test:desktop-parity": "node --conditions=development --import tsx scripts/desktop-parity/verify.mts",
     "contracts:schemas": "node --conditions=development --import tsx scripts/desktop-contracts/schema-check.mjs",
+    "contracts:reverse:generate": "node scripts/rust-contracts/run.mjs --write",
+    "contracts:reverse:verify": "node scripts/rust-contracts/run.mjs --check",
     "contracts:generate": "node scripts/desktop-contracts/regenerate.mjs",
     "test:contract-semantics": "node --conditions=development --import tsx --test scripts/desktop-contracts/semantics.test.mjs",
     "contracts:verify": "node scripts/desktop-contracts/verify.mjs"

@@ -2971,6 +2971,7 @@ name = "pp-domain"
 version = "0.1.0"
 dependencies = [
  "proptest",
+ "schemars 0.8.22",
  "serde",
  "serde_json",
 ]

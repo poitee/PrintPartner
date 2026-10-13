@@ -1,0 +1,471 @@
+{
+  "dialect": "http://json-schema.org/draft-07/schema#",
+  "generator": "rust-contracts-zod/1",
+  "refinements": {
+    "PlanDraftBasis": "basis-consistency",
+    "SavePlanChoicesRequest": "request-consistency",
+    "SemanticFixture": "write-positive-default"
+  },
+  "roots": {
+    "basis": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "definitions": {
+        "WireInteger_0_9007199254740991": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "WireInteger_1_9007199254740991": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "properties": {
+        "plan_version": {
+          "$ref": "#/definitions/WireInteger_0_9007199254740991"
+        },
+        "revision_id": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WireInteger_1_9007199254740991"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "plan_version",
+        "revision_id"
+      ],
+      "title": "PlanDraftBasis",
+      "type": "object"
+    },
+    "identity": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "definitions": {
+        "Digest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "DraftState": {
+          "enum": [
+            "open",
+            "abandoned",
+            "consumed"
+          ],
+          "type": "string"
+        },
+        "PlanDraftBasis": {
+          "additionalProperties": false,
+          "properties": {
+            "plan_version": {
+              "$ref": "#/definitions/WireInteger_0_9007199254740991"
+            },
+            "revision_id": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/WireInteger_1_9007199254740991"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "plan_version",
+            "revision_id"
+          ],
+          "type": "object"
+        },
+        "WireInteger_0_9007199254740991": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "WireInteger_1_9007199254740991": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "properties": {
+        "base": {
+          "$ref": "#/definitions/PlanDraftBasis"
+        },
+        "draft_id": {
+          "$ref": "#/definitions/WireInteger_1_9007199254740991"
+        },
+        "lifecycle_version": {
+          "$ref": "#/definitions/WireInteger_0_9007199254740991"
+        },
+        "snapshot_digest": {
+          "$ref": "#/definitions/Digest"
+        },
+        "state": {
+          "$ref": "#/definitions/DraftState"
+        }
+      },
+      "required": [
+        "base",
+        "draft_id",
+        "lifecycle_version",
+        "snapshot_digest",
+        "state"
+      ],
+      "title": "PlanDraftIdentity",
+      "type": "object"
+    },
+    "probe": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "definitions": {
+        "CalendarDate": {
+          "format": "date",
+          "type": "string"
+        },
+        "Mode": {
+          "enum": [
+            "read",
+            "write"
+          ],
+          "type": "string"
+        },
+        "WireInteger_0_10": {
+          "maximum": 10,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "WireInteger_0_9007199254740991": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "WireText_1_4": {
+          "maxLength": 4,
+          "minLength": 1,
+          "type": "string",
+          "x-unicode-scalar": true
+        }
+      },
+      "properties": {
+        "date": {
+          "$ref": "#/definitions/CalendarDate"
+        },
+        "defaulted": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/WireInteger_0_10"
+            }
+          ],
+          "default": 3
+        },
+        "integer": {
+          "$ref": "#/definitions/WireInteger_0_9007199254740991"
+        },
+        "mode": {
+          "$ref": "#/definitions/Mode"
+        },
+        "nullable": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "optional": {
+          "type": "string"
+        },
+        "text": {
+          "$ref": "#/definitions/WireText_1_4"
+        }
+      },
+      "required": [
+        "date",
+        "integer",
+        "mode",
+        "nullable",
+        "text"
+      ],
+      "title": "SemanticFixture",
+      "type": "object"
+    },
+    "receipt": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "definitions": {
+        "Digest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "WireInteger_1_9007199254740991": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "WireText_1_100": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string",
+          "x-unicode-scalar": true
+        }
+      },
+      "properties": {
+        "applied_at": {
+          "$ref": "#/definitions/WireText_1_100"
+        },
+        "draft_id": {
+          "$ref": "#/definitions/WireInteger_1_9007199254740991"
+        },
+        "draft_lifecycle_version": {
+          "$ref": "#/definitions/WireInteger_1_9007199254740991"
+        },
+        "plan_version": {
+          "$ref": "#/definitions/WireInteger_1_9007199254740991"
+        },
+        "profile_id": {
+          "$ref": "#/definitions/WireInteger_1_9007199254740991"
+        },
+        "required_unit_mapping_digest": {
+          "$ref": "#/definitions/Digest"
+        },
+        "revision_digest": {
+          "$ref": "#/definitions/Digest"
+        },
+        "revision_id": {
+          "$ref": "#/definitions/WireInteger_1_9007199254740991"
+        }
+      },
+      "required": [
+        "applied_at",
+        "draft_id",
+        "draft_lifecycle_version",
+        "plan_version",
+        "profile_id",
+        "required_unit_mapping_digest",
+        "revision_digest",
+        "revision_id"
+      ],
+      "title": "ApplyPlanDraftReceipt",
+      "type": "object"
+    },
+    "request": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "definitions": {
+        "Digest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "DraftState": {
+          "enum": [
+            "open",
+            "abandoned",
+            "consumed"
+          ],
+          "type": "string"
+        },
+        "FileTarget": {
+          "additionalProperties": false,
+          "properties": {
+            "part_key": {
+              "$ref": "#/definitions/WireText_1_4096"
+            },
+            "relative_path": {
+              "$ref": "#/definitions/WireText_1_4096"
+            },
+            "source_layer": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/WireText_0_1000"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "part_key",
+            "relative_path",
+            "source_layer"
+          ],
+          "type": "object"
+        },
+        "PlanChoice": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "set_included"
+                  ],
+                  "type": "string"
+                },
+                "target": {
+                  "$ref": "#/definitions/FileTarget"
+                },
+                "value": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "kind",
+                "target",
+                "value"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "set_quantity_override"
+                  ],
+                  "type": "string"
+                },
+                "target": {
+                  "$ref": "#/definitions/FileTarget"
+                },
+                "value": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/WireInteger_1_10000"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "target",
+                "value"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "PlanDraftBasis": {
+          "additionalProperties": false,
+          "properties": {
+            "plan_version": {
+              "$ref": "#/definitions/WireInteger_0_9007199254740991"
+            },
+            "revision_id": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/WireInteger_1_9007199254740991"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "plan_version",
+            "revision_id"
+          ],
+          "type": "object"
+        },
+        "PlanDraftIdentity": {
+          "additionalProperties": false,
+          "properties": {
+            "base": {
+              "$ref": "#/definitions/PlanDraftBasis"
+            },
+            "draft_id": {
+              "$ref": "#/definitions/WireInteger_1_9007199254740991"
+            },
+            "lifecycle_version": {
+              "$ref": "#/definitions/WireInteger_0_9007199254740991"
+            },
+            "snapshot_digest": {
+              "$ref": "#/definitions/Digest"
+            },
+            "state": {
+              "$ref": "#/definitions/DraftState"
+            }
+          },
+          "required": [
+            "base",
+            "draft_id",
+            "lifecycle_version",
+            "snapshot_digest",
+            "state"
+          ],
+          "type": "object"
+        },
+        "WireInteger_0_9007199254740991": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "WireInteger_1_10000": {
+          "maximum": 10000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "WireInteger_1_9007199254740991": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "WireText_0_1000": {
+          "maxLength": 1000,
+          "minLength": 0,
+          "type": "string",
+          "x-unicode-scalar": true
+        },
+        "WireText_1_4096": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string",
+          "x-unicode-scalar": true
+        }
+      },
+      "properties": {
+        "decisions": {
+          "items": {
+            "$ref": "#/definitions/PlanChoice"
+          },
+          "maxItems": 10000,
+          "minItems": 1,
+          "type": "array"
+        },
+        "expected_base": {
+          "$ref": "#/definitions/PlanDraftBasis"
+        },
+        "expected_draft": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PlanDraftIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "remap_checkoff_links": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "decisions",
+        "expected_base",
+        "expected_draft",
+        "remap_checkoff_links"
+      ],
+      "title": "SavePlanChoicesRequest",
+      "type": "object"
+    }
+  },
+  "schemars": "0.8.22"
+}
