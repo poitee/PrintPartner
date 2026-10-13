@@ -143,6 +143,19 @@ fn ticket_t_7_ownership_unknown_rollback_fail_closed() {
 }
 
 #[test]
+fn ticket_t_7_ownership_unknown_format_preserves_tree() {
+    let dir = scratch("ticket_t_7_ownership_unknown_format");
+    plant_tree(&dir);
+    let before = fingerprint_tree(&dir).unwrap();
+    let mut value = bundled_value();
+    value["live_format"]["id"] = serde_json::json!("source-revision-workspace-v2");
+    let error = boot_source_sync(&dir, &serde_json::to_string(&value).unwrap()).unwrap_err();
+    assert!(matches!(error, AdmissionError::UnknownLiveFormat { .. }));
+    assert_eq!(fingerprint_tree(&dir).unwrap(), before);
+    assert!(!dir.join("source-sync-admission.json").exists());
+}
+
+#[test]
 fn ticket_t_7_ownership_all_rust_unsupported() {
     let mut value = bundled_value();
     value["owner"] = serde_json::json!("rust");
@@ -291,9 +304,7 @@ fn ticket_t_7_ownership_restart_manifest_changed() {
     let dir = scratch("ticket_t_7_ownership_manifest_changed");
     let first = boot_source_sync(&dir, bundled_text()).unwrap();
     let persisted = read(&dir.join("source-sync-admission.json"));
-    let mut value = bundled_value();
-    value["live_format"]["id"] = serde_json::json!("source-revision-workspace-v2");
-    let error = boot_source_sync(&dir, &serde_json::to_string(&value).unwrap()).unwrap_err();
+    let error = boot_source_sync(&dir, &format!("{}\n", bundled_text())).unwrap_err();
     assert!(
         matches!(error, AdmissionError::RestartManifestChanged),
         "{error}"

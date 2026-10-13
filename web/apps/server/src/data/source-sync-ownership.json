@@ -7,6 +7,12 @@
   },
   "participants": [
     {
+      "id": "http.POST /jobs/extract-source-docs",
+      "kind": "http",
+      "owner": "node",
+      "resources": ["table:source_docs", "file:source-workspace"]
+    },
+    {
       "id": "http.POST /jobs/import-scan",
       "kind": "http",
       "owner": "node",
@@ -17,6 +23,12 @@
       "kind": "http",
       "owner": "node",
       "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"]
+    },
+    {
+      "id": "http.POST /api/v1/jobs/extract-source-docs",
+      "kind": "http_alias",
+      "owner": "node",
+      "resources": ["table:source_docs", "file:source-workspace"]
     },
     {
       "id": "http.POST /api/v1/jobs/import-scan",
@@ -59,6 +71,12 @@
       "kind": "mcp_action",
       "owner": "node",
       "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"]
+    },
+    {
+      "id": "job.extract-source-docs",
+      "kind": "job",
+      "owner": "node",
+      "resources": ["table:source_docs", "file:source-workspace"]
     },
     {
       "id": "job.import-scan",

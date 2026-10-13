@@ -97,6 +97,15 @@ export async function registerJobRoutes(
   });
 
   app.post("/jobs/extract-source-docs", async (request, reply) => {
+    try {
+      requireSourceSyncParticipant("http.POST /jobs/extract-source-docs");
+      requireSourceSyncParticipant("http.POST /api/v1/jobs/extract-source-docs");
+    } catch (error) {
+      if (error instanceof OwnershipAdmissionError) {
+        return reply.status(503).send({ detail: error.message });
+      }
+      throw error;
+    }
     if (await refuseIfHostedQuotaExceeded(reply, request.tenantId)) return;
     const body = request.body as { project_id?: number };
     const job_id = await jobs.start(

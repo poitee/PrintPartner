@@ -23,6 +23,7 @@ import {
   SOURCE_SYNC_OPERATION,
   SOURCE_SYNC_PARTICIPANTS,
   admitSourceSyncManifest,
+  beginSourceSyncAdmission,
   defaultSourceSyncManifestPath,
   packagedSourceSyncManifestPath,
   parseSourceSyncAdmissionReceipt,
@@ -176,6 +177,48 @@ function toolText(body: string): string {
 }
 
 describe("Source Sync Fastify admission", () => {
+  it("rejects an unsupported live format before creating the data directory", () => {
+    const dir = scratch("unknown-format");
+    const dataDir = join(dir, "new-data");
+    const manifest = writeManifest(dir, "unknown-format.json", (value) => {
+      value.live_format = { id: "source-revision-workspace-v2", rollback: "compatible" };
+    });
+    installManifest(manifest, dataDir);
+    expect(() => beginSourceSyncAdmission(dataDir)).toThrow(/unknown live format/);
+    expect(existsSync(dataDir)).toBe(false);
+  });
+
+  it("publishes a complete reusable receipt when filesystem writes are short", () => {
+    const dir = scratch("short-writes");
+    const proof = join(dir, "short-writes.mjs");
+    writeFileSync(proof, [
+      'import fs from "node:fs";',
+      'import { syncBuiltinESMExports } from "node:module";',
+      'const actualWrite = fs.writeSync;',
+      'let shortWrites = 0;',
+      'fs.writeSync = (fd, data, offset = 0, length = data.length, position = null) => {',
+      '  shortWrites += 1;',
+      '  if (typeof data === "string") return actualWrite(fd, Buffer.from(data).subarray(0, 17));',
+      '  return actualWrite(fd, data, offset, Math.min(17, length), position);',
+      '};',
+      'syncBuiltinESMExports();',
+      `const { beginSourceSyncAdmission, sourceSyncAdmissionReceiptPath } = await import(${JSON.stringify(join(sourceDir, "source-sync-admission.ts"))});`,
+      'const first = beginSourceSyncAdmission(process.argv[2]);',
+      'const bytes = fs.readFileSync(sourceSyncAdmissionReceiptPath(process.argv[2]), "utf8");',
+      'const second = beginSourceSyncAdmission(process.argv[2]);',
+      'if (shortWrites < 2 || JSON.stringify(first) !== JSON.stringify(second)) throw Error("incomplete admission");',
+      'if (JSON.stringify(JSON.parse(bytes)) !== JSON.stringify(first)) throw Error("incomplete receipt");',
+      'console.log("Complete receipt after short writes");',
+    ].join("\n"));
+    const env = { ...process.env };
+    delete env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST;
+    const result = spawnSync(process.execPath, ["--experimental-strip-types", proof, join(dir, "data")], {
+      encoding: "utf8", env,
+    });
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain("Complete receipt after short writes");
+  });
+
   it("rejects a conflicting manifest before timers or data changes", async () => {
     const dir = scratch("conflict");
     const manifest = writeManifest(dir, "conflict.json", (value) => {
@@ -357,7 +400,7 @@ describe("Source Sync Fastify admission", () => {
     expect(alias.statusCode).toBe(200);
     const aliasJob = (alias.json() as { job_id: string }).job_id;
     const importJobs: string[] = [];
-    for (const url of ["/jobs/import-scan", "/api/v1/jobs/import-scan"]) {
+    for (const url of ["/jobs/import-scan", "/api/v1/jobs/import-scan", "/jobs/extract-source-docs", "/api/v1/jobs/extract-source-docs"]) {
       const imported = await started.app.inject({
         method: "POST",
         url,
@@ -448,8 +491,9 @@ describe("Source Sync Fastify admission", () => {
     const beforeReplacement = fingerprint(dir);
     const originalManifest = readFileSync(manifest, "utf8");
     const queuedImport = await started.ports.jobs.start("import-scan", { project_id: source.id });
+    const queuedExtraction = await started.ports.jobs.start("extract-source-docs", { project_id: source.id });
     writeFileSync(manifest, `${originalManifest}\n`);
-    for (const url of ["/jobs/sync", "/api/v1/jobs/sync", "/jobs/import-scan", "/api/v1/jobs/import-scan"]) {
+    for (const url of ["/jobs/sync", "/api/v1/jobs/sync", "/jobs/import-scan", "/api/v1/jobs/import-scan", "/jobs/extract-source-docs", "/api/v1/jobs/extract-source-docs"]) {
       const refused = await started.app.inject({
         method: "POST",
         url,
@@ -461,10 +505,14 @@ describe("Source Sync Fastify admission", () => {
     }
     await expect(started.ports.jobs.start("import-scan", { project_id: source.id }))
       .rejects.toThrow(/runtime manifest does not match/);
-    expect(await waitJob(started.app, queuedImport)).toMatchObject({
-      status: "error",
-      error: expect.stringMatching(/runtime manifest does not match/),
-    });
+    await expect(started.ports.jobs.start("extract-source-docs", { project_id: source.id }))
+      .rejects.toThrow(/runtime manifest does not match/);
+    for (const jobId of [queuedImport, queuedExtraction]) {
+      expect(await waitJob(started.app, jobId)).toMatchObject({
+        status: "error",
+        error: expect.stringMatching(/runtime manifest does not match/),
+      });
+    }
     writeFileSync(manifest, originalManifest);
     expect(fingerprint(dir)).toBe(beforeReplacement);
 
@@ -482,7 +530,7 @@ describe("Source Sync Fastify admission", () => {
     });
     expect(refused.statusCode).toBe(400);
     expect(refused.body).toMatch(/conflicting ownership/);
-    for (const url of ["/jobs/import-scan", "/api/v1/jobs/import-scan"]) {
+    for (const url of ["/jobs/import-scan", "/api/v1/jobs/import-scan", "/jobs/extract-source-docs", "/api/v1/jobs/extract-source-docs"]) {
       const refusedImport = await started.app.inject({
         method: "POST",
         url,

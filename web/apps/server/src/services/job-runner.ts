@@ -260,6 +260,7 @@ export class InProcessJobRunner {
     }
     if (kind === "sync") requireSourceSyncParticipant("job.sync");
     if (kind === "import-scan") requireSourceSyncParticipant("job.import-scan");
+    if (kind === "extract-source-docs") requireSourceSyncParticipant("job.extract-source-docs");
     this.pruneCompletedJobs();
     const jobId = crypto.randomUUID();
     const snap: JobSnapshot = {
@@ -403,6 +404,7 @@ export class InProcessJobRunner {
                 this.start("extract-source-docs", { project_id: pid }, tenantId),
             });
           } else if (kind === "extract-source-docs") {
+            requireSourceSyncParticipant("job.extract-source-docs");
             result = await this.runExtractSourceDocs(jobId, payload);
           } else if (kind === "check-source-updates") {
             result = await checkAllSourceUpdates(this.repo);
@@ -498,6 +500,7 @@ export class InProcessJobRunner {
       });
     }
     for (let i = 0; i < ids.length; i++) {
+      requireSourceSyncParticipant("job.sync");
       const id = ids[i]!;
       const row = this.repo.getProjectRow(id);
       this.emit(jobId, {

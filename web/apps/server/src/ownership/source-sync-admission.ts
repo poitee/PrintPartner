@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -10,6 +10,8 @@ export const SOURCE_SYNC_PARTICIPANTS = [
   "http.POST /api/v1/jobs/sync",
   "http.POST /jobs/import-scan",
   "http.POST /api/v1/jobs/import-scan",
+  "http.POST /jobs/extract-source-docs",
+  "http.POST /api/v1/jobs/extract-source-docs",
   "http.POST /sources",
   "http.POST /api/v1/sources",
   "http.POST /assistant/actions/apply",
@@ -17,6 +19,7 @@ export const SOURCE_SYNC_PARTICIPANTS = [
   "mcp.start_sync",
   "job.sync",
   "job.import-scan",
+  "job.extract-source-docs",
   "startup.startSourceWatcher",
   "worker.startSourceWatcher",
 ] as const;
@@ -123,7 +126,7 @@ export function admitSourceSyncManifest(text: string): {
   const liveExtra = unknownFields(parsed.live_format, LIVE_FORMAT_FIELDS);
   if (liveExtra) return fail("malformed", `malformed ownership manifest: unknown field ${liveExtra}`);
   const formatId = parsed.live_format.id;
-  if (typeof formatId !== "string" || formatId.trim() === "") {
+  if (formatId !== "source-revision-workspace-v1") {
     return fail("unknown_live_format", `unknown live format rollback ${String(formatId)}`);
   }
   if (parsed.live_format.rollback === "incompatible") {
@@ -320,11 +323,11 @@ export function beginSourceSyncAdmission(dataDir: string): SourceSyncAdmissionRe
     manifest_sha256: admitted.manifestSha256,
   };
   const temporary = `${receiptPath}.tmp`;
-  const payload = JSON.stringify(receipt, null, 2);
+  const payload = Buffer.from(JSON.stringify(receipt, null, 2));
   mkdirSync(dataDir, { recursive: true });
   const fd = openSync(temporary, "w");
   try {
-    writeSync(fd, payload);
+    writeFileSync(fd, payload);
     fsyncSync(fd);
   } finally {
     closeSync(fd);

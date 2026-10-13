@@ -26,6 +26,8 @@ pub const SOURCE_SYNC_PARTICIPANTS: &[&str] = &[
     "http.POST /api/v1/jobs/sync",
     "http.POST /jobs/import-scan",
     "http.POST /api/v1/jobs/import-scan",
+    "http.POST /jobs/extract-source-docs",
+    "http.POST /api/v1/jobs/extract-source-docs",
     "http.POST /sources",
     "http.POST /api/v1/sources",
     "http.POST /assistant/actions/apply",
@@ -33,6 +35,7 @@ pub const SOURCE_SYNC_PARTICIPANTS: &[&str] = &[
     "mcp.start_sync",
     "job.sync",
     "job.import-scan",
+    "job.extract-source-docs",
     "startup.startSourceWatcher",
     "worker.startSourceWatcher",
 ];
@@ -252,7 +255,7 @@ pub fn admit_observed(
             value: parsed.operation,
         });
     }
-    if parsed.live_format.id.trim().is_empty() {
+    if parsed.live_format.id != "source-revision-workspace-v1" {
         return Err(AdmissionError::UnknownLiveFormat {
             value: parsed.live_format.id,
         });
