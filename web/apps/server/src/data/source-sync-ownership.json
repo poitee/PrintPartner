@@ -7,6 +7,12 @@
   },
   "participants": [
     {
+      "id": "http.POST /jobs/check-source-updates",
+      "kind": "http",
+      "owner": "node",
+      "resources": ["table:projects", "table:app_settings", "table:app_events"]
+    },
+    {
       "id": "http.POST /jobs/extract-source-docs",
       "kind": "http",
       "owner": "node",
@@ -23,6 +29,12 @@
       "kind": "http",
       "owner": "node",
       "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"]
+    },
+    {
+      "id": "http.POST /api/v1/jobs/check-source-updates",
+      "kind": "http_alias",
+      "owner": "node",
+      "resources": ["table:projects", "table:app_settings", "table:app_events"]
     },
     {
       "id": "http.POST /api/v1/jobs/extract-source-docs",
@@ -73,6 +85,12 @@
       "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"]
     },
     {
+      "id": "job.check-source-updates",
+      "kind": "job",
+      "owner": "node",
+      "resources": ["table:projects", "table:app_settings", "table:app_events"]
+    },
+    {
       "id": "job.extract-source-docs",
       "kind": "job",
       "owner": "node",
@@ -100,7 +118,7 @@
       "id": "worker.startSourceWatcher",
       "kind": "worker",
       "owner": "node",
-      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"]
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers", "table:app_settings", "table:app_events"]
     }
   ]
 }

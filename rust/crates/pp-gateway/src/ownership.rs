@@ -28,6 +28,8 @@ pub const SOURCE_SYNC_PARTICIPANTS: &[&str] = &[
     "http.POST /api/v1/jobs/import-scan",
     "http.POST /jobs/extract-source-docs",
     "http.POST /api/v1/jobs/extract-source-docs",
+    "http.POST /jobs/check-source-updates",
+    "http.POST /api/v1/jobs/check-source-updates",
     "http.POST /sources",
     "http.POST /api/v1/sources",
     "http.POST /assistant/actions/apply",
@@ -36,6 +38,7 @@ pub const SOURCE_SYNC_PARTICIPANTS: &[&str] = &[
     "job.sync",
     "job.import-scan",
     "job.extract-source-docs",
+    "job.check-source-updates",
     "startup.startSourceWatcher",
     "worker.startSourceWatcher",
 ];
@@ -79,6 +82,11 @@ pub enum AdmissionError {
     UnknownParticipantKind {
         value: String,
     },
+    ParticipantKindMismatch {
+        id: String,
+        expected: String,
+        actual: String,
+    },
     UnknownLiveFormat {
         value: String,
     },
@@ -121,6 +129,16 @@ impl std::fmt::Display for AdmissionError {
             }
             Self::UnknownParticipantKind { value } => {
                 write!(formatter, "unknown participant kind {value}")
+            }
+            Self::ParticipantKindMismatch {
+                id,
+                expected,
+                actual,
+            } => {
+                write!(
+                    formatter,
+                    "participant kind mismatch for {id}: expected {expected}, got {actual}"
+                )
             }
             Self::UnknownLiveFormat { value } => {
                 write!(formatter, "unknown live format rollback {value}")
@@ -283,6 +301,29 @@ pub fn admit_observed(
             });
         }
         validate_kind(&participant.kind)?;
+        if SOURCE_SYNC_PARTICIPANTS.contains(&participant.id.as_str()) {
+            let expected = match participant.id.split('.').next() {
+                Some("http") if participant.id.starts_with("http.POST /api/v1/") => "http_alias",
+                Some("http") => "http",
+                Some("job") => "job",
+                Some("mcp") => "mcp_action",
+                Some("startup") => "startup_watcher",
+                Some("worker") => "worker",
+                _ => {
+                    return Err(AdmissionError::Malformed(format!(
+                        "unclassified participant {}",
+                        participant.id
+                    )));
+                }
+            };
+            if participant.kind != expected {
+                return Err(AdmissionError::ParticipantKindMismatch {
+                    id: participant.id.clone(),
+                    expected: expected.to_string(),
+                    actual: participant.kind.clone(),
+                });
+            }
+        }
         validate_resources(&participant.resources)?;
         parsed_participants.push(ParsedParticipant {
             id: &participant.id,

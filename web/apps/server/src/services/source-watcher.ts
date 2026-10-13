@@ -270,7 +270,7 @@ async function runPeriodicUpdateCheck(
 
   let checkResult: Awaited<ReturnType<typeof checkAllSourceUpdates>>;
   try {
-    checkResult = await checkAllSourceUpdates(repo);
+    checkResult = await checkAllSourceUpdates(repo, "worker.startSourceWatcher");
   } catch (err) {
     logger.log(
       "warn",

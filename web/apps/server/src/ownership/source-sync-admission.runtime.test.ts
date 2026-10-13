@@ -177,6 +177,22 @@ function toolText(body: string): string {
 }
 
 describe("Source Sync Fastify admission", () => {
+  it("rejects every participant relabeled with another allowed kind before persisting admission", () => {
+    for (const [index, id] of SOURCE_SYNC_PARTICIPANTS.entries()) {
+      const dir = scratch(`wrong-kind-${index}`);
+      const dataDir = join(dir, "new-data");
+      const manifest = writeManifest(dir, "wrong-kind.json", (value) => {
+        const participants = value.participants as Array<{ id: string; kind: string }>;
+        const participant = participants.find((item) => item.id === id);
+        if (!participant) throw new Error(`Missing fixture participant ${id}`);
+        participant.kind = participant.kind === "job" ? "http" : "job";
+      });
+      installManifest(manifest, dataDir);
+      expect(() => beginSourceSyncAdmission(dataDir), id).toThrow(/participant kind mismatch/);
+      expect(existsSync(dataDir), id).toBe(false);
+    }
+  });
+
   it("rejects an unsupported live format before creating the data directory", () => {
     const dir = scratch("unknown-format");
     const dataDir = join(dir, "new-data");
@@ -400,7 +416,7 @@ describe("Source Sync Fastify admission", () => {
     expect(alias.statusCode).toBe(200);
     const aliasJob = (alias.json() as { job_id: string }).job_id;
     const importJobs: string[] = [];
-    for (const url of ["/jobs/import-scan", "/api/v1/jobs/import-scan", "/jobs/extract-source-docs", "/api/v1/jobs/extract-source-docs"]) {
+    for (const url of ["/jobs/import-scan", "/api/v1/jobs/import-scan", "/jobs/extract-source-docs", "/api/v1/jobs/extract-source-docs", "/jobs/check-source-updates", "/api/v1/jobs/check-source-updates"]) {
       const imported = await started.app.inject({
         method: "POST",
         url,
@@ -492,8 +508,9 @@ describe("Source Sync Fastify admission", () => {
     const originalManifest = readFileSync(manifest, "utf8");
     const queuedImport = await started.ports.jobs.start("import-scan", { project_id: source.id });
     const queuedExtraction = await started.ports.jobs.start("extract-source-docs", { project_id: source.id });
+    const queuedUpdateCheck = await started.ports.jobs.start("check-source-updates", {});
     writeFileSync(manifest, `${originalManifest}\n`);
-    for (const url of ["/jobs/sync", "/api/v1/jobs/sync", "/jobs/import-scan", "/api/v1/jobs/import-scan", "/jobs/extract-source-docs", "/api/v1/jobs/extract-source-docs"]) {
+    for (const url of ["/jobs/sync", "/api/v1/jobs/sync", "/jobs/import-scan", "/api/v1/jobs/import-scan", "/jobs/extract-source-docs", "/api/v1/jobs/extract-source-docs", "/jobs/check-source-updates", "/api/v1/jobs/check-source-updates"]) {
       const refused = await started.app.inject({
         method: "POST",
         url,
@@ -507,7 +524,9 @@ describe("Source Sync Fastify admission", () => {
       .rejects.toThrow(/runtime manifest does not match/);
     await expect(started.ports.jobs.start("extract-source-docs", { project_id: source.id }))
       .rejects.toThrow(/runtime manifest does not match/);
-    for (const jobId of [queuedImport, queuedExtraction]) {
+    await expect(started.ports.jobs.start("check-source-updates", {}))
+      .rejects.toThrow(/runtime manifest does not match/);
+    for (const jobId of [queuedImport, queuedExtraction, queuedUpdateCheck]) {
       expect(await waitJob(started.app, jobId)).toMatchObject({
         status: "error",
         error: expect.stringMatching(/runtime manifest does not match/),
@@ -530,7 +549,7 @@ describe("Source Sync Fastify admission", () => {
     });
     expect(refused.statusCode).toBe(400);
     expect(refused.body).toMatch(/conflicting ownership/);
-    for (const url of ["/jobs/import-scan", "/api/v1/jobs/import-scan", "/jobs/extract-source-docs", "/api/v1/jobs/extract-source-docs"]) {
+    for (const url of ["/jobs/import-scan", "/api/v1/jobs/import-scan", "/jobs/extract-source-docs", "/api/v1/jobs/extract-source-docs", "/jobs/check-source-updates", "/api/v1/jobs/check-source-updates"]) {
       const refusedImport = await started.app.inject({
         method: "POST",
         url,

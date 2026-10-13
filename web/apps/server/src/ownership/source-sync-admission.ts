@@ -5,24 +5,29 @@ import { fileURLToPath } from "node:url";
 
 /** Node remains the Source Sync owner. Rust is rejected, not routed back here. */
 export const SOURCE_SYNC_OPERATION = "source.sync";
-export const SOURCE_SYNC_PARTICIPANTS = [
-  "http.POST /jobs/sync",
-  "http.POST /api/v1/jobs/sync",
-  "http.POST /jobs/import-scan",
-  "http.POST /api/v1/jobs/import-scan",
-  "http.POST /jobs/extract-source-docs",
-  "http.POST /api/v1/jobs/extract-source-docs",
-  "http.POST /sources",
-  "http.POST /api/v1/sources",
-  "http.POST /assistant/actions/apply",
-  "http.POST /api/v1/assistant/actions/apply",
-  "mcp.start_sync",
-  "job.sync",
-  "job.import-scan",
-  "job.extract-source-docs",
-  "startup.startSourceWatcher",
-  "worker.startSourceWatcher",
-] as const;
+const SOURCE_SYNC_PARTICIPANT_KINDS = {
+  "http.POST /jobs/sync": "http",
+  "http.POST /api/v1/jobs/sync": "http_alias",
+  "http.POST /jobs/import-scan": "http",
+  "http.POST /api/v1/jobs/import-scan": "http_alias",
+  "http.POST /jobs/check-source-updates": "http",
+  "http.POST /api/v1/jobs/check-source-updates": "http_alias",
+  "http.POST /jobs/extract-source-docs": "http",
+  "http.POST /api/v1/jobs/extract-source-docs": "http_alias",
+  "http.POST /sources": "http",
+  "http.POST /api/v1/sources": "http_alias",
+  "http.POST /assistant/actions/apply": "http",
+  "http.POST /api/v1/assistant/actions/apply": "http_alias",
+  "mcp.start_sync": "mcp_action",
+  "job.sync": "job",
+  "job.import-scan": "job",
+  "job.check-source-updates": "job",
+  "job.extract-source-docs": "job",
+  "startup.startSourceWatcher": "startup_watcher",
+  "worker.startSourceWatcher": "worker",
+} as const;
+export const SOURCE_SYNC_PARTICIPANTS = Object.keys(SOURCE_SYNC_PARTICIPANT_KINDS);
+const expectedParticipantKinds = new Map(Object.entries(SOURCE_SYNC_PARTICIPANT_KINDS));
 
 const MANIFEST_FIELDS = new Set(["operation", "owner", "live_format", "participants"]);
 const RECEIPT_FIELDS = new Set([
@@ -157,6 +162,10 @@ export function admitSourceSyncManifest(text: string): {
     seen.add(entry.id);
     if (typeof entry.kind !== "string" || !KINDS.has(entry.kind)) {
       return fail("unknown_kind", `unknown participant kind ${String(entry.kind)}`);
+    }
+    const expectedKind = expectedParticipantKinds.get(entry.id);
+    if (expectedKind !== undefined && entry.kind !== expectedKind) {
+      return fail("participant_kind_mismatch", `participant kind mismatch for ${entry.id}: expected ${expectedKind}, got ${entry.kind}`);
     }
     if (!Array.isArray(entry.resources) || entry.resources.length === 0) {
       return fail("malformed", "malformed ownership manifest: participant resources must name a table or file");

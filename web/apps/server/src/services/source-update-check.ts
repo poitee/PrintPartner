@@ -1,6 +1,7 @@
 import { githubRefName, parseGithubUrl } from "./github-sync.js";
 import { createGithubClient } from "./github-client.js";
 import type { AppRepository } from "../db/repository.js";
+import { requireSourceSyncParticipant } from "../ownership/source-sync-admission.js";
 
 export const REMOTE_UPDATE_STATUS_KEY = "remote_update_status";
 export const REMOTE_CHECKED_AT_KEY = "remote_checked_at";
@@ -47,17 +48,22 @@ function isGitSource(row: {
   return true;
 }
 
-export async function checkAllSourceUpdates(repo: AppRepository): Promise<{
+export async function checkAllSourceUpdates(
+  repo: AppRepository,
+  participant: "worker.startSourceWatcher" | "job.check-source-updates" = "job.check-source-updates",
+): Promise<{
   checked: Array<{ source_id: number; name: string; update_status: RemoteUpdateStatus }>;
   skipped: Array<{ source_id: number; name: string; reason: string }>;
   updates_available: number;
   checked_count: number;
 }> {
+  requireSourceSyncParticipant(participant);
   const token = repo.getSetting("github_pat");
   const checked: Array<{ source_id: number; name: string; update_status: RemoteUpdateStatus }> = [];
   const skipped: Array<{ source_id: number; name: string; reason: string }> = [];
 
   for (const source of repo.listSources()) {
+    requireSourceSyncParticipant(participant);
     const row = repo.getProjectRow(source.id);
     if (!row || !isGitSource(row)) {
       skipped.push({ source_id: source.id, name: source.name, reason: "not_git" });
@@ -70,6 +76,7 @@ export async function checkAllSourceUpdates(repo: AppRepository): Promise<{
       token,
       row.tag,
     );
+    requireSourceSyncParticipant(participant);
     const now = new Date().toISOString();
     repo.updateSource(source.id, {
       metadata: {
@@ -94,6 +101,7 @@ export async function checkAllSourceUpdates(repo: AppRepository): Promise<{
     checked.push({ source_id: source.id, name: source.name, update_status: status });
   }
 
+  requireSourceSyncParticipant(participant);
   repo.setSetting("source_update_check_last_run_at", new Date().toISOString());
   return {
     checked,

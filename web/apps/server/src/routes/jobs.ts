@@ -91,7 +91,16 @@ export async function registerJobRoutes(
     return { job_id };
   });
 
-  app.post("/jobs/check-source-updates", async (request) => {
+  app.post("/jobs/check-source-updates", async (request, reply) => {
+    try {
+      requireSourceSyncParticipant("http.POST /jobs/check-source-updates");
+      requireSourceSyncParticipant("http.POST /api/v1/jobs/check-source-updates");
+    } catch (error) {
+      if (error instanceof OwnershipAdmissionError) {
+        return reply.status(503).send({ detail: error.message });
+      }
+      throw error;
+    }
     const job_id = await jobs.start("check-source-updates", {}, request.tenantId);
     return { job_id };
   });

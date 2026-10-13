@@ -73,6 +73,50 @@ fn ticket_t_7_ownership_bundled_manifest_admits_node() {
     for id in SOURCE_SYNC_PARTICIPANTS {
         assert!(admitted.participant_ids.contains(*id), "{id}");
     }
+    let value = bundled_value();
+    let worker = value["participants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == "worker.startSourceWatcher")
+        .unwrap();
+    for resource in ["table:app_settings", "table:app_events"] {
+        assert!(
+            worker["resources"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!(resource)),
+            "{resource}"
+        );
+    }
+}
+
+#[test]
+fn ticket_t_7_ownership_participant_kind_mismatch_preserves_tree() {
+    let dir = scratch("ticket_t_7_ownership_wrong_kind");
+    plant_tree(&dir);
+    let before = fingerprint_tree(&dir).unwrap();
+    for id in SOURCE_SYNC_PARTICIPANTS {
+        let mut value = bundled_value();
+        let participant = value["participants"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|item| item["id"] == *id)
+            .unwrap();
+        participant["kind"] = serde_json::json!(if participant["kind"] == "job" {
+            "http"
+        } else {
+            "job"
+        });
+        let error = boot_source_sync(&dir, &serde_json::to_string(&value).unwrap()).unwrap_err();
+        assert!(
+            matches!(error, AdmissionError::ParticipantKindMismatch { .. }),
+            "{id}: {error}"
+        );
+        assert_eq!(fingerprint_tree(&dir).unwrap(), before, "{id}");
+    }
+    assert!(!dir.join("source-sync-admission.json").exists());
 }
 
 #[test]
@@ -207,7 +251,12 @@ fn ticket_t_7_ownership_conflicting_resource_rejected() {
 
 #[test]
 fn ticket_t_7_ownership_docs_and_covers_conflicts_rejected() {
-    for resource in ["table:source_docs", "file:source-covers"] {
+    for resource in [
+        "table:source_docs",
+        "file:source-covers",
+        "table:app_settings",
+        "table:app_events",
+    ] {
         let mut value = bundled_value();
         set_participant_owner(&mut value, "job.import-scan", "rust");
         set_participant_resources(&mut value, "job.import-scan", &[resource]);
