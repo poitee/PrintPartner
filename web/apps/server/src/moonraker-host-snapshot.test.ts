@@ -11,12 +11,12 @@ it("ticket_t_4 unrelated integrations do not disable a bounded Moonraker snapsho
 });
 it("ticket_t_4 Moonraker host budget sends ids only past the cap", () => {
   const hosts = Array.from({ length: 128 }, (_, id) => ({
-    id,
+    id: String(id),
     type: "moonraker",
     config: { base_url: "http://printer", api_key: "secret" },
   }));
   expect(moonrakerHostSnapshot(JSON.stringify(hosts))).toHaveLength(128);
-  const over = moonrakerHostSnapshot(JSON.stringify([...hosts, { ...hosts[0], id: 128 }]));
+  const over = moonrakerHostSnapshot(JSON.stringify([...hosts, { ...hosts[0], id: "128" }]));
   expect(over).toHaveLength(129);
   expect(over?.[128]).toEqual({ id: "128", base_url: "", api_key: null, enabled: false });
   expect(over?.every((host) => host.base_url === "" && host.api_key === null)).toBe(true);
@@ -37,4 +37,18 @@ it("projects an oversized Moonraker row before the snapshot is serialized", () =
     { id: "key", base_url: "", api_key: null, enabled: false },
     { id: "wide", base_url: "", api_key: null, enabled: false },
   ]);
+});
+
+it.each([undefined, null, 123, true, {}, [], "", "x".repeat(257), "é".repeat(129)])(
+  "rejects a malformed Moonraker id %j instead of fabricating a polling identity", (id) => {
+    const healthy = { id: "healthy", type: "moonraker", config: { base_url: "http://printer" } };
+    const invalid = { id, type: "moonraker", config: { base_url: "http://other-printer" } };
+    expect(moonrakerHostSnapshot(JSON.stringify([healthy, invalid]))).toBeNull();
+    const overflow = Array.from({ length: 128 }, (_, index) => ({ ...healthy, id: String(index) }));
+    expect(moonrakerHostSnapshot(JSON.stringify([...overflow, invalid]))).toBeNull();
+  },
+);
+it("accepts a nonempty Moonraker id at the UTF-8 byte limit", () => {
+  const id = "é".repeat(128);
+  expect(moonrakerHostSnapshot(JSON.stringify([{ id, type: "moonraker" }]))?.[0]?.id).toBe(id);
 });

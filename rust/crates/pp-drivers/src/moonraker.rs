@@ -153,12 +153,13 @@ impl Watchers {
             self.invalidate().await;
             anyhow::bail!("Invalid host snapshot");
         };
-        // An oversized row is never polled but stays known, so only that id fails
-        // closed; unrelated hosts and printer types keep routing.
+        // Unusable or oversized rows stay known without a polling slot, so only
+        // those ids fail closed. Node projects oversized rows with an empty endpoint.
         let wanted: HashMap<_, _> = hosts
             .into_iter()
             .filter(|h| {
-                h.base_url.len() <= MAX_CONFIG_BYTES
+                !h.base_url.trim().is_empty()
+                    && h.base_url.len() <= MAX_CONFIG_BYTES
                     && h.api_key
                         .as_ref()
                         .is_none_or(|key| key.len() <= MAX_CONFIG_BYTES)
@@ -728,13 +729,19 @@ mod tests {
             api_key: Some("k".repeat(MAX_CONFIG_BYTES + 1)),
             ..healthy.clone()
         };
+        let projected = Host {
+            id: "projected".into(),
+            base_url: String::new(),
+            ..healthy.clone()
+        };
         watchers
-            .replace(vec![healthy, oversized, big_key])
+            .replace(vec![healthy, oversized, big_key, projected])
             .await
             .unwrap();
         assert!(matches!(watchers.route("host"), Route::Cached(_)));
         assert_eq!(watchers.route("big"), Route::Unavailable);
         assert_eq!(watchers.route("key"), Route::Unavailable);
+        assert_eq!(watchers.route("projected"), Route::Unavailable);
         assert_eq!(watchers.route("prusa"), Route::Node);
     }
 }
