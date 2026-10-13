@@ -333,6 +333,7 @@ async function writeSnapshotFile(args: {
   file: SnapshotFile;
   openFile(file: SnapshotFile): Promise<SnapshotFileResponse>;
   maxBytes: number;
+  beforePublish?: () => undefined;
 }): Promise<SnapshotContentFile> {
   const destination = join(args.candidateDir, ...args.file.path.split("/"));
   await mkdir(dirname(destination), { recursive: true });
@@ -346,6 +347,7 @@ async function writeSnapshotFile(args: {
     if (contentLengthBytes != null && contentLengthBytes > args.maxBytes) {
       throw new Error(`Source snapshot exceeds the ${MAX_SOURCE_SNAPSHOT_BYTES} byte stored-content limit`);
     }
+    args.beforePublish?.();
   } catch (error) {
     response.stream.destroy();
     throw error;
@@ -726,6 +728,7 @@ export class LocalSourceSnapshotStore {
           candidateDir,
           file,
           openFile: input.openFile,
+          beforePublish: input.beforePublish,
           maxBytes: MAX_SOURCE_SNAPSHOT_BYTES - storedBytes,
         });
         storedBytes += written.sizeBytes;

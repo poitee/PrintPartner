@@ -210,7 +210,11 @@ export class InProcessJobRunner {
     if (meta) meta.updatedAt = Date.now();
   }
 
-  private emit(jobId: string, patch: Partial<JobSnapshot>): void {
+  private emit(
+    jobId: string,
+    patch: Partial<JobSnapshot>,
+    options: { notifyWebhooks: boolean } = { notifyWebhooks: true },
+  ): void {
     const snap = this.jobs.get(jobId);
     if (!snap) return;
     Object.assign(snap, patch);
@@ -222,6 +226,10 @@ export class InProcessJobRunner {
       listener(event);
     }
     if (event.status === "done" || event.status === "error") {
+      if (!options.notifyWebhooks) {
+        this.pruneCompletedJobs();
+        return;
+      }
       void dispatchWebhooks(this.repo, event.status === "done" ? "job.done" : "job.error", {
         job_id: event.job_id,
         kind: event.kind,
@@ -460,7 +468,7 @@ export class InProcessJobRunner {
             error: errMsg,
             result: null,
             finished_at: new Date().toISOString(),
-          });
+          }, { notifyWebhooks: !(e instanceof OwnershipAdmissionError) });
         } catch {
           // Best-effort: if the repo/db connection is already gone (e.g. test
           // teardown raced a still-running background job), there's nothing

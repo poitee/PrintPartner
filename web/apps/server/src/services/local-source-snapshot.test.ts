@@ -102,6 +102,41 @@ describe("LocalSourceSnapshotStore", () => {
     }
   });
 
+  it("does not consume snapshot content after admission changes while opening a file", async () => {
+    const reposDir = tempReposDir();
+    const manifest = join(reposDir, "ownership.json");
+    const original = readFileSync(packagedSourceSyncManifestPath(), "utf8");
+    const previous = process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST;
+    const readContent = vi.fn();
+    const part = file("cube.stl", "stl", "solid cube");
+    const stream = Readable.from((async function* () {
+      readContent();
+      yield part.content;
+    })());
+    try {
+      writeFileSync(manifest, original);
+      process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST = manifest;
+      beginSourceSyncAdmission(reposDir);
+      await expect(new LocalSourceSnapshotStore({ reposDir }).materialize({
+        sourceId: 1, upstreamRevisionKey: "open-file-admission", files: [part.descriptor], selection: selection(),
+        beforePublish: () => requireSourceSyncParticipant("job.sync"),
+        openFile: async () => {
+          await Promise.resolve();
+          writeFileSync(manifest, `${original}\n`);
+          return { stream, contentLengthBytes: part.content.length };
+        },
+      })).rejects.toThrow(/runtime manifest does not match/);
+      expect(readContent).not.toHaveBeenCalled();
+      expect(stream.destroyed).toBe(true);
+      expect(await candidateNames(reposDir, 1)).toEqual([]);
+      expect(existsSync(join(reposDir, "1/revisions/open-file-admission"))).toBe(false);
+    } finally {
+      stream.destroy();
+      if (previous === undefined) delete process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST;
+      else process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST = previous;
+    }
+  });
+
   it("does not write snapshot metadata after admission changes during the final stream", async () => {
     const reposDir = tempReposDir();
     const manifest = join(reposDir, "ownership.json");
