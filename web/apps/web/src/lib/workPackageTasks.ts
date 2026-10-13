@@ -200,7 +200,10 @@ function platesTasks(input: PlatesTaskInput): ProductionTask[] {
   const prepared = selected && input.printerCount > 0 && arranged && !isSetup;
   const exported = links.exportArtifact != null;
   const sliced = links.slicedFile != null;
-  const sent = links.unitTokens.some((token) => input.dispatchedUnitTokens.includes(token));
+  const dispatchedTokens = new Set(input.dispatchedUnitTokens);
+  const sent =
+    links.unitTokens.length > 0 &&
+    links.unitTokens.every((token) => dispatchedTokens.has(token));
 
   const preparationFailed = input.assignError != null || input.plateError != null;
   const preparePlates: ProductionTask = {

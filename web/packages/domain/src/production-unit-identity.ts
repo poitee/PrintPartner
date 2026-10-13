@@ -1,3 +1,5 @@
+import { interpretSlicedObjectName } from "./sliced-object-matching.js";
+
 const REQUIRED_UNIT_TOKEN_IN_OBJECT_NAME = /__(ppu_[0-9a-f]{32})$/;
 
 export type RecordedPrintIdentity = Readonly<{
@@ -6,14 +8,17 @@ export type RecordedPrintIdentity = Readonly<{
   objectNames: readonly (string | null | undefined)[];
 }>;
 
-/** Required-unit tokens carried in object names. A bare filename contributes none. */
+/** Required-unit tokens carried in object names, after slicer wrappers are removed. A bare filename contributes none. */
 export function requiredUnitTokensInObjectNames(
   names: readonly (string | null | undefined)[],
 ): string[] {
   const tokens: string[] = [];
   const seen = new Set<string>();
   for (const name of names) {
-    const match = name ? REQUIRED_UNIT_TOKEN_IN_OBJECT_NAME.exec(name) : null;
+    if (!name) continue;
+    const match = REQUIRED_UNIT_TOKEN_IN_OBJECT_NAME.exec(
+      interpretSlicedObjectName(name).unwrappedName,
+    );
     if (!match) continue;
     const token = match[1];
     if (token == null || seen.has(token)) continue;
