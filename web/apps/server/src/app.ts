@@ -1,6 +1,6 @@
 import { StatusExecution } from "./integrations/status-execution.js";
 import { moonrakerHostSnapshot } from "./moonraker-host-snapshot.js";
-import { acquireDataDirectory, desktopContext, desktopPrincipal, registerDesktopBoundary } from "./desktop-context.js";
+import { acquireDataDirectory, desktopContext, desktopPrincipal, mappedDesktopTenant, mappedDesktopDatabaseAvailable, registerDesktopBoundary } from "./desktop-context.js";
 import { rustOwnedCopy } from "./db/rust-owned.js";
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
@@ -103,6 +103,7 @@ export function createPorts(config: ServerConfig): RuntimePorts {
     config.multiUser
       ? ISOLATED_SOURCE_FILESYSTEM
       : TRUSTED_SINGLE_USER_SOURCE_FILESYSTEM,
+    mappedDesktopTenant() ? "existing-current-schema" : "migrate",
   );
 }
 
@@ -137,7 +138,7 @@ function resolveAuthStore(ports: RuntimePorts, config: ServerConfig): AuthStore 
   const store = resolveStoreDb(ports);
   if (!store) return null;
   return createAuthStore(store.db, store.driver, {
-    claimDefaultTenantForFirstUser: !config.singleUserAuth && config.deployMode !== "saas",
+    claimDefaultTenantForFirstUser: mappedDesktopTenant() === null && !config.singleUserAuth && config.deployMode !== "saas",
   });
 }
 
@@ -148,6 +149,8 @@ function resolveBoardStore(ports: RuntimePorts, config: ServerConfig): BoardStor
 }
 
 function configuredTenantIds(config: ServerConfig, authStore: AuthStore | null): string[] {
+  const mapped = mappedDesktopTenant();
+  if (mapped) return mappedDesktopDatabaseAvailable() ? [mapped] : [];
   const tenantIds = config.multiUser ? (authStore?.listTenantIds() ?? []) : ["default"];
   if (config.deployMode === "saas" && config.saasBasicAuth) {
     const [login] = config.saasBasicAuth.split(":");
@@ -199,8 +202,18 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
     trustProxy: config.trustProxy,
   });
   registerDesktopBoundary(app);
+  if (mappedDesktopTenant()) {
+    app.addHook("onRequest", async (request, reply) => {
+      const path = decodeURIComponent(new URL(request.url, "http://desktop").pathname);
+      if (/^\/(?:api\/v[12]\/)?backups(?:\/|$)/.test(path)) {
+        return reply.code(403).send({ detail: "Backups require an unmapped runtime" });
+      }
+    });
+  }
   try {
-    await configureApp(app, config, ports);
+    const tenant = mappedDesktopTenant();
+    if (tenant) await tenantStorage.run(tenant, () => configureApp(app, config, ports));
+    else await configureApp(app, config, ports);
     return app;
   } catch (error) {
     await app.close();
@@ -300,6 +313,13 @@ async function configureApp(app: FastifyInstance, config: ServerConfig, ports: R
 
   const requireAdmin = createAdminPreHandler(config, validateRequestApiKey);
   app.addHook("preHandler", async (request, reply) => {
+    const mappedPath = mappedDesktopTenant()
+      ? decodeURIComponent(new URL(request.url, "http://desktop").pathname) : null;
+    const mappedAdminRoute = mappedPath && (isAdministrativeRoute(mappedPath) ||
+      isAdministrativeRoute(mappedPath.replace(/^\/api\/v[12](?=\/)/, "")));
+    if (mappedAdminRoute && !request.sessionUser?.is_admin) {
+      return reply.code(403).send({ detail: "Administrator access required" });
+    }
     if (isAdministrativeRoute(request.url)) {
       return requireAdmin(request, reply);
     }
@@ -323,7 +343,7 @@ async function configureApp(app: FastifyInstance, config: ServerConfig, ports: R
     const statusExecution = new StatusExecution();
     app.addHook("preClose", async () => { await statusExecution.stop(); });
     beginSourceSyncAdmission(config.dataDir);
-    if (config.deployMode === "self-host") {
+    if (config.deployMode === "self-host" && !mappedDesktopTenant()) {
       migrateLegacySelfHostExports(config.dataDir, repository);
     }
     const backgroundTenantIds = () => configuredTenantIds(config, authStore);
@@ -363,10 +383,12 @@ async function configureApp(app: FastifyInstance, config: ServerConfig, ports: R
         }
       }
     };
-    await migrateLegacySourceManifests();
-    sweepExpiredTransferArtifacts(join(config.dataDir, "exports"), {
-      protectedDirectories: activePrinterUploadDirectories(repository, backgroundTenantIds()),
-    });
+    if (!mappedDesktopTenant()) {
+      await migrateLegacySourceManifests();
+      sweepExpiredTransferArtifacts(join(config.dataDir, "exports"), {
+        protectedDirectories: activePrinterUploadDirectories(repository, backgroundTenantIds()),
+      });
+    }
     const thumbsDir = join(config.dataDir, "thumbs");
     const coversDir = join(config.dataDir, "covers");
     const getRepo = () => repository;
@@ -452,7 +474,7 @@ async function configureApp(app: FastifyInstance, config: ServerConfig, ports: R
     });
 
     // Register backup routes (available regardless of auth mode)
-    await registerBackupRoutes(app, {
+    if (!mappedDesktopTenant()) await registerBackupRoutes(app, {
       dataDir: config.dataDir,
       sqlite,
       appVersion: config.version,
@@ -579,7 +601,7 @@ export async function startServer(config: ServerConfig) {
     beginSourceSyncAdmission(config.dataDir);
     validateProductionConfig(config);
     const ownership = rustOwnedCopy(config.dataDir);
-    if (!config.databaseUrl && ownership.kind !== "foreign") {
+    if (!mappedDesktopTenant() && !config.databaseUrl && ownership.kind !== "foreign") {
       const preparation = await prepareSqliteUpgrade({
         dataDir: config.dataDir,
         appVersion: config.version,
@@ -601,7 +623,7 @@ export async function startServer(config: ServerConfig) {
       await ports.db.connect();
 
       // One-time migration: move print_outcomes blob → print_job_parts SQL rows.
-      if (ports.repository) {
+      if (ports.repository && !mappedDesktopTenant()) {
         try {
           const { migratePrintOutcomesBlob } = await import(
             "./services/printer-outcomes-store.js"
@@ -613,7 +635,7 @@ export async function startServer(config: ServerConfig) {
       }
 
       // Best-effort: upsert Advisor notes from shipped/imported domain pack onto matching sources.
-      if (ports.repository) {
+      if (ports.repository && !mappedDesktopTenant()) {
         try {
           const { backfillAdvisorNotesFromDomainPack } = await import(
             "./assistant/domain-pack.js"

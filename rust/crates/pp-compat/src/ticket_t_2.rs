@@ -88,6 +88,7 @@ fn release_spec(scratch: &Scratch) -> super::SpawnSpec {
         .open(scratch.root.join("lease"))
         .unwrap();
     super::SpawnSpec {
+        account_pin: super::DesktopAccountPin::Disabled,
         bundle: bundle(scratch),
         data_dir: scratch.root.join("data"),
         runtime_dir: scratch.root.join("runtime"),
@@ -1074,4 +1075,170 @@ async fn ticket_t_2_unhealthy_startup_stops_polling_at_thirty_seconds() {
             .iter()
             .any(|row| row["reason"] == "readiness_timeout")
     );
+}
+
+#[tokio::test]
+async fn ticket_t_3_drain_repeated_eof_interrupts_mutation_without_resend() {
+    use axum::{body::Body, http::Request};
+
+    let scratch = Scratch::new("repeated-eof-upload");
+    let events = scratch.root.join("data/upload-events");
+    let mut expected = String::new();
+    let mut previous = Vec::new();
+    for cycle in 0..3 {
+        assert!(
+            previous
+                .iter()
+                .all(|pid| super::drain::process_group_absent(*pid))
+        );
+
+        let supervisor = super::Supervisor::launch_shell(
+            super::ShellSpec {
+                script: concat!(
+                    "exec /usr/bin/node -e '",
+                    include_str!("fixtures/drain-upload.cjs"),
+                    "'"
+                ),
+                ..shell_spec(&scratch)
+            },
+            super::SupervisorConfig::default(),
+        )
+        .unwrap();
+        let handle = supervisor.handle.clone();
+        let mut status = handle.status.clone();
+        wait_status(&mut status, |state| {
+            matches!(state, super::Status::Ready { .. })
+        })
+        .await;
+        let pid = match *status.borrow() {
+            super::Status::Ready { pid, .. } => pid,
+            _ => unreachable!(),
+        };
+        assert_eq!(recorded_pids(&scratch.pidfile()).len(), cycle + 1);
+        assert_eq!(live_pids(&scratch.pidfile()), vec![pid]);
+        let endpoint = handle.endpoint().unwrap();
+        let sending = endpoint.clone();
+        let upload = tokio::spawn(async move {
+            sending
+                .forward(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/upload")
+                        .body(Body::from(format!("payload-{cycle}")))
+                        .unwrap(),
+                )
+                .await
+        });
+        expected.push_str(&format!("POST /upload payload-{cycle}\n"));
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if std::fs::read_to_string(&events).unwrap_or_default() == expected {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("fixture did not accept mutation");
+        assert!(!upload.is_finished());
+        supervisor.disarm_restarts();
+        let started = tokio::time::Instant::now();
+        let exit = shutdown(supervisor).await;
+        let shutdown_elapsed = started.elapsed();
+        assert_eq!(exit, super::CompatExit::Graceful);
+        assert!(shutdown_elapsed < Duration::from_secs(5));
+        let error = tokio::time::timeout(Duration::from_secs(1), upload)
+            .await
+            .unwrap()
+            .unwrap()
+            .expect_err("interrupted mutation cannot report success");
+        assert_eq!(error.to_string(), "Compatibility dispatch outcome unknown");
+        assert!(handle.endpoint().is_none());
+        assert!(endpoint.connections.tasks.is_empty());
+        assert!(super::drain::process_group_absent(pid));
+        assert!(live_pids(&scratch.pidfile()).is_empty());
+        let refused = endpoint
+            .forward(
+                Request::builder()
+                    .method("POST")
+                    .uri("/upload")
+                    .body(Body::from("must-not-resend"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(refused.to_string(), "Compatibility generation is stopping");
+        expected.push_str("EOF\n");
+        assert_eq!(std::fs::read_to_string(&events).unwrap(), expected);
+        assert_eq!(recorded_pids(&scratch.pidfile()).len(), cycle + 1);
+        println!(
+            "{}",
+            serde_json::json!({
+                "case": "repeated_eof_upload", "cycle": cycle, "pid": pid,
+                "compat_exit": "graceful", "old_group_absent": true,
+                "shutdown_ms": shutdown_elapsed.as_millis(),
+                "connection_tasks": 0, "mutation_error": error.to_string(),
+                "stale_endpoint_error": refused.to_string(), "events": expected,
+            })
+        );
+        previous.push(pid);
+    }
+}
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn ticket_t_2_process_exit_obeys_every_backoff_deadline_and_cap() {
+    let scratch = Scratch::new("backoff-deadlines");
+    // Expire previous crashes so the independent five-crash guard does not
+    // prevent observation of the later backoff attempts. No child reaches Ready.
+    let supervisor = super::Supervisor::launch_shell(
+        super::ShellSpec {
+            script: r#"trap 'exit 7' USR1; read line || exit 1; data=${line#*'"data_dir":"'}; data=${data%%'"'*}; echo $$ > "$data/armed"; while read line; do :; done"#,
+            ..shell_spec(&scratch)
+        },
+        super::SupervisorConfig {
+            crash_guard_window: Duration::ZERO,
+            ..super::SupervisorConfig::default()
+        },
+    )
+    .unwrap();
+    for (attempt, millis) in [500, 1000, 2000, 4000, 8000, 30_000, 30_000]
+        .into_iter()
+        .enumerate()
+    {
+        let count = attempt + 1;
+        wait_live(&scratch.pidfile(), count).await;
+        assert_eq!(recorded_pids(&scratch.pidfile()).len(), count);
+        let pid = recorded_pids(&scratch.pidfile())[attempt];
+        pump_until(|| {
+            std::fs::read_to_string(scratch.root.join("data/armed"))
+                .is_ok_and(|text| text.trim() == pid.to_string())
+        })
+        .await;
+        assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGUSR1) }, 0);
+        wait_shell_crash(&supervisor, &scratch, count, false).await;
+        assert!(matches!(
+            *supervisor.handle.status.borrow(),
+            super::Status::Backoff { attempt: actual } if actual == attempt
+        ));
+        let started = tokio::time::Instant::now();
+        tokio::time::advance(Duration::from_millis(millis - 1)).await;
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(recorded_pids(&scratch.pidfile()).len(), count);
+        assert!(live_pids(&scratch.pidfile()).is_empty());
+        assert!(matches!(
+            *supervisor.handle.status.borrow(),
+            super::Status::Backoff { attempt: actual } if actual == attempt
+        ));
+        tokio::time::advance(Duration::from_millis(1)).await;
+        wait_live(&scratch.pidfile(), count + 1).await;
+        assert_eq!(started.elapsed(), Duration::from_millis(millis));
+        assert_eq!(recorded_pids(&scratch.pidfile()).len(), count + 1);
+        assert!(super::drain::process_group_absent(pid));
+        assert!(supervisor.handle.endpoint.borrow().is_none());
+    }
+    shutdown_guard_shell(supervisor, &scratch).await;
+    assert_eq!(recorded_pids(&scratch.pidfile()).len(), 8);
+    assert!(live_pids(&scratch.pidfile()).is_empty());
 }

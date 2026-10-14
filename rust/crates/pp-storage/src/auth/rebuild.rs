@@ -468,7 +468,11 @@ pub(crate) fn finish_stopped(work: WriterWork) {
     work.flow.finish(Err(AuthFailure::Stopped.into()));
 }
 
-pub(crate) fn advance(connection: &mut Connection, work: WriterWork) -> Option<WriterWork> {
+pub(crate) fn advance(
+    connection: &mut Connection,
+    work: WriterWork,
+    admission: crate::writer_admission::Deadline,
+) -> Option<WriterWork> {
     let WriterWork {
         flow,
         stage,
@@ -484,7 +488,7 @@ pub(crate) fn advance(connection: &mut Connection, work: WriterWork) -> Option<W
         return None;
     }
     match stage {
-        WriterStage::Begin(request) => match prepare(connection, &flow, request) {
+        WriterStage::Begin(request) => match prepare(connection, &flow, request, admission) {
             Ok(Prepared::Complete(outcome)) => {
                 flow.finish(Ok(outcome));
                 None
@@ -512,7 +516,14 @@ pub(crate) fn advance(connection: &mut Connection, work: WriterWork) -> Option<W
         } => {
             let policy = flow.policy;
             let result = result.and_then(|result| {
-                resume(connection, policy, flow.lifetimes, continuation, result)
+                resume(
+                    connection,
+                    policy,
+                    flow.lifetimes,
+                    admission,
+                    continuation,
+                    result,
+                )
             });
             match result {
                 Ok(Prepared::Complete(outcome)) => {
@@ -554,11 +565,18 @@ fn submit_kdf(job: KdfJob) -> Option<WriterWork> {
     }
 }
 
-fn prepare(connection: &mut Connection, flow: &AuthFlow, request: Request) -> Result<Prepared> {
+fn prepare(
+    connection: &mut Connection,
+    flow: &AuthFlow,
+    request: Request,
+    admission: crate::writer_admission::Deadline,
+) -> Result<Prepared> {
     let policy = flow.policy;
     let lifetimes = flow.lifetimes;
     match request {
-        Request::Status => execute_outcome(connection, Command::Status, policy, lifetimes),
+        Request::Status => {
+            execute_outcome(connection, Command::Status, policy, lifetimes, admission)
+        }
         Request::IdentityExists {
             provider,
             provider_user_id,
@@ -572,6 +590,7 @@ fn prepare(connection: &mut Connection, flow: &AuthFlow, request: Request) -> Re
                 },
                 policy,
                 lifetimes,
+                admission,
             )
         }
         Request::Register {
@@ -595,6 +614,7 @@ fn prepare(connection: &mut Connection, flow: &AuthFlow, request: Request) -> Re
                 Command::CredentialByEmail(email.to_lowercase()),
                 policy,
                 lifetimes,
+                admission,
             )?
             .ok_or_else(|| anyhow!(AuthFailure::InvalidCredentials))?;
             let stored = credential
@@ -615,18 +635,21 @@ fn prepare(connection: &mut Connection, flow: &AuthFlow, request: Request) -> Re
             Command::ResolveSession(crypto::digest(token.expose())),
             policy,
             lifetimes,
+            admission,
         ),
         Request::Logout { token } => execute_outcome(
             connection,
             Command::Logout(crypto::digest(token.expose())),
             policy,
             lifetimes,
+            admission,
         ),
         Request::LogoutAll { session } => execute_outcome(
             connection,
             Command::LogoutAll(crypto::digest(session.expose())),
             policy,
             lifetimes,
+            admission,
         ),
         Request::ChangePassword {
             session,
@@ -639,6 +662,7 @@ fn prepare(connection: &mut Connection, flow: &AuthFlow, request: Request) -> Re
                 Command::CredentialBySession(session.clone()),
                 policy,
                 lifetimes,
+                admission,
             )?
             .ok_or_else(|| anyhow!(AuthFailure::SessionRequired))?;
             let hash = credential
@@ -664,6 +688,7 @@ fn prepare(connection: &mut Connection, flow: &AuthFlow, request: Request) -> Re
             Command::RequestReset(email.to_lowercase()),
             policy,
             lifetimes,
+            admission,
         ),
         Request::ResetPassword { token, replacement } => {
             crypto::validate(&replacement)?;
@@ -695,6 +720,7 @@ fn prepare(connection: &mut Connection, flow: &AuthFlow, request: Request) -> Re
                 },
                 policy,
                 lifetimes,
+                admission,
             )
         }
         Request::LinkIdentity {
@@ -712,6 +738,7 @@ fn prepare(connection: &mut Connection, flow: &AuthFlow, request: Request) -> Re
                 },
                 policy,
                 lifetimes,
+                admission,
             )
         }
         Request::ListKeys { session } => execute_outcome(
@@ -722,6 +749,7 @@ fn prepare(connection: &mut Connection, flow: &AuthFlow, request: Request) -> Re
             },
             policy,
             lifetimes,
+            admission,
         ),
         Request::CreateKey { session } => execute_outcome(
             connection,
@@ -731,6 +759,7 @@ fn prepare(connection: &mut Connection, flow: &AuthFlow, request: Request) -> Re
             },
             policy,
             lifetimes,
+            admission,
         ),
         Request::RevokeKey { session, key_id } => execute_outcome(
             connection,
@@ -740,6 +769,7 @@ fn prepare(connection: &mut Connection, flow: &AuthFlow, request: Request) -> Re
             },
             policy,
             lifetimes,
+            admission,
         ),
         Request::RotateKey { session, key_id } => execute_outcome(
             connection,
@@ -749,12 +779,14 @@ fn prepare(connection: &mut Connection, flow: &AuthFlow, request: Request) -> Re
             },
             policy,
             lifetimes,
+            admission,
         ),
         Request::ResolveKey { tenant_id, key } => execute_outcome(
             connection,
             Command::ResolveKey { tenant_id, key },
             policy,
             lifetimes,
+            admission,
         ),
     }
 }
@@ -764,6 +796,7 @@ fn execute_outcome(
     command: Command,
     policy: AuthPolicy,
     lifetimes: AuthLifetimes,
+    admission: crate::writer_admission::Deadline,
 ) -> Result<Prepared> {
     match execute(
         connection,
@@ -772,6 +805,7 @@ fn execute_outcome(
             lifetimes,
         },
         policy,
+        admission,
     )? {
         Reply::Outcome(outcome) => Ok(Prepared::Complete(outcome)),
         Reply::Credential(_) => bail!("Unexpected authentication reply"),
@@ -783,6 +817,7 @@ fn execute_credential(
     command: Command,
     policy: AuthPolicy,
     lifetimes: AuthLifetimes,
+    admission: crate::writer_admission::Deadline,
 ) -> Result<Option<Credential>> {
     match execute(
         connection,
@@ -791,6 +826,7 @@ fn execute_credential(
             lifetimes,
         },
         policy,
+        admission,
     )? {
         Reply::Credential(credential) => Ok(credential),
         Reply::Outcome(_) => bail!("Unexpected authentication reply"),
@@ -801,6 +837,7 @@ fn resume(
     connection: &mut Connection,
     policy: AuthPolicy,
     lifetimes: AuthLifetimes,
+    admission: crate::writer_admission::Deadline,
     continuation: Continuation,
     result: KdfOutcome,
 ) -> Result<Prepared> {
@@ -841,6 +878,7 @@ fn resume(
                 },
                 policy,
                 lifetimes,
+                admission,
             );
             if !retried
                 && result.as_ref().is_err_and(|error| {
@@ -855,6 +893,7 @@ fn resume(
                     Command::CredentialByEmail(email),
                     policy,
                     lifetimes,
+                    admission,
                 )?
                 .filter(|current| current.user.user_id == user_id)
                 .ok_or(AuthFailure::InvalidCredentials)?;
@@ -896,6 +935,7 @@ fn resume(
             lifetimes,
         },
         policy,
+        admission,
     )? {
         Reply::Outcome(outcome) => Ok(Prepared::Complete(outcome)),
         Reply::Credential(_) => bail!("Unexpected authentication reply"),

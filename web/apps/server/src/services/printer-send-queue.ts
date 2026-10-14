@@ -261,10 +261,11 @@ type ShutdownPorts = {
   db?: { defaultRepository?: AppRepository | null };
 };
 
-export function interruptPrinterUploadsOnShutdown(source: ShutdownPorts): PrinterSendQueueItem[] {
+export function interruptPrinterUploadsOnShutdown(source: ShutdownPorts, tenantId?: string): PrinterSendQueueItem[] {
   printerUploadsHalted = true;
   const repo = source.repository ?? source.db?.defaultRepository ?? null;
   if (!repo) return [];
+  if (tenantId !== undefined) return tenantStorage.run(tenantId, () => interruptInFlightPrinterSends(repo));
   const tenantIds = new Set<string>(["default"]);
   if (typeof repo.listTenantIdsForSetting === "function") {
     for (const tenantId of repo.listTenantIdsForSetting(PRINTER_SEND_QUEUE_SETTINGS_KEY)) {

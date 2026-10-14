@@ -5,6 +5,119 @@ use std::os::unix::fs::DirBuilderExt;
 use std::process::Command;
 use std::sync::mpsc;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct SettingAttempts {
+    pub executions: u32,
+    pub inserts: u32,
+    pub commits: u32,
+}
+thread_local! {
+    static SETTING_ATTEMPTS: std::cell::Cell<SettingAttempts> = const {
+        std::cell::Cell::new(SettingAttempts { executions: 0, inserts: 0, commits: 0 })
+    };
+}
+pub(super) fn observe_setting(observe: impl FnOnce(&mut SettingAttempts)) {
+    SETTING_ATTEMPTS.with(|counts| {
+        let mut attempts = counts.get();
+        observe(&mut attempts);
+        counts.set(attempts);
+    });
+}
+
+#[test]
+fn ticket_t_7_writer_business_and_commit_errors_are_not_replayed() {
+    let path = directory("no-replay");
+    let (mut connection, _) = schema::initialize(
+        &path.join("print-partner.db"),
+        0,
+        "2026-10-02T00:00:00.000Z",
+    )
+    .unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE admission_parent(id INTEGER PRIMARY KEY);
+         CREATE TABLE admission_child(parent INTEGER REFERENCES admission_parent(id)
+            DEFERRABLE INITIALLY DEFERRED);
+         CREATE TRIGGER reject_body BEFORE INSERT ON app_settings WHEN NEW.key='reject-body'
+         BEGIN INSERT INTO app_settings VALUES('test','partial','must rollback');
+            SELECT RAISE(ABORT,'injected body failure'); END;
+         CREATE TRIGGER reject_commit BEFORE INSERT ON app_settings WHEN NEW.key='reject-commit'
+         BEGIN INSERT INTO admission_child VALUES(999); END;",
+        )
+        .unwrap();
+
+    for (key, expected_commits) in [("reject-body", 0), ("reject-commit", 1)] {
+        SETTING_ATTEMPTS.with(|counts| counts.set(SettingAttempts::default()));
+        let setting = |key: &str| {
+            Work::Setting(SettingCommand::Set(Setting {
+                tenant: "test".into(),
+                key: key.into(),
+                value: "once".into(),
+            }))
+        };
+        let error = execute(
+            &mut connection,
+            setting(key),
+            writer_admission::Deadline::at_dequeue(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error
+                .downcast_ref::<rusqlite::Error>()
+                .unwrap()
+                .sqlite_error_code(),
+            Some(rusqlite::ErrorCode::ConstraintViolation)
+        );
+        assert_eq!(
+            SETTING_ATTEMPTS.with(|counts| counts.get()),
+            SettingAttempts {
+                executions: 1,
+                inserts: 1,
+                commits: expected_commits,
+            }
+        );
+        assert!(connection.is_autocommit());
+        assert_eq!(pragma_value(&connection, "busy_timeout"), 5000);
+        for absent in [key, "partial"] {
+            assert_eq!(
+                snapshot(&connection, "test", absent).unwrap(),
+                SettingSnapshot::Missing
+            );
+        }
+        let children: i64 = connection
+            .query_row("SELECT count(*) FROM admission_child", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(children, 0);
+
+        assert!(
+            execute(
+                &mut connection,
+                setting("next"),
+                writer_admission::Deadline::at_dequeue()
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            snapshot(&connection, "test", "next").unwrap(),
+            SettingSnapshot::Stored {
+                value: "once".into()
+            }
+        );
+        assert_eq!(
+            SETTING_ATTEMPTS.with(|counts| counts.get()),
+            SettingAttempts {
+                executions: 2,
+                inserts: 2,
+                commits: expected_commits + 1,
+            }
+        );
+        assert!(connection.is_autocommit());
+        assert_eq!(pragma_value(&connection, "busy_timeout"), 5000);
+    }
+    drop(connection);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
 fn exited_true_pid() -> u32 {
     let mut prior = Command::new("/usr/bin/true").spawn().unwrap();
     let pid = prior.id();
@@ -12,7 +125,7 @@ fn exited_true_pid() -> u32 {
     pid
 }
 
-fn directory(name: &str) -> PathBuf {
+pub(super) fn directory(name: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!(
         "pp-storage-{name}-{}",
         hex::encode(rand::random::<[u8; 8]>())
@@ -2077,7 +2190,7 @@ fn ticket_t_7_writer_replays_an_existing_node_seed_only_once() {
     assert_eq!(sqlite_sequence_rows(&raw), replayed);
 }
 
-fn pragma_value(connection: &Connection, name: &str) -> i64 {
+pub(super) fn pragma_value(connection: &Connection, name: &str) -> i64 {
     connection
         .pragma_query_value(None, name, |row| row.get(0))
         .unwrap()

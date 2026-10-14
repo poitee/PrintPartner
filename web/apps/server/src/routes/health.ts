@@ -1,3 +1,4 @@
+import { mappedDesktopTenant } from "../desktop-context.js";
 import type { FastifyInstance } from "fastify";
 import {
   DISCORD_OAUTH_CAPABILITY,
@@ -20,6 +21,7 @@ export async function registerHealthRoutes(
   ports: AppPorts,
   authStore: AuthStore | null = null,
 ): Promise<void> {
+  const mapped = mappedDesktopTenant() !== null;
   app.get("/health", async (request) => {
     let dbOk = false;
     let postgresOk: boolean | null = null;
@@ -53,12 +55,12 @@ export async function registerHealthRoutes(
       authenticated: request.sessionUser !== null,
       authentication_required: config.authRequired,
       registration_open:
-        config.registrationOpen &&
+        !mapped && config.registrationOpen &&
         (config.multiUser || (config.singleUserAuth && (authStore?.countUsers() ?? 0) === 0)),
       data_dir: config.dataDir,
       port: config.port,
       api_version: "v1",
-      capabilities: healthCapabilities(config),
+      capabilities: healthCapabilities(config, mapped),
       db: {
         connected: dbOk,
         driver: saasDb.bundle?.driver ?? "sqlite",
@@ -77,7 +79,7 @@ export async function registerHealthRoutes(
   });
 }
 
-function healthCapabilities(config: ServerConfig): string[] {
+function healthCapabilities(config: ServerConfig, mapped: boolean): string[] {
   const hosted = hostedPlanningPolicy(config.deployMode).hostedPlanning;
   return [
     "kit_planning",
@@ -86,14 +88,14 @@ function healthCapabilities(config: ServerConfig): string[] {
     "jobs_ws",
     "fleet_presets",
     "integrations_api",
-    ...(config.multiUser ? ["multi_user_auth", ...(hosted ? [INVITE_BOARD_CAPABILITY] : ["plan_sharing"])] : []),
-    ...(config.singleUserAuth ? ["single_user_auth"] : []),
-    ...(config.smtpConfigured ? ["password_reset_email"] : []),
+    ...(config.multiUser ? [...(!mapped ? ["multi_user_auth"] : []), ...(hosted ? [INVITE_BOARD_CAPABILITY] : ["plan_sharing"])] : []),
+    ...(config.singleUserAuth && !mapped ? ["single_user_auth"] : []),
+    ...(config.smtpConfigured && !mapped ? ["password_reset_email"] : []),
     ...(hosted
       ? [HOSTED_PLANNING_CAPABILITY]
-      : ["mcp_http", "backups", "api_key_management", "webhook_security"]),
-    ...(config.githubOAuthConfigured ? [GITHUB_OAUTH_CAPABILITY] : []),
-    ...(config.discordOAuthConfigured ? [DISCORD_OAUTH_CAPABILITY] : []),
+      : ["mcp_http", ...(!mapped ? ["backups"] : []), "api_key_management", "webhook_security"]),
+    ...(config.githubOAuthConfigured && !mapped ? [GITHUB_OAUTH_CAPABILITY] : []),
+    ...(config.discordOAuthConfigured && !mapped ? [DISCORD_OAUTH_CAPABILITY] : []),
     ...(config.googleClientId ? ["google_drive_manifest"] : []),
     "logging",
   ];

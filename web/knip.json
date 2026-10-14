@@ -9,6 +9,7 @@
         "scripts/*.{mjs,mts,ts}",
         "scripts/desktop-parity/verify.mts",
         "scripts/desktop-parity/capture.mts",
+        "scripts/desktop-parity/gre487.mts",
         "scripts/desktop-parity/compare.mts"
       ],
       "project": [

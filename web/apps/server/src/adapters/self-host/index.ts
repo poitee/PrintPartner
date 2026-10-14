@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import type { DbStore, JobRunner } from "../../ports/index.js";
-import { getDb, SqliteDatabase } from "../../db/client.js";
+import { getDb, SqliteDatabase, type SqliteStartupPolicy } from "../../db/client.js";
 import { AppRepository } from "../../db/repository.js";
 import { createJobRunner } from "../../services/job-runner.js";
 import {
@@ -15,8 +15,9 @@ export class SelfHostDbStore implements DbStore {
   constructor(
     readonly dataDir: string,
     private readonly sourceFilesystemPolicy: SourceFilesystemPolicy,
+    startupPolicy: SqliteStartupPolicy = "migrate",
   ) {
-    this.sqlite = new SqliteDatabase(dataDir);
+    this.sqlite = new SqliteDatabase(dataDir, "own", startupPolicy);
   }
 
   async connect(): Promise<void> {
@@ -47,8 +48,9 @@ type SelfHostPorts = {
 export function createSelfHostPorts(
   dataDir: string,
   sourceFilesystemPolicy: SourceFilesystemPolicy = TRUSTED_SINGLE_USER_SOURCE_FILESYSTEM,
+  startupPolicy: SqliteStartupPolicy = "migrate",
 ): SelfHostPorts {
-  const dbStore = new SelfHostDbStore(dataDir, sourceFilesystemPolicy);
+  const dbStore = new SelfHostDbStore(dataDir, sourceFilesystemPolicy, startupPolicy);
   const getRepo = () => {
     if (!dbStore.repository) throw new Error("Database not connected");
     return dbStore.repository;

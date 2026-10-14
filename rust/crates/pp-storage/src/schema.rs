@@ -5,7 +5,10 @@ use std::{
     fs::File,
     os::unix::fs::DirBuilderExt,
     path::{Path, PathBuf},
+    time::Duration,
 };
+
+pub(crate) const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Deserialize)]
 struct SchemaData {
@@ -126,9 +129,8 @@ pub(crate) fn configure(conn: &Connection, read_only: bool) -> Result<()> {
     if !read_only {
         conn.pragma_update(None, "journal_mode", "WAL")?;
     }
-    conn.execute_batch(
-        "PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;",
-    )?;
+    conn.execute_batch("PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;")?;
+    conn.busy_timeout(BUSY_TIMEOUT)?;
     conn.pragma_update(None, "query_only", i64::from(read_only))?;
     let journal: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0))?;
     ensure!(journal == "wal", "WAL required");
