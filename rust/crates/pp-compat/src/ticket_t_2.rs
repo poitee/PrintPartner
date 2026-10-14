@@ -489,3 +489,149 @@ async fn ticket_t_2_guard_logs_five_failure_facts_then_stops_restarts() {
         5
     );
 }
+
+fn crash_guard_spec(scratch: &Scratch) -> super::ShellSpec {
+    let mut spec = shell_spec(scratch);
+    spec.script = r#"read line || exit 1; data=${line#*'"data_dir":"'}; data=${data%%'"'*}; if [ -f "$data/hold" ]; then while read line; do :; done; else exit 7; fi"#;
+    spec
+}
+
+async fn wait_shell_crash(
+    supervisor: &super::Supervisor,
+    scratch: &Scratch,
+    expected: usize,
+    guarded: bool,
+) {
+    let mut status = supervisor.handle.status.clone();
+    tokio::time::resume();
+    wait_status(&mut status, |state| {
+        recorded_pids(&scratch.pidfile()).len() == expected
+            && if guarded {
+                matches!(state, super::Status::Guarded)
+            } else {
+                matches!(state, super::Status::Backoff { .. })
+            }
+    })
+    .await;
+    tokio::time::pause();
+    assert_eq!(recorded_pids(&scratch.pidfile()).len(), expected);
+    assert!(live_pids(&scratch.pidfile()).is_empty());
+    let rows = diagnostic_rows(scratch);
+    let failures: Vec<_> = rows
+        .iter()
+        .filter(|row| row["event"] == "compat_failure")
+        .collect();
+    assert_eq!(failures.len(), expected);
+    for failure in failures {
+        assert_eq!(failure["reason"], "child_exit");
+        assert_eq!(
+            failure["termination"],
+            serde_json::json!({"kind":"exit_code","value":7})
+        );
+    }
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row["event"] == "compat_reaped")
+            .count(),
+        expected
+    );
+}
+
+async fn advance_crash_backoff(supervisor: &super::Supervisor) {
+    let attempt = match *supervisor.handle.status.borrow() {
+        super::Status::Backoff { attempt } => attempt,
+        ref state => panic!("expected pending restart, got {state:?}"),
+    };
+    tokio::time::advance(super::backoff(attempt)).await;
+}
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn ticket_t_2_five_shell_crashes_guard_until_explicit_recovery() {
+    let scratch = Scratch::new("guard-runtime");
+    let supervisor = super::Supervisor::launch_shell(
+        crash_guard_spec(&scratch),
+        super::SupervisorConfig::default(),
+    )
+    .unwrap();
+    let started = tokio::time::Instant::now();
+    for count in 1..=5 {
+        wait_shell_crash(&supervisor, &scratch, count, count == 5).await;
+        if count == 4 {
+            tokio::time::advance(Duration::from_secs(110)).await;
+        } else if count < 5 {
+            advance_crash_backoff(&supervisor).await;
+        }
+    }
+    assert!(started.elapsed() >= Duration::from_secs(110));
+    assert!(started.elapsed() < Duration::from_secs(120));
+    tokio::time::advance(Duration::from_secs(300)).await;
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
+    assert!(matches!(
+        *supervisor.handle.status.borrow(),
+        super::Status::Guarded
+    ));
+    assert_eq!(recorded_pids(&scratch.pidfile()).len(), 5);
+    assert!(live_pids(&scratch.pidfile()).is_empty());
+
+    std::fs::write(scratch.root.join("data/hold"), "").unwrap();
+    let handle = supervisor.handle.clone();
+    handle.recover().await.unwrap();
+    wait_live(&scratch.pidfile(), 6).await;
+    assert_eq!(recorded_pids(&scratch.pidfile()).len(), 6);
+    let recovered = *recorded_pids(&scratch.pidfile()).last().unwrap();
+    assert_eq!(live_pids(&scratch.pidfile()), vec![recovered]);
+    assert!(handle.recover().await.is_err());
+    tokio::time::resume();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(recorded_pids(&scratch.pidfile()).len(), 6);
+    assert_eq!(live_pids(&scratch.pidfile()), vec![recovered]);
+    shutdown(supervisor).await;
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(300)).await;
+    assert!(matches!(*handle.status.borrow(), super::Status::Stopped));
+    assert_eq!(recorded_pids(&scratch.pidfile()).len(), 6);
+    assert!(live_pids(&scratch.pidfile()).is_empty());
+    assert_eq!(
+        diagnostic_rows(&scratch)
+            .iter()
+            .filter(|row| row["event"] == "compat_reaped")
+            .count(),
+        6
+    );
+}
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn ticket_t_2_shell_crashes_expire_outside_default_guard_window() {
+    let scratch = Scratch::new("guard-expiry");
+    let supervisor = super::Supervisor::launch_shell(
+        crash_guard_spec(&scratch),
+        super::SupervisorConfig::default(),
+    )
+    .unwrap();
+    for count in 1..=4 {
+        wait_shell_crash(&supervisor, &scratch, count, false).await;
+        if count < 4 {
+            advance_crash_backoff(&supervisor).await;
+        }
+    }
+    tokio::time::advance(Duration::from_secs(121)).await;
+    let recent = tokio::time::Instant::now();
+    for count in 5..=9 {
+        wait_shell_crash(&supervisor, &scratch, count, count == 9).await;
+        if count < 9 {
+            advance_crash_backoff(&supervisor).await;
+        }
+    }
+    assert!(recent.elapsed() < Duration::from_secs(120));
+    assert_eq!(
+        diagnostic_rows(&scratch)
+            .iter()
+            .filter(|row| row["event"] == "compat_crash_guard")
+            .count(),
+        1
+    );
+    shutdown(supervisor).await;
+    assert!(live_pids(&scratch.pidfile()).is_empty());
+}
