@@ -51,15 +51,15 @@ fn begin_with_clock(
         match Transaction::new_unchecked(connection, TransactionBehavior::Immediate) {
             Ok(tx) => break Ok((tx, now())),
             Err(error) if error.sqlite_error_code() == Some(ErrorCode::DatabaseBusy) => {
+                let observed = now();
+                if observed >= deadline.0 {
+                    break Err(error);
+                }
                 last_busy = Some(error);
+                sleep(RETRY_PAUSE.min(deadline.0 - observed));
             }
             Err(error) => break Err(error),
         }
-        let observed = now();
-        if observed >= deadline.0 {
-            break Err(last_busy.take().unwrap());
-        }
-        sleep(RETRY_PAUSE.min(deadline.0 - observed));
     };
     connection.busy_timeout(BUSY_TIMEOUT)?;
     let (tx, acquired_at) = acquired?;
