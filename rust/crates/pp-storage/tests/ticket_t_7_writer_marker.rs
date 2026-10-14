@@ -386,3 +386,97 @@ fn ticket_t_7_writer_desktop_marker_invalid_preserves_existing_stale_lease() {
         b"retained evidence"
     );
 }
+
+/// Admission must answer within its bound even when a marker names a FIFO.
+/// A blocking read would wait for a writer that never comes.
+fn refuses_fifo_marker_within_bound(fixture: &Fixture, fifo: &std::path::Path) {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
+    let before = std::fs::metadata(fifo).unwrap();
+    for writer in [false, true] {
+        let directory = fixture.0.clone();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let error = if writer {
+                WriterOwner::open(&directory, Limits::default())
+                    .map(|(owner, _)| owner.shutdown().unwrap())
+                    .err()
+            } else {
+                StorageLease::acquire(&directory)
+                    .map(StorageLease::release)
+                    .err()
+            };
+            sender.send(error.map(|error| error.to_string())).unwrap();
+        });
+        let started = std::time::Instant::now();
+        let result = loop {
+            match receiver.recv_timeout(std::time::Duration::from_millis(50)) {
+                Ok(result) => break result,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                    if started.elapsed() < std::time::Duration::from_secs(2) => {}
+                Err(_) => {
+                    // Release the blocked reader so the failure is reported, not hung.
+                    while matches!(
+                        receiver.try_recv(),
+                        Err(std::sync::mpsc::TryRecvError::Empty)
+                    ) {
+                        let _ = std::fs::OpenOptions::new()
+                            .write(true)
+                            .custom_flags(libc::O_NONBLOCK)
+                            .open(fifo);
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    panic!(
+                        "admission blocked on a FIFO marker for {:?}",
+                        started.elapsed()
+                    );
+                }
+            }
+        };
+        assert_eq!(result.as_deref(), Some("storage_lease_marker_invalid"));
+        let after = std::fs::metadata(fifo).unwrap();
+        assert!(after.file_type().is_fifo());
+        assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+        assert!(!fixture.0.join("print-partner.db").exists());
+    }
+}
+
+fn make_fifo(path: &std::path::Path) {
+    let name = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+}
+
+#[test]
+fn ticket_t_7_writer_desktop_marker_fifo_refuses_within_bound() {
+    let _admission = ADMISSION_TEST
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    for through_symlink in [false, true] {
+        let fixture = Fixture::new();
+        let marker = fixture.0.join(".desktop-owner.json");
+        let fifo = if through_symlink {
+            fixture.0.join("private-fifo")
+        } else {
+            marker.clone()
+        };
+        make_fifo(&fifo);
+        if through_symlink {
+            std::os::unix::fs::symlink("private-fifo", &marker).unwrap();
+        }
+        refuses_fifo_marker_within_bound(&fixture, &fifo);
+        assert!(std::fs::symlink_metadata(&marker).is_ok());
+    }
+}
+
+#[test]
+fn ticket_t_7_writer_lease_record_fifo_refuses_within_bound() {
+    let _admission = ADMISSION_TEST
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let fixture = Fixture::new();
+    let lease = fixture.0.join(".desktop-lease");
+    std::fs::create_dir(&lease).unwrap();
+    let record = lease.join("owner.json");
+    make_fifo(&record);
+    refuses_fifo_marker_within_bound(&fixture, &record);
+    assert!(lease.is_dir());
+}

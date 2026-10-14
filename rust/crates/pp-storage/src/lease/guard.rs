@@ -166,7 +166,7 @@ impl StorageLease {
                     }
                     Err(error) => return Err(error.into()),
                 }
-                let bytes = match std::fs::read(lease.join("owner.json")) {
+                let bytes = match super::read_record(&lease.join("owner.json")) {
                     Ok(bytes) => bytes,
                     Err(error)
                         if error.kind() == std::io::ErrorKind::NotFound
