@@ -423,6 +423,46 @@ async fn ticket_t_12_hostile_lock_is_refused_before_supervised_node_startup() {
 }
 
 #[tokio::test]
+async fn ticket_t_12_unsafe_ancestor_is_refused_before_child_or_database_open() {
+    use std::os::unix::fs::PermissionsExt;
+    let parent = temporary("unsafe-ancestor");
+    let data = parent.join("data");
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&data)
+        .unwrap();
+    let source = temporary("ancestor-copy-source");
+    let (owner, _) = pp_storage::WriterOwner::open(&source, pp_storage::Limits::default()).unwrap();
+    owner.shutdown().unwrap();
+    let database = data.join("print-partner.db");
+    let config = data.join("desktop.toml");
+    let marker = data.join(".desktop-owner.json");
+    std::fs::copy(source.join("print-partner.db"), &database).unwrap();
+    std::fs::write(&config, b"port = 43123\n").unwrap();
+    std::fs::write(&marker, br#"{"pid":2147483647,"kind":"standalone"}"#).unwrap();
+    let before = [&database, &config, &marker].map(|path| std::fs::read(path).unwrap());
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o777)).unwrap();
+    let error = CoreRuntime::start(launch(data.clone()))
+        .await
+        .err()
+        .unwrap();
+    let after = [&database, &config, &marker].map(|path| std::fs::read(path).unwrap());
+    let entries = std::fs::read_dir(&data).unwrap().count();
+    let parent_entries = std::fs::read_dir(&parent).unwrap().count();
+    std::fs::remove_dir_all(&parent).unwrap();
+    std::fs::remove_dir_all(&source).unwrap();
+    assert_eq!(error.to_string(), "Unsafe data directory ancestor");
+    assert_eq!(after, before);
+    assert_eq!(entries, 3);
+    assert_eq!(parent_entries, 1);
+    println!(
+        "{}",
+        serde_json::json!({"proof_class":"headless_unsigned", "case":"unsafe_ancestor_refused", "error":error.to_string(), "database_unchanged":true, "config_unchanged":true, "stale_marker_unchanged":true, "ownership_artifacts_absent":true, "supervised_child_not_started":true})
+    );
+}
+
+#[tokio::test]
 async fn ticket_t_12_unsafe_directory_is_refused_before_child_or_database_open() {
     use std::os::unix::fs::PermissionsExt;
     let data = temporary("unsafe-directory");

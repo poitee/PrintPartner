@@ -325,3 +325,277 @@ fn ticket_t_12_legacy_permissions_and_data_alias_are_preserved() {
         assert!(owner.release().lock_released);
     }
 }
+
+fn entries(path: &Path) -> Vec<std::ffi::OsString> {
+    let mut names = std::fs::read_dir(path)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
+    names.sort();
+    names
+}
+
+fn files(path: &Path) -> Vec<(std::ffi::OsString, Vec<u8>)> {
+    entries(path)
+        .into_iter()
+        .filter_map(|name| {
+            let file = path.join(&name);
+            let metadata = std::fs::symlink_metadata(&file).unwrap();
+            metadata
+                .is_file()
+                .then(|| (name, std::fs::read(file).unwrap()))
+        })
+        .collect()
+}
+
+fn copied_store(data: &Path) {
+    let source = Copy::new();
+    let (owner, _) = WriterOwner::open(&source.0, Limits::default()).unwrap();
+    owner.shutdown().unwrap();
+    std::fs::copy(
+        source.0.join("print-partner.db"),
+        data.join("print-partner.db"),
+    )
+    .unwrap();
+    std::fs::write(data.join("desktop.toml"), b"port = 43123\n").unwrap();
+    std::fs::write(
+        data.join(".desktop-owner.json"),
+        br#"{"pid":2147483647,"kind":"standalone"}"#,
+    )
+    .unwrap();
+}
+
+fn assert_ancestor_refused(input: &Path, unchanged: &[&Path]) {
+    let before = unchanged
+        .iter()
+        .map(|path| (entries(path), files(path)))
+        .collect::<Vec<_>>();
+    for writer in [false, true] {
+        let error = if writer {
+            WriterOwner::open(input, Limits::default()).err()
+        } else {
+            StorageLease::acquire(input).err()
+        }
+        .expect("unsafe ancestor refused");
+        assert_eq!(error.to_string(), "Unsafe data directory ancestor");
+        assert_eq!(
+            unchanged
+                .iter()
+                .map(|path| (entries(path), files(path)))
+                .collect::<Vec<_>>(),
+            before
+        );
+    }
+}
+
+fn ancestor_fixture() -> (Copy, PathBuf, PathBuf) {
+    let copy = Copy::new();
+    let parent = copy.0.join("parent");
+    let data = parent.join("data");
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&data)
+        .unwrap();
+    (copy, parent, data)
+}
+
+#[test]
+fn ticket_t_12_writable_ancestor_refuses_copied_store_before_preflight() {
+    let source = Copy::new();
+    let (owner, _) = WriterOwner::open(&source.0, Limits::default()).unwrap();
+    owner.shutdown().unwrap();
+    for permissions in [0o777, 0o775, 0o707] {
+        let (_copy, parent, data) = ancestor_fixture();
+        let database = data.join("print-partner.db");
+        let config = data.join("desktop.toml");
+        let marker = data.join(".desktop-owner.json");
+        std::fs::copy(source.0.join("print-partner.db"), &database).unwrap();
+        std::fs::write(&config, b"port = 43123\n").unwrap();
+        std::fs::write(&marker, br#"{"pid":2147483647,"kind":"standalone"}"#).unwrap();
+        let before = [&database, &config, &marker].map(|path| std::fs::read(path).unwrap());
+        mode(&parent, permissions);
+        assert_ancestor_refused(&data, &[&parent, &data]);
+        assert_eq!(
+            [&database, &config, &marker].map(|path| std::fs::read(path).unwrap()),
+            before
+        );
+    }
+}
+
+#[test]
+fn ticket_t_12_unsafe_lexical_alias_parent_is_refused() {
+    let (copy, parent, data) = ancestor_fixture();
+    let safe = copy.0.join("safe");
+    std::fs::rename(&data, &safe).unwrap();
+    symlink(&safe, &data).unwrap();
+    copied_store(&safe);
+    mode(&parent, 0o777);
+    assert_ancestor_refused(&data, &[&copy.0, &parent, &safe]);
+}
+
+#[test]
+fn ticket_t_12_unsafe_resolved_alias_ancestor_is_refused() {
+    let (copy, parent, data) = ancestor_fixture();
+    let alias = copy.0.join("alias");
+    symlink(&data, &alias).unwrap();
+    copied_store(&data);
+    mode(&parent, 0o777);
+    assert_ancestor_refused(&alias, &[&copy.0, &parent, &data]);
+}
+
+#[test]
+fn ticket_t_12_missing_store_below_unsafe_resolved_alias_is_not_created() {
+    let (copy, parent, data) = ancestor_fixture();
+    let alias = copy.0.join("alias");
+    symlink(&data, &alias).unwrap();
+    copied_store(&data);
+    mode(&parent, 0o777);
+    assert_ancestor_refused(&alias.join("missing/store"), &[&copy.0, &parent, &data]);
+}
+
+#[test]
+fn ticket_t_12_missing_store_below_writable_ancestor_is_not_created() {
+    let (copy, parent, data) = ancestor_fixture();
+    mode(&parent, 0o777);
+    assert_ancestor_refused(&data.join("missing/store"), &[&copy.0, &parent, &data]);
+}
+
+#[test]
+fn ticket_t_12_safe_and_sticky_ancestors_admit_private_stores() {
+    for permissions in [0o700, 0o750, 0o755, 0o1777] {
+        let (copy, parent, data) = ancestor_fixture();
+        mode(&parent, permissions);
+        let alias = copy.0.join("alias");
+        symlink(&data, &alias).unwrap();
+        let lease = StorageLease::acquire(&alias.join("missing/store")).unwrap();
+        assert_eq!(
+            lease.data_dir(),
+            data.join("missing/store").canonicalize().unwrap()
+        );
+        assert!(lease.release().lock_released);
+        assert_eq!(
+            std::fs::metadata(&parent).unwrap().mode() & 0o7777,
+            permissions
+        );
+        mode(&data, 0o1777);
+        assert_eq!(
+            StorageLease::acquire(&data).err().unwrap().to_string(),
+            "Unsafe data directory permissions"
+        );
+    }
+}
+
+#[test]
+fn ticket_t_12_relative_store_checks_full_working_directory_ancestry() {
+    let (_copy, parent, data) = ancestor_fixture();
+    mode(&parent, 0o777);
+    let status = child_process::command(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "ticket_t_12_relative_ancestor_subprocess",
+            "--nocapture",
+        ])
+        .env("PP_T12_RELATIVE_ANCESTOR_PROBE", "1")
+        .current_dir(&data)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    assert_eq!(entries(&data), Vec::<std::ffi::OsString>::new());
+}
+
+#[test]
+fn ticket_t_12_relative_ancestor_subprocess() {
+    if std::env::var_os("PP_T12_RELATIVE_ANCESTOR_PROBE").is_none() {
+        return;
+    }
+    assert_ancestor_refused(Path::new("missing/store"), &[Path::new(".")]);
+}
+
+#[test]
+fn ticket_t_12_empty_path_leaves_working_directory_unchanged() {
+    let copy = Copy::new();
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&copy.0)
+        .unwrap();
+    std::fs::write(copy.0.join("existing-file"), b"unchanged").unwrap();
+    let status = child_process::command(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "ticket_t_12_empty_path_subprocess",
+            "--nocapture",
+        ])
+        .env("PP_T12_EMPTY_PATH_PROBE", "1")
+        .current_dir(&copy.0)
+        .status()
+        .unwrap();
+    assert_eq!(entries(&copy.0), ["existing-file"]);
+    assert_eq!(
+        std::fs::read(copy.0.join("existing-file")).unwrap(),
+        b"unchanged"
+    );
+    assert!(status.success());
+}
+
+#[test]
+fn ticket_t_12_empty_path_subprocess() {
+    if std::env::var_os("PP_T12_EMPTY_PATH_PROBE").is_none() {
+        return;
+    }
+    let input = Path::new("");
+    for error in [
+        pp_storage::lease::prepare_directory(input).err(),
+        StorageLease::acquire(input).err(),
+        WriterOwner::open(input, Limits::default()).err(),
+    ] {
+        assert_eq!(
+            error.expect("empty path refused").to_string(),
+            "Data directory path is empty"
+        );
+        assert_eq!(entries(Path::new(".")), ["existing-file"]);
+        assert_eq!(std::fs::read("existing-file").unwrap(), b"unchanged");
+    }
+    assert_eq!(
+        pp_storage::lease::prepare_directory(Path::new(".")).unwrap(),
+        std::env::current_dir().unwrap()
+    );
+    let relative = pp_storage::lease::prepare_directory(Path::new("relative-store")).unwrap();
+    assert_eq!(
+        relative,
+        std::env::current_dir().unwrap().join("relative-store")
+    );
+    std::fs::remove_dir(relative).unwrap();
+}
+
+#[test]
+fn ticket_t_12_ancestor_lookup_errors_are_not_treated_as_missing() {
+    let (copy, _parent, data) = ancestor_fixture();
+    let looping = copy.0.join("loop");
+    symlink(&looping, &looping).unwrap();
+    let file = data.join("file");
+    std::fs::write(&file, b"unchanged").unwrap();
+    for (input, errno) in [
+        (looping.join("missing/store"), libc::ELOOP),
+        (file.join("missing/store"), libc::ENOTDIR),
+    ] {
+        for writer in [false, true] {
+            let error = if writer {
+                WriterOwner::open(&input, Limits::default()).err()
+            } else {
+                StorageLease::acquire(&input).err()
+            }
+            .unwrap();
+            assert_eq!(
+                error
+                    .downcast_ref::<std::io::Error>()
+                    .unwrap()
+                    .raw_os_error(),
+                Some(errno)
+            );
+        }
+    }
+    assert_eq!(std::fs::read(&file).unwrap(), b"unchanged");
+    assert_eq!(std::fs::read_link(&looping).unwrap(), looping);
+    assert_eq!(entries(&data), ["file"]);
+}
