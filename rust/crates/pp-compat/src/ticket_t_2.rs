@@ -813,13 +813,14 @@ async fn ticket_t_2_shell_crashes_expire_outside_default_guard_window() {
 }
 
 struct HealthFixture {
+    completed: tokio::sync::watch::Receiver<usize>,
     health: std::sync::Arc<std::sync::Mutex<serde_json::Value>>,
     probes: std::sync::Arc<std::sync::Mutex<Vec<tokio::time::Instant>>>,
     task: tokio::task::JoinHandle<()>,
 }
 
 impl HealthFixture {
-    async fn attach(scratch: &Scratch) -> Self {
+    async fn attach(scratch: &Scratch, completed: tokio::sync::watch::Receiver<usize>) -> Self {
         let setup_file = scratch.root.join("data/setup");
         pump_until(|| setup_file.exists()).await;
         let setup: serde_json::Value =
@@ -881,6 +882,7 @@ impl HealthFixture {
             }
         });
         Self {
+            completed,
             health,
             probes,
             task,
@@ -893,18 +895,12 @@ impl HealthFixture {
 
     async fn tick(&self, duration: Duration, expected: usize) {
         tokio::time::advance(duration).await;
-        let wall = std::time::Instant::now();
-        while self.count() < expected {
-            assert!(
-                wall.elapsed() < Duration::from_secs(8),
-                "expected {expected} health probes, got {} after {duration:?}",
-                self.count()
-            );
-            tokio::task::yield_now().await;
-        }
+        // Completion is published by the supervisor after consuming the body.
+        // On this current-thread runtime it registers its next timer before the
+        // yielding test can observe the notification. The first missing-socket
+        // probe is counted by the supervisor but not received by the fixture.
+        pump_until(|| *self.completed.borrow() == expected + 1).await;
         assert_eq!(self.count(), expected);
-        // Keep policy time frozen while real IPC and the supervisor settle.
-        pump_for(Duration::from_millis(20)).await;
     }
 }
 
@@ -937,14 +933,9 @@ async fn health_supervisor(scratch: &Scratch) -> (super::Supervisor, HealthFixtu
     spec.script = r#"read line || exit 1; data=${line#*'"data_dir":"'}; data=${data%%'"'*}; printf '%s' "$line" > "$data/setup.tmp"; mv "$data/setup.tmp" "$data/setup"; while read line; do :; done"#;
     let supervisor =
         super::Supervisor::launch_shell(spec, super::SupervisorConfig::default()).unwrap();
-    let fixture = HealthFixture::attach(scratch).await;
-    // The first probe may precede the fixture's bind. Both startup orderings
-    // are valid; measure cadence from the first request actually received.
-    pump_for(Duration::from_millis(20)).await;
-    if fixture.count() == 0 {
-        fixture.tick(Duration::from_millis(250), 1).await;
-    }
-    assert_eq!(fixture.count(), 1);
+    pump_until(|| *supervisor.health_probes_completed.borrow() == 1).await;
+    let fixture = HealthFixture::attach(scratch, supervisor.health_probes_completed.clone()).await;
+    fixture.tick(Duration::from_millis(250), 1).await;
     (supervisor, fixture)
 }
 
@@ -1039,8 +1030,8 @@ async fn ticket_t_2_unhealthy_startup_stops_polling_at_thirty_seconds() {
     assert_eq!(started.elapsed(), Duration::from_secs(30));
     let times = fixture.probes.lock().unwrap().clone();
     let first = times[0] - started;
-    assert!(first == Duration::ZERO || first == Duration::from_millis(250));
-    assert_eq!(times.len(), if first.is_zero() { 120 } else { 119 });
+    assert_eq!(first, Duration::from_millis(250));
+    assert_eq!(times.len(), 119);
     assert_eq!(
         *times.last().unwrap() - started,
         Duration::from_millis(29750)
