@@ -83,6 +83,7 @@ export type SnapshotFileResponse = {
 };
 
 type MaterializeSourceSnapshotInput = {
+  beforePublish?: () => undefined;
   sourceId: number;
   upstreamRevisionKey: string;
   files: readonly SnapshotFile[];
@@ -91,6 +92,7 @@ type MaterializeSourceSnapshotInput = {
 };
 
 type DeriveFileReplacementInput = {
+  beforePublish?: () => undefined;
   sourceId: number;
   baseRevisionKey: string;
   sourceVersion: string;
@@ -362,6 +364,7 @@ async function writeSnapshotFile(args: {
   file: SnapshotFile;
   openFile(file: SnapshotFile): Promise<SnapshotFileResponse>;
   maxBytes: number;
+  beforePublish?: () => undefined;
 }): Promise<SnapshotContentFile> {
   const destination = join(args.candidateDir, ...args.file.path.split("/"));
   await mkdir(dirname(destination), { recursive: true });
@@ -375,6 +378,7 @@ async function writeSnapshotFile(args: {
     if (contentLengthBytes != null && contentLengthBytes > args.maxBytes) {
       throw new Error(`Source snapshot exceeds the ${MAX_SOURCE_SNAPSHOT_BYTES} byte stored-content limit`);
     }
+    args.beforePublish?.();
   } catch (error) {
     response.stream.destroy();
     throw error;
@@ -726,6 +730,7 @@ export class LocalSourceSnapshotStore {
       sizeHintBytes: file.sizeBytes,
     }));
     return this.materialize({
+      beforePublish: input.beforePublish,
       sourceId: input.sourceId,
       upstreamRevisionKey,
       files,
@@ -748,6 +753,7 @@ export class LocalSourceSnapshotStore {
   }
 
   async materialize(input: MaterializeSourceSnapshotInput): Promise<PublishedSourceSnapshot> {
+    input.beforePublish?.();
     validateSourceId(input.sourceId);
     validateRevisionKey(input.upstreamRevisionKey);
     const files = normalizeFiles(input.files);
@@ -768,16 +774,19 @@ export class LocalSourceSnapshotStore {
     });
     if (reused) return reused;
 
+    input.beforePublish?.();
     const candidateDir = await mkdtemp(
       join(revisionsRoot, `.candidate-${input.upstreamRevisionKey}-`),
     );
     const publishCandidate = async (): Promise<PublishedSourceSnapshot> => {
       let storedBytes = 0;
       for (const file of files) {
+        input.beforePublish?.();
         const written = await writeSnapshotFile({
           candidateDir,
           file,
           openFile: input.openFile,
+          beforePublish: input.beforePublish,
           maxBytes: MAX_SOURCE_SNAPSHOT_BYTES - storedBytes,
         });
         storedBytes += written.sizeBytes;
@@ -806,6 +815,7 @@ export class LocalSourceSnapshotStore {
         files: content,
       };
       const manifestBytes = `${JSON.stringify(manifest, null, 2)}\n`;
+      input.beforePublish?.();
       chargeTenantDiskBytes(Buffer.byteLength(manifestBytes));
       await writeFile(
         join(candidateDir, SOURCE_SNAPSHOT_MANIFEST_FILE),
@@ -814,6 +824,7 @@ export class LocalSourceSnapshotStore {
       );
 
       try {
+        input.beforePublish?.();
         await this.#dependencies.renameDirectory(candidateDir, finalDir);
       } catch (error) {
         if (hasErrorCode(error, new Set(["EXDEV"]))) {

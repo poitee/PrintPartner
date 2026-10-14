@@ -15,7 +15,7 @@ use sha2::Sha256;
 use std::{
     os::fd::AsRawFd,
     os::unix::process::ExitStatusExt,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{ExitStatus, Stdio},
     sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -477,6 +477,73 @@ impl Process {
         })
     }
 
+    #[cfg(test)]
+    async fn spawn_shell(spec: &ShellSpec, capture: &logs::Logs) -> Result<Self> {
+        let generation = hex::encode(rand::random::<[u8; 16]>());
+        let key = rand::random::<[u8; 32]>();
+        let socket = spec.runtime_dir.join(format!("{}.sock", &generation[..12]));
+        let endpoint = Arc::new(Endpoint {
+            socket: socket.clone(),
+            generation,
+            key,
+            connections: Arc::new(Connections::new()),
+        });
+        let mut command = Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg(spec.script)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .process_group(0);
+        let mut child = command.spawn().context("Could not start test child")?;
+        let pid = child.id().context("Missing child PID")?;
+        if let Err(error) = record_test_pid(&spec.pidfile, pid) {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            return Err(error);
+        }
+        let mut stdin = child.stdin.take().context("Missing parent-liveness pipe")?;
+        let setup = serde_json::json!({
+            "version": 1,
+            "data_dir": spec.data_dir,
+            "socket_path": endpoint.socket,
+            "generation": endpoint.generation,
+            "key": hex::encode(key),
+            "lease": "test",
+            "parent_pid": std::process::id(),
+            "port": spec.port
+        });
+        if stdin
+            .write_all(format!("{setup}\n").as_bytes())
+            .await
+            .is_err()
+        {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            bail!("Compatibility setup failed");
+        }
+        let mut logs = Vec::new();
+        if let Some(stdout) = child.stdout.take() {
+            let capture = capture.clone();
+            logs.push(tokio::spawn(async move { capture.capture(stdout).await }));
+        }
+        if let Some(stderr) = child.stderr.take() {
+            let capture = capture.clone();
+            logs.push(tokio::spawn(async move { capture.capture(stderr).await }));
+        }
+        Ok(Self {
+            pid,
+            child,
+            stdin: Some(stdin),
+            endpoint,
+            logs,
+        })
+    }
+
     async fn stop(
         mut self,
         observed: Option<ExitStatus>,
@@ -633,6 +700,61 @@ impl Process {
     }
 }
 
+enum Launch {
+    Release(SpawnSpec),
+    /// Paused-time double. Production startup always uses [`Launch::Release`].
+    #[cfg(test)]
+    Shell(ShellSpec),
+}
+
+#[cfg(test)]
+pub(crate) struct ShellSpec {
+    pub script: &'static str,
+    pub bundle: Bundle,
+    pub data_dir: PathBuf,
+    pub runtime_dir: PathBuf,
+    pub pidfile: PathBuf,
+    pub port: u16,
+}
+
+impl Launch {
+    fn data_dir(&self) -> &Path {
+        match self {
+            Self::Release(spec) => &spec.data_dir,
+            #[cfg(test)]
+            Self::Shell(spec) => &spec.data_dir,
+        }
+    }
+
+    fn bundle(&self) -> &Bundle {
+        match self {
+            Self::Release(spec) => &spec.bundle,
+            #[cfg(test)]
+            Self::Shell(spec) => &spec.bundle,
+        }
+    }
+}
+
+async fn obtain(source: &Launch, logs: &logs::Logs) -> Result<Process> {
+    match source {
+        Launch::Release(spec) => Process::spawn(spec, logs).await,
+        #[cfg(test)]
+        Launch::Shell(spec) => Process::spawn_shell(spec, logs).await,
+    }
+}
+
+#[cfg(test)]
+fn record_test_pid(path: &Path, pid: u32) -> Result<()> {
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .with_context(|| format!("Could not record test child {}", path.display()))?;
+    writeln!(file, "{pid}").context("Could not record test child")?;
+    file.sync_all().context("Could not record test child")
+}
+
 pub fn backoff(attempt: usize) -> Duration {
     Duration::from_millis([500, 1000, 2000, 4000, 8000, 30_000][attempt.min(5)])
 }
@@ -662,7 +784,16 @@ impl Supervisor {
 
     /// Start with a per-instance timing policy; `start` uses production defaults.
     pub fn start_with_config(spec: SpawnSpec, config: SupervisorConfig) -> Result<Self> {
-        let logs = logs::Logs::open(spec.data_dir.join("logs"))?;
+        Self::launch(Launch::Release(spec), config)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn launch_shell(spec: ShellSpec, config: SupervisorConfig) -> Result<Self> {
+        Self::launch(Launch::Shell(spec), config)
+    }
+
+    fn launch(source: Launch, config: SupervisorConfig) -> Result<Self> {
+        let logs = logs::Logs::open(source.data_dir().join("logs"))?;
         let (endpoints, endpoint) = watch::channel(None);
         let (states, status) = watch::channel(Status::Starting);
         let (recover, mut recovery) = mpsc::channel(1);
@@ -679,7 +810,7 @@ impl Supervisor {
                 }
                 states.send_replace(Status::Starting);
                 logs.event("compat_starting", 30);
-                let process = Process::spawn(&spec, &logs).await;
+                let process = obtain(&source, &logs).await;
                 if let Ok(mut process) = process {
                     let mut ready = false;
                     let mut observed_exit = None;
@@ -699,7 +830,7 @@ impl Supervisor {
                                 biased;
                                 _ = cancelled.cancelled() => None,
                                 _ = disarmed.cancelled() => None,
-                                probe = process.endpoint.ready(&spec.bundle, &cancelled) => {
+                                probe = process.endpoint.ready(source.bundle(), &cancelled) => {
                                     Some(probe)
                                 }
                             };
@@ -742,7 +873,7 @@ impl Supervisor {
                                     break;
                                 },
                                 _ = tokio::time::sleep(Duration::from_secs(10)) => {
-                                    if process.endpoint.ready(&spec.bundle, &cancelled).await { failures = 0; } else { failures += 1; }
+                                    if process.endpoint.ready(source.bundle(), &cancelled).await { failures = 0; } else { failures += 1; }
                                     if failures >= 3 { break; }
                                 }
                             }
@@ -786,10 +917,21 @@ impl Supervisor {
                 if crashes.len() >= 5 {
                     logs.event("compat_crash_guard", 50);
                     states.send_replace(Status::Guarded);
-                    tokio::select! { _ = cancelled.cancelled() => break, _ = recovery.recv() => { crashes.clear(); attempt = 0; } }
+                    tokio::select! {
+                        biased;
+                        _ = cancelled.cancelled() => break,
+                        _ = disarmed.cancelled() => break,
+                        _ = recovery.recv() => { crashes.clear(); attempt = 0; }
+                    }
                 } else {
                     states.send_replace(Status::Backoff { attempt });
-                    tokio::select! { _ = cancelled.cancelled() => break, _ = tokio::time::sleep(backoff(attempt)) => {} }
+                    // Drain disarms restarts before shutdown cancels this task.
+                    tokio::select! {
+                        biased;
+                        _ = cancelled.cancelled() => break,
+                        _ = disarmed.cancelled() => break,
+                        _ = tokio::time::sleep(backoff(attempt)) => {}
+                    }
                     attempt += 1;
                 }
             }
@@ -828,6 +970,9 @@ impl Drop for Supervisor {
         self.stop.cancel();
     }
 }
+
+#[cfg(test)]
+mod ticket_t_2;
 
 #[cfg(test)]
 mod tests {

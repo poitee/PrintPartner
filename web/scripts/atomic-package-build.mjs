@@ -249,11 +249,11 @@ export async function buildPackageAtomically({
   copies = [],
   requiredFiles = [],
   lockOptions,
-  compile = async (outputDirectory) =>
-    compileTypescript({ packageDirectory, project, outputDirectory }),
+  outputDirectory = path.join(packageDirectory, "dist"),
+  compile = async (pendingDirectory) =>
+    compileTypescript({ packageDirectory, project, outputDirectory: pendingDirectory }),
 }) {
   const buildStartedAt = Date.now();
-  const outputDirectory = path.join(packageDirectory, "dist");
   const releasesDirectory = path.join(outputDirectory, "releases");
   const buildId = `${Date.now().toString(36)}-${process.pid}-${randomUUID()}`;
   const pendingDirectory = path.join(releasesDirectory, `.pending-${buildId}`);

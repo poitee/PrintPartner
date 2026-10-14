@@ -19,6 +19,7 @@ import {
 import { readMarkdownDoc, walkSourceDocs } from "../services/source-docs-scan.js";
 import { indexSourceDocsFromDisk } from "../services/source-docs-index.js";
 import { sourcePdfTextStorage } from "../services/source-workspace.js";
+import { requireSourceSyncParticipant } from "../ownership/source-sync-admission.js";
 import { resolvedFileUnderRoot } from "../lib/secure-path.js";
 
 const GITHUB_PAT_KEY = "github_pat";
@@ -32,12 +33,12 @@ function resolvedDocumentPath(root: string, relativePath: string): string | null
   return resolvedFileUnderRoot(absRoot, resolve(absRoot, normalized));
 }
 
-function ensureDocsIndexed(repo: AppRepository, sourceId: number, localPath: string): void {
+function ensureDocsIndexed(repo: AppRepository, sourceId: number, localPath: string, beforePublish: () => undefined): void {
   const existing = repo.listSourceDocs(sourceId);
   if (existing.length > 0) return;
   const onDisk = walkSourceDocs(localPath);
   if (onDisk.length === 0) return;
-  indexSourceDocsFromDisk(repo, sourceId, localPath);
+  indexSourceDocsFromDisk(repo, sourceId, localPath, undefined, beforePublish);
 }
 
 export async function registerSourceDocsRoutes(
@@ -50,7 +51,8 @@ export async function registerSourceDocsRoutes(
     if (!row) return reply.status(404).send({ detail: "Source not found" });
 
     if (row.localPath && existsSync(row.localPath)) {
-      ensureDocsIndexed(deps.repo, id, row.localPath);
+      ensureDocsIndexed(deps.repo, id, row.localPath, () => requireSourceSyncParticipant(request.url.startsWith("/api/v1/")
+        ? "http.GET /api/v1/sources/:id/docs" : "http.GET /sources/:id/docs"));
     }
 
     let docs = deps.repo.listSourceDocs(id).map((d) => ({
@@ -106,12 +108,15 @@ export async function registerSourceDocsRoutes(
       const pdfTextStorage = sourcePdfTextStorage(deps.repo, id, row.localPath);
       let cached = readCachedPdfText(row.localPath, docPath, pdfTextStorage);
       if (!cached) {
+        const beforePublish = () => requireSourceSyncParticipant(request.url.startsWith("/api/v1/")
+          ? "http.GET /api/v1/sources/:id/docs/*" : "http.GET /sources/:id/docs/*");
+        beforePublish();
         const indexedDocId = deps.repo.listSourceDocs(id).find((doc) => doc.path === docPath)?.id;
         const extracted = await runWithTenantDiskQuota({
           dataDir: deps.diskQuota?.dataDir ?? "", reposDir: deps.repo.reposDir,
           tenantId: request.tenantId, quotaBytes: deps.diskQuota?.quotaBytes ?? null,
           sourceIds: () => deps.repo.listSources().map((source) => source.id),
-        }, () => extractPdfText(row.localPath!, docPath, pdfTextStorage)).catch((error: unknown) => {
+        }, () => extractPdfText(row.localPath!, docPath, { ...pdfTextStorage, beforePublish })).catch((error: unknown) => {
           if (error instanceof TenantDiskQuotaError) {
             reply.status(413).send({ detail: error.message });
             return null;
@@ -122,6 +127,7 @@ export async function registerSourceDocsRoutes(
         if (extracted.status === "ready") {
           cached = { text: extracted.text, chunks: extracted.chunks, hash: extracted.hash };
           if (indexedDocId != null) {
+            beforePublish();
             deps.repo.updateSourceDocExtract(id, docPath, {
               extractStatus: "ready",
               contentHash: extracted.hash,

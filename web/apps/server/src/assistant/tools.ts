@@ -1,4 +1,8 @@
 import { chargeTenantDiskBytes, TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
+import {
+  OwnershipAdmissionError,
+  requireSourceSyncParticipant,
+} from "../ownership/source-sync-admission.js";
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync, readdirSync, lstatSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
@@ -3313,6 +3317,8 @@ export async function applyAssistantAction(
         let importedFiles = 0;
         let stlCount = 0;
         let suggestedRules: string[] = [];
+        const beforePublish = () => requireSourceSyncParticipant("assistant.propose_import_source_files");
+        beforePublish();
         const staging = createSourceUploadStaging(sourcesDir, deps.tenantId ?? "default");
         try {
           if (archive) {
@@ -3350,9 +3356,10 @@ export async function applyAssistantAction(
             stlCount = written.stlCount;
             suggestedRules = written.suggestedImportRules;
           }
+          beforePublish();
           const artifacts = scanSourceArtifacts(workingTree);
           const updated = await publishLocalSourceWorkingTree({
-            repo: deps.repo, reposDir: deps.repo.reposDir, sourceId, workingTree, observed,
+            repo: deps.repo, reposDir: deps.repo.reposDir, sourceId, workingTree, observed, beforePublish,
             preserveAllFiles: true, suggestedImportRules: suggestedRules,
           });
           const revisionId = updated.current_source_revision_id;
@@ -3363,6 +3370,7 @@ export async function applyAssistantAction(
               sourceId,
               localPath: updated.local_path ?? workingTree,
               revisionId,
+              beforePublish,
             });
           if (indexedDocs?.outcome === "cleared") {
             getLogger().log("warn", "Uploaded Source documentation indexing failed", { sourceId, revisionId, error: indexedDocs.reason });
@@ -3373,8 +3381,10 @@ export async function applyAssistantAction(
                 sourcesDir,
                 sourceId,
                 activePath: updated.local_path,
+                beforePublish,
               });
             } catch (error) {
+              if (error instanceof OwnershipAdmissionError) throw error;
               getLogger().log("warn", "Obsolete hosted working tree cleanup failed", { sourceId, error: String(error) });
             }
           }
@@ -3389,7 +3399,7 @@ export async function applyAssistantAction(
             },
           };
         } catch (error) {
-          if (error instanceof TenantDiskQuotaError) throw error;
+          if (error instanceof OwnershipAdmissionError || error instanceof TenantDiskQuotaError) throw error;
           if (error instanceof SourceActivationConflictError) {
             return { ok: false, status: 409, detail: error.message };
           }
@@ -4172,6 +4182,7 @@ export async function applyAssistantAction(
         break;
       }
       case "start_sync": {
+        requireSourceSyncParticipant("mcp.start_sync");
         const ids: number[] = [];
         if (Array.isArray(action.params.project_ids)) {
           for (const raw of action.params.project_ids) {
@@ -4615,6 +4626,7 @@ export async function applyAssistantAction(
     }
     return outcome;
   } catch (error) {
+    if (error instanceof OwnershipAdmissionError) return { ok: false, status: 503, detail: error.message };
     if (error instanceof TenantDiskQuotaError) throw error;
     if (action.type !== "archive_plan") {
       return {

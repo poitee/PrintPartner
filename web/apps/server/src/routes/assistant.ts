@@ -14,6 +14,10 @@ import type { InProcessJobRunner } from "../services/job-runner.js";
 import { createAssistantPort } from "../assistant/create-assistant.js";
 import { resolveAssistantRuntime } from "../assistant/resolve-assistant.js";
 import { applyAssistantAction } from "../assistant/tools.js";
+import {
+  OwnershipAdmissionError,
+  requireSourceSyncParticipant,
+} from "../ownership/source-sync-admission.js";
 import { getSearchStatus, searchOverridesFromRuntime } from "../services/search/index.js";
 import { buildPreferencesDigest } from "../assistant/preferences-digest.js";
 import {
@@ -196,6 +200,17 @@ export async function registerAssistantRoutes(
       if (typeof action.plan_id !== "number" || !Number.isFinite(action.plan_id)) {
         return sendProblem(reply, 400, "Bad Request", "action.plan_id is required");
       }
+      if (action.type === "start_sync") {
+        try {
+          requireSourceSyncParticipant("http.POST /assistant/actions/apply");
+          requireSourceSyncParticipant("http.POST /api/v1/assistant/actions/apply");
+        } catch (error) {
+          if (error instanceof OwnershipAdmissionError) {
+            return sendProblem(reply, 503, "Service Unavailable", error.message);
+          }
+          throw error;
+        }
+      }
       let result: Awaited<ReturnType<typeof applyAssistantAction>>;
       try {
         result = await runWithTenantDiskQuota({
@@ -211,6 +226,7 @@ export async function registerAssistantRoutes(
           hostedPlanning: hostedPlanningPolicy(deps.config.deployMode).hostedPlanning,
         }));
       } catch (error) {
+        if (error instanceof OwnershipAdmissionError) return sendProblem(reply, 503, "Service Unavailable", error.message);
         if (error instanceof TenantDiskQuotaError) return sendProblem(reply, 413, "Payload Too Large", error.message);
         request.log.error(
           { failure: "unexpected", actionType: action.type, planId: action.plan_id },

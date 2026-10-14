@@ -98,6 +98,7 @@ export async function archiveLegacySourceManifest(
   observed: LegacySourceManifestFile,
   reposDir: string,
   sourceId: number,
+  beforePublish?: () => undefined,
 ): Promise<ArchivedLegacySourceManifest | null> {
   const current = await inspectLegacySourceManifest({ reposDir, sourceId });
   if (current.kind === "absent") return null;
@@ -105,12 +106,14 @@ export async function archiveLegacySourceManifest(
     throw new Error("Legacy Source manifest changed during publication");
   }
 
+  beforePublish?.();
   const backupDirectory = await mkdtemp(`${observed.legacyPath}.migrated-`);
   const backupPath = join(
     backupDirectory,
     `${basename(observed.legacyPath)}.migrated`,
   );
   try {
+    beforePublish?.();
     await rename(observed.legacyPath, backupPath);
   } catch (error) {
     await rm(backupDirectory, { recursive: true, force: true }).catch(() => undefined);

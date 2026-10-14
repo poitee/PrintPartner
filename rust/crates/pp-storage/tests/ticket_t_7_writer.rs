@@ -5,11 +5,14 @@ use pp_storage::{
 use std::{
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Child, Stdio},
     sync::mpsc,
     thread,
     time::Duration,
 };
+
+#[path = "common/process.rs"]
+mod child_process;
 
 struct StopProcess(Option<Child>);
 
@@ -59,7 +62,7 @@ fn production_node() -> Option<PathBuf> {
         let mut magic = [0u8; 4];
         std::io::Read::read_exact(&mut file, &mut magic).unwrap();
         assert_eq!(magic, *b"\x7fELF", "{}", path.display());
-        let output = Command::new(&path)
+        let output = child_process::command(&path)
             .arg("-p")
             .arg("process.version + ' ' + process.versions.modules + ' ' + process.execPath")
             .output()
@@ -125,7 +128,7 @@ fn snapshot(dir: &Path, tenant: &str, key: &str) -> SettingSnapshot {
 fn ticket_t_7_writer_reopens_after_clean_process_exit() {
     let dir = temp_dir("clean");
     let bin = env!("CARGO_BIN_EXE_storage-fixture");
-    let mut child = Command::new(bin)
+    let mut child = child_process::command(bin)
         .args([
             "settings",
             dir.to_str().unwrap(),
@@ -162,7 +165,7 @@ fn ticket_t_7_writer_reopens_after_clean_process_exit() {
 fn ticket_t_7_writer_survives_kill_and_live_node_child() {
     let dir = temp_dir("kill");
     let bin = env!("CARGO_BIN_EXE_storage-fixture");
-    let mut child = Command::new(bin)
+    let mut child = child_process::command(bin)
         .args(["hold", dir.to_str().unwrap(), "2026-10-02T00:00:00.000Z"])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -183,7 +186,7 @@ fn ticket_t_7_writer_survives_kill_and_live_node_child() {
     let node = production_node();
     let mut node_process = None;
     if let Some(node) = node {
-        let node_child = Command::new(&node)
+        let node_child = child_process::command(&node)
             .arg("-e")
             .arg("setInterval(() => {}, 1000000)")
             .stdin(Stdio::null())
