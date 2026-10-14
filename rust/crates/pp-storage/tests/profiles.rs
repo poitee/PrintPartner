@@ -25,6 +25,14 @@ fn utf16_json_preserves_lone_surrogates_and_encodes_pairs() {
     assert_eq!(text.as_utf16()[9], 0xd800);
     assert_eq!(JsText::from_string("😀").as_utf16(), &[0xd83d, 0xde00]);
     assert_eq!(JsText::from_utf16(vec![0xd800]).to_string_lossy(), "�");
+    assert_eq!(
+        JsText::from_utf16(vec![0xd800, 0xd800, 0xdc00, 0xdc00]).to_node_json_string(),
+        r#""\ud800𐀀\udc00""#
+    );
+    assert_eq!(
+        JsText::from_utf16(vec![0xdc00, 0xd800]).to_node_json_string(),
+        r#""\udc00\ud800""#
+    );
 }
 
 #[test]

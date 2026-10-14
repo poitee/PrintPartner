@@ -1,6 +1,5 @@
 use serde::Serialize;
 use serde_json::value::RawValue;
-use std::fmt::Write;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -44,36 +43,23 @@ impl JsText {
 
     pub fn to_node_json_string(&self) -> String {
         let mut output = String::from("\"");
-        let mut index = 0;
-        while index < self.utf16.len() {
-            let unit = self.utf16[index];
-            match unit {
-                0x0008 => output.push_str("\\b"),
-                0x0009 => output.push_str("\\t"),
-                0x000a => output.push_str("\\n"),
-                0x000c => output.push_str("\\f"),
-                0x000d => output.push_str("\\r"),
-                0x0022 => output.push_str("\\\""),
-                0x005c => output.push_str("\\\\"),
-                0x0000..=0x001f => write!(output, "\\u{unit:04x}").expect("write to string"),
-                0xd800..=0xdbff
-                    if self
-                        .utf16
-                        .get(index + 1)
-                        .is_some_and(|next| matches!(next, 0xdc00..=0xdfff)) =>
-                {
-                    let low = self.utf16[index + 1];
-                    let scalar =
-                        0x1_0000 + ((u32::from(unit) - 0xd800) << 10) + (u32::from(low) - 0xdc00);
-                    output.push(char::from_u32(scalar).expect("valid surrogate pair"));
-                    index += 1;
+        for decoded in char::decode_utf16(self.utf16.iter().copied()) {
+            match decoded {
+                Ok('\u{0008}') => output.push_str("\\b"),
+                Ok('\u{0009}') => output.push_str("\\t"),
+                Ok('\u{000a}') => output.push_str("\\n"),
+                Ok('\u{000c}') => output.push_str("\\f"),
+                Ok('\u{000d}') => output.push_str("\\r"),
+                Ok('"') => output.push_str("\\\""),
+                Ok('\\') => output.push_str("\\\\"),
+                Ok(control @ '\u{0000}'..='\u{001f}') => {
+                    output.push_str(&format!("\\u{:04x}", u32::from(control)));
                 }
-                0xd800..=0xdfff => {
-                    write!(output, "\\u{unit:04x}").expect("write to string");
+                Ok(scalar) => output.push(scalar),
+                Err(error) => {
+                    output.push_str(&format!("\\u{:04x}", error.unpaired_surrogate()));
                 }
-                _ => output.push(char::from_u32(u32::from(unit)).expect("valid BMP scalar")),
             }
-            index += 1;
         }
         output.push('"');
         output
