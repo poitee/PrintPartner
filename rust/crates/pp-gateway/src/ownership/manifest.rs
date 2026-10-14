@@ -17,6 +17,7 @@ use super::{
     SOURCE_SYNC_PARTICIPANTS,
 };
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const MANIFEST_SCHEMA: &str = "pp-ownership-manifest-v2";
@@ -53,6 +54,7 @@ pub struct OwnershipIndex {
     claims: BTreeMap<String, Claim>,
     resources: BTreeMap<String, Coverage>,
     live_formats: LiveFormats,
+    digest: String,
 }
 
 impl OwnershipIndex {
@@ -99,6 +101,22 @@ impl OwnershipIndex {
 
     pub fn claims(&self) -> &BTreeMap<String, Claim> {
         &self.claims
+    }
+
+    /// sha256 over the three admitted documents. Parity receipts and cutover
+    /// records bind to this value.
+    pub fn digest(&self) -> &str {
+        &self.digest
+    }
+
+    /// Every participant claimed by `operation`, including HEAD twins and
+    /// registry aliases. Empty means the operation is unknown.
+    pub fn participants_of(&self, operation: &str) -> BTreeSet<&str> {
+        self.claims
+            .iter()
+            .filter(|(_, claim)| claim.operation == operation)
+            .map(|(id, _)| id.as_str())
+            .collect()
     }
 }
 
@@ -167,6 +185,11 @@ pub fn admit_manifest_documents(
     operations: &str,
     source_sync: &str,
 ) -> Result<OwnershipIndex, AdmissionError> {
+    let digest = documents_digest(&[
+        ("ownership-manifest.json", manifest),
+        ("operations.json", operations),
+        ("source-sync-ownership.json", source_sync),
+    ]);
     let manifest: Manifest = serde_json::from_str(manifest)
         .map_err(|error| AdmissionError::Malformed(error.to_string()))?;
     let registry: Registry = serde_json::from_str(operations)
@@ -287,7 +310,20 @@ pub fn admit_manifest_documents(
         claims,
         resources,
         live_formats,
+        digest,
     })
+}
+
+/// Length prefixes keep a byte moved between documents from hashing the same.
+fn documents_digest(documents: &[(&str, &str)]) -> String {
+    let mut hasher = Sha256::new();
+    for (name, text) in documents {
+        for part in [name, text] {
+            hasher.update((part.len() as u64).to_be_bytes());
+            hasher.update(part.as_bytes());
+        }
+    }
+    hex::encode(hasher.finalize())
 }
 
 /// The grouped `source.sync` entry must be exactly the Node admission record.
