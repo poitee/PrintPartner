@@ -308,24 +308,6 @@ if (mode === "child" || mode === "bootstrap" || mode === "orphan") {
   readFileSync(0);
 }
 
-if (mode === "unsupported") {
-  const db = new Database(dbPath);
-  try {
-    db.pragma("busy_timeout = 5000");
-    const changed = db.prepare(
-      "UPDATE app_settings SET value = '33' WHERE tenant_id = 'default' AND key = 'schema_version'",
-    ).run();
-    if (changed.changes !== 1) {
-      throw new Error("schema stamp update changed " + changed.changes + " rows");
-    }
-  } catch (error) {
-    emit({ event: "setup-failed", message: error instanceof Error ? error.message : String(error) });
-    process.exit(3);
-  } finally {
-    db.close();
-  }
-}
-
 const before = mode === "bootstrap" ? null : fingerprint();
 const database = new SqliteDatabase(dataDir);
 try {
@@ -516,6 +498,20 @@ fn child_process_identity(pid: u32) -> String {
     }
 }
 
+fn stamp_schema_version(dir: &Path, version: &str) {
+    let connection = rusqlite::Connection::open(dir.join("print-partner.db")).unwrap();
+    connection
+        .busy_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    let changed = connection
+        .execute(
+            "UPDATE app_settings SET value = ?1 WHERE tenant_id = 'default' AND key = 'schema_version'",
+            [version],
+        )
+        .unwrap();
+    assert_eq!(changed, 1);
+}
+
 fn exited_pid() -> u32 {
     let mut child = Command::new("sh").arg("-c").arg("exit 0").spawn().unwrap();
     let pid = child.id();
@@ -590,7 +586,8 @@ fn ticket_t_7_writer_node_refuses_migration_and_writes_on_a_rust_owned_copy() {
     assert_eq!(event["before"]["version"], "34", "{event}");
     assert_stable_fingerprint(&event);
     owner.shutdown().unwrap();
-    let reopened = run_node_probe("unsupported", &dir, &web, &node, &probe);
+    stamp_schema_version(&dir, "33");
+    let reopened = run_node_probe("foreign", &dir, &web, &node, &probe);
     assert_eq!(reopened["event"], "connected", "{reopened}");
     assert_eq!(reopened["before"]["version"], "33", "{reopened}");
     assert_eq!(reopened["after"]["version"], "34", "{reopened}");
@@ -605,7 +602,8 @@ fn ticket_t_7_writer_node_refuses_to_upgrade_an_unsupported_rust_owned_schema() 
     let probe = write_probe(&web);
     let dir = temp_dir("node-unsupported");
     let (owner, _) = WriterOwner::open(&dir, Limits::default()).unwrap();
-    let event = run_node_probe("unsupported", &dir, &web, &node, &probe);
+    stamp_schema_version(&dir, "33");
+    let event = run_node_probe("foreign", &dir, &web, &node, &probe);
     assert_eq!(event["event"], "refused", "{event}");
     assert!(
         event["message"]

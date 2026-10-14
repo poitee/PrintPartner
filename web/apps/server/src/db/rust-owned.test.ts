@@ -1,3 +1,4 @@
+import Database from "better-sqlite3";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -26,6 +27,11 @@ function deadPid(): number {
   return exited.pid;
 }
 
+function foreignProcessIdentity(pid: number): string {
+  if (process.platform !== "linux") return `instance:${"ab".repeat(16)}`;
+  return processIdentity(pid);
+}
+
 describe("rust owner marker", () => {
   it("keeps the recorded child authoritative after the owner dies", () => {
     const dir = markerDir({
@@ -47,7 +53,7 @@ describe("rust owner marker", () => {
         pid: deadPid(),
         process_identity: "prior",
         child_pid: child.pid,
-        child_process_identity: processIdentity(child.pid),
+        child_process_identity: foreignProcessIdentity(child.pid),
       });
       expect(rustOwnedCopy(dir)).toEqual({ kind: "foreign" });
     } finally {
@@ -118,7 +124,7 @@ describe("rust owner marker", () => {
       mkdirSync(join(dir, ".desktop-lease"));
       writeFileSync(join(dir, ".desktop-lease", "owner.json"), JSON.stringify({
         pid: owner.pid,
-        process_identity: processIdentity(owner.pid),
+        process_identity: foreignProcessIdentity(owner.pid),
         instance: "ab".repeat(16),
       }));
       expect(() => new SqliteDatabase(dir).connect()).toThrow(/will not migrate or write/);
@@ -136,6 +142,16 @@ describe("rust owner marker", () => {
     expect(existsSync(join(dir, "print-partner.db"))).toBe(false);
   });
 
+  it("keeps an incomplete lease blocking", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pp-rust-owned-"));
+    roots.push(dir);
+    mkdirSync(join(dir, ".desktop-lease"));
+    writeFileSync(join(dir, ".desktop-lease", "owner.json"), JSON.stringify({ pid: deadPid() }));
+    expect(rustOwnedCopy(dir)).toEqual({ kind: "foreign" });
+    expect(() => new SqliteDatabase(dir).connect()).toThrow(/will not migrate or write/);
+    expect(existsSync(join(dir, "print-partner.db"))).toBe(false);
+  });
+
   it("still migrates when the only lease belongs to this process", () => {
     const dir = mkdtempSync(join(tmpdir(), "pp-rust-owned-"));
     roots.push(dir);
@@ -149,5 +165,33 @@ describe("rust owner marker", () => {
     database.connect();
     database.close();
     expect(existsSync(join(dir, "print-partner.db"))).toBe(true);
+  });
+
+  it("repairs a missing starter profile without replaying the existing seeds", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pp-rust-owned-"));
+    roots.push(dir);
+    const first = new SqliteDatabase(dir);
+    first.connect();
+    first.close();
+    const raw = new Database(join(dir, "print-partner.db"));
+    const before = raw.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'printer_profiles'").get() as { seq: number };
+    raw.prepare("DELETE FROM printer_profiles WHERE name = ?").run("Generic FDM Machine");
+    raw.close();
+    writeFileSync(join(dir, ".desktop-owner.json"), JSON.stringify({
+      storage_protocol_version: 1,
+      pid: deadPid(),
+      process_identity: "prior",
+      child_pid: process.pid,
+      child_process_identity: processIdentity(process.pid),
+    }));
+    const second = new SqliteDatabase(dir);
+    second.connect();
+    second.close();
+    const check = new Database(join(dir, "print-partner.db"), { readonly: true });
+    const count = check.prepare("SELECT COUNT(*) AS n FROM printer_profiles WHERE name = ?").get("Generic FDM Machine") as { n: number };
+    const after = check.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'printer_profiles'").get() as { seq: number };
+    check.close();
+    expect(count.n).toBe(1);
+    expect(after.seq).toBe(before.seq + 1);
   });
 });

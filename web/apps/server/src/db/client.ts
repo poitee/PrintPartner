@@ -56,7 +56,10 @@ export class SqliteDatabase {
     this.sqlite.pragma("journal_mode = WAL");
     this.sqlite.pragma("foreign_keys = ON");
     this.drizzle = drizzle(this.sqlite, { schema });
-    if (childAlreadyCurrent) return;
+    if (childAlreadyCurrent) {
+      seedStarterProfiles(this.sqlite, "missing");
+      return;
+    }
     this.runMigrations();
     seedStarterProfiles(this.sqlite);
   }

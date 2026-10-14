@@ -130,33 +130,29 @@ function readMarkerFile(dataDir: string): MarkerFile {
   return { kind: "unrecognized" };
 }
 
-function isLeaseOwner(value: unknown): value is { pid: number; process_identity?: string } {
-  if (typeof value !== "object" || value === null || !("pid" in value) || !isPid(value.pid)) return false;
-  if (
-    "process_identity" in value &&
-    value.process_identity !== undefined &&
-    typeof value.process_identity !== "string"
-  ) {
-    return false;
-  }
-  return true;
+function isCompleteLeaseOwner(value: unknown): value is { pid: number; process_identity: string } {
+  const record = recordOf(value);
+  if (!record || !isPid(record.pid)) return false;
+  if (typeof record.process_identity !== "string" || record.process_identity.length === 0) return false;
+  return typeof record.instance === "string" && /^[0-9a-fA-F]{32}$/.test(record.instance);
 }
 
-// The lease directory is published before the owner marker. A live other process
-// holding it already owns the copy, including while the marker is still being written.
+// Rust refuses to retire a published lease unless owner.json has a pid,
+// process identity, and a 32-character instance. Anything short of that stays blocking.
 function leaseBlocksOtherWriters(dataDir: string): boolean {
-  const ownerPath = join(dataDir, ".desktop-lease", "owner.json");
-  if (!existsSync(ownerPath)) return false;
+  const leaseDir = join(dataDir, ".desktop-lease");
+  if (!existsSync(leaseDir)) return false;
+  const ownerPath = join(leaseDir, "owner.json");
+  if (!existsSync(ownerPath)) return true;
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(ownerPath, "utf8"));
   } catch {
     return true;
   }
-  if (!isLeaseOwner(parsed)) return true;
-  const identity = typeof parsed.process_identity === "string" ? parsed.process_identity : undefined;
-  if (parsed.pid === process.pid && processStillOwnsIdentity(parsed.pid, identity)) return false;
-  return processStillOwnsIdentity(parsed.pid, identity);
+  if (!isCompleteLeaseOwner(parsed)) return true;
+  if (parsed.pid === process.pid && processStillOwnsIdentity(parsed.pid, parsed.process_identity)) return false;
+  return processStillOwnsIdentity(parsed.pid, parsed.process_identity);
 }
 
 function isRecordedChild(marker: RustOwnerMarker): boolean {
