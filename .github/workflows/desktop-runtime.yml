@@ -104,6 +104,13 @@ jobs:
           cargo test --manifest-path rust/Cargo.toml --locked -p pp-storage 2>&1 | tee "$PP_EVIDENCE/pp-storage-tests.log"
           cargo test --manifest-path rust/Cargo.toml --locked -p pp-api --test auth_http 2>&1 | tee "$PP_EVIDENCE/pp-api-http.log"
           cargo clippy --manifest-path rust/Cargo.toml --locked -p pp-api -p pp-storage -p pp-core -p pp-compat -p pp-gateway -p pp-server --all-targets -- -D warnings 2>&1 | tee "$PP_EVIDENCE/backend-clippy.log"
+      - name: Require nonzero API and storage test evidence
+        run: |
+          for suite in pp-api-http pp-storage-tests; do
+            passed="$(awk '/^test result: ok\./ { passed += $4 } END { print passed + 0 }' "$PP_EVIDENCE/$suite.log")"
+            test "$passed" -gt 0
+            echo "$suite: $passed tests passed" | tee -a "$PP_EVIDENCE/test-counts.txt" "$GITHUB_STEP_SUMMARY"
+          done
       - name: Verify authenticated workflow and process cleanup
         run: |
           python3 rust/tests/workflow_m0.py 2>&1 | tee "$PP_EVIDENCE/workflow.log"
