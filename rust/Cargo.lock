@@ -3321,6 +3321,7 @@ dependencies = [
  "libc",
  "pp-compat",
  "pp-gateway",
+ "pp-net",
  "pp-source",
  "pp-storage",
  "rand 0.9.5",

@@ -82,6 +82,14 @@ impl FilamentProviderConfig {
                 && base_url.fragment().is_none(),
             "Invalid filament provider URL"
         );
+        if let Some(host) = base_url.host_str()
+            && let Ok(ip) = host.trim_start_matches('[').trim_end_matches(']').parse()
+        {
+            ensure!(
+                pp_net::outbound::permitted(ip),
+                "Prohibited filament provider address"
+            );
+        }
         let path = base_url.path().trim_end_matches('/').to_owned();
         base_url.set_path(path.strip_suffix("/api/v1").unwrap_or(&path));
         ensure!(
@@ -237,6 +245,10 @@ impl SnapshotReviewObserver {
         snapshot: &Snapshot,
         cancelled: Arc<AtomicBool>,
     ) -> Result<SnapshotFilamentLookup> {
+        ensure!(
+            !cancelled.load(Ordering::Acquire),
+            "Filament observation cancelled"
+        );
         let Some(provider) = &self.filament else {
             return Ok(SnapshotFilamentLookup::default());
         };
@@ -244,7 +256,7 @@ impl SnapshotReviewObserver {
         if !snapshot.parts.iter().any(|part| {
             part.filament_color_id
                 .as_deref()
-                .is_some_and(|value| value.starts_with(&prefix))
+                .is_some_and(|value| value.trim().starts_with(&prefix))
         }) {
             return Ok(SnapshotFilamentLookup::default());
         }
@@ -277,26 +289,7 @@ impl SnapshotReviewObserver {
             Ok(value) if value.components().next().is_some() => value,
             _ => return Ok(None),
         };
-        let mut cursor = self.repos_root.clone();
-        for part in relative.components() {
-            let Component::Normal(part) = part else {
-                return Ok(None);
-            };
-            cursor.push(part);
-            budget.entry(0, cursor.as_os_str().len())?;
-            let metadata = match fs::symlink_metadata(&cursor) {
-                Ok(value) => value,
-                Err(_) => return Ok(None),
-            };
-            if metadata.file_type().is_symlink() || !metadata.is_dir() {
-                return Ok(None);
-            }
-        }
-        let canonical = match candidate.canonicalize() {
-            Ok(value) => value,
-            Err(_) => return Ok(None),
-        };
-        Ok((canonical != configured && canonical.starts_with(configured)).then_some(canonical))
+        Ok(Some(configured.join(relative)))
     }
 
     fn thumbnail_missing(
@@ -329,18 +322,18 @@ impl SnapshotReviewObserver {
             .filament_custom_hex
             .as_deref()
             .map(str::trim)
-            .filter(|hex| valid_hex(hex));
+            .filter(|hex| hex.len() == 7 && hex.starts_with('#') && valid_hex(hex));
         let catalog = part
             .filament_color_id
             .as_deref()
             .and_then(catalog_color)
             .map(|color| color.hex.as_str())
-            .filter(|hex| valid_hex(hex));
+            .filter(|hex| hex.len() == 7 && hex.starts_with('#') && valid_hex(hex));
         let hex = custom
             .or(catalog)
             .map(|hex| format!("#{}", hex.trim_start_matches('#').to_ascii_lowercase()))
             .unwrap_or_default();
-        let role = part.effective_role.trim().to_ascii_lowercase();
+        let role = part.effective_role.trim().to_lowercase();
         if role.is_empty() || role.contains('\0') {
             return Ok(true);
         }
@@ -557,6 +550,7 @@ impl FilamentLookup for SnapshotFilamentLookup {
     ) -> Result<Option<ResolvedFilament>> {
         let Some(id) = color_id.and_then(|value| {
             value
+                .trim()
                 .strip_prefix(&format!("spoolman:{}:filament:", self.integration_id))?
                 .parse::<i64>()
                 .ok()
@@ -569,6 +563,7 @@ impl FilamentLookup for SnapshotFilamentLookup {
         };
         let selected = spool_id.and_then(|value| {
             value
+                .trim()
                 .strip_prefix(&format!("spoolman:{}:spool:", self.integration_id))?
                 .parse::<i64>()
                 .ok()
@@ -593,12 +588,36 @@ impl FilamentLookup for SnapshotFilamentLookup {
     }
 }
 
+struct FilamentDns(Arc<dyn pp_net::outbound::Resolver>);
+impl reqwest::dns::Resolve for FilamentDns {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let future = self.0.resolve(name.as_str().into());
+        Box::pin(async move {
+            let addresses = future.await?;
+            if addresses.is_empty()
+                || addresses.len() > 32
+                || !addresses.iter().all(|ip| pp_net::outbound::permitted(*ip))
+            {
+                return Err("Prohibited filament DNS answer".into());
+            }
+            Ok(Box::new(
+                addresses
+                    .into_iter()
+                    .map(|ip| std::net::SocketAddr::new(ip, 0)),
+            ) as reqwest::dns::Addrs)
+        })
+    }
+}
+
 async fn load_filament(
     config: &FilamentProviderConfig,
     cancelled: &AtomicBool,
 ) -> Result<SnapshotFilamentLookup> {
     let client = reqwest::Client::builder()
         .no_proxy()
+        .dns_resolver(Arc::new(FilamentDns(Arc::new(
+            pp_net::outbound::SystemResolver,
+        ))))
         .redirect(reqwest::redirect::Policy::none())
         .timeout(config.timeout)
         .build()?;

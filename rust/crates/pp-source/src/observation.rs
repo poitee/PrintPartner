@@ -85,7 +85,7 @@ fn walk<B: ReadBudget>(
     for entry in entries {
         let Ok(entry) = entry else { continue };
         let name = entry.file_name().to_string_lossy();
-        if name == "." || name == ".." {
+        if name == "." || name == ".." || (prefix.is_empty() && name == crate::MANIFEST) {
             continue;
         }
         let len = prefix.len() + usize::from(!prefix.is_empty()) + name.len();

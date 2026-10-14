@@ -141,6 +141,20 @@ fn review_reports_artifacts_thumbnails_and_included_parts() {
     let observed = f.observe();
     assert!(observed.media_by_part_id[&9].artifact_missing);
     assert!(!observed.media_by_part_id[&9].thumb_empty);
+    f.snapshot.parts[0].effective_role = "ÜPPER".into();
+    fs::write(f.source().join("part.stl"), "solid test").unwrap();
+    let name = hex::encode(Sha256::digest(format!(
+        "accepted-thumbnail-v3\0thumbnail\0{digest}\0üpper\0"
+    )));
+    fs::write(
+        f.root.join("thumbs").join(format!("{name}.png")),
+        [137, 80, 78, 71, 13, 10, 26, 10],
+    )
+    .unwrap();
+    for custom in ["abcdef", "##abcdef"] {
+        f.snapshot.parts[0].filament_custom_hex = Some(custom.into());
+        assert!(!f.observe().media_by_part_id[&9].thumb_empty);
+    }
     f.snapshot.parts[0].included = false;
     assert!(f.observe().media_by_part_id.is_empty());
 }
@@ -207,6 +221,7 @@ fn review_enforces_cancellation_and_shared_read_budgets() {
         error.to_string(),
         "Review observation artifact budget exceeded"
     );
+    fs::write(f.source().join(pp_source::MANIFEST), "{}").unwrap();
     let observer = f
         .observer
         .clone()
@@ -215,6 +230,14 @@ fn review_enforces_cancellation_and_shared_read_budgets() {
             ..Default::default()
         })
         .unwrap();
+    assert!(
+        !observer
+            .review_observations(&f.snapshot, &AtomicBool::new(false))
+            .unwrap()
+            .media_by_part_id[&9]
+            .artifact_missing
+    );
+    fs::write(f.source().join("other.stl"), "solid other").unwrap();
     let error = observer
         .review_observations(&f.snapshot, &AtomicBool::new(false))
         .unwrap_err();
@@ -233,23 +256,43 @@ fn review_enforces_cancellation_and_shared_read_budgets() {
     );
 }
 
-#[test]
-fn filament_parsing_resolves_only_matching_integrations_and_spools() {
-    let lookup = SnapshotFilamentLookup {
-        integration_id: "local".into(),
-        filaments: parse_filaments(&json!({"results": [
-            {"id": "2", "name": "Red", "vendor": {"name": "Maker"}, "material": "PLA", "color_hex": "FF0000"},
-            {"id": -1, "name": "invalid"}
-        ]})),
-        spools: parse_spools(&json!([
-            {"id": 3, "filament_id": 2, "remaining_weight": "12.5"},
-            {"id": 4, "filament": {"id": 2}, "remaining_weight": 8},
-            {"id": 5, "filament_id": 2, "remaining_weight": 9, "archived": true},
-            {"id": 6, "filament_id": 2, "remaining_weight": "NaN"}
-        ])),
-    };
+#[tokio::test]
+async fn filament_provider_reads_local_http_and_falls_back_on_failure() {
+    use axum::{Router, routing::get};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = Router::new()
+        .route(
+            "/api/v1/filament",
+            get(|| async { axum::Json(json!({"results": [
+                {"id":"2","name":"Red","vendor":{"name":"Maker"},"material":"PLA","color_hex":"FF0000"},
+                {"id":-1,"name":"invalid"}
+            ]})) }),
+        )
+        .route(
+            "/api/v1/spool",
+            get(|| async {
+                axum::Json(json!([
+                    {"id":3,"filament_id":2,"remaining_weight":"12.5"},
+                    {"id":4,"filament":{"id":2},"remaining_weight":8},
+                    {"id":5,"filament_id":2,"remaining_weight":9,"archived":true},
+                    {"id":6,"filament_id":2,"remaining_weight":"NaN"}
+                ]))
+            }),
+        );
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let mut f = Fixture::new();
+    f.snapshot.parts[0].filament_color_id = Some(" spoolman:local:filament:2 ".into());
+    f.observer = f.observer.clone().with_filament_provider(
+        FilamentProviderConfig::new(&format!("http://{address}/api/v1"), "local", None).unwrap(),
+    );
+    let lookup = f
+        .observer
+        .filament_lookup(&f.snapshot, Arc::new(AtomicBool::new(false)))
+        .await
+        .unwrap();
     let resolved = lookup
-        .for_part(Some("spoolman:local:filament:2"), None)
+        .for_part(Some(" spoolman:local:filament:2 "), None)
         .unwrap()
         .unwrap();
     assert_eq!(resolved.combo_label, "Maker PLA · Red");
@@ -265,7 +308,7 @@ fn filament_parsing_resolves_only_matching_integrations_and_spools() {
     let selected = lookup
         .for_part(
             Some("spoolman:local:filament:2"),
-            Some("spoolman:local:spool:4"),
+            Some(" spoolman:local:spool:4 "),
         )
         .unwrap()
         .unwrap();
@@ -276,41 +319,6 @@ fn filament_parsing_resolves_only_matching_integrations_and_spools() {
             .unwrap()
             .is_none()
     );
-}
-
-#[tokio::test]
-async fn filament_provider_reads_local_http_and_falls_back_on_failure() {
-    use axum::{Router, routing::get};
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let app = Router::new()
-        .route(
-            "/api/v1/filament",
-            get(|| async { axum::Json(json!([{"id": 2, "name": "Red"}])) }),
-        )
-        .route(
-            "/api/v1/spool",
-            get(|| async {
-                axum::Json(json!([{"id": 3, "filament_id": 2, "remaining_weight": 10}]))
-            }),
-        );
-    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let mut f = Fixture::new();
-    f.snapshot.parts[0].filament_color_id = Some("spoolman:local:filament:2".into());
-    f.observer = f.observer.clone().with_filament_provider(
-        FilamentProviderConfig::new(&format!("http://{address}/api/v1"), "local", None).unwrap(),
-    );
-    let lookup = f
-        .observer
-        .filament_lookup(&f.snapshot, Arc::new(AtomicBool::new(false)))
-        .await
-        .unwrap();
-    let resolved = lookup
-        .for_part(Some("spoolman:local:filament:2"), None)
-        .unwrap()
-        .unwrap();
-    assert_eq!(resolved.combo_label, "Red");
-    assert_eq!(resolved.spools[0].remaining_g, 10.0);
     let error = f
         .observer
         .filament_lookup(&f.snapshot, Arc::new(AtomicBool::new(true)))
@@ -418,6 +426,9 @@ fn filament_config_rejects_ambiguous_urls_and_limit_expansion() {
         "http://user@localhost",
         "http://localhost?query",
         "http://localhost#fragment",
+        "http://169.254.169.254",
+        "http://[fd00:ec2::254]",
+        "http://[::ffff:169.254.169.254]",
     ] {
         assert!(
             FilamentProviderConfig::new(url, "local", None).is_err(),
@@ -530,4 +541,49 @@ async fn review_regression_provider_deadline_covers_redirects() {
         result.unwrap_err().to_string(),
         "Filament observation timed out"
     );
+}
+
+#[tokio::test]
+async fn review_cancelled_no_provider_is_an_error() {
+    let f = Fixture::new();
+    assert_eq!(
+        f.observer
+            .filament_lookup(&f.snapshot, Arc::new(AtomicBool::new(true)))
+            .await
+            .err()
+            .unwrap()
+            .to_string(),
+        "Filament observation cancelled"
+    );
+}
+
+#[tokio::test]
+async fn filament_dns_rejects_metadata_answers_and_pins_lan_answers() {
+    use pp_net::outbound::{Resolution, Resolver};
+    use reqwest::dns::Resolve;
+    struct Answers(Vec<std::net::IpAddr>);
+    impl Resolver for Answers {
+        fn resolve(&self, _: String) -> Resolution {
+            let answers = self.0.clone();
+            Box::pin(async move { Ok(answers) })
+        }
+    }
+    let allowed = "127.0.0.1".parse().unwrap();
+    let denied = "169.254.169.254".parse().unwrap();
+    let dns = FilamentDns(Arc::new(Answers(vec![allowed, denied])));
+    assert_eq!(
+        dns.resolve("example.test".parse().unwrap())
+            .await
+            .err()
+            .unwrap()
+            .to_string(),
+        "Prohibited filament DNS answer"
+    );
+    let dns = FilamentDns(Arc::new(Answers(vec![allowed])));
+    let addresses = dns
+        .resolve("example.test".parse().unwrap())
+        .await
+        .unwrap()
+        .collect::<Vec<_>>();
+    assert_eq!(addresses, vec!["127.0.0.1:0".parse().unwrap()]);
 }
