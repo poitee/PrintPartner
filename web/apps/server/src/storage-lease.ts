@@ -1,6 +1,19 @@
 import { randomBytes } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { z } from "zod";
+
+const leaseOwnerSchema = z.object({
+  pid: z.number().int().positive().max(2147483647),
+  process_identity: z.string().refine((identity) => identity.trim().length > 0),
+  instance: z.string().regex(/^[a-f0-9]{32}$/),
+}).passthrough().brand<"LeaseOwner">();
+type LeaseOwner = z.infer<typeof leaseOwnerSchema>;
+type LeaseObservation =
+  | { readonly kind: "absent" }
+  | { readonly kind: "invalid"; readonly cause: unknown }
+  | { readonly kind: "live" }
+  | { readonly kind: "stale"; readonly owner: LeaseOwner };
 
 const instanceIdentity = `instance:${randomBytes(16).toString("hex")}`;
 
@@ -29,6 +42,41 @@ export function ownerIsStale(owner: { pid: number; process_identity?: string }):
   catch { return false; }
 }
 
+function isFsError(error: unknown, codes: readonly string[]): boolean {
+  return error instanceof Error && "code" in error && typeof error.code === "string" && codes.includes(error.code);
+}
+
+function observeLease(lease: string): LeaseObservation {
+  try {
+    if (!lstatSync(lease).isDirectory()) {
+      return { kind: "invalid", cause: new Error("Storage lease is not a directory") };
+    }
+  } catch (cause) {
+    if (isFsError(cause, ["ENOENT"])) return { kind: "absent" };
+    return { kind: "invalid", cause };
+  }
+
+  let owner: LeaseOwner;
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(join(lease, "owner.json"), "utf8"));
+    owner = leaseOwnerSchema.parse(parsed);
+  } catch (cause) {
+    if (isFsError(cause, ["ENOENT"])) {
+      try { lstatSync(lease); }
+      catch (inspectionError) {
+        if (isFsError(inspectionError, ["ENOENT"])) return { kind: "absent" };
+        return { kind: "invalid", cause: inspectionError };
+      }
+    }
+    return { kind: "invalid", cause };
+  }
+  return ownerIsStale(owner) ? { kind: "stale", owner } : { kind: "live" };
+}
+
+function invalidLeaseError(cause: unknown): Error {
+  return new Error("storage_lease_marker_invalid: Data directory lease is malformed or unreadable", { cause });
+}
+
 export function acquireStorageLease(directory: string): { identity: string; release: () => void } {
   const identity = processIdentity(process.pid);
   const instance = randomBytes(16).toString("hex");
@@ -38,34 +86,44 @@ export function acquireStorageLease(directory: string): { identity: string; rele
   try {
     writeFileSync(join(candidate, "owner.json"), JSON.stringify({ pid: process.pid, process_identity: identity, instance }), { mode: 0o600 });
     for (let attempt = 0; attempt < 16; attempt++) {
-      try {
-        // A prepared nonempty directory cannot replace another nonempty lease.
-        renameSync(candidate, lease);
-        let heldPath = lease;
-        const detached = join(directory, `.desktop-lease-release-${instance}`);
-        return { identity, release: () => {
-          // Detach the whole lease before cleanup so a contender never observes an empty lease.
-          if (heldPath === lease) { renameSync(lease, detached); heldPath = detached; }
-          rmSync(heldPath, { recursive: true });
-        } };
-      } catch (error) {
-        if (!["ENOTEMPTY", "EEXIST"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
-      }
-      let owner: { pid: number; process_identity: string; instance: string };
-      try { owner = JSON.parse(readFileSync(join(lease, "owner.json"), "utf8")); }
-      catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-        throw error;
-      }
-      if (!Number.isInteger(owner.pid) || owner.pid <= 0 || owner.pid > 2147483647 ||
-          !/^[a-f0-9]{32}$/.test(owner.instance) || typeof owner.process_identity !== "string" || !ownerIsStale(owner)) {
-        throw new Error("Data directory is already owned; stop the other process before opening another writer");
-      }
-      try {
-        // Retain the nonempty destination: a second stale observer cannot retire a new lease.
-        renameSync(lease, join(directory, `.desktop-lease-retired-${owner.instance}`));
-      } catch (error) {
-        if (!["ENOENT", "ENOTEMPTY", "EEXIST"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+      const observation = observeLease(lease);
+      switch (observation.kind) {
+        case "absent": {
+          try {
+            // Cooperative publishers only expose nonempty directories.
+            renameSync(candidate, lease);
+          } catch (error) {
+            if (isFsError(error, ["ENOTEMPTY", "EEXIST"])) continue;
+            if (isFsError(error, ["ENOTDIR", "EISDIR"])) {
+              const current = observeLease(lease);
+              if (current.kind === "invalid") throw invalidLeaseError(current.cause);
+            }
+            throw error;
+          }
+          let heldPath = lease;
+          const detached = join(directory, `.desktop-lease-release-${instance}`);
+          return { identity, release: () => {
+            // Detach the whole lease before cleanup so a contender never observes an empty lease.
+            if (heldPath === lease) { renameSync(lease, detached); heldPath = detached; }
+            rmSync(heldPath, { recursive: true });
+          } };
+        }
+        case "invalid":
+          throw invalidLeaseError(observation.cause);
+        case "live":
+          throw new Error("Data directory is already owned; stop the other process before opening another writer");
+        case "stale":
+          try {
+            // Retain the nonempty destination: a second stale observer cannot retire a new lease.
+            renameSync(lease, join(directory, `.desktop-lease-retired-${observation.owner.instance}`));
+          } catch (error) {
+            if (!isFsError(error, ["ENOENT", "ENOTEMPTY", "EEXIST"])) throw error;
+          }
+          continue;
+        default: {
+          const exhaustive: never = observation;
+          return exhaustive;
+        }
       }
     }
     throw new Error("Data directory ownership changed repeatedly; retry startup");
