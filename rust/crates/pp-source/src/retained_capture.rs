@@ -19,6 +19,7 @@ struct TraceState {
     second_fail_at: Option<usize>,
     add_slot_sibling_at_unlink: bool,
     replace_deleting_at_unlink: bool,
+    replace_slot_at_unlink: Option<std::path::PathBuf>,
 }
 
 #[derive(Clone, Default)]
@@ -55,6 +56,15 @@ impl Trace {
                 evidence.write_all(b"preserve")?;
                 evidence.sync_all()?;
                 slot.sync()?;
+            }
+            let replacement = state
+                .lock()
+                .map_err(|_| Error::CorruptSnapshot)?
+                .replace_slot_at_unlink
+                .take();
+            if let Some(path) = replacement {
+                std::fs::rename(&path, path.with_extension("original"))?;
+                std::fs::create_dir(&path)?;
             }
         }
         Ok(())
@@ -1187,6 +1197,85 @@ mod tests {
                 .join(id.as_str())
                 .join("original-deleting")
                 .is_dir()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn replace_slot_on_cleanup(
+        root: &Path,
+        id: &RetainedCaptureId,
+        state: &Mutex<TraceState>,
+    ) -> PathBuf {
+        let path = root.join(VAULT).join(id.as_str());
+        state.lock().unwrap().replace_slot_at_unlink = Some(path.clone());
+        path
+    }
+
+    fn assert_replacement_slot_survives(path: &Path) {
+        use std::os::unix::fs::MetadataExt;
+        let replacement = fs::metadata(path).expect("replacement slot was deleted");
+        let original = fs::metadata(path.with_extension("original")).unwrap();
+        assert!(replacement.is_dir());
+        assert!(original.is_dir());
+        assert_ne!(replacement.ino(), original.ino());
+        assert_eq!(fs::read_dir(path).unwrap().count(), 0);
+        assert_eq!(
+            fs::read_dir(path.with_extension("original"))
+                .unwrap()
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn retained_candidate_abort_preserves_replaced_slot_identity() {
+        let (root, vault, state) = traced_vault("abort-replaced-slot");
+        let candidate = candidate_with(&vault, "part.stl", b"mesh");
+        let path = replace_slot_on_cleanup(&root, candidate.capture_id(), &state);
+        let result = candidate.abort();
+        assert_replacement_slot_survives(&path);
+        assert!(matches!(result.unwrap_err().source, Error::CorruptSnapshot));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn retained_frozen_remove_preserves_replaced_slot_identity() {
+        let (root, vault, state) = traced_vault("frozen-replaced-slot");
+        let frozen = freeze(candidate_with(&vault, "part.stl", b"mesh"), b"manifest");
+        let path = replace_slot_on_cleanup(&root, frozen.capture_id(), &state);
+        let result = frozen.remove(&[SourcePath::try_from("part.stl".to_owned()).unwrap()]);
+        assert_replacement_slot_survives(&path);
+        assert!(matches!(result, Err(Error::CorruptSnapshot)));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn retained_deleting_restart_preserves_replaced_slot_identity() {
+        let (root, vault, state) = traced_vault("restart-replaced-slot");
+        let id = RetainedCaptureId::parse("44".repeat(32)).unwrap();
+        let slot = vault.parent.create_child_exclusive(id.as_str()).unwrap();
+        slot.create_child_exclusive(DELETING).unwrap();
+        let path = replace_slot_on_cleanup(&root, &id, &state);
+        let result = vault.finish_deleting();
+        assert_replacement_slot_survives(&path);
+        assert!(matches!(result, Err(Error::CorruptSnapshot)));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn retained_allocation_cleanup_preserves_replaced_slot_identity() {
+        let (root, vault, state) = traced_vault("allocation-replaced-slot");
+        let id = RetainedCaptureId::parse("55".repeat(32)).unwrap();
+        let path = replace_slot_on_cleanup(&root, &id, &state);
+        state.lock().unwrap().fail_at = Some(5);
+        let result = vault.allocate_owned_with(|| Ok(id.clone()));
+        assert_replacement_slot_survives(&path);
+        let error = result.err().unwrap();
+        assert!(matches!(error.source, Error::Io(_)));
+        assert_eq!(error.retained().unwrap().capture_id(), &id);
+        assert_eq!(
+            error.retained().unwrap().phase(),
+            RetainedCapturePhase::Malformed
         );
         fs::remove_dir_all(root).unwrap();
     }
