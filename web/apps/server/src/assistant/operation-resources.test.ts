@@ -49,7 +49,7 @@ const TABLES = ["table:app_settings", "table:projects", "table:source_docs"];
 const FILE_RESOURCES = ["file:source-workspace", "table:projects", "table:source_docs"];
 const manifest = z.object({ resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.get_plan_decisions"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -65,6 +65,8 @@ function tableForObservedSelect(statement: unknown, tenantId = "default"): strin
     ["projects", new RegExp(`^select ${columns} from "projects" where \\(${tenant} and "projects"\\."id" = -?(?:0|[1-9][0-9]*)(?:\\.0)?\\)$`)],
     ["source_docs", new RegExp(`^select "project_id", count\\(\\*\\) from "source_docs" where "source_docs"\\."tenant_id" = ${activeTenant} group by "source_docs"\\."project_id"$`)],
     ["app_settings", new RegExp(`^select ${columns} from "app_settings" where \\("app_settings"\\."tenant_id" = ${activeTenant} and "app_settings"\\."key" = ${literal}\\)$`)],
+    ["build_profiles", new RegExp(`^select "id", "name", "order_number", "archived_at" from "build_profiles" where \\("build_profiles"\\."tenant_id" = ${activeTenant} and "build_profiles"\\."id" = -?(?:0|[1-9][0-9]*)(?:\\.0)?\\)$`)],
+    ["plan_decisions", new RegExp(`^select ${columns} from "plan_decisions" where \\("plan_decisions"\\."tenant_id" = ${activeTenant} and "plan_decisions"\\."profile_id" = -?(?:0|[1-9][0-9]*)(?:\\.0)?\\) order by "plan_decisions"\\."created_at" asc$`)],
   ];
   const match = shapes.find(([, pattern]) => pattern.test(sql));
   if (!match) throw new Error(`Unsupported SQL: ${sql}`);
@@ -457,4 +459,50 @@ it("rejects an undeclared read against the empty get_workflow_help resource set"
   if (!entry || entry.operation === "source.sync") throw new Error("Missing workflow help declaration");
   const declared = entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort();
   expect(() => expect(observed).toEqual(declared)).toThrow();
+});
+
+it("traces get_plan_decisions plan lookup, limits, fallback and tenant isolation against its declaration", async () => {
+  const planId = repo.createProfile("Decision plan").id;
+  const emptyPlanId = repo.createProfile("Empty plan").id;
+  const first = repo.createPlanDecision({ planId, actor: "assistant", kind: "applied_action", summary: "First decision" });
+  const last = repo.createPlanDecision({ planId, actor: "user", kind: "dismissed_action", summary: "Last decision" });
+  sqlite.prepare("UPDATE plan_decisions SET created_at = ? WHERE id = ?").run("2026-01-01T00:00:00Z", first.id);
+  sqlite.prepare("UPDATE plan_decisions SET created_at = ? WHERE id = ?").run("2026-01-02T00:00:00Z", last.id);
+  const foreignPlanId = tenantStorage.run("tenant-b", () => repo.createProfile("Other tenant plan").id);
+  const foreign = tenantStorage.run("tenant-b", () => repo.createPlanDecision({ planId: foreignPlanId, actor: "user", kind: "dismissed_action", summary: "Private decision" }));
+  const union = new Set<string>();
+  async function trace(input: Record<string, unknown>, expected: string[], tenantId = "default", activePlanId?: number) {
+    statements = [];
+    observer.state.files = [];
+    observer.state.active = true;
+    let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+    try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("get_plan_decisions", input, { repo, activePlanId })); }
+    finally { observer.state.active = false; }
+    const observed = [...new Set(statements.map((sql) => tableForObservedSelect(sql, tenantId)))].sort();
+    expect(observed).toEqual(expected);
+    expect(observer.state.files).toEqual([]);
+    for (const resource of observed) union.add(resource);
+    return z.object({ plan_id: z.number().optional(), error: z.string().optional(), decisions: z.array(z.object({ id: z.number(), summary: z.string() })).optional() }).parse(JSON.parse(output.content));
+  }
+  const tables = ["table:build_profiles", "table:plan_decisions"];
+  expect(await trace({ plan_id: planId }, tables)).toMatchObject({ plan_id: planId, decisions: [{ id: first.id, summary: "First decision" }, { id: last.id, summary: "Last decision" }] });
+  for (const limit of [1, "1", 0, -2]) {
+    expect((await trace({ plan_id: String(planId), limit }, tables)).decisions).toEqual([{ id: last.id, summary: "Last decision" }]);
+  }
+  expect((await trace({ plan_id: emptyPlanId }, tables)).decisions).toEqual([]);
+  for (const input of [{}, { plan_id: "invalid" }]) {
+    expect(await trace(input, [])).toEqual({ error: "plan_id required" });
+    expect((await trace(input, ["table:plan_decisions"], "default", planId)).decisions).toHaveLength(2);
+  }
+  for (const plan_id of [999999, foreignPlanId, 0, -1]) {
+    expect(await trace({ plan_id }, ["table:build_profiles"])).toEqual({ error: "plan_id required" });
+    expect((await trace({ plan_id }, tables, "default", planId)).decisions).toHaveLength(2);
+  }
+  expect((await trace({ plan_id: foreignPlanId }, tables, "tenant-b")).decisions).toEqual([{ id: foreign.id, summary: "Private decision" }]);
+  expect(await trace({ plan_id: planId }, ["table:build_profiles"], "tenant-b")).toEqual({ error: "plan_id required" });
+  expect((await trace({}, ["table:plan_decisions"], "tenant-b", planId)).decisions).toEqual([]);
+  expect([...union].sort()).toEqual(tables);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.get_plan_decisions");
+  if (!entry || entry.operation === "source.sync") throw new Error("Missing plan decisions declaration");
+  expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual([...union].sort());
 });

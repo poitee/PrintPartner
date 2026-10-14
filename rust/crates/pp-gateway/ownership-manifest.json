@@ -289,6 +289,19 @@
       {
         "operation": "tool.get_workflow_help",
         "resources": []
+      },
+      {
+        "operation": "tool.get_plan_decisions",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "build_profiles"
+          },
+          {
+            "kind": "table",
+            "name": "plan_decisions"
+          }
+        ]
       }
     ],
     "unresolved": [
@@ -667,7 +680,6 @@
       "tool.get_job_status",
       "tool.get_kit_catalog",
       "tool.get_plan_checkoff",
-      "tool.get_plan_decisions",
       "tool.get_plan_draft",
       "tool.get_plan_option_groups",
       "tool.get_plan_review",

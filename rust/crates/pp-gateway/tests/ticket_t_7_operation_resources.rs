@@ -26,6 +26,70 @@ fn malformed(detail: &str) -> AdmissionError {
 }
 
 #[test]
+fn ticket_t_7_ownership_plan_decisions_has_complete_node_owned_resources() {
+    use pp_gateway::ownership::{Owner, manifest::Disposition};
+    let id = "tool.get_plan_decisions";
+    let index = admit_bundled_manifest().unwrap();
+    let resources = index
+        .resources_for(id)
+        .expect("plan decision resources must be reviewed");
+    let expected: ResourceSet = serde_json::from_value(json!([
+        {"kind": "table", "name": "build_profiles"},
+        {"kind": "table", "name": "plan_decisions"}
+    ]))
+    .unwrap();
+    assert_eq!(resources, &expected);
+    assert_eq!(
+        index.lookup(id).unwrap().disposition,
+        Disposition::Owned(Owner::Node)
+    );
+    assert_eq!(
+        index.admit_rollback(id),
+        Err(AdmissionError::IncompatibleLiveFormat {
+            operation: id.into(),
+            format: "sqlite-schema".into(),
+            node_reads: 34,
+            rust_writes: Some(35),
+        })
+    );
+    let mut compatible = manifest();
+    compatible["live_formats"]["sqlite-schema"]["rust_writes"] = json!(34);
+    assert_eq!(
+        admit(&compatible).unwrap().admit_rollback(id),
+        Ok(&expected)
+    );
+    compatible["live_formats"]["sqlite-schema"]["rust_writes"] = Value::Null;
+    assert_eq!(
+        admit(&compatible).unwrap().admit_rollback(id),
+        Err(AdmissionError::IncompatibleLiveFormat {
+            operation: id.into(),
+            format: "sqlite-schema".into(),
+            node_reads: 34,
+            rust_writes: None,
+        })
+    );
+    for owner in ["rust", "python"] {
+        let mut value = manifest();
+        regroup(&mut value, id, &[id]);
+        value["operations"]
+            .as_array_mut()
+            .unwrap()
+            .last_mut()
+            .unwrap()["owner"] = json!(owner);
+        let expected = if owner == "rust" {
+            AdmissionError::UnsupportedRustOwner {
+                participant: id.into(),
+            }
+        } else {
+            AdmissionError::UnknownOwner {
+                value: owner.into(),
+            }
+        };
+        assert_eq!(admit(&value).unwrap_err(), expected);
+    }
+}
+
+#[test]
 fn reviewed_sets_aliases_and_complete_unresolved_partition() {
     let index = admit_bundled_manifest().unwrap();
     assert_eq!(
@@ -104,6 +168,7 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
     let reviewed = BTreeSet::from([
         "source.sync",
         "tool.get_workflow_help",
+        "tool.get_plan_decisions",
         "tool.read_source_file",
         "tool.list_sources",
         "tool.list_source_categories",
@@ -371,6 +436,7 @@ fn regroup(value: &mut Value, operation: &str, participants: &[&str]) {
 fn reviewed_participants_cannot_move_to_unresolved_operations() {
     for id in [
         "tool.get_workflow_help",
+        "tool.get_plan_decisions",
         "tool.read_source_file",
         "tool.list_sources",
         "tool.list_source_categories",
@@ -404,6 +470,7 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
 #[test]
 fn reviewed_participants_cannot_swap_operations() {
     for (first, second) in [
+        ("tool.get_workflow_help", "tool.get_plan_decisions"),
         ("tool.get_workflow_help", "tool.preview_source_naming"),
         ("tool.preview_source_naming", "tool.list_sources"),
         ("tool.search_source_files", "tool.preview_source_naming"),

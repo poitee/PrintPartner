@@ -13,6 +13,7 @@ pub enum TableId {
     AppSettings,
     AppEvents,
     BuildProfiles,
+    PlanDecisions,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -56,6 +57,8 @@ enum ReviewedEntry {
     SourceSync { import: SourceSyncImport },
     #[serde(rename = "tool.get_workflow_help")]
     GetWorkflowHelp { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_plan_decisions")]
+    GetPlanDecisions { resources: Vec<ResourceId> },
     #[serde(rename = "tool.read_source_file")]
     ReadSourceFile { resources: Vec<ResourceId> },
     #[serde(rename = "tool.search_source_files")]
@@ -80,7 +83,7 @@ impl ReviewedEntry {
         source_sync: &AdmittedOperation,
     ) -> Result<(&'static str, ResourceSet), AdmissionError> {
         use ResourceId::{File, Table};
-        use TableId::{AppSettings, Projects, SourceDocs};
+        use TableId::{AppSettings, BuildProfiles, PlanDecisions, Projects, SourceDocs};
         let (id, resources, expected) = match self {
             Self::SourceSync {
                 import: SourceSyncImport::Admitted,
@@ -102,6 +105,11 @@ impl ReviewedEntry {
             Self::GetWorkflowHelp { resources } => {
                 ("tool.get_workflow_help", resources, BTreeSet::new())
             }
+            Self::GetPlanDecisions { resources } => (
+                "tool.get_plan_decisions",
+                resources,
+                BTreeSet::from([Table(BuildProfiles), Table(PlanDecisions)]),
+            ),
             Self::ReadSourceFile { resources } => (
                 "tool.read_source_file",
                 resources,
@@ -182,6 +190,7 @@ impl Declarations {
         for id in [
             "source.sync",
             "tool.get_workflow_help",
+            "tool.get_plan_decisions",
             "tool.read_source_file",
             "tool.search_source_files",
             "tool.preview_source_naming",
