@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import AdmZip from "adm-zip";
@@ -97,7 +97,10 @@ describe("path traversal hardening", () => {
       headers,
     });
     expect(res.statusCode).toBe(200);
-    expect(existsSync(join(dir, "sources", String(sourceId), "files", "part.stl"))).toBe(true);
+    const publishedPath = ports.repository.getSource(sourceId)?.local_path;
+    if (!publishedPath) throw new Error("Upload did not publish a Source revision");
+    expect(publishedPath).toContain(`/repos/${sourceId}/revisions/`);
+    expect(readFileSync(join(publishedPath, "part.stl"), "utf8")).toBe("solid part");
 
     await app.close();
     ports.db.close();
@@ -195,9 +198,11 @@ describe("path traversal hardening", () => {
       headers,
     });
     expect(res.statusCode).toBe(200);
-    expect(existsSync(join(dir, "sources", String(sourceId), "files", "parts", "a.stl"))).toBe(
-      true,
-    );
+    const publishedPath = ports.repository.getSource(sourceId)?.local_path;
+    if (!publishedPath) throw new Error("Upload did not publish a Source revision");
+    expect(publishedPath).toContain(`/repos/${sourceId}/revisions/`);
+    expect(readFileSync(join(publishedPath, "parts", "a.stl"), "utf8")).toBe("solid a");
+    expect(readFileSync(join(publishedPath, "parts", "b.stl"), "utf8")).toBe("solid b");
     const body = res.json() as { stl_count?: number; suggested_import_rules?: string[] };
     expect(body.stl_count).toBe(2);
     expect(body.suggested_import_rules).toEqual(["parts/"]);

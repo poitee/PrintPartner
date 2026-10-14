@@ -153,6 +153,91 @@ test("publication count drift fails parity", () => {
   });
   assert.throws(() => compare(golden, drift));
 });
+test("duplicated publication row fails parity against itself", () => {
+  const corrupt = changed((capture) => {
+    const states = object(capture.states);
+    const state = Object.values(states)[0];
+    assert(state);
+    const revisions = object(object(state).database).plan_revisions;
+    assert(Array.isArray(revisions) && revisions.length > 0);
+    revisions.push(structuredClone(revisions[0]));
+  });
+  assert.throws(() => compare(corrupt, structuredClone(corrupt)), /State hash mismatch/);
+});
+test("route case pointing at a missing state fails parity against itself", () => {
+  const corrupt = changed((capture) => {
+    named(capture, "route_cases", "bound-http-final-inclusion-and-quantity").before = "f".repeat(64);
+  });
+  assert.throws(() => compare(corrupt, structuredClone(corrupt)), /route_cases\.bound-http-final-inclusion-and-quantity\.before/);
+});
+test("unreferenced database state fails parity against itself", () => {
+  const copy = structuredClone(golden);
+  const envelope = object(copy);
+  const raw = object(envelope.raw);
+  assert(typeof raw.data_directory === "string");
+  const states = object(object(raw.capture).states);
+  const state = structuredClone(Object.values(states)[0]);
+  assert(state);
+  const files = object(state).files;
+  assert(Array.isArray(files) && files.length > 0);
+  const file = object(files[0]);
+  assert(typeof file.bytes === "number");
+  file.bytes += 1;
+  const id = digest(canonical(normalize(state, raw.data_directory)));
+  states[id] = state;
+  envelope.normalized = normalize(raw.capture, raw.data_directory);
+  assert.throws(() => compare(copy, structuredClone(copy)), /Unreferenced state/);
+});
+test("no-write route with a different after state fails parity against itself", () => {
+  const corrupt = changed((capture) => {
+    const route = named(capture, "route_cases", "changed-payload-same-key");
+    assert.equal(route.before, route.after);
+    assert.notEqual(capture.initial_state, route.before);
+    route.after = capture.initial_state;
+  });
+  assert.throws(
+    () => compare(corrupt, structuredClone(corrupt)),
+    /route_cases\.changed-payload-same-key: exact-database-and-file-no-write/,
+  );
+});
+test("publication route with identical before and after states fails parity against itself", () => {
+  const corrupt = changed((capture) => {
+    const route = named(capture, "route_cases", "bound-http-final-inclusion-and-quantity");
+    assert.notEqual(route.before, route.after);
+    route.after = route.before;
+  });
+  assert.throws(
+    () => compare(corrupt, structuredClone(corrupt)),
+    /route_cases\.bound-http-final-inclusion-and-quantity: one-publication/,
+  );
+});
+test("publication route whose after state still has a plate head fails parity against itself", () => {
+  const corrupt = changed((capture) => {
+    const route = named(capture, "route_cases", "bound-http-final-inclusion-and-quantity");
+    const headed = named(capture, "setup_operations", "initial-accepted-plate").state;
+    assert(typeof headed === "string" && headed !== route.before && headed !== route.after);
+    const heads = object(object(object(capture.states)[headed]).database).accepted_plate_heads;
+    const afterHeads = object(object(object(capture.states)[String(route.after)]).database).accepted_plate_heads;
+    assert(Array.isArray(heads) && heads.length > 0);
+    assert(Array.isArray(afterHeads) && afterHeads.length === 0);
+    route.after = headed;
+  });
+  assert.throws(
+    () => compare(corrupt, structuredClone(corrupt)),
+    /route_cases\.bound-http-final-inclusion-and-quantity: current-plate-head-invalidated/,
+  );
+});
+test("file digest drift fails parity against itself", () => {
+  const corrupt = changed((capture) => {
+    const states = object(capture.states);
+    const state = Object.values(states)[0];
+    assert(state);
+    const files = object(state).files;
+    assert(Array.isArray(files) && files.length > 0);
+    object(files[0]).sha256 = "f".repeat(64);
+  });
+  assert.throws(() => compare(corrupt, structuredClone(corrupt)), /State hash mismatch/);
+});
 test("raw drift cannot hide behind unchanged normalized evidence", () => {
   const copy = structuredClone(golden);
   object(object(copy).raw).capture = null;

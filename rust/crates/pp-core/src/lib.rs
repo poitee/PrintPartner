@@ -13,6 +13,18 @@ use std::{
 };
 use tokio::net::TcpListener;
 
+mod drain;
+mod rebuild;
+
+pub use rebuild::DesktopRebuild;
+
+pub use drain::{ShutdownGate, TrackedShutdownWork};
+pub use pp_compat::drain::{
+    GroupStopReport, SIGTERM_GRACE, drive_shutdown_group, process_alive, process_group_absent,
+    reap_process_group, reject_and_arm_eof, restarts_allowed,
+};
+pub use pp_gateway::MUTATION_DRAIN;
+
 pub struct DesktopLaunch {
     pub data_dir: PathBuf,
     pub bundle: Bundle,
@@ -60,24 +72,42 @@ async fn bind_origin(owner: &StorageLease) -> Result<TcpListener> {
 
 pub struct CoreHandle {
     compat: CompatHandle,
+    monitoring: pp_gateway::MonitoringControl,
+    gate: ShutdownGate,
 }
 impl Clone for CoreHandle {
     fn clone(&self) -> Self {
         Self {
             compat: self.compat.clone(),
+            monitoring: self.monitoring.clone(),
+            gate: self.gate.clone(),
         }
     }
 }
 impl CoreHandle {
+    /// Power adapters can cancel/join status sockets before acknowledging sleep.
+    /// Hide-to-tray deliberately leaves monitoring running.
+    pub async fn suspend_monitoring(&self) {
+        self.monitoring.suspend().await;
+    }
+    pub fn resume_monitoring(&self) {
+        self.monitoring.resume();
+    }
+
     pub fn subscribe(&self) -> tokio::sync::watch::Receiver<pp_compat::Status> {
         self.compat.status.clone()
     }
     pub async fn recover_compat(&self) -> Result<()> {
         self.compat.recover().await
     }
+
+    pub fn track_shutdown_work(&self) -> Result<TrackedShutdownWork, &'static str> {
+        self.gate.track()
+    }
 }
 
 pub struct CoreRuntime {
+    desktop_rebuild: DesktopRebuild,
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     completion: Option<tokio::sync::oneshot::Receiver<ShutdownReceipt>>,
     worker: Option<std::thread::JoinHandle<()>>,
@@ -90,6 +120,7 @@ struct Resources {
     gateway: Gateway,
     supervisor: Supervisor,
     owner: StorageLease,
+    gate: ShutdownGate,
 }
 
 #[derive(Serialize, Debug)]
@@ -143,6 +174,8 @@ async fn start_resources(
         );
     }
     let mut owner = StorageLease::acquire(&input.data_dir)?;
+    pp_gateway::ownership::boot_bundled_source_sync(owner.data_dir())
+        .map_err(|error| anyhow::anyhow!("Source Sync ownership admission failed: {error}"))?;
     let listener = bind_origin(&owner).await?;
     let supervisor = Supervisor::start_with_config(
         SpawnSpec {
@@ -152,7 +185,7 @@ async fn start_resources(
             lease: owner.secret().to_owned(),
             lease_file: owner.clone_file()?,
             port: listener.local_addr()?.port(),
-            record_child: StorageLease::record_child,
+            record_child: pp_storage::lease::record_child,
         },
         compat_config,
     )?;
@@ -197,6 +230,7 @@ async fn start_resources(
         gateway,
         supervisor,
         owner,
+        gate: ShutdownGate::new(),
     })
 }
 
@@ -210,6 +244,7 @@ impl CoreRuntime {
         input: DesktopLaunch,
         compat_config: SupervisorConfig,
     ) -> Result<Self> {
+        let desktop_rebuild = DesktopRebuild::from_env();
         let (started, startup) = tokio::sync::oneshot::channel();
         let (stop, stopped) = tokio::sync::oneshot::channel();
         let (completed, completion) = tokio::sync::oneshot::channel();
@@ -241,6 +276,8 @@ impl CoreRuntime {
                             resources.gateway.origin().to_owned(),
                             CoreHandle {
                                 compat: resources.supervisor.handle.clone(),
+                                monitoring: resources.gateway.monitoring_control(),
+                                gate: resources.gate.clone(),
                             },
                             launch,
                             requested_by_adapter,
@@ -260,6 +297,7 @@ impl CoreRuntime {
         let (origin, handle, launch, shutdown_requested) =
             startup.await.context("Core owner startup failed")??;
         Ok(Self {
+            desktop_rebuild,
             stop: Some(stop),
             completion: Some(completion),
             worker: Some(worker),
@@ -269,6 +307,10 @@ impl CoreRuntime {
             shutdown_requested,
         })
     }
+    pub fn desktop_rebuild(&self) -> DesktopRebuild {
+        self.desktop_rebuild
+    }
+
     pub fn origin(&self) -> &str {
         &self.origin
     }
@@ -305,7 +347,15 @@ impl CoreRuntime {
 }
 
 async fn stop_resources(resources: Resources) -> ShutdownReceipt {
-    resources.gateway.drain().await;
+    let _ = drain::reject_and_wait(
+        MUTATION_DRAIN,
+        &resources.gate,
+        || resources.gateway.begin_drain(),
+        |bound| resources.gateway.wait_idle(bound),
+        || resources.supervisor.disarm_restarts(),
+    )
+    .await;
+    resources.gateway.finish_drain();
     let compat_reaped = resources.supervisor.shutdown().await.is_ok();
     let gateway_stopped = resources.gateway.stop().await.is_ok();
     let mut receipt = ShutdownReceipt {

@@ -63,6 +63,61 @@ function equal(expected: Json, actual: Json, path: string): void {
   assert.equal(actual, expected, path);
 }
 
+function stateId(value: Json, label: string): string {
+  assert(typeof value === "string" && /^[0-9a-f]{64}$/.test(value), `${label}: state id`);
+  return value;
+}
+
+function assertClosedStateGraph(capture: { [key: string]: Json }): void {
+  const states = object(capture.states);
+  const referenced = new Set<string>();
+  const expectState = (value: Json, label: string) => {
+    const id = stateId(value, label);
+    referenced.add(id);
+    assert(Object.hasOwn(states, id), `Missing state ${id} referenced by ${label}`);
+  };
+  expectState(capture.initial_state, "initial_state");
+  expectState(capture.final_state, "final_state");
+  const setup = capture.setup_operations;
+  assert(Array.isArray(setup), "setup_operations");
+  setup.forEach((entry, index) => expectState(object(entry).state, `setup_operations[${index}].state`));
+  const routes = capture.route_cases;
+  assert(Array.isArray(routes), "route_cases");
+  routes.forEach((entry, index) => {
+    const route = object(entry);
+    const name = typeof route.name === "string" ? route.name : String(index);
+    expectState(route.before, `route_cases.${name}.before`);
+    expectState(route.after, `route_cases.${name}.after`);
+  });
+  for (const id of Object.keys(states)) assert(referenced.has(id), `Unreferenced state ${id}`);
+}
+
+function assertRouteStateInvariants(capture: { [key: string]: Json }): void {
+  const states = object(capture.states);
+  const routes = capture.route_cases;
+  assert(Array.isArray(routes), "route_cases");
+  routes.forEach((entry, index) => {
+    const route = object(entry);
+    const name = typeof route.name === "string" ? route.name : String(index);
+    const label = `route_cases.${name}`;
+    const invariants = route.invariants;
+    assert(Array.isArray(invariants), `${label}: invariants`);
+    const before = stateId(route.before, `${label}.before`);
+    const after = stateId(route.after, `${label}.after`);
+    if (invariants.includes("exact-database-and-file-no-write")) {
+      assert.equal(before, after, `${label}: exact-database-and-file-no-write requires identical before and after states`);
+    }
+    if (invariants.includes("one-publication")) {
+      assert.notEqual(before, after, `${label}: one-publication requires different before and after states`);
+    }
+    if (invariants.includes("current-plate-head-invalidated")) {
+      const heads = object(object(states[after]).database).accepted_plate_heads;
+      assert(Array.isArray(heads), `${label}: accepted_plate_heads`);
+      assert.equal(heads.length, 0, `${label}: current-plate-head-invalidated requires an empty accepted_plate_heads table`);
+    }
+  });
+}
+
 export function compare(left: Json, right: Json): void {
   const a = object(left);
   const b = object(right);
@@ -77,4 +132,10 @@ export function compare(left: Json, right: Json): void {
     equal(normalize(raw.capture, raw.data_directory), corpus.normalized, "Raw and normalized evidence differ");
   }
   equal(a.normalized, b.normalized, "$.normalized");
+  const normalized = object(a.normalized);
+  for (const [id, state] of Object.entries(object(normalized.states))) {
+    assert.equal(digest(canonical(state)), id, `State hash mismatch: ${id}`);
+  }
+  assertClosedStateGraph(normalized);
+  assertRouteStateInvariants(normalized);
 }

@@ -1,6 +1,6 @@
 use super::*;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::process::Command;
 use std::sync::mpsc;
 
@@ -210,7 +210,7 @@ fn reader_pool_resets_pragmas_rejects_writes_and_is_bounded() {
 }
 #[test]
 fn ahead_and_old_versions_reject_before_side_effects() {
-    for version in [30, 35] {
+    for version in [30, 36] {
         let path = directory("version");
         let database = path.join("print-partner.db");
         let conn = Connection::open(&database).unwrap();
@@ -234,10 +234,15 @@ fn ahead_and_old_versions_reject_before_side_effects() {
 #[test]
 fn reopen_preserves_the_pre_upgrade_backup() {
     let path = directory("upgrade-backup");
-    let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
-    owner.shutdown().unwrap();
-
     let database = path.join("print-partner.db");
+    std::fs::write(
+        &database,
+        include_bytes!("../tests/fixtures/accepted-plan-node.db"),
+    )
+    .unwrap();
+    let older_backup = path.join("backups/pre-schema34.db");
+    std::fs::create_dir_all(older_backup.parent().unwrap()).unwrap();
+    std::fs::write(&older_backup, b"retained older recovery copy").unwrap();
     let raw = Connection::open(&database).unwrap();
     raw.execute(
         "UPDATE app_settings SET value='33' WHERE tenant_id='default' AND key='schema_version'",
@@ -265,6 +270,11 @@ fn reopen_preserves_the_pre_upgrade_backup() {
     assert!(ready.backup.is_none());
     owner.shutdown().unwrap();
     assert_eq!(version(&backup), "33");
+    assert_ne!(backup, older_backup);
+    assert_eq!(
+        std::fs::read(older_backup).unwrap(),
+        b"retained older recovery copy"
+    );
 }
 #[test]
 fn backup_includes_uncheckpointed_wal() {
@@ -517,6 +527,32 @@ fn failed_cleanup_retains_marker_and_lock_until_explicit_retry() {
 }
 
 #[test]
+fn directory_lease_cleanup_failure_retains_lock_until_retry() {
+    use fs2::FileExt;
+    let (path, owner, _) = fixture("retained-directory-lease");
+    let lease_path = path.join(".desktop-lease");
+    let hidden = path.join(".desktop-lease-hidden");
+    std::fs::rename(&lease_path, &hidden).unwrap();
+    // Marker removal alone must not release the OS lock when the portable lease cannot be removed.
+    assert!(owner.shutdown().is_err());
+    assert!(!path.join(".desktop-owner.json").exists());
+    assert!(
+        std::fs::File::open(path.join(".desktop.lock"))
+            .unwrap()
+            .try_lock_exclusive()
+            .is_err()
+    );
+    std::fs::rename(hidden, &lease_path).unwrap();
+    let released = lease::StorageLease::retry_failed_release(&path).unwrap();
+    assert!(released.marker_removed && released.runtime_removed && released.lock_released);
+    assert!(!released.ownership_retained);
+    assert!(!lease_path.exists());
+    let next = lease::StorageLease::acquire(&path).unwrap().release();
+    assert!(next.lock_released);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
 fn wal_only_unsupported_versions_preserve_every_input_file() {
     use sha2::{Digest, Sha256};
     let tree = |path: &Path| {
@@ -534,7 +570,7 @@ fn wal_only_unsupported_versions_preserve_every_input_file() {
         entries
     };
     for stale_marker in [false, true] {
-        for version in [30, 35] {
+        for version in [30, 36] {
             for with_shm in [false, true] {
                 let source = directory("wal-source");
                 let raw = Connection::open(source.join("print-partner.db")).unwrap();
@@ -1156,6 +1192,55 @@ fn schema_version_at(path: &Path) -> String {
         .unwrap()
 }
 
+fn sqlite_schema_cookie(db: &Path) -> i64 {
+    Connection::open(db)
+        .unwrap()
+        .query_row("PRAGMA schema_version", [], |row| row.get(0))
+        .unwrap()
+}
+
+fn index_and_trigger_sql(db: &Path) -> Vec<(String, String, String)> {
+    let connection = Connection::open(db).unwrap();
+    let mut statement = connection
+        .prepare(
+            "SELECT type, name, sql FROM sqlite_master
+              WHERE sql IS NOT NULL AND type IN ('index', 'trigger')
+                AND name NOT LIKE 'sqlite_%'
+              ORDER BY type, name",
+        )
+        .unwrap();
+    statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .unwrap()
+        .map(|row| row.unwrap())
+        .collect()
+}
+
+fn assert_second_open_keeps_catalog(dir: &Path, label: &str) {
+    let db = dir.join("print-partner.db");
+    assert_eq!(schema_version_at(&db), "35", "{label}");
+    let cookie = sqlite_schema_cookie(&db);
+    let catalog = index_and_trigger_sql(&db);
+    let (owner, ready) = open_parity(dir, "2026-10-02T00:00:00.000Z");
+    assert_eq!(ready.version, 35, "{label}");
+    assert_eq!(ready.previous_version, 35, "{label}");
+    assert!(ready.backup.is_none(), "{label}");
+    owner.shutdown().unwrap();
+    assert_eq!(schema_version_at(&db), "35", "{label}");
+    assert_eq!(
+        sqlite_schema_cookie(&db),
+        cookie,
+        "{label} second open changed the SQLite schema cookie"
+    );
+    assert_eq!(index_and_trigger_sql(&db), catalog, "{label}");
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum FixtureRefusal {
     HistoricalClaim,
@@ -1518,10 +1603,10 @@ fn ticket_t_7_migrations() {
             );
         }
         let (owner, ready) = open_parity(&work, &clock);
-        assert_eq!(ready.version, 34, "{name}");
+        assert_eq!(ready.version, 35, "{name}");
         assert_eq!(ready.previous_version, initial, "{name}");
         let backup = ready.backup.clone();
-        if (1..34).contains(&initial) {
+        if (1..35).contains(&initial) {
             assert_eq!(
                 schema_version_at(backup.as_ref().unwrap()),
                 initial.to_string(),
@@ -1535,24 +1620,19 @@ fn ticket_t_7_migrations() {
         assert_eq!(tree_hashes(&source), before_source, "{name} source changed");
         let observed = read_schema_graph(&work.join("print-partner.db"));
         let node_graph = read_schema_graph(&expected);
-        let diff = graph_diff(&node_graph, &observed);
+        let diff = node_owned_catalog(&node_graph, &observed);
         assert!(diff.is_empty(), "{name} node {node_version}: {diff:#?}");
         let backup_bytes = backup.as_ref().map(|path| std::fs::read(path).unwrap());
         let (reopened, again) = open_parity(&work, &clock);
-        assert_eq!(again.version, 34);
-        assert_eq!(again.previous_version, 34);
+        assert_eq!(again.version, 35);
+        assert_eq!(again.previous_version, 35);
         assert!(again.backup.is_none());
         reopened.shutdown().unwrap();
         if let Some(bytes) = backup_bytes {
             assert_eq!(std::fs::read(backup.unwrap()).unwrap(), bytes);
         }
         let reopened_graph = read_schema_graph(&work.join("print-partner.db"));
-        let mut reopened_diff = graph_diff(&node_graph, &reopened_graph);
-        // Seed replay uses INSERT OR IGNORE. SQLite can advance sqlite_sequence.seq
-        // while the named rows stay in place. Any other row payload still fails the diff.
-        if sequence_identities(&node_graph) == sequence_identities(&reopened_graph) {
-            reopened_diff.retain(|line| line != "rows sqlite_sequence");
-        }
+        let reopened_diff = node_owned_catalog(&node_graph, &reopened_graph);
         assert!(
             reopened_diff.is_empty(),
             "{name} reopen: {reopened_diff:#?}"
@@ -1645,7 +1725,7 @@ fn ticket_t_7_migrations_preserves_refused_inputs() {
         &refused_wal_input("30"),
         "Cannot upgrade database schema version 30",
     );
-    assert_refused(&refused_wal_input("35"), "newer than supported version 34");
+    assert_refused(&refused_wal_input("36"), "newer than supported version 35");
     assert_refused(&refused_wal_input("abc"), "Invalid database schema version");
     let corrupt = directory("refuse-corrupt");
     std::fs::write(corrupt.join("print-partner.db"), b"not a sqlite database").unwrap();
@@ -1730,6 +1810,203 @@ fn ticket_t_7_writer_reads_wal_full_and_rejects_reader_writes() {
     );
     drop(read);
     owner.shutdown().unwrap();
+}
+
+fn sqlite_sequence_rows(connection: &Connection) -> Vec<(String, i64)> {
+    let present: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'sqlite_sequence')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    if !present {
+        return Vec::new();
+    }
+    let mut statement = connection
+        .prepare("SELECT name, seq FROM sqlite_sequence ORDER BY name")
+        .unwrap();
+    statement
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .map(|row| row.unwrap())
+        .collect()
+}
+
+#[test]
+fn ticket_t_7_writer_reopen_keeps_starter_seed_sequences() {
+    let path = directory("t7-seed-sequence");
+    let clock = "2026-10-02T00:00:00.000Z";
+    let (owner, _) = WriterOwner::open_at(&path, Limits::default(), clock).unwrap();
+    let read = owner.client().reader(Duration::ZERO).unwrap();
+    let conn = read.connection.as_ref().unwrap();
+    assert_eq!(pragma_value(conn, "query_only"), 1);
+    let write_error = conn
+        .execute("DELETE FROM printer_profiles", [])
+        .unwrap_err()
+        .to_string();
+    assert!(
+        write_error.to_lowercase().contains("readonly"),
+        "{write_error}"
+    );
+    let through_pool = sqlite_sequence_rows(conn);
+    assert!(
+        through_pool
+            .iter()
+            .any(|(name, _)| name == "printer_profiles")
+            && through_pool
+                .iter()
+                .any(|(name, _)| name == "process_profiles")
+            && through_pool
+                .iter()
+                .any(|(name, _)| name == "filament_profiles"),
+        "starter seeds did not allocate sequences: {through_pool:?}"
+    );
+    drop(read);
+    owner.shutdown().unwrap();
+
+    let db = path.join("print-partner.db");
+    let raw = Connection::open(&db).unwrap();
+    assert_eq!(
+        sqlite_sequence_rows(&raw),
+        through_pool,
+        "raw connection that skips startup moved sqlite_sequence"
+    );
+    drop(raw);
+
+    let (owner, _) = WriterOwner::open_at(&path, Limits::default(), clock).unwrap();
+    owner.shutdown().unwrap();
+    let raw = Connection::open(&db).unwrap();
+    assert_eq!(
+        sqlite_sequence_rows(&raw),
+        through_pool,
+        "second WriterOwner open advanced sqlite_sequence"
+    );
+
+    let edited = raw
+        .execute(
+            "UPDATE filament_profiles SET resolved_flat_config = 'edited'
+              WHERE tenant_id = 'default' AND name = 'Generic PLA'",
+            [],
+        )
+        .unwrap();
+    assert_eq!(edited, 1);
+    let deleted = raw
+        .execute(
+            "DELETE FROM printer_profiles
+              WHERE tenant_id = 'default' AND name = 'Generic FDM Machine'",
+            [],
+        )
+        .unwrap();
+    assert_eq!(deleted, 1);
+    assert_eq!(
+        sqlite_sequence_rows(&raw),
+        through_pool,
+        "raw starter edit changed sqlite_sequence"
+    );
+    let previous_printer = through_pool
+        .iter()
+        .find(|(name, _)| name == "printer_profiles")
+        .unwrap()
+        .1;
+    drop(raw);
+
+    let (owner, _) = WriterOwner::open_at(&path, Limits::default(), clock).unwrap();
+    owner.shutdown().unwrap();
+    let raw = Connection::open(&db).unwrap();
+    let pla: String = raw
+        .query_row(
+            "SELECT resolved_flat_config FROM filament_profiles
+              WHERE tenant_id = 'default' AND name = 'Generic PLA'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(pla, "edited");
+    let restored_id: i64 = raw
+        .query_row(
+            "SELECT id FROM printer_profiles
+              WHERE tenant_id = 'default' AND name = 'Generic FDM Machine'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(restored_id, previous_printer + 1);
+    let mut expected = through_pool;
+    expected
+        .iter_mut()
+        .find(|(name, _)| name == "printer_profiles")
+        .unwrap()
+        .1 = previous_printer + 1;
+    assert_eq!(sqlite_sequence_rows(&raw), expected);
+}
+
+fn user_version(connection: &Connection) -> i64 {
+    connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap()
+}
+
+fn starter_row_counts(connection: &Connection) -> Vec<(String, i64)> {
+    ["filament_profiles", "printer_profiles", "process_profiles"]
+        .into_iter()
+        .map(|table| {
+            let count: i64 = connection
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            (table.to_owned(), count)
+        })
+        .collect()
+}
+
+#[test]
+fn ticket_t_7_writer_replays_an_existing_node_seed_only_once() {
+    let path = directory("t7-node-seed-replay");
+    let clock = "2026-10-02T00:00:00.000Z";
+    let (owner, _) = WriterOwner::open_at(&path, Limits::default(), clock).unwrap();
+    owner.shutdown().unwrap();
+    let db = path.join("print-partner.db");
+    let raw = Connection::open(&db).unwrap();
+    assert_eq!(user_version(&raw), 1);
+    // A generated schema-31 input is a Node database that already contains the
+    // starters and has not recorded this Rust replay. Clearing the latch
+    // reproduces that input.
+    raw.execute_batch("PRAGMA user_version = 0").unwrap();
+    let before = sqlite_sequence_rows(&raw);
+    let counts = starter_row_counts(&raw);
+    drop(raw);
+
+    let (owner, _) = WriterOwner::open_at(&path, Limits::default(), clock).unwrap();
+    owner.shutdown().unwrap();
+    let raw = Connection::open(&db).unwrap();
+    assert_eq!(user_version(&raw), 1);
+    let replayed = sqlite_sequence_rows(&raw);
+    for (name, count) in &counts {
+        let old = before.iter().find(|(row, _)| row == name).unwrap().1;
+        let new = replayed.iter().find(|(row, _)| row == name).unwrap().1;
+        assert_eq!(new, old + count, "{name}");
+    }
+    for (name, seq) in &before {
+        if counts.iter().any(|(starter, _)| starter == name) {
+            continue;
+        }
+        assert_eq!(
+            replayed
+                .iter()
+                .find(|(row, _)| row == name)
+                .map(|(_, value)| *value),
+            Some(*seq),
+            "{name} moved during the one Node-equivalent replay"
+        );
+    }
+    drop(raw);
+
+    let (owner, _) = WriterOwner::open_at(&path, Limits::default(), clock).unwrap();
+    owner.shutdown().unwrap();
+    let raw = Connection::open(&db).unwrap();
+    assert_eq!(sqlite_sequence_rows(&raw), replayed);
 }
 
 fn pragma_value(connection: &Connection, name: &str) -> i64 {
@@ -2005,4 +2282,1174 @@ fn ticket_t_7_writer_retains_ownership_when_cleanup_fails() {
     );
     drop(read);
     owner.shutdown().unwrap();
+}
+
+struct PinnedSchema {
+    commit: &'static str,
+    sha256: &'static str,
+    released_version: u64,
+    bytes: &'static [u8],
+}
+
+const HISTORICAL_SCHEMA_31: PinnedSchema = PinnedSchema {
+    commit: "87b30cd13cfa496829edbef6e6d1c25be29e92d1",
+    sha256: "6921e78e0b65be4d08c635e55fe1428b6a4bf071862982d0e46337a55cf4eb1e",
+    released_version: 31,
+    bytes: include_bytes!("../data/historical/schema-31.ts"),
+};
+const HISTORICAL_SCHEMA_33: PinnedSchema = PinnedSchema {
+    commit: "ac0153b682d9565b8b2255b2b2747bee7f9b82d2",
+    sha256: "3023074597eb6462866892aceaa1433dcb69b0cc68abfa8479cf920e2be0130f",
+    released_version: 33,
+    bytes: include_bytes!("../data/historical/schema-33.ts"),
+};
+const HISTORICAL_SCHEMA_34: PinnedSchema = PinnedSchema {
+    commit: "71e25e7731feddd0eaec05a0d1070dc13de790a7",
+    sha256: "f5755e7a045fcb8b638bbeb17321c57ff6737d0d6db6b317518c41a14780d8b1",
+    released_version: 34,
+    bytes: include_bytes!("../data/historical/schema-34.ts"),
+};
+
+#[derive(Clone)]
+struct HistoricalStatement {
+    comments: Vec<String>,
+    sql: String,
+}
+
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..")
+}
+
+fn historical_source(pinned: &PinnedSchema) -> String {
+    let digest = hex::encode(Sha256::digest(pinned.bytes));
+    assert_eq!(digest, pinned.sha256, "{}", pinned.commit);
+    let spec = format!("{}:web/apps/server/src/db/schema.ts", pinned.commit);
+    let probe = Command::new("git")
+        .args(["cat-file", "-e", &spec])
+        .current_dir(repo_root())
+        .output()
+        .unwrap();
+    if probe.status.success() {
+        let object = Command::new("git")
+            .args(["cat-file", "-p", &spec])
+            .current_dir(repo_root())
+            .output()
+            .unwrap();
+        assert!(
+            object.status.success(),
+            "{}",
+            String::from_utf8_lossy(&object.stderr)
+        );
+        assert_eq!(
+            object.stdout, pinned.bytes,
+            "{spec} does not match the pinned historical source"
+        );
+    }
+    std::str::from_utf8(pinned.bytes).unwrap().to_owned()
+}
+
+fn template_literal(source: &str, start: usize) -> (String, usize) {
+    assert_eq!(source.as_bytes()[start], b'`');
+    let bytes = source.as_bytes();
+    let mut index = start + 1;
+    let mut sql = String::new();
+    while index < bytes.len() {
+        if bytes[index] == b'\\' {
+            sql.push(bytes[index + 1] as char);
+            index += 2;
+            continue;
+        }
+        if bytes[index] == b'`' {
+            return (sql, index + 1);
+        }
+        sql.push(bytes[index] as char);
+        index += 1;
+    }
+    panic!("unterminated historical template");
+}
+
+fn exported_template(source: &str, name: &str) -> String {
+    let marker = format!("export const {name} = `");
+    let start = source
+        .find(&marker)
+        .unwrap_or_else(|| panic!("missing {name}"));
+    template_literal(source, start + marker.len() - 1).0
+}
+
+fn parse_schema_migrations(source: &str) -> Vec<HistoricalStatement> {
+    let marker = "export const schemaMigrations: string[] = [";
+    let mut index = source.find(marker).expect("schemaMigrations") + marker.len();
+    let mut statements = Vec::new();
+    let mut comments = Vec::new();
+    while index < source.len() {
+        index += source[index..]
+            .chars()
+            .take_while(|ch| ch.is_whitespace() || *ch == ',')
+            .map(char::len_utf8)
+            .sum::<usize>();
+        if source[index..].starts_with("];") {
+            break;
+        }
+        if source[index..].starts_with("//") {
+            let end = source[index..].find('\n').unwrap();
+            comments.push(source[index..index + end].trim().to_owned());
+            index += end + 1;
+            continue;
+        }
+        if source.as_bytes()[index] == b'`' {
+            let (sql, next) = template_literal(source, index);
+            statements.push(HistoricalStatement {
+                comments: std::mem::take(&mut comments),
+                sql,
+            });
+            index = next;
+            continue;
+        }
+        let length = source[index..]
+            .chars()
+            .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
+            .map(char::len_utf8)
+            .sum::<usize>();
+        assert!(length > 0, "unexpected schemaMigrations token");
+        let name = &source[index..index + length];
+        statements.push(HistoricalStatement {
+            comments: std::mem::take(&mut comments),
+            sql: exported_template(source, name),
+        });
+        index += length;
+    }
+    statements
+}
+
+fn execute_historical(
+    connection: &Connection,
+    statements: &[HistoricalStatement],
+) -> Result<(), String> {
+    for statement in statements {
+        if let Err(error) = connection.execute_batch(&statement.sql) {
+            let message = error.to_string();
+            if statement.sql.trim_start().starts_with("ALTER TABLE ")
+                && message.to_lowercase().contains("duplicate column name")
+            {
+                continue;
+            }
+            return Err(message);
+        }
+    }
+    Ok(())
+}
+
+fn stamp_schema_version(connection: &Connection, version: u64) {
+    connection
+        .execute(
+            "INSERT INTO app_settings (tenant_id, key, value) VALUES ('default', 'schema_version', ?1)
+             ON CONFLICT(tenant_id, key) DO UPDATE SET value = excluded.value",
+            [version.to_string()],
+        )
+        .unwrap();
+}
+
+fn build_historical_database(
+    name: &str,
+    statements: &[HistoricalStatement],
+    version: u64,
+) -> PathBuf {
+    let root = directory(name);
+    let connection = Connection::open(root.join("print-partner.db")).unwrap();
+    connection.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+    execute_historical(&connection, statements).unwrap();
+    stamp_schema_version(&connection, version);
+    drop(connection);
+    root
+}
+
+fn table_columns(db: &Path, table: &str) -> Vec<String> {
+    let connection = Connection::open(db).unwrap();
+    let mut statement = connection
+        .prepare(&format!("PRAGMA table_info({})", quote_ident(table)))
+        .unwrap();
+    statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .map(|name| name.unwrap())
+        .collect()
+}
+
+fn historical_diff_names(diff: &[String]) -> BTreeSet<String> {
+    diff.iter()
+        .map(|line| {
+            let mut parts = line.splitn(3, ' ');
+            match parts.next().unwrap() {
+                "object" => {
+                    parts.next().unwrap();
+                    parts.next().unwrap().to_owned()
+                }
+                "columns" | "foreign_keys" | "rows" => parts.next().unwrap().to_owned(),
+                other => panic!("unexpected graph diff {other}: {line}"),
+            }
+        })
+        .collect()
+}
+
+fn without_sequence_rows(diff: &mut Vec<String>, left: &SchemaGraph, right: &SchemaGraph) {
+    if sequence_identities(left) == sequence_identities(right) {
+        diff.retain(|line| line != "rows sqlite_sequence");
+    }
+}
+
+// Replays pinned schema.ts migrations from the commits that released schema 31, 33, and 34.
+// Schema 32 is that v32 statement applied to the schema 31 list. No release assigned
+// currentSchemaVersion = 32. Passing this test does not claim AppStartupReady.
+#[test]
+fn ticket_t_7_migrations_historical_order() {
+    let source_31 = historical_source(&HISTORICAL_SCHEMA_31);
+    let source_33 = historical_source(&HISTORICAL_SCHEMA_33);
+    let source_34 = historical_source(&HISTORICAL_SCHEMA_34);
+    for source in [&source_31, &source_33, &source_34] {
+        assert!(!source.contains("currentSchemaVersion = 32"));
+    }
+    assert!(source_31.contains("export const currentSchemaVersion = 31;"));
+    assert!(source_33.contains("export const currentSchemaVersion = 33;"));
+    assert!(source_34.contains("export const currentSchemaVersion = 34;"));
+    assert_eq!(
+        [
+            HISTORICAL_SCHEMA_31.released_version,
+            HISTORICAL_SCHEMA_33.released_version,
+            HISTORICAL_SCHEMA_34.released_version
+        ],
+        [31, 33, 34]
+    );
+    let statements_31 = parse_schema_migrations(&source_31);
+    let statements_33 = parse_schema_migrations(&source_33);
+    let statements_34 = parse_schema_migrations(&source_34);
+    assert_eq!(statements_31.len(), 175);
+    assert_eq!(statements_33.len(), 176);
+    assert_eq!(statements_34.len(), 180);
+    let v32_step: Vec<_> = statements_33
+        .iter()
+        .filter(|statement| {
+            statement
+                .comments
+                .iter()
+                .any(|comment| comment.contains("v32"))
+        })
+        .collect();
+    assert_eq!(v32_step.len(), 1);
+    assert_eq!(
+        v32_step[0].comments,
+        ["// v32 - durable cutover from mutable workspace manifests to Source revisions."]
+    );
+    assert!(statements_31.iter().all(|statement| {
+        !statement
+            .comments
+            .iter()
+            .any(|comment| comment.contains("v32"))
+    }));
+    assert_ne!(
+        statements_31
+            .iter()
+            .map(|statement| statement.sql.as_str())
+            .collect::<Vec<_>>(),
+        statements_33[..statements_31.len()]
+            .iter()
+            .map(|statement| statement.sql.as_str())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(statements_33.last().unwrap().sql, v32_step[0].sql);
+    assert_eq!(
+        statements_34[..statements_33.len()]
+            .iter()
+            .map(|statement| statement.sql.as_str())
+            .collect::<Vec<_>>(),
+        statements_33
+            .iter()
+            .map(|statement| statement.sql.as_str())
+            .collect::<Vec<_>>()
+    );
+    let mut statements_32 = statements_31.clone();
+    statements_32.push(HistoricalStatement {
+        comments: v32_step[0].comments.clone(),
+        sql: v32_step[0].sql.clone(),
+    });
+
+    let schema_json: serde_json::Value =
+        serde_json::from_str(include_str!("../data/schema.json")).unwrap();
+    let rust_migrations = schema_json["migrations"].as_array().unwrap();
+    // Main has 169 statements. Auth adds sessions.provider.
+    assert_eq!(rust_migrations.len(), 170);
+    assert_eq!(schema_json["repair"].as_array().unwrap().len(), 3);
+    assert_eq!(schema_json["extras"].as_array().unwrap().len(), 2);
+    assert_eq!(schema_json["seeds"].as_array().unwrap().len(), 3);
+    assert!(
+        schema_json["stranded"]
+            .as_str()
+            .unwrap()
+            .contains("source_revisions")
+    );
+    let schema_text = include_str!("../data/schema.json");
+    assert!(!schema_text.contains("print_outcomes"));
+    assert!(!schema_text.contains("advisor"));
+    let app = std::fs::read_to_string(repo_root().join("web/apps/server/src/app.ts")).unwrap();
+    assert!(app.contains("migratePrintOutcomesBlob"));
+    assert!(app.contains("backfillAdvisorNotesFromDomainPack"));
+    let board: Vec<_> = rust_migrations
+        .iter()
+        .filter_map(|statement| statement.as_str())
+        .filter(|statement| statement.contains("board_"))
+        .collect();
+    assert_eq!(board.len(), 4);
+    let historical_board: Vec<_> = statements_34[statements_33.len()..]
+        .iter()
+        .map(|statement| statement.sql.as_str())
+        .collect();
+    assert_eq!(board, historical_board);
+    assert_ne!(
+        rust_migrations
+            .iter()
+            .filter_map(|statement| statement.as_str())
+            .collect::<Vec<_>>(),
+        statements_34
+            .iter()
+            .map(|statement| statement.sql.as_str())
+            .collect::<Vec<_>>()
+    );
+
+    let built = [
+        (
+            "schema-31",
+            31u64,
+            build_historical_database("historical-31", &statements_31, 31),
+        ),
+        (
+            "schema-32",
+            32,
+            build_historical_database("historical-32", &statements_32, 32),
+        ),
+        (
+            "schema-33",
+            33,
+            build_historical_database("historical-33", &statements_33, 33),
+        ),
+        (
+            "schema-34",
+            34,
+            build_historical_database("historical-34", &statements_34, 34),
+        ),
+    ];
+    let db = |label: &str| {
+        built
+            .iter()
+            .find(|(name, ..)| *name == label)
+            .unwrap()
+            .2
+            .join("print-partner.db")
+    };
+    let columns = |label: &str| table_columns(&db(label), "projects");
+    assert!(!columns("schema-31").contains(&"legacy_manifest_cutover".to_owned()));
+    assert_eq!(
+        columns("schema-32").last().unwrap(),
+        "legacy_manifest_cutover"
+    );
+    let columns_33 = columns("schema-33");
+    let metadata = columns_33
+        .iter()
+        .position(|name| name == "metadata_json")
+        .unwrap();
+    let legacy = columns_33
+        .iter()
+        .position(|name| name == "legacy_manifest_cutover")
+        .unwrap();
+    let pointer = columns_33
+        .iter()
+        .position(|name| name == "current_source_revision_id")
+        .unwrap();
+    assert!(metadata + 1 == legacy && legacy < pointer);
+    assert_ne!(columns("schema-32"), columns_33);
+    for label in ["schema-31", "schema-32", "schema-33"] {
+        let connection = Connection::open(db(label)).unwrap();
+        assert!(!table_present(&connection, "board_posts"));
+        assert!(!table_present(&connection, "board_comments"));
+    }
+    let current = Connection::open(db("schema-34")).unwrap();
+    assert!(table_present(&current, "board_posts"));
+    assert!(table_present(&current, "board_comments"));
+    drop(current);
+    let graphs: Vec<_> = built
+        .iter()
+        .map(|(label, version, root)| {
+            let graph = read_schema_graph(&root.join("print-partner.db"));
+            assert_eq!(graph.version, version.to_string(), "{label}");
+            graph
+        })
+        .collect();
+    for pair in [(0, 1), (1, 2), (2, 3)] {
+        let diff = graph_diff(&graphs[pair.0], &graphs[pair.1]);
+        assert!(!diff.is_empty(), "{pair:?} historical graphs matched");
+    }
+
+    let stamped = directory("historical-stamp-only");
+    std::fs::copy(db("schema-34"), stamped.join("print-partner.db")).unwrap();
+    let stamped_db = Connection::open(stamped.join("print-partner.db")).unwrap();
+    stamp_schema_version(&stamped_db, 32);
+    drop(stamped_db);
+    let stamped_graph = read_schema_graph(&stamped.join("print-partner.db"));
+    assert_eq!(stamped_graph.version, "32");
+    assert!(table_present(
+        &Connection::open(stamped.join("print-partner.db")).unwrap(),
+        "board_posts"
+    ));
+    assert!(!graph_diff(&graphs[1], &stamped_graph).is_empty());
+    assert_ne!(
+        table_columns(&stamped.join("print-partner.db"), "projects"),
+        columns("schema-32")
+    );
+
+    let mut ordered_32 = statements_32.clone();
+    let step = ordered_32.pop().unwrap();
+    ordered_32.insert(0, step);
+    let memory = Connection::open_in_memory().unwrap();
+    memory.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+    let early_alter = execute_historical(&memory, &ordered_32);
+    assert!(
+        early_alter
+            .as_ref()
+            .unwrap_err()
+            .to_lowercase()
+            .contains("no such table"),
+        "{early_alter:?}"
+    );
+    let board_index = statements_34
+        .iter()
+        .find(|statement| statement.sql.contains("idx_board_posts_created"))
+        .unwrap();
+    let index_first = Connection::open_in_memory().unwrap();
+    let index_error = index_first
+        .execute_batch(&board_index.sql)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        index_error.to_lowercase().contains("no such table"),
+        "{index_error}"
+    );
+    let mut drifted = graphs[0].clone();
+    let trigger = drifted
+        .objects
+        .iter_mut()
+        .find(|((kind, _), _)| kind == "trigger")
+        .unwrap();
+    trigger.1.1.as_mut().unwrap().push_str(" /*drift*/");
+    assert!(!graph_diff(&graphs[0], &drifted).is_empty());
+
+    let fresh_dir = directory("historical-fresh");
+    let (fresh_owner, fresh_ready) = open_parity(&fresh_dir, "2026-10-02T00:00:00.000Z");
+    assert_eq!(fresh_ready.version, 35);
+    assert_eq!(fresh_ready.previous_version, 0);
+    assert!(fresh_ready.backup.is_none());
+    fresh_owner.shutdown().unwrap();
+    let fresh_graph = read_schema_graph(&fresh_dir.join("print-partner.db"));
+    for (label, version, source) in &built {
+        let before = tree_hashes(source);
+        let work = directory(&format!("historical-upgrade-{label}"));
+        copy_db_files(source, &work);
+        let (owner, ready) = open_parity(&work, "2026-10-02T00:00:00.000Z");
+        assert_eq!(ready.version, 35, "{label}");
+        assert_eq!(ready.previous_version, *version, "{label}");
+        match ready.backup.as_ref() {
+            Some(path) if *version < 35 => {
+                assert_eq!(schema_version_at(path), version.to_string())
+            }
+            Some(_) => panic!("{label} backed up a current database"),
+            None => assert_eq!(*version, 35, "{label}"),
+        }
+        owner.shutdown().unwrap();
+        assert_eq!(tree_hashes(source), before, "{label} source changed");
+        let observed = read_schema_graph(&work.join("print-partner.db"));
+        let mut diff = graph_diff(&fresh_graph, &observed);
+        without_sequence_rows(&mut diff, &fresh_graph, &observed);
+        let names = historical_diff_names(&diff);
+        // legacy_manifest_cutover keeps the ALTER position on schemas 31 and 32.
+        // Schema 33+ creates that column in place. The sets match; only the order differs.
+        // Historical snapshots create sessions without provider. ALTER appends it,
+        // so sqlite_master text differs from the fresh CREATE while the columns match.
+        let mut expected = BTreeSet::from(["sessions".to_owned()]);
+        if *version < 33 {
+            expected.insert("projects".to_owned());
+        }
+        assert_eq!(names, expected, "{label} upgrade vs fresh: {diff:#?}");
+        let fresh_columns = table_columns(&fresh_dir.join("print-partner.db"), "projects");
+        let upgraded_columns = table_columns(&work.join("print-partner.db"), "projects");
+        let mut fresh_order = fresh_columns.clone();
+        let mut upgraded_order = upgraded_columns.clone();
+        fresh_order.sort();
+        upgraded_order.sort();
+        assert_eq!(fresh_order, upgraded_order, "{label}");
+        assert_second_open_keeps_catalog(&work, label);
+        if *version < 33 {
+            assert_ne!(fresh_columns, upgraded_columns, "{label}");
+            assert_eq!(
+                upgraded_columns.last().map(String::as_str),
+                Some("legacy_manifest_cutover"),
+                "{label}"
+            );
+            let metadata = fresh_columns
+                .iter()
+                .position(|name| name == "metadata_json")
+                .unwrap();
+            assert_eq!(
+                fresh_columns.get(metadata + 1).map(String::as_str),
+                Some("legacy_manifest_cutover"),
+                "{label}"
+            );
+        } else {
+            assert_eq!(fresh_columns, upgraded_columns, "{label}");
+        }
+        let fresh_sessions = table_columns(&fresh_dir.join("print-partner.db"), "sessions");
+        let upgraded_sessions = table_columns(&work.join("print-partner.db"), "sessions");
+        assert_eq!(fresh_sessions, upgraded_sessions, "{label} sessions");
+        assert_eq!(
+            fresh_sessions.last().map(String::as_str),
+            Some("provider"),
+            "{label}"
+        );
+    }
+    assert_second_open_keeps_catalog(&fresh_dir, "fresh");
+}
+
+fn plan_input_column_defs(db: &Path) -> Vec<String> {
+    let connection = Connection::open(db).unwrap();
+    let mut statement = connection
+        .prepare("PRAGMA table_info(plan_revision_inputs)")
+        .unwrap();
+    statement
+        .query_map([], |row| {
+            Ok(format!(
+                "{}|{}|{}|{}|{}",
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                value_token(row.get(4)?),
+                row.get::<_, i64>(5)?,
+            ))
+        })
+        .unwrap()
+        .map(|row| row.unwrap())
+        .collect()
+}
+
+fn plan_input_index_defs(db: &Path) -> Vec<String> {
+    let connection = Connection::open(db).unwrap();
+    let mut listed = connection
+        .prepare("PRAGMA index_list(plan_revision_inputs)")
+        .unwrap();
+    let indexes: Vec<(String, i64)> = listed
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(1)?, row.get::<_, i64>(2)?))
+        })
+        .unwrap()
+        .map(|row| row.unwrap())
+        .filter(|(name, _)| !name.starts_with("sqlite_"))
+        .collect();
+    drop(listed);
+    let mut defs = Vec::new();
+    for (name, unique) in indexes {
+        let mut info = connection
+            .prepare(&format!("PRAGMA index_info({})", quote_ident(&name)))
+            .unwrap();
+        let columns: Vec<String> = info
+            .query_map([], |row| row.get::<_, String>(2))
+            .unwrap()
+            .map(|column| column.unwrap())
+            .collect();
+        drop(info);
+        let sql: String = connection
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE name = ?1",
+                [&name],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let identity = sql.split_whitespace().collect::<Vec<_>>().join(" ");
+        let predicate = identity
+            .split_once(" WHERE ")
+            .map(|(_, predicate)| predicate.to_owned())
+            .unwrap_or_default();
+        defs.push(format!("{name}|{unique}|{}|{predicate}", columns.join(",")));
+    }
+    defs.sort();
+    defs
+}
+
+fn plan_input_rows(db: &Path) -> Vec<String> {
+    let connection = Connection::open(db).unwrap();
+    let mut statement = connection
+        .prepare(
+            "SELECT id, tenant_id, input_set_id, source_id, source_layer, layer_order,
+                    tracking_kind, source_revision_id, manifest_digest, effective_naming_digest
+               FROM plan_revision_inputs
+              ORDER BY id",
+        )
+        .unwrap();
+    statement
+        .query_map([], |row| {
+            let mut cells = Vec::new();
+            for index in 0..10 {
+                cells.push(value_token(row.get(index)?));
+            }
+            Ok(cells.join("|"))
+        })
+        .unwrap()
+        .map(|row| row.unwrap())
+        .collect()
+}
+
+const HISTORICAL_NODE_CLIENT_SHA256: &str =
+    "283c23182a1370c0ebfb9a56194db6f859ba763b178d10ec52dca7af780a72e5";
+
+fn materialize_historical_node() -> PathBuf {
+    let root = directory("historical-node-src");
+    let archive = Command::new("git")
+        .args([
+            "archive",
+            "--format=tar",
+            HISTORICAL_SCHEMA_34.commit,
+            "web/apps/server/src/db",
+            "web/apps/server/src/services",
+        ])
+        .current_dir(repo_root())
+        .output()
+        .unwrap();
+    assert!(
+        archive.status.success(),
+        "historical Node client {} is unavailable: {}",
+        HISTORICAL_SCHEMA_34.commit,
+        String::from_utf8_lossy(&archive.stderr)
+    );
+    let mut tar = Command::new("tar")
+        .arg("-x")
+        .arg("-C")
+        .arg(&root)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    {
+        use std::io::Write;
+        tar.stdin
+            .as_mut()
+            .unwrap()
+            .write_all(&archive.stdout)
+            .unwrap();
+    }
+    assert!(tar.wait().unwrap().success(), "tar extract failed");
+    let client = std::fs::read(root.join("web/apps/server/src/db/client.ts")).unwrap();
+    assert_eq!(
+        hex::encode(Sha256::digest(&client)),
+        HISTORICAL_NODE_CLIENT_SHA256
+    );
+    let rebuild = include_bytes!("../data/historical/plan-revision-inputs-rebuild.sql");
+    assert_eq!(
+        hex::encode(Sha256::digest(rebuild)),
+        "a94c8cd765d5b963f50ed8741d9f05642237f0fcc9d4d28c119e64f484b31c67"
+    );
+    assert!(
+        client
+            .windows(rebuild.len())
+            .any(|window| window == rebuild),
+        "vendored rebuild SQL is not the historical client body"
+    );
+    std::os::unix::fs::symlink(
+        repo_root().join("web/node_modules"),
+        root.join("node_modules"),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("drive.mts"),
+        "import { SqliteDatabase } from \"./web/apps/server/src/db/client.ts\";\nconst database = new SqliteDatabase(process.argv[2]);\ndatabase.connect();\ndatabase.close();\n",
+    )
+    .unwrap();
+    root
+}
+
+fn materialize_current_node_driver() -> PathBuf {
+    let root = directory("current-node-driver");
+    let client = serde_json::to_string(
+        &repo_root()
+            .join("web/apps/server/src/db/client.ts")
+            .to_string_lossy()
+            .as_ref(),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("drive.mts"),
+        format!(
+            "import {{ SqliteDatabase }} from {client};\nconst database = new SqliteDatabase(process.argv[2]);\ndatabase.connect();\ndatabase.close();\n"
+        ),
+    )
+    .unwrap();
+    root
+}
+
+fn run_node_driver(driver_dir: &Path, data_dir: &Path) {
+    let output = Command::new(schema_parity_node())
+        .arg(repo_root().join("web/node_modules/tsx/dist/cli.mjs"))
+        .arg(driver_dir.join("drive.mts"))
+        .arg(data_dir)
+        .env("NODE_PATH", repo_root().join("web/node_modules"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "node upgrade failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn apply_historical_node_upgrade(data_dir: &Path) {
+    let client = materialize_historical_node();
+    run_node_driver(&client, data_dir);
+}
+
+fn blank_imported_at(graph: &mut SchemaGraph) {
+    for table in ["printer_profiles", "process_profiles", "filament_profiles"] {
+        let Some(columns) = graph.columns.get(table) else {
+            continue;
+        };
+        let Some(index) = columns
+            .iter()
+            .position(|line| line.split('\u{1f}').nth(1) == Some("imported_at"))
+        else {
+            continue;
+        };
+        let Some(rows) = graph.rows.get_mut(table) else {
+            continue;
+        };
+        for row in rows {
+            let mut cells: Vec<String> = row.split('\u{1e}').map(str::to_owned).collect();
+            if index < cells.len() {
+                cells[index] = "'<clock>'".to_owned();
+            }
+            *row = cells.join("\u{1e}");
+        }
+    }
+}
+
+fn drop_empty_plan_sequence(graph: &mut SchemaGraph) {
+    let Some(rows) = graph.rows.get_mut("sqlite_sequence") else {
+        return;
+    };
+    rows.retain(|row| {
+        let mut cells = row.split('\u{1e}');
+        let name = cells.next().unwrap_or("");
+        let seq = cells.next().unwrap_or("");
+        !(name == "'plan_revision_inputs'" && seq == "0")
+    });
+}
+
+fn with_sql_identity(graph: &SchemaGraph) -> SchemaGraph {
+    let mut graph = graph.clone();
+    for (_, sql) in graph.objects.values_mut() {
+        if let Some(sql) = sql.as_mut() {
+            *sql = schema::sql_identity(sql);
+        }
+    }
+    graph
+}
+
+fn omit_durable_jobs(graph: &mut SchemaGraph) {
+    let job_object = |name: &str| {
+        name.starts_with("durable_job") || name.starts_with("sqlite_autoindex_durable_job")
+    };
+    graph.objects.retain(|(_, name), _| !job_object(name));
+    graph
+        .columns
+        .retain(|name, _| !name.starts_with("durable_job"));
+    graph
+        .foreign_keys
+        .retain(|name, _| !name.starts_with("durable_job"));
+    graph
+        .rows
+        .retain(|name, _| !name.starts_with("durable_job"));
+    if let Some(rows) = graph.rows.get_mut("sqlite_sequence") {
+        rows.retain(|row| !row.contains("durable_job"));
+    }
+}
+
+fn blank_schema_version_stamp(graph: &mut SchemaGraph) {
+    graph.version = "node-catalog".into();
+    let Some(columns) = graph.columns.get("app_settings") else {
+        return;
+    };
+    let Some(key_index) = columns
+        .iter()
+        .position(|line| line.split('\u{1f}').nth(1) == Some("key"))
+    else {
+        return;
+    };
+    let Some(value_index) = columns
+        .iter()
+        .position(|line| line.split('\u{1f}').nth(1) == Some("value"))
+    else {
+        return;
+    };
+    let Some(rows) = graph.rows.get_mut("app_settings") else {
+        return;
+    };
+    for row in rows {
+        let mut cells: Vec<String> = row.split('\u{1e}').map(str::to_owned).collect();
+        if cells.get(key_index).map(String::as_str) == Some("'schema_version'")
+            && value_index < cells.len()
+        {
+            cells[value_index] = "'<stamp>'".into();
+            *row = cells.join("\u{1e}");
+        }
+    }
+}
+
+/// Node schema 34 is the shared catalog. Durable jobs and the schema 35 stamp
+/// are the Rust-owned extension and are compared by the jobs tests.
+fn node_owned_catalog(node: &SchemaGraph, rust: &SchemaGraph) -> Vec<String> {
+    let mut node = node.clone();
+    let mut rust = rust.clone();
+    omit_durable_jobs(&mut node);
+    omit_durable_jobs(&mut rust);
+    blank_schema_version_stamp(&mut node);
+    blank_schema_version_stamp(&mut rust);
+    graph_diff(&node, &rust)
+}
+
+fn equivalent_catalog(left_db: &Path, right_db: &Path) -> Vec<String> {
+    let mut left = with_sql_identity(&read_schema_graph(left_db));
+    let mut right = with_sql_identity(&read_schema_graph(right_db));
+    blank_imported_at(&mut left);
+    blank_imported_at(&mut right);
+    drop_empty_plan_sequence(&mut left);
+    drop_empty_plan_sequence(&mut right);
+    omit_durable_jobs(&mut left);
+    omit_durable_jobs(&mut right);
+    blank_schema_version_stamp(&mut left);
+    blank_schema_version_stamp(&mut right);
+    graph_diff(&left, &right)
+}
+
+fn insert_historical_plan_inputs(db: &Path) {
+    let connection = Connection::open(db).unwrap();
+    connection.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+    connection
+        .execute_batch(
+            "INSERT INTO projects (name, url) VALUES ('Widget', 'https://example.test/widget');
+             INSERT INTO source_revisions (
+               project_id, upstream_revision_key, manifest_digest, snapshot_locator, synced_at
+             ) VALUES (1, 'abc', 'manifest', 'snap://widget', '2020-01-01T00:00:00Z');
+             INSERT INTO build_profiles (name) VALUES ('Profile');
+             INSERT INTO plan_revision_input_sets (
+               profile_id, input_set_digest, expected_input_count, recorded_at
+             ) VALUES (1, 'set', 2, '2020-01-01T00:00:00Z');
+             INSERT INTO plan_revision_inputs (
+               input_set_id, source_revision_id, manifest_digest, source_id, source_layer,
+               layer_order, tracking_kind, effective_naming_digest
+             ) VALUES (1, 1, 'manifest', 1, 'primary', 0, 'revision', 'names');
+             INSERT INTO plan_revision_inputs (input_set_id, source_revision_id, manifest_digest)
+             VALUES (1, 1, 'manifest-filled');",
+        )
+        .unwrap();
+}
+
+#[test]
+fn ticket_t_7_migrations_preserves_plan_revision_inputs() {
+    let source_31 = historical_source(&HISTORICAL_SCHEMA_31);
+    let statements = parse_schema_migrations(&source_31);
+    let historical = build_historical_database("plan-input-history", &statements, 31);
+    insert_historical_plan_inputs(&historical.join("print-partner.db"));
+    let before = tree_hashes(&historical);
+    let node_dir = directory("plan-input-node");
+    let rust_dir = directory("plan-input-rust");
+    copy_db_files(&historical, &node_dir);
+    copy_db_files(&historical, &rust_dir);
+    apply_historical_node_upgrade(&node_dir);
+    let (owner, ready) = open_parity(&rust_dir, "2026-10-02T00:00:00.000Z");
+    assert_eq!(ready.version, 35);
+    assert_eq!(ready.previous_version, 31);
+    assert_eq!(schema_version_at(ready.backup.as_ref().unwrap()), "31");
+    let backup_rows = plan_input_rows(ready.backup.as_ref().unwrap());
+    assert_eq!(
+        backup_rows,
+        [
+            "1|default|1|1|primary|0|revision|1|manifest|names",
+            "2|default|1|<null>|<null>|0|revision|1|manifest-filled|<null>",
+        ]
+    );
+    owner.shutdown().unwrap();
+    assert_eq!(tree_hashes(&historical), before);
+    assert_eq!(
+        plan_input_column_defs(&node_dir.join("print-partner.db")),
+        plan_input_column_defs(&rust_dir.join("print-partner.db"))
+    );
+    assert_eq!(
+        plan_input_index_defs(&node_dir.join("print-partner.db")),
+        plan_input_index_defs(&rust_dir.join("print-partner.db"))
+    );
+    assert_eq!(
+        plan_input_rows(&rust_dir.join("print-partner.db")),
+        [
+            "1|default|1|1|primary|0|revision|1|manifest|names",
+            "2|default|1|1|legacy:1|0|revision|1|manifest-filled|<null>",
+        ]
+    );
+    assert_eq!(
+        plan_input_rows(&node_dir.join("print-partner.db")),
+        plan_input_rows(&rust_dir.join("print-partner.db"))
+    );
+    let node_sql: String = Connection::open(node_dir.join("print-partner.db"))
+        .unwrap()
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE name = 'plan_revision_inputs'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let rust_sql: String = Connection::open(rust_dir.join("print-partner.db"))
+        .unwrap()
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE name = 'plan_revision_inputs'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        schema::sql_identity(&node_sql),
+        schema::sql_identity(&rust_sql)
+    );
+    let fresh_dir = directory("plan-input-fresh");
+    let (fresh_owner, _) = open_parity(&fresh_dir, "2026-10-02T00:00:00.000Z");
+    fresh_owner.shutdown().unwrap();
+    let fresh_trigger: String = Connection::open(fresh_dir.join("print-partner.db"))
+        .unwrap()
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE name = 'trg_accepted_plate_revisions_immutable_update'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let rust_trigger: String = Connection::open(rust_dir.join("print-partner.db"))
+        .unwrap()
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE name = 'trg_accepted_plate_revisions_immutable_update'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(fresh_trigger, rust_trigger);
+    let node_trigger: String = Connection::open(node_dir.join("print-partner.db"))
+        .unwrap()
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE name = 'trg_accepted_plate_revisions_immutable_update'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        schema::sql_identity(&node_trigger),
+        schema::sql_identity(&rust_trigger)
+    );
+    assert!(node_trigger.contains("Accepted Plate revision is immutable"));
+    assert_second_open_keeps_catalog(&rust_dir, "plan-input-rust");
+
+    let orphan_dir = directory("plan-input-orphan");
+    copy_db_files(&historical, &orphan_dir);
+    let orphan = Connection::open(orphan_dir.join("print-partner.db")).unwrap();
+    orphan.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
+    orphan
+        .execute(
+            "INSERT INTO plan_revision_inputs (input_set_id, source_revision_id, manifest_digest, source_id, source_layer)
+             VALUES (1, 99, 'missing', 1, 'primary')",
+            [],
+        )
+        .unwrap();
+    drop(orphan);
+    let error = WriterOwner::open_at(
+        &orphan_dir,
+        Limits {
+            queued_writes: 2,
+            readers: 2,
+        },
+        "2026-10-02T00:00:00.000Z",
+    )
+    .err()
+    .unwrap()
+    .to_string();
+    assert!(
+        error.contains("Cannot migrate Plan revision input 3: Source revision is missing"),
+        "{error}"
+    );
+    let retained = Connection::open(orphan_dir.join("print-partner.db")).unwrap();
+    let notnull: i64 = retained
+        .query_row(
+            "SELECT \"notnull\" FROM pragma_table_info('plan_revision_inputs') WHERE name = 'source_revision_id'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(notnull, 1);
+    let version: String = retained
+        .query_row(
+            "SELECT value FROM app_settings WHERE tenant_id = 'default' AND key = 'schema_version'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(version, "31");
+}
+
+fn pinned_historical_copies() -> Vec<(&'static str, u64, PathBuf)> {
+    let source_31 = historical_source(&HISTORICAL_SCHEMA_31);
+    let source_33 = historical_source(&HISTORICAL_SCHEMA_33);
+    let statements_31 = parse_schema_migrations(&source_31);
+    let statements_33 = parse_schema_migrations(&source_33);
+    let v32 = statements_33
+        .iter()
+        .find(|statement| {
+            statement
+                .comments
+                .iter()
+                .any(|comment| comment.contains("v32"))
+        })
+        .unwrap();
+    let mut statements_32 = statements_31.clone();
+    statements_32.push(v32.clone());
+    let statements_34 = parse_schema_migrations(&historical_source(&HISTORICAL_SCHEMA_34));
+    vec![
+        (
+            "schema-31",
+            31,
+            build_historical_database("node-proof-31", &statements_31, 31),
+        ),
+        (
+            "schema-32",
+            32,
+            build_historical_database("node-proof-32", &statements_32, 32),
+        ),
+        (
+            "schema-33",
+            33,
+            build_historical_database("node-proof-33", &statements_33, 33),
+        ),
+        (
+            "schema-34",
+            34,
+            build_historical_database("node-proof-34", &statements_34, 34),
+        ),
+    ]
+}
+
+// Historical Node connect() is the upgrade that repaired plan_revision_inputs.
+// Current Node initialization no longer does. Rust must match that repair and
+// the current fresh catalog, including the two plan-input indexes and the
+// accepted-plate immutability trigger.
+#[test]
+fn ticket_t_7_migrations_matches_node_upgrade() {
+    let current_client =
+        std::fs::read_to_string(repo_root().join("web/apps/server/src/db/client.ts")).unwrap();
+    assert!(
+        !current_client.contains("plan_revision_inputs_v17"),
+        "current Node still rebuilds plan_revision_inputs"
+    );
+    let app = std::fs::read_to_string(repo_root().join("web/apps/server/src/app.ts")).unwrap();
+    assert!(app.contains("migratePrintOutcomesBlob"));
+    assert!(app.contains("backfillAdvisorNotesFromDomainPack"));
+    let historical = materialize_historical_node();
+    let current = materialize_current_node_driver();
+
+    let node_fresh = directory("current-node-fresh");
+    run_node_driver(&current, &node_fresh);
+    let rust_fresh = directory("current-rust-fresh");
+    let (owner, ready) = open_parity(&rust_fresh, "2026-10-02T00:00:00.000Z");
+    assert_eq!(ready.previous_version, 0);
+    assert!(ready.backup.is_none());
+    owner.shutdown().unwrap();
+    let fresh_diff = equivalent_catalog(
+        &node_fresh.join("print-partner.db"),
+        &rust_fresh.join("print-partner.db"),
+    );
+    assert!(
+        fresh_diff.is_empty(),
+        "current Node fresh vs Rust fresh: {fresh_diff:#?}"
+    );
+
+    for (label, version, source) in pinned_historical_copies() {
+        let before = tree_hashes(&source);
+        let node_dir = directory(&format!("node-upgrade-{label}"));
+        let rust_dir = directory(&format!("rust-upgrade-{label}"));
+        copy_db_files(&source, &node_dir);
+        copy_db_files(&source, &rust_dir);
+        insert_historical_plan_inputs(&node_dir.join("print-partner.db"));
+        insert_historical_plan_inputs(&rust_dir.join("print-partner.db"));
+        run_node_driver(&historical, &node_dir);
+        let (owner, ready) = open_parity(&rust_dir, "2026-10-02T00:00:00.000Z");
+        assert_eq!(ready.version, 35, "{label}");
+        assert_eq!(ready.previous_version, version, "{label}");
+        if version < 35 {
+            assert_eq!(
+                schema_version_at(ready.backup.as_ref().unwrap()),
+                version.to_string(),
+                "{label}"
+            );
+        } else {
+            assert!(ready.backup.is_none(), "{label}");
+        }
+        owner.shutdown().unwrap();
+        assert_eq!(tree_hashes(&source), before, "{label} source changed");
+        let diff = equivalent_catalog(
+            &node_dir.join("print-partner.db"),
+            &rust_dir.join("print-partner.db"),
+        );
+        // The pinned Node client predates sessions.provider. Current Rust appends it.
+        let names = historical_diff_names(&diff);
+        assert_eq!(
+            names,
+            BTreeSet::from(["sessions".to_owned()]),
+            "{label} Node upgrade vs Rust: {diff:#?}"
+        );
+        let node_sessions = table_columns(&node_dir.join("print-partner.db"), "sessions");
+        let rust_sessions = table_columns(&rust_dir.join("print-partner.db"), "sessions");
+        assert!(
+            !node_sessions.iter().any(|column| column == "provider"),
+            "{label}"
+        );
+        let mut without_provider = rust_sessions.clone();
+        assert_eq!(
+            without_provider.pop().as_deref(),
+            Some("provider"),
+            "{label}"
+        );
+        assert_eq!(node_sessions, without_provider, "{label}");
+        assert_eq!(
+            table_columns(&node_dir.join("print-partner.db"), "projects"),
+            table_columns(&rust_dir.join("print-partner.db"), "projects"),
+            "{label}"
+        );
+        assert_eq!(
+            plan_input_rows(&node_dir.join("print-partner.db")),
+            plan_input_rows(&rust_dir.join("print-partner.db")),
+            "{label}"
+        );
+        assert_eq!(
+            plan_input_rows(&rust_dir.join("print-partner.db")),
+            [
+                "1|default|1|1|primary|0|revision|1|manifest|names",
+                "2|default|1|1|legacy:1|0|revision|1|manifest-filled|<null>",
+            ],
+            "{label}"
+        );
+        let fresh_columns = table_columns(&rust_fresh.join("print-partner.db"), "projects");
+        let upgraded_columns = table_columns(&rust_dir.join("print-partner.db"), "projects");
+        if version < 33 {
+            assert_ne!(fresh_columns, upgraded_columns, "{label}");
+            assert_eq!(
+                upgraded_columns.last().map(String::as_str),
+                Some("legacy_manifest_cutover"),
+                "{label}"
+            );
+        } else {
+            assert_eq!(fresh_columns, upgraded_columns, "{label}");
+        }
+    }
 }

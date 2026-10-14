@@ -1,4 +1,8 @@
-import { TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
+import { chargeTenantDiskBytes, TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
+import {
+  OwnershipAdmissionError,
+  requireSourceSyncParticipant,
+} from "../ownership/source-sync-admission.js";
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync, readdirSync, lstatSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
@@ -18,7 +22,7 @@ import {
   findSourceCategoryPath,
   moveSourceCategoryPath,
 } from "@print-partner/domain";
-import type { AppRepository } from "../db/repository.js";
+import { SourceActivationConflictError, type AppRepository } from "../db/repository.js";
 import { AcceptedPlanOperationalIntegrityError } from "../db/accepted-plan-operational.js";
 import { acceptedPlanBasis, acceptedProgressSummary } from "../db/accepted-plan-progress.js";
 import type { IntegrationPort } from "../integrations/store.js";
@@ -95,9 +99,8 @@ import {
 import { PlanDraftWorkspaceService } from "../services/plan-draft-workspace.js";
 import { createSourceUploadStaging, finalizeUploadedSource, writeUploadedFiles, writeUploadedZip } from "../services/archive-import.js";
 import { MAX_MCP_INLINE_FILE_BYTES, MCP_INLINE_UPLOAD_TOO_LARGE_DETAIL } from "../services/upload-limits.js";
-import { indexSourceDocsFromDisk } from "../services/source-docs-index.js";
+import { indexDocsForActivatedRevision, publishLocalSourceWorkingTree, removeObsoleteHostedWorkingTree, SOURCE_PUBLICATION_UNAVAILABLE_DETAIL } from "../services/local-source-revision.js";
 import { resolvedFileUnderRoot } from "../lib/secure-path.js";
-import { publishLocalSourceWorkingTree } from "../services/local-source-revision.js";
 import { addCustomFilament, listCustomFilaments } from "../services/custom-filaments.js";
 import { extractThreeMfMeshes } from "../services/three-mf-import.js";
 import { bufferChunks } from "../lib/byte-chunks.js";
@@ -956,6 +959,9 @@ export async function invokeAssistantTool(
         });
       }
       case "propose_import_source_files": {
+        if (!ctx.repo.canPublishSourceRevision()) {
+          return { content: JSON.stringify({ error: SOURCE_PUBLICATION_UNAVAILABLE_DETAIL }) };
+        }
         const sourceId = asInt(input.source_id);
         if (sourceId == null || !ctx.repo.getSource(sourceId)) return { content: JSON.stringify({ error: "source_id must reference an existing Source" }) };
         const archive = typeof input.archive_base64 === "string" ? input.archive_base64.trim() : "";
@@ -3295,10 +3301,14 @@ export async function applyAssistantAction(
         break;
       }
       case "propose_import_source_files": {
+        if (!deps.repo.canPublishSourceRevision()) {
+          return { ok: false, status: 503, detail: SOURCE_PUBLICATION_UNAVAILABLE_DETAIL };
+        }
         const sourceId = asInt(action.params.source_id);
         if (sourceId == null) return { ok: false, detail: "source_id required" };
+        const observed = deps.repo.getSourceActivationObservation(sourceId);
         const source = deps.repo.getSource(sourceId);
-        if (!source) return { ok: false, detail: "Source not found" };
+        if (!source || !observed) return { ok: false, detail: "Source not found" };
         const archive = typeof action.params.archive_base64 === "string" ? action.params.archive_base64.trim() : "";
         const rawFiles = Array.isArray(action.params.files) ? action.params.files : [];
         if ((!archive && rawFiles.length === 0) || (archive && rawFiles.length > 0)) return { ok: false, detail: "provide exactly one of archive_base64 or files" };
@@ -3307,14 +3317,17 @@ export async function applyAssistantAction(
         let importedFiles = 0;
         let stlCount = 0;
         let suggestedRules: string[] = [];
-        const staging = createSourceUploadStaging(sourcesDir);
+        const beforePublish = () => requireSourceSyncParticipant("assistant.propose_import_source_files");
+        beforePublish();
+        const staging = createSourceUploadStaging(sourcesDir, deps.tenantId ?? "default");
         try {
           if (archive) {
             const buffer = Buffer.from(archive, "base64");
             if (buffer.length > MAX_MCP_INLINE_FILE_BYTES) return { ok: false, detail: MCP_INLINE_UPLOAD_TOO_LARGE_DETAIL };
             const stagedZip = join(staging, "upload.zip");
+            chargeTenantDiskBytes(buffer.length);
             writeFileSync(stagedZip, buffer);
-            workingTree = writeUploadedZip(stagedZip, sourcesDir, sourceId);
+            workingTree = writeUploadedZip(stagedZip, staging);
             const finalized = finalizeUploadedSource(workingTree);
             importedFiles = 1;
             stlCount = finalized.stlCount;
@@ -3333,35 +3346,70 @@ export async function applyAssistantAction(
               totalBytes += buffer.length;
               if (totalBytes > MAX_MCP_INLINE_FILE_BYTES) return { ok: false, detail: MCP_INLINE_UPLOAD_TOO_LARGE_DETAIL };
               const path = join(staging, String(index));
+              chargeTenantDiskBytes(buffer.length);
               writeFileSync(path, buffer);
               files.push({ relativePath, path });
             }
-            const written = writeUploadedFiles(files, sourcesDir, sourceId);
+            const written = writeUploadedFiles(files, staging);
             workingTree = written.extractDir;
             importedFiles = written.fileCount;
             stlCount = written.stlCount;
             suggestedRules = written.suggestedImportRules;
           }
-          const updated = await publishLocalSourceWorkingTree({ repo: deps.repo, reposDir: deps.repo.reposDir, sourceId, workingTree });
-          const existingRules = deps.repo.getProjectRow(sourceId)?.importedPaths;
-          if ((!existingRules || existingRules === "[]") && suggestedRules.length > 0) deps.repo.updateImportRules(sourceId, suggestedRules);
-          indexSourceDocsFromDisk(deps.repo, sourceId, updated.local_path ?? workingTree);
+          beforePublish();
+          const artifacts = scanSourceArtifacts(workingTree);
+          const updated = await publishLocalSourceWorkingTree({
+            repo: deps.repo, reposDir: deps.repo.reposDir, sourceId, workingTree, observed, beforePublish,
+            preserveAllFiles: true, suggestedImportRules: suggestedRules,
+          });
+          const revisionId = updated.current_source_revision_id;
+          const indexedDocs = revisionId == null
+            ? null
+            : indexDocsForActivatedRevision({
+              repo: deps.repo,
+              sourceId,
+              localPath: updated.local_path ?? workingTree,
+              revisionId,
+              beforePublish,
+            });
+          if (indexedDocs?.outcome === "cleared") {
+            getLogger().log("warn", "Uploaded Source documentation indexing failed", { sourceId, revisionId, error: indexedDocs.reason });
+          }
+          if (deps.hostedPlanning) {
+            try {
+              await removeObsoleteHostedWorkingTree({
+                sourcesDir,
+                sourceId,
+                activePath: updated.local_path,
+                beforePublish,
+              });
+            } catch (error) {
+              if (error instanceof OwnershipAdmissionError) throw error;
+              getLogger().log("warn", "Obsolete hosted working tree cleanup failed", { sourceId, error: String(error) });
+            }
+          }
           outcome = {
             ok: true,
             result: {
               source: deps.repo.sourceSummaryForClient(updated),
               imported_files: importedFiles,
               stl_count: stlCount,
-              artifacts: updated.local_path ? scanSourceArtifacts(updated.local_path) : [],
+              artifacts,
               suggested_import_rules: suggestedRules,
             },
           };
         } catch (error) {
-          if (error instanceof TenantDiskQuotaError) throw error;
+          if (error instanceof OwnershipAdmissionError || error instanceof TenantDiskQuotaError) throw error;
+          if (error instanceof SourceActivationConflictError) {
+            return { ok: false, status: 409, detail: error.message };
+          }
           return { ok: false, detail: error instanceof Error ? error.message : String(error) };
         } finally {
-          rmSync(staging, { recursive: true, force: true });
-          if (deps.hostedPlanning) rmSync(join(sourcesDir, String(sourceId)), { recursive: true, force: true });
+          try {
+            rmSync(staging, { recursive: true, force: true });
+          } catch (error) {
+            getLogger().log("warn", "Source upload staging cleanup failed", { error: String(error) });
+          }
         }
         break;
       }
@@ -4134,6 +4182,7 @@ export async function applyAssistantAction(
         break;
       }
       case "start_sync": {
+        requireSourceSyncParticipant("mcp.start_sync");
         const ids: number[] = [];
         if (Array.isArray(action.params.project_ids)) {
           for (const raw of action.params.project_ids) {
@@ -4577,6 +4626,7 @@ export async function applyAssistantAction(
     }
     return outcome;
   } catch (error) {
+    if (error instanceof OwnershipAdmissionError) return { ok: false, status: 503, detail: error.message };
     if (error instanceof TenantDiskQuotaError) throw error;
     if (action.type !== "archive_plan") {
       return {

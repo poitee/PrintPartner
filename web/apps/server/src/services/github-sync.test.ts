@@ -1,8 +1,8 @@
 import * as pdfText from "./pdf-text-extract.js";
-import { TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { measureTenantDiskUsage, TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -28,6 +28,8 @@ vi.mock("@octokit/rest", () => ({
 
 import { createSelfHostPorts } from "../adapters/self-host/index.js";
 import { createJobRunner } from "./job-runner.js";
+import { publishLocalSourceWorkingTree } from "./local-source-revision.js";
+import { beginSourceSyncAdmission, packagedSourceSyncManifestPath } from "../ownership/source-sync-admission.js";
 import { syncProjectById } from "../routes/sources.js";
 import {
   listGithubBranches,
@@ -36,7 +38,7 @@ import {
   resolveGithubUrlRef,
   syncGithubSource,
 } from "./github-sync.js";
-import { LocalSourceSnapshotStore, sourceRelativePath } from "./local-source-snapshot.js";
+import { LocalSourceSnapshotStore, sharedSnapshotHolderCount, sourceRelativePath } from "./local-source-snapshot.js";
 
 const COMMIT_A = "a".repeat(40);
 const COMMIT_B = "b".repeat(40);
@@ -51,6 +53,20 @@ type TreeItem = {
   sha?: string;
 };
 
+function revisionNames(reposDir: string, sourceId: number): string[] {
+  const root = join(reposDir, String(sourceId), "revisions");
+  if (!existsSync(root)) return [];
+  return readdirSync(root).filter((name) => !name.startsWith(".")).sort();
+}
+
+function fileBytes(path: string): number {
+  if (!existsSync(path)) return 0;
+  const stat = statSync(path);
+  if (stat.isSymbolicLink() || !stat.isFile() && !stat.isDirectory()) return 0;
+  if (stat.isFile()) return stat.size;
+  return readdirSync(path).reduce((sum, name) => sum + fileBytes(join(path, name)), 0);
+}
+
 function reposRoot(): string {
   const root = mkdtempSync(join(tmpdir(), "pp-github-sync-"));
   roots.push(root);
@@ -62,8 +78,8 @@ function setTree(commitSha: string, items: TreeItem[], truncated = false): void 
   github.getTree.mockResolvedValue({ data: { truncated, tree: items } });
 }
 
-function rawResponse(contentByPath: Record<string, string>): ReturnType<typeof vi.fn> {
-  return vi.fn(async (input: string | URL | Request) => {
+function rawResponse(contentByPath: Record<string, string>) {
+  return vi.fn<typeof fetch>(async (input) => {
     const url = String(input);
     const path = decodeURIComponent(new URL(url).pathname.split("/").slice(4).join("/"));
     const content = contentByPath[path];
@@ -90,6 +106,260 @@ afterEach(() => {
 });
 
 describe("atomic GitHub Source sync", () => {
+  it("does not overwrite an upload that publishes during a pending sync", async () => {
+    const dataDir = reposRoot();
+    const ports = createSelfHostPorts(dataDir);
+    await ports.db.connect();
+    const repo = ports.repository!;
+    const source = repo.createSource({ name: "Concurrent kit", url: "https://github.com/example/kit", source_kind: "github" });
+    let fetched!: () => void;
+    const fetching = new Promise<void>((resolve) => { fetched = resolve; });
+    let resume!: () => void;
+    const gate = new Promise<void>((resolve) => { resume = resolve; });
+    setTree(COMMIT_A, [{ path: "remote.stl", type: "blob", mode: "100644", size: 6 }]);
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      fetched();
+      await gate;
+      return new Response("remote", { status: 200, headers: { "content-length": "6" } });
+    }));
+    const syncing = syncProjectById(repo, repo.reposDir, source.id);
+    await fetching;
+    const candidate = join(dataDir, "upload-candidate");
+    mkdirSync(candidate);
+    writeFileSync(join(candidate, "upload.stl"), "upload wins");
+    const uploaded = await publishLocalSourceWorkingTree({ repo, reposDir: repo.reposDir, sourceId: source.id, workingTree: candidate });
+    resume();
+    await expect(syncing).rejects.toThrow("Source changed during sync");
+    const active = repo.getSource(source.id);
+    expect(active?.local_path).toBe(uploaded.local_path);
+    expect(readFileSync(join(uploaded.local_path!, "upload.stl"), "utf8")).toBe("upload wins");
+    expect(readdirSync(uploaded.local_path!).sort()).toEqual([".printpartner-source-snapshot.json", "upload.stl"]);
+    expect(revisionNames(repo.reposDir, source.id)).toEqual([basename(uploaded.local_path!)]);
+    expect(repo.listSourceRevisions(source.id).map((revision) => revision.snapshot_locator)).toEqual([
+      `${source.id}/revisions/${basename(uploaded.local_path!)}`,
+    ]);
+    expect(await measureTenantDiskUsage({
+      dataDir, reposDir: repo.reposDir, tenantId: "default", sourceIds: [source.id],
+    })).toBe(fileBytes(join(repo.reposDir, String(source.id))));
+    await ports.db.close();
+  });
+
+  it("review preserves an in-flight unregistered Git reuser when the creator loses", async () => {
+    const dataDir = reposRoot();
+    const ports = createSelfHostPorts(dataDir);
+    await ports.db.connect();
+    const repo = ports.repository!;
+    const source = repo.createSource({ name: "Shared Git", url: "https://github.com/example/kit", source_kind: "github" });
+    setTree(COMMIT_A, [{ path: "remote.stl", type: "blob", mode: "100644", size: 6 }]);
+    vi.stubGlobal("fetch", rawResponse({ "remote.stl": "remote" }));
+    const real = LocalSourceSnapshotStore.prototype.materialize;
+    const releases: Array<() => void> = [];
+    const ready: Array<() => void> = [];
+    const gates = [0, 1].map(() => new Promise<void>((resolve) => { ready.push(resolve); }));
+    let seen = 0;
+    let sharedPath = "";
+    const materialize = vi.spyOn(LocalSourceSnapshotStore.prototype, "materialize").mockImplementation(async function (
+      this: LocalSourceSnapshotStore,
+      input: Parameters<LocalSourceSnapshotStore["materialize"]>[0],
+    ) {
+      const result = await real.call(this, input);
+      if (input.upstreamRevisionKey.startsWith(COMMIT_A)) {
+        const index = seen;
+        seen += 1;
+        sharedPath = result.absolutePath;
+        expect(result.publication).toBe(index === 0 ? "created" : "reused");
+        const gate = new Promise<void>((resolve) => { releases[index] = resolve; });
+        ready[index]?.();
+        await gate;
+      }
+      return result;
+    });
+    let creator: ReturnType<typeof syncProjectById> | undefined;
+    let reuser: ReturnType<typeof syncProjectById> | undefined;
+    try {
+      creator = syncProjectById(repo, repo.reposDir, source.id);
+      await gates[0];
+      const candidate = join(dataDir, "upload-candidate");
+      mkdirSync(candidate);
+      writeFileSync(join(candidate, "upload.stl"), "upload wins");
+      const uploaded = await publishLocalSourceWorkingTree({
+        repo, reposDir: repo.reposDir, sourceId: source.id, workingTree: candidate,
+      });
+      const uploadedPath = uploaded.local_path;
+      if (!uploadedPath) throw new Error("upload did not publish");
+      reuser = syncProjectById(repo, repo.reposDir, source.id);
+      await gates[1];
+      releases[0]?.();
+      await expect(creator).rejects.toThrow("Source changed during sync");
+      expect(existsSync(sharedPath)).toBe(true);
+      releases[1]?.();
+      const synced = await reuser;
+      expect(synced.stl_count).toBe(1);
+      const active = repo.getSource(source.id);
+      expect(active?.local_path).toBe(sharedPath);
+      expect(active?.current_source_revision_id).toEqual(expect.any(Number));
+      expect(existsSync(sharedPath)).toBe(true);
+      expect(readFileSync(join(sharedPath, "remote.stl"), "utf8")).toBe("remote");
+      expect(readFileSync(join(uploadedPath, "upload.stl"), "utf8")).toBe("upload wins");
+      expect(revisionNames(repo.reposDir, source.id)).toEqual(
+        [basename(sharedPath), basename(uploadedPath)].sort(),
+      );
+      expect(sharedSnapshotHolderCount(sharedPath)).toBe(0);
+      expect(sharedSnapshotHolderCount(uploadedPath)).toBe(0);
+      expect(await measureTenantDiskUsage({
+        dataDir, reposDir: repo.reposDir, tenantId: "default", sourceIds: [source.id],
+      })).toBe(fileBytes(join(repo.reposDir, String(source.id))));
+    } finally {
+      for (const release of releases) release?.();
+      materialize.mockRestore();
+      await ports.db.close();
+    }
+  });
+
+  it("keeps a reused Git snapshot when a later sync loses activation to an upload", async () => {
+    const dataDir = reposRoot();
+    const ports = createSelfHostPorts(dataDir);
+    await ports.db.connect();
+    const repo = ports.repository!;
+    const source = repo.createSource({ name: "Reused kit", url: "https://github.com/example/kit", source_kind: "github" });
+    setTree(COMMIT_A, [{ path: "remote.stl", type: "blob", mode: "100644", size: 6 }]);
+    vi.stubGlobal("fetch", rawResponse({ "remote.stl": "remote" }));
+    await syncProjectById(repo, repo.reposDir, source.id);
+    const kept = repo.getSource(source.id);
+    const keptPath = kept?.local_path;
+    if (!keptPath) throw new Error("Expected the first sync to activate a snapshot");
+    expect(readFileSync(join(keptPath, "remote.stl"), "utf8")).toBe("remote");
+    const keptNames = revisionNames(repo.reposDir, source.id);
+
+    let publication = "";
+    let started!: () => void;
+    const waiting = new Promise<void>((resolve) => { started = resolve; });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const real = LocalSourceSnapshotStore.prototype.materialize;
+    let gated = false;
+    const materialize = vi.spyOn(LocalSourceSnapshotStore.prototype, "materialize").mockImplementation(async function (
+      this: LocalSourceSnapshotStore,
+      input: Parameters<LocalSourceSnapshotStore["materialize"]>[0],
+    ) {
+      const snapshot = await real.call(this, input);
+      if (gated) return snapshot;
+      gated = true;
+      publication = snapshot.publication;
+      started();
+      await gate;
+      return snapshot;
+    });
+    try {
+      const syncing = syncProjectById(repo, repo.reposDir, source.id);
+      await waiting;
+      expect(publication).toBe("reused");
+      const candidate = join(dataDir, "upload-candidate");
+      mkdirSync(candidate);
+      writeFileSync(join(candidate, "upload.stl"), "upload wins");
+      const uploaded = await publishLocalSourceWorkingTree({
+        repo, reposDir: repo.reposDir, sourceId: source.id, workingTree: candidate,
+      });
+      release();
+      await expect(syncing).rejects.toThrow("Source changed during sync");
+      expect(repo.getSource(source.id)?.local_path).toBe(uploaded.local_path);
+      expect(readFileSync(join(uploaded.local_path!, "upload.stl"), "utf8")).toBe("upload wins");
+      expect(readFileSync(join(keptPath, "remote.stl"), "utf8")).toBe("remote");
+      expect(revisionNames(repo.reposDir, source.id)).toEqual(
+        [...keptNames, basename(uploaded.local_path!)].sort(),
+      );
+      expect(repo.listSourceRevisions(source.id)).toHaveLength(2);
+      expect(await measureTenantDiskUsage({
+        dataDir, reposDir: repo.reposDir, tenantId: "default", sourceIds: [source.id],
+      })).toBe(fileBytes(join(repo.reposDir, String(source.id))));
+    } finally {
+      release();
+      materialize.mockRestore();
+      await ports.db.close();
+    }
+  });
+
+  it.each(["github", "git"])("rejects unsupported %s publication before upstream or Source mutation", async (sourceKind) => {
+    const dataDir = reposRoot();
+    const ports = createSelfHostPorts(dataDir);
+    await ports.db.connect();
+    const repo = ports.repository!;
+    const source = repo.createSource({ name: "Unsupported kit", url: "https://github.com/example/kit", source_kind: sourceKind });
+    const before = repo.getProjectRow(source.id);
+    const capability = vi.spyOn(repo, "canPublishSourceRevision").mockReturnValue(false);
+    const upstream = vi.fn(() => { throw new Error("Upstream must not be contacted"); });
+    github.getCommit.mockImplementation(upstream);
+    try {
+      await expect(syncProjectById(repo, repo.reposDir, source.id)).rejects.toThrow(
+        "atomic publication transactions are not supported",
+      );
+      expect(repo.getProjectRow(source.id)).toEqual(before);
+      expect(repo.listSourceRevisions(source.id)).toEqual([]);
+      expect(readdirSync(repo.reposDir)).toEqual([]);
+      expect(upstream).not.toHaveBeenCalled();
+    } finally {
+      capability.mockRestore();
+      await ports.db.close();
+    }
+  });
+
+  it.each(["local", "zip"])("keeps %s document indexing available without revision publication", async (sourceKind) => {
+    const dataDir = reposRoot();
+    const ports = createSelfHostPorts(dataDir);
+    await ports.db.connect();
+    const repo = ports.repository!;
+    const files = join(dataDir, "local-files");
+    mkdirSync(files);
+    writeFileSync(join(files, "README.md"), "# Existing local documentation");
+    const source = repo.createSource({ name: "Local docs", source_kind: sourceKind, local_path: files });
+    const capability = vi.spyOn(repo, "canPublishSourceRevision").mockReturnValue(false);
+    try {
+      expect(await syncProjectById(repo, repo.reposDir, source.id)).toEqual({
+        stl_count: 0, downloaded: 0, doc_count: 1, docs_downloaded: 0,
+      });
+      expect(repo.listSourceDocs(source.id).map((doc) => doc.path)).toEqual(["README.md"]);
+      expect(readFileSync(join(files, "README.md"), "utf8")).toBe("# Existing local documentation");
+    } finally {
+      capability.mockRestore();
+      await ports.db.close();
+    }
+  });
+
+  it("rolls back sync activation when marking the revision current fails", async () => {
+    const dataDir = reposRoot();
+    const ports = createSelfHostPorts(dataDir);
+    await ports.db.connect();
+    const repo = ports.repository!;
+    const source = repo.createSource({ name: "Rollback kit", url: "https://github.com/example/kit", source_kind: "github" });
+    const candidate = join(dataDir, "upload-candidate");
+    mkdirSync(candidate);
+    writeFileSync(join(candidate, "previous.stl"), "previous bytes");
+    const previous = await publishLocalSourceWorkingTree({
+      repo, reposDir: repo.reposDir, sourceId: source.id, workingTree: candidate,
+    });
+    const revisions = repo.listSourceRevisions(source.id);
+    setTree(COMMIT_A, [{ path: "remote.stl", type: "blob", mode: "100644", size: 6 }]);
+    vi.stubGlobal("fetch", rawResponse({ "remote.stl": "remote" }));
+    const markCurrent = vi.spyOn(repo, "markSourceRevisionCurrent").mockImplementation(() => {
+      throw new Error("forced current-status failure");
+    });
+    const beforeNames = revisionNames(repo.reposDir, source.id);
+    try {
+      await expect(syncProjectById(repo, repo.reposDir, source.id)).rejects.toThrow("forced current-status failure");
+      expect(repo.getSource(source.id)?.current_source_revision_id).toBe(previous.current_source_revision_id);
+      expect(repo.getSource(source.id)?.local_path).toBe(previous.local_path);
+      expect(repo.listSourceRevisions(source.id)).toEqual(revisions);
+      expect(readFileSync(join(previous.local_path!, "previous.stl"), "utf8")).toBe("previous bytes");
+      expect(revisionNames(repo.reposDir, source.id)).toEqual(beforeNames);
+      expect(await measureTenantDiskUsage({
+        dataDir, reposDir: repo.reposDir, tenantId: "default", sourceIds: [source.id],
+      })).toBe(fileBytes(join(repo.reposDir, String(source.id))));
+    } finally {
+      markCurrent.mockRestore();
+      await ports.db.close();
+    }
+  });
+
   it("keeps the branch from a deep GitHub tree URL", () => {
     const url =
       "https://github.com/MillenniumMachines/Milo-V2.0/tree/Current/STL%20Files/Spindle-Mounts/LDO-Kit-Spindle-Mount";
@@ -147,7 +417,10 @@ describe("atomic GitHub Source sync", () => {
     expect(result.stlPaths).toEqual([`${path}.STL`]);
     expect(result.downloaded).toBe(1);
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect((await syncGithubSource(input)).snapshot.publication).toBe("reused");
+    const reused = await syncGithubSource(input);
+    expect(reused.snapshot.publication).toBe("reused");
+    expect(sharedSnapshotHolderCount(result.snapshot.absolutePath)).toBe(0);
+    expect(sharedSnapshotHolderCount(reused.snapshot.absolutePath)).toBe(0);
   });
 
   it.each([undefined, COMMIT_A])("rejects case collisions without identical blob identity (%s)", async (sha) => {
@@ -670,6 +943,56 @@ it("a queued hosted sync cannot activate a snapshot larger than its remaining qu
     expect(repo.listSourceRevisions(source.id)).toEqual([]);
     expect(readdirSync(join(repo.reposDir, String(source.id), "revisions"))).toEqual([]);
   } finally {
+    await ports.db.close();
+  }
+});
+
+it.each([
+  { count: 1, change: "replacement" },
+  { count: 2, change: "replacement" },
+  { count: 1, change: "removal" },
+])("refuses publication for $count sources after manifest $change during download", async ({ count, change }) => {
+  const dataDir = reposRoot();
+  const ports = createSelfHostPorts(dataDir);
+  await ports.db.connect();
+  const priorManifest = process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST;
+  try {
+    const repo = ports.repository;
+    const first = repo.createSource({ name: "First", url: "https://github.com/example/first", source_kind: "github" });
+    const second = repo.createSource({ name: "Second", url: "https://github.com/example/second", source_kind: "github" });
+    const beforeSecond = repo.getProjectRow(second.id);
+    const beforeFirst = repo.getProjectRow(first.id);
+    const manifest = join(dataDir, "manifest.json");
+    const original = readFileSync(packagedSourceSyncManifestPath(), "utf8");
+    writeFileSync(manifest, original);
+    process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST = manifest;
+    beginSourceSyncAdmission(dataDir);
+    setTree(COMMIT_A, [{ path: "part.stl", type: "blob", mode: "100644", size: 3 }]);
+    const download = rawResponse({ "part.stl": "stl" });
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      const response = await download(input);
+      if (change === "removal") rmSync(manifest);
+      else writeFileSync(manifest, `${original}\n`);
+      return response;
+    }));
+    const jobs = createJobRunner(() => repo, dataDir);
+    const jobId = await jobs.start("sync", { project_ids: [first.id, second.id].slice(0, count) });
+    await vi.waitFor(async () => {
+      expect(await jobs.get(jobId, "default")).toMatchObject({
+        status: "error",
+        error: expect.stringMatching(/runtime manifest does not match|cannot read Source Sync manifest/),
+      });
+    });
+    expect(repo.listSourceRevisions(first.id)).toEqual([]);
+    expect(repo.getProjectRow(first.id)).toEqual(beforeFirst);
+    expect(readdirSync(join(repo.reposDir, String(first.id), "revisions"))).toEqual([]);
+    expect(repo.getProjectRow(second.id)).toEqual(beforeSecond);
+    expect(repo.listSourceRevisions(second.id)).toEqual([]);
+    expect(existsSync(join(repo.reposDir, String(second.id)))).toBe(false);
+    expect(download).toHaveBeenCalledOnce();
+  } finally {
+    if (priorManifest === undefined) delete process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST;
+    else process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST = priorManifest;
     await ports.db.close();
   }
 });

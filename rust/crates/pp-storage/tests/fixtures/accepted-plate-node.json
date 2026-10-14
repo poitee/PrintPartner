@@ -1,0 +1,6 @@
+{
+  "databaseSha256": "909d084745230cd0d16b162b193fbbd3b6a51d6c2a1c0bd833296dbccd1684a5",
+  "source": "Actual Node publishAcceptedPlates, progress, recomputePlanDraft, advisory queue/checkoff settings and naming override",
+  "generator": "outputs/plan-read-model/node-advisory.mts",
+  "head": "16b680a6c3b1becf86e5ca95567e34ead443a6ae"
+}

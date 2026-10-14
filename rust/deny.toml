@@ -52,16 +52,17 @@ allow = [
     "MIT-0",
 ]
 
-# Exceptions (documented): copyleft licenses scoped per crate.
+# Exceptions (documented): licenses scoped per crate.
 # Do not blanket-allow AGPL/GPL/LGPL tree-wide.
 #
 # Exception: AGPL-3.0-only on every first-party workspace crate.
 # Reason: rust/Cargo.toml [workspace.package] sets license = "AGPL-3.0-only".
 # cargo-deny also checks first-party crates; AGPL is allowed only for these
-# crates, not for third-party dependencies. Crates covered: pp-api-types,
+# crates, not for third-party dependencies. Crates covered: pp-api, pp-api-types,
 # pp-compat, pp-contracts, pp-core, pp-desktop, pp-domain, pp-drivers,
 # pp-gateway, pp-net, pp-server, pp-services, pp-source, pp-storage.
 exceptions = [
+    { crate = "pp-api", allow = ["AGPL-3.0-only"] },
     { crate = "pp-api-types", allow = ["AGPL-3.0-only"] },
     { crate = "pp-compat", allow = ["AGPL-3.0-only"] },
     { crate = "pp-contracts", allow = ["AGPL-3.0-only"] },
@@ -75,6 +76,9 @@ exceptions = [
     { crate = "pp-services", allow = ["AGPL-3.0-only"] },
     { crate = "pp-source", allow = ["AGPL-3.0-only"] },
     { crate = "pp-storage", allow = ["AGPL-3.0-only"] },
+    # Mozilla CA data used by lettre's TLS trust roots. Section 2.1 requires the
+    # agreement with shared data; its full text ships in THIRD_PARTY_NOTICES.md.
+    { crate = "webpki-roots@1.0.9", allow = ["CDLA-Permissive-2.0"] },
 ]
 
 [bans]

@@ -1,4 +1,5 @@
-import { acquireDataDirectory, desktopContext, registerDesktopBoundary } from "./desktop-context.js";
+import { moonrakerHostSnapshot } from "./moonraker-host-snapshot.js";
+import { acquireDataDirectory, desktopContext, desktopPrincipal, registerDesktopBoundary } from "./desktop-context.js";
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
@@ -36,6 +37,7 @@ import {
 } from "./middleware/tenant-context.js";
 import fastifyStatic from "@fastify/static";
 import { existsSync } from "node:fs";
+import { beginSourceSyncAdmission } from "./ownership/source-sync-admission.js";
 import { dirname, join, resolve } from "node:path";
 import { isBrowserDocumentNavigation, isSpaClientPath } from "./lib/spa-nav.js";
 import type { SaasDbStore } from "./adapters/saas/index.js";
@@ -214,6 +216,19 @@ async function configureApp(app: FastifyInstance, config: ServerConfig, ports: R
   const authStore = resolveAuthStore(ports, config);
   const boardStore = resolveBoardStore(ports, config);
   const repository = resolveRepository(ports);
+  // Private UDS-only snapshot for the Rust status watcher. The desktop boundary
+  // authenticates the signed principal; the public gateway does not admit this path.
+  if (desktopContext() && repository) {
+    app.get("/__desktop/moonraker-hosts", async (request, reply) => {
+      if (!desktopPrincipal(request)) return reply.code(403).send({ detail: "Desktop principal required" });
+      const raw = repository.getSetting("integrations");
+      const hosts = moonrakerHostSnapshot(raw);
+      // 4xx: malformed stored settings fail closed immediately. 5xx stays reserved
+      // for a snapshot the gateway may keep using through the grace period.
+      if (!hosts) return reply.code(400).send({ detail: "Host snapshot invalid" });
+      return hosts;
+    });
+  }
   const planning = hostedPlanningPolicy(config.deployMode);
   setPrivateOutboundDenied(!planning.allowPrivateOutbound);
   if (planning.hostedPlanning) {
@@ -303,6 +318,7 @@ async function configureApp(app: FastifyInstance, config: ServerConfig, ports: R
   await registerOpenApi(app, config);
 
   if (repository) {
+    beginSourceSyncAdmission(config.dataDir);
     if (config.deployMode === "self-host") {
       migrateLegacySelfHostExports(config.dataDir, repository);
     }
@@ -555,6 +571,7 @@ async function configureApp(app: FastifyInstance, config: ServerConfig, ports: R
 export async function startServer(config: ServerConfig) {
   const releaseOwner = acquireDataDirectory(config.dataDir);
   try {
+    beginSourceSyncAdmission(config.dataDir);
     validateProductionConfig(config);
     if (!config.databaseUrl) {
       const preparation = await prepareSqliteUpgrade({

@@ -52,6 +52,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Fetch pinned historical schema commits
+        run: rust/scripts/fetch-historical-schema-commits.sh
       - name: Initialize evidence
         run: |
           export PP_EVIDENCE="$RUNNER_TEMP/desktop-runtime-evidence"
@@ -61,8 +63,17 @@ jobs:
           git rev-parse HEAD > "$PP_EVIDENCE/head.txt"
       - name: Run rust/scripts self-tests
         run: |
+          python3 rust/scripts/stage-desktop.py --self-test 2>&1 | tee "$PP_EVIDENCE/stage-desktop-self-tests.log"
           python3 rust/scripts/gateway-operations.py rust/crates/pp-gateway/operations.json --self-test 2>&1 | tee "$PP_EVIDENCE/gateway-operations-self-tests.log"
           python3 rust/scripts/native-process-probe.py --self-test 2>&1 | tee "$PP_EVIDENCE/native-process-probe-self-tests.log"
+      - name: Install pinned storage-fixture Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22.23.3'
+      - name: Record storage-fixture executable
+        run: |
+          test "$(node --version)" = v22.23.3
+          echo "PP_SCHEMA_PARITY_NODE=$(node -p process.execPath)" >> "$GITHUB_ENV"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.21.0'
@@ -79,7 +90,7 @@ jobs:
           cp rust/bundle-manifest.json "$PP_EVIDENCE/bundle-manifest.json"
       - name: Build real server and check crate boundaries
         run: |
-          cargo build --manifest-path rust/Cargo.toml --locked -p pp-server 2>&1 | tee "$PP_EVIDENCE/server-build.log"
+          cargo build --manifest-path rust/Cargo.toml --locked -p pp-api -p pp-server 2>&1 | tee "$PP_EVIDENCE/server-build.log"
           python3 rust/scripts/check-boundaries.py --self-test 2>&1 | tee "$PP_EVIDENCE/boundaries.log"
           python3 rust/scripts/check-domain-deps.py --self-test 2>&1 | tee "$PP_EVIDENCE/domain-deps.log"
           cargo fmt --manifest-path rust/Cargo.toml --all --check 2>&1 | tee "$PP_EVIDENCE/fmt.log"
@@ -89,8 +100,10 @@ jobs:
           cargo test --manifest-path rust/Cargo.toml --locked -p pp-core --test runtime_m0 -- --nocapture --test-threads=1 2>&1 | tee "$PP_EVIDENCE/core-runtime.log"
       - name: Run backend units and lint
         run: |
-          cargo test --manifest-path rust/Cargo.toml --locked -p pp-core -p pp-compat -p pp-gateway -p pp-server --lib --bins 2>&1 | tee "$PP_EVIDENCE/backend-units.log"
-          cargo clippy --manifest-path rust/Cargo.toml --locked -p pp-core -p pp-compat -p pp-gateway -p pp-server --all-targets -- -D warnings 2>&1 | tee "$PP_EVIDENCE/backend-clippy.log"
+          cargo test --manifest-path rust/Cargo.toml --locked -p pp-api -p pp-storage -p pp-core -p pp-compat -p pp-gateway -p pp-server --lib --bins 2>&1 | tee "$PP_EVIDENCE/backend-units.log"
+          cargo test --manifest-path rust/Cargo.toml --locked -p pp-storage 2>&1 | tee "$PP_EVIDENCE/pp-storage-tests.log"
+          cargo test --manifest-path rust/Cargo.toml --locked -p pp-api --test auth_http 2>&1 | tee "$PP_EVIDENCE/pp-api-http.log"
+          cargo clippy --manifest-path rust/Cargo.toml --locked -p pp-api -p pp-storage -p pp-core -p pp-compat -p pp-gateway -p pp-server --all-targets -- -D warnings 2>&1 | tee "$PP_EVIDENCE/backend-clippy.log"
       - name: Verify authenticated workflow and process cleanup
         run: |
           python3 rust/tests/workflow_m0.py 2>&1 | tee "$PP_EVIDENCE/workflow.log"

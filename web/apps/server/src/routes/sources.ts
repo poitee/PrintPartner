@@ -8,7 +8,11 @@ import {
 } from "@print-partner/domain";
 import { HOSTED_TENANT_DISK_QUOTA_BYTES, isHostedLibrarySourceKind, normalizeCategoryPath } from "@print-partner/contracts";
 import type { JobSnapshot } from "@print-partner/contracts";
-import type { AppRepository } from "../db/repository.js";
+import { SourceActivationConflictError, type AppRepository } from "../db/repository.js";
+import {
+  OwnershipAdmissionError,
+  requireSourceSyncParticipant,
+} from "../ownership/source-sync-admission.js";
 import {
   createReadStreamUnderRoot,
   openRepoStlMeshStream,
@@ -45,7 +49,8 @@ import {
 } from "../services/source-docs-index.js";
 import { PDF_BG_EXTRACT_BYTES } from "../services/pdf-text-extract.js";
 import { findSourceManifestPath, sourcePdfTextStorage } from "../services/source-workspace.js";
-import { publishLocalSourceWorkingTree } from "../services/local-source-revision.js";
+import { releaseSharedSnapshot, type PublishedSourceSnapshot } from "../services/local-source-snapshot.js";
+import { activateSyncedSourceSnapshot, indexDocsForActivatedRevision, publishLocalSourceWorkingTree, removeObsoleteHostedWorkingTree, SOURCE_PUBLICATION_UNAVAILABLE_DETAIL } from "../services/local-source-revision.js";
 import { scanSourceArtifacts } from "../services/source-artifacts.js";
 import { sendIfTenantDiskQuotaExceeded, runWithTenantDiskQuota, TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
 
@@ -65,11 +70,19 @@ function hostedSourceKindBlocked(
   return hostedPlanning && !hostedLibraryKindAllowed((kind ?? "github").toLowerCase());
 }
 
+async function discardSourceUploadStaging(
+  staging: string,
+  warn: (error: unknown) => void,
+): Promise<void> {
+  await rm(staging, { recursive: true, force: true }).catch((error: unknown) => {
+    warn(error);
+  });
+}
+
 async function refuseIfHostedQuotaExceeded(
   reply: import("fastify").FastifyReply,
   deps: RouteDeps,
   tenantId: string,
-  additionalBytes = 0,
 ): Promise<boolean> {
   const quota = deps.hostedPlanning ? HOSTED_TENANT_DISK_QUOTA_BYTES : null;
   return sendIfTenantDiskQuotaExceeded(reply, {
@@ -77,7 +90,6 @@ async function refuseIfHostedQuotaExceeded(
     reposDir: deps.reposDir,
     tenantId,
     sourceIds: deps.repo.listSources().map((source) => source.id),
-    additionalBytes,
     quotaBytes: quota,
   });
 }
@@ -96,11 +108,11 @@ type RouteDeps = {
   jobs?: import("../services/job-runner.js").InProcessJobRunner;
 };
 
-async function prefetchSourceCover(deps: RouteDeps, sourceId: number): Promise<void> {
+async function prefetchSourceCover(deps: RouteDeps, sourceId: number, beforePublish: () => undefined): Promise<void> {
   const row = deps.repo.getProjectRow(sourceId);
   if (!row) return;
   try {
-    await ensureSourceCover(deps.coversDir, toCoverProject(row));
+    await ensureSourceCover(deps.coversDir, toCoverProject(row), { beforePublish });
   } catch {
     /* cover is best-effort */
   }
@@ -206,6 +218,8 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
       if (kind === "github" || kind === "git") {
         if (await refuseIfHostedQuotaExceeded(reply, deps, request.tenantId)) return;
       }
+      requireSourceSyncParticipant("http.POST /sources");
+      requireSourceSyncParticipant("http.POST /api/v1/sources");
       const newSource = deps.repo.createSource({
         name: String(body.name ?? ""),
         url: githubLocation?.url ?? requestedUrl,
@@ -223,13 +237,18 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
       if (kind === "github" || kind === "git") {
         try {
           if (deps.jobs) {
-            void deps.jobs.start("sync", { project_ids: [newSource.id] }, request.tenantId);
+            await deps.jobs.start("sync", { project_ids: [newSource.id] }, request.tenantId);
           }
-        } catch { /* best effort */ }
+        } catch (error) {
+          if (error instanceof OwnershipAdmissionError) {
+            deps.repo.deleteSource(newSource.id);
+            throw error;
+          }
+        }
       }
       return deps.repo.sourceSummaryForClient(newSource);
     } catch (e) {
-      return reply.status(400).send({ detail: e instanceof Error ? e.message : String(e) });
+      return reply.status(e instanceof OwnershipAdmissionError ? 503 : 400).send({ detail: e instanceof Error ? e.message : String(e) });
     }
   });
 
@@ -372,9 +391,16 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
   });
 
   app.post("/sources/:id/upload-zip", async (request, reply) => {
+    const beforePublish = () => requireSourceSyncParticipant(request.url.startsWith("/api/v1/")
+      ? "http.POST /api/v1/sources/:id/upload-zip" : "http.POST /sources/:id/upload-zip");
+    beforePublish();
+    if (!deps.repo.canPublishSourceRevision()) {
+      return reply.status(503).send({ detail: SOURCE_PUBLICATION_UNAVAILABLE_DETAIL });
+    }
     const id = Number((request.params as { id: string }).id);
+    const observed = deps.repo.getSourceActivationObservation(id);
     const row = deps.repo.getProjectRow(id);
-    if (!row) return reply.status(404).send({ detail: "Source not found" });
+    if (!row || !observed) return reply.status(404).send({ detail: "Source not found" });
     if (hostedSourceKindBlocked(deps.hostedPlanning, row.sourceKind)) {
       return reply.status(400).send({ detail: HOSTED_SOURCE_KIND_DETAIL });
     }
@@ -387,7 +413,7 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
       },
     });
     if (!data) return reply.status(400).send({ detail: "ZIP file required" });
-    const staging = createSourceUploadStaging(deps.sourcesDir);
+    const staging = createSourceUploadStaging(deps.sourcesDir, request.tenantId);
     try {
       const stagedZip = join(staging, "upload.zip");
       let uploadedBytes: number;
@@ -399,7 +425,7 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
         }
         throw error;
       }
-      if (await refuseIfHostedQuotaExceeded(reply, deps, request.tenantId, uploadedBytes)) {
+      if (await refuseIfHostedQuotaExceeded(reply, deps, request.tenantId)) {
         return;
       }
       try {
@@ -408,57 +434,87 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
           quotaBytes: deps.hostedPlanning ? HOSTED_TENANT_DISK_QUOTA_BYTES : null,
           sourceIds: () => deps.repo.listSources().map((source) => source.id),
         }, async () => {
-          if (!deps.repo.getProjectRow(id)) return reply.status(404).send({ detail: "Source not found" });
           try {
-            const extractDir = writeUploadedZip(stagedZip, deps.sourcesDir, id);
+            beforePublish();
+            if (!deps.repo.getProjectRow(id)) return reply.status(404).send({ detail: "Source not found" });
+            const extractDir = writeUploadedZip(stagedZip, staging);
             const { suggestedImportRules, stlCount } = finalizeUploadedSource(extractDir);
-            const existingRules = deps.repo.getProjectRow(id)?.importedPaths;
-            const hasRules =
-              existingRules != null &&
-              existingRules.trim() !== "" &&
-              existingRules.trim() !== "[]";
-            if (!hasRules && suggestedImportRules.length > 0) {
-              deps.repo.updateImportRules(id, suggestedImportRules);
-            }
+            const artifacts = scanSourceArtifacts(extractDir);
             const updated = await publishLocalSourceWorkingTree({
+              beforePublish,
               repo: deps.repo,
               reposDir: deps.reposDir,
               sourceId: id,
               workingTree: extractDir,
+              observed,
+              preserveAllFiles: true,
+              suggestedImportRules,
             });
-            indexSourceDocsFromDisk(deps.repo, id, updated.local_path ?? extractDir);
-            void prefetchSourceCover(deps, id);
+            beforePublish();
+            const indexedDocs = updated.current_source_revision_id == null
+              ? null
+              : indexDocsForActivatedRevision({
+                repo: deps.repo,
+                sourceId: id,
+                localPath: updated.local_path ?? extractDir,
+                revisionId: updated.current_source_revision_id,
+                beforePublish,
+              });
+            if (indexedDocs?.outcome === "cleared") {
+              request.log.warn({ err: indexedDocs.reason, sourceId: id, revisionId: updated.current_source_revision_id }, "Uploaded Source documentation indexing failed");
+            }
+            if (deps.hostedPlanning) {
+              await removeObsoleteHostedWorkingTree({
+                sourcesDir: deps.sourcesDir,
+                sourceId: id,
+                activePath: updated.local_path,
+                beforePublish,
+              }).catch((error: unknown) => {
+                if (error instanceof OwnershipAdmissionError) throw error;
+                request.log.warn({ err: error, sourceId: id }, "Obsolete hosted working tree cleanup failed");
+              });
+            }
+            void prefetchSourceCover(deps, id, beforePublish);
             return {
               ...deps.repo.sourceSummaryForClient(updated),
               imported_files: uploadedBytes,
               stl_count: stlCount,
-              artifacts: scanSourceArtifacts(updated.local_path ?? extractDir),
+              artifacts,
               suggested_import_rules: suggestedImportRules,
             };
           } finally {
-            if (deps.hostedPlanning) {
-              await rm(join(deps.sourcesDir, String(id)), { recursive: true, force: true });
-            }
+            await discardSourceUploadStaging(staging, (error) => {
+              request.log.warn({ err: error }, "Source upload staging cleanup failed");
+            });
           }
         });
       } catch (error) {
-        return reply.status(error instanceof TenantDiskQuotaError ? 413 : 400)
+        return reply.status(error instanceof OwnershipAdmissionError ? 503 : error instanceof TenantDiskQuotaError ? 413 : error instanceof SourceActivationConflictError ? 409 : 400)
           .send({ detail: error instanceof Error ? error.message : String(error) });
       }
     } finally {
-      await rm(staging, { recursive: true, force: true });
+      await discardSourceUploadStaging(staging, (error) => {
+        request.log.warn({ err: error }, "Source upload staging cleanup failed");
+      });
     }
   });
 
   app.post("/sources/:id/upload-files", async (request, reply) => {
+    const beforePublish = () => requireSourceSyncParticipant(request.url.startsWith("/api/v1/")
+      ? "http.POST /api/v1/sources/:id/upload-files" : "http.POST /sources/:id/upload-files");
+    beforePublish();
+    if (!deps.repo.canPublishSourceRevision()) {
+      return reply.status(503).send({ detail: SOURCE_PUBLICATION_UNAVAILABLE_DETAIL });
+    }
     const id = Number((request.params as { id: string }).id);
+    const observed = deps.repo.getSourceActivationObservation(id);
     const row = deps.repo.getProjectRow(id);
-    if (!row) return reply.status(404).send({ detail: "Source not found" });
+    if (!row || !observed) return reply.status(404).send({ detail: "Source not found" });
     if (hostedSourceKindBlocked(deps.hostedPlanning, row.sourceKind)) {
       return reply.status(400).send({ detail: HOSTED_SOURCE_KIND_DETAIL });
     }
 
-    const staging = createSourceUploadStaging(deps.sourcesDir);
+    const staging = createSourceUploadStaging(deps.sourcesDir, request.tenantId);
     try {
       const uploads: Array<{ relativePath: string; path: string }> = [];
       let relativePaths: string[] = [];
@@ -518,7 +574,7 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
       if (!uploads.length) {
         return reply.status(400).send({ detail: "At least one file is required" });
       }
-      if (await refuseIfHostedQuotaExceeded(reply, deps, request.tenantId, uploadedBytes)) {
+      if (await refuseIfHostedQuotaExceeded(reply, deps, request.tenantId)) {
         return;
       }
 
@@ -528,46 +584,68 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
           quotaBytes: deps.hostedPlanning ? HOSTED_TENANT_DISK_QUOTA_BYTES : null,
           sourceIds: () => deps.repo.listSources().map((source) => source.id),
         }, async () => {
-          if (!deps.repo.getProjectRow(id)) return reply.status(404).send({ detail: "Source not found" });
           try {
-            const result = writeUploadedFiles(uploads, deps.sourcesDir, id);
+            beforePublish();
+            if (!deps.repo.getProjectRow(id)) return reply.status(404).send({ detail: "Source not found" });
+            const result = writeUploadedFiles(uploads, staging);
 
-            const existingRules = deps.repo.getProjectRow(id)?.importedPaths;
-            const hasRules =
-              existingRules != null &&
-              existingRules.trim() !== "" &&
-              existingRules.trim() !== "[]";
-            if (!hasRules && result.suggestedImportRules.length > 0) {
-              deps.repo.updateImportRules(id, result.suggestedImportRules);
-            }
-
+            const artifacts = scanSourceArtifacts(result.extractDir);
             const updated = await publishLocalSourceWorkingTree({
+              beforePublish,
               repo: deps.repo,
               reposDir: deps.reposDir,
               sourceId: id,
               workingTree: result.extractDir,
+              observed,
+              preserveAllFiles: true,
+              suggestedImportRules: result.suggestedImportRules,
             });
-            indexSourceDocsFromDisk(deps.repo, id, updated.local_path ?? result.extractDir);
-            void prefetchSourceCover(deps, id);
+            beforePublish();
+            const indexedDocs = updated.current_source_revision_id == null
+              ? null
+              : indexDocsForActivatedRevision({
+                repo: deps.repo,
+                sourceId: id,
+                localPath: updated.local_path ?? result.extractDir,
+                revisionId: updated.current_source_revision_id,
+                beforePublish,
+              });
+            if (indexedDocs?.outcome === "cleared") {
+              request.log.warn({ err: indexedDocs.reason, sourceId: id, revisionId: updated.current_source_revision_id }, "Uploaded Source documentation indexing failed");
+            }
+            if (deps.hostedPlanning) {
+              await removeObsoleteHostedWorkingTree({
+                sourcesDir: deps.sourcesDir,
+                sourceId: id,
+                activePath: updated.local_path,
+                beforePublish,
+              }).catch((error: unknown) => {
+                if (error instanceof OwnershipAdmissionError) throw error;
+                request.log.warn({ err: error, sourceId: id }, "Obsolete hosted working tree cleanup failed");
+              });
+            }
+            void prefetchSourceCover(deps, id, beforePublish);
             return {
               ...deps.repo.sourceSummaryForClient(updated),
               imported_files: result.fileCount,
               stl_count: result.stlCount,
-              artifacts: scanSourceArtifacts(updated.local_path ?? result.extractDir),
+              artifacts,
               suggested_import_rules: result.suggestedImportRules,
             };
           } finally {
-            if (deps.hostedPlanning) {
-              await rm(join(deps.sourcesDir, String(id)), { recursive: true, force: true });
-            }
+            await discardSourceUploadStaging(staging, (error) => {
+              request.log.warn({ err: error }, "Source upload staging cleanup failed");
+            });
           }
         });
       } catch (error) {
-        return reply.status(error instanceof TenantDiskQuotaError ? 413 : 400)
+        return reply.status(error instanceof OwnershipAdmissionError ? 503 : error instanceof TenantDiskQuotaError ? 413 : error instanceof SourceActivationConflictError ? 409 : 400)
           .send({ detail: error instanceof Error ? error.message : String(error) });
       }
     } finally {
-      await rm(staging, { recursive: true, force: true });
+      await discardSourceUploadStaging(staging, (error) => {
+        request.log.warn({ err: error }, "Source upload staging cleanup failed");
+      });
     }
   });
 
@@ -587,7 +665,9 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
     const row = deps.repo.getProjectRow(id);
     if (!row) return reply.status(404).send({ detail: "Source not found" });
     const coverRel = `source_${id}.img`;
-    const ready = await ensureSourceCover(deps.coversDir, toCoverProject(row));
+    const beforePublish = () => requireSourceSyncParticipant(request.url.startsWith("/api/v1/")
+      ? "http.GET /api/v1/sources/:id/cover" : "http.GET /sources/:id/cover");
+    const ready = await ensureSourceCover(deps.coversDir, toCoverProject(row), { beforePublish });
     // 204, not 404: most sources have no cover, and the Library probes this
     // route for every card — a 404 would log a console error per card.
     if (!ready) return reply.status(204).send();
@@ -705,6 +785,7 @@ export async function syncProjectById(
   projectId: number,
   coversDir = join(dirname(reposDir), "covers"),
   options?: {
+    beforePublish?: () => undefined;
     maxDocsBytes?: number;
     onProgress?: (event: Partial<JobSnapshot>) => void;
     /** When set, enqueue PDF extraction as a follow-up job instead of inline. */
@@ -718,12 +799,18 @@ export async function syncProjectById(
   pdf_extract_job_id?: string;
   postprocess_warning?: string;
 }> {
+  const checkAdmission = options?.beforePublish ?? (() => requireSourceSyncParticipant("job.sync"));
+  checkAdmission();
   const row = repo.getProjectRow(projectId);
   if (!row) throw new Error("Source not found");
+  if ((row.sourceKind === "github" || row.sourceKind === "git") && !repo.canPublishSourceRevision()) {
+    throw new Error(SOURCE_PUBLICATION_UNAVAILABLE_DETAIL);
+  }
   const observed = repo.getSourceActivationObservation(projectId);
   if (!observed) throw new Error("Source not found");
   const token = repo.getSetting(GITHUB_PAT_KEY);
   const maxDocsBytes = options?.maxDocsBytes ?? DEFAULT_SOURCE_DOCS_MAX_BYTES;
+  let retainedSnapshot: PublishedSourceSnapshot | undefined;
 
   try {
     if (row.sourceKind === "github" || row.sourceKind === "git") {
@@ -733,7 +820,9 @@ export async function syncProjectById(
         reposDir,
         sourceId: projectId,
         token,
+        retainSnapshot: true,
         options: {
+          beforePublish: checkAdmission,
           maxStlFiles: 500,
           tag: row.tag,
           maxDocsBytes,
@@ -748,21 +837,16 @@ export async function syncProjectById(
           },
         },
       });
-      const revision = repo.recordSourceRevision({
+      retainedSnapshot = result.snapshot;
+      const activated = activateSyncedSourceSnapshot({
+        repo,
+        reposDir,
+        beforePublish: checkAdmission,
         sourceId: projectId,
-        upstreamRevisionKey: result.snapshot.upstreamRevisionKey,
-        manifestDigest: result.snapshot.manifestDigest,
-        snapshotLocator: result.snapshot.snapshotLocator,
-        syncedAt: new Date().toISOString(),
-        completeness: "complete",
-      });
-      const activated = repo.activateSourceRevision({
-        sourceId: projectId,
-        revisionId: revision.id,
         observed,
+        snapshot: result.snapshot,
         sourceVersion: result.commitSha,
       });
-      repo.markSourceRevisionCurrent(projectId, revision.id);
       const activePath = activated.local_path;
       if (!activePath) throw new Error("Activated Source revision has no local path");
 
@@ -770,7 +854,7 @@ export async function syncProjectById(
       let pdf_extract_job_id: string | undefined;
       let postprocess_warning: string | undefined;
       try {
-        indexed = indexSourceDocsFromDisk(repo, projectId, activePath, result.docPaths);
+        indexed = indexSourceDocsFromDisk(repo, projectId, activePath, result.docPaths, checkAdmission);
         const pdfTextStorage = sourcePdfTextStorage(repo, projectId, activePath);
 
         // Eagerly extract small PDFs; large ones go to a background job.
@@ -784,6 +868,7 @@ export async function syncProjectById(
         if (smallPdfs.length > 0) {
           options?.onProgress?.({ message: "Extracting PDF text…", progress: 92 });
           await extractPendingPdfsForSource(repo, projectId, activePath, {
+            beforePublish: checkAdmission,
             ...pdfTextStorage,
             maxSizeBytes: PDF_BG_EXTRACT_BYTES - 1,
             onProgress: (msg, progress) =>
@@ -797,6 +882,7 @@ export async function syncProjectById(
         } else if (largePdfs.length > 0) {
           options?.onProgress?.({ message: "Extracting large PDF manuals…", progress: 93 });
           await extractPendingPdfsForSource(repo, projectId, activePath, {
+            beforePublish: checkAdmission,
             ...pdfTextStorage,
             minSizeBytes: PDF_BG_EXTRACT_BYTES,
             onProgress: (msg, progress) =>
@@ -804,6 +890,7 @@ export async function syncProjectById(
           });
         }
       } catch (error) {
+        if (error instanceof OwnershipAdmissionError) throw error;
         if (error instanceof TenantDiskQuotaError) throw error;
         postprocess_warning = error instanceof Error ? error.message : String(error);
       }
@@ -811,11 +898,13 @@ export async function syncProjectById(
       const syncedRow = repo.getProjectRow(projectId);
       if (syncedRow) {
         try {
-          await ensureSourceCover(coversDir, toCoverProject(syncedRow));
-        } catch {
+          await ensureSourceCover(coversDir, toCoverProject(syncedRow), { beforePublish: checkAdmission });
+        } catch (error) {
+          if (error instanceof OwnershipAdmissionError) throw error;
           /* cover is best-effort */
         }
       }
+      checkAdmission();
       return {
         stl_count: result.stlPaths.length,
         downloaded: result.downloaded,
@@ -828,7 +917,8 @@ export async function syncProjectById(
 
     // Zip/local: index whatever docs already landed on disk.
     if (row.localPath) {
-      const indexed = indexSourceDocsFromDisk(repo, projectId, row.localPath);
+      const indexed = indexSourceDocsFromDisk(repo, projectId, row.localPath, undefined, checkAdmission);
+      checkAdmission();
       repo.markSourceSynced(projectId, row.lastCommitSha);
       return {
         stl_count: 0,
@@ -838,9 +928,13 @@ export async function syncProjectById(
       };
     }
 
+    checkAdmission();
     repo.markSourceSynced(projectId, row.lastCommitSha);
     return { stl_count: 0, downloaded: 0, doc_count: 0, docs_downloaded: 0 };
   } catch (error) {
+    if (retainedSnapshot) releaseSharedSnapshot(retainedSnapshot);
+    if (error instanceof OwnershipAdmissionError) throw error;
+    checkAdmission();
     const current = repo.getSourceActivationObservation(projectId);
     if (JSON.stringify(current) === JSON.stringify(observed)) {
       repo.updateSource(projectId, { metadata: {

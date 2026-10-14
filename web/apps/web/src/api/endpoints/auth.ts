@@ -7,6 +7,7 @@ export type AuthUser = {
   display_name: string;
   email: string | null;
   provider: string;
+  hasPassword?: boolean;
   is_admin: boolean;
 };
 

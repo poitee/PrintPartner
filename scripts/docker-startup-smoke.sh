@@ -47,6 +47,12 @@ wait_for_health() {
 
 wait_for_health
 docker exec --user 1000:1000 "$container" sh -ec '
+  test -f /app/web/apps/server/dist/current/data/source-sync-ownership.json
+  test ! -e /rust
+'
+docker exec --user 1000:1000 "$container" node -e 'const r=JSON.parse(require("node:fs").readFileSync("/data/source-sync-admission.json","utf8")); if(r.operation!=="source.sync"||r.owner!=="node"||r.admission_count!==1||!(r.participant_count>0)) process.exit(1)'
+receipt_sha="$(docker exec --user 1000:1000 "$container" sha256sum /data/source-sync-admission.json)"
+docker exec --user 1000:1000 "$container" sh -ec '
   test "$(cat /data/private/sentinel)" = preserved
   test "$(stat -c %u:%g /data/private/sentinel)" = 1000:1000
   test "$(stat -c %u:%g /data/print-partner.db)" = 1000:1000
@@ -70,6 +76,8 @@ docker start "$container" >/dev/null
 # Docker can assign a different ephemeral host port after a restart.
 address="http://$(docker port "$container" 8080/tcp)"
 wait_for_health
+test "$(docker exec --user 1000:1000 "$container" sha256sum /data/source-sync-admission.json)" = "$receipt_sha"
+docker exec --user 1000:1000 "$container" node -e 'const r=JSON.parse(require("node:fs").readFileSync("/data/source-sync-admission.json","utf8")); if(r.admission_count!==1) process.exit(1)'
 curl --fail --silent --show-error --max-time 10 \
   -H 'Authorization: Bearer startup-smoke-only' "$address/plans" \
   | node -e 'let s="";process.stdin.on("data",x=>s+=x).on("end",()=>{const p=JSON.parse(s);require("node:assert/strict").ok(p.profiles.some(x=>x.name==="Startup persistence smoke"));})'

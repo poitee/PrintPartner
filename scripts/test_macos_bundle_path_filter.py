@@ -66,6 +66,23 @@ class PathFilterTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue(bundle_filter.is_native_input(path))
 
+    def test_pr_macos_filter(self):
+        triggers = ["rust/crates/pp-desktop/src/main.rs", "rust/crates/pp-desktop/tauri.conf.json",
+                    "rust/crates/pp-compat/src/lib.rs", "rust/scripts/desktop-bundle.sh",
+                    "rust/scripts/check-macos-bundle.py", "rust/Cargo.lock", "web/package-lock.json",
+                    "rust-toolchain.toml", ".github/workflows/desktop-native-macos.yml",
+                    "scripts/macos-bundle-path-filter.py", "rust/crates/pp-storage/src/macos.rs"]
+        for path in triggers:
+            with self.subTest(path=path):
+                self.assertTrue(bundle_filter.is_macos_pr_input(path))
+        quiet = ["web/apps/web/src/App.tsx", "web/apps/server/src/start.ts",
+                 "rust/crates/pp-server/src/lib.rs", "rust/crates/pp-core/src/lib.rs",
+                 ".github/workflows/web-ci.yml", "scripts/release.mjs", "Dockerfile",
+                 "rust/crates/pp-desktop/README.md", "docs/macos.md"]
+        for path in quiet:
+            with self.subTest(path=path):
+                self.assertFalse(bundle_filter.is_macos_pr_input(path))
+
     def test_packaged_markdown_inputs(self):
         paths = ["web/apps/server/src/data/pitfalls.md",
                  "web/apps/server/src/data/legal/THIRD_PARTY_NOTICES.md",
@@ -110,8 +127,10 @@ class PathFilterTests(unittest.TestCase):
                 self.assertFalse(bundle_filter.select_native("pull_request", advanced_base, head))
                 self.assertEqual(bundle_filter.select_native("pull_request", advanced_base, browser_head), False)
                 self.assertEqual(bundle_filter.select_native("pull_request", advanced_base, lint_head), False)
-                self.assertEqual(bundle_filter.select_native("pull_request", base, mixed_head), True)
-                self.assertTrue(bundle_filter.select_native("pull_request", base, markdown_head))
+                # Packaged server data is a native input on main, not a PR macOS trigger.
+                self.assertEqual(bundle_filter.select_native("pull_request", base, mixed_head), False)
+                self.assertFalse(bundle_filter.select_native("pull_request", base, markdown_head))
+                self.assertTrue(bundle_filter.select_native("push", base, markdown_head))
                 self.assertTrue(bundle_filter.select_native("workflow_dispatch", base, head))
                 self.assertTrue(bundle_filter.select_native("push", "0" * 40, head))
                 self.assertTrue(bundle_filter.select_native("pull_request", "", head))

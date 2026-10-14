@@ -10,7 +10,76 @@ parser.add_argument('inventory', type=pathlib.Path)
 parser.add_argument('--check', action='store_true')
 parser.add_argument('--self-test', action='store_true')
 args = parser.parse_args()
-registered = json.loads(args.inventory.read_text())['routes']
+inventory = json.loads(args.inventory.read_text())
+registered = inventory['routes']
+
+
+def normalize_owner(value):
+    if value == 'compat':
+        return 'node'
+    return value
+
+
+def planted_ownership_error(document):
+    """Reject worker, startup, and MCP ownership the route table cannot see."""
+    section_keys = ('workers', 'startup', 'mcp', 'operations')
+    if not any(key in document for key in section_keys):
+        return None
+    participants = []
+    for kind, key in (('worker', 'workers'), ('startup_watcher', 'startup'), ('mcp_action', 'mcp')):
+        entries = document.get(key, [])
+        if not isinstance(entries, list):
+            return f'ownership admission: {key} must be an array'
+        for entry in entries:
+            if not isinstance(entry, dict):
+                return 'ownership admission: malformed ownership manifest'
+            participants.append({
+                'kind': kind,
+                'owner': normalize_owner(str(entry.get('owner', ''))),
+                'raw_owner': str(entry.get('owner', '')),
+                'operation': str(entry.get('operation', '')),
+            })
+    operations = document.get('operations')
+    if isinstance(operations, dict):
+        for name, body in operations.items():
+            entries = body.get('participants') if isinstance(body, dict) else None
+            if not isinstance(entries, list):
+                return 'ownership admission: malformed ownership manifest'
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    return 'ownership admission: malformed ownership manifest'
+                participants.append({
+                    'kind': str(entry.get('kind', '')),
+                    'owner': normalize_owner(str(entry.get('owner', ''))),
+                    'raw_owner': str(entry.get('owner', '')),
+                    'operation': str(name),
+                })
+    elif operations is not None:
+        return 'ownership admission: malformed ownership manifest'
+    if not participants:
+        return 'ownership admission: ownership sections declare no participants'
+    for entry in participants:
+        if entry['kind'] not in {'http', 'http_alias', 'mcp_action', 'job', 'startup_watcher', 'worker', 'migration', 'assistant_action'}:
+            return f"ownership admission: unknown participant kind {entry['kind']}"
+        if entry['raw_owner'] not in {'node', 'compat', 'rust'}:
+            return f"ownership admission: unknown owner {entry['raw_owner']}"
+        if entry['operation'] != 'source.sync':
+            return f"ownership admission: unknown operation {entry['operation']}"
+    owners = {entry['owner'] for entry in participants}
+    kinds = {entry['kind'] for entry in participants}
+    if len(owners) > 1:
+        return 'ownership admission: conflicting ownership for source.sync'
+    if owners == {'rust'}:
+        return 'ownership admission: unsupported rust owner'
+    for required in ('worker', 'startup_watcher', 'mcp_action'):
+        if required not in kinds:
+            return f'ownership admission: unrepresented participant {required}'
+    return None
+
+
+ownership_error = planted_ownership_error(inventory)
+if ownership_error:
+    raise SystemExit(ownership_error)
 
 
 def base(path):

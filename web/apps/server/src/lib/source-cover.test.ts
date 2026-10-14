@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, realpathSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fetch as undiciFetch, Response as UndiciResponse } from "undici";
@@ -13,6 +13,7 @@ import {
   githubRepoSlug,
   resolveCoverCandidates,
 } from "./source-cover.js";
+import { beginSourceSyncAdmission, packagedSourceSyncManifestPath, requireSourceSyncParticipant } from "../ownership/source-sync-admission.js";
 
 // Keep tests hermetic: the SSRF guard resolves hostnames before fetching.
 vi.mock("node:dns/promises", () => ({
@@ -29,6 +30,32 @@ afterEach(() => {
 });
 
 describe("source cover resolution", () => {
+  it("refuses downloaded cover publication after the manifest changes", async () => {
+    const dataDir = realpathSync(mkdtempSync(join(tmpdir(), "pp-cover-admission-")));
+    const coversRoot = join(dataDir, "covers");
+    mkdirSync(coversRoot);
+    const manifest = join(dataDir, "manifest.json");
+    const original = readFileSync(packagedSourceSyncManifestPath(), "utf8");
+    const previous = process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST;
+    try {
+      writeFileSync(manifest, original);
+      process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST = manifest;
+      beginSourceSyncAdmission(dataDir);
+      vi.mocked(undiciFetch).mockImplementationOnce(async () => {
+        writeFileSync(manifest, `${original}\n`);
+        return new UndiciResponse(Buffer.from([0x89, 0x50, 0x4e, 0x47]), { headers: { "content-type": "image/png" } });
+      });
+      await expect(ensureSourceCover(coversRoot, { id: 1, url: "https://github.com/example/cover", sourceKind: "github", sourceType: "git", metadataJson: null }, {
+        beforePublish: () => requireSourceSyncParticipant("job.sync"),
+      })).rejects.toThrow(/runtime manifest does not match/);
+      expect(readdirSync(coversRoot)).toEqual([]);
+    } finally {
+      if (previous === undefined) delete process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST;
+      else process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST = previous;
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
   it("parses GitHub repo slugs", () => {
     expect(githubRepoSlug("https://github.com/VoronDesign/Voron-2")).toEqual([
       "VoronDesign",

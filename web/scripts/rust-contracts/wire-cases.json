@@ -1,0 +1,74 @@
+{
+  "cases": [
+    {
+      "name": "duplicate-root-boolean-last-wins",
+      "parser": "parseSavePlanChoicesRequest",
+      "raw_input": "{\"expected_base\":{\"revision_id\":1,\"plan_version\":1},\"expected_draft\":null,\"remap_checkoff_links\":\"wrong\",\"remap_checkoff_links\":true,\"decisions\":[{\"kind\":\"set_quantity_override\",\"target\":{\"part_key\":\"part\",\"relative_path\":\"part.stl\",\"source_layer\":null},\"value\":null}]}",
+      "outcome": {
+        "kind": "accepted",
+        "parsed": {
+          "expected_base": {
+            "revision_id": 1,
+            "plan_version": 1
+          },
+          "expected_draft": null,
+          "remap_checkoff_links": true,
+          "decisions": [
+            {
+              "kind": "set_quantity_override",
+              "target": {
+                "part_key": "part",
+                "relative_path": "part.stl",
+                "source_layer": null
+              },
+              "value": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "duplicate-root-final-invalid",
+      "parser": "parseSavePlanChoicesRequest",
+      "raw_input": "{\"expected_base\":{\"revision_id\":1,\"plan_version\":1},\"expected_draft\":null,\"remap_checkoff_links\":true,\"remap_checkoff_links\":\"wrong\",\"decisions\":[{\"kind\":\"set_quantity_override\",\"target\":{\"part_key\":\"part\",\"relative_path\":\"part.stl\",\"source_layer\":null},\"value\":null}]}",
+      "outcome": {
+        "kind": "rejected"
+      }
+    },
+    {
+      "name": "duplicate-nested-required-null-last-wins",
+      "parser": "parseSavePlanChoicesRequest",
+      "raw_input": "{\"expected_base\":{\"revision_id\":1,\"plan_version\":1},\"expected_draft\":null,\"remap_checkoff_links\":true,\"decisions\":[{\"kind\":\"set_quantity_override\",\"target\":{\"part_key\":\"part\",\"relative_path\":\"part.stl\",\"source_layer\":\"first\",\"source_layer\":null},\"value\":null}]}",
+      "outcome": {
+        "kind": "accepted",
+        "parsed": {
+          "expected_base": {
+            "revision_id": 1,
+            "plan_version": 1
+          },
+          "expected_draft": null,
+          "remap_checkoff_links": true,
+          "decisions": [
+            {
+              "kind": "set_quantity_override",
+              "target": {
+                "part_key": "part",
+                "relative_path": "part.stl",
+                "source_layer": null
+              },
+              "value": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "duplicate-nested-final-invalid",
+      "parser": "parseSavePlanChoicesRequest",
+      "raw_input": "{\"expected_base\":{\"revision_id\":1,\"plan_version\":1},\"expected_draft\":null,\"remap_checkoff_links\":true,\"decisions\":[{\"kind\":\"set_quantity_override\",\"target\":{\"part_key\":\"part\",\"relative_path\":\"part.stl\",\"source_layer\":null,\"source_layer\":12},\"value\":null}]}",
+      "outcome": {
+        "kind": "rejected"
+      }
+    }
+  ]
+}

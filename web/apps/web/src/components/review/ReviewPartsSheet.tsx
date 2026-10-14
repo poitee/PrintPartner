@@ -61,6 +61,7 @@ type Props = {
   review: PlanReview;
   planName: string;
   disabled?: boolean;
+  quantityDisabled?: boolean;
   folderRules?: StlNamingFolderRule[];
 };
 
@@ -278,7 +279,7 @@ function ReviewSheetRow({
 const NO_SPOOLS: SpoolmanSpoolRow[] = [];
 
 const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function ReviewPartsSheet(
-  { review: includedReview, planName, disabled, folderRules },
+  { review: includedReview, planName, disabled, quantityDisabled = Boolean(disabled), folderRules },
   ref,
 ) {
   const { profiles } = useProfileSelection();
@@ -464,7 +465,7 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
               part={part}
               viewMode={viewMode}
               busy={busyPartId === part.id || Boolean(disabled)}
-              quantityDisabled={Boolean(disabled)}
+              quantityDisabled={quantityDisabled}
               spoolmanConfigured={spoolmanConfigured}
               roleFilaments={roleFilaments}
               spools={spools}
@@ -516,7 +517,7 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
                   part={part}
                   viewMode={viewMode}
                   busy={busyPartId === part.id || Boolean(disabled)}
-                  quantityDisabled={Boolean(disabled)}
+                  quantityDisabled={quantityDisabled}
                   compact={isMobileLayout || ui.compactMode}
                   eager={printPrep}
                   note={note}
@@ -550,7 +551,7 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
           part={part}
           review={review}
           busy={busyPartId === part.id || Boolean(disabled)}
-          quantityDisabled={Boolean(disabled)}
+          quantityDisabled={quantityDisabled}
           onQtyChange={onQtyChange}
           onRemove={onRemove}
           onRestore={onRestore}

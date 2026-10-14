@@ -98,6 +98,10 @@ export function createReadStreamUnderRoot(root: string, relativePath: string): R
   return file ? readStreamForFileUnderRoot(root, file) : null;
 }
 
+export function tenantSourceUploadPrefix(tenantId: string): string {
+  return `.upload-tenant-${Buffer.from(tenantId, "utf8").toString("hex")}-`;
+}
+
 export function tenantExportDirectory(exportsRoot: string, tenantId: string): string {
   const segment =
     tenantId === "default"

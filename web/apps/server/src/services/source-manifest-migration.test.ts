@@ -31,6 +31,7 @@ import {
   legacySourceManifestOverridePath,
   sourceWorkspaceRoot,
 } from "./source-workspace.js";
+import { beginSourceSyncAdmission, packagedSourceSyncManifestPath } from "../ownership/source-sync-admission.js";
 
 vi.mock("node:fs/promises", { spy: true });
 
@@ -91,6 +92,71 @@ afterEach(() => {
 });
 
 describe("legacy Source manifest migration", () => {
+  it.each([false, true])("refuses legacy publication or archival after admission changes (alreadyCutOver=%s)", async (alreadyCutOver) => {
+    const f = fixture();
+    const previous = process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST;
+    try {
+      const { source } = await trackedSource({ ...f, name: "Migration admission" });
+      const manifest = join(f.dataDir, "ownership.json");
+      const original = readFileSync(packagedSourceSyncManifestPath(), "utf8");
+      writeFileSync(manifest, original);
+      process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST = manifest;
+      beginSourceSyncAdmission(f.dataDir);
+      const legacyPath = legacySourceManifestOverridePath(f.repo.reposDir, source.id);
+      writeFileSync(legacyPath, "project: legacy\n");
+      if (alreadyCutOver) {
+        await migrateLegacySourceManifestOverrides(f.repo);
+        writeFileSync(legacyPath, "project: restored legacy\n");
+      }
+      const legacyBytes = readFileSync(legacyPath);
+      const revisions = f.repo.listSourceRevisions(source.id);
+      const before = f.repo.getProjectRow(source.id);
+      const backups = migratedBackupPaths(legacyPath);
+      await expect(migrateLegacySourceManifestOverrides(f.repo, {
+        inspectLegacy: async (input) => {
+          const observed = await inspectLegacySourceManifest(input);
+          writeFileSync(manifest, `${original}\n`);
+          return observed;
+        },
+      })).rejects.toThrow(/runtime manifest does not match/);
+      expect(readFileSync(legacyPath)).toEqual(legacyBytes);
+      expect(f.repo.getProjectRow(source.id)).toEqual(before);
+      expect(f.repo.listSourceRevisions(source.id)).toEqual(revisions);
+      expect(migratedBackupPaths(legacyPath)).toEqual(backups);
+    } finally {
+      if (previous === undefined) delete process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST;
+      else process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST = previous;
+      f.sqlite.close();
+    }
+  });
+
+  it("retains legacy overrides when publication transactions are unsupported", async () => {
+    const { sqlite, repo } = fixture();
+    const source = repo.createSource({ name: "Unsupported migration", source_kind: "github" });
+    const workspace = sourceWorkspaceRoot(repo.reposDir, source.id);
+    mkdirSync(workspace, { recursive: true });
+    const legacyPath = legacySourceManifestOverridePath(repo.reposDir, source.id);
+    writeFileSync(legacyPath, "project: retained\nparts: []\n");
+    const before = repo.getProjectRow(source.id);
+    vi.spyOn(repo, "canPublishSourceRevision").mockReturnValue(false);
+    try {
+      const report = await migrateLegacySourceManifestOverrides(repo);
+      expect(report).toEqual({
+        migrated: [],
+        retained: [{
+          sourceId: source.id, legacyPath,
+          reason: "Source revision publication is unavailable on experimental PostgreSQL because atomic publication transactions are not supported.",
+        }],
+      });
+      expect(repo.getProjectRow(source.id)).toEqual(before);
+      expect(repo.listSourceRevisions(source.id)).toEqual([]);
+      expect(readFileSync(legacyPath, "utf8")).toBe("project: retained\nparts: []\n");
+      expect(readdirSync(workspace)).toEqual(["print-partner.manifest.yaml"]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
   it("atomically claims concurrently replaced legacy bytes without deleting them", async () => {
     const { sqlite, repo } = fixture();
     const source = repo.createSource({ name: "Atomic claim", source_kind: "local" });

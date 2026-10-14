@@ -39,6 +39,7 @@ Use this index to find the guide for your task. The in-app Help page covers the 
 ## Reference
 
 - [Architecture](ARCHITECTURE.md)
+- [Desktop rebuild flag and slice plan](desktop-rebuild.md)
 - [HTTP API](API.md)
 - [Manifest format](../manifests/README.md)
 - [Security](../SECURITY.md)

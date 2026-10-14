@@ -6,6 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 publish = false
 
+[features]
+default = []
+desktop_rebuild = []
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true

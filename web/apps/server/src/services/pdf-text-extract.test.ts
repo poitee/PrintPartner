@@ -2,6 +2,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -21,6 +22,7 @@ import {
   readCachedPdfText,
   sidecarPathForHash,
 } from "./pdf-text-extract.js";
+import { beginSourceSyncAdmission, packagedSourceSyncManifestPath, requireSourceSyncParticipant } from "../ownership/source-sync-admission.js";
 
 const cleanupDirs: string[] = [];
 
@@ -62,6 +64,31 @@ afterEach(() => {
 });
 
 describe("PDF text cache roots", () => {
+  it.each([false, true])("refuses cache publication after the manifest changes during parsing (perPage=%s)", async (perPage) => {
+    const root = tempRoot();
+    const contentRoot = join(root, "content");
+    const cacheRoot = join(root, "cache");
+    mkdirSync(contentRoot);
+    writeFileSync(join(contentRoot, "manual.pdf"), minimalPdf("Print Partner"), "binary");
+    const manifest = join(root, "manifest.json");
+    const original = readFileSync(packagedSourceSyncManifestPath(), "utf8");
+    const previous = process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST;
+    try {
+      writeFileSync(manifest, original);
+      process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST = manifest;
+      beginSourceSyncAdmission(root);
+      await expect(extractPdfText(contentRoot, "manual.pdf", {
+        cacheRoot, perPage,
+        beforePublish: () => requireSourceSyncParticipant("job.extract-source-docs"),
+        onProgress: () => writeFileSync(manifest, `${original}\n`),
+      })).rejects.toThrow(/runtime manifest does not match/);
+      expect(existsSync(cacheRoot)).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST;
+      else process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST = previous;
+    }
+  });
+
   it("rejects a PDF symlink that escapes the content root", async () => {
     const root = tempRoot();
     const contentRoot = join(root, "revisions", "commit-a");

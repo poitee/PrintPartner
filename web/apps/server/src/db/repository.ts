@@ -1196,6 +1196,10 @@ export class AppRepository {
     return this.syncSqlite ? this.transaction(read, "deferred") : read();
   }
 
+  canPublishSourceRevision(): boolean {
+    return this.syncSqlite;
+  }
+
   canMutateAcceptedPlan(): boolean {
     return this.syncSqlite;
   }
@@ -1918,6 +1922,15 @@ export class AppRepository {
   async ping(): Promise<boolean> {
     this.db.select({ key: this.schema.appSettings.key }).from(this.schema.appSettings).limit(1).all();
     return true;
+  }
+
+  listTenantIdsForSetting(key: string): string[] {
+    const rows = this.db
+      .select({ tenantId: this.schema.appSettings.tenantId })
+      .from(this.schema.appSettings)
+      .where(eq(this.schema.appSettings.key, key))
+      .all();
+    return [...new Set(rows.map((row) => row.tenantId).filter((tenantId) => tenantId.trim()))];
   }
 
   getSetting(key: string, defaultValue: string | null = null): string | null {
@@ -2908,6 +2921,21 @@ export class AppRepository {
       .where(and(eq(this.schema.sourceRevisions.tenantId, this.tenantId), eq(this.schema.sourceRevisions.id, id)))
       .get();
     return row ? sourceRevision(row) : null;
+  }
+
+  /** Revision locators for cleanup. A deleted Source has no row and no references. */
+  sourceRevisionSnapshotLocators(sourceId: number): string[] {
+    return this.db
+      .select({ snapshotLocator: this.schema.sourceRevisions.snapshotLocator })
+      .from(this.schema.sourceRevisions)
+      .where(
+        and(
+          eq(this.schema.sourceRevisions.tenantId, this.tenantId),
+          eq(this.schema.sourceRevisions.projectId, sourceId),
+        ),
+      )
+      .all()
+      .map((row) => row.snapshotLocator);
   }
 
   listSourceRevisions(sourceId: number): SourceRevision[] {
@@ -4674,6 +4702,42 @@ export class AppRepository {
     }
   }
 
+  private carryOpenDraftEdits(
+    profileId: number,
+    parts: PreparedPlanDraft["parts"],
+    preserveInclusion: boolean,
+  ): PreparedPlanDraft["parts"] {
+    const openDrafts = this.listPlanDraftIdentities(profileId).filter((draft) => draft.state === "open");
+    if (openDrafts.length === 0) return parts;
+    const edits = new Map<string, { readonly included: boolean; readonly quantityOverride: number | null }>();
+    for (const identity of openDrafts) {
+      const draft = this.getPlanDraft(profileId, identity.id);
+      if (!draft || draft.state !== "open") continue;
+      for (const part of draft.parts) {
+        edits.set(`${part.sourceLayer}\0${part.partKey}`, {
+          included: part.included,
+          quantityOverride: part.quantityOverride,
+        });
+      }
+    }
+    if (edits.size === 0) return parts;
+    return parts.map((part) => {
+      const edit = edits.get(`${part.sourceLayer}\0${part.partKey}`);
+      if (!edit) return part;
+      const included = preserveInclusion ? edit.included : part.included;
+      const quantityOverride = edit.quantityOverride ?? part.quantityOverride;
+      const quantityEffective = edit.quantityOverride != null ? edit.quantityOverride : part.quantityEffective;
+      if (
+        included === part.included &&
+        quantityOverride === part.quantityOverride &&
+        quantityEffective === part.quantityEffective
+      ) {
+        return part;
+      }
+      return { ...part, included, quantityOverride, quantityEffective };
+    });
+  }
+
   recomputePlanDraft(input: {
     profileId: number;
     actor: string;
@@ -4782,6 +4846,14 @@ export class AppRepository {
         if (this.capturePlanInputs(input.profileId).fingerprint !== prepared.capture.fingerprint) {
           return { kind: "inputs_changed" };
         }
+        // preparePlanDraft already returned, so a PATCH can commit before this
+        // write. Copy that quantity. Copy inclusion only when the caller asked
+        // to keep the current draft instead of applying the kit.
+        const parts = this.carryOpenDraftEdits(
+          input.profileId,
+          prepared.parts,
+          input.applyManifest === false,
+        );
         // A recompute supersedes any older open draft. Leaving them open
         // strands the Plan sheet after the newer draft is applied: the sheet
         // falls back to the stale survivor, whose base version can never
@@ -4801,7 +4873,9 @@ export class AppRepository {
             ),
           )
           .run();
-        const inserted = this.insertPlanDraftSnapshot({ profileId: input.profileId, actor, idempotencyKey, ...prepared });
+        const inserted = this.insertPlanDraftSnapshot({
+          profileId: input.profileId, actor, idempotencyKey, ...prepared, parts,
+        });
         return { kind: "created", draftId: inserted.draftId };
       },
       "immediate",

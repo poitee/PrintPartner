@@ -475,6 +475,57 @@ fn accented_shared_folder_case_publishes_and_reuses_with_stable_manifest() {
 }
 
 #[test]
+fn selected_omitted_case_pair_publishes_while_exact_and_omitted_collisions_reject() {
+    let fixture = Fixture::new();
+    fs::write(fixture.0.join("input/README.md"), b"# Notes\n").unwrap();
+    let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+    let mut source = fixture.repos().source(42).unwrap();
+    let mut selected = request();
+    selected.files.push(SelectedFile {
+        path: SourcePath::try_from("README.md".to_owned()).unwrap(),
+        kind: FileKind::Readme,
+        size_hint_bytes: None,
+    });
+    selected.selection.omitted_files = vec![pp_source::OmittedFile {
+        path: SourcePath::try_from("readme.md".to_owned()).unwrap(),
+        kind: FileKind::Md,
+        size_hint_bytes: None,
+        reason: pp_source::OmissionReason::UnknownDocumentSize,
+    }];
+    let published = source
+        .materialize(selected.clone(), &input, budget())
+        .unwrap();
+    assert_eq!(published.publication, Publication::Created);
+    assert!(
+        published
+            .files
+            .iter()
+            .any(|file| file.path.as_str() == "README.md")
+    );
+    selected.upstream_revision_key = "exact-duplicate".into();
+    selected.selection.omitted_files[0].path =
+        SourcePath::try_from("README.md".to_owned()).unwrap();
+    assert!(matches!(
+        source.materialize(selected.clone(), &input, budget()),
+        Err(pp_source::Error::DuplicatePath)
+    ));
+    selected.upstream_revision_key = "omitted-case-collision".into();
+    selected.selection.omitted_files = ["omitted.md", "OMITTED.md"]
+        .into_iter()
+        .map(|path| pp_source::OmittedFile {
+            path: SourcePath::try_from(path.to_owned()).unwrap(),
+            kind: FileKind::Md,
+            size_hint_bytes: None,
+            reason: pp_source::OmissionReason::UnknownDocumentSize,
+        })
+        .collect();
+    assert!(matches!(
+        source.materialize(selected, &input, budget()),
+        Err(pp_source::Error::DuplicatePath)
+    ));
+}
+
+#[test]
 fn canonical_folder_overlap_is_rejected_without_publishing_and_retry_can_recover() {
     let fixture = Fixture::new();
     let paths = ["Parts/a.stl", "parts/notes.md"];
