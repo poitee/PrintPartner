@@ -511,7 +511,7 @@ fn child_process_identity(pid: u32) -> String {
             .split_whitespace()
             .nth(19)
             .unwrap();
-        return format!("{}:{start}", boot.trim());
+        format!("{}:{start}", boot.trim())
     }
     #[cfg(not(target_os = "linux"))]
     {
