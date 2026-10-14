@@ -156,18 +156,22 @@ def apply_pr(pr):
 
 
 def reconcile(hours):
+    def ts(value):
+        return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+
     since = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=hours)
     prs = all_prs()
-    recent = [p for p in prs if dt.datetime.fromisoformat(p["updatedAt"].replace("Z", "+00:00")) >= since]
-    for p in sorted(recent, key=lambda p: p["updatedAt"]):  # oldest first, newest wins
+    recent = [p for p in prs if ts(p["updatedAt"]) >= since]
+    for p in sorted(recent, key=lambda p: ts(p["updatedAt"])):  # oldest first, newest wins
         apply_pr(p)
     # stall sweep
     last = {}
     for p in prs:
-        t = max([p["updatedAt"]] + [node["commit"]["committedDate"]
-                for node in p.get("commits", {}).get("nodes", [])])
+        activity = [p[key] for key in ("mergedAt", "closedAt", "updatedAt") if p.get(key)]
+        activity += [node["commit"]["committedDate"] for node in p.get("commits", {}).get("nodes", [])]
+        t = max(ts(value) for value in activity)
         for ident in refs(p)[1]:
-            last[ident] = max(last.get(ident, ""), t)
+            last[ident] = max(last.get(ident, t), t)
     issues = []
     cursor = None
     while True:
@@ -177,12 +181,11 @@ def reconcile(hours):
             break
         cursor = d["issues"]["pageInfo"]["endCursor"]
     cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=STALE_HOURS)
-    ts = lambda v: dt.datetime.fromisoformat(v.replace("Z", "+00:00"))
     for iss in issues:
         ident = iss["identifier"]
         if other_open(ident, -1):
             continue
-        t = max([ts(iss["updatedAt"])] + ([ts(last[ident])] if ident in last else []))
+        t = max([ts(iss["updatedAt"])] + ([last[ident]] if ident in last else []))
         if t < cutoff:
             move(iss, "Backlog", f"stalled: no PR/commit activity for {STALE_HOURS}h and no open PR.")
 

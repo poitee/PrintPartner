@@ -86,11 +86,13 @@ class SyncTest(unittest.TestCase):
         sync.apply_pr(pr(state="MERGED"))
         self.assertEqual(self.issues["GRE-1"]["state"]["name"], "In Review")
 
-    def test_refs_slice_does_not_revive_backlog(self):
-        self.issues["GRE-1"] = ticket(state="Backlog")
-        sync.apply_pr(pr(state="MERGED"))
-        self.assertEqual(self.issues["GRE-1"]["state"]["name"], "Backlog")
-        self.assertEqual(self.comments, [])
+    def test_refs_slice_does_not_revive_todo_or_backlog(self):
+        for state in ("Todo", "Backlog"):
+            with self.subTest(state=state):
+                self.issues["GRE-1"] = ticket(state=state)
+                sync.apply_pr(pr(state="MERGED"))
+                self.assertEqual(self.issues["GRE-1"]["state"]["name"], state)
+                self.assertEqual(self.comments, [])
 
     def test_unmerged_close_and_terminal_protection(self):
         self.issues["GRE-1"] = ticket(state="In Review")
@@ -160,6 +162,17 @@ class SyncTest(unittest.TestCase):
         sync.reconcile(3)
         self.assertEqual([self.issues[f"GRE-{n}"]["state"]["name"] for n in range(1, 5)],
                          ["Backlog", "In Progress", "In Progress", "In Progress"])
+
+    def test_stall_sweep_uses_latest_merge_close_or_update(self):
+        for field in ("mergedAt", "closedAt", "updatedAt"):
+            with self.subTest(field=field):
+                self.issues["GRE-1"] = ticket()
+                closed = pr(state="CLOSED", age=96)
+                closed[field] = pr(age=24)["updatedAt"]
+                sync._prs = [closed]
+                sync.reconcile(3)
+                self.assertEqual(self.issues["GRE-1"]["state"]["name"], "In Progress")
+                self.assertEqual(self.comments, [])
 
     def test_dry_run_does_not_mutate_linear(self):
         sync.DRY = True
