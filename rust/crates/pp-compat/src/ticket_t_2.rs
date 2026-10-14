@@ -146,13 +146,43 @@ async fn wait_live(path: &Path, expected_records: usize) {
     }
 }
 
-async fn shutdown(supervisor: super::Supervisor) {
+async fn shutdown(supervisor: super::Supervisor) -> super::CompatExit {
     let fuse = wall_fuse(Duration::from_secs(8));
     tokio::select! {
         biased;
         _ = fuse.cancelled() => panic!("shutdown exceeded 8s wall time"),
         result = supervisor.shutdown() => result.expect("supervisor shutdown"),
     }
+}
+
+#[tokio::test]
+async fn ticket_t_3_drain_supervisor_shutdown_reports_graceful_exit() {
+    let scratch = Scratch::new("graceful");
+    let supervisor =
+        super::Supervisor::launch_shell(shell_spec(&scratch), super::SupervisorConfig::default())
+            .unwrap();
+    wait_live(&scratch.pidfile(), 1).await;
+    assert_eq!(shutdown(supervisor).await, super::CompatExit::Graceful);
+    assert!(live_pids(&scratch.pidfile()).is_empty());
+}
+
+#[tokio::test]
+async fn ticket_t_3_drain_supervisor_shutdown_reports_forced_exit() {
+    let scratch = Scratch::new("forced");
+    let spec = super::ShellSpec {
+        script: "trap '' TERM; while :; do sleep 1; done",
+        ..shell_spec(&scratch)
+    };
+    let supervisor =
+        super::Supervisor::launch_shell(spec, super::SupervisorConfig::default()).unwrap();
+    wait_live(&scratch.pidfile(), 1).await;
+    let started = std::time::Instant::now();
+    assert_eq!(
+        supervisor.shutdown().await.unwrap(),
+        super::CompatExit::Forced
+    );
+    assert!(started.elapsed() >= super::drain::SIGTERM_GRACE);
+    assert!(live_pids(&scratch.pidfile()).is_empty());
 }
 
 #[tokio::test(flavor = "current_thread", start_paused = true)]

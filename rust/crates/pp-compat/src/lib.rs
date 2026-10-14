@@ -267,7 +267,7 @@ pub struct Supervisor {
     pub handle: CompatHandle,
     stop: CancellationToken,
     restarts_disarmed: CancellationToken,
-    task: Option<JoinHandle<Result<()>>>,
+    task: Option<JoinHandle<Result<CompatExit>>>,
 }
 
 fn restarts_blocked(cancelled: &CancellationToken, disarmed: &CancellationToken) -> bool {
@@ -291,6 +291,25 @@ struct Process {
 enum StopOutcome {
     Observed(ExitStatus),
     ForcedAfterTimeout(ExitStatus),
+}
+
+impl StopOutcome {
+    fn exit(&self) -> CompatExit {
+        match self {
+            Self::Observed(_) => CompatExit::Graceful,
+            Self::ForcedAfterTimeout(_) => CompatExit::Forced,
+        }
+    }
+}
+
+/// How the compatibility child ended on the final planned shutdown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompatExit {
+    /// The child exited inside the SIGTERM grace, or none was running.
+    Graceful,
+    /// The grace ran out and the process group was SIGKILLed.
+    Forced,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -551,7 +570,7 @@ impl Process {
         observed: Option<ExitStatus>,
         cancelled: &CancellationToken,
         eof_watchdog: bool,
-    ) -> Result<StopIntent> {
+    ) -> Result<(StopIntent, CompatExit)> {
         let pid = self.pid;
         let mut errors = CleanupErrors::default();
         let mut outcome = None;
@@ -697,11 +716,14 @@ impl Process {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(error).context("Compatibility socket cleanup failed"),
         });
-        let intent = outcome
-            .map(|outcome| classify_stop_outcome(outcome, cancelled))
+        let stopped = outcome
+            .map(|outcome| {
+                let exit = outcome.exit();
+                classify_stop_outcome(outcome, cancelled).map(|intent| (intent, exit))
+            })
             .transpose()?;
         errors.finish()?;
-        intent.context("Compatibility child outcome unavailable after cleanup")
+        stopped.context("Compatibility child outcome unavailable after cleanup")
     }
 }
 
@@ -808,6 +830,7 @@ impl Supervisor {
         let disarmed = restarts_disarmed.clone();
         let task = tokio::spawn(async move {
             let mut crashes = std::collections::VecDeque::new();
+            let mut exit = CompatExit::Graceful;
             let mut attempt = 0;
             loop {
                 if restarts_blocked(&cancelled, &disarmed) {
@@ -902,11 +925,11 @@ impl Supervisor {
                             .map(logs::Termination::ExitCode)
                             .or_else(|| status.signal().map(logs::Termination::Signal));
                     }
-                    let stop_intent = match process
+                    let (stop_intent, stop_exit) = match process
                         .stop(observed_exit, &cancelled, config.eof_watchdog)
                         .await
                     {
-                        Ok(intent) => intent,
+                        Ok(stopped) => stopped,
                         Err(error) => {
                             logs.event(
                                 logs::Event::Failure {
@@ -921,6 +944,7 @@ impl Supervisor {
                     };
                     logs.event(logs::Event::Reaped, 30);
                     if stop_intent == StopIntent::PlannedShutdown {
+                        exit = stop_exit;
                         break;
                     }
                 } else if cancelled.is_cancelled() {
@@ -967,7 +991,7 @@ impl Supervisor {
             }
             endpoints.send_replace(None);
             states.send_replace(Status::Stopped);
-            Ok(())
+            Ok(exit)
         });
         Ok(Self {
             handle: CompatHandle {
@@ -985,13 +1009,12 @@ impl Supervisor {
         self.restarts_disarmed.cancel();
     }
 
-    pub async fn shutdown(mut self) -> Result<()> {
+    pub async fn shutdown(mut self) -> Result<CompatExit> {
         self.stop.cancel();
-        if let Some(task) = self.task.take() {
-            task.await
-                .context("Compatibility supervisor join failed")??;
+        match self.task.take() {
+            Some(task) => task.await.context("Compatibility supervisor join failed")?,
+            None => Ok(CompatExit::Graceful),
         }
-        Ok(())
     }
 }
 
@@ -1471,6 +1494,21 @@ mod tests {
     }
 
     #[test]
+    fn ticket_t_3_drain_forced_stop_outcome_reports_forced_exit() {
+        for status in [libc::SIGKILL, libc::SIGTERM, 0] {
+            let status = std::process::ExitStatus::from_raw(status);
+            assert_eq!(
+                super::StopOutcome::ForcedAfterTimeout(status).exit(),
+                super::CompatExit::Forced
+            );
+            assert_eq!(
+                super::StopOutcome::Observed(status).exit(),
+                super::CompatExit::Graceful
+            );
+        }
+    }
+
+    #[test]
     fn unplanned_observed_exit_preserves_recovery_path() {
         assert!(
             super::validate_stop_outcome(
@@ -1500,6 +1538,7 @@ mod tests {
 
     struct OwnedStop {
         intent: super::StopIntent,
+        exit: super::CompatExit,
         elapsed: Duration,
         rejected: bool,
         group_absent: bool,
@@ -1550,7 +1589,7 @@ mod tests {
             cancelled.cancel();
         }
         let started = std::time::Instant::now();
-        let intent = process.stop(None, &cancelled, eof_watchdog).await.unwrap();
+        let (intent, exit) = process.stop(None, &cancelled, eof_watchdog).await.unwrap();
         let rejected = connections.admit().is_err();
         let group_absent = unsafe { libc::kill(-(pid as i32), 0) } < 0
             && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
@@ -1558,6 +1597,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&runtime_dir);
         OwnedStop {
             intent,
+            exit,
             elapsed: started.elapsed(),
             rejected,
             group_absent,
@@ -1577,6 +1617,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
         let outcome = stop_owned_child(child, true).await;
         assert_eq!(outcome.intent, super::StopIntent::PlannedShutdown);
+        assert_eq!(outcome.exit, super::CompatExit::Graceful);
         assert!(
             outcome.elapsed < Duration::from_secs(3),
             "{:?}",
@@ -1621,6 +1662,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
         let outcome = stop_owned_child(child, false).await;
         assert_eq!(outcome.intent, super::StopIntent::PlannedShutdown);
+        assert_eq!(outcome.exit, super::CompatExit::Forced);
         assert!(
             outcome.elapsed >= Duration::from_secs(10),
             "{:?}",
