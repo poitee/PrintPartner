@@ -239,3 +239,15 @@ fn ticket_t_7_ownership_node_runtime_admits_bundled_manifest() {
     let output = node_admit(&script, &manifest, "worker.startSourceWatcher");
     assert!(output.status.success(), "{}", command_text(&output));
 }
+
+#[test]
+fn ticket_t_7_ownership_http_registry_matches_fastify_union() {
+    let root = repo_root();
+    let output = Command::new("python3")
+        .arg(root.join("rust/scripts/gateway-operations.py"))
+        .arg(root.join("fixtures/http/routes-inventory.json"))
+        .arg("--check")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", command_text(&output));
+}

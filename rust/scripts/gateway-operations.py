@@ -11,7 +11,12 @@ parser.add_argument('--check', action='store_true')
 parser.add_argument('--self-test', action='store_true')
 args = parser.parse_args()
 inventory = json.loads(args.inventory.read_text())
-registered = inventory['routes']
+# The desktop child runs the single-user self-host build. Routes Fastify only
+# registers in other modes (board, shares) are absent there, not admitted.
+DESKTOP_MODE = 'self-host/single-user-auth'
+registered = [route for route in inventory['routes']
+              if route.get('registeredByMode', {}).get(DESKTOP_MODE, {'registered': True})['registered']]
+GATEWAY_OWNED = [{'method': 'POST', 'path': '/auth/logout', 'reason': 'Revokes the desktop session locally'}]
 
 
 def normalize_owner(value):
@@ -156,6 +161,8 @@ routes = []
 exclusions = []
 for registered_route in sorted(registered, key=lambda route: (route['path'], route['method'])):
     method, path = registered_route['method'], registered_route['path']
+    if any(owned['method'] == method and owned['path'] == path for owned in GATEWAY_OWNED):
+        continue
     reason = denied(method, path)
     if reason:
         exclusions.append({'method': method, 'path': path, 'reason': reason})
@@ -169,7 +176,7 @@ for registered_route in sorted(registered, key=lambda route: (route['path'], rou
 normalized = json.dumps(sorted(registered, key=lambda route: (route['path'], route['method'])), sort_keys=True, separators=(',', ':'))
 result = {'scope': 'Observed desktop self-host registration; Node owns domain/background/file effects',
           'registry_sha256': hashlib.sha256(normalized.encode()).hexdigest(),
-          'gateway_owned': [{'method': 'POST', 'path': '/auth/logout', 'reason': 'Revokes the desktop session locally'}],
+          'gateway_owned': GATEWAY_OWNED,
           'routes': routes, 'denied': exclusions}
 encoded = json.dumps(result, indent=2) + '\n'
 output = ROOT / 'rust/crates/pp-gateway/operations.json'
