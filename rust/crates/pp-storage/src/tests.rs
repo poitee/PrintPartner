@@ -157,6 +157,65 @@ fn queue_cancellation_reply_loss_and_shutdown_drain() {
     assert!(!path.join(".desktop-owner.json").exists());
 }
 #[test]
+fn ticket_t_7_writer_disk_full_rolls_back_and_readmits() {
+    let (path, owner, client) = fixture("disk-full");
+    set(&client, "before", "kept")
+        .unwrap()
+        .recv()
+        .unwrap()
+        .unwrap();
+    let pages = owner.database_pages().unwrap();
+    assert_eq!(owner.admit_disk_quota(pages).unwrap(), pages);
+    let filler = "x".repeat(2048);
+    let mut refused = None;
+    for index in 0..256 {
+        let key = format!("fill-{index}");
+        match set(&client, &key, &filler).unwrap().recv().unwrap() {
+            Ok(written) => assert!(written),
+            Err(error) => {
+                refused = Some((key, error));
+                break;
+            }
+        }
+    }
+    let (key, error) = refused.expect("disk quota refuses a settings write");
+    assert!(
+        matches!(
+            error.downcast_ref::<rusqlite::Error>(),
+            Some(rusqlite::Error::SqliteFailure(code, _)) if code.code == rusqlite::ErrorCode::DiskFull
+        ),
+        "{error:#}"
+    );
+    assert!(owner.database_pages().unwrap() <= pages);
+    let read = client.reader(Duration::ZERO).unwrap();
+    assert_eq!(
+        read.snapshot("test", &key).unwrap(),
+        SettingSnapshot::Missing
+    );
+    assert_eq!(
+        read.snapshot("test", "before").unwrap(),
+        SettingSnapshot::Stored {
+            value: "kept".into()
+        }
+    );
+    drop(read);
+
+    assert_eq!(owner.admit_disk_quota(pages + 64).unwrap(), pages + 64);
+    assert!(
+        set(&client, &key, &filler)
+            .unwrap()
+            .recv()
+            .unwrap()
+            .unwrap()
+    );
+    owner.shutdown().unwrap();
+    let check = Connection::open(path.join("print-partner.db")).unwrap();
+    assert_eq!(
+        snapshot(&check, "test", &key).unwrap(),
+        SettingSnapshot::Stored { value: filler }
+    );
+}
+#[test]
 fn reader_pool_resets_pragmas_rejects_writes_and_is_bounded() {
     let (_, owner, client) = fixture("readers");
     let read = client.reader(Duration::ZERO).unwrap();

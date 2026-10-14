@@ -28,6 +28,21 @@ pub struct StorageLease {
     release_allowed: bool,
 }
 
+#[cfg(test)]
+thread_local! {
+    static FAIL_MARKER_WRITE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn write_marker(file: &mut File, bytes: &[u8]) -> std::io::Result<()> {
+    #[cfg(test)]
+    if FAIL_MARKER_WRITE.with(std::cell::Cell::take) {
+        file.write_all(&bytes[..bytes.len() / 2])?;
+        return Err(std::io::Error::from_raw_os_error(libc::ENOSPC));
+    }
+    file.write_all(bytes)?;
+    file.sync_all()
+}
+
 /// Record the supervised child in the owner marker before setup opens storage.
 pub fn record_child(directory: &Path, pid: u32) -> Result<()> {
     guard::record_child(directory, pid)
@@ -103,19 +118,21 @@ impl StorageLease {
         std::fs::create_dir(&runtime_dir)?;
         std::fs::set_permissions(&runtime_dir, std::fs::Permissions::from_mode(0o700))?;
         let marker = serde_json::json!({"storage_protocol_version":1,"pid":std::process::id(),"process_identity":lease_guard.identity,"lease_hash":hex::encode(Sha256::digest(lease.as_bytes())),"runtime_dir":runtime_dir});
-        let result = (|| -> Result<()> {
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&marker_path)?;
-            file.write_all(marker.to_string().as_bytes())?;
-            file.sync_all()?;
-            Ok(())
-        })();
+        let result = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&marker_path)
+            .and_then(|mut file| {
+                write_marker(&mut file, marker.to_string().as_bytes()).inspect_err(|_| {
+                    // A torn marker cannot be parsed, so it would refuse every later
+                    // admission. We created it and still hold the lock, so remove it.
+                    let _ = std::fs::remove_file(&marker_path);
+                })
+            });
         if let Err(error) = result {
             let _ = std::fs::remove_dir(&runtime_dir);
-            return Err(error);
+            return Err(error.into());
         }
         Ok(Self {
             lock: Some(lock),
@@ -324,6 +341,37 @@ mod tests {
         assert!(guard::StorageLease::acquire(&path).is_err());
         std::fs::remove_dir(&marker).unwrap();
         assert_released(StorageLease::retry_failed_release(&path).unwrap(), &path);
+    }
+
+    #[test]
+    fn ticket_t_7_writer_disk_full_marker_leaves_the_copy_admittable() {
+        let path = directory();
+        FAIL_MARKER_WRITE.with(|fail| fail.set(true));
+        let refused = StorageLease::acquire(&path)
+            .err()
+            .expect("ENOSPC refuses admission");
+        assert_eq!(
+            refused
+                .downcast_ref::<std::io::Error>()
+                .and_then(std::io::Error::raw_os_error),
+            Some(libc::ENOSPC),
+            "{refused:#}"
+        );
+        assert!(
+            !path.join(".desktop-owner.json").exists(),
+            "torn marker left behind"
+        );
+        assert!(!path.join(".desktop-lease").exists());
+        let lock = File::open(path.join(".desktop.lock")).unwrap();
+        lock.try_lock_exclusive().unwrap();
+        FileExt::unlock(&lock).unwrap();
+
+        let owner = StorageLease::acquire(&path).unwrap();
+        let marker: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path.join(".desktop-owner.json")).unwrap())
+                .unwrap();
+        assert_eq!(marker["pid"], std::process::id());
+        assert_released(owner.release(), &path);
     }
 
     #[test]
