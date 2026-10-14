@@ -2,14 +2,17 @@ import { describe, expect, it } from "vitest";
 import { drizzle } from "drizzle-orm/node-postgres";
 import type { Pool } from "pg";
 import * as schema from "./schema-pg.js";
+import { AppRepository } from "./repository.js";
 import {
   asSyncDb,
   compareAndSetPostgresSetting,
+  compareAndSetPostgresOwnedPlanFeatures,
   registerPostgresSyncQuery,
   runSerializedSettingsMutation,
   unregisterPostgresSyncQuery,
   type AppDrizzleDb,
   type PostgresSettingCompareAndSet,
+  type PostgresSyncQuery,
 } from "./sync-db-bridge.js";
 
 describe("runSerializedSettingsMutation", () => {
@@ -119,6 +122,55 @@ describe("compareAndSetPostgresSetting", () => {
     } finally {
       unregisterPostgresSyncQuery(postgres);
     }
+  });
+});
+
+describe("owned Postgres plan settings", () => {
+  it.each([{ kind: "missing" }, { kind: "stored", value: "" }] satisfies Array<PostgresSettingCompareAndSet["expected"]>)(
+    "locks the owned profile before exact-snapshot CAS for %j", (expected) => {
+      const postgres = drizzle.mock({ schema });
+      const queries: PostgresSyncQuery[] = [];
+      registerPostgresSyncQuery(postgres, (query) => {
+        queries.push(query);
+        return { rows: [], rowCount: queries.length === 1 ? 1 : 0 };
+      });
+      try {
+        const input = { tenantId: "farm-a", profileId: 7, expected, value: '{"farm":false}' };
+        expect(compareAndSetPostgresOwnedPlanFeatures(postgres, input)).toBe(true);
+        expect(compareAndSetPostgresOwnedPlanFeatures(postgres, input)).toBe(false);
+        expect(queries.map((query) => query.params)).toEqual(expected.kind === "missing"
+          ? [["farm-a", "feature_toggles:plan:7", '{"farm":false}', 7], ["farm-a", "feature_toggles:plan:7", '{"farm":false}', 7]]
+          : [["farm-a", "feature_toggles:plan:7", '{"farm":false}', 7, ""], ["farm-a", "feature_toggles:plan:7", '{"farm":false}', 7, ""]]);
+        const sql = queries[0]?.sql.replace(/\s+/g, " ");
+        expect(sql).toContain("SELECT id FROM build_profiles WHERE tenant_id = $1 AND id = $4 FOR KEY SHARE");
+        expect(sql).toContain(expected.kind === "missing"
+          ? "SELECT $1, $2, $3 FROM owned ON CONFLICT (tenant_id, key) DO NOTHING"
+          : "FROM owned WHERE app_settings.tenant_id = $1 AND key = $2 AND value = $5");
+      } finally { unregisterPostgresSyncQuery(postgres); }
+    });
+
+  it("deletes the owned profile and all setting keys after acquiring its lock in a transaction", () => {
+    const postgres = drizzle.mock({ schema });
+    const queries: PostgresSyncQuery[] = [];
+    registerPostgresSyncQuery(postgres, (query) => {
+      queries.push(query);
+      return { rows: [], rowCount: 3 };
+    });
+    try {
+      new AppRepository(postgres, "farm-a", "/tmp").deleteProfile(7);
+      expect(queries).toHaveLength(1);
+      expect(queries[0]?.beforeInTransaction).toEqual([{
+        sql: "SELECT id FROM build_profiles WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
+        params: ["farm-a", 7],
+      }]);
+      expect(queries[0]?.params).toEqual([
+        "farm-a", 7, ["production_setup:7", "role_filaments_7", "feature_toggles:plan:7"],
+      ]);
+      expect(queries[0]?.sql.replace(/\s+/g, " ")).toContain(
+        "DELETE FROM build_profiles WHERE tenant_id = $1 AND id = $2 RETURNING id",
+      );
+      expect(queries[0]?.sql).toContain("AND EXISTS (SELECT 1 FROM deleted)");
+    } finally { unregisterPostgresSyncQuery(postgres); }
   });
 });
 

@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { AppRepository } from "../db/repository.js";
 import type { IntegrationPort } from "../integrations/store.js";
 import { getIntegrationConfig } from "../integrations/store.js";
-import { readFarmAccess } from "../lib/farm-access.js";
+import { selectFarmSuggestionItems } from "../services/plan-features.js";
 import { sendProblem } from "../lib/api-error.js";
 import { parseCheckoffUnits } from "../services/printer-checkoff.js";
 import { loadFleet } from "../services/printer-fleet.js";
@@ -84,14 +84,14 @@ export async function registerPrinterSendQueueRoutes(
     "/printer-send-queue/suggestions",
     { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } },
     async (request, reply) => {
-      const access = readFarmAccess(() => deps.repo);
+      const access = selectFarmSuggestionItems(deps.repo);
       if (access.kind !== "allowed") {
         const status = access.kind === "disabled" ? 403 : 500;
         return reply.status(status).send({
           status,
           title: access.kind === "disabled" ? "Forbidden" : "Internal Server Error",
-          detail: access.error,
-          code: access.code,
+          detail: access.kind === "disabled" ? "Feature farm is disabled." : "Stored feature toggles are invalid.",
+          code: access.kind === "disabled" ? "FEATURE_DISABLED" : "FEATURE_TOGGLES_INVALID",
         });
       }
       const query = request.query as { idle_integration_ids?: string };
@@ -103,14 +103,11 @@ export async function registerPrinterSendQueueRoutes(
           .filter(Boolean),
       );
       const fleet = loadFleet(deps.repo);
-      const queued = listActivePrinterSendQueue(deps.repo).filter(
-        (i) => i.state === "queued",
-      );
       const suggestions = computePrinterQueueSuggestions(
         deps.repo,
         fleet,
         idleIds,
-        queued,
+        access.items,
       );
       return { suggestions };
     },
