@@ -100,7 +100,7 @@ fn ticket_t_12_permission_repair_reopens_the_copied_database() {
 
 #[test]
 fn ticket_t_12_unsafe_permissions_refuse_before_lock_or_database_changes() {
-    for permissions in [0o777, 0o775, 0o707, 0o555, 0o600] {
+    for permissions in [0o777, 0o775, 0o707, 0o555, 0o600, 0o300] {
         let copy = Copy::new();
         std::fs::DirBuilder::new()
             .recursive(true)

@@ -393,22 +393,25 @@ async fn ticket_t_12_unsafe_directory_is_refused_before_child_or_database_open()
     let copied = b"copied database must remain unopened";
     std::fs::write(&database, copied).unwrap();
     std::fs::write(data.join("desktop.toml"), b"port = 43123\n").unwrap();
-    std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o775)).unwrap();
-    let error = CoreRuntime::start(launch(data.clone()))
-        .await
-        .err()
-        .unwrap();
-    assert_eq!(error.to_string(), "Unsafe data directory permissions");
-    assert_eq!(std::fs::read(&database).unwrap(), copied);
-    assert_eq!(
-        std::fs::read(data.join("desktop.toml")).unwrap(),
-        b"port = 43123\n"
-    );
-    assert_eq!(std::fs::read_dir(&data).unwrap().count(), 2);
-    println!(
-        "{}",
-        serde_json::json!({"proof_class":"headless_unsigned", "case":"unsafe_directory_refused", "error":error.to_string(), "database_unchanged":true, "origin_unchanged":true, "ownership_artifacts_absent":true})
-    );
+    for permissions in [0o775, 0o300] {
+        std::fs::set_permissions(&data, std::fs::Permissions::from_mode(permissions)).unwrap();
+        let error = CoreRuntime::start(launch(data.clone()))
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.to_string(), "Unsafe data directory permissions");
+        std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(std::fs::read(&database).unwrap(), copied);
+        assert_eq!(
+            std::fs::read(data.join("desktop.toml")).unwrap(),
+            b"port = 43123\n"
+        );
+        assert_eq!(std::fs::read_dir(&data).unwrap().count(), 2);
+        println!(
+            "{}",
+            serde_json::json!({"proof_class":"headless_unsigned", "case":"unsafe_directory_refused", "permissions":permissions, "error":error.to_string(), "database_unchanged":true, "origin_unchanged":true, "ownership_artifacts_absent":true})
+        );
+    }
     std::fs::remove_dir_all(data).unwrap();
 }
 

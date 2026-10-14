@@ -39,7 +39,7 @@ pub fn prepare_directory(path: &Path) -> Result<PathBuf> {
     ensure!(metadata.is_dir(), "Data directory is not a directory");
     ensure!(
         metadata.uid() == unsafe { libc::geteuid() }
-            && metadata.mode() & 0o300 == 0o300
+            && metadata.mode() & 0o700 == 0o700
             && metadata.mode() & 0o022 == 0,
         "Unsafe data directory permissions"
     );
