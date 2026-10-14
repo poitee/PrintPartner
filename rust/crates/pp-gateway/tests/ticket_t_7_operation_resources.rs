@@ -90,6 +90,58 @@ fn ticket_t_7_ownership_plan_decisions_has_complete_node_owned_resources() {
 }
 
 #[test]
+fn ticket_t_7_ownership_list_plans_has_complete_node_owned_resources() {
+    use pp_gateway::ownership::{Owner, manifest::Disposition};
+    let id = "tool.list_plans";
+    let index = admit_bundled_manifest().unwrap();
+    let resources = index
+        .resources_for(id)
+        .expect("plan list resources must be reviewed");
+    let expected: ResourceSet = serde_json::from_value(json!([
+        {"kind": "table", "name": "build_profiles"},
+        {"kind": "table", "name": "parts"},
+        {"kind": "table", "name": "profile_layers"},
+        {"kind": "table", "name": "projects"},
+        {"kind": "table", "name": "source_revisions"},
+        {"kind": "table", "name": "app_settings"},
+        {"kind": "table", "name": "plan_accepted_input_sets"},
+        {"kind": "table", "name": "plan_revision_input_sets"},
+        {"kind": "table", "name": "plan_revision_inputs"}
+    ]))
+    .unwrap();
+    assert_eq!(resources, &expected);
+    assert_eq!(
+        index.lookup(id).unwrap().disposition,
+        Disposition::Owned(Owner::Node)
+    );
+    assert_eq!(
+        index.admit_rollback(id),
+        Err(AdmissionError::IncompatibleLiveFormat {
+            operation: id.into(),
+            format: "sqlite-schema".into(),
+            node_reads: 34,
+            rust_writes: Some(35),
+        })
+    );
+    let mut compatible = manifest();
+    compatible["live_formats"]["sqlite-schema"]["rust_writes"] = json!(34);
+    assert_eq!(
+        admit(&compatible).unwrap().admit_rollback(id),
+        Ok(&expected)
+    );
+    compatible["live_formats"]["sqlite-schema"]["rust_writes"] = Value::Null;
+    assert_eq!(
+        admit(&compatible).unwrap().admit_rollback(id),
+        Err(AdmissionError::IncompatibleLiveFormat {
+            operation: id.into(),
+            format: "sqlite-schema".into(),
+            node_reads: 34,
+            rust_writes: None,
+        })
+    );
+}
+
+#[test]
 fn reviewed_sets_aliases_and_complete_unresolved_partition() {
     let index = admit_bundled_manifest().unwrap();
     assert_eq!(
@@ -169,6 +221,7 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "source.sync",
         "tool.get_workflow_help",
         "tool.get_plan_decisions",
+        "tool.list_plans",
         "tool.read_source_file",
         "tool.list_sources",
         "tool.list_source_categories",
@@ -437,6 +490,7 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
     for id in [
         "tool.get_workflow_help",
         "tool.get_plan_decisions",
+        "tool.list_plans",
         "tool.read_source_file",
         "tool.list_sources",
         "tool.list_source_categories",
@@ -471,6 +525,7 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
 fn reviewed_participants_cannot_swap_operations() {
     for (first, second) in [
         ("tool.get_workflow_help", "tool.get_plan_decisions"),
+        ("tool.get_workflow_help", "tool.list_plans"),
         ("tool.get_workflow_help", "tool.preview_source_naming"),
         ("tool.preview_source_naming", "tool.list_sources"),
         ("tool.search_source_files", "tool.preview_source_naming"),
@@ -600,4 +655,123 @@ fn ticket_t_7_ownership_workflow_help_is_reviewed_empty_and_node_owned() {
         detail.contains("unknown variant `unknown_workflow_table`"),
         "{detail}"
     );
+}
+
+#[test]
+fn ticket_t_7_ownership_list_plans_refuses_before_effects() {
+    let id = "tool.list_plans";
+    let mut compatible = manifest();
+    compatible["live_formats"]["sqlite-schema"]["rust_writes"] = json!(34);
+    let execute = |value: &Value, marker: &mut bool| -> Result<(), AdmissionError> {
+        let index = admit(value)?;
+        index.admit_rollback(id)?;
+        *marker = true;
+        Ok(())
+    };
+    let mut marker = false;
+    assert_eq!(execute(&compatible, &mut marker), Ok(()));
+    assert!(marker);
+    let entry = compatible["resources"]["reviewed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|entry| entry["operation"] == id)
+        .unwrap();
+    for (edit, expected) in [
+        (0, AdmissionError::ResourceSetMismatch { id: id.into() }),
+        (1, AdmissionError::ResourceSetMismatch { id: id.into() }),
+        (
+            2,
+            malformed("missing reviewed resources for tool.list_plans"),
+        ),
+        (3, malformed("duplicate resource state for tool.list_plans")),
+    ] {
+        let mut value = compatible.clone();
+        match edit {
+            0 => {
+                value["resources"]["reviewed"][entry]["resources"]
+                    .as_array_mut()
+                    .unwrap()
+                    .remove(0);
+            }
+            1 => {
+                let resource = value["resources"]["reviewed"][entry]["resources"][0].clone();
+                value["resources"]["reviewed"][entry]["resources"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(resource);
+            }
+            2 => {
+                value["resources"]["reviewed"]
+                    .as_array_mut()
+                    .unwrap()
+                    .remove(entry);
+            }
+            3 => {
+                value["resources"]["unresolved"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!(id));
+            }
+            _ => unreachable!(),
+        }
+        marker = false;
+        assert_eq!(execute(&value, &mut marker), Err(expected));
+        assert!(!marker);
+    }
+    let mut value = compatible.clone();
+    value["resources"]["reviewed"][entry]["resources"][0] =
+        json!({"kind":"table","name":"future_plan_table"});
+    marker = false;
+    assert!(
+        matches!(execute(&value, &mut marker), Err(AdmissionError::Malformed(detail)) if detail.contains("unknown variant `future_plan_table`"))
+    );
+    assert!(!marker);
+    let mut value = compatible.clone();
+    value["operations"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"operation":"tool.conflict", "owner":"node", "participants":[id]}));
+    marker = false;
+    assert_eq!(
+        execute(&value, &mut marker),
+        Err(AdmissionError::ConflictingParticipant {
+            operation: id.into(),
+            left: "tool.conflict".into(),
+            right: id.into(),
+        })
+    );
+    assert!(!marker);
+    for owner in ["rust", "python"] {
+        let mut value = compatible.clone();
+        regroup(&mut value, id, &[id]);
+        value["operations"]
+            .as_array_mut()
+            .unwrap()
+            .last_mut()
+            .unwrap()["owner"] = json!(owner);
+        let expected = if owner == "rust" {
+            AdmissionError::UnsupportedRustOwner {
+                participant: id.into(),
+            }
+        } else {
+            AdmissionError::UnknownOwner {
+                value: owner.into(),
+            }
+        };
+        marker = false;
+        assert_eq!(execute(&value, &mut marker), Err(expected));
+        assert!(!marker);
+    }
+    marker = false;
+    assert_eq!(
+        execute(&manifest(), &mut marker),
+        Err(AdmissionError::IncompatibleLiveFormat {
+            operation: id.into(),
+            format: "sqlite-schema".into(),
+            node_reads: 34,
+            rust_writes: Some(35)
+        })
+    );
+    assert!(!marker);
 }
