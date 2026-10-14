@@ -28,8 +28,8 @@ export async function registerIntegrationRoutes(
     const id = (request.params as { id: string }).id;
     const integration = deps.integrations.get(id);
     if (!integration) return sendProblem(reply, 404, "Not Found", "Integration not found");
-    if (integration.type !== "bambu") return;
-    const access = readFeatureAccess(() => deps.repo, "bambu");
+    if (integration.type !== "bambu" && integration.type !== "spoolman") return;
+    const access = readFeatureAccess(() => deps.repo, integration.type);
     if (access.kind !== "allowed") {
       const status = access.kind === "disabled" ? 403 : 500;
       return reply.status(status).send({
