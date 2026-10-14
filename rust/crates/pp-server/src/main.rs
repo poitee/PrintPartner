@@ -74,6 +74,7 @@ async fn main() -> Result<()> {
         _ = shutdown_requested => {}
     }
     let receipt = runtime.shutdown().await;
+    println!("{}", serde_json::to_string(&receipt)?);
     anyhow::ensure!(receipt.complete(), "Desktop shutdown incomplete");
     Ok(())
 }

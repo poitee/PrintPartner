@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# Stage-1 pp-server smoke: boot on loopback, authenticate, exercise HTTP, WS and
-# MCP through the gateway, prove the data lock is held while running and
-# released after a clean stop. Portable to macOS bash 3.2 and Linux.
 set -euo pipefail
 
 usage='Usage: bash rust/scripts/workflow-smoke.sh SERVER_BINARY NODE_BINARY'
@@ -99,6 +96,7 @@ log "ready: $origin (pid $server_pid)"
 
 # Data lock taken at boot.
 test -f "$data/.desktop-owner.json" || fail 'owner marker missing after boot'
+runtime_dir="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["runtime_dir"])' "$data/.desktop-owner.json")"
 lock="$(lock_state)" || fail 'data lock probe failed at boot'
 test "$lock" = held || fail "data lock is $lock while running"
 log 'lock: held at boot (flock EWOULDBLOCK, owner marker present)'
@@ -154,19 +152,34 @@ test "$(printf '%s' "$mcp" | tail -n 1)" = 403 || fail "authenticated MCP return
 printf '%s' "$mcp" | grep -q 'MCP is disabled in this foundation' || fail "unexpected MCP refusal: $mcp"
 log 'mcp: initialize -> 401 without session, 403 fail-closed with session'
 
-# Clean stop: SIGTERM, exit 0, WS closed, no child or process-group leftovers.
-# The upgrade must still be open here so its close is attributable to shutdown.
 alive "$ws_pid" || fail 'websocket client exited before shutdown'
 if grep -q '"closed"' "$fixture/ws.out"; then fail 'websocket closed before shutdown'; fi
+SECONDS=0
 kill -TERM "$server_pid"
-wait_exit "$server_pid" 40 || fail 'server did not exit within 40s of SIGTERM'
+wait_exit "$server_pid" 17 || fail 'server did not exit within 17s of SIGTERM'
+shutdown_seconds=$SECONDS
 set +e
 wait "$server_pid"
 server_exit=$?
 set -e
 server_pid_stopped="$server_pid"
 server_pid=''
-test "$server_exit" = 0 || fail "server exited $server_exit after SIGTERM"
+test "$server_exit" = 1 || fail "server exited $server_exit after stalled WebSocket drain"
+((shutdown_seconds >= 5 && shutdown_seconds < 17)) || fail "shutdown took ${shutdown_seconds}s"
+python3 - "$fixture/server.out" "$fixture/server.err" <<'PY'
+import json, pathlib, sys
+records = pathlib.Path(sys.argv[1]).read_text().splitlines()
+assert len(records) == 2, records
+receipt = json.loads(records[1])
+assert receipt == {
+    "proof_class": "headless_unsigned", "tracked_idle": True, "gateway_idle": False,
+    "compat_exit": "graceful", "compat_reaped": True, "storage_released": True,
+    "gateway_stopped": True, "marker_removed": True, "runtime_removed": True,
+    "errors": ["gateway_drain_timed_out"],
+}, receipt
+stderr = pathlib.Path(sys.argv[2]).read_text().strip()
+assert stderr == "Error: Desktop shutdown incomplete", stderr
+PY
 wait_exit "$ws_pid" 10 || fail 'websocket client did not exit after shutdown'
 set +e
 wait "$ws_pid"
@@ -178,20 +191,23 @@ grep -q '"closed":true' "$fixture/ws.out" || fail 'websocket was not closed by s
 if alive "$child_pid"; then fail "compat child $child_pid survived stop"; fi
 check_no_leftovers -g "$child_pid"
 check_no_leftovers -P "$server_pid_stopped"
-log "stop: SIGTERM -> exit 0, ws closed, child $child_pid gone, no process-group or child leftovers"
+log "stop: SIGTERM -> gateway drain timeout, exit 1 in ${shutdown_seconds}s, ws closed, child $child_pid gone, no process-group or child leftovers"
 
 # Data lock released at stop.
 test ! -e "$data/.desktop-owner.json" || fail 'owner marker survived stop'
+test ! -e "$runtime_dir" || fail 'runtime directory survived stop'
 lock="$(lock_state)" || fail 'data lock probe failed after stop'
 test "$lock" = free || fail "data lock is $lock after stop"
 log 'lock: released at stop (flock acquired, owner marker removed)'
 
-python3 - "$commit" "$origin" "$child_pid" "$plan_id" <<'PY'
+python3 - "$commit" "$origin" "$child_pid" "$plan_id" "$fixture/server.out" "$shutdown_seconds" <<'PY'
 import json, platform, sys
+shutdown = json.loads(open(sys.argv[5]).read().splitlines()[1])
 print(json.dumps({"proof_class": "headless_unsigned", "case": "stage1_server_smoke", "os": platform.system(),
                   "arch": platform.machine(), "commit": sys.argv[1], "origin": sys.argv[2], "child_pid": int(sys.argv[3]),
                   "plan_id": int(sys.argv[4]), "http_authenticated": True, "ws_open_and_closed_on_stop": True,
                   "mcp_fail_closed": True, "lock_held_at_boot": True, "lock_released_at_stop": True,
-                  "server_exit": 0, "leftover_processes": 0}))
+                  "server_exit": 1, "shutdown_seconds": int(sys.argv[6]), "shutdown": shutdown,
+                  "runtime_removed": True, "leftover_processes": 0}))
 PY
 log PASS
