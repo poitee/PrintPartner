@@ -7,6 +7,7 @@ import {
   type ApiKeyValidator,
 } from "../middleware/api-key.js";
 import { getLogger } from "../services/logger.js";
+import { readFarmAccess } from "../lib/farm-access.js";
 
 export type MetricsDeps = {
   repo: AppRepository;
@@ -74,6 +75,13 @@ export async function registerMetricsRoutes(
     }
     if (!request.sessionUser && !apiKey && deps.authRequired) {
       return reply.status(401).send({ detail: "Authentication required" });
+    }
+
+    const farmAccess = readFarmAccess(() => deps.repo);
+    if (farmAccess.kind === "invalid") {
+      return reply.status(500).send({
+        status: 500, title: "Internal Server Error", detail: farmAccess.error, code: farmAccess.code,
+      });
     }
 
     reply.header("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
@@ -219,37 +227,41 @@ export async function registerMetricsRoutes(
       }
 
       // printers_idle / printers_printing from fleet + live integration status
-      try {
-        const fleet = loadFleet(repo);
-        let idleCount = 0;
-        let printingCount = 0;
+      if (farmAccess.kind === "disabled") {
+        lines.push(`# ${farmAccess.code}: ${farmAccess.error}`, "");
+      } else {
+        try {
+          const fleet = loadFleet(repo);
+          let idleCount = 0;
+          let printingCount = 0;
 
-        if (deps.integrations) {
-          await Promise.allSettled(
-            fleet.map(async (m) => {
-              if (!m.integration_id) return;
-              try {
-                const status = await deps.integrations!.getStatus(m.integration_id);
-                if (status.state === "idle" || status.state === "complete") idleCount++;
-                else if (status.state === "printing" || status.state === "paused") printingCount++;
-              } catch {
-                // unreachable printer — skip
-              }
-            }),
-          );
+          if (deps.integrations) {
+            await Promise.allSettled(
+              fleet.map(async (m) => {
+                if (!m.integration_id) return;
+                try {
+                  const status = await deps.integrations!.getStatus(m.integration_id);
+                  if (status.state === "idle" || status.state === "complete") idleCount++;
+                  else if (status.state === "printing" || status.state === "paused") printingCount++;
+                } catch {
+                  // unreachable printer — skip
+                }
+              }),
+            );
+          }
+
+          lines.push("# HELP printers_idle Number of printers currently idle");
+          lines.push("# TYPE printers_idle gauge");
+          lines.push(`printers_idle ${idleCount}`);
+          lines.push("");
+
+          lines.push("# HELP printers_printing Number of printers currently printing or paused");
+          lines.push("# TYPE printers_printing gauge");
+          lines.push(`printers_printing ${printingCount}`);
+          lines.push("");
+        } catch {
+          // skip
         }
-
-        lines.push("# HELP printers_idle Number of printers currently idle");
-        lines.push("# TYPE printers_idle gauge");
-        lines.push(`printers_idle ${idleCount}`);
-        lines.push("");
-
-        lines.push("# HELP printers_printing Number of printers currently printing or paused");
-        lines.push("# TYPE printers_printing gauge");
-        lines.push(`printers_printing ${printingCount}`);
-        lines.push("");
-      } catch {
-        // skip
       }
     }
 
