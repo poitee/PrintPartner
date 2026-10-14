@@ -2,6 +2,7 @@ import { chmodSync, existsSync, readFileSync, rmdirSync, rmSync } from "node:fs"
 import { dirname, join } from "node:path";
 import Database from "better-sqlite3";
 import { installDesktopContext, desktopContext } from "./desktop-context.js";
+import { interruptPrinterUploadsOnShutdown } from "./services/printer-send-queue.js";
 
 async function setupFromParent(): Promise<unknown> {
   return new Promise((resolve, reject) => {
@@ -28,6 +29,7 @@ const stop = async () => {
   stopping = true;
   const deadline = setTimeout(() => process.kill(-process.pid, "SIGKILL"), 9000);
   try {
+    if (runtime) interruptPrinterUploadsOnShutdown(runtime.ports);
     await runtime?.app.close();
     await runtime?.ports.db.close();
   } finally {

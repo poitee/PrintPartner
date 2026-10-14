@@ -10,7 +10,8 @@ import type {
 import type { AppRepository } from "../db/repository.js";
 import { resolvedFileUnderRoot } from "../lib/secure-path.js";
 
-const SETTINGS_KEY = "printer.send_queue";
+export const PRINTER_SEND_QUEUE_SETTINGS_KEY = "printer.send_queue";
+const SETTINGS_KEY = PRINTER_SEND_QUEUE_SETTINGS_KEY;
 const MAX_ITEMS = 50;
 
 const STATES = new Set<PrinterSendQueueState>([
