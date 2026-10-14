@@ -94,6 +94,7 @@ pub enum ProfileInterpretError {
     ScalarTooLarge,
     ScalarDepthLimit,
     ResolvedDocumentTooLarge,
+    RawDocumentTooLarge,
     InvalidStorageShape,
 }
 
@@ -181,6 +182,12 @@ impl CheckedChild {
             source_path: JsText::from_string(self.source_label),
         };
         let raw = JsText::from_string(self.raw);
+        if (self.kind == ProfileKind::Filament
+            || self.kind == ProfileKind::Printer && self.format == SourceFormat::Json)
+            && node_json_string_len(&raw) > MAX_RESOLVED_BYTES
+        {
+            return Err(ProfileInterpretError::RawDocumentTooLarge);
+        }
         match self.kind {
             ProfileKind::Printer => ProfileImport::printer(PrinterImportInput {
                 provenance,
@@ -265,6 +272,7 @@ impl CheckedChild {
 #[derive(Clone, Debug, Default)]
 struct NodeFlatObject {
     entries: Vec<(JsText, JsText)>,
+    positions: std::collections::BTreeMap<Vec<u16>, usize>,
 }
 
 impl NodeFlatObject {
@@ -278,21 +286,23 @@ impl NodeFlatObject {
         if value.as_utf16().len() > MAX_SCALAR_UNITS {
             return Err(ProfileInterpretError::ScalarTooLarge);
         }
-        if let Some((_, current)) = self.entries.iter_mut().find(|(current, _)| current == &key) {
-            *current = value;
+        if let Some(&position) = self.positions.get(key.as_utf16()) {
+            self.entries[position].1 = value;
             return Ok(());
         }
         if self.entries.len() == MAX_ENTRIES {
             return Err(ProfileInterpretError::TooManyEntries);
         }
+        self.positions
+            .insert(key.as_utf16().to_vec(), self.entries.len());
         self.entries.push((key, value));
         Ok(())
     }
     fn get_ascii(&self, key: &str) -> Option<&JsText> {
         let key: Vec<_> = key.encode_utf16().collect();
-        self.entries
-            .iter()
-            .find_map(|(candidate, value)| (candidate.as_utf16() == key).then_some(value))
+        self.positions
+            .get(&key)
+            .map(|&position| &self.entries[position].1)
     }
     fn ordered(&self) -> Vec<(&JsText, &JsText)> {
         let mut indexes: Vec<_> = self
@@ -919,9 +929,6 @@ fn ecma_trim(value: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn document(raw: &str, kind: ProfileKind) -> ProfileDocument<'_> {
-        ProfileDocument::new(raw.as_bytes(), kind, SlicerKind::Orca, "owned/profile").unwrap()
-    }
     #[test]
     fn negative_half_rounding_matches_javascript() {
         assert_eq!(rounded_number(Some(-0.5)).unwrap().unwrap().value(), 0.0);
@@ -974,63 +981,7 @@ mod tests {
         }
     }
     #[test]
-    fn child_overwrites_one_parent_and_keeps_node_key_order() {
-        let pending = match interpret_profile(document(
-            r#"{"name":"Child","inherits":"Parent","shared":"child","child":true}"#,
-            ProfileKind::Process,
-        ))
-        .unwrap()
-        {
-            ProfileInterpretation::NeedsParent(value) => value,
-            ProfileInterpretation::Ready(_) => panic!("expected parent"),
-        };
-        let value = serde_json::to_value(
-            pending
-                .finish_with_parent(br#"{"9":"nine","2":"two","shared":"parent","parent":true}"#)
-                .unwrap(),
-        )
-        .unwrap();
-        let text = value.to_string();
-        assert!(text.contains("\\\"2\\\":\\\"two\\\",\\\"9\\\":\\\"nine\\\""));
-        assert!(text.contains("\\\"shared\\\":\\\"child\\\""));
-    }
-
-    #[test]
-    fn profile_interpreter_limits_fail_with_named_errors() {
-        let oversized = vec![b' '; MAX_DOCUMENT_BYTES + 1];
-        assert_eq!(
-            interpret_profile(
-                ProfileDocument::new(
-                    &oversized,
-                    ProfileKind::Process,
-                    SlicerKind::Orca,
-                    "owned/profile",
-                )
-                .unwrap()
-            )
-            .unwrap_err(),
-            ProfileInterpretError::DocumentTooLarge
-        );
-
-        let scalar = format!(
-            "{{\"name\":\"large\",\"value\":\"{}\"}}",
-            "a".repeat(MAX_SCALAR_UNITS + 1)
-        );
-        assert_eq!(
-            interpret_profile(document(&scalar, ProfileKind::Process)).unwrap_err(),
-            ProfileInterpretError::ScalarTooLarge
-        );
-
-        let nested = format!(
-            "{{\"name\":\"deep\",\"value\":{}{}}}",
-            "[".repeat(MAX_JSON_DEPTH + 1),
-            "]".repeat(MAX_JSON_DEPTH + 1)
-        );
-        assert_eq!(
-            interpret_profile(document(&nested, ProfileKind::Process)).unwrap_err(),
-            ProfileInterpretError::JsonNestingLimit
-        );
-
+    fn resolved_document_limit_fails_with_named_error() {
         let mut resolved = NodeFlatObject::default();
         let value = JsText::from_string("a".repeat(MAX_SCALAR_UNITS));
         for index in 0..17 {

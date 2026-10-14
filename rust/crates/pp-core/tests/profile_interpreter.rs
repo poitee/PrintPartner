@@ -246,6 +246,49 @@ fn numeric_stringification_and_projection_follow_javascript() {
 }
 
 #[test]
+fn many_retained_keys_preserve_values_in_json_and_ini() {
+    let prefix = "k".repeat(256);
+    let pairs: Vec<_> = (0..16_384)
+        .map(|i| (format!("{prefix}{i}"), i.to_string()))
+        .collect();
+    let json = serde_json::to_string(
+        &pairs
+            .iter()
+            .map(|(key, value)| (key.clone(), Value::String(value.clone())))
+            .collect::<serde_json::Map<_, _>>(),
+    );
+    let ini = pairs
+        .iter()
+        .map(|(key, value)| format!("{key}={value}\n"))
+        .collect::<String>();
+    for raw in [json.unwrap(), ini] {
+        let imported = ready(raw.as_bytes(), ProfileKind::Process);
+        let flat: Value = serde_json::from_str(
+            imported["provenance"]["resolved_flat_config"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(flat.as_object().unwrap().len(), 16_384);
+        assert_eq!(flat[format!("{prefix}0")], "0");
+        assert_eq!(flat[format!("{prefix}16383")], "16383");
+    }
+}
+
+#[test]
+fn retained_raw_ini_is_bounded_before_serialization() {
+    let raw = format!(";{}", "\u{0001}".repeat(3 * 1024 * 1024));
+    assert_eq!(
+        interpret_profile(document(raw.as_bytes(), ProfileKind::Filament)).err(),
+        Some(ProfileInterpretError::RawDocumentTooLarge)
+    );
+    assert_eq!(
+        ready(b";\x01\nname=PLA", ProfileKind::Filament)["raw"]["value"],
+        ";\u{0001}\nname=PLA"
+    );
+}
+
+#[test]
 fn json_tree_entry_budget_is_shared() {
     let array = format!("[{}]", vec!["0"; 8_192].join(","));
     let smaller = format!("[{}]", vec!["0"; 8_189].join(","));
