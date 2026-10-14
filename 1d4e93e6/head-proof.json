@@ -1,0 +1,33 @@
+{
+  "head": "1d4e93e63313eb99d1bcbacf99cf773f720ba441",
+  "result": "PASS",
+  "command": [
+    "dbus-run-session",
+    "--",
+    "xvfb-run",
+    "-a",
+    "-s",
+    "-screen 0 1280x1024x24",
+    "python3",
+    "rust/tests/webkit_stl_smoke.py",
+    "--binary",
+    "/persist/home/.local/state/pstack-t3/gre353-permissions/pp-desktop",
+    "--stage",
+    "/persist/home/.local/state/pstack-t3/gre353-permissions/head-stage",
+    "--output",
+    "/persist/home/.local/state/pstack-t3/gre353-permissions/head-native"
+  ],
+  "preparation": "prove-head.py: web build, full-SHA staging and native build passed before first native run failed at existing STL canvas wait",
+  "retained_failure": "head-native-attempt1/failure.json",
+  "failure_message": "Timed out: production STL WebGL canvas; last result=False",
+  "retry": "same source, same staged resources, identical native binary snapshot; native run only",
+  "hashes": {
+    "/persist/worktrees/t3/PrintPartner/owner-gre353-next-202610141155-6ee1/rust/tests/webkit_stl_smoke.py": "32cc56af47ae4d44bb65c1c1ab21a45491a37981fb98ac424417ef0a95306270",
+    "/persist/home/.local/state/pstack-t3/gre353-permissions/pp-desktop": "f96150775a662a7232695790c58d547dbf4aa35c19b1aa081cf4564a56428fd9",
+    "/persist/home/.local/state/pstack-t3/gre353-permissions/head-stage/bundle-manifest.json": "91758fe4ea8f26feffa8c1b9991f0c226c62159f6f0876f998ee76c8c6f0f1cd"
+  },
+  "binary": "/persist/home/.local/state/pstack-t3/gre353-permissions/pp-desktop",
+  "stage": "/persist/home/.local/state/pstack-t3/gre353-permissions/head-stage",
+  "proof_class": "native_linux_webkitgtk_webgl",
+  "native_teardown_claim": false
+}

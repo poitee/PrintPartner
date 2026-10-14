@@ -1,0 +1,22 @@
+{
+  "source_url": "http://127.0.0.1:41289/builds",
+  "sample_count": 32,
+  "blob_url": "blob:http://127.0.0.1:41289/d708ff9e-fa3d-4d60-921c-737fe6e1bfb9",
+  "blob_created": true,
+  "blob_origin_matches": true,
+  "blob_bytes_match": true,
+  "blob_type": "text/html",
+  "attempt_scheduled": true,
+  "final_href": "http://127.0.0.1:41289/builds",
+  "blob_document_seen": false,
+  "attempt_observed": true,
+  "document_preserved": true,
+  "blob_script_executed": false,
+  "root_present": true,
+  "observation_seconds": 3.114516736000951,
+  "http_control_url": "http://127.0.0.1:41289/builds?navigation_control=1ce81193dedad211492fce31df28bf84",
+  "http_control_scheduled": true,
+  "http_control_loaded": true,
+  "http_control_blob_script_executed": false,
+  "result": "PASS"
+}

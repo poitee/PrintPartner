@@ -1,0 +1,186 @@
+{
+  "policies": {
+    "strict": "frame-src 'none'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+    "relaxed": "frame-src http://127.0.0.1:45315; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+  },
+  "observations": {
+    "positive": {
+      "phase": "positive",
+      "parent_href": "http://127.0.0.1:41953/positive",
+      "parent_origin": "http://127.0.0.1:41953",
+      "target_url": "http://127.0.0.1:45315/child/ecc47b6873b56f7cbad22c7522ecb67b",
+      "attempt_token": "ecc47b6873b56f7cbad22c7522ecb67b",
+      "child_origin": "http://127.0.0.1:45315",
+      "events": [],
+      "sample_count": 29,
+      "preflight": {
+        "python": true,
+        "browser_credentials_omit": true
+      },
+      "attempt_intact": true,
+      "parent_preserved": true,
+      "message": true,
+      "duration_seconds": 3.04997295600333,
+      "request_delta": [
+        {
+          "route": "positive-document",
+          "time": 51192.671497133
+        },
+        {
+          "route": "positive-beacon",
+          "time": 51192.690433068
+        }
+      ],
+      "document_get_count": 1,
+      "beacon_count": 1,
+      "denial_result": "target_executed"
+    },
+    "strict": {
+      "phase": "strict",
+      "parent_href": "http://127.0.0.1:41953/strict",
+      "parent_origin": "http://127.0.0.1:41953",
+      "target_url": "http://127.0.0.1:45315/child/607516dfd8541b353d1e2af6e36c9030",
+      "attempt_token": "607516dfd8541b353d1e2af6e36c9030",
+      "child_origin": "http://127.0.0.1:45315",
+      "events": [
+        {
+          "disposition": "enforce",
+          "isTrusted": true,
+          "documentURI": "http://127.0.0.1:41953/strict",
+          "violatedDirective": "frame-src",
+          "timeStamp": 59.00000000000001,
+          "originalPolicy": "frame-src 'none'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+          "blockedURI": "http://127.0.0.1:45315",
+          "effectiveDirective": "frame-src"
+        }
+      ],
+      "sample_count": 29,
+      "preflight": {
+        "python": true,
+        "browser_credentials_omit": true
+      },
+      "attempt_intact": true,
+      "parent_preserved": true,
+      "message": false,
+      "duration_seconds": 3.029465113002516,
+      "seconds_after_enforcing_event": 3.0220822589981253,
+      "request_delta": [],
+      "document_get_count": 0,
+      "beacon_count": 0,
+      "denial_result": null
+    },
+    "negative": {
+      "phase": "negative",
+      "parent_href": "http://127.0.0.1:41953/negative",
+      "parent_origin": "http://127.0.0.1:41953",
+      "target_url": "http://127.0.0.1:45315/child/baff8d734f7e741f10131ad8a682b324",
+      "attempt_token": "baff8d734f7e741f10131ad8a682b324",
+      "child_origin": "http://127.0.0.1:45315",
+      "events": [],
+      "sample_count": 29,
+      "preflight": {
+        "python": true,
+        "browser_credentials_omit": true
+      },
+      "attempt_intact": true,
+      "parent_preserved": true,
+      "message": true,
+      "duration_seconds": 3.0170110019971617,
+      "request_delta": [
+        {
+          "route": "negative-document",
+          "time": 51199.133271734
+        },
+        {
+          "route": "negative-beacon",
+          "time": 51199.143439462
+        }
+      ],
+      "document_get_count": 1,
+      "beacon_count": 1,
+      "denial_result": "target_executed"
+    },
+    "native": {
+      "phase": "native",
+      "parent_href": "http://127.0.0.1:41289/builds?navigation_control=1ce81193dedad211492fce31df28bf84",
+      "parent_origin": "http://127.0.0.1:41289",
+      "target_url": "http://127.0.0.1:45315/child/a3dfa24c73fe44fac9cdd5b1f1e809c7",
+      "attempt_token": "a3dfa24c73fe44fac9cdd5b1f1e809c7",
+      "child_origin": "http://127.0.0.1:45315",
+      "events": [
+        {
+          "disposition": "enforce",
+          "isTrusted": true,
+          "documentURI": "http://127.0.0.1:41289/builds?navigation_control=1ce81193dedad211492fce31df28bf84",
+          "violatedDirective": "frame-src",
+          "timeStamp": 14568,
+          "originalPolicy": "frame-src 'none'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+          "blockedURI": "http://127.0.0.1:45315",
+          "effectiveDirective": "frame-src"
+        }
+      ],
+      "sample_count": 29,
+      "preflight": {
+        "python": true,
+        "browser_credentials_omit": true
+      },
+      "attempt_intact": true,
+      "parent_preserved": true,
+      "message": false,
+      "duration_seconds": 3.0481235859988374,
+      "seconds_after_enforcing_event": 3.0132338819967117,
+      "request_delta": [],
+      "document_get_count": 0,
+      "beacon_count": 0,
+      "denial_result": null
+    }
+  },
+  "cleanup": {
+    "control_driver_reaped": true,
+    "fixture_threads_stopped": true,
+    "errors": []
+  },
+  "engine": {
+    "native": {
+      "path": "/usr/lib/x86_64-linux-gnu/libwebkit2gtk-4.1.so.0.21.10",
+      "sha256": "32ca85d893950e1cea287881397fe5793acf4b4709e08605ccbc59636a37574b"
+    },
+    "control": {
+      "path": "/usr/lib/x86_64-linux-gnu/libwebkit2gtk-4.1.so.0.21.10",
+      "sha256": "32ca85d893950e1cea287881397fe5793acf4b4709e08605ccbc59636a37574b"
+    },
+    "native_capabilities": {
+      "browserName": "wry",
+      "browserVersion": "0.57",
+      "platformName": "linux",
+      "acceptInsecureCerts": false,
+      "strictFileInteractability": false,
+      "setWindowRect": true,
+      "unhandledPromptBehavior": "dismiss and notify",
+      "pageLoadStrategy": "normal",
+      "proxy": {},
+      "timeouts": {
+        "script": 60000,
+        "pageLoad": 60000,
+        "implicit": 0
+      }
+    },
+    "control_capabilities": {
+      "browserName": "MiniBrowser",
+      "browserVersion": "2.52.6",
+      "platformName": "linux",
+      "acceptInsecureCerts": false,
+      "strictFileInteractability": false,
+      "setWindowRect": true,
+      "unhandledPromptBehavior": "dismiss and notify",
+      "pageLoadStrategy": "normal",
+      "proxy": {},
+      "timeouts": {
+        "script": 15000,
+        "pageLoad": 15000,
+        "implicit": 0
+      }
+    }
+  },
+  "result": "PASS"
+}

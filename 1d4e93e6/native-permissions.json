@@ -1,0 +1,59 @@
+{
+  "result": "PASS",
+  "commands": [
+    {
+      "command": "plugin:app|exit",
+      "expected_permission": "core:app:allow-exit",
+      "status": "rejected",
+      "rejection_message": "app.exit not allowed. Permissions associated with this command: core:app:allow-exit"
+    },
+    {
+      "command": "plugin:window|close",
+      "expected_permission": "core:window:allow-close",
+      "status": "rejected",
+      "rejection_message": "window.close not allowed. Permissions associated with this command: core:window:allow-close"
+    },
+    {
+      "command": "plugin:window|destroy",
+      "expected_permission": "core:window:allow-destroy",
+      "status": "rejected",
+      "rejection_message": "window.destroy not allowed. Permissions associated with this command: core:window:allow-destroy"
+    },
+    {
+      "command": "plugin:webview|create_webview_window",
+      "expected_permission": "core:webview:allow-create-webview-window",
+      "status": "rejected",
+      "rejection_message": "webview.create_webview_window not allowed. Permissions associated with this command: core:webview:allow-create-webview-window"
+    },
+    {
+      "command": "plugin:fs|read_file",
+      "expected_permission": null,
+      "status": "rejected",
+      "rejection_message": "fs.read_file not allowed. Plugin not found"
+    },
+    {
+      "command": "plugin:shell|execute",
+      "expected_permission": null,
+      "status": "rejected",
+      "rejection_message": "shell.execute not allowed. Plugin not found"
+    }
+  ],
+  "parent": {
+    "global_api_absent": true,
+    "labels": {
+      "currentWindow": {
+        "label": "main"
+      },
+      "currentWebview": {
+        "label": "main"
+      }
+    },
+    "origin": "http://127.0.0.1:41289"
+  },
+  "after": {
+    "url_preserved": true,
+    "document_preserved": true,
+    "root_preserved": true,
+    "token_preserved": true
+  }
+}
