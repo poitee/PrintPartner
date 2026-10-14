@@ -420,6 +420,9 @@ async fn smtp_http_failure_keeps_committed_token_without_enumeration_or_retry() 
         tokio::time::timeout(Duration::from_secs(3), async {
             loop {
                 let received = !fake.messages.lock().unwrap().is_empty();
+                // LOGS is process-wide, so a parallel test can already contain
+                // smtp_permanent. This attempt's counter is the local signal.
+                let counted = !matches!(mode, Mode::Reject) || mail.delivery_failure_count() >= 1;
                 let logged = !matches!(mode, Mode::Reject)
                     || LOGS
                         .0
@@ -427,7 +430,7 @@ async fn smtp_http_failure_keeps_committed_token_without_enumeration_or_retry() 
                         .unwrap()
                         .iter()
                         .any(|line| line.contains("error_class=smtp_permanent"));
-                if received && logged {
+                if received && counted && logged {
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(5)).await;
