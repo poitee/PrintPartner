@@ -496,24 +496,73 @@ fn crash_guard_spec(scratch: &Scratch) -> super::ShellSpec {
     spec
 }
 
+fn shell_exited(pid: u32) -> bool {
+    if super::drain::process_group_absent(pid) {
+        return true;
+    }
+    // Observe the exit without taking the supervisor's wait status.
+    let mut info = unsafe { std::mem::zeroed::<libc::siginfo_t>() };
+    let result = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            pid,
+            &mut info,
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        )
+    };
+    result == 0 && unsafe { info.si_pid() } == pid as i32
+}
+
 async fn wait_shell_crash(
     supervisor: &super::Supervisor,
     scratch: &Scratch,
     expected: usize,
     guarded: bool,
 ) {
-    let mut status = supervisor.handle.status.clone();
-    tokio::time::resume();
-    wait_status(&mut status, |state| {
-        recorded_pids(&scratch.pidfile()).len() == expected
+    let fuse = wall_fuse(Duration::from_secs(8));
+    let policy_started = tokio::time::Instant::now();
+    let mut startup_ticks = 0;
+    let mut cleanup_ticks = 0;
+    let mut next_tick = std::time::Instant::now();
+    loop {
+        let state = supervisor.handle.status.borrow().clone();
+        let pids = recorded_pids(&scratch.pidfile());
+        if pids.len() == expected
             && if guarded {
                 matches!(state, super::Status::Guarded)
             } else {
                 matches!(state, super::Status::Backoff { .. })
             }
-    })
-    .await;
-    tokio::time::pause();
+        {
+            break;
+        }
+        assert!(
+            !fuse.is_cancelled(),
+            "crash {expected} stalled at {state:?}"
+        );
+        let pid = pids.get(expected - 1).copied();
+        if std::time::Instant::now() >= next_tick {
+            let tick = match state {
+                super::Status::Starting if startup_ticks < 8 && pid.is_some_and(shell_exited) => {
+                    startup_ticks += 1;
+                    Some(Duration::from_millis(250))
+                }
+                super::Status::Stopping
+                    if cleanup_ticks < 2 && pid.is_some_and(super::drain::process_group_absent) =>
+                {
+                    cleanup_ticks += 1;
+                    Some(Duration::from_millis(10))
+                }
+                _ => None,
+            };
+            if let Some(tick) = tick {
+                tokio::time::advance(tick).await;
+                next_tick = std::time::Instant::now() + Duration::from_secs(1);
+            }
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(policy_started.elapsed() <= Duration::from_millis(2020));
     assert_eq!(recorded_pids(&scratch.pidfile()).len(), expected);
     assert!(live_pids(&scratch.pidfile()).is_empty());
     let rows = diagnostic_rows(scratch);
@@ -545,6 +594,26 @@ async fn advance_crash_backoff(supervisor: &super::Supervisor) {
     tokio::time::advance(super::backoff(attempt)).await;
 }
 
+async fn shutdown_guard_shell(supervisor: super::Supervisor, scratch: &Scratch) {
+    let pid = *recorded_pids(&scratch.pidfile()).last().unwrap();
+    let stopping = supervisor.shutdown();
+    tokio::pin!(stopping);
+    let fuse = wall_fuse(Duration::from_secs(8));
+    let mut cleanup_tick = false;
+    loop {
+        tokio::select! {
+            biased;
+            _ = fuse.cancelled() => panic!("shell shutdown stalled"),
+            result = &mut stopping => { result.unwrap(); return; }
+            _ = tokio::task::yield_now() => {}
+        }
+        if !cleanup_tick && super::drain::process_group_absent(pid) {
+            tokio::time::advance(Duration::from_millis(10)).await;
+            cleanup_tick = true;
+        }
+    }
+}
+
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn ticket_t_2_five_shell_crashes_guard_until_explicit_recovery() {
     let scratch = Scratch::new("guard-runtime");
@@ -557,12 +626,12 @@ async fn ticket_t_2_five_shell_crashes_guard_until_explicit_recovery() {
     for count in 1..=5 {
         wait_shell_crash(&supervisor, &scratch, count, count == 5).await;
         if count == 4 {
-            tokio::time::advance(Duration::from_secs(110)).await;
+            tokio::time::advance(Duration::from_secs(100)).await;
         } else if count < 5 {
             advance_crash_backoff(&supervisor).await;
         }
     }
-    assert!(started.elapsed() >= Duration::from_secs(110));
+    assert!(started.elapsed() >= Duration::from_secs(100));
     assert!(started.elapsed() < Duration::from_secs(120));
     tokio::time::advance(Duration::from_secs(300)).await;
     for _ in 0..8 {
@@ -583,12 +652,10 @@ async fn ticket_t_2_five_shell_crashes_guard_until_explicit_recovery() {
     let recovered = *recorded_pids(&scratch.pidfile()).last().unwrap();
     assert_eq!(live_pids(&scratch.pidfile()), vec![recovered]);
     assert!(handle.recover().await.is_err());
-    tokio::time::resume();
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    tokio::time::advance(Duration::from_secs(1)).await;
     assert_eq!(recorded_pids(&scratch.pidfile()).len(), 6);
     assert_eq!(live_pids(&scratch.pidfile()), vec![recovered]);
-    shutdown(supervisor).await;
-    tokio::time::pause();
+    shutdown_guard_shell(supervisor, &scratch).await;
     tokio::time::advance(Duration::from_secs(300)).await;
     assert!(matches!(*handle.status.borrow(), super::Status::Stopped));
     assert_eq!(recorded_pids(&scratch.pidfile()).len(), 6);
@@ -632,6 +699,6 @@ async fn ticket_t_2_shell_crashes_expire_outside_default_guard_window() {
             .count(),
         1
     );
-    shutdown(supervisor).await;
+    shutdown_guard_shell(supervisor, &scratch).await;
     assert!(live_pids(&scratch.pidfile()).is_empty());
 }
