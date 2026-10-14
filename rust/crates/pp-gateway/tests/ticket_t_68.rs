@@ -10,7 +10,13 @@ use std::{path::PathBuf, time::Duration};
 
 async fn gateway() -> Gateway {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    Gateway::start(listener, PathBuf::new(), CompatHandle::unpublished()).unwrap()
+    Gateway::start(
+        listener,
+        PathBuf::new(),
+        CompatHandle::unpublished(),
+        &pp_gateway::ownership::cutover::OperationOwners::node_only(),
+    )
+    .unwrap()
 }
 
 async fn exchange(origin: &str, request: Builder) -> (StatusCode, HeaderMap, Vec<u8>) {
@@ -323,7 +329,12 @@ async fn ticket_t_68_ipv6_wildcard_listener_is_rejected() {
 
 async fn rejects_listener(address: &str) {
     let listener = tokio::net::TcpListener::bind(address).await.unwrap();
-    match Gateway::start(listener, PathBuf::new(), CompatHandle::unpublished()) {
+    match Gateway::start(
+        listener,
+        PathBuf::new(),
+        CompatHandle::unpublished(),
+        &pp_gateway::ownership::cutover::OperationOwners::node_only(),
+    ) {
         Ok(gateway) => {
             gateway.stop().await.unwrap();
             panic!("Gateway admitted a non-loopback listener at {address}");
@@ -339,8 +350,13 @@ async fn rejects_listener(address: &str) {
 async fn ticket_t_68_loopback_listeners_preserve_protected_bootstrap() {
     for address in ["127.0.0.1:0", "[::1]:0"] {
         let listener = tokio::net::TcpListener::bind(address).await.unwrap();
-        let mut gateway =
-            Gateway::start(listener, PathBuf::new(), CompatHandle::unpublished()).unwrap();
+        let mut gateway = Gateway::start(
+            listener,
+            PathBuf::new(),
+            CompatHandle::unpublished(),
+            &pp_gateway::ownership::cutover::OperationOwners::node_only(),
+        )
+        .unwrap();
         let origin = gateway.origin().to_owned();
         let launch = gateway.take_launch_target().unwrap().into_url();
         let (status, _, _) = exchange(&origin, request(&origin, "/__runtime")).await;
