@@ -5,6 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+default = []
+desktop_rebuild = ["serde_json/raw_value"]
+
 [dependencies]
 anyhow.workspace = true
 rusqlite.workspace = true
