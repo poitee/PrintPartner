@@ -16,6 +16,7 @@ use std::{
 struct TraceState {
     events: Vec<&'static str>,
     fail_at: Option<usize>,
+    second_fail_at: Option<usize>,
     add_slot_sibling_at_unlink: bool,
     replace_deleting_at_unlink: bool,
 }
@@ -33,7 +34,7 @@ impl Trace {
             let mut state = state.lock().map_err(|_| Error::CorruptSnapshot)?;
             let index = state.events.len();
             state.events.push(_event);
-            if state.fail_at == Some(index) {
+            if state.fail_at == Some(index) || state.second_fail_at == Some(index) {
                 return Err(Error::Io(std::io::Error::other("injected I/O failure")));
             }
         }
@@ -494,13 +495,10 @@ impl RetainedCaptureVault {
             return match allocated {
                 Ok(candidate) => Ok(candidate),
                 Err(source) => {
-                    let retained =
-                        cleanup_generated_slot(&self.parent, &slot, &id, &self.trace, true)
-                            .err()
-                            .map(|_| RetainedCaptureReceipt {
-                                id,
-                                phase: RetainedCapturePhase::Candidate,
-                            });
+                    let mut phase = Some(RetainedCapturePhase::Malformed);
+                    let _ =
+                        cleanup_generated_slot(&self.parent, &slot, &id, &self.trace, &mut phase);
+                    let retained = phase.map(|phase| RetainedCaptureReceipt { id, phase });
                     Err(CandidateAllocationError { retained, source })
                 }
             };
@@ -513,7 +511,13 @@ impl RetainedCaptureVault {
 
     pub fn open_frozen(&self, id: &RetainedCaptureId) -> Result<FrozenCapture> {
         let slot = self.parent.child(id.as_str(), false)?;
+        require_only_entry(&slot, FROZEN)?;
         let frozen = slot.child(FROZEN, false)?;
+        let mut entries = frozen.entries()?;
+        entries.sort();
+        if entries != [MANIFEST.to_owned(), INPUT.to_owned()] {
+            return Err(Error::CorruptSnapshot);
+        }
         let input = frozen.child(INPUT, false)?;
         Ok(FrozenCapture {
             parent: self.parent.try_clone()?,
@@ -588,15 +592,12 @@ fn cleanup_generated_slot(
     slot: &Directory,
     id: &RetainedCaptureId,
     trace: &Trace,
-    allow_empty: bool,
+    phase: &mut Option<RetainedCapturePhase>,
 ) -> Result<()> {
     match slot.entries()?.as_slice() {
-        [] if allow_empty => {
-            parent.remove_empty_directory(id.as_str())?;
-            trace.before("parent_sync")?;
-            parent.sync()
-        }
+        [] => {}
         [name] if name == CANDIDATE => {
+            *phase = Some(RetainedCapturePhase::Candidate);
             let candidate = slot.child(CANDIDATE, false)?;
             match candidate.entries()?.as_slice() {
                 [] => {}
@@ -608,18 +609,21 @@ fn cleanup_generated_slot(
             }
             trace.before("deleting_rename")?;
             slot.rename_no_replace(CANDIDATE, DELETING)?;
+            *phase = Some(RetainedCapturePhase::Deleting);
             trace.before("slot_sync")?;
             slot.sync()?;
             require_only_entry(slot, DELETING)?;
             trace.before("tree_remove")?;
             slot.remove_owned_empty_directory(DELETING, &candidate)?;
-            trace.before_slot_remove(slot)?;
-            parent.remove_empty_directory(id.as_str())?;
-            trace.before("parent_sync")?;
-            parent.sync()
+            *phase = Some(RetainedCapturePhase::Malformed);
         }
-        _ => Err(Error::CorruptSnapshot),
+        _ => return Err(Error::CorruptSnapshot),
     }
+    trace.before_slot_remove(slot)?;
+    parent.remove_empty_directory(id.as_str())?;
+    *phase = None;
+    trace.before("parent_sync")?;
+    parent.sync()
 }
 
 impl CaptureCandidate {
@@ -952,22 +956,23 @@ impl FrozenCapture {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
+    use std::{
+        fs,
+        path::PathBuf,
+        sync::{Arc, Mutex},
+    };
 
     fn temporary_root(name: &str) -> std::path::PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "pp-retained-{name}-{}-{}",
-            std::process::id(),
-            rand_suffix()
-        ));
-        fs::create_dir_all(&path).unwrap();
-        path
+        let mut builder = tempfile::Builder::new();
+        builder.prefix(name).tempdir().unwrap().keep()
     }
 
-    fn rand_suffix() -> String {
-        let mut bytes = [0u8; 8];
-        getrandom::fill(&mut bytes).unwrap();
-        hex::encode(bytes)
+    fn traced_vault(name: &str) -> (PathBuf, RetainedCaptureVault, Arc<Mutex<TraceState>>) {
+        let root = temporary_root(name);
+        let state = Arc::new(Mutex::new(TraceState::default()));
+        let mut vault = RetainedCaptureVault::open(&root).unwrap();
+        vault.trace.state = Some(state.clone());
+        (root, vault, state)
     }
 
     fn freeze(candidate: CaptureCandidate, manifest: &[u8]) -> FrozenCapture {
@@ -976,6 +981,14 @@ mod tests {
             FreezeResult::FrozenWithError { error, .. }
             | FreezeResult::CandidateError { error, .. } => panic!("freeze failed: {error}"),
         }
+    }
+
+    fn candidate_with(vault: &RetainedCaptureVault, path: &str, bytes: &[u8]) -> CaptureCandidate {
+        let mut candidate = vault.allocate().unwrap();
+        candidate
+            .write_file(SourcePath::try_from(path.to_owned()).unwrap(), bytes, 4)
+            .unwrap();
+        candidate
     }
 
     #[test]
@@ -1007,18 +1020,8 @@ mod tests {
             "slot_sync",
         ];
         for fail_at in 0..=expected.len() {
-            let root = temporary_root("fault-order");
-            let mut vault = RetainedCaptureVault::open(&root).unwrap();
-            let state = std::sync::Arc::new(std::sync::Mutex::new(TraceState::default()));
-            vault.trace.state = Some(state.clone());
-            let mut candidate = vault.allocate().unwrap();
-            candidate
-                .write_file(
-                    SourcePath::try_from("a/b/part.stl".to_owned()).unwrap(),
-                    b"mesh",
-                    4,
-                )
-                .unwrap();
+            let (root, vault, state) = traced_vault("fault-order");
+            let candidate = candidate_with(&vault, "a/b/part.stl", b"mesh");
             {
                 let mut state = state.lock().unwrap();
                 state.events.clear();
@@ -1057,18 +1060,8 @@ mod tests {
 
     #[test]
     fn retained_capture_post_rename_error_returns_frozen_ownership() {
-        let root = temporary_root("post-rename-ownership");
-        let mut vault = RetainedCaptureVault::open(&root).unwrap();
-        let state = std::sync::Arc::new(std::sync::Mutex::new(TraceState::default()));
-        vault.trace.state = Some(state.clone());
-        let mut candidate = vault.allocate().unwrap();
-        candidate
-            .write_file(
-                SourcePath::try_from("input/part.stl".to_owned()).unwrap(),
-                b"part",
-                4,
-            )
-            .unwrap();
+        let (root, vault, state) = traced_vault("post-rename-ownership");
+        let candidate = candidate_with(&vault, "input/part.stl", b"part");
         state.lock().unwrap().events.clear();
         state.lock().unwrap().fail_at = Some(6);
         let FreezeResult::FrozenWithError { capture, .. } = candidate.freeze_owned(b"manifest")
@@ -1085,38 +1078,37 @@ mod tests {
 
     #[test]
     fn retained_partial_allocation_failures_remove_generated_slot() {
-        for fail_at in 0..=5 {
-            let root = temporary_root(&format!("allocation-{fail_at}"));
-            let mut vault = RetainedCaptureVault::open(&root).unwrap();
-            let state = std::sync::Arc::new(std::sync::Mutex::new(TraceState {
+        use RetainedCapturePhase::{Candidate, Deleting, Malformed};
+        for (fail_at, second, phase) in (0..=5).map(|index| (index, None, None)).chain([
+            (5, Some(6), Some(Candidate)),
+            (5, Some(7), Some(Deleting)),
+            (5, Some(8), Some(Deleting)),
+            (5, Some(9), Some(Malformed)),
+            (5, Some(10), None),
+            (1, Some(2), Some(Malformed)),
+        ]) {
+            let (root, vault, state) = traced_vault("allocation-cleanup");
+            *state.lock().unwrap() = TraceState {
                 fail_at: Some(fail_at),
+                second_fail_at: second,
                 ..TraceState::default()
-            }));
-            vault.trace.state = Some(state);
-            let error = match vault.allocate_owned() {
-                Ok(_) => panic!("injected allocation failure succeeded"),
-                Err(error) => error,
             };
-            assert!(error.retained().is_none());
-            assert!(vault.scan().unwrap().is_empty());
+            let error = vault.allocate_owned().err().unwrap();
+            assert_eq!(error.retained().map(RetainedCaptureReceipt::phase), phase);
+            let entries = vault.scan().unwrap();
+            assert_eq!(entries.len(), usize::from(phase.is_some()));
+            if let Some(receipt) = error.retained() {
+                assert_eq!(entries[0].capture_id(), receipt.capture_id());
+                assert_eq!(entries[0].phase(), receipt.phase());
+            }
             fs::remove_dir_all(root).unwrap();
         }
     }
 
     #[test]
     fn retained_cleanup_empty_slot_remains_repair_evidence() {
-        let root = temporary_root("empty-slot");
-        let mut vault = RetainedCaptureVault::open(&root).unwrap();
-        let state = std::sync::Arc::new(std::sync::Mutex::new(TraceState::default()));
-        vault.trace.state = Some(state.clone());
-        let mut candidate = vault.allocate().unwrap();
-        candidate
-            .write_file(
-                SourcePath::try_from("part.stl".to_owned()).unwrap(),
-                b"mesh",
-                4,
-            )
-            .unwrap();
+        let (root, vault, state) = traced_vault("empty-slot");
+        let candidate = candidate_with(&vault, "part.stl", b"mesh");
         let frozen = freeze(candidate, b"manifest");
         {
             let mut state = state.lock().unwrap();
@@ -1140,19 +1132,9 @@ mod tests {
 
     #[test]
     fn retained_frozen_cleanup_preserves_sibling_created_at_final_unlink() {
-        let root = temporary_root("frozen-final-unlink");
-        let mut vault = RetainedCaptureVault::open(&root).unwrap();
-        let state = std::sync::Arc::new(std::sync::Mutex::new(TraceState::default()));
-        vault.trace.state = Some(state.clone());
-        let mut candidate = vault.allocate().unwrap();
+        let (root, vault, state) = traced_vault("frozen-final-unlink");
+        let candidate = candidate_with(&vault, "part.stl", b"mesh");
         let id = candidate.capture_id().as_str().to_owned();
-        candidate
-            .write_file(
-                SourcePath::try_from("part.stl".to_owned()).unwrap(),
-                b"mesh",
-                4,
-            )
-            .unwrap();
         let frozen = freeze(candidate, b"manifest");
         state.lock().unwrap().add_slot_sibling_at_unlink = true;
 
@@ -1168,19 +1150,9 @@ mod tests {
 
     #[test]
     fn retained_deleting_restart_preserves_sibling_created_at_final_unlink() {
-        let root = temporary_root("deleting-final-unlink");
-        let mut vault = RetainedCaptureVault::open(&root).unwrap();
-        let state = std::sync::Arc::new(std::sync::Mutex::new(TraceState::default()));
-        vault.trace.state = Some(state.clone());
-        let mut candidate = vault.allocate().unwrap();
+        let (root, vault, state) = traced_vault("deleting-final-unlink");
+        let candidate = candidate_with(&vault, "part.stl", b"mesh");
         let id = candidate.capture_id().as_str().to_owned();
-        candidate
-            .write_file(
-                SourcePath::try_from("part.stl".to_owned()).unwrap(),
-                b"mesh",
-                4,
-            )
-            .unwrap();
         let frozen = freeze(candidate, b"manifest");
         let slot = root.join(VAULT).join(&id);
         fs::remove_file(slot.join("frozen/input/part.stl")).unwrap();
@@ -1198,13 +1170,8 @@ mod tests {
 
     #[test]
     fn retained_deleting_restart_preserves_replaced_directory_identity() {
-        let root = temporary_root("deleting-replaced-identity");
-        let mut vault = RetainedCaptureVault::open(&root).unwrap();
-        let state = std::sync::Arc::new(std::sync::Mutex::new(TraceState {
-            replace_deleting_at_unlink: true,
-            ..TraceState::default()
-        }));
-        vault.trace.state = Some(state);
+        let (root, vault, state) = traced_vault("deleting-replaced-identity");
+        state.lock().unwrap().replace_deleting_at_unlink = true;
         let id = RetainedCaptureId::parse("33".repeat(32)).unwrap();
         let slot = vault.parent.create_child_exclusive(id.as_str()).unwrap();
         slot.create_child_exclusive(DELETING).unwrap();

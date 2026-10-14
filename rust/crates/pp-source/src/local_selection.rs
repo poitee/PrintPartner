@@ -1,4 +1,4 @@
-use crate::{Directory, Error, LocalFiles, Result, SourcePath};
+use crate::{Directory, Error, LocalFiles, MAX_ENTRIES, PathCollisions, Result, SourcePath};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -17,6 +17,7 @@ pub struct InputFile {
 
 impl LocalFiles {
     pub fn inventory(&self, paths: &[SourcePath], max_bytes: u64) -> Result<Vec<InputFile>> {
+        validate_paths(paths)?;
         let mut result = Vec::new();
         let mut total = 0u64;
         for path in paths {
@@ -53,6 +54,7 @@ impl LocalFiles {
         cancelled: &AtomicBool,
     ) -> Result<(LocalFiles, Vec<InputFile>)> {
         crate::validate_revision(operation)?;
+        validate_paths(paths)?;
         let parent = Directory::open_root(owned_root)?;
         let imports = parent.child(".pp-imports", true)?;
         let root = match imports.create_child_exclusive(operation) {
@@ -63,10 +65,8 @@ impl LocalFiles {
         };
         imports.sync()?;
         let owned = LocalFiles { root };
-        let mut collisions = crate::PathCollisions::default();
         let mut total = 0u64;
         for path in paths {
-            collisions.insert(path, false)?;
             let mut input = self.root.file(path.as_str(), false)?;
             let (parent, name) = owned.root.parent(path.as_str(), true)?;
             let mut output = parent.file_exclusive(&name)?;
@@ -93,4 +93,15 @@ impl LocalFiles {
         let inventory = owned.inventory(paths, max_bytes)?;
         Ok((owned, inventory))
     }
+}
+
+fn validate_paths(paths: &[SourcePath]) -> Result<()> {
+    if paths.len() > MAX_ENTRIES {
+        return Err(Error::Limit);
+    }
+    let mut collisions = PathCollisions::default();
+    for path in paths {
+        collisions.insert(path, false)?;
+    }
+    Ok(())
 }

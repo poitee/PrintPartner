@@ -32,6 +32,17 @@ fn retained_lifecycle_reopens_transfers_and_preserves_existing_operations() {
     };
     assert_eq!(frozen.receipt().phase(), RetainedCapturePhase::Frozen);
     drop(frozen);
+    let slot = root.join("source-captures").join(id.as_str());
+    for directory in [&slot, &slot.join("frozen")] {
+        let sibling = directory.join("evidence");
+        fs::write(&sibling, b"preserve").unwrap();
+        assert!(matches!(
+            vault.open_frozen(&id),
+            Err(Error::CorruptSnapshot)
+        ));
+        assert_eq!(fs::read(&sibling).unwrap(), b"preserve");
+        fs::remove_file(sibling).unwrap();
+    }
     let frozen = vault.open_frozen(&id).unwrap();
     assert_eq!(frozen.manifest().unwrap(), b"opaque manifest");
     assert_eq!(
@@ -53,6 +64,22 @@ fn retained_lifecycle_reopens_transfers_and_preserves_existing_operations() {
     let sentinel = staging.join("sentinel");
     fs::write(&sentinel, b"preserve").unwrap();
     let local = LocalFiles::open(&staging).unwrap();
+    let empty = SourcePath::try_from("empty".to_owned()).unwrap();
+    fs::write(staging.join("empty"), []).unwrap();
+    let repeated = vec![empty; pp_source::MAX_ENTRIES + 1];
+    let missing = vec![SourcePath::try_from("absent".to_owned()).unwrap(); 2];
+    for (selected, operation, category) in [
+        (&repeated[..], "overlimit", "limit"),
+        (&repeated[..2], "duplicate", "duplicate-path"),
+        (&missing[..], "duplicate", "duplicate-path"),
+    ] {
+        let inventory = local.inventory(selected, 0);
+        let capture = local.capture(selected, &root, operation, 0, &cancelled);
+        for result in [inventory.map(|_| ()), capture.map(|_| ())] {
+            assert_eq!(result.err().unwrap().category(), category);
+        }
+        assert!(!root.join(".pp-imports").join(operation).exists());
+    }
     for selected in [&paths[..], &[][..]] {
         assert!(matches!(
             local.capture(selected, &root, "operation", 4, &cancelled),
