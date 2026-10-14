@@ -35,7 +35,7 @@ Core tests isolate environment changes in child processes. They cover absent, di
 
 ## Slice plan
 
-The rebuild ships as small PRs to `main`, each under about 1.5k lines and checkable on its own. Every code slice compiles behind the `desktop_rebuild` Cargo feature, and anything user-visible also checks the runtime setting (D31 and D32 are exceptions; see below). The default build stays unchanged. The old desktop stack (#135 to #168, `desktop/rust-core`, and the reference branch `desktop/source-sync-local-current-20261008`) is reference only. It is not merged, and it is not closed or deleted until the slices cover it.
+The rebuild ships as small PRs to `main`, each under about 1.5k lines and checkable on its own. New product code compiles behind the `desktop_rebuild` Cargo feature, and anything user-visible also checks the runtime setting. D4 records media already shipped in #131 and adds no product code. D31 and D32 add CI or documentation only. The default build stays unchanged. The old desktop stack (#135 to #168, `desktop/rust-core`, and the reference branch `desktop/source-sync-local-current-20261008`) is reference only. It is not merged, and it is not closed or deleted until the slices cover it.
 
 Each slice is done when:
 
@@ -85,6 +85,44 @@ Gap slices added in triage on 2026-10-13 cover commits that are not in the refer
 | D32 | GRE-627 | Coverage audit mapping #133 and #135 patches to slices | none; runs early, re-checked before cutover |
 
 Turning `desktop_rebuild` on by default is a separate decision for the maintainer after D26 and D32.
+
+### D4 media reconciliation
+
+GRE-599 reconciles media already shipped in #131. The `pp-source` media library, the `pp-source-media` CLI, and all unconditional #131 exports remain available in the default build. This slice adds a historical audit and documentation. It adds no feature behavior, host, runtime API, or dependency.
+
+Run the read-only audit from the repository root:
+
+```sh
+python3 rust/scripts/audit-d4-media.py
+```
+
+The audit uses fixed revisions and does not follow the current `HEAD`:
+
+- Landed #131 is `1beaa1cc09622611505b6470402027053db10d91`.
+- The reference is `d73b6d8d250b84e22b37262a0c2720d4f777a0ca`.
+- The audited snapshot is `2e3cac927a1a82cf2d1a276f9564772f6cd67ee4`.
+
+Within `rust/crates/pp-source/`, the inventory covers `src/media.rs`, `src/bin/pp-source-media.rs`, `tests/media.rs`, `tests/direct_model_binding.rs`, `tests/support/process.rs`, and `src/archive.rs`. It also covers the union of paths under `rust/tests/source-media/` at all three revisions. Every audited file must equal its #131 blob. The shared media test and CLI equal the reference. All nine probe files equal the reference except `verify-zip64.py`.
+
+The direct-model binding test and its process helper are intentional #131 additions absent from the reference. `archive.rs` is a dependency already reconciled in #131. Its reference version lacks `read_bound_entry`. The audit checks the landed archive blob identity without classifying the archive implementation as D4. The pinned `lib.rs` module prefix and Cargo feature section also confirm unconditional media and an empty `desktop_rebuild` feature.
+
+On success, the audit prints the commit IDs, each file's blob identity and reference delta, and unified reference-to-audited diffs. The three media hunks and the probe changes have these reasons:
+
+- Model reads use #131's `local_header_offset`, `inflated_bytes`, and `archive::read_bound_entry` to bind model bytes to the validated ZIP64 payload. `readBytes` includes the inflated model length. Preserve `direct_model_redirect_is_rejected_before_publish_and_valid_models_still_convert` in `tests/direct_model_binding.rs`, which rejects redirected reads before publication and still converts valid models.
+- Grammar compilation reports `3MF grammar regex is invalid` instead of an unnamed unwrap panic. Missing attribute or entity captures return `MediaError::Invalid`. The regex patterns remain identical to the reference.
+- `radix_number` returns `NaN` for a non-digit instead of unwrapping a failed digit conversion.
+- `verify-zip64.py` sends the inflated budget through `archiveLimits` and asserts `archive-limit`. The reference sends that archive budget through media `limits` and does not assert the error code.
+
+Exit 0 means all identity checks passed. Exit 1 reports a file, inventory, or gate mismatch. Exit 2 reports missing Git, missing historical objects, or a Git command failure. Failures go to stderr without a success summary. A checkout without the pinned history must fetch history containing those full commit IDs before rerunning. The audit never fetches, checks out files, writes files, or runs Cargo. Blob equality proves historical file identity, not a fresh probe execution. Later media changes do not invalidate this fixed audit.
+
+The existing full source suites cover media, direct-model binding, and archive behavior with the feature off and on:
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-source
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-source --features desktop_rebuild
+```
+
+D5 retained capture and D28 ZIP acquisition label policy remain separate slices. The second D3 PR for source acquisition and uploads remains deferred. Local selection is outside this audit. This audit introduces no user-visible path and needs no runtime gate. Future rebuild callers must compile behind `desktop_rebuild` and check `PP_DESKTOP_REBUILD` for exactly `1` or `true`.
 
 ## Directory layout resolver
 
