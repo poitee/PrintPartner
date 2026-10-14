@@ -682,9 +682,13 @@ async fn handle(
     let Some(operation) = operation else {
         return error(StatusCode::NOT_FOUND, "Operation not registered");
     };
+    let mut fetch_sites = request.headers().get_all("sec-fetch-site").iter();
     let same_origin_browser_get = request.method() == "GET"
         && origin.is_none()
-        && header(&request, "sec-fetch-site") == Some("same-origin");
+        && fetch_sites
+            .next()
+            .is_some_and(|value| value.as_bytes() == b"same-origin")
+        && fetch_sites.next().is_none();
     if operation.effect != EffectClass::Observation && origin.is_none() && !same_origin_browser_get
     {
         return error(

@@ -424,6 +424,97 @@ fn session_rejection(response: (StatusCode, HeaderMap, Vec<u8>), cookie: &str, t
 }
 
 #[tokio::test]
+async fn ticket_t_68_effectful_get_requires_single_same_origin_fetch_site() {
+    let mut gateway = gateway().await;
+    let origin = gateway.origin().to_owned();
+    let (cookie, token) = bootstrap_session(&mut gateway).await;
+    let history = || request(&origin, "/api/v1/assistant/history").header("cookie", &cookie);
+    let cases = [
+        (
+            "same-origin then cross-site",
+            history()
+                .header("sec-fetch-site", "same-origin")
+                .header("sec-fetch-site", "cross-site"),
+        ),
+        (
+            "same-origin then nontext",
+            history()
+                .header("sec-fetch-site", "same-origin")
+                .header("sec-fetch-site", HeaderValue::from_bytes(b"\xff").unwrap()),
+        ),
+        (
+            "identical duplicates",
+            history()
+                .header("sec-fetch-site", "same-origin")
+                .header("sec-fetch-site", "same-origin"),
+        ),
+        (
+            "cross-site then same-origin",
+            history()
+                .header("sec-fetch-site", "cross-site")
+                .header("sec-fetch-site", "same-origin"),
+        ),
+        (
+            "comma joined",
+            history().header("sec-fetch-site", "same-origin, cross-site"),
+        ),
+        ("missing", history()),
+        ("empty", history().header("sec-fetch-site", "")),
+        (
+            "cross-site",
+            history().header("sec-fetch-site", "cross-site"),
+        ),
+    ];
+    let mut unexpected = Vec::new();
+    for (case, builder) in cases {
+        let (status, headers, body) = exchange(&origin, builder).await;
+        if status != StatusCode::FORBIDDEN {
+            unexpected.push((case, status));
+        } else {
+            private_response(&headers);
+        }
+        assert!(!headers.contains_key("set-cookie"), "{case}");
+        assert!(!headers.contains_key("location"), "{case}");
+        let body = String::from_utf8(body).unwrap();
+        assert!(!body.contains(&token), "{case}");
+        assert!(!body.contains(cookie.split_once('=').unwrap().1), "{case}");
+        let (status, headers, body) = exchange(
+            &origin,
+            request(&origin, "/__runtime").header("cookie", &cookie),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{case}");
+        assert!(!headers.contains_key("set-cookie"), "{case}");
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap()["compat"]["state"],
+            "starting"
+        );
+    }
+    for builder in [
+        history().header("sec-fetch-site", "same-origin"),
+        history().header("origin", &origin),
+        history()
+            .header("origin", &origin)
+            .header("sec-fetch-site", "same-origin")
+            .header("sec-fetch-site", "cross-site"),
+    ] {
+        let (status, headers, body) = exchange(&origin, builder).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap()["detail"],
+            "Compatibility backend unavailable"
+        );
+        assert_eq!(headers["cache-control"], "no-store");
+        assert!(!headers.contains_key("set-cookie"));
+    }
+    gateway.stop().await.unwrap();
+    assert!(
+        unexpected.is_empty(),
+        "expected FORBIDDEN, got {unexpected:?}"
+    );
+}
+
+#[tokio::test]
 async fn ticket_t_68_cookie_same_line_duplicate_valid_first_is_rejected() {
     let mut gateway = gateway().await;
     let origin = gateway.origin().to_owned();
