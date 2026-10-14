@@ -47,8 +47,8 @@ jobs:
 
   rust-partition-1:
     needs: [ci-plan]
-    if: ${{ (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository || needs.ci-plan.outputs.hosted == 'true') && needs.ci-plan.outputs.linux == 'true' }}
-    runs-on: ${{ fromJSON(needs.ci-plan.outputs.linux-runner) }}
+    if: ${{ (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository || needs.ci-plan.outputs.hosted == 'true') && needs.ci-plan.outputs.hosted == 'true' }}
+    runs-on: ubuntu-latest
     name: Rust partition (1/2)
     timeout-minutes: 45
     env:
@@ -204,8 +204,8 @@ jobs:
 
   rust-partition-2:
     needs: [ci-plan]
-    if: ${{ (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository || needs.ci-plan.outputs.hosted == 'true') && needs.ci-plan.outputs.linux == 'true' }}
-    runs-on: ${{ fromJSON(needs.ci-plan.outputs.linux-runner) }}
+    if: ${{ (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository || needs.ci-plan.outputs.hosted == 'true') && needs.ci-plan.outputs.hosted == 'true' }}
+    runs-on: ubuntu-latest
     name: Rust partition (2/2)
     timeout-minutes: 45
     env:
@@ -216,8 +216,8 @@ jobs:
   # Explicit dependencies preserve each result when only one partition is rerun.
   rust:
     needs: [ci-plan, rust-partition-1, rust-partition-2]
-    if: ${{ (always() && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository || needs.ci-plan.outputs.hosted == 'true')) && needs.ci-plan.outputs.linux == 'true' }}
-    runs-on: ${{ fromJSON(needs.ci-plan.outputs.linux-runner) }}
+    if: ${{ (always() && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository || needs.ci-plan.outputs.hosted == 'true')) && needs.ci-plan.outputs.hosted == 'true' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Require both Rust partitions

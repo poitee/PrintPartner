@@ -28,8 +28,8 @@ jobs:
 
   webkit-stl:
     needs: [ci-plan]
-    if: ${{ needs.ci-plan.outputs.linux == 'true' }}
-    runs-on: ${{ fromJSON(needs.ci-plan.outputs.linux-runner) }}
+    if: ${{ needs.ci-plan.outputs.hosted == 'true' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
       CARGO_BUILD_JOBS: '4'

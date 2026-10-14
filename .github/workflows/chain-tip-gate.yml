@@ -24,8 +24,8 @@ jobs:
 
   gate:
     needs: [ci-plan]
-    if: ${{ needs.ci-plan.outputs.linux == 'true' }}
-    runs-on: ${{ fromJSON(needs.ci-plan.outputs.linux-runner) }}
+    if: ${{ needs.ci-plan.outputs.hosted == 'true' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
       VITE_PRINT_PARTNER_DESKTOP: '1'

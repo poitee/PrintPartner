@@ -50,8 +50,8 @@ jobs:
 
   runtime:
     needs: [ci-plan]
-    if: ${{ needs.ci-plan.outputs.linux == 'true' }}
-    runs-on: ${{ fromJSON(needs.ci-plan.outputs.linux-runner) }}
+    if: ${{ needs.ci-plan.outputs.hosted == 'true' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
       VITE_PRINT_PARTNER_DESKTOP: '1'
@@ -143,8 +143,8 @@ jobs:
 
   source-artifacts:
     needs: [ci-plan]
-    if: ${{ needs.ci-plan.outputs.linux == 'true' }}
-    runs-on: ${{ fromJSON(needs.ci-plan.outputs.linux-runner) }}
+    if: ${{ needs.ci-plan.outputs.hosted == 'true' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -208,8 +208,8 @@ jobs:
 
   rust-verify:
     needs: [ci-plan]
-    if: ${{ needs.ci-plan.outputs.linux == 'true' }}
-    runs-on: ${{ fromJSON(needs.ci-plan.outputs.linux-runner) }}
+    if: ${{ needs.ci-plan.outputs.hosted == 'true' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
       CARGO_INCREMENTAL: '0'

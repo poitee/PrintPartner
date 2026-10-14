@@ -128,15 +128,24 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - name: Install
         run: npm ci
+      - name: Set user-space browser directory
+        run: echo "PLAYWRIGHT_BROWSERS_PATH=$RUNNER_TEMP/playwright-browsers" >> "$GITHUB_ENV"
+      - name: Cache Chromium
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/playwright-browsers
+          key: chromium-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('web/package-lock.json') }}
+      - name: Install Chromium without system changes
+        run: |
+          npx --no-install playwright-core install chromium
+          node --input-type=module -e 'import { chromium } from "playwright-core"; console.log(`PLAYWRIGHT_CHROMIUM_EXECUTABLE=${chromium.executablePath()}`)' >> "$GITHUB_ENV"
       - name: Build, bundle, runtime and browser checks
-        env:
-          PLAYWRIGHT_CHROMIUM_EXECUTABLE: /usr/bin/google-chrome
         run: npm run build && npm run test:workflow-smoke && npm run test:bundles -w @print-partner/web && npm run test:runtime && npm run test:browser
 
   docker:
     needs: [ci-plan, web, web-build]
-    if: ${{ needs.ci-plan.outputs.linux == 'true' }}
-    runs-on: ${{ fromJSON(needs.ci-plan.outputs.linux-runner) }}
+    if: ${{ needs.ci-plan.outputs.hosted == 'true' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
