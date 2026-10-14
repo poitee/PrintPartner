@@ -209,13 +209,20 @@ impl StorageLease {
         let _ = std::fs::remove_dir_all(candidate);
         result
     }
+    pub(crate) fn detach(&mut self) -> Result<()> {
+        if let Some(path) = &self.path
+            && path != &self.detached
+        {
+            std::fs::rename(path, &self.detached)?;
+            self.path = Some(self.detached.clone());
+        }
+        Ok(())
+    }
+
     pub(crate) fn release(&mut self) -> Result<()> {
+        self.detach()?;
         if let Some(path) = &self.path {
-            if path != &self.detached {
-                std::fs::rename(path, &self.detached)?;
-                self.path = Some(self.detached.clone());
-            }
-            std::fs::remove_dir_all(self.path.as_ref().expect("Lease path present"))?;
+            std::fs::remove_dir_all(path)?;
             self.path = None;
         }
         Ok(())

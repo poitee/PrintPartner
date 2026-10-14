@@ -29,8 +29,17 @@ pub struct StorageLease {
 
 #[cfg(test)]
 thread_local! {
+    static FAIL_LOCK_UNLOCK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static FAIL_MARKER_WRITE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static REMOVE_MARKER_BEFORE_READ: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn unlock_os_lock(file: &File) -> std::io::Result<()> {
+    #[cfg(test)]
+    if FAIL_LOCK_UNLOCK.with(std::cell::Cell::take) {
+        return Err(std::io::Error::from_raw_os_error(libc::EIO));
+    }
+    FileExt::unlock(file)
 }
 
 fn write_marker(file: &mut File, bytes: &[u8]) -> std::io::Result<()> {
@@ -236,14 +245,23 @@ impl StorageLease {
                 Ok(()) => true,
                 Err(error) => error.kind() == std::io::ErrorKind::NotFound,
             };
-        // Keep the shared lease until marker cleanup is proved. Standalone Node
-        // writers use this lease without checking the Rust OS lock.
-        let guard_released = marker_removed
+        // The shared lease excludes Node writers until OS unlock succeeds.
+        let os_unlocked = marker_removed
+            && self
+                .lock
+                .as_ref()
+                .is_none_or(|lock| unlock_os_lock(lock).is_ok());
+        let guard_detached = os_unlocked
             && self
                 .lease_guard
                 .as_mut()
-                .is_none_or(|guard| guard.release().is_ok());
-        if !runtime_removed || !marker_removed || !guard_released {
+                .is_none_or(|guard| guard.detach().is_ok());
+        if !runtime_removed || !marker_removed || !os_unlocked || !guard_detached {
+            if os_unlocked && let Some(lock) = &self.lock {
+                // Failed detachment leaves the shared admission guard in place.
+                // Re-lock when possible, without blocking on another admission.
+                let _ = FileExt::try_lock_exclusive(lock);
+            }
             let retained = Self {
                 lock: self.lock.take(),
                 lease_guard: self.lease_guard.take(),
@@ -269,6 +287,8 @@ impl StorageLease {
                 ownership_retained: true,
             };
         }
+        // Detachment commits ownership release; Drop cleans only retired metadata.
+        drop(self.lease_guard.take());
         drop(self.lock.take());
         LeaseRelease {
             marker_removed,
@@ -345,6 +365,54 @@ mod tests {
                 assert_released(owner.release(), &path);
             }
         }
+    }
+
+    #[test]
+    fn release_unlocks_descriptors_inherited_by_an_unrelated_spawn() {
+        let path = directory();
+        let owner = StorageLease::acquire(&path).unwrap();
+        // A concurrent fork can retain the same open file description until exec.
+        let inherited = owner.clone_file().unwrap();
+        assert_released(owner.release(), &path);
+        assert!(inherited.metadata().is_ok());
+        drop(inherited);
+    }
+
+    #[test]
+    fn unlock_failure_keeps_the_shared_lease_until_retry() {
+        let path = directory();
+        let owner = StorageLease::acquire(&path).unwrap();
+        FAIL_LOCK_UNLOCK.with(|fail| fail.set(true));
+        let released = owner.release();
+        assert!(released.ownership_retained && !released.lock_released);
+        assert!(path.join(".desktop-lease/owner.json").is_file());
+        assert!(guard::StorageLease::acquire(&path).is_err());
+        let lock = File::open(path.join(".desktop.lock")).unwrap();
+        assert!(lock.try_lock_exclusive().is_err());
+        assert_released(StorageLease::retry_failed_release(&path).unwrap(), &path);
+    }
+
+    #[test]
+    fn failed_detachment_keeps_admission_closed_and_relocks_until_retry() {
+        let path = directory();
+        let owner = StorageLease::acquire(&path).unwrap();
+        let identity: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path.join(".desktop-lease/owner.json")).unwrap())
+                .unwrap();
+        let retired = path.join(format!(
+            ".desktop-lease-release-{}",
+            identity["instance"].as_str().unwrap()
+        ));
+        std::fs::create_dir(&retired).unwrap();
+        std::fs::write(retired.join("block-detach"), b"retain").unwrap();
+        let released = owner.release();
+        assert!(released.ownership_retained && !released.lock_released);
+        assert!(path.join(".desktop-lease/owner.json").is_file());
+        assert!(guard::StorageLease::acquire(&path).is_err());
+        let lock = File::open(path.join(".desktop.lock")).unwrap();
+        assert!(lock.try_lock_exclusive().is_err());
+        std::fs::remove_dir_all(retired).unwrap();
+        assert_released(StorageLease::retry_failed_release(&path).unwrap(), &path);
     }
 
     #[test]
