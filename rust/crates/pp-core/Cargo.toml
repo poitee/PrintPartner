@@ -7,7 +7,7 @@ license.workspace = true
 
 [features]
 default = []
-desktop_rebuild = []
+desktop_rebuild = ["pp-storage/desktop_rebuild"]
 
 [dependencies]
 pp-storage = { path = "../pp-storage" }
