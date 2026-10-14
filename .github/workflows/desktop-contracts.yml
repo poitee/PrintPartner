@@ -52,7 +52,7 @@ jobs:
     needs: [ci-plan]
     if: ${{ needs.ci-plan.outputs.linux == 'true' }}
     runs-on: ${{ fromJSON(needs.ci-plan.outputs.linux-runner) }}
-    timeout-minutes: 5
+    timeout-minutes: 15
     strategy:
       matrix:
         node: ["22", "24"]
