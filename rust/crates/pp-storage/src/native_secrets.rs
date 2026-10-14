@@ -1,5 +1,6 @@
 use crate::{Envelope, SettingsClient, Shared, WriterOwner};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use sha2::{Digest, Sha256};
 use std::{
     error::Error,
     fmt,
@@ -144,6 +145,7 @@ pub(crate) enum Outcome {
 pub(crate) type Reply = mpsc::Sender<Result<Outcome, StorageError>>;
 
 struct MigrationReceiptRow {
+    legacy_digest: Vec<u8>,
     state: String,
     generation: i64,
     migration_id: String,
@@ -166,7 +168,7 @@ fn load_receipt(connection: &Connection) -> Result<Option<MigrationReceiptRow>, 
     database_error(
         connection
             .query_row(
-                "SELECT state,generation,migration_id,legacy_rowid
+                "SELECT state,generation,migration_id,legacy_rowid,legacy_digest
                    FROM native_secret_migrations
                   WHERE tenant_id=?1 AND purpose=?2",
                 params![TENANT, PURPOSE],
@@ -176,6 +178,7 @@ fn load_receipt(connection: &Connection) -> Result<Option<MigrationReceiptRow>, 
                         generation: row.get(1)?,
                         migration_id: row.get(2)?,
                         legacy_rowid: row.get(3)?,
+                        legacy_digest: row.get(4)?,
                     })
                 },
             )
@@ -202,7 +205,15 @@ fn prepare(connection: &mut Connection, owner: Arc<Shared>) -> Result<Outcome, S
             let Some((current_rowid, value)) = legacy()? else {
                 return Err(StorageError(StorageFailure::PreparedLegacyMissing));
             };
-            if current_rowid != receipt.legacy_rowid || value.is_empty() {
+            if current_rowid != receipt.legacy_rowid
+                || value.is_empty()
+                || !bool::from(
+                    receipt
+                        .legacy_digest
+                        .as_slice()
+                        .ct_eq(Sha256::digest(value.as_bytes()).as_slice()),
+                )
+            {
                 return Err(StorageError(StorageFailure::LegacyChanged));
             }
             database_error(tx.commit())?;
@@ -242,9 +253,16 @@ fn prepare(connection: &mut Connection, owner: Arc<Shared>) -> Result<Outcome, S
             let migration_id = hex::encode(rand::random::<[u8; 32]>());
             database_error(tx.execute(
                 "INSERT INTO native_secret_migrations(
-                    tenant_id,purpose,generation,migration_id,state,legacy_rowid
-                 ) VALUES(?1,?2,?3,?4,'prepared',?5)",
-                params![TENANT, PURPOSE, generation, migration_id, legacy_rowid],
+                    tenant_id,purpose,generation,migration_id,state,legacy_rowid,legacy_digest
+                 ) VALUES(?1,?2,?3,?4,'prepared',?5,?6)",
+                params![
+                    TENANT,
+                    PURPOSE,
+                    generation,
+                    migration_id,
+                    legacy_rowid,
+                    Sha256::digest(value.as_bytes()).as_slice()
+                ],
             ))?;
             database_error(tx.commit())?;
             Ok(Outcome::Preparation(MigrationPreparation::Prepared(

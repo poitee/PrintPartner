@@ -250,3 +250,51 @@ fn confirmation_removes_only_the_legacy_secret_and_survives_reopen() {
     owner.shutdown().unwrap();
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn changed_legacy_value_cannot_reuse_a_prepared_locator_even_after_reopen() {
+    let root = directory("changed-preparation");
+    let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+    set_legacy(&owner, "original-test-token");
+    let client = owner.native_secret_migration();
+    let prepared = match client
+        .prepare(&AtomicBool::new(false), Duration::from_secs(5))
+        .unwrap()
+    {
+        MigrationPreparation::Prepared(value) => value,
+        _ => panic!("expected prepared migration"),
+    };
+    let db = Connection::open(root.join("print-partner.db")).unwrap();
+    let rowid = || {
+        db.query_row(
+            "SELECT rowid FROM app_settings WHERE tenant_id='default' AND key='github_pat'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap()
+    };
+    let original_rowid = rowid();
+    set_legacy(&owner, "replacement-test-token");
+    assert_eq!(rowid(), original_rowid);
+    assert!(matches!(
+        client.prepare(&AtomicBool::new(false), Duration::from_secs(5)),
+        Err(error) if error.failure() == StorageFailure::LegacyChanged
+    ));
+    assert_eq!(
+        client
+            .confirm(prepared, &AtomicBool::new(false), Duration::from_secs(5))
+            .unwrap_err()
+            .failure(),
+        StorageFailure::LegacyChanged
+    );
+    drop(db);
+    owner.shutdown().unwrap();
+    let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+    assert!(matches!(
+        owner.native_secret_migration().prepare(&AtomicBool::new(false), Duration::from_secs(5)),
+        Err(error) if error.failure() == StorageFailure::LegacyChanged
+    ));
+    assert_legacy_matches(&root, "replacement-test-token");
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
