@@ -175,7 +175,9 @@ fn plan_for(
 
 fn switch(index: &OwnershipIndex, dir: &Path, operation: &str) -> CutoverReceipt {
     let (owners, _) = cutover::recover(dir, Some(index)).unwrap();
-    plan_for(index, &owners, operation).commit(dir, DRAINED)
+    let receipt = plan_for(index, &owners, operation).commit(dir, DRAINED);
+    assert!(matches!(receipt, CutoverReceipt::Committed { .. }));
+    receipt
 }
 
 fn plant_record(dir: &Path, digest: &str, operation: &str, participants: &[&str]) {
@@ -201,25 +203,14 @@ fn ticket_t_3_drain_cutover_switches_whole_operation() {
         index.participants_of(CATALOG),
         BTreeSet::from(CATALOG_PARTICIPANTS)
     );
-    assert_eq!(
+    assert_json(
         switch(&index, &dir.0, CATALOG),
-        CutoverReceipt::Committed {
-            operation: CATALOG.into(),
-            participants: 4,
-            manifest_sha256: index.digest().into(),
-            parity_sha256: sha256(&parity(CATALOG, index.digest(), 3, 3, 0)),
-            fixtures: 3,
-            directory_synced: true,
-        }
+        json!({"outcome": "committed", "operation": CATALOG, "participants": 4, "manifest_sha256": index.digest(), "parity_sha256": sha256(&parity(CATALOG, index.digest(), 3, 3, 0)), "fixtures": 3, "directory_synced": true}),
     );
     let (owners, boot) = cutover::recover(&dir.0, Some(&index)).unwrap();
-    assert_eq!(
+    assert_json(
         boot,
-        BootReceipt {
-            rust_operations: vec![CATALOG.into()],
-            abandoned_temporaries: 0,
-            evidence_saved: true,
-        }
+        json!({"rust_operations": [CATALOG], "abandoned_temporaries": 0, "evidence_saved": true}),
     );
     let rust_owned: BTreeSet<&str> = index
         .claims()
@@ -346,10 +337,7 @@ async fn session(gateway: &mut Gateway) -> (String, String) {
 async fn rust_owned_gateway(dir: &Path, node: &FakeNode) -> Gateway {
     let index = fixture_index();
     for operation in [CATALOG, PLANS_CREATE] {
-        assert!(matches!(
-            switch(&index, dir, operation),
-            CutoverReceipt::Committed { .. }
-        ));
+        switch(&index, dir, operation);
     }
     let (owners, _) = cutover::recover(dir, Some(&index)).unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -473,17 +461,13 @@ fn ticket_t_3_drain_cutover_subset_record_fails_closed() {
         &["http.GET /filaments/catalog"],
     );
     let error = cutover::recover(&dir.0, Some(&index)).unwrap_err();
-    assert_eq!(
+    assert_json(
         error,
-        CutoverError::ParticipantSetMismatch {
-            operation: CATALOG.into(),
-            missing: vec![
-                "http.GET /api/v1/filaments/catalog".into(),
-                "http.HEAD /api/v1/filaments/catalog".into(),
-                "http.HEAD /filaments/catalog".into(),
-            ],
-            unexpected: Vec::new(),
-        }
+        json!({"reason": "participant_set_mismatch", "operation": CATALOG, "missing": [
+                "http.GET /api/v1/filaments/catalog",
+                "http.HEAD /api/v1/filaments/catalog",
+                "http.HEAD /filaments/catalog",
+            ], "unexpected": []}),
     );
     assert_eq!(
         evidence_lines(&dir.0),
@@ -509,7 +493,7 @@ fn ticket_t_3_drain_cutover_refuses_operation_with_worker() {
         (PROFILE_SYNC, "worker.startManagedProfileSync"),
         ("source.sync", "assistant.propose_import_source_files"),
     ] {
-        assert_eq!(
+        assert_json(
             cutover::plan(
                 Some(&index),
                 &owners,
@@ -517,9 +501,7 @@ fn ticket_t_3_drain_cutover_refuses_operation_with_worker() {
                 &parity(operation, index.digest(), 3, 3, 0),
             )
             .unwrap_err(),
-            CutoverRefusal::NodeCannotFence {
-                participant: participant.into()
-            }
+            json!({"reason": "node_cannot_fence", "participant": participant}),
         );
     }
     let dir = Scratch::new("worker");
@@ -533,11 +515,9 @@ fn ticket_t_3_drain_cutover_refuses_operation_with_worker() {
         ]
     );
     plant_record(&dir.0, index.digest(), PROFILE_SYNC, &participants);
-    assert_eq!(
+    assert_json(
         cutover::recover(&dir.0, Some(&index)).unwrap_err(),
-        CutoverError::NodeCannotFence {
-            participant: "worker.startManagedProfileSync".into()
-        }
+        json!({"reason": "node_cannot_fence", "participant": "worker.startManagedProfileSync"}),
     );
 }
 
@@ -564,41 +544,31 @@ fn ticket_t_3_drain_cutover_parity_refusals() {
             "{malformed}"
         );
     }
-    assert_eq!(
+    assert_json(
         refuse(&parity(CATALOG, index.digest(), 0, 0, 0)),
-        CutoverRefusal::ParityNoFixtures
+        json!({"reason": "parity_no_fixtures"}),
     );
     for (passed, failed) in [(2, 1), (3, 1), (2, 0)] {
-        assert_eq!(
+        assert_json(
             refuse(&parity(CATALOG, index.digest(), 3, passed, failed)),
-            CutoverRefusal::ParityFailures {
-                fixtures: 3,
-                passed,
-                failed
-            }
+            json!({"reason": "parity_failures", "fixtures": 3, "passed": passed, "failed": failed}),
         );
     }
-    assert_eq!(
+    assert_json(
         refuse(&parity(PROFILE_SYNC, index.digest(), 3, 3, 0)),
-        CutoverRefusal::ParityOperationMismatch {
-            expected: CATALOG.into(),
-            actual: PROFILE_SYNC.into(),
-        }
+        json!({"reason": "parity_operation_mismatch", "expected": CATALOG, "actual": PROFILE_SYNC}),
     );
     assert_ne!(index.digest(), other.digest());
-    assert_eq!(
+    assert_json(
         refuse(&parity(CATALOG, other.digest(), 3, 3, 0)),
-        CutoverRefusal::ParityManifestMismatch {
-            expected: index.digest().into(),
-            actual: other.digest().into(),
-        }
+        json!({"reason": "parity_manifest_mismatch", "expected": index.digest(), "actual": other.digest()}),
     );
 }
 
 #[test]
 fn ticket_t_3_drain_cutover_flag_off_refuses_and_writes_nothing() {
     let index = fixture_index();
-    assert_eq!(
+    assert_json(
         cutover::plan(
             None,
             &OperationOwners::node_only(),
@@ -606,7 +576,7 @@ fn ticket_t_3_drain_cutover_flag_off_refuses_and_writes_nothing() {
             &parity(CATALOG, index.digest(), 3, 3, 0),
         )
         .unwrap_err(),
-        CutoverRefusal::FlagOff
+        json!({"reason": "flag_off"}),
     );
     let empty = Scratch::new("flag-off-empty");
     assert_eq!(
@@ -622,23 +592,17 @@ fn ticket_t_3_drain_cutover_flag_off_refuses_and_writes_nothing() {
     );
     assert!(listing(&empty.0).is_empty());
     let recorded = Scratch::new("flag-off-record");
-    assert!(matches!(
-        switch(&index, &recorded.0, CATALOG),
-        CutoverReceipt::Committed { .. }
-    ));
-    assert_eq!(
+    switch(&index, &recorded.0, CATALOG);
+    assert_json(
         cutover::recover(&recorded.0, None).unwrap_err(),
-        CutoverError::RecordWithoutFlag
+        json!({"reason": "record_without_flag"}),
     );
 }
 
 fn assert_commit_changes_nothing(drained: DrainEvidence, expected: CutoverReceipt) {
     let index = fixture_index();
     let dir = Scratch::new("unchanged");
-    assert!(matches!(
-        switch(&index, &dir.0, CATALOG),
-        CutoverReceipt::Committed { .. }
-    ));
+    switch(&index, &dir.0, CATALOG);
     let (owners, _) = cutover::recover(&dir.0, Some(&index)).unwrap();
     let before = listing(&dir.0);
     let record = fs::read(dir.0.join(CUTOVER_FILE)).unwrap();
@@ -698,22 +662,15 @@ fn ticket_t_3_drain_cutover_force_killed_compat_changes_nothing() {
 fn ticket_t_3_drain_cutover_crash_before_rename_recovers_node() {
     let index = fixture_index();
     let committed = Scratch::new("committed-body");
-    assert!(matches!(
-        switch(&index, &committed.0, CATALOG),
-        CutoverReceipt::Committed { .. }
-    ));
+    switch(&index, &committed.0, CATALOG);
     let dir = Scratch::new("before-rename");
     let temporary = dir.0.join(".operation-cutover.abc.tmp");
     fs::copy(committed.0.join(CUTOVER_FILE), &temporary).unwrap();
     let (owners, boot) = cutover::recover(&dir.0, Some(&index)).unwrap();
     assert_eq!(owners, OperationOwners::node_only());
-    assert_eq!(
+    assert_json(
         boot,
-        BootReceipt {
-            rust_operations: Vec::new(),
-            abandoned_temporaries: 1,
-            evidence_saved: true,
-        }
+        json!({"rust_operations": [], "abandoned_temporaries": 1, "evidence_saved": true}),
     );
     assert!(!temporary.exists());
     assert!(!dir.0.join(CUTOVER_FILE).exists());
@@ -729,20 +686,13 @@ fn ticket_t_3_drain_cutover_crash_before_rename_recovers_node() {
 fn ticket_t_3_drain_cutover_crash_after_rename_recovers_rust() {
     let index = fixture_index();
     let dir = Scratch::new("after-rename");
-    assert!(matches!(
-        switch(&index, &dir.0, CATALOG),
-        CutoverReceipt::Committed { .. }
-    ));
+    switch(&index, &dir.0, CATALOG);
     let temporary = dir.0.join(".operation-cutover.def.tmp");
     fs::copy(dir.0.join(CUTOVER_FILE), &temporary).unwrap();
     let (owners, boot) = cutover::recover(&dir.0, Some(&index)).unwrap();
-    assert_eq!(
+    assert_json(
         boot,
-        BootReceipt {
-            rust_operations: vec![CATALOG.into()],
-            abandoned_temporaries: 1,
-            evidence_saved: true,
-        }
+        json!({"rust_operations": [CATALOG], "abandoned_temporaries": 1, "evidence_saved": true}),
     );
     assert_eq!(
         owners.owner_of("http.HEAD /api/v1/filaments/catalog"),
@@ -755,23 +705,16 @@ fn ticket_t_3_drain_cutover_crash_after_rename_recovers_rust() {
 fn ticket_t_3_drain_cutover_restart_is_idempotent() {
     let index = fixture_index();
     let dir = Scratch::new("idempotent");
-    assert!(matches!(
-        switch(&index, &dir.0, CATALOG),
-        CutoverReceipt::Committed { .. }
-    ));
+    switch(&index, &dir.0, CATALOG);
     let record = fs::read(dir.0.join(CUTOVER_FILE)).unwrap();
     let first = cutover::recover(&dir.0, Some(&index)).unwrap();
     let second = cutover::recover(&dir.0, Some(&index)).unwrap();
     assert_eq!(first, second);
-    assert_eq!(
+    assert_json(
         second.1,
-        BootReceipt {
-            rust_operations: vec![CATALOG.into()],
-            abandoned_temporaries: 0,
-            evidence_saved: true,
-        }
+        json!({"rust_operations": [CATALOG], "abandoned_temporaries": 0, "evidence_saved": true}),
     );
-    assert_eq!(
+    assert_json(
         cutover::plan(
             Some(&index),
             &second.0,
@@ -779,7 +722,7 @@ fn ticket_t_3_drain_cutover_restart_is_idempotent() {
             &parity(CATALOG, index.digest(), 3, 3, 0),
         )
         .unwrap_err(),
-        CutoverRefusal::AlreadyRustOwned
+        json!({"reason": "already_rust_owned"}),
     );
     assert_eq!(fs::read(dir.0.join(CUTOVER_FILE)).unwrap(), record);
 }
@@ -789,16 +732,10 @@ fn ticket_t_3_drain_cutover_changed_manifest_on_restart_fails_closed() {
     let bundled = fixture_index();
     let upgraded = index_with_extra_tool();
     let dir = Scratch::new("manifest-changed");
-    assert!(matches!(
-        switch(&bundled, &dir.0, CATALOG),
-        CutoverReceipt::Committed { .. }
-    ));
-    assert_eq!(
+    switch(&bundled, &dir.0, CATALOG);
+    assert_json(
         cutover::recover(&dir.0, Some(&upgraded)).unwrap_err(),
-        CutoverError::RestartManifestChanged {
-            recorded: bundled.digest().into(),
-            bundled: upgraded.digest().into(),
-        }
+        json!({"reason": "restart_manifest_changed", "recorded": bundled.digest(), "bundled": upgraded.digest()}),
     );
 }
 
@@ -964,19 +901,15 @@ async fn ticket_t_3_drain_cutover_gateway_drain_waits_for_inflight_forward() {
         .await;
     assert!(!gateway_idle);
     let index = fixture_index();
-    assert_eq!(
+    assert_json(
         plan_for(&index, &owners, PLANS_CREATE).commit(
             &dir.0,
             DrainEvidence {
                 gateway_idle,
                 ..DRAINED
-            }
+            },
         ),
-        CutoverReceipt::DrainTimedOut {
-            operation: PLANS_CREATE.into(),
-            tracked_idle: true,
-            gateway_idle: false
-        }
+        json!({"outcome": "drain_timed_out", "operation": PLANS_CREATE, "tracked_idle": true, "gateway_idle": false}),
     );
     assert!(!dir.0.join(CUTOVER_FILE).exists());
     node.release.notify_one();
@@ -1016,10 +949,7 @@ fn ticket_t_3_drain_cutover_record_and_evidence_fail_closed() {
         Err(CutoverError::Malformed { .. })
     ));
     fs::remove_file(&path).unwrap();
-    assert!(matches!(
-        switch(&index, &dir.0, CATALOG),
-        CutoverReceipt::Committed { .. }
-    ));
+    switch(&index, &dir.0, CATALOG);
     fs::remove_file(dir.0.join(EVIDENCE_FILE)).unwrap();
     symlink(&target, dir.0.join(EVIDENCE_FILE)).unwrap();
     let (owners, boot) = cutover::recover(&dir.0, Some(&index)).unwrap();
@@ -1029,10 +959,12 @@ fn ticket_t_3_drain_cutover_record_and_evidence_fail_closed() {
     let mut record: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     record["operations"][CATALOG]["fixtures"] = json!(0);
     fs::write(path, record.to_string()).unwrap();
-    assert_eq!(
+    assert_json(
         cutover::recover(&dir.0, Some(&index)).unwrap_err(),
-        CutoverError::NoParityFixtures {
-            operation: CATALOG.into()
-        }
+        json!({"reason": "no_parity_fixtures", "operation": CATALOG}),
     );
+}
+
+fn assert_json(value: impl serde::Serialize, expected: serde_json::Value) {
+    assert_eq!(serde_json::to_value(value).unwrap(), expected);
 }
