@@ -246,6 +246,29 @@ fn numeric_stringification_and_projection_follow_javascript() {
 }
 
 #[test]
+fn json_object_entry_limits_apply_before_flattening() {
+    let properties = (0..16_384)
+        .map(|index| format!(r#""k{index}":null"#))
+        .collect::<Vec<_>>()
+        .join(",");
+    let raw = format!(r#"{{{properties},"extra":null}}"#);
+    assert!(matches!(
+        interpret_profile(document(raw.as_bytes(), ProfileKind::Process)),
+        Err(ProfileInterpretError::TooManyEntries)
+    ));
+    let nested = format!(r#"{{"ignored":{raw}}}"#);
+    assert!(matches!(
+        interpret_profile(document(nested.as_bytes(), ProfileKind::Process)),
+        Err(ProfileInterpretError::TooManyEntries)
+    ));
+    let duplicate = format!(r#"{{{properties},"k0":"final"}}"#);
+    assert_eq!(
+        ready(duplicate.as_bytes(), ProfileKind::Process)["provenance"]["resolved_flat_config"],
+        r#"{"k0":"final"}"#
+    );
+}
+
+#[test]
 fn public_errors_bound_malformed_input_depth_keys_scalars_and_entries() {
     assert!(matches!(
         ProfileDocument::new(b"{}", ProfileKind::Process, SlicerKind::Orca, ""),

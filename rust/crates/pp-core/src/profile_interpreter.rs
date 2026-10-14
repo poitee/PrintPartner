@@ -87,6 +87,7 @@ pub enum ProfileInterpretError {
     EmptySourceLabel,
     DocumentTooLarge,
     InvalidJson,
+    InvalidVersionExpression,
     JsonNestingLimit,
     TooManyEntries,
     KeyTooLarge,
@@ -124,7 +125,7 @@ pub fn interpret_profile(
         .unwrap_or_else(|| JsText::from_string("Unnamed"));
     let version = match format {
         SourceFormat::Json => own.get_ascii("version").cloned(),
-        SourceFormat::Ini => ini_version(&raw).map(JsText::from_string),
+        SourceFormat::Ini => ini_version(&raw)?.map(JsText::from_string),
     };
     let child = CheckedChild {
         format,
@@ -137,15 +138,14 @@ pub fn interpret_profile(
         own,
     };
     if format == SourceFormat::Json
-        && child
+        && let Some(file_stem) = child
             .own
             .get_ascii("inherits")
-            .is_some_and(|value| !value.is_empty())
+            .filter(|value| !value.is_empty())
+            .cloned()
     {
         return Ok(ProfileInterpretation::NeedsParent(PendingProfile {
-            request: ParentFileRequest {
-                file_stem: child.own.get_ascii("inherits").expect("checked").clone(),
-            },
+            request: ParentFileRequest { file_stem },
             child,
         }));
     }
@@ -298,17 +298,18 @@ impl NodeFlatObject {
         let mut indexes: Vec<_> = self
             .entries
             .iter()
-            .filter(|(key, _)| array_index(key).is_some())
+            .filter_map(|(key, value)| array_index(key).map(|index| (index, key, value)))
             .collect();
-        indexes.sort_by_key(|(key, _)| array_index(key).expect("filtered"));
+        indexes.sort_by_key(|(index, _, _)| *index);
         indexes
             .into_iter()
+            .map(|(_, key, value)| (key, value))
             .chain(
                 self.entries
                     .iter()
-                    .filter(|(key, _)| array_index(key).is_none()),
+                    .filter(|(key, _)| array_index(key).is_none())
+                    .map(|(key, value)| (key, value)),
             )
-            .map(|(key, value)| (key, value))
             .collect()
     }
 }
@@ -384,9 +385,9 @@ impl<'a> JsonParser<'a> {
     fn parse_object(&mut self, depth: usize) -> Result<JsValue, ProfileInterpretError> {
         self.position += 1;
         self.skip_whitespace();
-        let mut entries = Vec::new();
+        let mut entries = std::collections::BTreeMap::<Vec<u16>, (usize, JsText, JsValue)>::new();
         if self.consume(b'}') {
-            return Ok(JsValue::Object(entries));
+            return Ok(JsValue::Object(Vec::new()));
         }
         loop {
             if self.peek() != Some(b'"') {
@@ -398,14 +399,28 @@ impl<'a> JsonParser<'a> {
                 return Err(ProfileInterpretError::InvalidJson);
             }
             let value = self.parse_value(depth)?;
-            if let Some((_, current)) = entries.iter_mut().find(|(current, _)| current == &key) {
-                *current = value;
-            } else {
-                entries.push((key, value));
+            let position = entries.len();
+            match entries.entry(key.as_utf16().to_vec()) {
+                std::collections::btree_map::Entry::Occupied(mut entry) => {
+                    entry.get_mut().2 = value;
+                }
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    if position == MAX_ENTRIES {
+                        return Err(ProfileInterpretError::TooManyEntries);
+                    }
+                    entry.insert((position, key, value));
+                }
             }
             self.skip_whitespace();
             if self.consume(b'}') {
-                return Ok(JsValue::Object(entries));
+                let mut ordered: Vec<_> = entries.into_values().collect();
+                ordered.sort_by_key(|(position, _, _)| *position);
+                return Ok(JsValue::Object(
+                    ordered
+                        .into_iter()
+                        .map(|(_, key, value)| (key, value))
+                        .collect(),
+                ));
             }
             if !self.consume(b',') {
                 return Err(ProfileInterpretError::InvalidJson);
@@ -483,7 +498,7 @@ impl<'a> JsonParser<'a> {
             return Err(ProfileInterpretError::InvalidJson);
         }
         self.position = end;
-        let digits = std::str::from_utf8(digits).expect("ASCII hex digits");
+        let digits = std::str::from_utf8(digits).map_err(|_| ProfileInterpretError::InvalidJson)?;
         u16::from_str_radix(digits, 16).map_err(|_| ProfileInterpretError::InvalidJson)
     }
 
@@ -692,19 +707,21 @@ fn profile_kind(raw: Option<&JsText>, fallback: ProfileKind) -> ProfileKind {
     }
 }
 
-fn ini_version(raw: &str) -> Option<String> {
-    static EXPRESSION: std::sync::OnceLock<regress::Regex> = std::sync::OnceLock::new();
+fn ini_version(raw: &str) -> Result<Option<String>, ProfileInterpretError> {
+    static EXPRESSION: std::sync::OnceLock<Result<regress::Regex, ProfileInterpretError>> =
+        std::sync::OnceLock::new();
     let expression = EXPRESSION.get_or_init(|| {
         regress::Regex::with_flags(
             r"generated by\s+(?:PrusaSlicer|BambuStudio|OrcaSlicer)\s+([^\s]+)",
             "i",
         )
-        .expect("static generated-by expression")
+        .map_err(|_| ProfileInterpretError::InvalidVersionExpression)
     });
-    expression
+    let expression = expression.as_ref().map_err(|error| *error)?;
+    Ok(expression
         .find(raw)
         .and_then(|matched| matched.captures.first().cloned().flatten())
-        .map(|version| raw[version].to_owned())
+        .map(|version| raw[version].to_owned()))
 }
 
 fn first_number(flat: &NodeFlatObject, keys: &[&str]) -> Option<f64> {
@@ -911,7 +928,11 @@ mod tests {
                 Some("2.4.0"),
             ),
         ] {
-            assert_eq!(ini_version(raw).as_deref(), expected, "input {raw:?}");
+            assert_eq!(
+                ini_version(raw).unwrap().as_deref(),
+                expected,
+                "input {raw:?}"
+            );
         }
     }
     #[test]
