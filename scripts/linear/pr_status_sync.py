@@ -139,13 +139,14 @@ def reconcile(hours):
         for ident in refs(p)[1]:
             last[ident] = max(last.get(ident, ""), t)
     d = gql('query($k:String!){issues(first:250,filter:{team:{key:{eq:$k}},state:{name:{in:["In Progress","In Review"]}}}){nodes{id identifier updatedAt state{name type}}}}', {"k": TEAM})
-    cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=STALE_HOURS)).isoformat()
+    cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=STALE_HOURS)
+    ts = lambda v: dt.datetime.fromisoformat(v.replace("Z", "+00:00"))
     for iss in d["issues"]["nodes"]:
         ident = iss["identifier"]
         if other_open(ident, -1):
             continue
-        t = max(last.get(ident, ""), iss["updatedAt"])
-        if t.replace("Z", "+00:00") < cutoff:
+        t = max([ts(iss["updatedAt"])] + ([ts(last[ident])] if ident in last else []))
+        if t < cutoff:
             move(iss, "Backlog", f"stalled: no PR/commit activity for {STALE_HOURS}h and no open PR.")
 
 
