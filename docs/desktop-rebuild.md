@@ -94,7 +94,7 @@ Linux auxiliary app data uses the `XDG_DATA_HOME`, `XDG_CONFIG_HOME`, `XDG_STATE
 
 `LayoutEnvironment::from_env` reads those variables, `APPDATA`, `LOCALAPPDATA`, and `PP_PORTABLE_DIR`. A supplied portable root takes precedence on every platform and appends `data`, `config`, `logs`, and `cache`. An empty portable root returns an error. Selected roots and the home path must be absolute and contain no parent traversal. The resolver preserves non-Unicode paths and does not canonicalize paths or follow links.
 
-Launcher integration with legacy-store preservation, directory permission checks, origin recovery, portable settings transfer, and installed artifact receipts remain open. The resolver does not enable any user-visible behavior, so no runtime opt-in is read here. Future launcher integration must check the stored runtime gate.
+Launcher integration with legacy-store preservation, directory permission checks, browser preference capture and restore, and installed artifact receipts remain open. The resolver does not enable any user-visible behavior, so no runtime opt-in is read here. Future launcher integration must check the stored runtime gate.
 
 Windows auxiliary app data and config use `<APPDATA>/com.poitee.printpartner`. Cache uses `<LOCALAPPDATA>/com.poitee.printpartner`; logs append `logs` to that local directory. Missing or empty variables fall back independently to `~/AppData/Roaming` and `~/AppData/Local`. Nonempty relative or parent-traversing values return a named error. The legacy store remains `~/.print-partner`. Windows ignores XDG values; macOS and Linux ignore Windows values.
 
@@ -105,3 +105,11 @@ Portable path tests run on Linux, including the macOS and Windows mappings:
 ```sh
 cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-core --lib --features desktop_rebuild --no-tests=fail -E 'test(layout::tests::ticket_t_12)'
 ```
+
+### Origin recovery and library preferences
+
+CoreRuntime replaces a valid saved port only when binding returns `AddrInUse`. It holds the replacement listener while publishing a private same-directory file, syncing the file, checking the old file identity and content, renaming, and syncing the directory. Node starts only after publication succeeds. Missing configuration retains hard-link publication without clobbering an existing name. Corrupt and unsafe configuration still fails closed. `origin_change()` returns an optional immutable `OriginChange::PersistedPortInUse` with nonzero old and new ports. Its display notice contains no launch token or credentials.
+
+`CoreHandle` offers typed per-field updates and reads for `BrowserPreferences` under the existing storage lease. The versioned `browser-preferences.json` sidecar is independent of the port. It stores optional sidebar collapse, theme, and supported printer poll interval values. Unknown fields, invalid values, unsupported versions, unsafe files, and oversized files fail without overwrite. Updates preserve other fields and unrelated portable-store bytes. Shutdown closes command admission and settles queued callers before releasing the lease.
+
+This is a library contract. GRE-368 must wire browser capture and restore and show the origin-change notice. Existing origin-scoped localStorage and IndexedDB do not follow a changed port today. These operations do not relocate or rewrite product databases or transfer authentication data. A new runtime always bootstraps its gateway session, without adding a user login flow.
