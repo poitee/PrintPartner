@@ -387,7 +387,15 @@ fn digest(value: &str) -> [u8; 32] {
     Sha256::digest(value.as_bytes()).into()
 }
 fn error(status: StatusCode, detail: &'static str) -> Response<Body> {
-    (status, axum::Json(serde_json::json!({"detail":detail}))).into_response()
+    (
+        status,
+        [
+            ("cache-control", "no-store"),
+            ("referrer-policy", "no-referrer"),
+        ],
+        axum::Json(serde_json::json!({"detail":detail})),
+    )
+        .into_response()
 }
 
 fn node_unavailable() -> Response<Body> {
@@ -498,7 +506,10 @@ async fn handle(
     State(state): State<Arc<GatewayState>>,
     mut request: Request<Body>,
 ) -> Response<Body> {
-    if header(&request, "host") != Some(state.host.as_str()) {
+    let mut hosts = request.headers().get_all("host").iter();
+    if hosts.next().map(HeaderValue::as_bytes) != Some(state.host.as_bytes())
+        || hosts.next().is_some()
+    {
         return error(StatusCode::BAD_REQUEST, "Invalid Host");
     }
     let target = match target::CanonicalTarget::parse(request.uri()) {
@@ -507,11 +518,13 @@ async fn handle(
     };
     *request.uri_mut() = target.uri;
     let path = target.path;
-    let origin = header(&request, "origin");
+    let mut origins = request.headers().get_all("origin").iter();
+    let origin = origins.next();
     let upgrade = header(&request, "upgrade").is_some();
     let unsafe_method = !matches!(request.method().as_str(), "GET" | "HEAD" | "OPTIONS");
-    if origin.is_some_and(|value| value != state.origin)
-        || ((unsafe_method || upgrade) && origin != Some(state.origin.as_str()))
+    if origins.next().is_some()
+        || origin.is_some_and(|value| value.as_bytes() != state.origin.as_bytes())
+        || ((unsafe_method || upgrade) && origin.is_none())
     {
         return error(StatusCode::FORBIDDEN, "Invalid Origin");
     }
@@ -654,9 +667,7 @@ async fn handle(
     let same_origin_browser_get = request.method() == "GET"
         && origin.is_none()
         && header(&request, "sec-fetch-site") == Some("same-origin");
-    if operation.effect != EffectClass::Observation
-        && origin != Some(state.origin.as_str())
-        && !same_origin_browser_get
+    if operation.effect != EffectClass::Observation && origin.is_none() && !same_origin_browser_get
     {
         return error(
             StatusCode::FORBIDDEN,

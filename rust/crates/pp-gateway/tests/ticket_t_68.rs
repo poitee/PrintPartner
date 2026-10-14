@@ -1,0 +1,312 @@
+use axum::{
+    body::Body,
+    http::{HeaderMap, HeaderValue, Request, StatusCode, request::Builder},
+};
+use http_body_util::BodyExt;
+use hyper_util::rt::TokioIo;
+use pp_compat::CompatHandle;
+use pp_gateway::Gateway;
+use std::{path::PathBuf, time::Duration};
+
+async fn gateway() -> Gateway {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    Gateway::start(listener, PathBuf::new(), CompatHandle::unpublished()).unwrap()
+}
+
+async fn exchange(origin: &str, request: Builder) -> (StatusCode, HeaderMap, Vec<u8>) {
+    let socket = tokio::net::TcpStream::connect(origin.strip_prefix("http://").unwrap())
+        .await
+        .unwrap();
+    let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(socket))
+        .await
+        .unwrap();
+    let connection = tokio::spawn(connection);
+    let response = sender
+        .send_request(
+            request
+                .header("connection", "close")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (head, body) = response.into_parts();
+    let body = body.collect().await.unwrap().to_bytes().to_vec();
+    drop(sender);
+    connection.await.unwrap().unwrap();
+    (head.status, head.headers, body)
+}
+
+fn request(origin: &str, target: &str) -> Builder {
+    Request::builder()
+        .uri(target)
+        .header("host", origin.strip_prefix("http://").unwrap())
+}
+
+fn private_response(headers: &HeaderMap) {
+    assert_eq!(
+        headers.get("cache-control"),
+        Some(&HeaderValue::from_static("no-store"))
+    );
+    assert_eq!(
+        headers.get("referrer-policy"),
+        Some(&HeaderValue::from_static("no-referrer"))
+    );
+}
+
+#[tokio::test]
+async fn ticket_t_68_rejections_keep_bootstrap_private_and_unconsumed() {
+    let mut gateway = gateway().await;
+    let origin = gateway.origin().to_owned();
+    let launch = gateway.take_launch_target().unwrap().into_url();
+    let target = launch.strip_prefix(&origin).unwrap();
+    let token = target.split_once("token=").unwrap().1;
+    let invalid_target = target.replace("/__desktop/", "/%2e%2e/__desktop/");
+    let cases = [
+        (
+            request(&origin, "/__desktop/bootstrap?token=invalid"),
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            Request::builder()
+                .uri(target)
+                .header("host", "foreign.invalid"),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            request(&origin, target).header("origin", "http://foreign.invalid"),
+            StatusCode::FORBIDDEN,
+        ),
+        (request(&origin, &invalid_target), StatusCode::BAD_REQUEST),
+        (
+            request(&origin, target).method("POST"),
+            StatusCode::FORBIDDEN,
+        ),
+    ];
+    for (request, expected) in cases {
+        let (status, headers, body) = exchange(&origin, request).await;
+        assert_eq!(status, expected);
+        private_response(&headers);
+        assert!(!headers.contains_key("set-cookie"));
+        assert!(!headers.contains_key("location"));
+        assert!(!String::from_utf8(body).unwrap().contains(token));
+    }
+    let (status, headers, body) = exchange(&origin, request(&origin, target)).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    private_response(&headers);
+    assert_eq!(headers["location"], "/");
+    assert!(body.is_empty());
+    let cookie = headers["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    let (status, _, body) = exchange(
+        &origin,
+        request(&origin, "/__runtime").header("cookie", cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body).unwrap()["compat"]["state"],
+        "starting"
+    );
+    let (status, headers, _) = exchange(&origin, request(&origin, target)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    private_response(&headers);
+    gateway.begin_drain();
+    let (status, headers, _) = exchange(&origin, request(&origin, target)).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    private_response(&headers);
+    gateway.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn ticket_t_68_ambiguous_host_cannot_redeem_bootstrap() {
+    let mut gateway = gateway().await;
+    let origin = gateway.origin().to_owned();
+    let launch = gateway.take_launch_target().unwrap().into_url();
+    let target = launch.strip_prefix(&origin).unwrap();
+    for builder in [
+        request(&origin, target).header("host", "foreign.invalid"),
+        request(&origin, target).header("host", origin.strip_prefix("http://").unwrap()),
+        Request::builder()
+            .uri(target)
+            .header("host", HeaderValue::from_bytes(b"\xff").unwrap()),
+    ] {
+        let (status, headers, _) = exchange(&origin, builder).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        private_response(&headers);
+        assert!(!headers.contains_key("set-cookie"));
+    }
+    let (status, _, _) = exchange(&origin, request(&origin, target)).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    gateway.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn ticket_t_68_ambiguous_origin_cannot_redeem_bootstrap() {
+    let mut gateway = gateway().await;
+    let origin = gateway.origin().to_owned();
+    let launch = gateway.take_launch_target().unwrap().into_url();
+    let target = launch.strip_prefix(&origin).unwrap();
+    let cases = [
+        request(&origin, target)
+            .header("origin", &origin)
+            .header("origin", "http://foreign.invalid"),
+        request(&origin, target)
+            .header("origin", "http://foreign.invalid")
+            .header("origin", &origin),
+        request(&origin, target)
+            .header("origin", &origin)
+            .header("origin", &origin),
+        request(&origin, target).header("origin", HeaderValue::from_bytes(b"\xff").unwrap()),
+        request(&origin, target).header("origin", "null"),
+        request(&origin, target).header("origin", ""),
+    ];
+    for request in cases {
+        let (status, headers, _) = exchange(&origin, request).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(!headers.contains_key("set-cookie"));
+        private_response(&headers);
+    }
+    let (status, headers, _) =
+        exchange(&origin, request(&origin, target).header("origin", &origin)).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    private_response(&headers);
+    gateway.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn ticket_t_68_session_requires_origin_for_logout_and_revokes_access() {
+    let mut gateway = gateway().await;
+    let origin = gateway.origin().to_owned();
+    let launch = gateway.take_launch_target().unwrap().into_url();
+    let (status, headers, _) = exchange(
+        &origin,
+        request(&origin, launch.strip_prefix(&origin).unwrap()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let cookie = headers["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    for builder in [
+        request(&origin, "/auth/logout").method("POST"),
+        request(&origin, "/__runtime").header("upgrade", "websocket"),
+        request(&origin, "/__runtime").header("origin", HeaderValue::from_bytes(b"\xff").unwrap()),
+    ] {
+        let (status, headers, _) = exchange(&origin, builder.header("cookie", cookie)).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        private_response(&headers);
+    }
+    let (status, _, _) = exchange(
+        &origin,
+        request(&origin, "/__runtime").header("cookie", cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    for (builder, expected) in [
+        (
+            request(&origin, "/api/v1/assistant/history"),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            request(&origin, "/api/v1/assistant/history").header("origin", &origin),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        (
+            request(&origin, "/api/v1/assistant/history").header("sec-fetch-site", "same-origin"),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        (
+            request(&origin, "/api/v1/assistant/history")
+                .header("sec-fetch-site", "same-origin")
+                .header("origin", HeaderValue::from_bytes(b"\xff").unwrap()),
+            StatusCode::FORBIDDEN,
+        ),
+    ] {
+        let (status, _, _) = exchange(&origin, builder.header("cookie", cookie)).await;
+        assert_eq!(status, expected);
+    }
+    let (status, _, body) = exchange(
+        &origin,
+        request(&origin, "/auth/logout")
+            .method("POST")
+            .header("cookie", cookie)
+            .header("origin", &origin),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+        serde_json::json!({"ok":true})
+    );
+    let (status, headers, _) = exchange(
+        &origin,
+        request(&origin, "/__runtime").header("cookie", cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    private_response(&headers);
+    gateway.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn ticket_t_68_concurrent_redemption_has_one_private_success() {
+    let mut gateway = gateway().await;
+    let origin = gateway.origin().to_owned();
+    let launch = gateway.take_launch_target().unwrap().into_url();
+    let target = launch.strip_prefix(&origin).unwrap();
+    let mut requests = tokio::task::JoinSet::new();
+    for _ in 0..16 {
+        let request = request(&origin, target);
+        let origin = origin.clone();
+        requests.spawn(async move { exchange(&origin, request).await });
+    }
+    let mut accepted = 0;
+    let mut denied = 0;
+    while let Some(result) = requests.join_next().await {
+        let (status, headers, _) = result.unwrap();
+        private_response(&headers);
+        match status {
+            StatusCode::SEE_OTHER => {
+                accepted += 1;
+                assert_eq!(headers["location"], "/");
+                assert!(headers.contains_key("set-cookie"));
+            }
+            StatusCode::UNAUTHORIZED => {
+                denied += 1;
+                assert!(!headers.contains_key("set-cookie"));
+            }
+            other => panic!("Unexpected bootstrap status {other}"),
+        }
+    }
+    assert_eq!((accepted, denied), (1, 15));
+    gateway.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn ticket_t_68_expired_bootstrap_remains_private() {
+    let mut gateway = gateway().await;
+    let origin = gateway.origin().to_owned();
+    let launch = gateway.take_launch_target().unwrap().into_url();
+    tokio::time::sleep(Duration::from_secs(61)).await;
+    let (status, headers, body) = exchange(
+        &origin,
+        request(&origin, launch.strip_prefix(&origin).unwrap()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    private_response(&headers);
+    assert!(!headers.contains_key("set-cookie"));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+        serde_json::json!({"detail": "Bootstrap expired or consumed"})
+    );
+    gateway.stop().await.unwrap();
+}
