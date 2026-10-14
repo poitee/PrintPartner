@@ -38,7 +38,7 @@ impl Drop for PreflightCopy {
 pub(crate) fn preflight(path: &Path, owned: bool) -> Result<u64> {
     let marker = path.parent().unwrap().join(".desktop-owner.json");
     ensure!(
-        owned || !crate::lease::prior_owner_blocks_unowned(&marker),
+        owned || !crate::lease::prior_owner_blocks_unowned(&marker)?,
         "Data directory already owned"
     );
     if !path.exists() || path.metadata()?.len() == 0 {
@@ -74,7 +74,7 @@ pub(crate) fn preflight(path: &Path, owned: bool) -> Result<u64> {
         "Database changed during preflight capture"
     );
     ensure!(
-        owned || !crate::lease::prior_owner_blocks_unowned(&marker),
+        owned || !crate::lease::prior_owner_blocks_unowned(&marker)?,
         "Data directory already owned"
     );
     let conn = Connection::open(copy.0.join("print-partner.db"))?;
