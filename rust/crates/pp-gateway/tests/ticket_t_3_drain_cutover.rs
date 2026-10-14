@@ -752,6 +752,86 @@ fn ticket_t_3_drain_cutover_changed_manifest_on_restart_fails_closed() {
 }
 
 #[test]
+fn ticket_t_11_routing_changed_manifest_refuses_planning_before_shutdown() {
+    let original = fixture_index();
+    let changed = index_with_extra_tool();
+    let dir = Scratch::new("planning-manifest-changed");
+    switch(&original, &dir.0, CATALOG);
+    let (owners, _) = cutover::recover(&dir.0, Some(&original)).unwrap();
+    let before = listing(&dir.0);
+
+    // Both a new operation and an already-owned operation must report the
+    // authority mismatch, even with passing parity for the new manifest.
+    for operation in [PLANS_CREATE, CATALOG] {
+        let before_planning = listing(&dir.0);
+        let refusal = cutover::plan(
+            Some(&changed),
+            &owners,
+            operation,
+            &parity(operation, changed.digest(), 3, 3, 0),
+        )
+        .unwrap_err();
+        assert_json(
+            &refusal,
+            json!({"reason": "ownership_manifest_mismatch",
+                "recorded": original.digest(), "current": changed.digest()}),
+        );
+        assert_eq!(listing(&dir.0), before_planning);
+        cutover::append_evidence(
+            &dir.0,
+            &Evidence::Refused {
+                operation,
+                refusal: &refusal,
+            },
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        fs::read(dir.0.join(CUTOVER_FILE)).unwrap(),
+        before[CUTOVER_FILE],
+    );
+    assert_eq!(owners.owner_of("http.POST /plans"), Owner::Node);
+    assert_eq!(owners.owner_of("http.GET /filaments/catalog"), Owner::Rust);
+    assert!(matches!(
+        cutover::recover(&dir.0, Some(&changed)),
+        Err(CutoverError::RestartManifestChanged { .. }),
+    ));
+    let (recovered, _) = cutover::recover(&dir.0, Some(&original)).unwrap();
+    assert_eq!(recovered, owners);
+    assert_eq!(
+        evidence_lines(&dir.0)[1],
+        json!({
+            "event": "refused", "operation": PLANS_CREATE,
+            "reason": "ownership_manifest_mismatch",
+            "recorded": original.digest(), "current": changed.digest(),
+        })
+    );
+}
+
+#[test]
+fn ticket_t_11_routing_matching_manifest_preserves_prior_cutovers() {
+    let index = fixture_index();
+    let dir = Scratch::new("planning-manifest-matches");
+    switch(&index, &dir.0, CATALOG);
+    let (owners, _) = cutover::recover(&dir.0, Some(&index)).unwrap();
+    let receipt = plan_for(&index, &owners, PLANS_CREATE).commit(&dir.0, DRAINED);
+    assert!(matches!(receipt, CutoverReceipt::Committed { .. }));
+    let (recovered, _) = cutover::recover(&dir.0, Some(&index)).unwrap();
+    assert_eq!(recovered.owner_of("http.POST /plans"), Owner::Rust);
+    for participant in CATALOG_PARTICIPANTS {
+        assert_eq!(recovered.owner_of(participant), Owner::Rust);
+    }
+    assert_eq!(recovered.rust_operations().count(), 2);
+
+    let changed = index_with_extra_tool();
+    let fresh = Scratch::new("planning-new-authority");
+    let receipt =
+        plan_for(&changed, &OperationOwners::node_only(), CATALOG).commit(&fresh.0, DRAINED);
+    assert!(matches!(receipt, CutoverReceipt::Committed { .. }));
+    assert!(cutover::recover(&fresh.0, Some(&changed)).is_ok());
+}
+
+#[test]
 fn ticket_t_3_drain_cutover_receipts_serialize_exactly() {
     let operation = || CATALOG.to_owned();
     for (receipt, expected) in [
@@ -1005,7 +1085,7 @@ fn ticket_t_3_drain_cutover_all_bundled_http_operations_recover() {
             })
         })
         .collect();
-    assert!(operations.len() >= 292);
+    assert_eq!(operations.len(), 296);
     let expected: BTreeSet<_> = operations
         .iter()
         .flat_map(|op| index.participants_of(op))

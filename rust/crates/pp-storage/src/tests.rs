@@ -2983,21 +2983,17 @@ fn materialize_historical_node() -> PathBuf {
         HISTORICAL_SCHEMA_34.commit,
         String::from_utf8_lossy(&archive.stderr)
     );
-    let archive_path = root.join("historical-source.tar");
+    let archive_path = root.join("historical-node.tar");
     std::fs::write(&archive_path, &archive.stdout).unwrap();
-    let tar = Command::new("tar")
+    let extracted = Command::new("tar")
         .arg("-xf")
         .arg(&archive_path)
         .arg("-C")
         .arg(&root)
-        .output()
+        .status()
         .unwrap();
-    assert!(
-        tar.status.success(),
-        "tar extract failed: {}",
-        String::from_utf8_lossy(&tar.stderr)
-    );
     std::fs::remove_file(archive_path).unwrap();
+    assert!(extracted.success(), "tar extract failed");
     let client = std::fs::read(root.join("web/apps/server/src/db/client.ts")).unwrap();
     assert_eq!(
         hex::encode(Sha256::digest(&client)),
