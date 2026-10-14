@@ -204,6 +204,90 @@ def _stop_group(process, grace):
         process.stdout.close()
 
 
+# Written before a normal close so the watcher does not SIGKILL a pgid that has
+# already been reaped and reused. A bare EOF is still parent death.
+GUARD_RELEASE = b"\x00"
+GUARD_SOURCE = ("import os, signal, sys\n"
+                "fd, group = int(sys.argv[1]), int(sys.argv[2])\n"
+                "if group == 0:\n"
+                "    number = bytearray()\n"
+                "    while True:\n"
+                "        chunk = os.read(fd, 1)\n"
+                "        if not chunk:\n"
+                "            raise SystemExit(0)\n"
+                "        if chunk == b'\\n':\n"
+                "            break\n"
+                "        number.extend(chunk)\n"
+                "    group = int(number)\n"
+                "released = False\n"
+                "while True:\n"
+                "    chunk = os.read(fd, 1)\n"
+                "    if chunk == b'\\x00':\n"
+                "        released = True\n"
+                "        break\n"
+                "    if not chunk:\n"
+                "        break\n"
+                "if released:\n"
+                "    raise SystemExit(0)\n"
+                "try:\n"
+                "    os.killpg(group, signal.SIGKILL)\n"
+                "except ProcessLookupError:\n"
+                "    pass\n")
+
+
+def guard_group(group, read_fd, done_fd):
+    return subprocess.Popen([sys.executable, "-I", "-c", GUARD_SOURCE, str(read_fd), str(group)],
+                            pass_fds=(read_fd,), start_new_session=True,
+                            stdin=subprocess.DEVNULL, stdout=done_fd, stderr=subprocess.DEVNULL)
+
+
+def guarded_popen(args, **kwargs):
+    read_fd, write_fd = os.pipe()
+    done_fd, done_write = os.pipe()
+    watcher = None
+
+    def publish_group_before_exec():
+        os.write(write_fd, f"{os.getpgrp()}\n".encode())
+        os.close(write_fd)
+
+    try:
+        watcher = guard_group(0, read_fd, done_write)
+        process = subprocess.Popen(args, start_new_session=True, preexec_fn=publish_group_before_exec,
+                                   pass_fds=(write_fd,), **kwargs)
+    except BaseException:
+        os.close(write_fd)
+        os.close(done_fd)
+        if watcher is not None:
+            watcher.wait()
+        raise
+    finally:
+        os.close(read_fd)
+        os.close(done_write)
+    process.guard = (done_fd, write_fd, watcher)
+    return process
+
+
+def release_guard(guard):
+    done_fd, write_fd, *watchers = guard
+    try:
+        try:
+            pending = GUARD_RELEASE
+            while pending:
+                try:
+                    written = os.write(write_fd, pending)
+                except InterruptedError:
+                    continue
+                pending = pending[written:]
+        finally:
+            os.close(write_fd)
+        while os.read(done_fd, 1):
+            pass
+    finally:
+        os.close(done_fd)
+        for watcher in watchers:
+            watcher.wait()
+
+
 def run(root, *args, env=None, stdout=None, timeout=600):
     print("BUILD:", " ".join(args), flush=True)
     # Signals stay held for the whole build: a stop is only recorded, so it can never escape
@@ -213,7 +297,7 @@ def run(root, *args, env=None, stdout=None, timeout=600):
     held["active"] = True
     process = None
     try:
-        process = subprocess.Popen(args, cwd=root, env=env, stdout=stdout, text=True, start_new_session=True)
+        process = guarded_popen(args, cwd=root, env=env, stdout=stdout, text=True)
         deadline = time.monotonic() + timeout
         while True:
             try:
@@ -232,6 +316,8 @@ def run(root, *args, env=None, stdout=None, timeout=600):
             if process is not None:
                 stop_group(process)
         finally:
+            if process is not None:
+                release_guard(process.guard)
             held["active"] = was_held
     if not was_held:
         release_signals()
@@ -279,8 +365,8 @@ def start_server(binary, root, node, commit, fixture, errors, credentials=None, 
     if credentials is not None:
         args += ["--test-credential-file", str(credentials)]
     # A new session keeps terminal Ctrl-C from reaching pp-server before its signal handlers exist.
-    return subprocess.Popen(args, cwd=root, stdout=subprocess.PIPE, stderr=errors, text=True,
-                            start_new_session=isolated)
+    spawn = guarded_popen if isolated else subprocess.Popen
+    return spawn(args, cwd=root, stdout=subprocess.PIPE, stderr=errors, text=True)
 
 
 def read_origin(process, errors):
@@ -577,7 +663,11 @@ def serve(binary, root, node, commit, credentials):
                         if runtime_dir is None and marker.exists():
                             runtime_dir = Path(json.loads(marker.read_text())["runtime_dir"])
                     finally:
-                        terminate(process)
+                        try:
+                            terminate(process)
+                        finally:
+                            if getattr(process, "guard", None) is not None:
+                                release_guard(process.guard)
                 finally:
                     if credentials is not None:
                         unpublish_credential(credentials, published)

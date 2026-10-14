@@ -8,6 +8,7 @@ import { schemaMigrations } from "./migrations-sqlite.js";
 import { seedStarterProfiles } from "./seed-starter-profiles.js";
 import { repairSourceRevisionTenantOwnershipSqlite } from "./source-revision-tenant-repair.js";
 import { assertUpgradableSchemaVersion, readSchemaVersion } from "./upgrade-guard.js";
+import { databaseSchemaIsCurrent, rustOwnedCopy } from "./rust-owned.js";
 
 export type DrizzleDb = BetterSQLite3Database<typeof schema>;
 
@@ -27,7 +28,17 @@ export class SqliteDatabase {
     this.sourcesDir = join(dataDir, "sources");
   }
 
+  // Writer processes reserve the copy before they connect. startServer, the MCP
+  // server and the migrate CLI hold acquireDataDirectory, and the desktop child
+  // runs under its parent's lease. Connect only refuses a copy another runtime owns.
   connect(): void {
+    const ownership = rustOwnedCopy(this.dataDir);
+    if (ownership.kind === "foreign") {
+      throw new Error("Rust owns this data directory; Node will not migrate or write");
+    }
+    // A recorded child reopening the current schema restores missing starters
+    // only, so existing starter rows do not advance sqlite_sequence.
+    const seedMode = ownership.kind === "child" && databaseSchemaIsCurrent(this.dbPath) ? "missing" : "ignore";
     mkdirSync(dirname(this.dbPath), { recursive: true });
     const sqlite = new Database(this.dbPath);
     try {
@@ -47,7 +58,7 @@ export class SqliteDatabase {
     this.sqlite.pragma("foreign_keys = ON");
     this.drizzle = drizzle(this.sqlite, { schema });
     this.runMigrations();
-    seedStarterProfiles(this.sqlite);
+    seedStarterProfiles(this.sqlite, seedMode);
   }
 
   private runMigrations(): void {

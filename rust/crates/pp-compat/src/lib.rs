@@ -1,6 +1,8 @@
 pub mod drain;
 mod logs;
 pub use logs::recent_diagnostics;
+mod parent_death;
+use parent_death::{ParentDeathGuard, configure_child};
 mod release;
 use anyhow::{Context, Result, bail};
 use axum::{
@@ -282,6 +284,7 @@ struct Process {
     stdin: Option<ChildStdin>,
     endpoint: Arc<Endpoint>,
     logs: Vec<JoinHandle<()>>,
+    parent_death: Option<ParentDeathGuard>,
 }
 
 #[derive(Debug)]
@@ -411,17 +414,11 @@ impl Process {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        command.process_group(0);
-        let lease_fd = spec.lease_file.as_raw_fd();
-        unsafe {
-            command.pre_exec(move || {
-                if libc::dup2(lease_fd, 198) < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
+        let (parent_read, parent_death) =
+            configure_child(&mut command, spec.lease_file.as_raw_fd())
+                .context("Could not arm parent-death watcher")?;
         let mut child = command.spawn().context("Could not start bundled Node")?;
+        drop(parent_read);
         // Persist ownership before the child can receive setup or open storage.
         if let Err(error) =
             (spec.record_child)(&spec.data_dir, child.id().context("Missing child PID")?)
@@ -430,9 +427,27 @@ impl Process {
             let _ = child.wait().await;
             return Err(error.context("Could not record child ownership"));
         }
+        let child_identity = (|| -> Result<String> {
+            let marker: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(spec.data_dir.join(".desktop-owner.json"))?)?;
+            marker["child_process_identity"]
+                .as_str()
+                .filter(|identity| !identity.is_empty())
+                .map(str::to_string)
+                .context("Recorded child identity missing")
+        })();
+        let child_identity = match child_identity {
+            Ok(identity) => identity,
+            Err(error) => {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                return Err(error.context("Could not read recorded child ownership"));
+            }
+        };
         let mut stdin = child.stdin.take().context("Missing parent-liveness pipe")?;
         let setup = serde_json::json!({ "version":1, "data_dir":spec.data_dir, "socket_path":endpoint.socket,
-            "generation":endpoint.generation, "key":hex::encode(key), "lease":spec.lease, "parent_pid":std::process::id(), "port":spec.port });
+            "generation":endpoint.generation, "key":hex::encode(key), "lease":spec.lease, "parent_pid":std::process::id(),
+            "port":spec.port, "child_process_identity":child_identity });
         if stdin
             .write_all(format!("{setup}\n").as_bytes())
             .await
@@ -457,6 +472,7 @@ impl Process {
             stdin: Some(stdin),
             endpoint,
             logs,
+            parent_death: Some(parent_death),
         })
     }
 
@@ -480,9 +496,11 @@ impl Process {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .process_group(0);
+            .kill_on_drop(true);
+        let lease = std::fs::File::open("/dev/null")?;
+        let (parent_read, parent_death) = configure_child(&mut command, lease.as_raw_fd())?;
         let mut child = command.spawn().context("Could not start test child")?;
+        drop(parent_read);
         let pid = child.id().context("Missing child PID")?;
         if let Err(error) = record_test_pid(&spec.pidfile, pid) {
             let _ = child.kill().await;
@@ -524,6 +542,7 @@ impl Process {
             stdin: Some(stdin),
             endpoint,
             logs,
+            parent_death: Some(parent_death),
         })
     }
 
@@ -657,6 +676,9 @@ impl Process {
                 .await
                 .context("Process group still present"),
             );
+        }
+        if let Some(guard) = self.parent_death.as_mut() {
+            guard.release();
         }
         errors.capture(self.endpoint.connections.join().await);
         for mut log in self.logs {
@@ -984,6 +1006,223 @@ mod ticket_t_2;
 
 #[cfg(test)]
 mod tests {
+    fn node_binary() -> std::path::PathBuf {
+        let configured = std::env::var_os("PP_TEST_NODE").unwrap_or_else(|| "node".into());
+        let output = std::process::Command::new(configured)
+            .args(["-p", "process.execPath"])
+            .output()
+            .expect("Node must report its native executable");
+        assert!(output.status.success());
+        std::path::PathBuf::from(String::from_utf8(output.stdout).unwrap().trim())
+    }
+
+    fn pid_has_exited(pid: i32) -> bool {
+        let result = unsafe { libc::kill(pid, 0) };
+        (result < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH))
+            || matches!(linux_proc_state(pid as u32), Some('Z' | 'X'))
+    }
+
+    /// `kill(pid, 0)` is true for a zombie. A preserved peer has to still be
+    /// running: `try_wait` has not reaped it, and Linux does not report `Z`.
+    fn peer_is_running(peer: &mut std::process::Child) -> bool {
+        let state = linux_proc_state(peer.id());
+        let unreaped = peer.try_wait().unwrap().is_none();
+        unreaped && state.is_none_or(|state| state != 'Z' && state != 'X')
+    }
+
+    fn linux_proc_state(pid: u32) -> Option<char> {
+        #[cfg(target_os = "linux")]
+        {
+            let text = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+            let close = text.rfind(')')?;
+            text[close + 1..].split_whitespace().next()?.chars().next()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = pid;
+            None
+        }
+    }
+
+    #[tokio::test]
+    async fn parent_death_fixture() {
+        let Some(pidfile) = std::env::var_os("PP_COMPAT_DEATH_PIDFILE") else {
+            return;
+        };
+        let lease = std::fs::File::open("/dev/null").unwrap();
+        let node = node_binary();
+        let mut command = tokio::process::Command::new(&node);
+        command
+            .arg("-e")
+            .arg("const {spawn}=require('node:child_process'); const fs=require('node:fs'); const child=spawn(process.execPath,['-e','setInterval(() => {}, 1e9)'],{stdio:'ignore'}); fs.writeFileSync(process.env.PP_COMPAT_DEATH_PIDFILE+'.desc',String(child.pid)); setInterval(() => {}, 1e9)")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let (parent_read, _parent_death) =
+            super::configure_child(&mut command, std::os::fd::AsRawFd::as_raw_fd(&lease)).unwrap();
+        let mut child = command.spawn().unwrap();
+        drop(parent_read);
+        let pidfile = std::path::PathBuf::from(pidfile);
+        let temporary = pidfile.with_extension("tmp");
+        std::fs::write(&temporary, child.id().unwrap().to_string()).unwrap();
+        std::fs::rename(temporary, pidfile).unwrap();
+        child.wait().await.unwrap();
+    }
+
+    #[test]
+    fn separate_group_child_dies_with_force_killed_parent() {
+        use std::os::unix::process::CommandExt;
+        struct Fixture {
+            owner: std::process::Child,
+            pidfile: std::path::PathBuf,
+        }
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                let _ = self.owner.kill();
+                let _ = self.owner.wait();
+                if let Ok(text) = std::fs::read_to_string(&self.pidfile)
+                    && let Ok(pid) = text.parse::<i32>()
+                {
+                    unsafe {
+                        libc::kill(-pid, libc::SIGKILL);
+                    }
+                }
+                let _ = std::fs::remove_file(&self.pidfile);
+                let _ = std::fs::remove_file(self.pidfile.with_extension("desc"));
+            }
+        }
+        let node = node_binary();
+        let pidfile = std::env::temp_dir().join(format!(
+            "pp-compat-death-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let owner = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["parent_death_fixture", "--nocapture"])
+            .env("PP_COMPAT_DEATH_PIDFILE", &pidfile)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let mut fixture = Fixture {
+            owner,
+            pidfile: pidfile.clone(),
+        };
+        let owner = &mut fixture.owner;
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !pidfile.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if !pidfile.exists() {
+            let _ = owner.kill();
+            owner.wait().unwrap();
+            panic!("node fixture never spawned");
+        }
+        let pid: i32 = std::fs::read_to_string(&pidfile).unwrap().parse().unwrap();
+        let descendant_file = pidfile.with_file_name(format!(
+            "{}.desc",
+            pidfile.file_name().unwrap().to_string_lossy()
+        ));
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !descendant_file.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let descendant: u32 = std::fs::read_to_string(&descendant_file)
+            .unwrap()
+            .parse()
+            .unwrap();
+        let group = unsafe { libc::getpgid(pid) };
+        assert!(node.is_file(), "node binary missing: {}", node.display());
+        #[cfg(target_os = "linux")]
+        {
+            let exe = std::fs::read_link(format!("/proc/{pid}/exe")).unwrap();
+            assert_eq!(
+                std::fs::canonicalize(&exe).unwrap_or(exe),
+                std::fs::canonicalize(&node).unwrap(),
+                "death subject must be the real node binary"
+            );
+        }
+        // The peer keeps this stopped group from becoming orphaned before the
+        // owner dies. The death guard must terminate the entire Node group.
+        let mut peer = std::process::Command::new("sleep")
+            .arg("600")
+            .process_group(pid)
+            .spawn()
+            .unwrap();
+        let peer_pid = peer.id() as i32;
+        assert_eq!(unsafe { libc::getpgid(peer_pid) }, pid);
+        assert_eq!(unsafe { libc::kill(pid, libc::SIGSTOP) }, 0);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let state = std::process::Command::new("ps")
+                .args(["-o", "stat=", "-p", &pid.to_string()])
+                .output()
+                .unwrap();
+            if String::from_utf8_lossy(&state.stdout).contains('T') {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "node did not stop");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        unsafe {
+            libc::kill(-(owner.id() as i32), libc::SIGKILL);
+        }
+        owner.wait().unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !pid_has_exited(pid) && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let descendant_deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !pid_has_exited(descendant as i32)
+            && linux_proc_state(descendant) != Some('Z')
+            && std::time::Instant::now() < descendant_deadline
+        {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let descendant_gone =
+            pid_has_exited(descendant as i32) || linux_proc_state(descendant) == Some('Z');
+        let node_gone = pid_has_exited(pid);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while peer_is_running(&mut peer) && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let peer_alive = peer_is_running(&mut peer);
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+        }
+        let _ = peer.kill();
+        let _ = peer.wait();
+        std::fs::remove_file(pidfile).unwrap();
+        std::fs::remove_file(descendant_file).unwrap();
+        assert_eq!(
+            group, pid,
+            "fixture must reproduce Node's separate process group"
+        );
+        assert!(node_gone, "stopped Node outlived its force-killed parent");
+        assert!(!peer_alive, "Node group member outlived its owner");
+        assert!(descendant_gone, "Node subprocess outlived its owner");
+    }
+
+    #[test]
+    fn watcher_is_isolated_before_node_can_spawn() {
+        let lease = std::fs::File::open("/dev/null").unwrap();
+        for _ in 0..32 {
+            let mut command = tokio::process::Command::new("true");
+            let (read, guard) =
+                super::configure_child(&mut command, std::os::fd::AsRawFd::as_raw_fd(&lease))
+                    .unwrap();
+            let session = unsafe { libc::getsid(guard.watcher) };
+            let watcher = guard.watcher;
+            drop(read);
+            drop(guard);
+            assert_eq!(
+                session, watcher,
+                "Node may spawn only after watcher isolation"
+            );
+        }
+    }
+
     use std::{
         os::unix::process::ExitStatusExt,
         sync::{
@@ -1107,6 +1346,7 @@ mod tests {
             stdin: None,
             endpoint,
             logs: vec![first_log, later_log],
+            parent_death: None,
         };
         let active = tokio_util::sync::CancellationToken::new();
         let error = process
@@ -1297,6 +1537,7 @@ mod tests {
             stdin,
             endpoint,
             logs: Vec::new(),
+            parent_death: None,
         };
         let cancelled = tokio_util::sync::CancellationToken::new();
         if let Some(delay) = cancel_after {
