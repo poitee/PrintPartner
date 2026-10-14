@@ -49,6 +49,7 @@ import {
 } from "../services/source-monitoring-settings.js";
 import { hostedPlanningPolicy } from "../lib/hosted-planning.js";
 import { isRecord } from "../lib/guards.js";
+import { readFeatureAccess } from "../lib/feature-access.js";
 
 type RouteDeps = { repo: AppRepository; dataDir: string; config?: ServerConfig };
 
@@ -411,7 +412,16 @@ export async function registerStubRoutes(app: FastifyInstance, deps: RouteDeps):
     return { integration_id: raw };
   });
 
-  app.get("/filaments/catalog", async (request) => {
+  app.get("/filaments/catalog", async (request, reply) => {
+    const access = readFeatureAccess(() => deps.repo, "spoolman");
+    if (access.kind === "invalid") {
+      return reply.status(500).send({
+        status: 500,
+        title: "Internal Server Error",
+        detail: access.error,
+        code: access.code,
+      });
+    }
     const catalog = loadFilamentCatalog();
     const custom = listCustomFilaments(deps.dataDir).map((f) => ({
       id: f.id,
@@ -429,7 +439,10 @@ export async function registerStubRoutes(app: FastifyInstance, deps: RouteDeps):
     let spoolman_status: "ok" | "empty" | "error" | "disabled" | "not_found" | undefined;
     let spoolman_error: string | null = null;
 
-    if (integrationId) {
+    if (access.kind === "disabled") {
+      spoolman_status = "disabled";
+      spoolman_error = access.error;
+    } else if (integrationId) {
       const integration = getIntegrationConfig(deps.repo, integrationId);
       if (!integration) {
         spoolman_status = "not_found";
