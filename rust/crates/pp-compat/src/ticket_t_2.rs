@@ -7,7 +7,7 @@ use std::{
 
 use tokio_util::sync::CancellationToken;
 
-const STAY: &str = "read line || exit 1; while read line; do :; done";
+const STAY: &str = "while read line; do :; done";
 
 struct Scratch {
     root: PathBuf,
