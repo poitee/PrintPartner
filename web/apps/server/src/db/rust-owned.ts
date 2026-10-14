@@ -170,6 +170,24 @@ function isRecordedChild(marker: RustOwnerMarker): boolean {
   }
 }
 
+function readJson(path: string): unknown {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+/** True when the live standalone writer that reserved the copy is this process's parent. */
+export function parentReservedCopy(dataDir: string): boolean {
+  const lease = readJson(join(dataDir, ".desktop-lease", "owner.json"));
+  if (!isCompleteLeaseOwner(lease) || lease.pid !== process.ppid) return false;
+  const marker = recordOf(readJson(join(dataDir, ".desktop-owner.json")));
+  if (!marker || marker.kind !== "standalone" || marker.pid !== process.ppid) return false;
+  if (marker.process_identity !== lease.process_identity) return false;
+  return processStillOwnsIdentity(lease.pid, lease.process_identity);
+}
+
 export function rustOwnedCopy(dataDir: string): RustOwnedCopy {
   const marker = readMarkerFile(dataDir);
   if (marker.kind === "live") {

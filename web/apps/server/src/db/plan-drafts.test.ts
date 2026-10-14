@@ -4075,7 +4075,7 @@ selections:
 import { getDb, SqliteDatabase } from "./src/db/client.ts";
 import { AppRepository } from "./src/db/repository.ts";
 import { parseRequiredUnitToken } from "./src/services/required-units.ts";
-const database = new SqliteDatabase(process.argv[1]);
+const database = new SqliteDatabase(process.argv[1], "parent");
 database.connect();
 const repo = new AppRepository(getDb(database), "default", database.reposDir);
 writeFileSync(process.argv[4], "ready");

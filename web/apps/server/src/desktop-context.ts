@@ -118,6 +118,37 @@ export function verifyDesktopPrincipal(
   return principal;
 }
 
+type HeldDataDirectory = { refs: number; release: () => void };
+const heldDataDirectories = new Map<string, HeldDataDirectory>();
+
+function heldRelease(canonical: string, held: HeldDataDirectory): () => void {
+  let released = false;
+  return () => {
+    if (released) return;
+    if (held.refs === 1) {
+      held.release();
+      heldDataDirectories.delete(canonical);
+    }
+    held.refs--;
+    released = true;
+  };
+}
+
+// Connections share the lease this process already holds for the copy, so an
+// open SqliteDatabase keeps the copy reserved even without acquireDataDirectory.
+export function retainDataDirectory(dataDir: string): () => void {
+  if (!context) {
+    mkdirSync(dataDir, { recursive: true });
+    const canonical = realpathSync(dataDir);
+    const held = heldDataDirectories.get(canonical);
+    if (held) {
+      held.refs++;
+      return heldRelease(canonical, held);
+    }
+  }
+  return acquireDataDirectory(dataDir);
+}
+
 export function acquireDataDirectory(dataDir: string): () => void {
   if (context) {
     if (realpathSync(dataDir) !== context.data_dir) throw new Error("Desktop storage lease rejected");
@@ -137,12 +168,11 @@ export function acquireDataDirectory(dataDir: string): () => void {
     lease.release();
     throw error;
   }
-  let released = false;
-  return () => {
-    if (released) return;
+  const held: HeldDataDirectory = { refs: 1, release: () => {
     // Preserve ownership if marker cleanup fails, so callers can retry safely.
     rmSync(marker);
     lease.release();
-    released = true;
-  };
+  } };
+  heldDataDirectories.set(canonical, held);
+  return heldRelease(canonical, held);
 }

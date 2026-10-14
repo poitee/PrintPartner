@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { presentDesktopChildCredential } from "../desktop-child-credential.js";
+import { acquireDataDirectory } from "../desktop-context.js";
 import { processIdentity } from "../storage-lease.js";
 import { SqliteDatabase } from "./client.js";
 import { rustOwnedCopy } from "./rust-owned.js";
@@ -184,18 +185,18 @@ describe("rust owner marker", () => {
   it("still migrates when the only lease belongs to this process", () => {
     const dir = mkdtempSync(join(tmpdir(), "pp-rust-owned-"));
     roots.push(dir);
-    mkdirSync(join(dir, ".desktop-lease"));
-    writeFileSync(join(dir, ".desktop-lease", "owner.json"), JSON.stringify({
-      pid: process.pid,
-      process_identity: processIdentity(process.pid),
-      instance: "cd".repeat(16),
-    }));
-    const database = new SqliteDatabase(dir);
-    database.connect();
-    database.close();
-    expect(existsSync(join(dir, "print-partner.db"))).toBe(true);
-    const owner = JSON.parse(readFileSync(join(dir, ".desktop-lease", "owner.json"), "utf8")) as { instance: string };
-    expect(owner.instance).toBe("cd".repeat(16));
+    const releaseOwner = acquireDataDirectory(dir);
+    const before = readFileSync(join(dir, ".desktop-lease", "owner.json"), "utf8");
+    try {
+      const database = new SqliteDatabase(dir);
+      database.connect();
+      database.close();
+      expect(existsSync(join(dir, "print-partner.db"))).toBe(true);
+      expect(readFileSync(join(dir, ".desktop-lease", "owner.json"), "utf8")).toBe(before);
+    } finally {
+      releaseOwner();
+    }
+    expect(existsSync(join(dir, ".desktop-lease"))).toBe(false);
   });
 
   it("replays the migration DDL for a current recorded child without replaying seeds", () => {

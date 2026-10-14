@@ -714,7 +714,7 @@ describe("accepted Plate repository", () => {
           `import { existsSync, writeFileSync } from "node:fs";
 import { getDb, SqliteDatabase } from "./src/db/client.ts";
 import { AppRepository } from "./src/db/repository.ts";
-const database = new SqliteDatabase(process.argv[1]);
+const database = new SqliteDatabase(process.argv[1], "parent");
 database.connect();
 const repo = new AppRepository(getDb(database), "default", database.reposDir);
 writeFileSync(process.argv[5], "ready");
@@ -778,7 +778,7 @@ database.close();`,
     const command = nextApplyCommand(repo, profile.id, basisA, "stale-head");
     const secondDatabase = new SqliteDatabase(root);
     secondDatabase.connect();
-    cleanups.push(() => secondDatabase.close());
+    cleanups.unshift(() => secondDatabase.close());
     const secondRepo = new AppRepository(getDb(secondDatabase), "default", secondDatabase.reposDir);
     expect(secondRepo.applyPlanChanges(command)).toMatchObject({ kind: "applied" });
     raw.prepare(
@@ -809,7 +809,7 @@ database.close();`,
     const applyCommand = nextApplyCommand(repo, profile.id, basisA, "apply-race");
     const secondDatabase = new SqliteDatabase(root);
     secondDatabase.connect();
-    cleanups.push(() => secondDatabase.close());
+    cleanups.unshift(() => secondDatabase.close());
     const secondRepo = new AppRepository(getDb(secondDatabase), "default", secondDatabase.reposDir);
     const mesh = parseAcceptedStlMesh(Buffer.from(`solid geometry
 facet normal 0 0 1
