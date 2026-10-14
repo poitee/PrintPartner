@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 
@@ -42,6 +42,18 @@ export function ownerIsStale(owner: { pid: number; process_identity?: string }):
   catch { return false; }
 }
 
+/** Reads an ownership record, refusing anything but a regular file. */
+export function readOwnershipRecord(path: string): string {
+  // A blocking open of a FIFO waits for a writer, so a planted FIFO would hang startup.
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
+  try {
+    if (!fstatSync(fd).isFile()) throw new Error("Ownership record is not a regular file");
+    return readFileSync(fd, "utf8");
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function isFsError(error: unknown, codes: readonly string[]): boolean {
   return error instanceof Error && "code" in error && typeof error.code === "string" && codes.includes(error.code);
 }
@@ -58,7 +70,7 @@ function observeLease(lease: string): LeaseObservation {
 
   let owner: LeaseOwner;
   try {
-    const parsed: unknown = JSON.parse(readFileSync(join(lease, "owner.json"), "utf8"));
+    const parsed: unknown = JSON.parse(readOwnershipRecord(join(lease, "owner.json")));
     owner = leaseOwnerSchema.parse(parsed);
   } catch (cause) {
     if (isFsError(cause, ["ENOENT"])) {

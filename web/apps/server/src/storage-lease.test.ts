@@ -181,21 +181,21 @@ describe("valid lease owners", () => {
 });
 
 describe("lease observation races", () => {
-  it.each(["lease disappears", "only owner disappears"])("handles owner-read ENOENT when %s", (scenario) => {
+  it.each(["lease disappears", "only owner disappears"])("handles owner-open ENOENT when %s", (scenario) => {
     const dir = dataDir();
     publish(dir, JSON.stringify(owner(deadPid)));
     const child = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
       import fs from "node:fs";
       import { syncBuiltinESMExports } from "node:module";
       import { acquireStorageLease } from ${JSON.stringify(new URL("./storage-lease.ts", import.meta.url).href)};
-      const read = fs.readFileSync;
+      const open = fs.openSync;
       let injected = false;
-      fs.readFileSync = function(path, ...args) {
+      fs.openSync = function(path, ...args) {
         if (!injected && path === ${JSON.stringify(join(dir, ".desktop-lease", "owner.json"))}) {
           injected = true;
           fs.rmSync(${JSON.stringify(join(dir, ".desktop-lease", scenario === "lease disappears" ? "" : "owner.json"))}, { recursive: true });
         }
-        return read.call(this, path, ...args);
+        return open.call(this, path, ...args);
       };
       syncBuiltinESMExports();
       try {
