@@ -17,6 +17,12 @@ A gateway drain timeout reports `gateway_drain_timed_out`. Gateway and compat
 cleanup still run. Storage release requires proved compat cleanup and an idle
 tracked-work gate. No timeout commits an ownership change.
 
+The headless server emits its shutdown receipt before checking completeness.
+The streaming smoke test holds a download open through the drain deadline and
+requires exit 1 with only `gateway_drain_timed_out`, plus child cleanup, removal
+of the runtime directory and owner marker, and reacquisition of the storage lock.
+Its ordinary logout case still requires exit 0.
+
 The tests in `rust/crates/pp-core/tests/runtime_m0/drain.rs` launch the measured
 Node bundle through the public core API. Each case runs in a separate process so
 runtime flags and retained leases cannot contaminate another case. They cover:
