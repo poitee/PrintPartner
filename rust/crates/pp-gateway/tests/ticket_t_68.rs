@@ -388,3 +388,227 @@ async fn ticket_t_68_loopback_listeners_preserve_protected_bootstrap() {
         gateway.stop().await.unwrap();
     }
 }
+
+async fn bootstrap_session(gateway: &mut Gateway) -> (String, String) {
+    let origin = gateway.origin().to_owned();
+    let launch = gateway.take_launch_target().unwrap().into_url();
+    let target = launch.strip_prefix(&origin).unwrap();
+    let token = target.split_once("token=").unwrap().1.to_owned();
+    let (status, headers, body) = exchange(&origin, request(&origin, target)).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    private_response(&headers);
+    assert!(body.is_empty());
+    let cookie = headers["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    (cookie, token)
+}
+
+fn session_rejection(response: (StatusCode, HeaderMap, Vec<u8>), cookie: &str, token: &str) {
+    let (status, headers, body) = response;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    private_response(&headers);
+    assert!(!headers.contains_key("set-cookie"));
+    assert!(!headers.contains_key("location"));
+    let body = String::from_utf8(body).unwrap();
+    assert!(!body.contains(token));
+    assert!(!body.contains(cookie.split_once('=').unwrap().1));
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+        serde_json::json!({"detail": "Desktop session required"})
+    );
+}
+
+#[tokio::test]
+async fn ticket_t_68_cookie_same_line_duplicate_valid_first_is_rejected() {
+    let mut gateway = gateway().await;
+    let origin = gateway.origin().to_owned();
+    let (cookie, token) = bootstrap_session(&mut gateway).await;
+    let name = cookie.split_once('=').unwrap().0;
+    session_rejection(
+        exchange(
+            &origin,
+            request(&origin, "/__runtime").header("cookie", format!("{cookie}; {name}=wrong")),
+        )
+        .await,
+        &cookie,
+        &token,
+    );
+    gateway.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn ticket_t_68_cookie_split_duplicate_valid_first_is_rejected() {
+    let mut gateway = gateway().await;
+    let origin = gateway.origin().to_owned();
+    let (cookie, token) = bootstrap_session(&mut gateway).await;
+    let name = cookie.split_once('=').unwrap().0;
+    session_rejection(
+        exchange(
+            &origin,
+            request(&origin, "/__runtime")
+                .header("cookie", &cookie)
+                .header("cookie", format!("{name}=wrong")),
+        )
+        .await,
+        &cookie,
+        &token,
+    );
+    gateway.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn ticket_t_68_cookie_non_text_second_header_is_rejected() {
+    let mut gateway = gateway().await;
+    let origin = gateway.origin().to_owned();
+    let (cookie, token) = bootstrap_session(&mut gateway).await;
+    session_rejection(
+        exchange(
+            &origin,
+            request(&origin, "/__runtime")
+                .header("cookie", &cookie)
+                .header("cookie", HeaderValue::from_bytes(b"\xff").unwrap()),
+        )
+        .await,
+        &cookie,
+        &token,
+    );
+    gateway.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn ticket_t_68_cookie_non_text_first_header_is_rejected() {
+    let mut gateway = gateway().await;
+    let origin = gateway.origin().to_owned();
+    let (cookie, token) = bootstrap_session(&mut gateway).await;
+    session_rejection(
+        exchange(
+            &origin,
+            request(&origin, "/__runtime")
+                .header("cookie", HeaderValue::from_bytes(b"\xff").unwrap())
+                .header("cookie", &cookie),
+        )
+        .await,
+        &cookie,
+        &token,
+    );
+    gateway.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn ticket_t_68_cookie_duplicate_variants_are_rejected() {
+    let mut gateway = gateway().await;
+    let origin = gateway.origin().to_owned();
+    let (cookie, token) = bootstrap_session(&mut gateway).await;
+    let name = cookie.split_once('=').unwrap().0;
+    for other in [format!("{name}=wrong"), cookie.clone(), format!("{name}=")] {
+        for (first, second) in [(&cookie, &other), (&other, &cookie)] {
+            for builder in [
+                request(&origin, "/__runtime").header("cookie", format!("{first}; {second}")),
+                request(&origin, "/__runtime")
+                    .header("cookie", first)
+                    .header("cookie", second),
+            ] {
+                session_rejection(exchange(&origin, builder).await, &cookie, &token);
+            }
+        }
+    }
+    gateway.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn ticket_t_68_cookie_unrelated_pairs_and_split_valid_second_are_admitted() {
+    let mut gateway = gateway().await;
+    let origin = gateway.origin().to_owned();
+    let (cookie, token) = bootstrap_session(&mut gateway).await;
+    let unrelated = "bare_flag; theme=dark; pp_desktop_0=old; pp_desktop_0=older";
+    for builder in [
+        request(&origin, "/__runtime").header("cookie", &cookie),
+        request(&origin, "/__runtime").header("cookie", format!("{unrelated}; {cookie}")),
+        request(&origin, "/__runtime").header("cookie", format!("{cookie}; {unrelated}")),
+        request(&origin, "/__runtime")
+            .header("cookie", unrelated)
+            .header("cookie", &cookie),
+        request(&origin, "/__runtime")
+            .header("cookie", &cookie)
+            .header("cookie", unrelated),
+    ] {
+        let (status, headers, body) = exchange(&origin, builder).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(!headers.contains_key("set-cookie"));
+        let body = String::from_utf8(body).unwrap();
+        assert!(!body.contains(&token));
+        assert!(!body.contains(cookie.split_once('=').unwrap().1));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap()["compat"]["state"],
+            "starting"
+        );
+    }
+    let name = cookie.split_once('=').unwrap().0;
+    for builder in [
+        request(&origin, "/__runtime"),
+        request(&origin, "/__runtime").header("cookie", unrelated),
+        request(&origin, "/__runtime").header("cookie", format!("{name}=wrong")),
+    ] {
+        session_rejection(exchange(&origin, builder).await, &cookie, &token);
+    }
+    gateway.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn ticket_t_68_cookie_ambiguous_logout_cannot_revoke_session() {
+    let mut gateway = gateway().await;
+    let origin = gateway.origin().to_owned();
+    let (cookie, token) = bootstrap_session(&mut gateway).await;
+    let name = cookie.split_once('=').unwrap().0;
+    for builder in [
+        request(&origin, "/auth/logout").header("cookie", format!("{cookie}; {name}=wrong")),
+        request(&origin, "/auth/logout")
+            .header("cookie", &cookie)
+            .header("cookie", &cookie),
+        request(&origin, "/auth/logout")
+            .header("cookie", &cookie)
+            .header("cookie", HeaderValue::from_bytes(b"\xff").unwrap()),
+    ] {
+        session_rejection(
+            exchange(&origin, builder.method("POST").header("origin", &origin)).await,
+            &cookie,
+            &token,
+        );
+        let (status, headers, _) = exchange(
+            &origin,
+            request(&origin, "/__runtime").header("cookie", &cookie),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(!headers.contains_key("set-cookie"));
+    }
+    let (status, headers, body) = exchange(
+        &origin,
+        request(&origin, "/auth/logout")
+            .method("POST")
+            .header("origin", &origin)
+            .header("cookie", &cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!headers.contains_key("set-cookie"));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+        serde_json::json!({"ok": true})
+    );
+    session_rejection(
+        exchange(
+            &origin,
+            request(&origin, "/__runtime").header("cookie", &cookie),
+        )
+        .await,
+        &cookie,
+        &token,
+    );
+    gateway.stop().await.unwrap();
+}

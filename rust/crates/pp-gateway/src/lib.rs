@@ -441,6 +441,23 @@ fn node_unavailable() -> Response<Body> {
 fn header<'a>(request: &'a Request<Body>, name: &str) -> Option<&'a str> {
     request.headers().get(name)?.to_str().ok()
 }
+fn desktop_cookie<'a>(request: &'a Request<Body>, expected_name: &str) -> Option<&'a str> {
+    let mut selected = None;
+    for cookies in request.headers().get_all("cookie").iter() {
+        for pair in cookies.to_str().ok()?.split(';') {
+            let Some((name, value)) = pair.trim().split_once('=') else {
+                continue;
+            };
+            if name == expected_name {
+                if selected.is_some() {
+                    return None;
+                }
+                selected = Some(value);
+            }
+        }
+    }
+    selected
+}
 fn sort_routes(routes: &mut [Operation]) {
     fn rank(path: &str) -> impl Iterator<Item = u8> + '_ {
         path.split('/')
@@ -589,12 +606,7 @@ async fn handle(
             .body(Body::empty())
             .expect("Static response");
     }
-    let cookie = header(&request, "cookie").and_then(|cookies| {
-        cookies.split(';').find_map(|cookie| {
-            let (name, value) = cookie.trim().split_once('=')?;
-            (name == state.cookie_name).then_some(value)
-        })
-    });
+    let cookie = desktop_cookie(&request, &state.cookie_name);
     let admission = match Admission::acquire(&state.access, cookie) {
         Ok(admission) => admission,
         Err(StatusCode::SERVICE_UNAVAILABLE) => {
