@@ -110,6 +110,14 @@ function assertRouteStateInvariants(capture: { [key: string]: Json }): void {
     if (invariants.includes("one-publication")) {
       assert.notEqual(before, after, `${label}: one-publication requires different before and after states`);
     }
+    if (invariants.includes("fixture-file-hashes-unchanged")) {
+      const path = `${label}: fixture-file-hashes-unchanged`;
+      const beforeFiles = object(states[before]).files;
+      const afterFiles = object(states[after]).files;
+      assert(Array.isArray(beforeFiles), `${path}.before.files: expected array`);
+      assert(Array.isArray(afterFiles), `${path}.after.files: expected array`);
+      equal(beforeFiles, afterFiles, path);
+    }
     if (invariants.includes("current-plate-head-invalidated")) {
       const heads = object(object(states[after]).database).accepted_plate_heads;
       assert(Array.isArray(heads), `${label}: accepted_plate_heads`);
