@@ -4,14 +4,15 @@ import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 if (process.argv.length > 3) {
-  console.error('Usage: node scripts/check-ci-tool-pins.mjs [workflow-directory]');
+  console.error('Usage: node web/scripts/check-ci-tool-pins.mjs [workflow-directory]');
   process.exit(2);
 }
 let yaml;
 try {
-  yaml = createRequire(join(root, 'web/package.json'))('yaml');
+  const require = createRequire(join(root, 'web/package.json'));
+  yaml = require('yaml');
 } catch {
   console.error('MISSING_PARSER: run npm ci in web/ before checking CI tool pins');
   process.exit(2);

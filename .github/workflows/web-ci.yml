@@ -86,8 +86,8 @@ jobs:
       - name: Check CI installer tool pins
         working-directory: .
         run: |
-          node --test scripts/check-ci-tool-pins.test.mjs
-          node scripts/check-ci-tool-pins.mjs
+          node --test web/scripts/check-ci-tool-pins.test.mjs
+          node web/scripts/check-ci-tool-pins.mjs
       - name: Check workaround ratchet
         run: node ../scripts/workaround-ratchet.mjs && node --test ../scripts/workaround-ratchet.test.mjs
       - name: Check MCP tool inventory golden

@@ -118,14 +118,14 @@ test('extra arguments fail usage', t => {
   const result = run(t, installer('nextest'), ['extra']);
   assert.equal(result.status, 2);
   assert.equal(result.stdout, '');
-  assert.equal(result.stderr, 'Usage: node scripts/check-ci-tool-pins.mjs [workflow-directory]\n');
+  assert.equal(result.stderr, 'Usage: node web/scripts/check-ci-tool-pins.mjs [workflow-directory]\n');
 });
 
 test('missing parser gives setup instruction', t => {
   const directory = mkdtempSync(join(tmpdir(), 'ci-tool-parser-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
-  mkdirSync(join(directory, 'scripts'));
-  const isolated = join(directory, 'scripts/check-ci-tool-pins.mjs');
+  mkdirSync(join(directory, 'web/scripts'), { recursive: true });
+  const isolated = join(directory, 'web/scripts/check-ci-tool-pins.mjs');
   copyFileSync(cli, isolated);
   const result = spawnSync(process.execPath, [isolated], { encoding: 'utf8', env: { ...process.env, NODE_PATH: '' } });
   assert.equal(result.status, 2);
