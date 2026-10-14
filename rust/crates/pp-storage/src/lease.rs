@@ -243,7 +243,13 @@ impl StorageLease {
                 .lease_guard
                 .as_mut()
                 .is_none_or(|guard| guard.release().is_ok());
-        if !runtime_removed || !marker_removed || !guard_released {
+        // Closing one descriptor does not unlock copies held between fork and exec.
+        let lock_released = guard_released
+            && self
+                .lock
+                .as_ref()
+                .is_none_or(|lock| FileExt::unlock(lock).is_ok());
+        if !runtime_removed || !marker_removed || !guard_released || !lock_released {
             let retained = Self {
                 lock: self.lock.take(),
                 lease_guard: self.lease_guard.take(),
@@ -345,6 +351,17 @@ mod tests {
                 assert_released(owner.release(), &path);
             }
         }
+    }
+
+    #[test]
+    fn release_unlocks_descriptors_inherited_by_an_unrelated_spawn() {
+        let path = directory();
+        let owner = StorageLease::acquire(&path).unwrap();
+        // A concurrent fork can retain the same open file description until exec.
+        let inherited = owner.clone_file().unwrap();
+        assert_released(owner.release(), &path);
+        assert!(inherited.metadata().is_ok());
+        drop(inherited);
     }
 
     #[test]
