@@ -397,14 +397,20 @@ impl CoreRuntime {
                     .take()
                     .is_some_and(|stop| stop.send(Some(plan)).is_ok())
                 {
-                    let (shutdown, cutover) = self.finish_shutdown().await;
-                    return Ok((
-                        shutdown,
-                        cutover.unwrap_or_else(|| CutoverReceipt::CommitFailed {
+                    let (mut shutdown, cutover) = self.finish_shutdown().await;
+                    let cutover = cutover.unwrap_or_else(|| {
+                        // The owner may have renamed the record before losing completion.
+                        let unproved = CutoverReceipt::CommitUnproved {
                             operation: operation.to_owned(),
-                            detail: "core owner failed before reporting cutover".into(),
-                        }),
-                    ));
+                        };
+                        if cutover::append_evidence(&self.data_dir, &Evidence::Cutover(&unproved))
+                            .is_err()
+                        {
+                            shutdown.errors.push("cutover_evidence_unsaved");
+                        }
+                        unproved
+                    });
+                    return Ok((shutdown, cutover));
                 }
                 CutoverRefusal::ShutdownInProgress
             }

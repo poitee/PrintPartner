@@ -778,6 +778,12 @@ fn ticket_t_3_drain_cutover_receipts_serialize_exactly() {
             json!({"outcome": "compat_force_killed", "operation": CATALOG}),
         ),
         (
+            CutoverReceipt::CommitUnproved {
+                operation: operation(),
+            },
+            json!({"outcome": "commit_unproved", "operation": CATALOG}),
+        ),
+        (
             CutoverReceipt::CommitFailed {
                 operation: operation(),
                 detail: "disk full".into(),

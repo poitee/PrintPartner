@@ -148,6 +148,9 @@ pub enum CutoverReceipt {
         operation: String,
         detail: String,
     },
+    CommitUnproved {
+        operation: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
