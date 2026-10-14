@@ -1,3 +1,4 @@
+import { StatusExecution } from "../status-execution.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { moonrakerAdapter } from "./moonraker.js";
 
@@ -6,6 +7,8 @@ function jsonResponse(body: unknown): Response {
     headers: { "Content-Type": "application/json" },
   });
 }
+
+const execution = new StatusExecution();
 
 describe("moonrakerAdapter", () => {
   afterEach(() => {
@@ -19,7 +22,7 @@ describe("moonrakerAdapter", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await moonrakerAdapter.testConnection({
+    const result = await execution.test(moonrakerAdapter, {
       base_url: "http://127.0.0.1:7125",
       api_key: "test-api-key",
     });
@@ -44,7 +47,7 @@ describe("moonrakerAdapter", () => {
         })),
     );
 
-    const status = await moonrakerAdapter.getStatus!({
+    const status = await execution.probe(moonrakerAdapter, {
       base_url: "http://127.0.0.1:7125",
     });
     expect(status.state).toBe("printing");
@@ -65,7 +68,7 @@ describe("moonrakerAdapter", () => {
         })),
     );
 
-    const status = await moonrakerAdapter.getStatus!({
+    const status = await execution.probe(moonrakerAdapter, {
       base_url: "http://127.0.0.1:7125",
     });
     expect(status.state).toBe("complete");
@@ -84,7 +87,7 @@ describe("moonrakerAdapter", () => {
         })),
     );
 
-    const status = await moonrakerAdapter.getStatus!({
+    const status = await execution.probe(moonrakerAdapter, {
       base_url: "http://127.0.0.1:7125",
     });
     expect(status.state).toBe("idle");
@@ -102,7 +105,7 @@ describe("moonrakerAdapter", () => {
         })),
     );
 
-    const status = await moonrakerAdapter.getStatus!({
+    const status = await execution.probe(moonrakerAdapter, {
       base_url: "http://127.0.0.1:7125",
     });
     expect(status.state).toBe("unknown");
@@ -118,7 +121,7 @@ describe("moonrakerAdapter", () => {
       .mockResolvedValueOnce(jsonResponse({ result: { klippy_state: "ready" } }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await moonrakerAdapter.testConnection({
+    const result = await execution.test(moonrakerAdapter, {
       base_url: "http://127.0.0.1:7125",
       api_key: "secret-key",
     });

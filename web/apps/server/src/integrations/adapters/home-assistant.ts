@@ -1,3 +1,4 @@
+import { statusRequest, type StatusPermit } from "../status-execution.js";
 import type {
   IntegrationConfig,
   IntegrationTestResult,
@@ -5,7 +6,7 @@ import type {
   PrinterUploadResult,
 } from "@print-partner/contracts";
 import type { IntegrationAdapter, PrinterUploadSource } from "../store.js";
-import { safeConnectorFetch } from "../../lib/outbound-url.js";
+import { safeConnectorFetch, type ConnectorRequestInit } from "../../lib/outbound-url.js";
 import {
   cancelResponseBody,
   readBoundedJsonResponse,
@@ -69,7 +70,7 @@ async function drainResponseBody(res: Response): Promise<void> {
 async function haFetch(
   url: string,
   config: IntegrationConfig,
-  init: RequestInit = {},
+  init: ConnectorRequestInit = {},
 ): Promise<Response> {
   const token = bearerToken(config);
   const originalOrigin = new URL(url).origin;
@@ -119,8 +120,18 @@ function mapHaState(raw: string | undefined): PrinterHostStatus["state"] {
   return "unknown";
 }
 
+function inspectEntity(
+  url: string,
+  config: IntegrationConfig,
+  permit: StatusPermit,
+  timeoutMs: number,
+): Promise<Response> {
+  return haFetch(url, config, statusRequest(permit, timeoutMs));
+}
+
 async function queryEntityStatus(
   config: IntegrationConfig,
+  permit: StatusPermit,
 ): Promise<PrinterHostStatus> {
   const baseUrl = normalizeBaseUrl(config.base_url ?? config.baseUrl);
   if (!baseUrl) return { state: "offline", message: "base_url is required" };
@@ -130,10 +141,7 @@ async function queryEntityStatus(
     return { state: "offline", message: "token is required" };
   }
 
-  const url = `${baseUrl}/api/states/${encodeURIComponent(eid)}`;
-  const res = await haFetch(url, config, {
-    signal: AbortSignal.timeout(10_000),
-  });
+  const res = await inspectEntity(`${baseUrl}/api/states/${encodeURIComponent(eid)}`, config, permit, 10_000);
 
   if (res.status === 404) {
     await cancelResponseBody(res);
@@ -192,7 +200,7 @@ async function queryEntityStatus(
 export const homeAssistantAdapter: IntegrationAdapter = {
   type: "home_assistant",
 
-  async testConnection(config: IntegrationConfig): Promise<IntegrationTestResult> {
+  async testConnection(config: IntegrationConfig, permit: StatusPermit): Promise<IntegrationTestResult> {
     const baseUrl = normalizeBaseUrl(config.base_url ?? config.baseUrl);
     if (!baseUrl) {
       return { ok: false, message: "base_url is required" };
@@ -204,7 +212,7 @@ export const homeAssistantAdapter: IntegrationAdapter = {
     try {
       // /api/ returns minimal JSON: {"message":"API running."}
       const res = await haFetch(`${baseUrl}/api/`, config, {
-        signal: AbortSignal.timeout(8_000),
+        ...statusRequest(permit, 8_000),
       });
       if (!res.ok) {
         await cancelResponseBody(res);
@@ -223,11 +231,7 @@ export const homeAssistantAdapter: IntegrationAdapter = {
       // Optionally verify entity_id is readable if provided
       const eid = entityId(config);
       if (eid) {
-        const stateRes = await haFetch(
-          `${baseUrl}/api/states/${encodeURIComponent(eid)}`,
-          config,
-          { signal: AbortSignal.timeout(8_000) },
-        ).catch(() => null);
+        const stateRes = await inspectEntity(`${baseUrl}/api/states/${encodeURIComponent(eid)}`, config, permit, 8_000).catch(() => null);
         if (!stateRes) {
           return {
             ok: true,
@@ -267,13 +271,13 @@ export const homeAssistantAdapter: IntegrationAdapter = {
     }
   },
 
-  async listDevices(config: IntegrationConfig) {
+  async listDevices(config: IntegrationConfig, permit: StatusPermit) {
     const baseUrl = normalizeBaseUrl(config.base_url ?? config.baseUrl);
     if (!baseUrl || !bearerToken(config)) return [];
     try {
       const eid = entityId(config);
       if (!eid) return [];
-      const status = await queryEntityStatus(config);
+      const status = await queryEntityStatus(config, permit);
       return [
         {
           id: eid,
@@ -287,9 +291,9 @@ export const homeAssistantAdapter: IntegrationAdapter = {
     }
   },
 
-  async getStatus(config: IntegrationConfig): Promise<PrinterHostStatus> {
+  async getStatus(config: IntegrationConfig, permit: StatusPermit): Promise<PrinterHostStatus> {
     try {
-      return await queryEntityStatus(config);
+      return await queryEntityStatus(config, permit);
     } catch (e) {
       return {
         state: "offline",

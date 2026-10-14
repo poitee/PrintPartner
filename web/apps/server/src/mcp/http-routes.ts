@@ -1,3 +1,4 @@
+import type { StatusExecution } from "../integrations/status-execution.js";
 import { desktopContext } from "../desktop-context.js";
 /**
  * Streamable HTTP MCP on the live app process (same tools as stdio).
@@ -36,6 +37,7 @@ import {
 import { createMcpSessionCapacity } from "./http-session-capacity.js";
 
 type McpHttpDeps = {
+  statusExecution: StatusExecution;
   getRepo: () => AppRepository;
   jobs: InProcessJobRunner;
   config: ServerConfig;
@@ -281,6 +283,7 @@ export async function registerMcpHttpRoutes(
         const now = Date.now();
         const server = createProductMcpServer({
           getRepo: deps.getRepo,
+          statusExecution: deps.statusExecution,
           jobs: deps.jobs,
           config: deps.config,
           defaultPlanId,

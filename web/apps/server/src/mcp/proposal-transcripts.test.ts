@@ -1,3 +1,4 @@
+import { StatusExecution } from "../integrations/status-execution.js";
 /**
  * Golden MCP proposal lifecycle transcripts (GRE-577).
  *
@@ -102,6 +103,7 @@ async function runScenario(
   const config = { ...loadConfig(), dataDir };
   const pending = new Map<string, AssistantProposedAction>();
   const server = createProductMcpServer({
+    statusExecution: new StatusExecution(),
     getRepo,
     jobs: createJobRunner(getRepo, dataDir),
     config,

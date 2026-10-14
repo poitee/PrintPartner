@@ -1,3 +1,4 @@
+import { statusRequest, type StatusPermit } from "../status-execution.js";
 import type {
   IntegrationConfig,
   IntegrationTestResult,
@@ -9,7 +10,7 @@ import type {
 } from "@print-partner/contracts";
 import { createReadStream, statSync } from "node:fs";
 import type { IntegrationAdapter, PrinterUploadSource } from "../store.js";
-import { safeConnectorFetch } from "../../lib/outbound-url.js";
+import { safeConnectorFetch, type ConnectorRequestInit } from "../../lib/outbound-url.js";
 import {
   cancelResponseBody,
   readBoundedJsonResponse,
@@ -59,13 +60,13 @@ async function drainResponseBody(res: Response): Promise<void> {
 
 async function obtainDigestChallenge(
   requestUrl: string,
-  signal: AbortSignal,
+  init: ConnectorRequestInit,
 ): Promise<Record<string, string> | null> {
   const origin = new URL(requestUrl).origin;
   const probeUrl = `${origin}/api/v1/status`;
   const probe = await safeConnectorFetch(probeUrl, {
+    ...init,
     method: "GET",
-    signal,
     redirect: "manual",
   });
   await drainResponseBody(probe);
@@ -77,7 +78,7 @@ async function obtainDigestChallenge(
 async function prusalinkFetch(
   url: string,
   config: IntegrationConfig,
-  init: RequestInit = {},
+  init: ConnectorRequestInit = {},
 ): Promise<Response> {
   const creds = credentials(config);
   const method = (init.method ?? "GET").toUpperCase();
@@ -87,7 +88,7 @@ async function prusalinkFetch(
     return safeConnectorFetch(url, { ...init, method, signal, redirect: "manual" });
   }
 
-  const challenge = await obtainDigestChallenge(url, signal);
+  const challenge = await obtainDigestChallenge(url, { signal, joinTransport: init.joinTransport });
   let authorization: string | undefined;
   if (challenge) {
     const parsed = new URL(url);
@@ -328,10 +329,11 @@ function filenameFromFile(file: PrusaFileMeta | undefined): string | undefined {
 async function readJobFileMeta(
   config: IntegrationConfig,
   baseUrl: string,
+  permit: StatusPermit,
 ): Promise<{ filename?: string; progress?: number; eta_seconds?: number }> {
   try {
     const res = await prusalinkFetch(`${baseUrl}/api/v1/job`, config, {
-      signal: AbortSignal.timeout(8000),
+      ...statusRequest(permit, 8000),
     });
     if (!res.ok) {
       await drainResponseBody(res);
@@ -361,7 +363,7 @@ async function readJobFileMeta(
   }
 }
 
-async function readStatus(config: IntegrationConfig): Promise<PrinterHostStatus> {
+async function readStatus(config: IntegrationConfig, permit: StatusPermit): Promise<PrinterHostStatus> {
   const baseUrl = normalizeBaseUrl(config.base_url ?? config.baseUrl);
   if (!baseUrl) return { state: "offline", message: "base_url is required" };
   if (!credentials(config)) {
@@ -369,7 +371,7 @@ async function readStatus(config: IntegrationConfig): Promise<PrinterHostStatus>
   }
 
   const res = await prusalinkFetch(`${baseUrl}/api/v1/status`, config, {
-    signal: AbortSignal.timeout(8000),
+    ...statusRequest(permit, 8000),
   });
   if (res.status === 204) {
     await drainResponseBody(res);
@@ -399,7 +401,7 @@ async function readStatus(config: IntegrationConfig): Promise<PrinterHostStatus>
 
   // While printing/paused, `/api/v1/job` is the reliable source for active file metadata.
   if (state === "printing" || state === "paused") {
-    const jobMeta = await readJobFileMeta(config, baseUrl);
+    const jobMeta = await readJobFileMeta(config, baseUrl, permit);
     if (jobMeta.filename) filename = jobMeta.filename;
     if (progress == null && jobMeta.progress != null) progress = jobMeta.progress;
     if (eta == null && jobMeta.eta_seconds != null) eta = jobMeta.eta_seconds;
@@ -669,7 +671,7 @@ export const prusalinkAdapter: IntegrationAdapter = {
     },
   },
 
-  async testConnection(config: IntegrationConfig): Promise<IntegrationTestResult> {
+  async testConnection(config: IntegrationConfig, permit: StatusPermit): Promise<IntegrationTestResult> {
     const baseUrl = normalizeBaseUrl(config.base_url ?? config.baseUrl);
     if (!baseUrl) {
       return { ok: false, message: "base_url is required" };
@@ -679,7 +681,7 @@ export const prusalinkAdapter: IntegrationAdapter = {
     }
     try {
       const infoRes = await prusalinkFetch(`${baseUrl}/api/v1/info`, config, {
-        signal: AbortSignal.timeout(8000),
+        ...statusRequest(permit, 8000),
       });
       if (infoRes.ok) {
         const info = await readBoundedJsonResponse(infoRes, MAX_METADATA_RESPONSE_BYTES);
@@ -688,13 +690,13 @@ export const prusalinkAdapter: IntegrationAdapter = {
               .find((value): value is string => typeof value === "string" && value.length > 0)
             ?? "PrusaLink"
           : "PrusaLink";
-        const status = await readStatus(config).catch(() => null);
+        const status = await readStatus(config, permit).catch(() => null);
         const statePart = status?.state ? `, state: ${status.state}` : "";
         return { ok: true, message: `Connected (${label}${statePart})` };
       }
       // Fall back to status if /info is unavailable on older builds.
       await drainResponseBody(infoRes);
-      const status = await readStatus(config);
+      const status = await readStatus(config, permit);
       if (status.state === "offline") {
         return { ok: false, message: status.message ?? `PrusaLink returned HTTP ${infoRes.status}` };
       }
@@ -707,11 +709,11 @@ export const prusalinkAdapter: IntegrationAdapter = {
     }
   },
 
-  async listDevices(config: IntegrationConfig) {
+  async listDevices(config: IntegrationConfig, permit: StatusPermit) {
     const baseUrl = normalizeBaseUrl(config.base_url ?? config.baseUrl);
     if (!baseUrl) return [];
     try {
-      const status = await readStatus(config);
+      const status = await readStatus(config, permit);
       return [
         {
           id: "default",
@@ -725,9 +727,9 @@ export const prusalinkAdapter: IntegrationAdapter = {
     }
   },
 
-  async getStatus(config: IntegrationConfig): Promise<PrinterHostStatus> {
+  async getStatus(config: IntegrationConfig, permit: StatusPermit): Promise<PrinterHostStatus> {
     try {
-      return await readStatus(config);
+      return await readStatus(config, permit);
     } catch (e) {
       return {
         state: "offline",

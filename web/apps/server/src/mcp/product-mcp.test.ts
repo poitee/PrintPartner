@@ -1,3 +1,4 @@
+import { StatusExecution } from "../integrations/status-execution.js";
 /**
  * confirm_apply: reserve before await, reject concurrent confirm, restore on failure.
  */
@@ -40,6 +41,7 @@ describe("product MCP confirm_apply reservation", () => {
   ) {
     const config = loadConfig();
     const server = createProductMcpServer({
+      statusExecution: new StatusExecution(),
       getRepo: () => ({ getProfile: () => null, getSetting: () => null }) as never,
       jobs: { start: async () => "j1" } as never,
       config,

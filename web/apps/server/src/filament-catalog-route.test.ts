@@ -1,3 +1,4 @@
+import { StatusExecution } from "./integrations/status-execution.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -49,6 +50,7 @@ describe("GET /filaments/catalog Spoolman merge", () => {
     const ports = createSelfHostPorts(dir);
     await ports.db.connect();
     const integrations = createIntegrationPort({
+      statusExecution: new StatusExecution(),
       repo: ports.repository,
       getAdapter: (type) => (type === "spoolman" ? spoolmanAdapter : undefined),
     });
@@ -96,6 +98,7 @@ describe("GET /filaments/catalog Spoolman merge", () => {
     const ports = createSelfHostPorts(dir);
     await ports.db.connect();
     const integrations = createIntegrationPort({
+      statusExecution: new StatusExecution(),
       repo: ports.repository,
       getAdapter: (type) => (type === "spoolman" ? spoolmanAdapter : undefined),
     });

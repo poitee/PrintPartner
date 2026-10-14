@@ -1,3 +1,4 @@
+import { statusRequest, type StatusPermit } from "../status-execution.js";
 import type {
   IntegrationConfig,
   IntegrationTestResult,
@@ -8,7 +9,7 @@ import type {
   PrinterUploadResult,
 } from "@print-partner/contracts";
 import type { IntegrationAdapter, PrinterUploadSource } from "../store.js";
-import { safeConnectorFetch } from "../../lib/outbound-url.js";
+import { safeConnectorFetch, type ConnectorRequestInit } from "../../lib/outbound-url.js";
 import {
   cancelResponseBody,
   readBoundedJsonResponse,
@@ -60,7 +61,7 @@ async function drainResponseBody(res: Response): Promise<void> {
 async function moonrakerFetch(
   url: string,
   config: IntegrationConfig,
-  init: RequestInit = {},
+  init: ConnectorRequestInit = {},
   credentialOrigin = new URL(url).origin,
 ): Promise<Response> {
   const auth = authHeaders(config);
@@ -347,9 +348,9 @@ function mapPrintState(raw: string | undefined): PrinterHostStatus["state"] {
   return "unknown";
 }
 
-async function querySystemUptime(baseUrl: string, config: IntegrationConfig): Promise<number | undefined> {
+async function querySystemUptime(baseUrl: string, config: IntegrationConfig, permit: StatusPermit): Promise<number | undefined> {
   try {
-    const response = await moonrakerFetch(`${baseUrl}/machine/proc_stats`, config);
+    const response = await moonrakerFetch(`${baseUrl}/machine/proc_stats`, config, { ...statusRequest(permit, 30_000) });
     if (!response.ok) {
       await cancelResponseBody(response);
       return undefined;
@@ -365,7 +366,7 @@ async function querySystemUptime(baseUrl: string, config: IntegrationConfig): Pr
   }
 }
 
-async function queryStatus(config: IntegrationConfig): Promise<PrinterHostStatus> {
+async function queryStatus(config: IntegrationConfig, permit: StatusPermit): Promise<PrinterHostStatus> {
   const baseUrl = normalizeBaseUrl(config.base_url ?? config.baseUrl);
   if (!baseUrl) return { state: "offline", message: "base_url is required" };
 
@@ -373,6 +374,7 @@ async function queryStatus(config: IntegrationConfig): Promise<PrinterHostStatus
   const res = await moonrakerFetch(
     `${baseUrl}/printer/objects/query?${objects}`,
     config,
+    { ...statusRequest(permit, 30_000) },
   );
   if (!res.ok) {
     await cancelResponseBody(res);
@@ -397,7 +399,7 @@ async function queryStatus(config: IntegrationConfig): Promise<PrinterHostStatus
     : undefined;
   const rawState = typeof printStats?.state === "string" ? printStats.state : undefined;
   const state = mapPrintState(rawState);
-  const uptimeSeconds = await querySystemUptime(baseUrl, config);
+  const uptimeSeconds = await querySystemUptime(baseUrl, config, permit);
   return {
     state,
     progress: state === "printing" || state === "paused" ? progress : undefined,
@@ -494,14 +496,14 @@ export const moonrakerAdapter: IntegrationAdapter = {
     },
   },
 
-  async testConnection(config: IntegrationConfig): Promise<IntegrationTestResult> {
+  async testConnection(config: IntegrationConfig, permit: StatusPermit): Promise<IntegrationTestResult> {
     const baseUrl = normalizeBaseUrl(config.base_url ?? config.baseUrl);
     if (!baseUrl) {
       return { ok: false, message: "base_url is required" };
     }
     try {
       const res = await moonrakerFetch(`${baseUrl}/server/info`, config, {
-        signal: AbortSignal.timeout(8000),
+        ...statusRequest(permit, 8000),
       });
       if (!res.ok) {
         await cancelResponseBody(res);
@@ -519,11 +521,11 @@ export const moonrakerAdapter: IntegrationAdapter = {
     }
   },
 
-  async listDevices(config: IntegrationConfig) {
+  async listDevices(config: IntegrationConfig, permit: StatusPermit) {
     const baseUrl = normalizeBaseUrl(config.base_url ?? config.baseUrl);
     if (!baseUrl) return [];
     try {
-      const status = await queryStatus(config);
+      const status = await queryStatus(config, permit);
       return [
         {
           id: "default",
@@ -537,9 +539,9 @@ export const moonrakerAdapter: IntegrationAdapter = {
     }
   },
 
-  async getStatus(config: IntegrationConfig): Promise<PrinterHostStatus> {
+  async getStatus(config: IntegrationConfig, permit: StatusPermit): Promise<PrinterHostStatus> {
     try {
-      return await queryStatus(config);
+      return await queryStatus(config, permit);
     } catch (e) {
       return {
         state: "offline",

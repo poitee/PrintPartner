@@ -1,3 +1,4 @@
+import type { StatusPermit } from "../status-execution.js";
 import mqtt, { type IClientOptions, type MqttClient, type OnMessageCallback } from "mqtt";
 import { isIP, type LookupFunction } from "node:net";
 import type {
@@ -256,26 +257,31 @@ function brokerUrl(conn: BambuConnection): string {
  * Connect over local MQTT TLS, request `pushall`, and resolve the first
  * report that includes `print.gcode_state`. Status-only — no print control.
  */
-function fetchBambuStatus(conn: BambuConnection): Promise<PrinterHostStatus> {
+function fetchBambuStatus(conn: BambuConnection, permit: StatusPermit): Promise<PrinterHostStatus> {
+  permit.signal.throwIfAborted();
   return new Promise((resolve) => {
     let settled = false;
     let client: MqttClient | null = null;
 
+    const onMessage: OnMessageCallback = (_topic, payload) => {
+      if (settled) return;
+      const body = parseReportPayload(payload);
+      if (!isUsablePrintReport(body?.print)) return;
+      finish(statusFromBambuPrint(body.print));
+    };
+    const onAbort = () => finish({ state: "offline", message: "Printer status execution stopped" });
     const finish = (status: PrinterHostStatus) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      // Keep the "error" listener bound (guarded by `settled`) instead of
-      // removeAllListeners(): the mqtt client's own internal connect/connack
-      // timers can still fire an "error" after we resolve, and an Emitter
-      // with zero "error" listeners throws and crashes the process.
-      try {
-        client?.removeListener("message", onMessage);
-        client?.end(true);
-      } catch {
-        // ignore disconnect errors after we already have a result
+      permit.signal.removeEventListener("abort", onAbort);
+      if (!client) {
+        resolve(status);
+        return;
       }
-      resolve(status);
+      client.removeListener("message", onMessage);
+      // MQTT can still emit an error during end; its guarded listener stays attached.
+      client.end(true, {}, () => resolve(status));
     };
 
     const timer = setTimeout(() => {
@@ -313,11 +319,11 @@ function fetchBambuStatus(conn: BambuConnection): Promise<PrinterHostStatus> {
     const reportTopic = `device/${conn.serial}/report`;
     const requestTopic = `device/${conn.serial}/request`;
 
-    const onMessage: OnMessageCallback = (_topic, payload) => {
-      const body = parseReportPayload(payload);
-      if (!isUsablePrintReport(body?.print)) return;
-      finish(statusFromBambuPrint(body.print));
-    };
+    permit.signal.addEventListener("abort", onAbort, { once: true });
+    if (permit.signal.aborted) {
+      onAbort();
+      return;
+    }
 
     client.on("message", onMessage);
 
@@ -338,7 +344,9 @@ function fetchBambuStatus(conn: BambuConnection): Promise<PrinterHostStatus> {
     });
 
     client.on("connect", () => {
+      if (settled) return;
       client!.subscribe(reportTopic, (subErr) => {
+        if (settled) return;
         if (subErr) {
           finish({
             state: "offline",
@@ -350,6 +358,7 @@ function fetchBambuStatus(conn: BambuConnection): Promise<PrinterHostStatus> {
           pushing: { sequence_id: "0", command: "pushall" },
         });
         client!.publish(requestTopic, pushall, { qos: 0 }, (pubErr) => {
+          if (settled) return;
           if (pubErr) {
             finish({
               state: "offline",
@@ -365,11 +374,11 @@ function fetchBambuStatus(conn: BambuConnection): Promise<PrinterHostStatus> {
 export const bambuAdapter: IntegrationAdapter = {
   type: "bambu",
 
-  async testConnection(config: IntegrationConfig): Promise<IntegrationTestResult> {
+  async testConnection(config: IntegrationConfig, permit: StatusPermit): Promise<IntegrationTestResult> {
     const resolved = await resolveConnection(config);
     if (!resolved.ok) return { ok: false, message: resolved.message };
     try {
-      const status = await fetchBambuStatus(resolved.conn);
+      const status = await fetchBambuStatus(resolved.conn, permit);
       if (status.state === "offline") {
         return { ok: false, message: status.message ?? "Bambu MQTT offline" };
       }
@@ -399,13 +408,13 @@ export const bambuAdapter: IntegrationAdapter = {
     ];
   },
 
-  async getStatus(config: IntegrationConfig): Promise<PrinterHostStatus> {
+  async getStatus(config: IntegrationConfig, permit: StatusPermit): Promise<PrinterHostStatus> {
     const resolved = await resolveConnection(config);
     if (!resolved.ok) {
       return { state: "offline", message: resolved.message };
     }
     try {
-      return { ...(await fetchBambuStatus(resolved.conn)), ip_address: resolved.conn.host };
+      return { ...(await fetchBambuStatus(resolved.conn, permit)), ip_address: resolved.conn.host };
     } catch (e) {
       return {
         state: "offline",

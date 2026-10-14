@@ -1,3 +1,4 @@
+import type { StatusExecution } from "../integrations/status-execution.js";
 /**
  * Shared product MCP handlers (stdio + streamable HTTP).
  * Mutating tools only propose; confirm_apply / dismiss_proposed_action apply.
@@ -102,6 +103,7 @@ function jsonSchemaToMcp(spec: (typeof ASSISTANT_TOOL_SPECS)[number]) {
 const SOURCE_CATEGORIES_URI = "print-partner://source-categories";
 
 type ProductMcpDeps = {
+  statusExecution: StatusExecution;
   getRepo: () => AppRepository;
   jobs: InProcessJobRunner;
   config: ServerConfig;
@@ -144,6 +146,7 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
     if (!integrationsPort) {
       integrationsPort = createIntegrationPort({
         repo: getRepo(),
+        statusExecution: deps.statusExecution,
         getAdapter: getIntegrationAdapter,
       });
     }

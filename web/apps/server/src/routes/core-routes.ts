@@ -1,3 +1,4 @@
+import type { StatusExecution } from "../integrations/status-execution.js";
 import type { FastifyInstance } from "fastify";
 import { join } from "node:path";
 import type { ServerConfig } from "../config.js";
@@ -41,6 +42,7 @@ import { getIntegrationAdapter } from "../integrations/registry.js";
 import { hostedPlanningPolicy } from "../lib/hosted-planning.js";
 
 export type CoreRouteDeps = {
+  statusExecution: StatusExecution;
   repo: AppRepository;
   reposDir: string;
   sourcesDir: string;
@@ -66,6 +68,7 @@ export async function registerCoreRoutes(
   deps: CoreRouteDeps,
   options: CoreRouteOptions = {},
 ): Promise<void> {
+  const statusExecution = deps.statusExecution;
   const routeDeps = {
     repo: deps.repo,
     reposDir: deps.reposDir,
@@ -132,6 +135,7 @@ export async function registerCoreRoutes(
   const integrations = createIntegrationPort({
     repo: deps.repo,
     getAdapter: getIntegrationAdapter,
+    statusExecution,
   });
   await registerPrinterCheckoffRoutes(app, {
     integrations,
@@ -157,7 +161,7 @@ export async function registerCoreRoutes(
     await registerWebhookRoutes(app, { repo: deps.repo });
   }
 
-  await registerJobRoutes(app, deps.jobs, deps.config);
+  await registerJobRoutes(app, deps.jobs, { ...deps.config, statusExecution });
   await registerAssistantRoutes(app, {
     repo: deps.repo,
     config: deps.config,

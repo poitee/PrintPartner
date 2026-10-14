@@ -1,3 +1,4 @@
+import { StatusExecution } from "../integrations/status-execution.js";
 import { acceptPlanForTest, editAcceptedPartsForTest } from "../test/accept-plan.js";
 import Fastify, { type FastifyInstance } from "fastify";
 import rateLimit from "@fastify/rate-limit";
@@ -88,7 +89,7 @@ async function setup() {
     updated_at: new Date().toISOString(),
   }]));
 
-  const integrations = createIntegrationPort({ repo, getAdapter: getIntegrationAdapter });
+  const integrations = createIntegrationPort({ repo, getAdapter: getIntegrationAdapter, statusExecution: new StatusExecution() });
   const app = Fastify();
   await app.register(rateLimit, { global: false });
   // Same limits app.ts registers, so the route's own per-request caps are what

@@ -1,3 +1,4 @@
+import { StatusExecution } from "../status-execution.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { homeAssistantAdapter } from "./home-assistant.js";
 
@@ -19,6 +20,8 @@ function jsonResponse(body: unknown, status = 200): Response {
     headers: { "Content-Type": "application/json" },
   });
 }
+
+const execution = new StatusExecution();
 
 describe("homeAssistantAdapter", () => {
   afterEach(() => {
@@ -43,7 +46,7 @@ describe("homeAssistantAdapter", () => {
           }));
       vi.stubGlobal("fetch", fetchMock);
 
-      const result = await homeAssistantAdapter.testConnection(makeConfig());
+      const result = await execution.test(homeAssistantAdapter, makeConfig());
       expect(result.ok).toBe(true);
       expect(result.message).toContain("2024.1.0");
       expect(result.message).toContain("sensor.printer_state");
@@ -54,7 +57,7 @@ describe("homeAssistantAdapter", () => {
       const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ message: "API running." }));
       vi.stubGlobal("fetch", fetchMock);
 
-      await homeAssistantAdapter.testConnection(
+      await execution.test(homeAssistantAdapter,
         makeConfig({ entity_id: undefined }),
       );
 
@@ -64,7 +67,7 @@ describe("homeAssistantAdapter", () => {
     });
 
     it("returns ok=false when base_url is missing", async () => {
-      const result = await homeAssistantAdapter.testConnection(
+      const result = await execution.test(homeAssistantAdapter,
         makeConfig({ base_url: "" }),
       );
       expect(result.ok).toBe(false);
@@ -72,7 +75,7 @@ describe("homeAssistantAdapter", () => {
     });
 
     it("returns ok=false when token is missing", async () => {
-      const result = await homeAssistantAdapter.testConnection(
+      const result = await execution.test(homeAssistantAdapter,
         makeConfig({ token: undefined }),
       );
       expect(result.ok).toBe(false);
@@ -88,7 +91,7 @@ describe("homeAssistantAdapter", () => {
           headers: new Headers(),
         }),
       );
-      const result = await homeAssistantAdapter.testConnection(makeConfig());
+      const result = await execution.test(homeAssistantAdapter, makeConfig());
       expect(result.ok).toBe(false);
       expect(result.message).toMatch(/unauthorized/i);
     });
@@ -100,7 +103,7 @@ describe("homeAssistantAdapter", () => {
         .mockResolvedValueOnce(jsonResponse({}, 404));
       vi.stubGlobal("fetch", fetchMock);
 
-      const result = await homeAssistantAdapter.testConnection(makeConfig());
+      const result = await execution.test(homeAssistantAdapter, makeConfig());
       expect(result.ok).toBe(false);
       expect(result.message).toContain("not found");
     });
@@ -115,7 +118,7 @@ describe("homeAssistantAdapter", () => {
         .mockResolvedValueOnce(jsonResponse({ message: "API running." }));
       vi.stubGlobal("fetch", fetchMock);
 
-      const result = await homeAssistantAdapter.testConnection(
+      const result = await execution.test(homeAssistantAdapter,
         makeConfig({ entity_id: undefined }),
       );
       expect(result.ok).toBe(true);
@@ -148,7 +151,7 @@ describe("homeAssistantAdapter", () => {
           })),
       );
 
-      const status = await homeAssistantAdapter.getStatus!(makeConfig());
+      const status = await execution.probe(homeAssistantAdapter, makeConfig());
       expect(status.state).toBe("printing");
       expect(status.progress).toBe(42);
       expect(status.filename).toBe("benchy.gcode");
@@ -164,7 +167,7 @@ describe("homeAssistantAdapter", () => {
           })),
       );
 
-      const status = await homeAssistantAdapter.getStatus!(makeConfig());
+      const status = await execution.probe(homeAssistantAdapter, makeConfig());
       expect(status.state).toBe("paused");
       expect(status.progress).toBe(67);
     });
@@ -178,7 +181,7 @@ describe("homeAssistantAdapter", () => {
           })),
       );
 
-      const status = await homeAssistantAdapter.getStatus!(makeConfig());
+      const status = await execution.probe(homeAssistantAdapter, makeConfig());
       expect(status.state).toBe("complete");
       // progress is not surfaced for complete state
       expect(status.progress).toBeUndefined();
@@ -190,7 +193,7 @@ describe("homeAssistantAdapter", () => {
         vi.fn().mockResolvedValue(jsonResponse({ state: "idle", attributes: {} })),
       );
 
-      const status = await homeAssistantAdapter.getStatus!(makeConfig());
+      const status = await execution.probe(homeAssistantAdapter, makeConfig());
       expect(status.state).toBe("idle");
     });
 
@@ -200,7 +203,7 @@ describe("homeAssistantAdapter", () => {
         vi.fn().mockResolvedValue(jsonResponse({ state: "unavailable", attributes: {} })),
       );
 
-      const status = await homeAssistantAdapter.getStatus!(makeConfig());
+      const status = await execution.probe(homeAssistantAdapter, makeConfig());
       expect(status.state).toBe("offline");
     });
 
@@ -214,13 +217,13 @@ describe("homeAssistantAdapter", () => {
         }),
       );
 
-      const status = await homeAssistantAdapter.getStatus!(makeConfig());
+      const status = await execution.probe(homeAssistantAdapter, makeConfig());
       expect(status.state).toBe("offline");
       expect(status.message).toContain("not found");
     });
 
     it("returns offline when entity_id is missing from config", async () => {
-      const status = await homeAssistantAdapter.getStatus!(
+      const status = await execution.probe(homeAssistantAdapter,
         makeConfig({ entity_id: undefined }),
       );
       expect(status.state).toBe("offline");
@@ -228,7 +231,7 @@ describe("homeAssistantAdapter", () => {
     });
 
     it("returns offline when token is missing", async () => {
-      const status = await homeAssistantAdapter.getStatus!(
+      const status = await execution.probe(homeAssistantAdapter,
         makeConfig({ token: undefined }),
       );
       expect(status.state).toBe("offline");
@@ -244,7 +247,7 @@ describe("homeAssistantAdapter", () => {
           })),
       );
 
-      const status = await homeAssistantAdapter.getStatus!(makeConfig());
+      const status = await execution.probe(homeAssistantAdapter, makeConfig());
       expect(status.state).toBe("printing");
       expect(status.progress).toBe(76);
     });
@@ -255,7 +258,7 @@ describe("homeAssistantAdapter", () => {
         vi.fn().mockRejectedValue(new Error("ECONNREFUSED")),
       );
 
-      const status = await homeAssistantAdapter.getStatus!(makeConfig());
+      const status = await execution.probe(homeAssistantAdapter, makeConfig());
       expect(status.state).toBe("offline");
       expect(status.message).toContain("ECONNREFUSED");
     });
@@ -271,7 +274,7 @@ describe("homeAssistantAdapter", () => {
         vi.fn().mockResolvedValue(jsonResponse({ state: "idle", attributes: {} })),
       );
 
-      const devices = await homeAssistantAdapter.listDevices!(makeConfig());
+      const devices = await execution.devices(homeAssistantAdapter, makeConfig());
       expect(devices).toHaveLength(1);
       expect(devices[0]!.id).toBe("sensor.printer_state");
       expect(devices[0]!.type).toBe("home_assistant");
@@ -279,7 +282,7 @@ describe("homeAssistantAdapter", () => {
     });
 
     it("returns empty array when entity_id is missing", async () => {
-      const devices = await homeAssistantAdapter.listDevices!(
+      const devices = await execution.devices(homeAssistantAdapter,
         makeConfig({ entity_id: undefined }),
       );
       expect(devices).toHaveLength(0);
