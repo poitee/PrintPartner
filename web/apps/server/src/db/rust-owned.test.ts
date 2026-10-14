@@ -198,7 +198,7 @@ describe("rust owner marker", () => {
     expect(owner.instance).toBe("cd".repeat(16));
   });
 
-  it("restores a missing assembled column for a current recorded child without replaying seeds", () => {
+  it("replays the migration DDL for a current recorded child without replaying seeds", () => {
     const dir = mkdtempSync(join(tmpdir(), "pp-rust-owned-"));
     roots.push(dir);
     const first = new SqliteDatabase(dir);
@@ -206,6 +206,8 @@ describe("rust owner marker", () => {
     first.close();
     const raw = new Database(join(dir, "print-partner.db"));
     raw.exec("ALTER TABLE print_progress DROP COLUMN assembled");
+    raw.exec("ALTER TABLE print_jobs DROP COLUMN completed_at");
+    raw.exec("DROP TRIGGER trg_parts_invalidate_accepted_revision_insert");
     const before = raw.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'printer_profiles'").get() as { seq: number };
     raw.close();
     writeFileSync(join(dir, ".desktop-owner.json"), JSON.stringify({
@@ -220,10 +222,16 @@ describe("rust owner marker", () => {
     second.close();
     const check = new Database(join(dir, "print-partner.db"), { readonly: true });
     const cols = check.pragma("table_info(print_progress)") as { name: string }[];
+    const jobCols = check.pragma("table_info(print_jobs)") as { name: string }[];
+    const trigger = check
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name = 'trg_parts_invalidate_accepted_revision_insert'")
+      .get();
     const after = check.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'printer_profiles'").get() as { seq: number };
     const version = check.prepare("SELECT value FROM app_settings WHERE tenant_id = 'default' AND key = 'schema_version'").get() as { value: string };
     check.close();
     expect(cols.some((column) => column.name === "assembled")).toBe(true);
+    expect(jobCols.some((column) => column.name === "completed_at")).toBe(true);
+    expect(trigger).toEqual({ name: "trg_parts_invalidate_accepted_revision_insert" });
     expect(after.seq).toBe(before.seq);
     expect(version.value).toBe("34");
   });

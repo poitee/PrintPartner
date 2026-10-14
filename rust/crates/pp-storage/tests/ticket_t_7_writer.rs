@@ -655,7 +655,7 @@ fn ticket_t_7_writer_node_refuses_to_upgrade_an_unsupported_rust_owned_schema() 
 }
 
 #[test]
-fn ticket_t_7_writer_node_child_asserts_schema_without_migrating() {
+fn ticket_t_7_writer_node_child_reopens_a_current_schema_unchanged() {
     let web = web_root();
     let node = server_node(&web);
     let probe = write_probe(&web);

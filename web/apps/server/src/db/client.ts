@@ -36,37 +36,29 @@ export class SqliteDatabase {
     if (ownership.kind === "foreign") {
       throw new Error("Rust owns this data directory; Node will not migrate or write");
     }
-    // The desktop lease records this process before any SQL file exists.
-    // Skip version-advancing migrations only after that schema is already current.
-    const childAlreadyCurrent =
-      ownership.kind === "child" && databaseSchemaIsCurrent(this.dbPath);
+    // A recorded child reopening the current schema restores missing starters
+    // only, so existing starter rows do not advance sqlite_sequence.
+    const seedMode = ownership.kind === "child" && databaseSchemaIsCurrent(this.dbPath) ? "missing" : "ignore";
     mkdirSync(dirname(this.dbPath), { recursive: true });
     const sqlite = new Database(this.dbPath);
     try {
-      if (!childAlreadyCurrent) assertUpgradableSchemaVersion(readSchemaVersion(sqlite));
-      mkdirSync(this.reposDir, { recursive: true });
-      mkdirSync(this.sourcesDir, { recursive: true });
-      mkdirSync(join(this.dataDir, "exports"), { recursive: true });
-      mkdirSync(join(this.dataDir, "thumbs"), { recursive: true });
-      mkdirSync(join(this.dataDir, "covers"), { recursive: true });
-
-      this.sqlite = sqlite;
-      this.sqlite.pragma("journal_mode = WAL");
-      this.sqlite.pragma("foreign_keys = ON");
-      this.drizzle = drizzle(this.sqlite, { schema });
-      if (childAlreadyCurrent) {
-        this.repairCurrentSchema();
-        seedStarterProfiles(this.sqlite, "missing");
-      } else {
-        this.runMigrations();
-        seedStarterProfiles(this.sqlite);
-      }
+      assertUpgradableSchemaVersion(readSchemaVersion(sqlite));
     } catch (error) {
       sqlite.close();
-      this.sqlite = null;
-      this.drizzle = null;
       throw error;
     }
+    mkdirSync(this.reposDir, { recursive: true });
+    mkdirSync(this.sourcesDir, { recursive: true });
+    mkdirSync(join(this.dataDir, "exports"), { recursive: true });
+    mkdirSync(join(this.dataDir, "thumbs"), { recursive: true });
+    mkdirSync(join(this.dataDir, "covers"), { recursive: true });
+
+    this.sqlite = sqlite;
+    this.sqlite.pragma("journal_mode = WAL");
+    this.sqlite.pragma("foreign_keys = ON");
+    this.drizzle = drizzle(this.sqlite, { schema });
+    this.runMigrations();
+    seedStarterProfiles(this.sqlite, seedMode);
   }
 
   private runMigrations(): void {
@@ -90,26 +82,12 @@ export class SqliteDatabase {
         if (!/duplicate column name/i.test(msg)) throw e;
       }
     }
-    this.repairCurrentSchema();
-    if (versionBeforeMigration < currentSchemaVersion) {
-      this.sqlite
-        .prepare(
-          `INSERT INTO app_settings (tenant_id, key, value) VALUES (?, ?, ?)
-           ON CONFLICT(tenant_id, key) DO UPDATE SET value = excluded.value`,
-        )
-        .run("default", schemaVersionKey, String(currentSchemaVersion));
-    }
-  }
-
-  private repairCurrentSchema(): void {
-    if (!this.sqlite) throw new Error("Database not connected");
-    const sqlite = this.sqlite;
-    repairSourceRevisionTenantOwnershipSqlite(sqlite);
-    const partCols = sqlite.pragma("table_info(parts)") as { name: string }[];
+    repairSourceRevisionTenantOwnershipSqlite(this.sqlite);
+    const partCols = this.sqlite.pragma("table_info(parts)") as { name: string }[];
     if (!partCols.some((c) => c.name === "spoolman_spool_id")) {
-      sqlite.exec("ALTER TABLE parts ADD COLUMN spoolman_spool_id TEXT");
+      this.sqlite.exec("ALTER TABLE parts ADD COLUMN spoolman_spool_id TEXT");
     }
-    sqlite.exec(`
+    this.sqlite.exec(`
       CREATE TRIGGER IF NOT EXISTS trg_build_profiles_revision_ownership_insert
       BEFORE INSERT ON build_profiles
       WHEN NEW.accepted_plan_revision_id IS NOT NULL AND NOT EXISTS (
@@ -133,11 +111,13 @@ export class SqliteDatabase {
         SELECT RAISE(ABORT, 'Accepted Plan revision ownership violation');
       END;
     `);
-    const printProgressCols = sqlite.pragma("table_info(print_progress)") as { name: string }[];
+    const printProgressCols = this.sqlite.pragma("table_info(print_progress)") as { name: string }[];
     if (!printProgressCols.some((c) => c.name === "assembled")) {
-      sqlite.exec("ALTER TABLE print_progress ADD COLUMN assembled INTEGER NOT NULL DEFAULT 0");
+      this.sqlite.exec("ALTER TABLE print_progress ADD COLUMN assembled INTEGER NOT NULL DEFAULT 0");
     }
-    sqlite.exec(`
+
+    // Performance indexes (idempotent — IF NOT EXISTS)
+    this.sqlite.exec(`
       CREATE INDEX IF NOT EXISTS idx_profile_layers_tenant_profile
         ON profile_layers(tenant_id, profile_id);
       CREATE INDEX IF NOT EXISTS idx_parts_tenant_profile
@@ -155,6 +135,14 @@ export class SqliteDatabase {
       CREATE INDEX IF NOT EXISTS idx_buildprofiles_last_used
         ON build_profiles(tenant_id, last_used_at);
     `);
+    if (versionBeforeMigration < currentSchemaVersion) {
+      this.sqlite
+        .prepare(
+          `INSERT INTO app_settings (tenant_id, key, value) VALUES (?, ?, ?)
+           ON CONFLICT(tenant_id, key) DO UPDATE SET value = excluded.value`,
+        )
+        .run("default", schemaVersionKey, String(currentSchemaVersion));
+    }
   }
 
   ping(): boolean {
