@@ -603,3 +603,22 @@ fn review_rejects_ambiguous_directory_prefixes() {
         assert!(!f.observe().media_by_part_id[&9].artifact_missing);
     }
 }
+
+#[test]
+fn review_preserves_unicode16_persisted_path_identity() {
+    let mut f = Fixture::new();
+    fs::remove_file(f.source().join("part.stl")).unwrap();
+    let legacy = "a\u{1ADD}\u{0300}.stl";
+    let composed = "\u{00E0}\u{1ADD}.stl";
+    fs::write(f.source().join(legacy), "solid test").unwrap();
+    fs::write(f.source().join(composed), "other").unwrap();
+    *f.artifact_mut().1 = legacy.into();
+    if fs::read_dir(f.source()).unwrap().count() == 2 {
+        assert!(!f.observe().media_by_part_id[&9].artifact_missing);
+        *f.artifact_mut().1 = composed.into();
+        *f.artifact_mut().2 = hex::encode(Sha256::digest(b"other"));
+        assert!(!f.observe().media_by_part_id[&9].artifact_missing);
+    } else {
+        assert!(f.observe().media_by_part_id[&9].artifact_missing);
+    }
+}

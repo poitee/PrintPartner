@@ -25,7 +25,7 @@ pub struct Inventory {
 }
 impl Inventory {
     pub fn matching_path(&self, path: &str) -> Option<usize> {
-        let key = crate::path_policy::collision_key(path);
+        let key = crate::path_policy::collision_key_unicode16(path);
         if key
             .match_indices('/')
             .map(|(end, _)| &key[..end])
@@ -38,7 +38,7 @@ impl Inventory {
             .paths
             .iter()
             .enumerate()
-            .filter(|(_, value)| crate::path_policy::collision_key(value) == key);
+            .filter(|(_, value)| crate::path_policy::collision_key_unicode16(value) == key);
         let (index, _) = matches.next()?;
         matches.next().is_none().then_some(index)
     }
@@ -119,7 +119,7 @@ fn walk<B: ReadBudget>(
         } else {
             format!("{prefix}/{name}")
         };
-        let key = crate::path_policy::collision_key(&path);
+        let key = crate::path_policy::collision_key_unicode16(&path);
         if !seen.insert(key.clone()) {
             ambiguous.insert(key);
         }

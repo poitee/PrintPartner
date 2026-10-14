@@ -184,7 +184,11 @@ impl SnapshotReviewObserver {
         self
     }
 
-    fn observe(&self, snapshot: &Snapshot, cancelled: &AtomicBool) -> Result<ReviewObservations> {
+    pub fn review_observations(
+        &self,
+        snapshot: &Snapshot,
+        cancelled: &AtomicBool,
+    ) -> Result<ReviewObservations> {
         let mut budget = ObservationBudget::new(cancelled, self.limits);
         let mut roots = HashMap::<String, Option<Inventory>>::new();
 
@@ -240,11 +244,11 @@ impl SnapshotReviewObserver {
         })
     }
 
-    async fn observe_filament(
+    pub async fn filament_lookup(
         &self,
         snapshot: &Snapshot,
         cancelled: Arc<AtomicBool>,
-    ) -> Result<SnapshotFilamentLookup> {
+    ) -> Result<impl FilamentLookup + Send + Sync + use<>> {
         ensure!(
             !cancelled.load(Ordering::Acquire),
             "Filament observation cancelled"
@@ -380,24 +384,6 @@ impl SnapshotReviewObserver {
             }
         }
         Ok(true)
-    }
-}
-
-impl SnapshotReviewObserver {
-    pub fn review_observations(
-        &self,
-        snapshot: &Snapshot,
-        cancelled: &AtomicBool,
-    ) -> Result<ReviewObservations> {
-        self.observe(snapshot, cancelled)
-    }
-
-    pub async fn filament_lookup(
-        &self,
-        snapshot: &Snapshot,
-        cancelled: Arc<AtomicBool>,
-    ) -> Result<impl FilamentLookup + Send + Sync + use<>> {
-        self.observe_filament(snapshot, cancelled).await
     }
 }
 
