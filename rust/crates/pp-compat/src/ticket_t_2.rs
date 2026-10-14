@@ -820,13 +820,14 @@ struct HealthFixture {
 
 impl HealthFixture {
     async fn attach(scratch: &Scratch) -> Self {
-        let socket_file = scratch.root.join("data/socket");
-        pump_until(|| std::fs::read_to_string(&socket_file).is_ok_and(|path| !path.is_empty()))
-            .await;
-        let socket = std::fs::read_to_string(socket_file).unwrap();
-        // Let the initial missing-socket probe finish before binding the fixture.
-        pump_for(Duration::from_millis(20)).await;
-        let listener = tokio::net::UnixListener::bind(socket.trim()).unwrap();
+        let setup_file = scratch.root.join("data/setup");
+        pump_until(|| setup_file.exists()).await;
+        let setup: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(setup_file).unwrap()).unwrap();
+        let key = hex::decode(setup["key"].as_str().unwrap()).unwrap();
+        let generation = setup["generation"].as_str().unwrap().to_owned();
+        let listener =
+            tokio::net::UnixListener::bind(setup["socket_path"].as_str().unwrap()).unwrap();
         let health = std::sync::Arc::new(std::sync::Mutex::new(serde_json::json!({
             "ok": false,
             "version": "ticket-t-2-unreleased",
@@ -840,6 +841,8 @@ impl HealthFixture {
                 let (stream, _) = listener.accept().await.unwrap();
                 let response = response.clone();
                 let received = received.clone();
+                let key = key.clone();
+                let generation = generation.clone();
                 // Each health request owns a fresh IPC connection. Finish it before
                 // accepting another so fixture tasks cannot survive teardown.
                 hyper::server::conn::http1::Builder::new()
@@ -848,7 +851,22 @@ impl HealthFixture {
                         hyper::service::service_fn(move |request| {
                             assert_eq!(request.method(), "GET");
                             assert_eq!(request.uri(), "/health");
-                            assert!(request.headers().contains_key("x-pp-signature"));
+                            use hmac::Mac;
+                            let principal = request.headers()["x-pp-principal"].to_str().unwrap();
+                            let signature =
+                                hex::decode(request.headers()["x-pp-signature"].to_str().unwrap())
+                                    .unwrap();
+                            let mut verifier =
+                                super::Hmac::<super::Sha256>::new_from_slice(&key).unwrap();
+                            verifier.update(principal.as_bytes());
+                            verifier
+                                .verify_slice(&signature)
+                                .expect("authenticated health request");
+                            let assertion: serde_json::Value =
+                                serde_json::from_slice(&hex::decode(principal).unwrap()).unwrap();
+                            assert_eq!(assertion["generation"], generation);
+                            assert_eq!(assertion["method"], "GET");
+                            assert_eq!(assertion["target"], "/health");
                             received.lock().unwrap().push(tokio::time::Instant::now());
                             let body = response.lock().unwrap().to_string();
                             async move {
@@ -916,11 +934,17 @@ async fn pump_for(duration: Duration) {
 
 async fn health_supervisor(scratch: &Scratch) -> (super::Supervisor, HealthFixture) {
     let mut spec = shell_spec(scratch);
-    spec.script = r#"read line || exit 1; data=${line#*'"data_dir":"'}; data=${data%%'"'*}; socket=${line#*'"socket_path":"'}; socket=${socket%%'"'*}; printf '%s' "$socket" > "$data/socket"; while read line; do :; done"#;
+    spec.script = r#"read line || exit 1; data=${line#*'"data_dir":"'}; data=${data%%'"'*}; printf '%s' "$line" > "$data/setup.tmp"; mv "$data/setup.tmp" "$data/setup"; while read line; do :; done"#;
     let supervisor =
         super::Supervisor::launch_shell(spec, super::SupervisorConfig::default()).unwrap();
     let fixture = HealthFixture::attach(scratch).await;
-    fixture.tick(Duration::from_millis(250), 1).await;
+    // The first probe may precede the fixture's bind. Both startup orderings
+    // are valid; measure cadence from the first request actually received.
+    pump_for(Duration::from_millis(20)).await;
+    if fixture.count() == 0 {
+        fixture.tick(Duration::from_millis(250), 1).await;
+    }
+    assert_eq!(fixture.count(), 1);
     (supervisor, fixture)
 }
 
@@ -993,8 +1017,10 @@ async fn ticket_t_2_unhealthy_startup_stops_polling_at_thirty_seconds() {
     let scratch = Scratch::new("health-budget");
     let started = tokio::time::Instant::now();
     let (supervisor, fixture) = health_supervisor(&scratch).await;
-    for expected in 2..=119 {
-        fixture.tick(Duration::from_millis(250), expected).await;
+    while started.elapsed() < Duration::from_millis(29750) {
+        fixture
+            .tick(Duration::from_millis(250), fixture.count() + 1)
+            .await;
         assert!(supervisor.handle.endpoint().is_none());
         assert!(matches!(
             *supervisor.handle.status.borrow(),
@@ -1011,7 +1037,19 @@ async fn ticket_t_2_unhealthy_startup_stops_polling_at_thirty_seconds() {
     tokio::time::advance(Duration::from_millis(1)).await;
     pump_until(|| matches!(*supervisor.handle.status.borrow(), super::Status::Stopping)).await;
     assert_eq!(started.elapsed(), Duration::from_secs(30));
-    assert_eq!(fixture.count(), 119, "health polled beyond startup budget");
+    let times = fixture.probes.lock().unwrap().clone();
+    let first = times[0] - started;
+    assert!(first == Duration::ZERO || first == Duration::from_millis(250));
+    assert_eq!(times.len(), if first.is_zero() { 120 } else { 119 });
+    assert_eq!(
+        *times.last().unwrap() - started,
+        Duration::from_millis(29750)
+    );
+    assert!(
+        times
+            .windows(2)
+            .all(|pair| pair[1] - pair[0] == Duration::from_millis(250))
+    );
     tokio::time::resume();
     let mut status = supervisor.handle.status.clone();
     wait_status(&mut status, |state| {
