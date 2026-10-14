@@ -377,6 +377,31 @@ async fn authenticated_logout_requests_complete_shutdown() {
 }
 
 #[tokio::test]
+async fn ticket_t_12_unsafe_config_is_refused_before_any_database_open() {
+    let data = temporary("unsafe-origin-config");
+    std::fs::create_dir(&data).unwrap();
+    let database = data.join("print-partner.db");
+    let copied = b"copied database must remain unopened";
+    std::fs::write(&database, copied).unwrap();
+    let target = data.join("missing-config.toml");
+    std::os::unix::fs::symlink(&target, data.join("desktop.toml")).unwrap();
+    let error = CoreRuntime::start(launch(data.clone()))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(error.to_string(), "Desktop configuration unavailable");
+    assert_eq!(std::fs::read(&database).unwrap(), copied);
+    assert_eq!(
+        std::fs::read_link(data.join("desktop.toml")).unwrap(),
+        target
+    );
+    assert!(!data.join(".desktop-owner.json").exists());
+    let owner = pp_storage::lease::StorageLease::acquire(&data).unwrap();
+    drop(owner);
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+#[tokio::test]
 async fn failed_bind_releases_owner_before_any_child() {
     let data = std::env::temp_dir().join(format!(
         "pp-bind-m0-{}",

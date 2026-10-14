@@ -394,12 +394,51 @@ fn check_document_size(size: usize) -> Result<()> {
     Ok(())
 }
 
-fn decode_row(id: &str, document: &str) -> Option<JobRecord> {
+fn decode_row(
+    id: &str,
+    document: &str,
+    diagnostics: &mut DocumentDiagnostics,
+) -> Option<JobRecord> {
     match decode(document) {
         Ok(job) => Some(job),
         Err(error) => {
-            eprintln!("Skipping invalid durable job row {id}: {error}");
+            diagnostics.record(id, &error);
             None
+        }
+    }
+}
+
+fn document_failure_reason(error: &anyhow::Error) -> String {
+    match error.downcast_ref::<JobFailure>() {
+        Some(error @ JobFailure::JobDocTooLarge { .. }) => error.to_string(),
+        _ => "Invalid durable job document; operator inspection required".into(),
+    }
+}
+
+#[derive(Default)]
+struct DocumentDiagnostics {
+    failures: usize,
+}
+impl DocumentDiagnostics {
+    fn record(&mut self, id: &str, error: &anyhow::Error) {
+        self.failures += 1;
+        if self.failures <= 8 {
+            let job_ref = hex::encode(Sha256::digest(id.as_bytes()));
+            eprintln!(
+                "Skipping invalid durable job row job_ref={}: {}",
+                &job_ref[..16],
+                document_failure_reason(error)
+            );
+        }
+    }
+}
+impl Drop for DocumentDiagnostics {
+    fn drop(&mut self) {
+        if self.failures > 8 {
+            eprintln!(
+                "Additional invalid durable job rows skipped: {}",
+                self.failures - 8
+            );
         }
     }
 }
@@ -448,9 +487,11 @@ fn decode(document: &str) -> Result<JobRecord> {
 }
 fn load(tx: &Transaction<'_>, id: &str) -> Result<Option<JobRecord>> {
     let document: Option<String> = tx
-        .query_row("SELECT document FROM durable_jobs WHERE id=?1", [id], |r| {
-            r.get(0)
-        })
+        .query_row(
+            "SELECT document FROM durable_jobs WHERE id=?1 AND state!='quarantined'",
+            [id],
+            |r| r.get(0),
+        )
         .optional()?;
     document.map(|v| decode(&v)).transpose()
 }
@@ -566,12 +607,21 @@ fn quarantine(tx: &Transaction<'_>, id: &str) -> Result<()> {
     Ok(())
 }
 fn recover_in(tx: &Transaction<'_>, all: bool) -> Result<()> {
-    let documents=tx.prepare("SELECT id,document,lease_until FROM durable_jobs WHERE state IN ('running','effect_admitted')")?.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,Option<i64>>(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
-    for (id, document, lease_until) in documents {
-        let Some(mut job) = decode_row(&id, &document) else {
+    let mut diagnostics = DocumentDiagnostics::default();
+    let rows=tx.prepare("SELECT id,lease_until,state FROM durable_jobs WHERE state IN ('running','effect_admitted') OR (?1 AND state!='quarantined')")?.query_map([all],|r|Ok((r.get::<_,String>(0)?,r.get::<_,Option<i64>>(1)?,r.get::<_,String>(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    for (id, lease_until, state) in rows {
+        let document: String = tx.query_row(
+            "SELECT document FROM durable_jobs WHERE id=?1",
+            [&id],
+            |row| row.get(0),
+        )?;
+        let Some(mut job) = decode_row(&id, &document, &mut diagnostics) else {
             quarantine(tx, &id)?;
             continue;
         };
+        if !matches!(state.as_str(), "running" | "effect_admitted") {
+            continue;
+        }
         if !all && !lease_until.is_some_and(|until| until <= now()) {
             continue;
         }
@@ -594,7 +644,16 @@ fn recover_in(tx: &Transaction<'_>, all: bool) -> Result<()> {
         } else {
             job.state = PersistentState::Queued;
         }
-        save(tx, &mut job, "attempt_recovered")?;
+        if let Err(error) = save(tx, &mut job, "attempt_recovered") {
+            if !matches!(
+                error.downcast_ref::<JobFailure>(),
+                Some(JobFailure::JobDocTooLarge { .. })
+            ) {
+                return Err(error);
+            }
+            diagnostics.record(&id, &error);
+            quarantine(tx, &id)?;
+        }
     }
     Ok(())
 }
@@ -762,7 +821,7 @@ fn user(
             if let Some((_, id)) = &query.before {
                 model::text(id, 128)?;
             }
-            let mut statement = tx.prepare("SELECT id,document FROM durable_jobs WHERE tenant=?1 AND (?2 IS NULL OR CASE state WHEN 'queued' THEN 'pending' WHEN 'running' THEN 'running' WHEN 'effect_admitted' THEN 'running' WHEN 'uploaded_only' THEN 'done' WHEN 'succeeded' THEN 'done' WHEN 'cancelled' THEN 'cancelled' ELSE 'error' END=?2) AND (?3 IS NULL OR updated>=?3) AND (?4 IS NULL OR json_extract(document,'$.payload.payload.profile_id')=?4) AND (?5 IS NULL OR updated<?5 OR (updated=?5 AND id<?6)) ORDER BY updated DESC,id DESC")?;
+            let mut statement = tx.prepare("SELECT id,document FROM durable_jobs WHERE tenant=?1 AND state!='quarantined' AND (?2 IS NULL OR CASE state WHEN 'queued' THEN 'pending' WHEN 'running' THEN 'running' WHEN 'effect_admitted' THEN 'running' WHEN 'uploaded_only' THEN 'done' WHEN 'succeeded' THEN 'done' WHEN 'cancelled' THEN 'cancelled' ELSE 'error' END=?2) AND (?3 IS NULL OR updated>=?3) AND (?4 IS NULL OR json_extract(document,'$.payload.payload.profile_id')=?4) AND (?5 IS NULL OR updated<?5 OR (updated=?5 AND id<?6)) ORDER BY updated DESC,id DESC")?;
             let mut rows = statement.query(params![
                 tenant,
                 query.status,
@@ -772,13 +831,14 @@ fn user(
                 query.before.as_ref().map(|c| c.1.as_str()),
             ])?;
             let mut jobs = Vec::with_capacity(usize::from(query.limit));
+            let mut diagnostics = DocumentDiagnostics::default();
             while jobs.len() < usize::from(query.limit) {
                 let Some(row) = rows.next()? else {
                     break;
                 };
                 let id: String = row.get(0)?;
                 let document: String = row.get(1)?;
-                if let Some(job) = decode_row(&id, &document) {
+                if let Some(job) = decode_row(&id, &document, &mut diagnostics) {
                     jobs.push(job);
                 }
             }
@@ -810,7 +870,7 @@ fn user(
                             updated_at: row.get(2)?,
                             reason: decode(&document)
                                 .err()
-                                .map(|e| e.to_string())
+                                .map(|e| document_failure_reason(&e))
                                 .unwrap_or_else(|| {
                                     "Document quarantined; operator inspection required".into()
                                 }),
@@ -988,6 +1048,7 @@ fn user(
     }
 }
 fn claim(tx: &Transaction<'_>, worker: &str, admission: &WorkerAdmission) -> Result<Outcome> {
+    let mut diagnostics = DocumentDiagnostics::default();
     recover_in(tx, false)?;
     let active: i64 = tx.query_row(
         "SELECT COUNT(*) FROM durable_jobs WHERE state IN ('running','effect_admitted')",
@@ -1004,7 +1065,7 @@ fn claim(tx: &Transaction<'_>, worker: &str, admission: &WorkerAdmission) -> Res
         }
         let documents=tx.prepare("SELECT id,document FROM durable_jobs WHERE state='queued' AND kind=?1 ORDER BY created,id")?.query_map([kind.name()],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
         for (id, document) in documents {
-            let Some(mut job) = decode_row(&id, &document) else {
+            let Some(mut job) = decode_row(&id, &document, &mut diagnostics) else {
                 continue;
             };
             let resource = job.payload.resource();
@@ -1202,6 +1263,7 @@ pub(crate) fn source_reserved(tx: &Transaction<'_>, tenant: &str, id: i64) -> Re
 // The column is retained for damaged rows. Healthy legacy scoped Sync rows may
 // still have source:* in the column; their validated payload supplies the scope.
 fn reserved_resources(tx: &Transaction<'_>, tenant: &str, queued: bool) -> Result<Vec<String>> {
+    let mut diagnostics = DocumentDiagnostics::default();
     let rows = tx.prepare("SELECT id,document,resource,state FROM durable_jobs WHERE tenant=?1 AND (state IN ('running','effect_admitted','reconciliation_required','quarantined') OR (?2 AND state='queued')) AND resource<>''")?
         .query_map(params![tenant, queued], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?)))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1211,7 +1273,7 @@ fn reserved_resources(tx: &Transaction<'_>, tenant: &str, queued: bool) -> Resul
             if state == "quarantined" {
                 return resource;
             }
-            decode_row(&id, &document)
+            decode_row(&id, &document, &mut diagnostics)
                 .map(|job| job.payload.resource())
                 .unwrap_or(resource)
         })
@@ -1450,8 +1512,16 @@ pub(crate) fn validate_schema(connection: &Connection, version: u64) -> Result<(
     );
     let mut query=connection.prepare("SELECT id,tenant,kind,state,resource,version,generation,lease_until,created,updated,document FROM durable_jobs")?;
     let mut rows = query.query([])?;
+    let mut diagnostics = DocumentDiagnostics::default();
     while let Some(row) = rows.next()? {
-        let Some(job) = decode_row(&row.get::<_, String>(0)?, &row.get::<_, String>(10)?) else {
+        if row.get::<_, String>(3)? == "quarantined" {
+            continue;
+        }
+        let Some(job) = decode_row(
+            &row.get::<_, String>(0)?,
+            &row.get::<_, String>(10)?,
+            &mut diagnostics,
+        ) else {
             continue;
         };
         job.payload.validate_stored()?;
