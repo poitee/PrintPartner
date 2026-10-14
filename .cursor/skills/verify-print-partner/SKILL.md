@@ -255,8 +255,10 @@ $CONTROL help
 ## Feature map
 
 See [features/README.md](features/README.md). Cloud agents cannot reach
-`192.168.200.80:8080` or `192.168.200.81:8080` — use Docker here; use [features/live-lan-walk.md](features/live-lan-walk.md)
-only as a human/Mac checklist on the LAN desk loop.
+`192.168.200.80:8080` or `192.168.200.81:8080`. Use the isolated Docker
+launch in this skill for agent proof. Observe production from
+[features/live-lan-walk.md](features/live-lan-walk.md) only as a person
+on a LAN client.
 
 ## Maintenance
 

@@ -48,4 +48,4 @@ user-visible behavior. It then uses exactly four H2 sections in this order:
 - [Checkoff](./checkoff.md) — verify units against an Accepted Plan.
 - [Production](./production.md) — plates, export, and printer handoff.
 - [Theme (instrument chrome)](./theme.md) — light / dark / system preference.
-- [Live LAN walk (human/Mac)](./live-lan-walk.md) — separate evidence path; not cloud-reachable.
+- [Live production observation](./live-lan-walk.md). A person opens the production UI on apps VM 111. Cloud agents do not drive that walk.
