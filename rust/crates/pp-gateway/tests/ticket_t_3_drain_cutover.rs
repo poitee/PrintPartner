@@ -933,6 +933,14 @@ async fn ticket_t_3_drain_cutover_gateway_drain_waits_for_inflight_forward() {
 fn ticket_t_3_drain_cutover_record_and_evidence_fail_closed() {
     use std::os::unix::fs::symlink;
     let index = fixture_index();
+    let blocked = Scratch::new("failed-rename");
+    fs::create_dir(blocked.0.join(CUTOVER_FILE)).unwrap();
+    assert!(matches!(
+        plan_for(&index, &OperationOwners::node_only(), CATALOG).commit(&blocked.0, DRAINED),
+        CutoverReceipt::CommitFailed { .. }
+    ));
+    assert!(blocked.0.join(CUTOVER_FILE).is_dir());
+    assert_eq!(fs::read_dir(&blocked.0).unwrap().count(), 1);
     let dir = Scratch::new("unsafe-record");
     let path = dir.0.join(CUTOVER_FILE);
     fs::write(&path, vec![b' '; 65537]).unwrap();

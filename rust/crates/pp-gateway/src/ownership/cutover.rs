@@ -52,6 +52,31 @@ struct ParityReceipt {
     failed: u32,
 }
 
+impl ParityReceipt {
+    fn parse(text: &str) -> Result<Self, CutoverRefusal> {
+        let receipt: ParityReceipt =
+            serde_json::from_str(text).map_err(|error| CutoverRefusal::ParityMalformed {
+                detail: error.to_string(),
+            })?;
+        if receipt.schema != PARITY_SCHEMA {
+            return Err(CutoverRefusal::ParityMalformed {
+                detail: format!("unsupported schema {}", receipt.schema),
+            });
+        }
+        if receipt.fixtures == 0 {
+            return Err(CutoverRefusal::ParityNoFixtures);
+        }
+        if receipt.passed != receipt.fixtures || receipt.failed != 0 {
+            return Err(CutoverRefusal::ParityFailures {
+                fixtures: receipt.fixtures,
+                passed: receipt.passed,
+                failed: receipt.failed,
+            });
+        }
+        Ok(receipt)
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OperationOwners {
     record: Option<CutoverRecord>,
@@ -253,25 +278,7 @@ pub fn plan(
     if owners.rust_operations().any(|owned| owned == operation) {
         return Err(CutoverRefusal::AlreadyRustOwned);
     }
-    let receipt: ParityReceipt =
-        serde_json::from_str(parity).map_err(|error| CutoverRefusal::ParityMalformed {
-            detail: error.to_string(),
-        })?;
-    if receipt.schema != PARITY_SCHEMA {
-        return Err(CutoverRefusal::ParityMalformed {
-            detail: format!("unsupported schema {}", receipt.schema),
-        });
-    }
-    if receipt.fixtures == 0 {
-        return Err(CutoverRefusal::ParityNoFixtures);
-    }
-    if receipt.passed != receipt.fixtures || receipt.failed != 0 {
-        return Err(CutoverRefusal::ParityFailures {
-            fixtures: receipt.fixtures,
-            passed: receipt.passed,
-            failed: receipt.failed,
-        });
-    }
+    let receipt = ParityReceipt::parse(parity)?;
     if receipt.operation != operation {
         return Err(CutoverRefusal::ParityOperationMismatch {
             expected: operation.to_owned(),
