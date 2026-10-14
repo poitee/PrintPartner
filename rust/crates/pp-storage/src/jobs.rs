@@ -18,6 +18,13 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[derive(Clone, Copy)]
+pub(crate) enum EffectAdmissionPolicy {
+    Legacy,
+    #[cfg(feature = "desktop_rebuild")]
+    EnforceFeatures,
+}
+
 pub struct PhysicalOwner {
     storage: Arc<crate::Shared>,
 }
@@ -165,12 +172,23 @@ pub(crate) enum Command {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobFailure {
+    #[cfg(feature = "desktop_rebuild")]
+    FeatureDisabled {
+        feature: pp_domain::features::Feature,
+    },
     CommitUnknown,
-    JobDocTooLarge { size: usize, limit: usize },
+    JobDocTooLarge {
+        size: usize,
+        limit: usize,
+    },
 }
 impl std::fmt::Display for JobFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            #[cfg(feature = "desktop_rebuild")]
+            Self::FeatureDisabled { feature } => {
+                write!(f, "Feature {} is disabled.", feature.key())
+            }
             Self::CommitUnknown => f.write_str("Job commit outcome unknown"),
             Self::JobDocTooLarge { size, limit } => write!(
                 f,
@@ -663,7 +681,11 @@ pub(crate) fn recover(connection: &mut Connection) -> Result<()> {
     tx.commit()?;
     Ok(())
 }
-pub(crate) fn execute(connection: &mut Connection, command: Command) -> Result<Outcome> {
+pub(crate) fn execute(
+    connection: &mut Connection,
+    command: Command,
+    effect_policy: EffectAdmissionPolicy,
+) -> Result<Outcome> {
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let outcome = match command {
         Command::User {
@@ -695,7 +717,7 @@ pub(crate) fn execute(connection: &mut Connection, command: Command) -> Result<O
             lease,
             operation,
             admission,
-        } => advance(&tx, lease, operation, &admission)?,
+        } => advance(&tx, lease, operation, &admission, effect_policy)?,
         Command::Retain { per_tenant, global } => {
             Outcome::Retained(prune(&tx, per_tenant, global)?)
         }
@@ -1310,6 +1332,7 @@ fn advance(
     lease: AttemptLease,
     operation: WorkerOperation,
     admission: &WorkerAdmission,
+    _effect_policy: EffectAdmissionPolicy,
 ) -> Result<Outcome> {
     let mut job = claimed_job(tx, &lease)?;
     let event = match operation {
@@ -1408,6 +1431,12 @@ fn advance(
                     );
                 }
             }
+            #[cfg(feature = "desktop_rebuild")]
+            if matches!(_effect_policy, EffectAdmissionPolicy::EnforceFeatures)
+                && intent.operation == EffectOperation::SpoolmanDeduction
+            {
+                require_spoolman(tx, &job)?;
+            }
             job.effects.push(EffectReceipt {
                 intent,
                 attempt: job.attempt,
@@ -1490,6 +1519,27 @@ fn advance(
     }
     save(tx, &mut job, event)?;
     Ok(Outcome::Job(job, LocalCommit::Committed))
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn require_spoolman(tx: &Transaction<'_>, job: &JobRecord) -> Result<()> {
+    use pp_domain::{PositiveId, features::Feature};
+
+    let Payload::PrinterUpload { profile_id, .. } = &job.payload else {
+        return Err(anyhow!("Spoolman deduction requires printer upload"));
+    };
+    let plan = profile_id
+        .map(PositiveId::new)
+        .transpose()
+        .map_err(anyhow::Error::msg)?;
+    let view = crate::features::resolve_for_tenant(tx, &job.tenant, plan)?;
+    ensure!(
+        view.effective().enabled(Feature::Spoolman),
+        JobFailure::FeatureDisabled {
+            feature: Feature::Spoolman
+        }
+    );
+    Ok(())
 }
 
 pub(crate) fn validate_schema(connection: &Connection, version: u64) -> Result<()> {
@@ -1751,9 +1801,12 @@ mod tests {
             .execute_batch(include_str!("jobs/schema.sql"))
             .unwrap();
         let held = enqueue_job(&mut connection, "held");
-        let Outcome::Claimed(Some((claimed, _))) =
-            execute(&mut connection, claim_command("holder")).unwrap()
-        else {
+        let Outcome::Claimed(Some((claimed, _))) = execute(
+            &mut connection,
+            claim_command("holder"),
+            EffectAdmissionPolicy::Legacy,
+        )
+        .unwrap() else {
             panic!("held claim");
         };
         assert_eq!(claimed.job_id, held.job_id);
@@ -1806,7 +1859,11 @@ mod tests {
             }
         }
         assert!(blocked, "page budget never rejected a larger job document");
-        let error = match execute(&mut connection, claim_command("second")) {
+        let error = match execute(
+            &mut connection,
+            claim_command("second"),
+            EffectAdmissionPolicy::Legacy,
+        ) {
             Err(error) => error,
             Ok(_) => panic!("in-flight claim committed under the page budget"),
         };
@@ -1840,9 +1897,12 @@ mod tests {
         connection
             .pragma_update(None, "max_page_count", limit + 64)
             .unwrap();
-        let Outcome::Claimed(Some((retried, _))) =
-            execute(&mut connection, claim_command("second")).unwrap()
-        else {
+        let Outcome::Claimed(Some((retried, _))) = execute(
+            &mut connection,
+            claim_command("second"),
+            EffectAdmissionPolicy::Legacy,
+        )
+        .unwrap() else {
             panic!("claim after raising the quota");
         };
         assert_eq!(retried.job_id, victim.job_id);
@@ -1868,9 +1928,12 @@ mod tests {
             .execute_batch(include_str!("jobs/schema.sql"))
             .unwrap();
         let held = enqueue_job(&mut connection, "held");
-        let Outcome::Claimed(Some((claimed, _))) =
-            execute(&mut connection, claim_command("holder")).unwrap()
-        else {
+        let Outcome::Claimed(Some((claimed, _))) = execute(
+            &mut connection,
+            claim_command("holder"),
+            EffectAdmissionPolicy::Legacy,
+        )
+        .unwrap() else {
             panic!("held claim");
         };
         assert_eq!(claimed.job_id, held.job_id);
@@ -1883,7 +1946,11 @@ mod tests {
                 std::ptr::null_mut(),
             );
         }
-        let error = match execute(&mut connection, claim_command("second")) {
+        let error = match execute(
+            &mut connection,
+            claim_command("second"),
+            EffectAdmissionPolicy::Legacy,
+        ) {
             Err(error) => error,
             Ok(_) => panic!("in-flight claim committed"),
         };
@@ -1910,9 +1977,12 @@ mod tests {
             )
             .unwrap();
         assert_eq!(running, 1);
-        let Outcome::Claimed(Some((retried, _))) =
-            execute(&mut connection, claim_command("second")).unwrap()
-        else {
+        let Outcome::Claimed(Some((retried, _))) = execute(
+            &mut connection,
+            claim_command("second"),
+            EffectAdmissionPolicy::Legacy,
+        )
+        .unwrap() else {
             panic!("claim after the commit failure");
         };
         assert_eq!(retried.job_id, victim.job_id);

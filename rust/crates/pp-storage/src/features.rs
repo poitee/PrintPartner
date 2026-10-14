@@ -147,25 +147,15 @@ pub(super) fn execute(connection: &mut Connection, command: Command) -> Result<V
             secret,
         } => auth::read_key_tenant(&tx, &routed_tenant, &secret)?,
     };
-    let mut plan = match command.scope {
+    let plan = match command.scope {
         Scope::User => None,
-        Scope::Plan(id) => {
-            let owned: bool = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM build_profiles WHERE id=?1 AND tenant_id=?2)",
-                params![i64::try_from(id.get())?, tenant],
-                |row| row.get(0),
-            )?;
-            ensure!(owned, "Plan not found");
-            let key = format!("{USER_KEY}:plan:{}", id.get());
-            let toggles = load(&tx, &tenant, &key)?;
-            Some((id, key, toggles))
-        }
+        Scope::Plan(id) => Some(id),
     };
-    let mut user = load(&tx, &tenant, USER_KEY)?;
+    let mut layers = load_layers(&tx, &tenant, plan)?;
     if let Some((feature, choice)) = command.patch {
-        let (key, layer) = match &mut plan {
+        let (key, layer) = match &mut layers.plan {
             Some((_, key, toggles)) => (key.as_str(), toggles),
-            None => (USER_KEY, &mut user),
+            None => (USER_KEY, &mut layers.user),
         };
         layer.toggles.set(feature, choice);
         match choice {
@@ -175,13 +165,51 @@ pub(super) fn execute(connection: &mut Connection, command: Command) -> Result<V
         store(&tx, &tenant, key, layer)?;
     }
     tx.commit()?;
-    let user = user.toggles;
-    let plan = plan.map(|(id, _, layer)| (id, layer.toggles));
-    Ok(View {
-        effective: resolve(&user, plan.as_ref().map(|(_, toggles)| toggles)),
-        user,
-        plan,
-    })
+    Ok(layers.into_view())
+}
+
+struct Layers {
+    user: Layer,
+    plan: Option<(PositiveId, String, Layer)>,
+}
+impl Layers {
+    fn into_view(self) -> View {
+        let user = self.user.toggles;
+        let plan = self.plan.map(|(id, _, layer)| (id, layer.toggles));
+        View {
+            effective: resolve(&user, plan.as_ref().map(|(_, toggles)| toggles)),
+            user,
+            plan,
+        }
+    }
+}
+
+fn load_layers(tx: &Transaction<'_>, tenant: &str, plan: Option<PositiveId>) -> Result<Layers> {
+    let plan = match plan {
+        None => None,
+        Some(id) => {
+            let owned: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM build_profiles WHERE id=?1 AND tenant_id=?2)",
+                params![i64::try_from(id.get())?, tenant],
+                |row| row.get(0),
+            )?;
+            ensure!(owned, "Plan not found");
+            let key = format!("{USER_KEY}:plan:{}", id.get());
+            let toggles = load(tx, tenant, &key)?;
+            Some((id, key, toggles))
+        }
+    };
+    let user = load(tx, tenant, USER_KEY)?;
+    Ok(Layers { user, plan })
+}
+
+/// Uses an already authenticated tenant within the caller's transaction.
+pub(crate) fn resolve_for_tenant(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    plan: Option<PositiveId>,
+) -> Result<View> {
+    Ok(load_layers(tx, tenant, plan)?.into_view())
 }
 
 #[derive(Default)]
