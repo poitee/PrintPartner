@@ -40,6 +40,8 @@ export class SqliteDatabase {
   // holds, and the recorded desktop child runs under its parent's lease.
   connect(): void {
     if (this.sqlite) throw new Error("Database already connected");
+    // Finish a release that a failed close left pending before reserving again.
+    this.close();
     let ownership: "absent" | "child";
     if (this.lease === "parent") {
       if (!parentReservedCopy(this.dataDir)) {

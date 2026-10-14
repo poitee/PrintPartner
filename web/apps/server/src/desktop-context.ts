@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { presentDesktopChildCredential } from "./desktop-child-credential.js";
-import { acquireStorageLease, ownerIsStale } from "./storage-lease.js";
+import { acquireStorageLease, ownerIsStale, storageParentIdentityEnv } from "./storage-lease.js";
 import type { SessionUser } from "./routes/auth-types.js";
 
 const setupSchema = z.strictObject({
@@ -118,7 +118,7 @@ export function verifyDesktopPrincipal(
   return principal;
 }
 
-type HeldDataDirectory = { refs: number; release: () => void };
+type HeldDataDirectory = { refs: number; identity: string; release: () => void };
 const heldDataDirectories = new Map<string, HeldDataDirectory>();
 
 function heldRelease(canonical: string, held: HeldDataDirectory): () => void {
@@ -149,6 +149,13 @@ export function retainDataDirectory(dataDir: string): () => void {
   return acquireDataDirectory(dataDir);
 }
 
+/** Environment for a worker process that opens a copy this process holds with the "parent" lease. */
+export function storageWorkerEnv(dataDir: string): Record<string, string> {
+  const held = heldDataDirectories.get(realpathSync(dataDir));
+  if (!held) throw new Error("This process does not hold the data directory");
+  return { [storageParentIdentityEnv]: held.identity };
+}
+
 export function acquireDataDirectory(dataDir: string): () => void {
   if (context) {
     if (realpathSync(dataDir) !== context.data_dir) throw new Error("Desktop storage lease rejected");
@@ -168,7 +175,7 @@ export function acquireDataDirectory(dataDir: string): () => void {
     lease.release();
     throw error;
   }
-  const held: HeldDataDirectory = { refs: 1, release: () => {
+  const held: HeldDataDirectory = { refs: 1, identity: lease.identity, release: () => {
     // Preserve ownership if marker cleanup fails, so callers can retry safely.
     rmSync(marker);
     lease.release();

@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { desktopChildCredential } from "../desktop-child-credential.js";
-import { processIdentity } from "../storage-lease.js";
+import { processIdentity, storageParentIdentityEnv } from "../storage-lease.js";
 import { currentSchemaVersion } from "./schema.js";
 import { readSchemaVersion } from "./upgrade-guard.js";
 
@@ -182,6 +182,9 @@ function readJson(path: string): unknown {
 export function parentReservedCopy(dataDir: string): boolean {
   const lease = readJson(join(dataDir, ".desktop-lease", "owner.json"));
   if (!isCompleteLeaseOwner(lease) || lease.pid !== process.ppid) return false;
+  // The parent hands over its identity explicitly. Off Linux the identity lookup
+  // below cannot tell a reused PID apart, so the credential is what authenticates.
+  if (process.env[storageParentIdentityEnv] !== lease.process_identity) return false;
   const marker = recordOf(readJson(join(dataDir, ".desktop-owner.json")));
   if (!marker || marker.kind !== "standalone" || marker.pid !== process.ppid) return false;
   if (marker.process_identity !== lease.process_identity) return false;

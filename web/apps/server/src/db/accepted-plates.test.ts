@@ -12,6 +12,7 @@ import { MAX_ACCEPTED_PLATES, parseAcceptedStlMesh } from "@print-partner/domain
 import { acceptedPlanBasis } from "./accepted-plan-progress.js";
 import { backfillAcceptedPlanRevisions } from "./accepted-plan-revisions.js";
 import { AcceptedPlateIntegrityError } from "./accepted-plates.js";
+import { storageWorkerEnv } from "../desktop-context.js";
 import { getDb, SqliteDatabase } from "./client.js";
 import { backfillCurrentRequiredUnitSets } from "./required-units.js";
 import { AppRepository } from "./repository.js";
@@ -734,7 +735,7 @@ database.close();`,
           readyPath,
           startPath,
         ],
-        { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] },
+        { cwd: process.cwd(), env: { ...process.env, ...storageWorkerEnv(root) }, stdio: ["ignore", "pipe", "pipe"] },
       );
       let output = "";
       let error = "";

@@ -1,10 +1,10 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { acquireDataDirectory } from "../desktop-context.js";
+import { acquireDataDirectory, storageWorkerEnv } from "../desktop-context.js";
 import { SqliteDatabase } from "./client.js";
 
 const clientUrl = new URL("./client.ts", import.meta.url).href;
@@ -30,13 +30,18 @@ function dataDir(): string {
 
 // A separate Node process that opens the copy with a bare connect, as tests
 // and dev scripts do, and optionally keeps it open.
-function bareConnect(dir: string, hold: boolean, lease: "own" | "parent" = "own"): ChildProcessWithoutNullStreams {
+function bareConnect(
+  dir: string,
+  hold: boolean,
+  lease: "own" | "parent" = "own",
+  env: NodeJS.ProcessEnv = process.env,
+): ChildProcessWithoutNullStreams {
   const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e",
     `import { SqliteDatabase } from ${JSON.stringify(clientUrl)};
      const db = new SqliteDatabase(${JSON.stringify(dir)}, ${JSON.stringify(lease)});
      try { db.connect(); } catch (error) { console.error(error.message); process.exit(3); }
      console.log("connected");
-     if (${hold}) setInterval(() => {}, 1000); else db.close();`]);
+     if (${hold}) setInterval(() => {}, 1000); else db.close();`], { env });
   children.push(child);
   return child;
 }
@@ -133,12 +138,13 @@ describe("connections inside one process", () => {
 });
 
 describe("a worker under its parent's reservation", () => {
-  it("connects while the parent holds the copy", async () => {
+  it("connects while the parent holds the copy and hands over its identity", async () => {
     const dir = dataDir();
     const db = new SqliteDatabase(dir);
     db.connect();
     try {
-      expect(await outcome(bareConnect(dir, false, "parent"))).toMatchObject({ code: 0, stdout: "connected\n" });
+      const worker = bareConnect(dir, false, "parent", { ...process.env, ...storageWorkerEnv(dir) });
+      expect(await outcome(worker)).toMatchObject({ code: 0, stdout: "connected\n" });
       expect(JSON.parse(readFileSync(join(dir, ".desktop-owner.json"), "utf8")).pid).toBe(process.pid);
     } finally {
       db.close();
@@ -158,4 +164,38 @@ describe("a worker under its parent's reservation", () => {
     expect(foreign.code).toBe(3);
     expect(foreign.stderr).toContain("The parent process does not hold this data directory");
   }, 30_000);
+
+  it("is refused without the parent's identity even though the parent holds the copy", async () => {
+    const dir = dataDir();
+    const db = new SqliteDatabase(dir);
+    db.connect();
+    try {
+      for (const env of [process.env, { ...process.env, PP_STORAGE_PARENT_IDENTITY: "instance:" + "ab".repeat(16) }]) {
+        const worker = await outcome(bareConnect(dir, false, "parent", env));
+        expect(worker.code).toBe(3);
+        expect(worker.stderr).toContain("The parent process does not hold this data directory");
+      }
+    } finally {
+      db.close();
+    }
+  }, 30_000);
+});
+
+describe("a close whose release fails", () => {
+  it.skipIf(process.getuid?.() === 0)("is finished by the next connect, so the copy is released after one close", () => {
+    const dir = dataDir();
+    const db = new SqliteDatabase(dir);
+    db.connect();
+    chmodSync(dir, 0o500);
+    try {
+      expect(() => db.close()).toThrow();
+    } finally {
+      chmodSync(dir, 0o700);
+    }
+    expect(existsSync(join(dir, ".desktop-owner.json"))).toBe(true);
+    db.connect();
+    db.close();
+    expect(existsSync(join(dir, ".desktop-lease"))).toBe(false);
+    expect(existsSync(join(dir, ".desktop-owner.json"))).toBe(false);
+  });
 });
