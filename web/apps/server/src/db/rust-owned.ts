@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { desktopChildCredential } from "../desktop-child-credential.js";
 import { processIdentity } from "../storage-lease.js";
 import { currentSchemaVersion } from "./schema.js";
 import { readSchemaVersion } from "./upgrade-guard.js";
@@ -50,8 +51,8 @@ function recordedIdentity(marker: RustOwnerMarker, key: "process_identity" | "ch
   return value;
 }
 
-// Linux compares boot_id:starttime. Elsewhere Rust stores a private instance token
-// that Node cannot recompute, so two instance tokens still name one live process.
+// A live process owns the recorded identity only when it still matches.
+// A missing lookup fails closed. PID reuse is not ownership.
 function processStillOwnsIdentity(pid: number, identity: string | undefined): boolean {
   try {
     process.kill(pid, 0);
@@ -65,14 +66,14 @@ function processStillOwnsIdentity(pid: number, identity: string | undefined): bo
   } catch {
     return true;
   }
-  if (actual === identity) return true;
-  return actual.startsWith("instance:") && identity.startsWith("instance:");
+  return actual === identity;
 }
 
 function recordedChildIsLive(marker: RustOwnerMarker): boolean {
   if (marker.child_pid === undefined) return false;
   const identity = recordedIdentity(marker, "child_process_identity");
   if (!identity) return true;
+  if (marker.child_pid === process.pid) return isRecordedChild(marker);
   return processStillOwnsIdentity(marker.child_pid, identity);
 }
 
@@ -159,7 +160,27 @@ function isRecordedChild(marker: RustOwnerMarker): boolean {
   if (marker.child_pid !== process.pid) return false;
   const identity = recordedIdentity(marker, "child_process_identity");
   if (!identity) return false;
-  return processStillOwnsIdentity(process.pid, identity);
+  // Linux matches boot_id:starttime. Off Linux the parent passes Rust's token
+  // through desktop setup; a recycled PID does not have that credential.
+  if (desktopChildCredential() === identity) return true;
+  try {
+    return processIdentity(process.pid) === identity;
+  } catch {
+    return false;
+  }
+}
+
+export function leaseHeldByThisProcess(dataDir: string): boolean {
+  const ownerPath = join(dataDir, ".desktop-lease", "owner.json");
+  if (!existsSync(ownerPath)) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(ownerPath, "utf8"));
+  } catch {
+    return false;
+  }
+  if (!isCompleteLeaseOwner(parsed)) return false;
+  return parsed.pid === process.pid && processStillOwnsIdentity(parsed.pid, parsed.process_identity);
 }
 
 export function rustOwnedCopy(dataDir: string): RustOwnedCopy {

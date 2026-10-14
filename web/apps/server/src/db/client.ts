@@ -2,18 +2,25 @@ import Database from "better-sqlite3";
 import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { acquireStorageLease } from "../storage-lease.js";
 import * as schema from "./schema.js";
 import { currentSchemaVersion, schemaVersionKey } from "./schema.js";
 import { schemaMigrations } from "./migrations-sqlite.js";
 import { seedStarterProfiles } from "./seed-starter-profiles.js";
 import { repairSourceRevisionTenantOwnershipSqlite } from "./source-revision-tenant-repair.js";
 import { assertUpgradableSchemaVersion, readSchemaVersion } from "./upgrade-guard.js";
-import { assertSupportedRustSchema, databaseSchemaIsCurrent, rustOwnedCopy } from "./rust-owned.js";
+import {
+  assertSupportedRustSchema,
+  databaseSchemaIsCurrent,
+  leaseHeldByThisProcess,
+  rustOwnedCopy,
+} from "./rust-owned.js";
 
 export type DrizzleDb = BetterSQLite3Database<typeof schema>;
 
 export class SqliteDatabase {
   private sqlite: Database.Database | null = null;
+  private releaseLease: (() => void) | null = null;
   readonly dbPath: string;
   readonly dataDir: string;
   readonly reposDir: string;
@@ -31,37 +38,61 @@ export class SqliteDatabase {
   connect(): void {
     const ownership = rustOwnedCopy(this.dataDir);
     if (ownership.kind === "foreign") {
-      if (existsSync(this.dbPath)) assertSupportedRustSchema(this.dbPath);
-      throw new Error("Rust owns this data directory; Node will not migrate or write");
+      this.refuseRustOwnedCopy();
     }
     // The desktop lease records this process before any SQL file exists.
-    // Skip migrations only after Rust has already stamped the supported schema.
+    // Skip version-advancing migrations only after that schema is already current.
     const childAlreadyCurrent =
       ownership.kind === "child" && databaseSchemaIsCurrent(this.dbPath);
+    const releaseAdmission = this.reserveUnownedCopy(ownership.kind);
     mkdirSync(dirname(this.dbPath), { recursive: true });
     const sqlite = new Database(this.dbPath);
     try {
       if (!childAlreadyCurrent) assertUpgradableSchemaVersion(readSchemaVersion(sqlite));
+      mkdirSync(this.reposDir, { recursive: true });
+      mkdirSync(this.sourcesDir, { recursive: true });
+      mkdirSync(join(this.dataDir, "exports"), { recursive: true });
+      mkdirSync(join(this.dataDir, "thumbs"), { recursive: true });
+      mkdirSync(join(this.dataDir, "covers"), { recursive: true });
+
+      this.sqlite = sqlite;
+      this.sqlite.pragma("journal_mode = WAL");
+      this.sqlite.pragma("foreign_keys = ON");
+      this.drizzle = drizzle(this.sqlite, { schema });
+      if (childAlreadyCurrent) {
+        this.repairCurrentSchema();
+        seedStarterProfiles(this.sqlite, "missing");
+      } else {
+        this.runMigrations();
+        seedStarterProfiles(this.sqlite);
+      }
+      this.releaseLease = releaseAdmission;
     } catch (error) {
       sqlite.close();
+      this.sqlite = null;
+      this.drizzle = null;
+      releaseAdmission?.();
       throw error;
     }
-    mkdirSync(this.reposDir, { recursive: true });
-    mkdirSync(this.sourcesDir, { recursive: true });
-    mkdirSync(join(this.dataDir, "exports"), { recursive: true });
-    mkdirSync(join(this.dataDir, "thumbs"), { recursive: true });
-    mkdirSync(join(this.dataDir, "covers"), { recursive: true });
+  }
 
-    this.sqlite = sqlite;
-    this.sqlite.pragma("journal_mode = WAL");
-    this.sqlite.pragma("foreign_keys = ON");
-    this.drizzle = drizzle(this.sqlite, { schema });
-    if (childAlreadyCurrent) {
-      seedStarterProfiles(this.sqlite, "missing");
-      return;
+  private refuseRustOwnedCopy(): never {
+    if (existsSync(this.dbPath)) assertSupportedRustSchema(this.dbPath);
+    throw new Error("Rust owns this data directory; Node will not migrate or write");
+  }
+
+  // Reserve the unowned observation. A lease this process already holds, including
+  // the desktop parent and acquireDataDirectory, stays with that caller.
+  private reserveUnownedCopy(kind: "absent" | "child"): (() => void) | null {
+    if (kind !== "absent" || leaseHeldByThisProcess(this.dataDir)) return null;
+    mkdirSync(this.dataDir, { recursive: true });
+    try {
+      return acquireStorageLease(this.dataDir).release;
+    } catch (error) {
+      const again = rustOwnedCopy(this.dataDir);
+      if (again.kind === "foreign") this.refuseRustOwnedCopy();
+      throw error;
     }
-    this.runMigrations();
-    seedStarterProfiles(this.sqlite);
   }
 
   private runMigrations(): void {
@@ -85,12 +116,26 @@ export class SqliteDatabase {
         if (!/duplicate column name/i.test(msg)) throw e;
       }
     }
-    repairSourceRevisionTenantOwnershipSqlite(this.sqlite);
-    const partCols = this.sqlite.pragma("table_info(parts)") as { name: string }[];
-    if (!partCols.some((c) => c.name === "spoolman_spool_id")) {
-      this.sqlite.exec("ALTER TABLE parts ADD COLUMN spoolman_spool_id TEXT");
+    this.repairCurrentSchema();
+    if (versionBeforeMigration < currentSchemaVersion) {
+      this.sqlite
+        .prepare(
+          `INSERT INTO app_settings (tenant_id, key, value) VALUES (?, ?, ?)
+           ON CONFLICT(tenant_id, key) DO UPDATE SET value = excluded.value`,
+        )
+        .run("default", schemaVersionKey, String(currentSchemaVersion));
     }
-    this.sqlite.exec(`
+  }
+
+  private repairCurrentSchema(): void {
+    if (!this.sqlite) throw new Error("Database not connected");
+    const sqlite = this.sqlite;
+    repairSourceRevisionTenantOwnershipSqlite(sqlite);
+    const partCols = sqlite.pragma("table_info(parts)") as { name: string }[];
+    if (!partCols.some((c) => c.name === "spoolman_spool_id")) {
+      sqlite.exec("ALTER TABLE parts ADD COLUMN spoolman_spool_id TEXT");
+    }
+    sqlite.exec(`
       CREATE TRIGGER IF NOT EXISTS trg_build_profiles_revision_ownership_insert
       BEFORE INSERT ON build_profiles
       WHEN NEW.accepted_plan_revision_id IS NOT NULL AND NOT EXISTS (
@@ -114,13 +159,11 @@ export class SqliteDatabase {
         SELECT RAISE(ABORT, 'Accepted Plan revision ownership violation');
       END;
     `);
-    const printProgressCols = this.sqlite.pragma("table_info(print_progress)") as { name: string }[];
+    const printProgressCols = sqlite.pragma("table_info(print_progress)") as { name: string }[];
     if (!printProgressCols.some((c) => c.name === "assembled")) {
-      this.sqlite.exec("ALTER TABLE print_progress ADD COLUMN assembled INTEGER NOT NULL DEFAULT 0");
+      sqlite.exec("ALTER TABLE print_progress ADD COLUMN assembled INTEGER NOT NULL DEFAULT 0");
     }
-
-    // Performance indexes (idempotent — IF NOT EXISTS)
-    this.sqlite.exec(`
+    sqlite.exec(`
       CREATE INDEX IF NOT EXISTS idx_profile_layers_tenant_profile
         ON profile_layers(tenant_id, profile_id);
       CREATE INDEX IF NOT EXISTS idx_parts_tenant_profile
@@ -138,14 +181,6 @@ export class SqliteDatabase {
       CREATE INDEX IF NOT EXISTS idx_buildprofiles_last_used
         ON build_profiles(tenant_id, last_used_at);
     `);
-    if (versionBeforeMigration < currentSchemaVersion) {
-      this.sqlite
-        .prepare(
-          `INSERT INTO app_settings (tenant_id, key, value) VALUES (?, ?, ?)
-           ON CONFLICT(tenant_id, key) DO UPDATE SET value = excluded.value`,
-        )
-        .run("default", schemaVersionKey, String(currentSchemaVersion));
-    }
   }
 
   ping(): boolean {
@@ -155,9 +190,15 @@ export class SqliteDatabase {
   }
 
   close(): void {
-    this.sqlite?.close();
-    this.sqlite = null;
-    this.drizzle = null;
+    try {
+      this.sqlite?.close();
+    } finally {
+      this.sqlite = null;
+      this.drizzle = null;
+      const release = this.releaseLease;
+      this.releaseLease = null;
+      release?.();
+    }
   }
 
   /** Create a transactionally consistent snapshot, including committed WAL data. */

@@ -1,9 +1,10 @@
 import Database from "better-sqlite3";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { presentDesktopChildCredential } from "../desktop-child-credential.js";
 import { processIdentity } from "../storage-lease.js";
 import { SqliteDatabase } from "./client.js";
 import { rustOwnedCopy } from "./rust-owned.js";
@@ -11,6 +12,7 @@ import { rustOwnedCopy } from "./rust-owned.js";
 const roots: string[] = [];
 
 afterEach(() => {
+  presentDesktopChildCredential(null);
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -72,15 +74,42 @@ describe("rust owner marker", () => {
     expect(rustOwnedCopy(dir)).toEqual({ kind: "absent" });
   });
 
-  it("matches an instance token only where this process identity is an instance token", () => {
+  it("admits an unmatched instance token only after this process presents it", () => {
+    const token = `instance:${"ab".repeat(16)}`;
     const dir = markerDir({
       storage_protocol_version: 1,
       pid: deadPid(),
       process_identity: "prior",
       child_pid: process.pid,
-      child_process_identity: `instance:${"ab".repeat(16)}`,
+      child_process_identity: token,
     });
-    expect(rustOwnedCopy(dir)).toEqual({ kind: process.platform === "linux" ? "absent" : "child" });
+    expect(rustOwnedCopy(dir)).toEqual({ kind: "absent" });
+    presentDesktopChildCredential(`instance:${"ff".repeat(16)}`);
+    expect(rustOwnedCopy(dir)).toEqual({ kind: "absent" });
+    presentDesktopChildCredential(token);
+    expect(rustOwnedCopy(dir)).toEqual({ kind: "child" });
+  });
+
+  it("refuses a recycled child pid while the owner is alive until the credential is presented", () => {
+    const owner = spawn("sleep", ["30"]);
+    if (typeof owner.pid !== "number") throw new Error("live owner unavailable");
+    const token = `instance:${"cd".repeat(16)}`;
+    try {
+      const dir = markerDir({
+        storage_protocol_version: 1,
+        pid: owner.pid,
+        process_identity: foreignProcessIdentity(owner.pid),
+        child_pid: process.pid,
+        child_process_identity: token,
+      });
+      expect(rustOwnedCopy(dir)).toEqual({ kind: "foreign" });
+      expect(() => new SqliteDatabase(dir).connect()).toThrow(/will not migrate or write/);
+      expect(existsSync(join(dir, "print-partner.db"))).toBe(false);
+      presentDesktopChildCredential(token);
+      expect(rustOwnedCopy(dir)).toEqual({ kind: "child" });
+    } finally {
+      owner.kill();
+    }
   });
 
   it("keeps an unknown protocol marker blocking after its owner dies", () => {
@@ -165,6 +194,54 @@ describe("rust owner marker", () => {
     database.connect();
     database.close();
     expect(existsSync(join(dir, "print-partner.db"))).toBe(true);
+    const owner = JSON.parse(readFileSync(join(dir, ".desktop-lease", "owner.json"), "utf8")) as { instance: string };
+    expect(owner.instance).toBe("cd".repeat(16));
+  });
+
+  it("acquires the shared lease before opening an unowned database and releases it on close", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pp-rust-owned-"));
+    roots.push(dir);
+    const database = new SqliteDatabase(dir);
+    database.connect();
+    const owner = JSON.parse(readFileSync(join(dir, ".desktop-lease", "owner.json"), "utf8")) as {
+      pid: number;
+      process_identity: string;
+    };
+    expect(owner.pid).toBe(process.pid);
+    expect(owner.process_identity).toBe(processIdentity(process.pid));
+    expect(existsSync(join(dir, "print-partner.db"))).toBe(true);
+    database.close();
+    expect(existsSync(join(dir, ".desktop-lease"))).toBe(false);
+  });
+
+  it("restores a missing assembled column for a current recorded child without replaying seeds", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pp-rust-owned-"));
+    roots.push(dir);
+    const first = new SqliteDatabase(dir);
+    first.connect();
+    first.close();
+    const raw = new Database(join(dir, "print-partner.db"));
+    raw.exec("ALTER TABLE print_progress DROP COLUMN assembled");
+    const before = raw.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'printer_profiles'").get() as { seq: number };
+    raw.close();
+    writeFileSync(join(dir, ".desktop-owner.json"), JSON.stringify({
+      storage_protocol_version: 1,
+      pid: deadPid(),
+      process_identity: "prior",
+      child_pid: process.pid,
+      child_process_identity: processIdentity(process.pid),
+    }));
+    const second = new SqliteDatabase(dir);
+    second.connect();
+    second.close();
+    const check = new Database(join(dir, "print-partner.db"), { readonly: true });
+    const cols = check.pragma("table_info(print_progress)") as { name: string }[];
+    const after = check.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'printer_profiles'").get() as { seq: number };
+    const version = check.prepare("SELECT value FROM app_settings WHERE tenant_id = 'default' AND key = 'schema_version'").get() as { value: string };
+    check.close();
+    expect(cols.some((column) => column.name === "assembled")).toBe(true);
+    expect(after.seq).toBe(before.seq);
+    expect(version.value).toBe("34");
   });
 
   it("repairs a missing starter profile without replaying the existing seeds", () => {

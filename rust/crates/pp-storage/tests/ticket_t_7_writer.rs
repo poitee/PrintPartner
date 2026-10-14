@@ -272,6 +272,7 @@ const NODE_PROBE: &str = r#"
 import { readFileSync, writeSync } from "node:fs";
 import Database from "better-sqlite3";
 import { SqliteDatabase } from CLIENT_SPECIFIER;
+import { presentDesktopChildCredential } from CREDENTIAL_SPECIFIER;
 
 const mode = process.argv[2];
 const dataDir = process.argv[3];
@@ -305,7 +306,12 @@ function fingerprint() {
 
 if (mode === "child" || mode === "bootstrap" || mode === "orphan") {
   emit({ event: "ready", pid: process.pid });
-  readFileSync(0);
+  const offered = readFileSync(0, "utf8").trim();
+  const prefix = "credential:";
+  if (!offered.startsWith(prefix) || offered.length === prefix.length) {
+    throw new Error("child credential missing");
+  }
+  presentDesktopChildCredential(offered.slice(prefix.length));
 }
 
 const before = mode === "bootstrap" ? null : fingerprint();
@@ -380,7 +386,15 @@ fn write_probe(web: &Path) -> PathBuf {
     std::os::unix::fs::symlink(web.join("node_modules"), probe_dir.join("node_modules")).unwrap();
     let probe = probe_dir.join("probe.mts");
     let client = serde_json::to_string(&web.join("apps/server/src/db/client.ts")).unwrap();
-    std::fs::write(&probe, NODE_PROBE.replace("CLIENT_SPECIFIER", &client)).unwrap();
+    let credential =
+        serde_json::to_string(&web.join("apps/server/src/desktop-child-credential.ts")).unwrap();
+    std::fs::write(
+        &probe,
+        NODE_PROBE
+            .replace("CLIENT_SPECIFIER", &client)
+            .replace("CREDENTIAL_SPECIFIER", &credential),
+    )
+    .unwrap();
     probe
 }
 
@@ -444,7 +458,7 @@ fn run_node_probe(
         } else {
             record_child(dir, pid).unwrap();
         }
-        writeln!(stdin, "go").unwrap();
+        write_child_credential(dir, &mut stdin);
         drop(stdin);
         let (line, _) = read_event_line(stdout);
         line
@@ -475,6 +489,14 @@ fn assert_stable_fingerprint(event: &serde_json::Value) {
     for name in ["printer_profiles", "process_profiles", "filament_profiles"] {
         assert!(names.contains(&name), "{names:?}");
     }
+}
+
+fn write_child_credential(dir: &Path, stdin: &mut impl Write) {
+    let marker: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join(".desktop-owner.json")).unwrap()).unwrap();
+    let identity = marker["child_process_identity"].as_str().unwrap();
+    assert!(!identity.is_empty(), "{marker}");
+    writeln!(stdin, "credential:{identity}").unwrap();
 }
 
 fn child_process_identity(pid: u32) -> String {
