@@ -1,12 +1,5 @@
-import { z } from "zod";
+import { desktopFeaturesEnabled, parseFeatureLayer, resolveFeature } from "./feature-toggles.js";
 import type { AppRepository } from "../db/repository.js";
-
-const featureTogglesSchema = z.object({
-  farm: z.boolean().optional(),
-  orders: z.boolean().optional(),
-  bambu: z.boolean().optional(),
-  spoolman: z.boolean().optional(),
-});
 
 type FarmAccess =
   | { kind: "allowed" }
@@ -22,25 +15,21 @@ type FarmAccess =
     };
 
 export function readFarmAccess(getRepo: () => AppRepository): FarmAccess {
-  if (process.env.PP_DESKTOP_REBUILD !== "1" && process.env.PP_DESKTOP_REBUILD !== "true") {
+  if (!desktopFeaturesEnabled()) {
     return { kind: "allowed" };
   }
   return resolveFarmAccess(getRepo().getSettingSnapshot("feature_toggles"));
 }
 
 function resolveFarmAccess(snapshot: ReturnType<AppRepository["getSettingSnapshot"]>): FarmAccess {
-  if (snapshot.kind === "stored") {
-    try {
-      const stored: unknown = JSON.parse(snapshot.value);
-      const toggles = featureTogglesSchema.parse(stored);
-      if (toggles.farm === true) return { kind: "allowed" };
-    } catch {
-      return {
-        kind: "invalid",
-        code: "FEATURE_TOGGLES_INVALID",
-        error: "Stored feature toggles are invalid.",
-      };
-    }
+  const layer = parseFeatureLayer(snapshot);
+  if (!layer) {
+    return {
+      kind: "invalid",
+      code: "FEATURE_TOGGLES_INVALID",
+      error: "Stored feature toggles are invalid.",
+    };
   }
+  if (resolveFeature("farm", layer.choices).enabled) return { kind: "allowed" };
   return { kind: "disabled", code: "FEATURE_DISABLED", error: "Feature farm is disabled." };
 }

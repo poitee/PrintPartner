@@ -1,6 +1,6 @@
 {
   "scope": "Observed desktop self-host registration; Node owns domain/background/file effects",
-  "registry_sha256": "29187a67a38ef4b57becb6a1ef15be41a765af4c97e81e32d2185ea95e5fe2ee",
+  "registry_sha256": "6e12a52dffa6c731245da1f8801b5603ab983e5ca99d2ad9c53d7c5453400daf",
   "gateway_owned": [
     {
       "method": "POST",
@@ -1165,6 +1165,36 @@
       "owner": "compat",
       "effect": "local_commit",
       "operation": "POST /plans/:param/duplicate legacy-v1",
+      "contract": "legacy-v1",
+      "websocket": false,
+      "effect_reason": "Node owns the complete local transaction or file publication"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/features",
+      "owner": "compat",
+      "effect": "external_effect",
+      "operation": "GET /plans/:param/features legacy-v1",
+      "contract": "legacy-v1",
+      "websocket": false,
+      "effect_reason": "Conservatively guarded GET/HEAD: no audited pure-read exception; provider or local effects may occur"
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/plans/:id/features",
+      "owner": "compat",
+      "effect": "external_effect",
+      "operation": "GET /plans/:param/features legacy-v1",
+      "contract": "legacy-v1",
+      "websocket": false,
+      "effect_reason": "Conservatively guarded GET/HEAD: no audited pure-read exception; provider or local effects may occur"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/plans/:id/features",
+      "owner": "compat",
+      "effect": "local_commit",
+      "operation": "PATCH /plans/:param/features legacy-v1",
       "contract": "legacy-v1",
       "websocket": false,
       "effect_reason": "Node owns the complete local transaction or file publication"
@@ -3571,6 +3601,36 @@
     },
     {
       "method": "GET",
+      "path": "/api/v2/plans/:id/features",
+      "owner": "compat",
+      "effect": "external_effect",
+      "operation": "GET /plans/:param/features current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "Conservatively guarded GET/HEAD: no audited pure-read exception; provider or local effects may occur"
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v2/plans/:id/features",
+      "owner": "compat",
+      "effect": "external_effect",
+      "operation": "GET /plans/:param/features current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "Conservatively guarded GET/HEAD: no audited pure-read exception; provider or local effects may occur"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v2/plans/:id/features",
+      "owner": "compat",
+      "effect": "local_commit",
+      "operation": "PATCH /plans/:param/features current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "Node owns the complete local transaction or file publication"
+    },
+    {
+      "method": "GET",
       "path": "/api/v2/plans/:id/kit-manifest",
       "owner": "compat",
       "effect": "external_effect",
@@ -5305,6 +5365,36 @@
       "owner": "compat",
       "effect": "local_commit",
       "operation": "POST /plans/:param/duplicate current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "Node owns the complete local transaction or file publication"
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/features",
+      "owner": "compat",
+      "effect": "external_effect",
+      "operation": "GET /plans/:param/features current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "Conservatively guarded GET/HEAD: no audited pure-read exception; provider or local effects may occur"
+    },
+    {
+      "method": "HEAD",
+      "path": "/plans/:id/features",
+      "owner": "compat",
+      "effect": "external_effect",
+      "operation": "GET /plans/:param/features current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "Conservatively guarded GET/HEAD: no audited pure-read exception; provider or local effects may occur"
+    },
+    {
+      "method": "PATCH",
+      "path": "/plans/:id/features",
+      "owner": "compat",
+      "effect": "local_commit",
+      "operation": "PATCH /plans/:param/features current",
       "contract": "current",
       "websocket": false,
       "effect_reason": "Node owns the complete local transaction or file publication"
