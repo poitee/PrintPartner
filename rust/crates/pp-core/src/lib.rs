@@ -170,6 +170,8 @@ async fn start_resources(
         );
     }
     let mut owner = StorageLease::acquire(&input.data_dir)?;
+    pp_gateway::ownership::boot_bundled_source_sync(owner.data_dir())
+        .map_err(|error| anyhow::anyhow!("Source Sync ownership admission failed: {error}"))?;
     let listener = bind_origin(&owner).await?;
     let supervisor = Supervisor::start_with_config(
         SpawnSpec {

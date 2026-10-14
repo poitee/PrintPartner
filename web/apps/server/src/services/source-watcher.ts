@@ -8,6 +8,7 @@ import { getLogger } from "./logger.js";
 import { tenantStorage, getRequestTenantId } from "../middleware/tenant-context.js";
 import { runWithTenantDiskQuota } from "../lib/tenant-disk-quota.js";
 import { readStoredSourceUpdateIntervalHours } from "./source-monitoring-settings.js";
+import { OwnershipAdmissionError, requireSourceSyncParticipant } from "../ownership/source-sync-admission.js";
 
 type SourceWatcherSettings = {
   discordWebhookUrl: string | null;
@@ -15,6 +16,13 @@ type SourceWatcherSettings = {
   notifyOnSync: boolean;
   autoSyncUpdates: boolean;
 };
+
+let sourceSyncWatcherInstallations = 0;
+
+/** Watchers that passed admission and installed startup timers. */
+export function installedSourceSyncWatchers(): number {
+  return sourceSyncWatcherInstallations;
+}
 
 const STARTUP_SYNC_DELAY_MS = 2_000;
 const STARTUP_SYNC_WAIT_MS = 5_000;
@@ -175,6 +183,7 @@ async function syncUnsyncedSources(
   getSettings: () => SourceWatcherSettings,
   quotaBytes: number | null,
 ): Promise<void> {
+  requireSourceSyncParticipant("startup.startSourceWatcher");
   const logger = getLogger();
   const sources = repo
     .listSources()
@@ -190,16 +199,20 @@ async function syncUnsyncedSources(
   const coversDir = join(dirname(reposDir), "covers");
 
   for (const source of sources) {
+    requireSourceSyncParticipant("startup.startSourceWatcher");
     try {
       logger.log("info", `[source-watcher] Auto-syncing new source: ${source.name} (id=${source.id})`);
       const result = await runWithTenantDiskQuota({
         dataDir: dirname(reposDir), reposDir, tenantId: getRequestTenantId(),
         quotaBytes, sourceIds: () => repo.listSources().map((item) => item.id),
-      }, () => syncProjectById(repo, reposDir, source.id, coversDir));
+      }, () => syncProjectById(repo, reposDir, source.id, coversDir, {
+        beforePublish: () => requireSourceSyncParticipant("startup.startSourceWatcher"),
+      }));
 
       const settings = getSettings();
       if (settings.discordWebhookUrl && settings.notifyOnSync) {
         const row = repo.getProjectRow(source.id);
+        requireSourceSyncParticipant("startup.startSourceWatcher");
         await sendDiscordNotification(settings.discordWebhookUrl, "source.synced", {
           sourceName: source.name,
           sourceUrl: source.url,
@@ -208,6 +221,7 @@ async function syncUnsyncedSources(
           stlCount: result.stl_count,
         });
       }
+      requireSourceSyncParticipant("startup.startSourceWatcher");
       await dispatchWebhooks(repo, "source.synced", {
         source_id: source.id,
         source_name: source.name,
@@ -217,6 +231,7 @@ async function syncUnsyncedSources(
         stl_count: result.stl_count,
       });
     } catch (err) {
+      if (err instanceof OwnershipAdmissionError) throw err;
       logger.log(
         "warn",
         `[source-watcher] Startup sync failed for ${source.name}: ${err instanceof Error ? err.message : String(err)}`,
@@ -224,6 +239,7 @@ async function syncUnsyncedSources(
       const settings = getSettings();
       if (settings.discordWebhookUrl && settings.notifyOnSync) {
         const row = repo.getProjectRow(source.id);
+        requireSourceSyncParticipant("startup.startSourceWatcher");
         await sendDiscordNotification(settings.discordWebhookUrl, "source.sync_failed", {
           sourceName: source.name,
           sourceUrl: source.url,
@@ -231,6 +247,7 @@ async function syncUnsyncedSources(
           error: err instanceof Error ? err.message : String(err),
         }).catch(() => {});
       }
+      requireSourceSyncParticipant("startup.startSourceWatcher");
       await dispatchWebhooks(repo, "source.sync_failed", {
         source_id: source.id,
         source_name: source.name,
@@ -252,6 +269,7 @@ async function runPeriodicUpdateCheck(
   getSettings: () => SourceWatcherSettings,
   quotaBytes: number | null,
 ): Promise<void> {
+  requireSourceSyncParticipant("worker.startSourceWatcher");
   const logger = getLogger();
   const settings = getSettings();
 
@@ -259,7 +277,7 @@ async function runPeriodicUpdateCheck(
 
   let checkResult: Awaited<ReturnType<typeof checkAllSourceUpdates>>;
   try {
-    checkResult = await checkAllSourceUpdates(repo);
+    checkResult = await checkAllSourceUpdates(repo, "worker.startSourceWatcher");
   } catch (err) {
     logger.log(
       "warn",
@@ -286,14 +304,18 @@ async function runPeriodicUpdateCheck(
     const previousSha = row?.lastCommitSha ?? null;
 
     if (settings.autoSyncUpdates) {
+      requireSourceSyncParticipant("worker.startSourceWatcher");
       // Auto-sync
       try {
         logger.log("info", `[source-watcher] Auto-syncing updated source: ${source.name}`);
         const result = await runWithTenantDiskQuota({
         dataDir: dirname(reposDir), reposDir, tenantId: getRequestTenantId(),
         quotaBytes, sourceIds: () => repo.listSources().map((item) => item.id),
-      }, () => syncProjectById(repo, reposDir, source.id, coversDir));
+      }, () => syncProjectById(repo, reposDir, source.id, coversDir, {
+        beforePublish: () => requireSourceSyncParticipant("worker.startSourceWatcher"),
+      }));
         const updatedRow = repo.getProjectRow(source.id);
+        requireSourceSyncParticipant("worker.startSourceWatcher");
         repo.recordAppEvent({
           kind: "source.updated",
           actorType: "source",
@@ -311,6 +333,7 @@ async function runPeriodicUpdateCheck(
 
         const currentSettings = getSettings();
         if (currentSettings.discordWebhookUrl && currentSettings.notifyOnUpdate) {
+          requireSourceSyncParticipant("worker.startSourceWatcher");
           await sendDiscordNotification(currentSettings.discordWebhookUrl, "source.updated", {
             sourceName: source.name,
             sourceUrl: source.url,
@@ -320,6 +343,7 @@ async function runPeriodicUpdateCheck(
             stlCount: result.stl_count,
           });
         }
+        requireSourceSyncParticipant("worker.startSourceWatcher");
         await dispatchWebhooks(repo, "source.updated", {
           source_id: source.id,
           source_name: source.name,
@@ -330,11 +354,13 @@ async function runPeriodicUpdateCheck(
           stl_count: result.stl_count,
         });
       } catch (err) {
+        if (err instanceof OwnershipAdmissionError) throw err;
         logger.log(
           "warn",
           `[source-watcher] Auto-sync failed for ${source.name}: ${err instanceof Error ? err.message : String(err)}`,
         );
         const currentSettings = getSettings();
+        requireSourceSyncParticipant("worker.startSourceWatcher");
         repo.recordAppEvent({
           kind: "source.sync_failed",
           actorType: "source",
@@ -348,6 +374,7 @@ async function runPeriodicUpdateCheck(
           },
         });
         if (currentSettings.discordWebhookUrl) {
+          requireSourceSyncParticipant("worker.startSourceWatcher");
           await sendDiscordNotification(currentSettings.discordWebhookUrl, "source.sync_failed", {
             sourceName: source.name,
             sourceUrl: source.url,
@@ -355,6 +382,7 @@ async function runPeriodicUpdateCheck(
             error: err instanceof Error ? err.message : String(err),
           }).catch(() => {});
         }
+        requireSourceSyncParticipant("worker.startSourceWatcher");
         await dispatchWebhooks(repo, "source.sync_failed", {
           source_id: source.id,
           source_name: source.name,
@@ -365,12 +393,14 @@ async function runPeriodicUpdateCheck(
       }
     } else if (settings.discordWebhookUrl && settings.notifyOnUpdate) {
       // Notify but don't sync
+      requireSourceSyncParticipant("worker.startSourceWatcher");
       await sendDiscordNotification(settings.discordWebhookUrl, "source.update_available", {
         sourceName: source.name,
         sourceUrl: source.url,
         branch: row?.branch ?? source.branch ?? "main",
         commitSha: previousSha,
       });
+      requireSourceSyncParticipant("worker.startSourceWatcher");
       await dispatchWebhooks(repo, "source.update_available", {
         source_id: source.id,
         source_name: source.name,
@@ -380,6 +410,7 @@ async function runPeriodicUpdateCheck(
       });
     } else {
       // No Discord configured — still fire webhook if registered
+      requireSourceSyncParticipant("worker.startSourceWatcher");
       await dispatchWebhooks(repo, "source.update_available", {
         source_id: source.id,
         source_name: source.name,
@@ -398,6 +429,8 @@ export function startSourceWatcher(input: {
   getSettings: () => SourceWatcherSettings;
   listTenantIds: () => readonly string[];
 }): { stop: () => void } {
+  requireSourceSyncParticipant("startup.startSourceWatcher");
+  requireSourceSyncParticipant("worker.startSourceWatcher");
   const logger = getLogger();
   const coordinator = createSourceWatcherCoordinator({
     listTenantIds: input.listTenantIds,
@@ -411,6 +444,7 @@ export function startSourceWatcher(input: {
   });
 
   void coordinator.runScheduledChecks();
+  sourceSyncWatcherInstallations += 1;
   const startupTimer = setTimeout(() => {
     void coordinator.runStartup();
   }, STARTUP_SYNC_WAIT_MS);
@@ -422,6 +456,7 @@ export function startSourceWatcher(input: {
     stop(): void {
       clearTimeout(startupTimer);
       clearInterval(schedulePoller);
+      sourceSyncWatcherInstallations = Math.max(0, sourceSyncWatcherInstallations - 1);
       logger.log("info", "[source-watcher] Stopped");
     },
   };

@@ -500,6 +500,71 @@ fn temporary(case: &str) -> PathBuf {
     ))
 }
 
+#[tokio::test]
+async fn source_sync_receipt_is_admitted_before_desktop_effects() {
+    use std::os::unix::fs::MetadataExt;
+
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "source-sync-receipt-{}",
+        hex::encode(rand::random::<[u8; 8]>())
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let cases = [
+        (
+            "count",
+            r#"{"operation":"source.sync","owner":"node","worker_pid":123,"admission_count":1,"participant_count":999,"manifest_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#,
+        ),
+        (
+            "pid",
+            r#"{"operation":"source.sync","owner":"node","admission_count":1,"participant_count":7,"manifest_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#,
+        ),
+        ("null", "null"),
+    ];
+    for (name, body) in cases {
+        let data = root.join(name);
+        std::fs::create_dir_all(&data).unwrap();
+        let receipt = data.join("source-sync-admission.json");
+        std::fs::write(&receipt, body).unwrap();
+        let error = CoreRuntime::start(launch(data.clone()))
+            .await
+            .err()
+            .unwrap_or_else(|| panic!("{name} start succeeded"));
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("Source Sync ownership admission failed"),
+            "{name}: {message}"
+        );
+        assert!(message.contains("admission receipt"), "{name}: {message}");
+        assert_eq!(std::fs::read(&receipt).unwrap(), body.as_bytes(), "{name}");
+        assert!(!data.join("desktop.toml").exists(), "{name}");
+        assert!(!data.join("print-partner.db").exists(), "{name}");
+    }
+
+    let data = root.join("reuse");
+    let first = CoreRuntime::start(launch(data.clone()))
+        .await
+        .expect("desktop startup admits Source Sync");
+    let receipt = data.join("source-sync-admission.json");
+    let bytes = std::fs::read(&receipt).unwrap();
+    let inode = std::fs::metadata(&receipt).unwrap().ino();
+    let shutdown = first.shutdown().await;
+    assert!(shutdown.complete(), "{shutdown:?}");
+    let second = CoreRuntime::start(launch(data.clone()))
+        .await
+        .expect("restart reuses the Source Sync receipt");
+    assert_eq!(std::fs::read(&receipt).unwrap(), bytes);
+    assert_eq!(std::fs::metadata(&receipt).unwrap().ino(), inode);
+    let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(parsed["operation"], "source.sync");
+    assert_eq!(parsed["owner"], "node");
+    assert_eq!(parsed["admission_count"], 1);
+    assert!(parsed["participant_count"].as_u64().unwrap() > 0);
+    assert!(parsed["worker_pid"].as_u64().unwrap() > 0);
+    let shutdown = second.shutdown().await;
+    assert!(shutdown.complete(), "{shutdown:?}");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
 fn copy_directory(source: &std::path::Path, target: &std::path::Path) {
     std::fs::create_dir_all(target).unwrap();
     for entry in std::fs::read_dir(source).unwrap() {

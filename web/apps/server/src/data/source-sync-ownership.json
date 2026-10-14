@@ -1,0 +1,208 @@
+{
+  "operation": "source.sync",
+  "owner": "node",
+  "live_format": {
+    "id": "source-revision-workspace-v1",
+    "rollback": "compatible"
+  },
+  "participants": [
+    {
+      "id": "http.POST /jobs/check-source-updates",
+      "kind": "http",
+      "owner": "node",
+      "resources": ["table:projects", "table:app_settings", "table:app_events"]
+    },
+    {
+      "id": "http.POST /jobs/extract-source-docs",
+      "kind": "http",
+      "owner": "node",
+      "resources": ["table:source_docs", "file:source-workspace"]
+    },
+    {
+      "id": "http.POST /jobs/import-scan",
+      "kind": "http",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"]
+    },
+    {
+      "id": "http.POST /jobs/sync",
+      "kind": "http",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"]
+    },
+    {
+      "id": "http.POST /api/v1/jobs/check-source-updates",
+      "kind": "http_alias",
+      "owner": "node",
+      "resources": ["table:projects", "table:app_settings", "table:app_events"]
+    },
+    {
+      "id": "http.POST /api/v1/jobs/extract-source-docs",
+      "kind": "http_alias",
+      "owner": "node",
+      "resources": ["table:source_docs", "file:source-workspace"]
+    },
+    {
+      "id": "http.POST /api/v1/jobs/import-scan",
+      "kind": "http_alias",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"]
+    },
+    {
+      "id": "http.POST /api/v1/jobs/sync",
+      "kind": "http_alias",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"]
+    },
+    {
+      "id": "http.POST /sources",
+      "kind": "http",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions"]
+    },
+    {
+      "id": "http.POST /api/v1/sources",
+      "kind": "http_alias",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions"]
+    },
+    {
+      "id": "http.POST /assistant/actions/apply",
+      "kind": "http",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"]
+    },
+    {
+      "id": "http.POST /api/v1/assistant/actions/apply",
+      "kind": "http_alias",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"]
+    },
+    {
+      "id": "http.PUT /sources/:id/repo-manifest",
+      "kind": "http",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "file:source-workspace"]
+    },
+    {
+      "id": "http.PUT /api/v1/sources/:id/repo-manifest",
+      "kind": "http_alias",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "file:source-workspace"]
+    },
+    {
+      "id": "http.POST /sources/:id/upload-zip",
+      "kind": "http",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers", "table:build_profiles"]
+    },
+    {
+      "id": "http.POST /api/v1/sources/:id/upload-zip",
+      "kind": "http_alias",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers", "table:build_profiles"]
+    },
+    {
+      "id": "http.POST /sources/:id/upload-files",
+      "kind": "http",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers", "table:build_profiles"]
+    },
+    {
+      "id": "http.POST /api/v1/sources/:id/upload-files",
+      "kind": "http_alias",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers", "table:build_profiles"]
+    },
+    {
+      "id": "http.GET /sources/:id/docs",
+      "kind": "http",
+      "owner": "node",
+      "resources": ["table:source_docs"]
+    },
+    {
+      "id": "http.GET /api/v1/sources/:id/docs",
+      "kind": "http_alias",
+      "owner": "node",
+      "resources": ["table:source_docs"]
+    },
+    {
+      "id": "http.GET /sources/:id/docs/*",
+      "kind": "http",
+      "owner": "node",
+      "resources": ["table:source_docs", "file:source-workspace"]
+    },
+    {
+      "id": "http.GET /api/v1/sources/:id/docs/*",
+      "kind": "http_alias",
+      "owner": "node",
+      "resources": ["table:source_docs", "file:source-workspace"]
+    },
+    {
+      "id": "http.GET /sources/:id/cover",
+      "kind": "http",
+      "owner": "node",
+      "resources": ["file:source-covers"]
+    },
+    {
+      "id": "http.GET /api/v1/sources/:id/cover",
+      "kind": "http_alias",
+      "owner": "node",
+      "resources": ["file:source-covers"]
+    },
+    {
+      "id": "assistant.propose_import_source_files",
+      "kind": "assistant_action",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "table:build_profiles"]
+    },
+    {
+      "id": "mcp.start_sync",
+      "kind": "mcp_action",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"]
+    },
+    {
+      "id": "job.check-source-updates",
+      "kind": "job",
+      "owner": "node",
+      "resources": ["table:projects", "table:app_settings", "table:app_events"]
+    },
+    {
+      "id": "job.extract-source-docs",
+      "kind": "job",
+      "owner": "node",
+      "resources": ["table:source_docs", "file:source-workspace"]
+    },
+    {
+      "id": "job.import-scan",
+      "kind": "job",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"]
+    },
+    {
+      "id": "job.sync",
+      "kind": "job",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"]
+    },
+    {
+      "id": "startup.startSourceWatcher",
+      "kind": "startup_watcher",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"]
+    },
+    {
+      "id": "worker.startSourceWatcher",
+      "kind": "worker",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers", "table:app_settings", "table:app_events"]
+    },
+    {
+      "id": "migration.migrateLegacySourceManifestOverridesForTenant",
+      "kind": "migration",
+      "owner": "node",
+      "resources": ["table:projects", "table:source_revisions", "file:source-workspace"]
+    }
+  ]
+}

@@ -12,6 +12,7 @@ import { basename, join, resolve } from "node:path";
 import { PDFParse } from "pdf-parse";
 import { resolvedFileUnderRoot } from "../lib/secure-path.js";
 import { chargeTenantDiskBytes, TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
+import { OwnershipAdmissionError } from "../ownership/source-sync-admission.js";
 
 export const DOCS_TEXT_DIR = ".docs-text";
 
@@ -40,6 +41,7 @@ type PdfExtractResult = {
 };
 
 type PdfTextCacheOptions = {
+  beforePublish?: () => undefined;
   /** Writable directory for extracted text and page chunks. */
   cacheRoot?: string;
   /** Read-only cache directories used by older Source layouts. */
@@ -102,7 +104,9 @@ function writeSidecar(
   text: string,
   chunks: PdfPageChunk[],
   pageCount: number,
+  beforePublish?: () => undefined,
 ): string {
+  beforePublish?.();
   mkdirSync(cacheRoot, { recursive: true });
   const path = writableCacheFile(cacheRoot, sidecarPathForHash(cacheRoot, hash));
   const chunksPath = writableCacheFile(cacheRoot, chunkSidecarPath(cacheRoot, hash));
@@ -318,6 +322,7 @@ export async function extractPdfText(
         assembled.text,
         assembled.chunks,
         assembled.pageCount,
+        options.beforePublish,
       );
       return {
         status: "ready",
@@ -346,6 +351,7 @@ export async function extractPdfText(
       assembled.text,
       assembled.chunks,
       assembled.pageCount,
+      options.beforePublish,
     );
     return {
       status: "ready",
@@ -356,7 +362,7 @@ export async function extractPdfText(
       cachePath: written,
     };
   } catch (e) {
-    if (e instanceof TenantDiskQuotaError) throw e;
+    if (e instanceof TenantDiskQuotaError || e instanceof OwnershipAdmissionError) throw e;
     return {
       status: "error",
       hash,

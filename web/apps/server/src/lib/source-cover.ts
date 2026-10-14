@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { OwnershipAdmissionError } from "../ownership/source-sync-admission.js";
 import {
   existsSync,
   readdirSync,
@@ -168,7 +169,9 @@ function writeCache(
   project: SourceCoverProject,
   imageBytes: Buffer,
   resolvedFrom: string,
+  beforePublish?: () => undefined,
 ): string {
+  beforePublish?.();
   const imagePath = coverImagePath(coversRoot, project.id);
   const metaPath = coverMetaPath(coversRoot, project.id);
   writeFileSync(imagePath, imageBytes);
@@ -188,6 +191,7 @@ function copyLocalImage(
   project: SourceCoverProject,
   path: string,
   resolvedFrom: string,
+  beforePublish?: () => undefined,
 ): string | null {
   let data: Buffer;
   try {
@@ -196,7 +200,7 @@ function copyLocalImage(
     return null;
   }
   if (!data.length || data.length > MAX_BYTES) return null;
-  return writeCache(coversRoot, project, data, resolvedFrom);
+  return writeCache(coversRoot, project, data, resolvedFrom, beforePublish);
 }
 
 export async function downloadRemoteImage(url: string): Promise<Buffer | null> {
@@ -228,10 +232,11 @@ async function downloadToCache(
   project: SourceCoverProject,
   url: string,
   resolvedFrom: string,
+  beforePublish?: () => undefined,
 ): Promise<string | null> {
   const data = await downloadRemoteImage(url);
   if (!data) return null;
-  return writeCache(coversRoot, project, data, resolvedFrom);
+  return writeCache(coversRoot, project, data, resolvedFrom, beforePublish);
 }
 
 type CoverCandidate = { resolvedFrom: string; target: string };
@@ -263,7 +268,7 @@ export function resolveCoverCandidates(project: SourceCoverProject): CoverCandid
 export async function ensureSourceCover(
   coversRoot: string,
   project: SourceCoverProject,
-  options?: { force?: boolean },
+  options?: { force?: boolean; beforePublish?: () => undefined },
 ): Promise<string | null> {
   if (!options?.force && coverCacheIsFresh(coversRoot, project)) {
     return coverImagePath(coversRoot, project.id);
@@ -285,22 +290,23 @@ export async function ensureSourceCover(
         );
         const imageUrl = extractOgImageUrl(page);
         if (imageUrl) {
-          const cached = await downloadToCache(coversRoot, project, imageUrl, "og_image");
+          const cached = await downloadToCache(coversRoot, project, imageUrl, "og_image", options?.beforePublish);
           if (cached) return cached;
         }
-      } catch {
+      } catch (error) {
+        if (error instanceof OwnershipAdmissionError) throw error;
         /* try next candidate */
       }
       continue;
     }
 
     if (resolvedFrom === "repo_file") {
-      const cached = copyLocalImage(coversRoot, project, target, resolvedFrom);
+      const cached = copyLocalImage(coversRoot, project, target, resolvedFrom, options?.beforePublish);
       if (cached) return cached;
       continue;
     }
 
-    const cached = await downloadToCache(coversRoot, project, target, resolvedFrom);
+    const cached = await downloadToCache(coversRoot, project, target, resolvedFrom, options?.beforePublish);
     if (cached) return cached;
   }
 

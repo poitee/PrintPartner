@@ -29,6 +29,7 @@ vi.mock("@octokit/rest", () => ({
 import { createSelfHostPorts } from "../adapters/self-host/index.js";
 import { createJobRunner } from "./job-runner.js";
 import { publishLocalSourceWorkingTree } from "./local-source-revision.js";
+import { beginSourceSyncAdmission, packagedSourceSyncManifestPath } from "../ownership/source-sync-admission.js";
 import { syncProjectById } from "../routes/sources.js";
 import {
   listGithubBranches,
@@ -77,8 +78,8 @@ function setTree(commitSha: string, items: TreeItem[], truncated = false): void 
   github.getTree.mockResolvedValue({ data: { truncated, tree: items } });
 }
 
-function rawResponse(contentByPath: Record<string, string>): ReturnType<typeof vi.fn> {
-  return vi.fn(async (input: string | URL | Request) => {
+function rawResponse(contentByPath: Record<string, string>) {
+  return vi.fn<typeof fetch>(async (input) => {
     const url = String(input);
     const path = decodeURIComponent(new URL(url).pathname.split("/").slice(4).join("/"));
     const content = contentByPath[path];
@@ -942,6 +943,56 @@ it("a queued hosted sync cannot activate a snapshot larger than its remaining qu
     expect(repo.listSourceRevisions(source.id)).toEqual([]);
     expect(readdirSync(join(repo.reposDir, String(source.id), "revisions"))).toEqual([]);
   } finally {
+    await ports.db.close();
+  }
+});
+
+it.each([
+  { count: 1, change: "replacement" },
+  { count: 2, change: "replacement" },
+  { count: 1, change: "removal" },
+])("refuses publication for $count sources after manifest $change during download", async ({ count, change }) => {
+  const dataDir = reposRoot();
+  const ports = createSelfHostPorts(dataDir);
+  await ports.db.connect();
+  const priorManifest = process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST;
+  try {
+    const repo = ports.repository;
+    const first = repo.createSource({ name: "First", url: "https://github.com/example/first", source_kind: "github" });
+    const second = repo.createSource({ name: "Second", url: "https://github.com/example/second", source_kind: "github" });
+    const beforeSecond = repo.getProjectRow(second.id);
+    const beforeFirst = repo.getProjectRow(first.id);
+    const manifest = join(dataDir, "manifest.json");
+    const original = readFileSync(packagedSourceSyncManifestPath(), "utf8");
+    writeFileSync(manifest, original);
+    process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST = manifest;
+    beginSourceSyncAdmission(dataDir);
+    setTree(COMMIT_A, [{ path: "part.stl", type: "blob", mode: "100644", size: 3 }]);
+    const download = rawResponse({ "part.stl": "stl" });
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      const response = await download(input);
+      if (change === "removal") rmSync(manifest);
+      else writeFileSync(manifest, `${original}\n`);
+      return response;
+    }));
+    const jobs = createJobRunner(() => repo, dataDir);
+    const jobId = await jobs.start("sync", { project_ids: [first.id, second.id].slice(0, count) });
+    await vi.waitFor(async () => {
+      expect(await jobs.get(jobId, "default")).toMatchObject({
+        status: "error",
+        error: expect.stringMatching(/runtime manifest does not match|cannot read Source Sync manifest/),
+      });
+    });
+    expect(repo.listSourceRevisions(first.id)).toEqual([]);
+    expect(repo.getProjectRow(first.id)).toEqual(beforeFirst);
+    expect(readdirSync(join(repo.reposDir, String(first.id), "revisions"))).toEqual([]);
+    expect(repo.getProjectRow(second.id)).toEqual(beforeSecond);
+    expect(repo.listSourceRevisions(second.id)).toEqual([]);
+    expect(existsSync(join(repo.reposDir, String(second.id)))).toBe(false);
+    expect(download).toHaveBeenCalledOnce();
+  } finally {
+    if (priorManifest === undefined) delete process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST;
+    else process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST = priorManifest;
     await ports.db.close();
   }
 });

@@ -24,6 +24,8 @@ use std::{
 use tokio::{net::TcpListener, task::JoinHandle};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
+pub mod ownership;
+
 pub const MUTATION_DRAIN: Duration = Duration::from_secs(5);
 
 pub struct LaunchTarget(String);
@@ -145,6 +147,10 @@ impl Gateway {
                 "Invalid operation ownership manifest"
             );
         }
+        // The desktop lease data directory already holds the persistent receipt.
+        // This repeats the bundled manifest check before routes are served.
+        ownership::admit_bundled_source_sync()
+            .map_err(|error| anyhow::anyhow!("Source Sync ownership admission failed: {error}"))?;
         sort_routes(&mut manifest.routes);
         let launch = Some(LaunchTarget(format!(
             "{origin}/__desktop/bootstrap?token={token}"
