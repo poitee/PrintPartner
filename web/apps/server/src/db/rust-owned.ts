@@ -1,8 +1,8 @@
 import Database from "better-sqlite3";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { desktopChildCredential } from "../desktop-child-credential.js";
-import { processIdentity, storageParentIdentityEnv } from "../storage-lease.js";
+import { processIdentity, readOwnershipRecord, storageParentIdentityEnv } from "../storage-lease.js";
 import { currentSchemaVersion } from "./schema.js";
 import { readSchemaVersion } from "./upgrade-guard.js";
 
@@ -119,7 +119,7 @@ function readMarkerFile(dataDir: string): MarkerFile {
   if (!existsSync(markerPath)) return { kind: "missing" };
   let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(markerPath, "utf8"));
+    parsed = JSON.parse(readOwnershipRecord(markerPath));
   } catch {
     return { kind: "unreadable" };
   }
@@ -147,7 +147,7 @@ function leaseBlocksOtherWriters(dataDir: string): boolean {
   if (!existsSync(ownerPath)) return true;
   let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(ownerPath, "utf8"));
+    parsed = JSON.parse(readOwnershipRecord(ownerPath));
   } catch {
     return true;
   }
@@ -172,7 +172,7 @@ function isRecordedChild(marker: RustOwnerMarker): boolean {
 
 function readJson(path: string): unknown {
   try {
-    return JSON.parse(readFileSync(path, "utf8"));
+    return JSON.parse(readOwnershipRecord(path));
   } catch {
     return null;
   }

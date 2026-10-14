@@ -1,11 +1,11 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
-import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { admitDesktopAccount, accountModeSchema, type DesktopAccount } from "./desktop-account.js";
 import { presentDesktopChildCredential } from "./desktop-child-credential.js";
-import { acquireStorageLease, ownerIsStale, storageParentIdentityEnv } from "./storage-lease.js";
+import { acquireStorageLease, ownerIsStale, readOwnershipRecord, storageParentIdentityEnv } from "./storage-lease.js";
 import type { SessionUser } from "./routes/auth-types.js";
 
 const baseSetupSchema = z.strictObject({
@@ -44,7 +44,7 @@ export function installDesktopContext(input: unknown): void {
   const parsed = setupSchema.parse(input);
   const dataDir = realpathSync(parsed.data_dir);
   const markerPath = join(dataDir, ".desktop-owner.json");
-  const marker = markerSchema.parse(JSON.parse(readFileSync(markerPath, "utf8")));
+  const marker = markerSchema.parse(JSON.parse(readOwnershipRecord(markerPath)));
   const mode = statSync(markerPath).mode & 0o777;
   const inherited = fstatSync(198);
   const ownerLock = statSync(join(dataDir, ".desktop.lock"));
@@ -69,7 +69,7 @@ function assertDataDirectoryAvailable(dataDir: string): void {
   const owner = z.object({ pid: z.number().int().positive().max(2147483647), process_identity: z.string().optional(),
     kind: z.string().optional(), storage_protocol_version: z.unknown().optional(), child_pid: z.number().int().positive().max(2147483647).optional(),
     child_process_identity: z.string().min(1).optional() })
-    .safeParse(JSON.parse(readFileSync(join(canonical, ".desktop-owner.json"), "utf8")));
+    .safeParse(JSON.parse(readOwnershipRecord(join(canonical, ".desktop-owner.json"))));
   if (owner.success && ownerIsStale(owner.data) && (owner.data.kind === "standalone" ||
       // Version 1 guarantees recording the child before setup opens storage.
       (owner.data.storage_protocol_version === 1 &&
