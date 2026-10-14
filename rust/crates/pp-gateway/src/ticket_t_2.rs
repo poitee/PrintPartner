@@ -115,8 +115,13 @@ async fn ticket_t_2_unready_node_routes_return_problem_json_and_keep_rust_surfac
     let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
         .await
         .unwrap();
-    let mut gateway =
-        super::Gateway::start(listener, assets.0.clone(), CompatHandle::unpublished()).unwrap();
+    let mut gateway = super::Gateway::start(
+        listener,
+        assets.0.clone(),
+        CompatHandle::unpublished(),
+        &crate::ownership::cutover::OperationOwners::node_only(),
+    )
+    .unwrap();
     let origin = gateway.origin().to_owned();
     let launch = gateway.take_launch_target().unwrap().into_url();
     let bootstrap = launch.strip_prefix(&origin).unwrap();
@@ -214,7 +219,13 @@ async fn ticket_t_2_status_refresh_unpublish_returns_problem_json() {
     let tcp = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
         .await
         .unwrap();
-    let mut gateway = super::Gateway::start(tcp, assets.0.clone(), compat).unwrap();
+    let mut gateway = super::Gateway::start(
+        tcp,
+        assets.0.clone(),
+        compat,
+        &crate::ownership::cutover::OperationOwners::node_only(),
+    )
+    .unwrap();
     let origin = gateway.origin().to_owned();
     let launch = gateway.take_launch_target().unwrap().into_url();
     let bootstrap = launch.strip_prefix(&origin).unwrap().to_owned();

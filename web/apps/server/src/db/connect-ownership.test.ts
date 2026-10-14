@@ -1,7 +1,7 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import Database from "better-sqlite3";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -98,6 +98,71 @@ describe("bare SqliteDatabase.connect across processes", () => {
       db.close();
     }
   }, 30_000);
+});
+
+describe("bare connect with malformed storage leases", () => {
+  function inventory(path: string): unknown {
+    const stat = lstatSync(path);
+    const metadata = { ino: stat.ino, dev: stat.dev, mode: stat.mode };
+    if (stat.isSymbolicLink()) return { ...metadata, target: readlinkSync(path) };
+    if (stat.isDirectory()) {
+      return { ...metadata, entries: readdirSync(path).sort().map((name) => [name, inventory(join(path, name))]) };
+    }
+    return { ...metadata, bytes: readFileSync(path).toString("base64") };
+  }
+
+  const cases = ["empty directory", "owner-less nonempty directory", "empty owner", "torn owner", "null owner",
+    "incomplete owner", "zero PID", "uppercase instance", "blank identity", "whitespace identity", "file", "valid symlink", "broken symlink"];
+
+  describe.each(["new", "existing"])("with a %s database", (database) => {
+    it.each(cases)("preserves the copy and prevents creation or migration with a %s", async (scenario) => {
+      const dir = dataDir();
+      if (database === "existing") {
+        const sqlite = new Database(join(dir, "print-partner.db"));
+        sqlite.exec("CREATE TABLE sentinel (value TEXT); INSERT INTO sentinel VALUES ('keep before migration');");
+        sqlite.close();
+      }
+      const dead = spawnSync(process.execPath, ["-e", ""]);
+      expect(dead.status).toBe(0);
+      const lease = join(dir, ".desktop-lease");
+      const validOwner = { pid: dead.pid, process_identity: "previous-boot:previous-start", instance: "ab".repeat(16) };
+      if (scenario === "file") writeFileSync(lease, JSON.stringify(validOwner));
+      else if (scenario.endsWith("symlink")) {
+        const target = join(dir, "lease-target");
+        if (scenario === "valid symlink") {
+          mkdirSync(target);
+          writeFileSync(join(target, "owner.json"), JSON.stringify(validOwner));
+        }
+        symlinkSync(target, lease);
+      } else {
+        mkdirSync(lease);
+        if (scenario === "owner-less nonempty directory") writeFileSync(join(lease, "previous-marker.json"), "lease evidence\n");
+        else if (scenario !== "empty directory") {
+          const ownerBytes: Record<string, string> = {
+            "empty owner": "",
+            "torn owner": '{"pid":',
+            "null owner": "null",
+            "incomplete owner": JSON.stringify({ pid: dead.pid }),
+            "zero PID": JSON.stringify({ ...validOwner, pid: 0 }),
+            "uppercase instance": JSON.stringify({ ...validOwner, instance: "AB".repeat(16) }),
+            "blank identity": JSON.stringify({ ...validOwner, process_identity: "" }),
+            "whitespace identity": JSON.stringify({ ...validOwner, process_identity: " \t\n" }),
+          };
+          writeFileSync(join(lease, "owner.json"), ownerBytes[scenario]);
+        }
+      }
+      const before = inventory(dir);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const refused = await outcome(bareConnect(dir, false));
+        expect(refused.code).toBe(3);
+        expect(refused.stdout).toBe("");
+        expect(refused.stderr).toMatch(/storage_lease_marker_invalid|Node will not migrate or write/);
+        if (scenario === "whitespace identity") expect(refused.stderr).toContain("storage_lease_marker_invalid");
+        expect(inventory(dir)).toEqual(before);
+      }
+      expect(existsSync(join(dir, "print-partner.db"))).toBe(database === "existing");
+    }, 30_000);
+  });
 });
 
 describe("connections inside one process", () => {

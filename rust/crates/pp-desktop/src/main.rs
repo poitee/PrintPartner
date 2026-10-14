@@ -125,14 +125,11 @@ fn run() -> Result<u8> {
             }
         }
     };
-    let data = match data {
-        Some(data) => data,
-        None => desktop_data_dir(
-            &app.path()
-                .home_dir()
-                .context("Desktop home directory unavailable")?,
-        )?,
-    };
+    let data = desktop_data_dir(data, || {
+        app.path()
+            .home_dir()
+            .context("Desktop home directory unavailable")
+    })?;
     let launch = ResourceLayout::read(&stage)
         .and_then(|layout| layout.into_launch(data.clone()))
         .context("Desktop resource verification failed")?;

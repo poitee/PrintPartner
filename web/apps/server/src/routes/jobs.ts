@@ -5,6 +5,7 @@ import {
   filenameExportSchema,
   miloFilenameGrouping,
   parseStartDirectExportRequest,
+  type JobSnapshot,
   type StartAcceptedPlateExportRequest,
   type StartDirectExportRequest,
 } from "@print-partner/contracts";
@@ -422,7 +423,88 @@ export function registerJobWebSocket(
   app: FastifyInstance,
   jobs: InProcessJobRunner,
 ): void {
+  type ConnectionState =
+    | { phase: "attaching"; latest: JobSnapshot | null }
+    | { phase: "lookup"; unsubscribe: () => void; latest: JobSnapshot | null }
+    | { phase: "streaming"; unsubscribe: () => void }
+    | { phase: "closed"; cause: "peer" | "terminal" | "missing" | "failure" };
+  const enabled = process.env.PP_DESKTOP_REBUILD === "1" || process.env.PP_DESKTOP_REBUILD === "true";
+  const terminal = (snapshot: JobSnapshot) =>
+    snapshot.status === "done" || snapshot.status === "error" || snapshot.status === "cancelled";
+
   app.get("/ws/jobs/:jobId", { websocket: true }, (socket, request) => {
+    if (enabled) {
+      const jobId = (request.params as { jobId: string }).jobId;
+      let state: ConnectionState = { phase: "attaching", latest: null };
+      const stop = (cause: "peer" | "terminal" | "missing" | "failure", error?: unknown) => {
+        const previous = state;
+        if (previous.phase === "closed" && !(previous.cause === "terminal" && cause === "failure")) return;
+        state = { phase: "closed", cause };
+        if (previous.phase === "lookup" || previous.phase === "streaming") previous.unsubscribe();
+        if (cause === "peer") return;
+        if (cause === "failure") request.log.error({ err: error, jobId }, "Job stream unavailable");
+        try {
+          if (cause === "failure") socket.close(1011, "Job stream unavailable");
+          else if (cause === "missing") socket.close(1008, "Job not found");
+          else socket.close();
+        } catch {
+          socket.terminate();
+        }
+      };
+      const send = (snapshot: JobSnapshot) => {
+        if (state.phase === "closed") return;
+        if (socket.readyState !== socket.OPEN) {
+          stop("peer");
+          return;
+        }
+        try {
+          socket.send(JSON.stringify(snapshot), (error) => {
+            if (error) stop("failure", error);
+          });
+          if (terminal(snapshot)) stop("terminal");
+        } catch (error) {
+          stop("failure", error);
+        }
+      };
+      socket.on("close", () => stop("peer"));
+      socket.on("error", (error) => stop("failure", error));
+      try {
+        const unsubscribe = jobs.subscribe(jobId, request.tenantId, (snapshot) => {
+          if (state.phase === "attaching" || state.phase === "lookup") {
+            if (!state.latest || !terminal(state.latest)) state.latest = snapshot;
+          } else if (state.phase === "streaming") {
+            send(snapshot);
+          }
+        });
+        if (!unsubscribe) {
+          stop("missing");
+          return;
+        }
+        if (socket.readyState !== socket.OPEN) {
+          unsubscribe();
+          stop("peer");
+          return;
+        }
+        state = { phase: "lookup", unsubscribe, latest: state.latest };
+        void jobs.get(jobId, request.tenantId).then((snapshot) => {
+          if (state.phase !== "lookup") return;
+          if (!snapshot) {
+            stop("missing");
+            return;
+          }
+          const latest = state.latest;
+          const first = latest && terminal(latest) ? latest
+            : terminal(snapshot) ? snapshot : latest ?? snapshot;
+          state = { phase: "streaming", unsubscribe: state.unsubscribe };
+          send(first);
+        }).catch((error: unknown) => {
+          if (state.phase !== "closed") stop("failure", error);
+        });
+      } catch (error) {
+        stop("failure", error);
+      }
+      return;
+    }
     const jobId = (request.params as { jobId: string }).jobId;
     void jobs.get(jobId, request.tenantId).then((snap) => {
       if (!snap) {

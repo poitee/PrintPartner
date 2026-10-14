@@ -4,11 +4,44 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use tauri::Url;
 
-/// Reuse the legacy desktop store in place; the native shell must not select a
-/// fresh platform-specific store when upgrading an existing installation.
-pub fn desktop_data_dir(home: &Path) -> Result<PathBuf> {
+pub fn desktop_data_dir(
+    explicit_data: Option<PathBuf>,
+    home: impl FnOnce() -> Result<PathBuf>,
+) -> Result<PathBuf> {
+    if let Some(data) = explicit_data {
+        return Ok(data);
+    }
+    #[cfg(feature = "desktop_rebuild")]
+    if pp_core::DesktopRebuild::from_env().enabled() {
+        use pp_core::layout::{DirectoryLayout, LayoutEnvironment};
+
+        let environment = LayoutEnvironment::from_env();
+        let home = if environment.portable_root.is_some() {
+            PathBuf::new()
+        } else {
+            home()?
+        };
+        return Ok(DirectoryLayout::resolve(host_platform(), &home, &environment)?.store);
+    }
+    let home = home()?;
     ensure!(home.is_absolute(), "Desktop home directory unavailable");
     Ok(home.join(".print-partner"))
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn host_platform() -> pp_core::layout::Platform {
+    #[cfg(target_os = "macos")]
+    {
+        pp_core::layout::Platform::MacOs
+    }
+    #[cfg(target_os = "linux")]
+    {
+        pp_core::layout::Platform::Linux
+    }
+    #[cfg(target_os = "windows")]
+    {
+        pp_core::layout::Platform::Windows
+    }
 }
 
 /// Only emit known diagnostic categories and OS error numbers. Arbitrary error
@@ -162,13 +195,239 @@ fn contained(root: &Path, relative: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn selector_child(test: &str) -> std::process::Command {
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command.args([
+            "--ignored",
+            "--exact",
+            test,
+            "--nocapture",
+            "--test-threads=1",
+        ]);
+        for name in [
+            "PP_DESKTOP_REBUILD",
+            "PP_PORTABLE_DIR",
+            "APPDATA",
+            "LOCALAPPDATA",
+            "XDG_DATA_HOME",
+            "XDG_CONFIG_HOME",
+            "XDG_STATE_HOME",
+            "XDG_CACHE_HOME",
+        ] {
+            command.env_remove(name);
+        }
+        command
+    }
+
+    fn assert_selector_child(mut command: std::process::Command) {
+        let output = command.output().unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{stdout}\n{stderr}");
+        assert!(stdout.contains("running 1 test\n"), "{stdout}");
+        assert!(stdout.contains("1 passed; 0 failed"), "{stdout}");
+    }
+
+    #[cfg(feature = "desktop_rebuild")]
+    #[test]
+    fn ticket_t_12_portable_launcher_store() {
+        let mut command = selector_child("tests::portable_launcher_store_in_child");
+        command.env("PP_DESKTOP_REBUILD", "1");
+        command.env("PP_PORTABLE_DIR", "/portable/Print Partner");
+        assert_selector_child(command);
+    }
+
+    #[cfg(feature = "desktop_rebuild")]
+    #[test]
+    #[ignore = "runs in an isolated subprocess with explicit environment"]
+    fn portable_launcher_store_in_child() {
+        let calls = std::cell::Cell::new(0);
+        let selected = desktop_data_dir(None, || {
+            calls.set(calls.get() + 1);
+            Ok("/users/existing-owner".into())
+        })
+        .unwrap();
+        assert_eq!(selected, PathBuf::from("/portable/Print Partner/data"));
+        assert_eq!(calls.get(), 0);
+    }
+
     #[test]
     fn ticket_t_5_upgrades_reuse_the_legacy_desktop_store() {
+        let mut command = selector_child("tests::launcher_selection_in_child");
+        command.env("PP_SELECTOR_CASE", "legacy");
+        assert_selector_child(command);
+    }
+
+    #[test]
+    fn ticket_t_12_launcher_selection_gates_and_overrides() {
+        for runtime in [
+            None,
+            Some(""),
+            Some("0"),
+            Some("false"),
+            Some("TRUE"),
+            Some(" true "),
+            Some("yes"),
+        ] {
+            let mut command = selector_child("tests::launcher_selection_in_child");
+            command.env("PP_SELECTOR_CASE", "legacy");
+            command.env("PP_PORTABLE_DIR", "/portable/Print Partner");
+            command.env("XDG_DATA_HOME", "invalid-relative");
+            if let Some(runtime) = runtime {
+                command.env("PP_DESKTOP_REBUILD", runtime);
+            }
+            assert_selector_child(command);
+        }
+        for runtime in ["1", "true"] {
+            for (case, portable) in [
+                ("portable", Some("/portable/Print Partner")),
+                ("portable-unavailable", Some("/portable/Print Partner")),
+                ("invalid-portable", Some("")),
+                ("invalid-portable", Some("relative")),
+                ("invalid-portable", Some("/safe/../other")),
+                ("invalid-portable-unavailable", Some("relative")),
+                ("legacy", None),
+                ("unavailable", None),
+                ("relative-home-enabled", None),
+                ("parent-home-enabled", None),
+                ("absolute-override", Some("relative")),
+                ("relative-override", Some("")),
+            ] {
+                let mut command = selector_child("tests::launcher_selection_in_child");
+                command.env("PP_SELECTOR_CASE", case);
+                command.env("PP_DESKTOP_REBUILD", runtime);
+                if let Some(portable) = portable {
+                    command.env("PP_PORTABLE_DIR", portable);
+                }
+                assert_selector_child(command);
+            }
+        }
+        for case in [
+            "unavailable",
+            "relative-home",
+            "parent-home",
+            "absolute-override",
+            "relative-override",
+        ] {
+            let mut command = selector_child("tests::launcher_selection_in_child");
+            command.env("PP_SELECTOR_CASE", case);
+            command.env("PP_PORTABLE_DIR", "invalid-relative");
+            assert_selector_child(command);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            for case in [
+                "nonunicode-portable",
+                "nonunicode-home",
+                "nonunicode-override",
+            ] {
+                let mut command = selector_child("tests::launcher_selection_in_child");
+                command.env("PP_SELECTOR_CASE", case);
+                command.env("PP_DESKTOP_REBUILD", "1");
+                if case == "nonunicode-portable" {
+                    command.env(
+                        "PP_PORTABLE_DIR",
+                        std::ffi::OsString::from_vec(b"/portable/\xff".to_vec()),
+                    );
+                }
+                assert_selector_child(command);
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "runs in an isolated subprocess with explicit environment"]
+    fn launcher_selection_in_child() {
+        let case = std::env::var("PP_SELECTOR_CASE").unwrap();
+        let compiled = cfg!(feature = "desktop_rebuild");
+        let mut home = PathBuf::from("/users/existing-owner");
+        let mut explicit = None;
+        let mut expected: Result<PathBuf, &str> = Ok("/users/existing-owner/.print-partner".into());
+        let mut expected_calls = 1;
+        match case.as_str() {
+            "legacy" => {}
+            "portable" | "portable-unavailable" if compiled => {
+                expected = Ok("/portable/Print Partner/data".into());
+                expected_calls = 0;
+            }
+            "invalid-portable-unavailable" | "invalid-portable" if compiled => {
+                expected = Err("Invalid PP_PORTABLE_DIR directory");
+                expected_calls = 0;
+            }
+            "portable" | "invalid-portable" => {}
+            "unavailable" | "portable-unavailable" | "invalid-portable-unavailable" => {
+                expected = Err("Desktop home directory unavailable");
+            }
+            "relative-home" | "relative-home-enabled" => {
+                home = "relative-home".into();
+                expected = Err(if compiled && case == "relative-home-enabled" {
+                    "Invalid home directory"
+                } else {
+                    "Desktop home directory unavailable"
+                });
+            }
+            "parent-home" | "parent-home-enabled" => {
+                home = "/users/../existing-owner".into();
+                expected = if compiled && case == "parent-home-enabled" {
+                    Err("Invalid home directory")
+                } else {
+                    Ok("/users/../existing-owner/.print-partner".into())
+                };
+            }
+            "absolute-override" | "relative-override" => {
+                let data = PathBuf::from(if case == "absolute-override" {
+                    "/explicit/data"
+                } else {
+                    "relative/data"
+                });
+                explicit = Some(data.clone());
+                expected = Ok(data);
+                expected_calls = 0;
+            }
+            #[cfg(unix)]
+            "nonunicode-portable" | "nonunicode-home" | "nonunicode-override" => {
+                use std::os::unix::ffi::OsStringExt;
+                let path =
+                    |bytes: &[u8]| PathBuf::from(std::ffi::OsString::from_vec(bytes.to_vec()));
+                match case.as_str() {
+                    "nonunicode-portable" if compiled => {
+                        expected = Ok(path(b"/portable/\xff/data"));
+                        expected_calls = 0;
+                    }
+                    "nonunicode-home" => {
+                        home = path(b"/users/\xff");
+                        expected = Ok(path(b"/users/\xff/.print-partner"));
+                    }
+                    "nonunicode-override" => {
+                        explicit = Some(path(b"relative/\xfe"));
+                        expected = Ok(path(b"relative/\xfe"));
+                        expected_calls = 0;
+                    }
+                    _ => {}
+                }
+            }
+            _ => panic!("unknown selector case {case}"),
+        }
+        let calls = std::cell::Cell::new(0);
+        let actual = desktop_data_dir(explicit, || {
+            calls.set(calls.get() + 1);
+            assert!(
+                !case.ends_with("override"),
+                "explicit data must not request home"
+            );
+            if case == "unavailable" || case.ends_with("-unavailable") {
+                anyhow::bail!("Desktop home directory unavailable");
+            }
+            Ok(home)
+        });
         assert_eq!(
-            desktop_data_dir(Path::new("/users/existing-owner")).unwrap(),
-            PathBuf::from("/users/existing-owner/.print-partner")
+            actual.map_err(|error| error.to_string()),
+            expected.map_err(str::to_owned),
+            "{case}"
         );
-        assert!(desktop_data_dir(Path::new("relative-home")).is_err());
+        assert_eq!(calls.get(), expected_calls, "{case}");
     }
 
     #[test]
@@ -213,10 +472,9 @@ mod tests {
             "node_abi": "137"
         });
         std::fs::write(fixture.join("release.json"), release.to_string()).unwrap();
-        let selected = desktop_data_dir(&fixture.join("home")).unwrap();
         let launch = ResourceLayout::read(&fixture)
             .unwrap()
-            .into_launch(selected)
+            .into_launch(data.clone())
             .unwrap();
         assert_eq!(launch.data_dir, data);
         assert_eq!(

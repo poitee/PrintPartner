@@ -26,8 +26,13 @@ impl Fixture {
         std::fs::write(root.join("index.html"), b"<html>desktop</html>").unwrap();
         std::fs::write(root.join("assets/app.js"), b"export default 1;").unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let mut gateway =
-            Gateway::start(listener, root.clone(), CompatHandle::unpublished()).unwrap();
+        let mut gateway = Gateway::start(
+            listener,
+            root.clone(),
+            CompatHandle::unpublished(),
+            &crate::ownership::cutover::OperationOwners::node_only(),
+        )
+        .unwrap();
         let launch = gateway.take_launch_target().unwrap().into_url();
         let request = Request::builder()
             .uri(launch.strip_prefix(gateway.origin()).unwrap())

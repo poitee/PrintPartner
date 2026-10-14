@@ -38,10 +38,9 @@ pub fn process_group_absent(pid: u32) -> bool {
     !group_alive(pid)
 }
 
-pub fn reap_process_group(pid: u32) {
-    if pid > 0 {
-        unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
-    }
+/// Returns whether SIGKILL was delivered to an existing process group.
+pub fn reap_process_group(pid: u32) -> bool {
+    pid > 0 && unsafe { libc::kill(-(pid as i32), libc::SIGKILL) } == 0
 }
 
 fn group_alive(pid: u32) -> bool {
@@ -115,7 +114,11 @@ pub async fn drive_shutdown_group(
             }
         }
     }
-    reap_process_group(pid);
+    if reap_process_group(pid) {
+        exit = exit.map(|exit| match exit {
+            GroupExit::Observed(status) | GroupExit::Forced(status) => GroupExit::Forced(status),
+        });
+    }
     let group_absent = wait_until_group_absent(pid).await.is_ok();
     if let Some(error) = failure {
         return Err(if group_absent {
