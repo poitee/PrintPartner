@@ -619,7 +619,8 @@ async fn handle(
         } else {
             path.trim_start_matches('/')
         };
-        let response = assets::serve(&state.assets, relative, request.method()).await;
+        let response =
+            assets::serve(&state.assets, relative, request.method(), request.headers()).await;
         return response.map(|body| {
             Body::new(TrackedBody {
                 body,
