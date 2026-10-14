@@ -15,7 +15,7 @@ const choicesSchema = featuresSchema.partial();
 export const featureKeys = featuresSchema.keyof().options;
 export const featurePatchSchema = z.partialRecord(featuresSchema.keyof(), z.boolean().nullable());
 export type FeatureChoices = z.infer<typeof choicesSchema>;
-type FeatureKey = keyof FeatureChoices;
+export type FeatureKey = keyof FeatureChoices;
 type FeatureLayer = { readonly choices: FeatureChoices; readonly raw: Record<string, unknown> };
 const storedObjectSchema = z.custom<Record<string, unknown>>(
   (value) => typeof value === "object" && value !== null && !Array.isArray(value),
