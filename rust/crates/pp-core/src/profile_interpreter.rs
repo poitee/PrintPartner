@@ -437,6 +437,9 @@ impl<'a> JsonParser<'a> {
             return Ok(JsValue::Array(values));
         }
         loop {
+            if values.len() == MAX_ENTRIES {
+                return Err(ProfileInterpretError::TooManyEntries);
+            }
             values.push(self.parse_value(depth)?);
             self.skip_whitespace();
             if self.consume(b']') {
@@ -677,8 +680,25 @@ fn merge(
 }
 
 fn serialize_flat(flat: &NodeFlatObject) -> Result<String, ProfileInterpretError> {
-    let mut output = String::from("{");
-    for (index, (key, value)) in flat.ordered().into_iter().enumerate() {
+    let ordered = flat.ordered();
+    let size = ordered
+        .iter()
+        .enumerate()
+        .try_fold(2, |size, (index, (key, value))| {
+            let size = size
+                + node_json_string_len(key)
+                + node_json_string_len(value)
+                + 1
+                + usize::from(index > 0);
+            if size > MAX_RESOLVED_BYTES {
+                Err(ProfileInterpretError::ResolvedDocumentTooLarge)
+            } else {
+                Ok(size)
+            }
+        })?;
+    let mut output = String::with_capacity(size);
+    output.push('{');
+    for (index, (key, value)) in ordered.into_iter().enumerate() {
         if index > 0 {
             output.push(',');
         }
@@ -687,10 +707,17 @@ fn serialize_flat(flat: &NodeFlatObject) -> Result<String, ProfileInterpretError
         output.push_str(&value.to_node_json_string());
     }
     output.push('}');
-    if output.len() > MAX_RESOLVED_BYTES {
-        return Err(ProfileInterpretError::ResolvedDocumentTooLarge);
-    }
     Ok(output)
+}
+
+fn node_json_string_len(text: &JsText) -> usize {
+    2 + char::decode_utf16(text.as_utf16().iter().copied())
+        .map(|decoded| match decoded {
+            Ok('\u{0008}' | '\u{0009}' | '\u{000a}' | '\u{000c}' | '\u{000d}' | '"' | '\\') => 2,
+            Ok('\u{0000}'..='\u{001f}') | Err(_) => 6,
+            Ok(scalar) => scalar.len_utf8(),
+        })
+        .sum::<usize>()
 }
 
 fn profile_kind(raw: Option<&JsText>, fallback: ProfileKind) -> ProfileKind {
@@ -1003,6 +1030,27 @@ mod tests {
         assert_eq!(
             serialize_flat(&resolved).unwrap_err(),
             ProfileInterpretError::ResolvedDocumentTooLarge
+        );
+    }
+}
+#[test]
+fn encoded_lengths_match_node_serialization_for_utf16() {
+    for unit in 0..=u16::MAX {
+        let text = JsText::from_utf16(vec![unit]);
+        assert_eq!(
+            node_json_string_len(&text),
+            text.to_node_json_string().len()
+        );
+    }
+    for units in [
+        vec![0xd83d, 0xde00],
+        vec![0xd800, 65, 0xdc00],
+        vec![0, 8, 9, 10, 12, 13, 34, 92],
+    ] {
+        let text = JsText::from_utf16(units);
+        assert_eq!(
+            node_json_string_len(&text),
+            text.to_node_json_string().len()
         );
     }
 }

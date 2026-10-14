@@ -246,6 +246,20 @@ fn numeric_stringification_and_projection_follow_javascript() {
 }
 
 #[test]
+fn json_arrays_are_bounded_before_flattening() {
+    let raw = format!(r#"{{"ignored":[{}]}}"#, vec!["null"; 16_385].join(","));
+    assert!(matches!(
+        interpret_profile(document(raw.as_bytes(), ProfileKind::Process)),
+        Err(ProfileInterpretError::TooManyEntries)
+    ));
+    let raw = format!(r#"{{"value":[{}]}}"#, vec!["0"; 16_384].join(","));
+    assert_eq!(
+        ready(raw.as_bytes(), ProfileKind::Process)["provenance"]["resolved_flat_config"],
+        r#"{"value":"0"}"#
+    );
+}
+
+#[test]
 fn json_object_entry_limits_apply_before_flattening() {
     let properties = (0..16_384)
         .map(|index| format!(r#""k{index}":null"#))
