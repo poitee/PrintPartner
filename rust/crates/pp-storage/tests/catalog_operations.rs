@@ -1637,6 +1637,87 @@ fn gre601_preview_merges_roles_and_preserves_reference_ordering() {
 
 #[cfg(feature = "desktop_rebuild")]
 #[test]
+fn gre601_preview_quantity_strips_only_literal_stl_suffixes() {
+    let fixture = Fixture::new();
+    let owner = fixture.open();
+    let client = owner.local_source_catalog();
+    for (path, regex, slug) in [
+        ("gear x2_stl", r"x([0-9]+)_stl", "gear "),
+        ("gear x2_stl", r"x([0-9]+)_stl$", "gear "),
+        ("gear x2.stl", r"x([0-9]+)\.stl", "gear x2"),
+        ("gear x2.STL", r"x([0-9]+)\.stl$", "gear "),
+        ("gear x2.astl", r"x([0-9]+)\.astl$", "gear "),
+        ("gear x2_stl-tail", r"x([0-9]+)_stl", "gear -tail"),
+    ] {
+        assert_eq!(
+            preview(&client, path, json!({"quantity":{"regex":regex}})),
+            json!({"role":"primary","quantity":2.0,"part_slug":slug,"filename":path}),
+            "{path} with {regex}"
+        );
+    }
+    owner.shutdown().unwrap();
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[test]
+fn gre601_preview_case_matching_preserves_original_marker_length_order() {
+    let fixture = Fixture::new();
+    let owner = fixture.open();
+    let client = owner.local_source_catalog();
+    for (path, profile, role, slug, filename) in [
+        (
+            "İXYgear.stl",
+            json!({"roles":[{"id":"accent","markers":["İ"]},{"id":"clear","markers":["XY"]}],"slug":{"strip_markers":false}}),
+            "clear",
+            "İXYgear",
+            "İXYgear.stl",
+        ),
+        (
+            "İxgear.stl",
+            json!({"roles":[{"id":"accent","markers":["x"]},{"id":"clear","markers":["İ"]}],"slug":{"strip_markers":false}}),
+            "accent",
+            "İxgear",
+            "İxgear.stl",
+        ),
+        (
+            "MiXeD/gear.stl",
+            json!({"folder_rules":[{"path_contains":"mIxEd","role_id":"opaque"}]}),
+            "opaque",
+            "gear",
+            "gear.stl",
+        ),
+        (
+            "TaG/gear.stl",
+            json!({"roles":[{"id":"accent","markers":["tAg"]}]}),
+            "accent",
+            "gear",
+            "gear.stl",
+        ),
+    ] {
+        assert_eq!(
+            preview(&client, path, profile),
+            json!({"role":role,"quantity":1.0,"part_slug":slug,"filename":filename}),
+            "{path}"
+        );
+    }
+    let mut markers = (0..512)
+        .map(|i| format!("missing-marker-{i}"))
+        .collect::<Vec<_>>();
+    markers.push("FiNaL".into());
+    let path = format!("{}/final/gear.stl", "z".repeat(400_000));
+    assert_eq!(
+        preview(
+            &client,
+            &path,
+            json!({"roles":[{"id":"accent","markers":markers}]})
+        ),
+        json!({"role":"accent","quantity":1.0,"part_slug":"gear","filename":"gear.stl"})
+    );
+    owner.shutdown().unwrap();
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[test]
 fn gre601_preview_quantity_uses_numeric_prefix_clamping_and_null() {
     let fixture = Fixture::new();
     let owner = fixture.open();

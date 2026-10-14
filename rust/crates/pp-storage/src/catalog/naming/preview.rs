@@ -185,7 +185,7 @@ fn quantity_strip(pattern: &str) -> Option<regress::Regex> {
     }
     pattern = replace_first(&pattern, r"\([^?][^)]*\)", "[0-9]+");
     pattern = pattern.replacen(r"\.stl$", "$", 1);
-    pattern = replace_first(&pattern, r".stl$", "$");
+    pattern = replace_first(&pattern, r"\.stl$", "$");
     regress::Regex::with_flags(&pattern, "i").ok()
 }
 fn parse_integer(text: &str) -> f64 {
@@ -212,6 +212,7 @@ pub(in crate::catalog) fn preview(
         None => global,
     };
     let path = relative_path.replace('\\', "/");
+    let lowercase_path = path.to_lowercase();
     let filename = path.rsplit('/').next().unwrap_or("").to_owned();
     let mut markers = profile
         .roles
@@ -224,19 +225,20 @@ pub(in crate::catalog) fn preview(
         })
         .collect::<Vec<_>>();
     markers.sort_by_key(|(marker, _)| std::cmp::Reverse(marker.encode_utf16().count()));
+    let markers = markers
+        .into_iter()
+        .map(|(marker, role)| (marker.to_lowercase(), role))
+        .collect::<Vec<_>>();
     let role = profile
         .folder_rules
         .iter()
-        .find(|r| {
-            path.to_lowercase()
-                .contains(&r.path_contains.to_lowercase())
-        })
+        .find(|r| lowercase_path.contains(&r.path_contains.to_lowercase()))
         .map(|r| r.role_id)
         .or_else(|| {
-            path.split('/').find_map(|segment| {
+            lowercase_path.split('/').find_map(|segment| {
                 markers
                     .iter()
-                    .find(|(m, _)| segment.to_lowercase().contains(&m.to_lowercase()))
+                    .find(|(m, _)| segment.contains(m))
                     .map(|(_, role)| *role)
             })
         })
