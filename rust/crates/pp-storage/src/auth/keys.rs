@@ -95,7 +95,10 @@ fn save(tx: &Transaction<'_>, tenant: &str, keys: &[StoredKey]) -> Result<()> {
     tx.execute("INSERT INTO app_settings(tenant_id,key,value) VALUES(?1,'api_keys_v1',?2) ON CONFLICT(tenant_id,key) DO UPDATE SET value=excluded.value", params![tenant,value])?;
     Ok(())
 }
-fn create(keys: &mut Vec<StoredKey>) -> Result<Outcome> {
+fn create(
+    keys: &mut Vec<StoredKey>,
+    #[cfg(feature = "desktop_rebuild")] lifetime: Option<i64>,
+) -> Result<Outcome> {
     ensure!(keys.len() < 4096, "API key collection too large");
     let raw = Secret(format!("ppk_{}", hex::encode(crypto::random::<32>()?)));
     let key = StoredKey {
@@ -103,14 +106,22 @@ fn create(keys: &mut Vec<StoredKey>) -> Result<Outcome> {
         key_hash: digest(raw.expose())?,
         created_at: timestamp(0),
         last_used_at: None,
+        #[cfg(not(feature = "desktop_rebuild"))]
         expires_at: None,
+        #[cfg(feature = "desktop_rebuild")]
+        expires_at: lifetime.map(timestamp),
         is_active: true,
     };
     let info = key.info();
     keys.push(key);
     Ok(Outcome::KeyCreated { info, key: raw })
 }
-pub(super) fn manage(tx: &Transaction<'_>, tenant: &str, action: Action) -> Result<Outcome> {
+pub(super) fn manage(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    action: Action,
+    #[cfg(feature = "desktop_rebuild")] lifetime: Option<i64>,
+) -> Result<Outcome> {
     let (mut keys, mut changed) = load(tx, tenant)?;
     let outcome = match action {
         Action::List => Outcome::Keys {
@@ -123,7 +134,11 @@ pub(super) fn manage(tx: &Transaction<'_>, tenant: &str, action: Action) -> Resu
         },
         Action::Create => {
             changed = true;
-            create(&mut keys)?
+            create(
+                &mut keys,
+                #[cfg(feature = "desktop_rebuild")]
+                lifetime,
+            )?
         }
         Action::Revoke(id) => {
             let found = keys.iter_mut().find(|key| key.id == id);
@@ -145,7 +160,11 @@ pub(super) fn manage(tx: &Transaction<'_>, tenant: &str, action: Action) -> Resu
             if let Some(key) = keys.iter_mut().find(|key| key.id == id) {
                 key.is_active = false;
                 changed = true;
-                create(&mut keys)?
+                create(
+                    &mut keys,
+                    #[cfg(feature = "desktop_rebuild")]
+                    lifetime,
+                )?
             } else {
                 Outcome::KeyChanged {
                     changed: false,

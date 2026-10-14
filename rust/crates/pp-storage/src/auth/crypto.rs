@@ -99,6 +99,77 @@ fn verify_with_kdf(
     }
 }
 
+#[cfg(feature = "desktop_rebuild")]
+pub(super) enum SupportedPasswordHash {
+    Argon2id(argon2::password_hash::PasswordHashString),
+    LegacyScrypt { salt: [u8; 16], expected: [u8; 64] },
+}
+
+#[cfg(feature = "desktop_rebuild")]
+impl SupportedPasswordHash {
+    pub(super) fn is_legacy(&self) -> bool {
+        matches!(self, Self::LegacyScrypt { .. })
+    }
+}
+
+#[cfg(feature = "desktop_rebuild")]
+pub(super) fn inspect(stored: &str) -> Option<SupportedPasswordHash> {
+    if stored.len() > 512 {
+        return None;
+    }
+    if stored.starts_with("scrypt:") {
+        let fields: Vec<_> = stored.split(':').collect();
+        if fields.len() != 6 || fields[1..4] != ["16384", "8", "1"] {
+            return None;
+        }
+        let (Ok(salt), Ok(expected)) = (
+            URL_SAFE_NO_PAD.decode(fields[4]),
+            URL_SAFE_NO_PAD.decode(fields[5]),
+        ) else {
+            return None;
+        };
+        Some(SupportedPasswordHash::LegacyScrypt {
+            salt: salt.try_into().ok()?,
+            expected: expected.try_into().ok()?,
+        })
+    } else {
+        let owned = argon2::password_hash::PasswordHashString::new(stored).ok()?;
+        let parsed = owned.password_hash();
+        if parsed.algorithm.as_str() != "argon2id"
+            || parsed.version != Some(19)
+            || parsed.params.get_decimal("m") != Some(19456)
+            || parsed.params.get_decimal("t") != Some(2)
+            || parsed.params.get_decimal("p") != Some(1)
+            || parsed.params.iter().count() != 3
+            || parsed.hash.is_none_or(|hash| hash.len() != 32)
+            || parsed.salt.is_none_or(|salt| salt.as_str().len() != 22)
+        {
+            return None;
+        };
+        Some(SupportedPasswordHash::Argon2id(owned))
+    }
+}
+
+#[cfg(feature = "desktop_rebuild")]
+pub(super) fn verify_supported(password: &Secret, stored: &SupportedPasswordHash) -> bool {
+    if password.0.len() > 4096 {
+        return false;
+    }
+    match stored {
+        SupportedPasswordHash::LegacyScrypt { salt, expected } => {
+            let Ok(params) = scrypt::Params::new(14, 8, 1, 64) else {
+                return false;
+            };
+            let mut actual = [0; 64];
+            scrypt::scrypt(password.0.as_bytes(), salt, &params, &mut actual).is_ok()
+                && bool::from(actual.ct_eq(expected))
+        }
+        SupportedPasswordHash::Argon2id(owned) => Argon2::default()
+            .verify_password(password.0.as_bytes(), &owned.password_hash())
+            .is_ok(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

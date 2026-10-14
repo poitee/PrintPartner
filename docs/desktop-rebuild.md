@@ -124,6 +124,31 @@ cargo test --locked --manifest-path rust/Cargo.toml -p pp-source --features desk
 
 D5 retained capture and D28 ZIP acquisition label policy remain separate slices. The second D3 PR for source acquisition and uploads remains deferred. Local selection is outside this audit. This audit introduces no user-visible path and needs no runtime gate. Future rebuild callers must compile behind `desktop_rebuild` and check `PP_DESKTOP_REBUILD` for exactly `1` or `true`.
 
+### D6 auth scheduling
+
+GRE-605 adds `WriterOwner::rebuild_auth_with_policy(policy, lifetimes)` behind
+`desktop_rebuild`. This explicit library constructor returns `RebuildAuthClient`.
+The existing `auth` and `auth_with_policy` constructors retain their existing pool
+and default session/key lifetimes with the feature off or on. No runtime caller
+selects the rebuild client. D23/D26 must check the stored `PP_DESKTOP_REBUILD`
+setting before selecting it.
+
+The rebuild client admits at most 34 flows and sends only password hashing and
+verification to two KDF workers. SQL stages run through the storage writer;
+status, session resolution, logout and key operations can progress while both KDF
+workers are occupied. Ready auth work has a separate queue and alternates with ordinary writer work,
+so it cannot consume ordinary write capacity. Full KDF queues retry without
+blocking that writer. A login that loses a credential comparison retries once
+by reloading the same user and re-verifying the supplied password outside the writer. Shutdown rejects late KDF
+results. Credential compare-and-swap checks remain in the shared SQL executor.
+`AuthLifetimes::shorter` supports shorter sessions and optional key expiry.
+
+The port preserves main's `User::has_password`, HMAC key hashing, hostile-cost
+checks and legacy constructors. The reference's subscription revalidation calls
+remain deferred to D15, where subscriptions are introduced. Native-secret and
+durable-authority support is the other D6 PR. Neither PR completes GRE-605 until
+both clear the coordinator's exact-head Grok Build gate.
+
 ### D5 retained capture
 
 GRE-603 ports the full reference `pp-source::retained_capture` module behind `desktop_rebuild`, including its eight embedded tests. Deliberate fixes beyond the reference track allocation cleanup receipts, reject malformed frozen layouts, and validate inventory and transfer paths before I/O or staging. Minimal support adds `local_selection::InputFile`, inventory and capture helpers, pinned-identity directory operations, and optional `getrandom`. Transfer atomically refuses existing import operations and creates destination files exclusively. Failed transfers can leave staging. The separate 20-test reference suite passed locally and is excluded from this slice; a compact public test covers lifecycle, reopen, inventory, transfer, malformed reopen, entry limits, path collisions, and existing-operation sentinel preservation. Current root, ancestor, path, and ACL protections remain in place. No runtime callers, routes, or CLI commands use these APIs. Later integration remains deferred and must check `PP_DESKTOP_REBUILD` for exactly `1` or `true`. GRE-603 stays In Progress.

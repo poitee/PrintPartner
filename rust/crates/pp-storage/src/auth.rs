@@ -1,6 +1,8 @@
 mod crypto;
 mod keys;
 mod policy;
+#[cfg(feature = "desktop_rebuild")]
+pub mod rebuild;
 pub use policy::{
     AuthFailure, AuthInputFailure, AuthPolicy, AuthStatus, RegistrationPolicy, SessionTenantPolicy,
 };
@@ -605,6 +607,11 @@ pub(super) enum Reply {
     Outcome(Outcome),
 }
 pub(super) enum Command {
+    #[cfg(feature = "desktop_rebuild")]
+    WithLifetimes {
+        command: Box<Command>,
+        lifetimes: rebuild::AuthLifetimes,
+    },
     Status,
     IdentityExists {
         provider: Provider,
@@ -776,7 +783,10 @@ fn create_session(
     mut user: User,
     provider: Provider,
     policy: AuthPolicy,
+    #[cfg(feature = "desktop_rebuild")] session_seconds: i64,
 ) -> Result<Outcome> {
+    #[cfg(not(feature = "desktop_rebuild"))]
+    let session_seconds = 14 * 24 * 60 * 60;
     user.tenant_id = policy::tenant_for_authenticated_actor(tx, &user, policy)?;
     user.provider = provider;
     let token = crypto::token()?;
@@ -785,7 +795,7 @@ fn create_session(
         params![
             crypto::digest(token.expose()),
             user.user_id,
-            timestamp(14 * 24 * 60 * 60),
+            timestamp(session_seconds),
             provider.name()
         ],
     )?;
@@ -822,8 +832,15 @@ pub(super) fn execute(
     policy: AuthPolicy,
     admission: crate::writer_admission::Deadline,
 ) -> Result<Reply> {
+    #[cfg(feature = "desktop_rebuild")]
+    let (command, lifetimes) = match command {
+        Command::WithLifetimes { command, lifetimes } => (*command, lifetimes),
+        command => (command, rebuild::AuthLifetimes::default()),
+    };
     let tx = crate::writer_admission::begin_immediate(connection, admission)?;
     let outcome = match command {
+        #[cfg(feature = "desktop_rebuild")]
+        Command::WithLifetimes { .. } => bail!(AuthFailure::Storage),
         Command::Status => {
             return Ok(Reply::Outcome(Outcome::Status(policy::status(
                 &tx, policy,
@@ -853,7 +870,14 @@ pub(super) fn execute(
                 AuthFailure::DuplicateEmail
             );
             let user = create_user(&tx, Some(email), display_name, Some(hash), first_user)?;
-            create_session(&tx, user, Provider::Email, policy)?
+            create_session(
+                &tx,
+                user,
+                Provider::Email,
+                policy,
+                #[cfg(feature = "desktop_rebuild")]
+                lifetimes.session_seconds,
+            )?
         }
         Command::Login {
             credential,
@@ -871,7 +895,14 @@ pub(super) fn execute(
                     params![hash, current.user.user_id],
                 )?;
             }
-            create_session(&tx, current.user, Provider::Email, policy)?
+            create_session(
+                &tx,
+                current.user,
+                Provider::Email,
+                policy,
+                #[cfg(feature = "desktop_rebuild")]
+                lifetimes.session_seconds,
+            )?
         }
         Command::ResolveSession(token) => Outcome::User(
             session_user(&tx, &token)?
@@ -906,7 +937,14 @@ pub(super) fn execute(
             )?;
             ensure!(changed == 1, AuthFailure::CredentialChanged);
             invalidate(&tx, &user.user_id)?;
-            create_session(&tx, user, Provider::Email, policy)?
+            create_session(
+                &tx,
+                user,
+                Provider::Email,
+                policy,
+                #[cfg(feature = "desktop_rebuild")]
+                lifetimes.session_seconds,
+            )?
         }
         Command::RequestReset(email) => {
             if let Some(credential) = by_email(&tx, &email)? {
@@ -941,7 +979,14 @@ pub(super) fn execute(
                 let user = by_id(&tx, &id)?
                     .ok_or_else(|| anyhow!("Reset user missing"))?
                     .user;
-                create_session(&tx, user, Provider::Email, policy)?
+                create_session(
+                    &tx,
+                    user,
+                    Provider::Email,
+                    policy,
+                    #[cfg(feature = "desktop_rebuild")]
+                    lifetimes.session_seconds,
+                )?
             } else {
                 Outcome::Changed(false)
             }
@@ -968,7 +1013,14 @@ pub(super) fn execute(
                 None => create_user(&tx, email, display_name, None, first_user)?,
             };
             link(&tx, &user.user_id, provider, &provider_user_id)?;
-            create_session(&tx, user, provider, policy)?
+            create_session(
+                &tx,
+                user,
+                provider,
+                policy,
+                #[cfg(feature = "desktop_rebuild")]
+                lifetimes.session_seconds,
+            )?
         }
         Command::LinkIdentity {
             session,
@@ -982,7 +1034,13 @@ pub(super) fn execute(
         Command::Keys { session, action } => {
             let user = actor(&tx, &session)?;
             let tenant = policy::tenant_for_authenticated_actor(&tx, &user, policy)?;
-            keys::manage(&tx, &tenant, action)?
+            keys::manage(
+                &tx,
+                &tenant,
+                action,
+                #[cfg(feature = "desktop_rebuild")]
+                lifetimes.key_seconds,
+            )?
         }
         Command::ResolveKey { tenant_id, key } => keys::resolve(&tx, &tenant_id, key)?,
     };

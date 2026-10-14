@@ -10,6 +10,10 @@ fn ticket_t_59_catalog_private_full_queue_retains_unreleased_work() {
     let (reply, _) = mpsc::channel();
     let shared = Arc::new(Shared {
         queue: Mutex::new(Queue {
+            #[cfg(feature = "desktop_rebuild")]
+            auth_ready: VecDeque::new(),
+            #[cfg(feature = "desktop_rebuild")]
+            next: crate::QueueClass::Normal,
             closed: false,
             pending: VecDeque::from([Envelope::Catalog {
                 command: Command::End(999),
