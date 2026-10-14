@@ -53,6 +53,7 @@ def package(root, validate_only=False):
     if not validate_only:
         for identity, variant in pairs.items():
             if variant.exists():
+                variant.chmod(identity.stat().st_mode & 0o666)
                 continue
             with tempfile.NamedTemporaryFile(dir=identity.parent, delete=False) as output:
                 temporary = pathlib.Path(output.name)
@@ -62,6 +63,7 @@ def package(root, validate_only=False):
                     ) as encoded:
                         shutil.copyfileobj(source, encoded, length=65536)
                     output.close()
+                    temporary.chmod(identity.stat().st_mode & 0o666)
                     temporary.replace(variant)
                 finally:
                     temporary.unlink(missing_ok=True)

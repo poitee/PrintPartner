@@ -212,6 +212,41 @@ fn ticket_t_11_packaging_manifest_measures_both_representations() {
 
 #[cfg(unix)]
 #[test]
+fn ticket_t_11_packaging_preserves_asset_read_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+    for expected in [0o644, 0o640] {
+        let assets = Assets::new();
+        fs::set_permissions(
+            assets.0.join("assets/app.js"),
+            fs::Permissions::from_mode(expected),
+        )
+        .unwrap();
+        assets.prepare();
+        let mode = fs::metadata(assets.0.join("assets/app.js.gz"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, expected);
+        fs::set_permissions(
+            assets.0.join("assets/app.js.gz"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        assets.prepare();
+        assert_eq!(
+            fs::metadata(assets.0.join("assets/app.js.gz"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            expected,
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn ticket_t_11_packaging_symlink_is_rejected_without_outside_write() {
     let assets = Assets::new();
     let outside = Assets::new();
