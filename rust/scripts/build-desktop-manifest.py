@@ -5,6 +5,7 @@ import pathlib
 import re
 import os
 import subprocess
+import sys
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--web', type=pathlib.Path, required=True)
@@ -98,6 +99,8 @@ if desktop['mode'] != 'desktop' or desktop['service_worker'] is not False:
 version = json.loads((web / 'package.json').read_text())['version']
 if desktop['version'] != version:
     raise ValueError('Frontend version mismatch')
+subprocess.run([sys.executable, str(pathlib.Path(__file__).with_name('precompress-spa.py')),
+                str(frontend)], check=True, stdout=subprocess.DEVNULL)
 backend = inventory(web / 'apps/server/dist/current')
 if 'desktop-resolution.js' not in backend:
     raise ValueError('Measured desktop resolution preload missing')

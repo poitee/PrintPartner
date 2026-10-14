@@ -30,6 +30,8 @@ The stage copies the real production dependencies, including optional production
 
 Release builds reject `--dev-stage`, `--data`, and the timed native probe argument. Packaged resource lookup has no global Node fallback. A package needs the actual staged resources and a Rust binary compiled with that stage's `PP_DESKTOP_RELEASE_MANIFEST`.
 
+The manifest builder adds deterministic `.gz` companions for HTML, JavaScript, CSS, SVG, JSON, source maps, Wasm, and text files. It excludes `desktop-build.json`. Both the original and compressed files enter the existing embedded SHA-256 inventory. Missing `index.html`, symlinks, orphan gzip files, corrupt gzip files, and gzip content that differs from its original stop the build. Rebuild the frontend into a clean `dist` directory after changing assets. To check an existing packaged frontend without generating files, run `python3 rust/scripts/precompress-spa.py /path/to/apps/web/dist --validate`. Compression and validation use 64 KiB buffers. This packaging prerequisite adds no routes or UI and needs no `desktop_rebuild` opt-in. The gateway still serves original files. Content negotiation, Brotli, embedded asset bytes, and signed native release receipts remain open under GRE-343.
+
 The unsigned bundle helper expects pinned `cargo-tauri` 2.12.1 installed on macOS:
 
 ```sh
