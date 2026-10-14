@@ -144,8 +144,8 @@ jobs:
 
   docker:
     needs: [ci-plan, web, web-build]
-    if: ${{ needs.ci-plan.outputs.hosted == 'true' }}
-    runs-on: ubuntu-latest
+    if: ${{ needs.ci-plan.outputs.linux == 'true' }}
+    runs-on: ${{ fromJSON(needs.ci-plan.outputs.linux-runner) }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

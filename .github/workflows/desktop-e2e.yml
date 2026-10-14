@@ -28,8 +28,8 @@ jobs:
 
   linux-smoke:
     needs: [ci-plan]
-    if: ${{ needs.ci-plan.outputs.hosted == 'true' }}
-    runs-on: ubuntu-latest
+    if: ${{ needs.ci-plan.outputs.linux == 'true' }}
+    runs-on: ${{ fromJSON(needs.ci-plan.outputs.linux-runner) }}
     timeout-minutes: 90
     env:
       CARGO_BUILD_JOBS: '4'
@@ -42,11 +42,33 @@ jobs:
           persist-credentials: false
       - name: Install WebKitGTK and a virtual display
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          set -euo pipefail
+          packages_installed() {
+            for package in "$@"; do
+              if [[ "$(dpkg-query -W -f="\${db:Status-Status}" "$package" 2>/dev/null)" == installed ]]; then
+                continue
+              fi
+              if [[ "$package" == webkit2gtk-driver ]] && {
+                [[ "$(dpkg-query -W -f="\${db:Status-Status}" webkitgtk-webdriver 2>/dev/null)" == installed ]] ||
+                  command -v WebKitWebDriver >/dev/null
+              }; then
+                continue
+              fi
+              return 1
+            done
+          }
+          if packages_installed \
             libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev \
             libayatana-appindicator3-dev librsvg2-dev pkg-config \
-            webkit2gtk-driver xvfb xauth dbus-x11 libgl1-mesa-dri libegl1 binutils file
+            webkit2gtk-driver xvfb xauth dbus-x11 libgl1-mesa-dri libegl1 binutils file; then
+            echo "Required packages are installed; skipping apt"
+          else
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends \
+              libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev \
+              libayatana-appindicator3-dev librsvg2-dev pkg-config \
+              webkit2gtk-driver xvfb xauth dbus-x11 libgl1-mesa-dri libegl1 binutils file
+          fi
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22.23.3'

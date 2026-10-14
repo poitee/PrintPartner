@@ -24,8 +24,8 @@ jobs:
 
   gate:
     needs: [ci-plan]
-    if: ${{ needs.ci-plan.outputs.hosted == 'true' }}
-    runs-on: ubuntu-latest
+    if: ${{ needs.ci-plan.outputs.linux == 'true' }}
+    runs-on: ${{ fromJSON(needs.ci-plan.outputs.linux-runner) }}
     timeout-minutes: 90
     env:
       VITE_PRINT_PARTNER_DESKTOP: '1'
@@ -43,17 +43,41 @@ jobs:
           tool: nextest
       - name: Install Linux desktop dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          set -euo pipefail
+          packages_installed() {
+            for package in "$@"; do
+              if [[ "$(dpkg-query -W -f="\${db:Status-Status}" "$package" 2>/dev/null)" == installed ]]; then
+                continue
+              fi
+              if [[ "$package" == webkit2gtk-driver ]] && {
+                [[ "$(dpkg-query -W -f="\${db:Status-Status}" webkitgtk-webdriver 2>/dev/null)" == installed ]] ||
+                  command -v WebKitWebDriver >/dev/null
+              }; then
+                continue
+              fi
+              return 1
+            done
+          }
+          if packages_installed \
             libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev \
-            libayatana-appindicator3-dev librsvg2-dev pkg-config
+            libayatana-appindicator3-dev librsvg2-dev pkg-config; then
+            echo "Required packages are installed; skipping apt"
+          else
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends \
+              libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev \
+              libayatana-appindicator3-dev librsvg2-dev pkg-config
+          fi
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '24.21.0'
       - name: Build desktop assets and generate measured manifest
         run: |
           set -euo pipefail
-          sudo ln -sf "$(command -v node)" /usr/bin/node
+          test -x "$RUNNER_TOOL_CACHE/node/24.21.0/x64/bin/node"
+          if [[ ! /usr/bin/node -ef "$RUNNER_TOOL_CACHE/node/24.21.0/x64/bin/node" ]]; then
+            sudo /usr/bin/ln -sf "$RUNNER_TOOL_CACHE/node/24.21.0/x64/bin/node" /usr/bin/node
+          fi
           test "$(/usr/bin/node --version)" = v24.21.0
           npm --prefix web ci
           npm --prefix web rebuild better-sqlite3
