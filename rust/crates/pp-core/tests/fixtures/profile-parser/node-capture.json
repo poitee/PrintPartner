@@ -1,0 +1,1273 @@
+{
+  "schema": "printpartner.profile-parser-capture.v2",
+  "runtime": {
+    "node": "v24.21.0",
+    "v8": "13.6.233.17-node.53",
+    "icu": "78.3",
+    "locale": "en-US",
+    "collator": {
+      "locale": "en-US",
+      "usage": "sort",
+      "sensitivity": "variant",
+      "ignorePunctuation": false,
+      "collation": "default",
+      "numeric": false,
+      "caseFirst": "false"
+    }
+  },
+  "collation": [
+    "10",
+    "2",
+    "a",
+    "A",
+    "Á",
+    "é",
+    "é",
+    "Same",
+    "z"
+  ],
+  "direct": {
+    "scalar": [
+      {
+        "index": 0,
+        "inputUtf16": [
+          116,
+          101,
+          120,
+          116
+        ],
+        "result": {
+          "ok": true,
+          "json": "\"text\""
+        }
+      },
+      {
+        "index": 1,
+        "inputUtf16": null,
+        "result": {
+          "ok": true,
+          "json": "\"12.5\""
+        }
+      },
+      {
+        "index": 2,
+        "inputUtf16": null,
+        "result": {
+          "ok": true,
+          "json": "\"true\""
+        }
+      },
+      {
+        "index": 3,
+        "inputUtf16": null,
+        "result": {
+          "ok": true,
+          "json": "null"
+        }
+      },
+      {
+        "index": 4,
+        "inputUtf16": null,
+        "result": {
+          "ok": true,
+          "json": "null"
+        }
+      },
+      {
+        "index": 5,
+        "inputUtf16": null,
+        "result": {
+          "ok": true,
+          "json": "\"first\""
+        }
+      },
+      {
+        "index": 6,
+        "inputUtf16": null,
+        "result": {
+          "ok": true,
+          "json": "\"false\""
+        }
+      },
+      {
+        "index": 7,
+        "inputUtf16": null,
+        "result": {
+          "ok": true,
+          "json": "null"
+        }
+      },
+      {
+        "index": 8,
+        "inputUtf16": null,
+        "result": {
+          "ok": true,
+          "json": "null"
+        }
+      },
+      {
+        "index": 9,
+        "inputUtf16": null,
+        "result": {
+          "ok": true,
+          "json": "\"\\ud800\""
+        }
+      }
+    ],
+    "json": [
+      {
+        "id": "ordinary-order",
+        "raw": "{\"name\":\"A\",\"2\":\"two\",\"10\":\"ten\",\"x\":true,\"nested\":{\"value\":[\"first\"]},\"none\":null}",
+        "result": {
+          "ok": true,
+          "json": "{\"2\":\"two\",\"10\":\"ten\",\"name\":\"A\",\"x\":\"true\",\"nested\":\"first\"}"
+        }
+      },
+      {
+        "id": "duplicate-proto",
+        "raw": "{\"a\":\"first\",\"a\":\"second\",\"__proto__\":\"dropped\",\"constructor\":\"kept\"}",
+        "result": {
+          "ok": true,
+          "json": "{\"a\":\"second\",\"constructor\":\"kept\"}"
+        }
+      },
+      {
+        "id": "duplicate-to-null",
+        "raw": "{\"a\":\"first\",\"a\":null}",
+        "result": {
+          "ok": true,
+          "json": "{}"
+        }
+      },
+      {
+        "id": "surrogate-fields",
+        "raw": "{\"name\":\"\\uD800\",\"low\":\"\\uDC00\",\"pair\":\"\\uD83D\\uDE00\",\"key\\uD800\":\"value\\uDC00\",\"type\":\"pro\\uD800cess\",\"inherits\":\"Parent\\uD800\",\"config\":{\"value\":\"x\\uD800\"}}",
+        "result": {
+          "ok": true,
+          "json": "{\"name\":\"\\ud800\",\"low\":\"\\udc00\",\"pair\":\"😀\",\"key\\ud800\":\"value\\udc00\",\"type\":\"pro\\ud800cess\",\"inherits\":\"Parent\\ud800\",\"config\":\"x\\ud800\"}"
+        }
+      },
+      {
+        "id": "array-root",
+        "raw": "[\"array root\",null,true]",
+        "result": {
+          "ok": true,
+          "json": "{\"0\":\"array root\",\"2\":\"true\"}"
+        }
+      },
+      {
+        "id": "astral-string-root",
+        "raw": "\"\\uD83D\\uDE00\"",
+        "result": {
+          "ok": true,
+          "json": "{\"0\":\"\\ud83d\",\"1\":\"\\ude00\"}"
+        }
+      },
+      {
+        "id": "surrogate-string-root",
+        "raw": "\"\\uD800X\\uDC00\"",
+        "result": {
+          "ok": true,
+          "json": "{\"0\":\"\\ud800\",\"1\":\"X\",\"2\":\"\\udc00\"}"
+        }
+      },
+      {
+        "id": "number-root",
+        "raw": "12.5",
+        "result": {
+          "ok": true,
+          "json": "{}"
+        }
+      },
+      {
+        "id": "boolean-root",
+        "raw": "true",
+        "result": {
+          "ok": true,
+          "json": "{}"
+        }
+      },
+      {
+        "id": "null-root",
+        "raw": "null",
+        "result": {
+          "ok": false,
+          "name": "TypeError",
+          "message": "Cannot convert undefined or null to object"
+        }
+      },
+      {
+        "id": "numeric-edges",
+        "raw": "{\"unsafe\":9007199254740993,\"huge\":1e308,\"overflow\":1e400,\"small\":1e-7,\"large\":1e21,\"negativeZero\":-0}",
+        "result": {
+          "ok": true,
+          "json": "{\"unsafe\":\"9007199254740992\",\"huge\":\"1e+308\",\"overflow\":\"Infinity\",\"small\":\"1e-7\",\"large\":\"1e+21\",\"negativeZero\":\"0\"}"
+        }
+      }
+    ],
+    "ini": [
+      {
+        "index": 0,
+        "raw": "﻿ key = value \r\n# comment\n; another\nkey = override\nempty=\nnope\n = ignored\n",
+        "result": {
+          "ok": true,
+          "json": "{\"key\":\"override\",\"empty\":\"\"}"
+        }
+      },
+      {
+        "index": 1,
+        "raw": "generated by OrcaSlicer 2.3.2\nname = Ini name\n",
+        "result": {
+          "ok": true,
+          "json": "{\"name\":\"Ini name\"}"
+        }
+      }
+    ],
+    "profile": [
+      {
+        "id": "bom-json",
+        "raw": "﻿  {\"name\":\"BOM JSON\",\"version\":\"\"}",
+        "kindHint": "process",
+        "result": {
+          "ok": false,
+          "name": "SyntaxError",
+          "message": "Unexpected token '﻿', \"﻿  {\"name\"\"... is not valid JSON"
+        }
+      },
+      {
+        "id": "ini-version",
+        "raw": "# generated by PrusaSlicer 2.8.0\nprint_settings_id = fallback",
+        "kindHint": "process",
+        "result": {
+          "ok": true,
+          "json": "{\"kind\":\"process\",\"name\":\"fallback\",\"version\":\"2.8.0\",\"flat\":{\"print_settings_id\":\"fallback\"}}"
+        }
+      },
+      {
+        "id": "ini-version-tabs",
+        "raw": "# generated by\tPrusaSlicer\t2.8.1\nname = tabs",
+        "kindHint": "process",
+        "result": {
+          "ok": true,
+          "json": "{\"kind\":\"process\",\"name\":\"tabs\",\"version\":\"2.8.1\",\"flat\":{\"name\":\"tabs\"}}"
+        }
+      },
+      {
+        "id": "ini-version-line-breaks",
+        "raw": "# generated by\nOrcaSlicer\n2.3.2\nname = lines",
+        "kindHint": "process",
+        "result": {
+          "ok": true,
+          "json": "{\"kind\":\"process\",\"name\":\"lines\",\"version\":\"2.3.2\",\"flat\":{\"name\":\"lines\"}}"
+        }
+      },
+      {
+        "id": "ini-version-unicode-whitespace",
+        "raw": "# generated by BambuStudio 1.9\nname = unicode whitespace",
+        "kindHint": "process",
+        "result": {
+          "ok": true,
+          "json": "{\"kind\":\"process\",\"name\":\"unicode whitespace\",\"version\":\"1.9\",\"flat\":{\"name\":\"unicode whitespace\"}}"
+        }
+      },
+      {
+        "id": "ini-version-attached",
+        "raw": "# generated by PrusaSlicer2.8.0\nname = attached",
+        "kindHint": "process",
+        "result": {
+          "ok": true,
+          "json": "{\"kind\":\"process\",\"name\":\"attached\",\"version\":null,\"flat\":{\"name\":\"attached\"}}"
+        }
+      },
+      {
+        "id": "ini-version-later-valid",
+        "raw": "# generated by Unknown 1.0\n# generated by OrcaSlicer 2.4.0\nname = later",
+        "kindHint": "process",
+        "result": {
+          "ok": true,
+          "json": "{\"kind\":\"process\",\"name\":\"later\",\"version\":\"2.4.0\",\"flat\":{\"name\":\"later\"}}"
+        }
+      },
+      {
+        "id": "array-as-ini",
+        "raw": "[1,2]",
+        "kindHint": "process",
+        "result": {
+          "ok": true,
+          "json": "{\"kind\":\"process\",\"name\":\"Unnamed\",\"version\":null,\"flat\":{}}"
+        }
+      },
+      {
+        "id": "null-as-ini",
+        "raw": "null",
+        "kindHint": "process",
+        "result": {
+          "ok": true,
+          "json": "{\"kind\":\"process\",\"name\":\"Unnamed\",\"version\":null,\"flat\":{}}"
+        }
+      },
+      {
+        "id": "surrogate-name",
+        "raw": "{\"name\":\"\\uD800\",\"type\":\"process\",\"inherits\":\"Parent\\uD800\"}",
+        "kindHint": "process",
+        "result": {
+          "ok": true,
+          "json": "{\"kind\":\"process\",\"name\":\"\\ud800\",\"version\":null,\"flat\":{\"name\":\"\\ud800\",\"type\":\"process\",\"inherits\":\"Parent\\ud800\"}}"
+        }
+      }
+    ],
+    "materials": [
+      {
+        "name": "PLA",
+        "output": "PLA"
+      },
+      {
+        "name": "PETG",
+        "output": "PETG"
+      },
+      {
+        "name": "ABS",
+        "output": "ABS"
+      },
+      {
+        "name": "ASA",
+        "output": "ASA"
+      },
+      {
+        "name": "TPU",
+        "output": "TPU"
+      },
+      {
+        "name": "PC",
+        "output": "PC"
+      },
+      {
+        "name": "NYLON",
+        "output": "NYLON"
+      },
+      {
+        "name": "PVA",
+        "output": "PVA"
+      },
+      {
+        "name": "HIPS",
+        "output": "HIPS"
+      },
+      {
+        "name": "PCTG",
+        "output": "PCTG"
+      },
+      {
+        "name": "abcPLA",
+        "output": "Generic"
+      },
+      {
+        "name": "éPLA",
+        "output": "PLA"
+      },
+      {
+        "name": "abs asa",
+        "output": "ABS"
+      },
+      {
+        "name": "unknown",
+        "output": "Generic"
+      }
+    ]
+  },
+  "watcher": {
+    "fixtures": [
+      {
+        "id": "unicode-parent",
+        "path": "<owned-temp>/slicer/user/default/process/UnicodeParent.json",
+        "bytes": 71,
+        "decodedUtf16Units": 71
+      },
+      {
+        "id": "unicode-child",
+        "path": "<owned-temp>/slicer/user/default/process/UnicodeChild.json",
+        "bytes": 164,
+        "decodedUtf16Units": 164
+      },
+      {
+        "id": "unicode-type",
+        "path": "<owned-temp>/slicer/user/default/process/UnicodeType.json",
+        "bytes": 48,
+        "decodedUtf16Units": 48
+      },
+      {
+        "id": "astral-name",
+        "path": "<owned-temp>/slicer/user/default/process/Astral.json",
+        "bytes": 54,
+        "decodedUtf16Units": 54
+      },
+      {
+        "id": "numeric-printer",
+        "path": "<owned-temp>/slicer/user/default/machine/Numeric.json",
+        "bytes": 116,
+        "decodedUtf16Units": 116
+      },
+      {
+        "id": "numeric-rejected-filament",
+        "path": "<owned-temp>/slicer/user/default/filament/Huge.json",
+        "bytes": 64,
+        "decodedUtf16Units": 64
+      },
+      {
+        "id": "ini-filament",
+        "path": "<owned-temp>/slicer/user/default/filament/PLA.ini",
+        "bytes": 144,
+        "decodedUtf16Units": 144
+      },
+      {
+        "id": "rounding-below-half",
+        "path": "<owned-temp>/slicer/user/default/filament/BelowHalf.json",
+        "bytes": 84,
+        "decodedUtf16Units": 84
+      },
+      {
+        "id": "rounding-large-integral",
+        "path": "<owned-temp>/slicer/user/default/filament/LargeIntegral.json",
+        "bytes": 85,
+        "decodedUtf16Units": 85
+      },
+      {
+        "id": "utf8-ff",
+        "path": "<owned-temp>/slicer/user/default/process/Utf8Ff.json",
+        "bytes": 12,
+        "decodedUtf16Units": 12
+      },
+      {
+        "id": "utf8-overlong",
+        "path": "<owned-temp>/slicer/user/default/process/Utf8Overlong.json",
+        "bytes": 13,
+        "decodedUtf16Units": 13
+      },
+      {
+        "id": "utf8-bad-continuation",
+        "path": "<owned-temp>/slicer/user/default/process/Utf8Continuation.json",
+        "bytes": 14,
+        "decodedUtf16Units": 14
+      },
+      {
+        "id": "bambu-producer-sample",
+        "path": "<owned-temp>/bambu/user/default/process/BambuProducer.json",
+        "bytes": 168,
+        "decodedUtf16Units": 168
+      },
+      {
+        "id": "prusa-producer-sample",
+        "path": "<owned-temp>/prusa/print/PrusaProducer.ini",
+        "bytes": 169,
+        "decodedUtf16Units": 169
+      }
+    ],
+    "events": [
+      {
+        "kind": "printer",
+        "slicer": "orca",
+        "nameJson": "\"Numeric machine\"",
+        "nameUtf16": [
+          78,
+          117,
+          109,
+          101,
+          114,
+          105,
+          99,
+          32,
+          109,
+          97,
+          99,
+          104,
+          105,
+          110,
+          101
+        ],
+        "versionJson": "\"2.3\""
+      },
+      {
+        "kind": "process",
+        "slicer": "orca",
+        "nameJson": "\"Astral 😀\"",
+        "nameUtf16": [
+          65,
+          115,
+          116,
+          114,
+          97,
+          108,
+          32,
+          55357,
+          56832
+        ],
+        "versionJson": "null"
+      },
+      {
+        "kind": "process",
+        "slicer": "orca",
+        "nameJson": "\"Child \\ud800\"",
+        "nameUtf16": [
+          67,
+          104,
+          105,
+          108,
+          100,
+          32,
+          55296
+        ],
+        "versionJson": "null"
+      },
+      {
+        "kind": "process",
+        "slicer": "orca",
+        "nameJson": "\"Parent \\ud800\"",
+        "nameUtf16": [
+          80,
+          97,
+          114,
+          101,
+          110,
+          116,
+          32,
+          55296
+        ],
+        "versionJson": "null"
+      },
+      {
+        "kind": "process",
+        "slicer": "orca",
+        "nameJson": "\"Type fallback\"",
+        "nameUtf16": [
+          84,
+          121,
+          112,
+          101,
+          32,
+          102,
+          97,
+          108,
+          108,
+          98,
+          97,
+          99,
+          107
+        ],
+        "versionJson": "null"
+      },
+      {
+        "kind": "process",
+        "slicer": "orca",
+        "nameJson": "\"�(�\"",
+        "nameUtf16": [
+          65533,
+          40,
+          65533
+        ],
+        "versionJson": "null"
+      },
+      {
+        "kind": "process",
+        "slicer": "orca",
+        "nameJson": "\"�\"",
+        "nameUtf16": [
+          65533
+        ],
+        "versionJson": "null"
+      },
+      {
+        "kind": "process",
+        "slicer": "orca",
+        "nameJson": "\"��\"",
+        "nameUtf16": [
+          65533,
+          65533
+        ],
+        "versionJson": "null"
+      },
+      {
+        "kind": "filament",
+        "slicer": "orca",
+        "nameJson": "\"Below Half PLA\"",
+        "nameUtf16": [
+          66,
+          101,
+          108,
+          111,
+          119,
+          32,
+          72,
+          97,
+          108,
+          102,
+          32,
+          80,
+          76,
+          65
+        ],
+        "versionJson": "null"
+      },
+      {
+        "kind": "filament",
+        "slicer": "orca",
+        "nameJson": "\"Huge PLA\"",
+        "nameUtf16": [
+          72,
+          117,
+          103,
+          101,
+          32,
+          80,
+          76,
+          65
+        ],
+        "versionJson": "null"
+      },
+      {
+        "kind": "filament",
+        "slicer": "orca",
+        "nameJson": "\"Large Integral PLA\"",
+        "nameUtf16": [
+          76,
+          97,
+          114,
+          103,
+          101,
+          32,
+          73,
+          110,
+          116,
+          101,
+          103,
+          114,
+          97,
+          108,
+          32,
+          80,
+          76,
+          65
+        ],
+        "versionJson": "null"
+      },
+      {
+        "kind": "filament",
+        "slicer": "orca",
+        "nameJson": "\"Fancy PLA\"",
+        "nameUtf16": [
+          70,
+          97,
+          110,
+          99,
+          121,
+          32,
+          80,
+          76,
+          65
+        ],
+        "versionJson": "\"2.8.0\""
+      },
+      {
+        "kind": "process",
+        "slicer": "bambu",
+        "nameJson": "\"Bambu producer sample\"",
+        "nameUtf16": [
+          66,
+          97,
+          109,
+          98,
+          117,
+          32,
+          112,
+          114,
+          111,
+          100,
+          117,
+          99,
+          101,
+          114,
+          32,
+          115,
+          97,
+          109,
+          112,
+          108,
+          101
+        ],
+        "versionJson": "null"
+      },
+      {
+        "kind": "process",
+        "slicer": "prusa",
+        "nameJson": "\"Prusa producer sample\"",
+        "nameUtf16": [
+          80,
+          114,
+          117,
+          115,
+          97,
+          32,
+          112,
+          114,
+          111,
+          100,
+          117,
+          99,
+          101,
+          114,
+          32,
+          115,
+          97,
+          109,
+          112,
+          108,
+          101
+        ],
+        "versionJson": "\"2.8.0\""
+      }
+    ]
+  },
+  "repository": {
+    "rows": [
+      {
+        "id": 7,
+        "name": "Astral 😀",
+        "slicerFormat": "orca",
+        "resolvedFlatConfig": "{\"name\":\"Astral 😀\",\"astral\":\"😀\"}",
+        "sourcePath": "<owned-temp>/slicer/user/default/process/Astral.json",
+        "syncedFromSlicerVersion": null,
+        "lastSyncedAt": "2026-10-07T21:57:02.008Z",
+        "importedAt": "2026-10-07T21:57:02.008Z",
+        "kind": "process",
+        "materialType": null
+      },
+      {
+        "id": 14,
+        "name": "Bambu producer sample",
+        "slicerFormat": "bambu",
+        "resolvedFlatConfig": "{\"name\":\"Bambu producer sample\",\"type\":\"process\",\"compatible_printers\":\"Bambu X1 Carbon 0.4 nozzle\",\"layer_height\":\"0.2\",\"sparse_infill_density\":\"15%\",\"wall_loops\":\"3\"}",
+        "sourcePath": "<owned-temp>/bambu/user/default/process/BambuProducer.json",
+        "syncedFromSlicerVersion": null,
+        "lastSyncedAt": "2026-10-07T21:57:02.018Z",
+        "importedAt": "2026-10-07T21:57:02.018Z",
+        "kind": "process",
+        "materialType": null
+      },
+      {
+        "id": 5,
+        "name": "Below Half PLA",
+        "materialType": "PLA",
+        "resolvedFlatConfig": "{\"name\":\"Below Half PLA\",\"type\":\"filament\",\"nozzle_temperature\":\"0.49999999999999994\"}",
+        "sourcePath": "<owned-temp>/slicer/user/default/filament/BelowHalf.json",
+        "syncedFromSlicerVersion": null,
+        "lastSyncedAt": "2026-10-07T21:57:02.014Z",
+        "importedAt": "2026-10-07T21:57:02.014Z",
+        "kind": "filament",
+        "slicerFormat": null
+      },
+      {
+        "id": 8,
+        "name": "Child �",
+        "slicerFormat": "orca",
+        "resolvedFlatConfig": "{\"name\":\"Child \\ud800\",\"parent\\ud800\":\"value\\udc00\",\"shared\":\"child\",\"inherits\":\"UnicodeParent\",\"type\":\"process\",\"config\\ud800\":\"value\\udc00\",\"compatible_printers\":\"Machine \\ud800\"}",
+        "sourcePath": "<owned-temp>/slicer/user/default/process/UnicodeChild.json",
+        "syncedFromSlicerVersion": null,
+        "lastSyncedAt": "2026-10-07T21:57:02.009Z",
+        "importedAt": "2026-10-07T21:57:02.009Z",
+        "kind": "process",
+        "materialType": null
+      },
+      {
+        "id": 8,
+        "name": "Fancy PLA",
+        "materialType": "PLA",
+        "resolvedFlatConfig": "{\"name\":\"Fancy PLA\",\"nozzle_temperature\":\"-0.5\",\"bed_temperature\":\"60.5\",\"fan_always_on\":\"1\",\"filament_flow_ratio\":\"0.98\"}",
+        "sourcePath": "<owned-temp>/slicer/user/default/filament/PLA.ini",
+        "syncedFromSlicerVersion": "2.8.0",
+        "lastSyncedAt": "2026-10-07T21:57:02.017Z",
+        "importedAt": "2026-10-07T21:57:02.017Z",
+        "kind": "filament",
+        "slicerFormat": null
+      },
+      {
+        "id": 6,
+        "name": "Huge PLA",
+        "materialType": "PLA",
+        "resolvedFlatConfig": "{\"name\":\"Huge PLA\",\"type\":\"filament\",\"nozzle_temperature\":\"1e+308\"}",
+        "sourcePath": "<owned-temp>/slicer/user/default/filament/Huge.json",
+        "syncedFromSlicerVersion": null,
+        "lastSyncedAt": "2026-10-07T21:57:02.015Z",
+        "importedAt": "2026-10-07T21:57:02.015Z",
+        "kind": "filament",
+        "slicerFormat": null
+      },
+      {
+        "id": 7,
+        "name": "Large Integral PLA",
+        "materialType": "PLA",
+        "resolvedFlatConfig": "{\"name\":\"Large Integral PLA\",\"type\":\"filament\",\"nozzle_temperature\":\"4503599627370497\"}",
+        "sourcePath": "<owned-temp>/slicer/user/default/filament/LargeIntegral.json",
+        "syncedFromSlicerVersion": null,
+        "lastSyncedAt": "2026-10-07T21:57:02.016Z",
+        "importedAt": "2026-10-07T21:57:02.016Z",
+        "kind": "filament",
+        "slicerFormat": null
+      },
+      {
+        "id": 3,
+        "name": "Numeric machine",
+        "slicerFormat": "orca",
+        "resolvedFlatConfig": "{\"name\":\"Numeric machine\",\"type\":\"machine\",\"nozzle_diameter\":\"1e+21\",\"extruder_count\":\"9007199254740992\",\"version\":\"2.3\"}",
+        "sourcePath": "<owned-temp>/slicer/user/default/machine/Numeric.json",
+        "syncedFromSlicerVersion": "2.3",
+        "lastSyncedAt": "2026-10-07T21:57:02.003Z",
+        "importedAt": "2026-10-07T21:57:02.003Z",
+        "kind": "printer",
+        "materialType": null
+      },
+      {
+        "id": 9,
+        "name": "Parent �",
+        "slicerFormat": "orca",
+        "resolvedFlatConfig": "{\"name\":\"Parent \\ud800\",\"parent\\ud800\":\"value\\udc00\",\"shared\":\"parent\"}",
+        "sourcePath": "<owned-temp>/slicer/user/default/process/UnicodeParent.json",
+        "syncedFromSlicerVersion": null,
+        "lastSyncedAt": "2026-10-07T21:57:02.010Z",
+        "importedAt": "2026-10-07T21:57:02.010Z",
+        "kind": "process",
+        "materialType": null
+      },
+      {
+        "id": 15,
+        "name": "Prusa producer sample",
+        "slicerFormat": "prusa",
+        "resolvedFlatConfig": "{\"print_settings_id\":\"Prusa producer sample\",\"layer_height\":\"0.2\",\"perimeters\":\"3\",\"fill_density\":\"15%\",\"compatible_printers\":\"Original Prusa MK4\"}",
+        "sourcePath": "<owned-temp>/prusa/print/PrusaProducer.ini",
+        "syncedFromSlicerVersion": "2.8.0",
+        "lastSyncedAt": "2026-10-07T21:57:02.019Z",
+        "importedAt": "2026-10-07T21:57:02.019Z",
+        "kind": "process",
+        "materialType": null
+      },
+      {
+        "id": 10,
+        "name": "Type fallback",
+        "slicerFormat": "orca",
+        "resolvedFlatConfig": "{\"name\":\"Type fallback\",\"type\":\"fil\\ud800ament\"}",
+        "sourcePath": "<owned-temp>/slicer/user/default/process/UnicodeType.json",
+        "syncedFromSlicerVersion": null,
+        "lastSyncedAt": "2026-10-07T21:57:02.010Z",
+        "importedAt": "2026-10-07T21:57:02.010Z",
+        "kind": "process",
+        "materialType": null
+      },
+      {
+        "id": 12,
+        "name": "�",
+        "slicerFormat": "orca",
+        "resolvedFlatConfig": "{\"name\":\"�\"}",
+        "sourcePath": "<owned-temp>/slicer/user/default/process/Utf8Ff.json",
+        "syncedFromSlicerVersion": null,
+        "lastSyncedAt": "2026-10-07T21:57:02.012Z",
+        "importedAt": "2026-10-07T21:57:02.012Z",
+        "kind": "process",
+        "materialType": null
+      },
+      {
+        "id": 11,
+        "name": "�(�",
+        "slicerFormat": "orca",
+        "resolvedFlatConfig": "{\"name\":\"�(�\"}",
+        "sourcePath": "<owned-temp>/slicer/user/default/process/Utf8Continuation.json",
+        "syncedFromSlicerVersion": null,
+        "lastSyncedAt": "2026-10-07T21:57:02.011Z",
+        "importedAt": "2026-10-07T21:57:02.011Z",
+        "kind": "process",
+        "materialType": null
+      },
+      {
+        "id": 13,
+        "name": "��",
+        "slicerFormat": "orca",
+        "resolvedFlatConfig": "{\"name\":\"��\"}",
+        "sourcePath": "<owned-temp>/slicer/user/default/process/Utf8Overlong.json",
+        "syncedFromSlicerVersion": null,
+        "lastSyncedAt": "2026-10-07T21:57:02.012Z",
+        "importedAt": "2026-10-07T21:57:02.012Z",
+        "kind": "process",
+        "materialType": null
+      }
+    ],
+    "writerTables": {
+      "printer": [
+        {
+          "id": 3,
+          "tenantId": "default",
+          "name": "Numeric machine",
+          "slicerFormat": "orca",
+          "slicerVersionAtImport": "2.3",
+          "printableArea": null,
+          "printableHeightMm": null,
+          "bedExcludeArea": null,
+          "nozzleDiameterMm": "1e+21",
+          "extruderCount": 9007199254740992,
+          "rawJson": "{\"name\":\"Numeric machine\",\"type\":\"machine\",\"nozzle_diameter\":1e21,\"extruder_count\":9007199254740993,\"version\":\"2.3\"}",
+          "rawIni": null,
+          "resolvedFlatConfig": "{\"name\":\"Numeric machine\",\"type\":\"machine\",\"nozzle_diameter\":\"1e+21\",\"extruder_count\":\"9007199254740992\",\"version\":\"2.3\"}",
+          "importedAt": "2026-10-07T21:57:02.003Z",
+          "sourcePath": "<owned-temp>/slicer/user/default/machine/Numeric.json",
+          "syncedFromSlicerVersion": "2.3",
+          "lastSyncedAt": "2026-10-07T21:57:02.003Z"
+        }
+      ],
+      "process": [
+        {
+          "id": 7,
+          "tenantId": "default",
+          "name": "Astral 😀",
+          "slicerFormat": "orca",
+          "compatiblePrinters": null,
+          "resolvedFlatConfig": "{\"name\":\"Astral 😀\",\"astral\":\"😀\"}",
+          "importedAt": "2026-10-07T21:57:02.008Z",
+          "sourcePath": "<owned-temp>/slicer/user/default/process/Astral.json",
+          "syncedFromSlicerVersion": null,
+          "lastSyncedAt": "2026-10-07T21:57:02.008Z"
+        },
+        {
+          "id": 8,
+          "tenantId": "default",
+          "name": "Child �",
+          "slicerFormat": "orca",
+          "compatiblePrinters": "Machine �",
+          "resolvedFlatConfig": "{\"name\":\"Child \\ud800\",\"parent\\ud800\":\"value\\udc00\",\"shared\":\"child\",\"inherits\":\"UnicodeParent\",\"type\":\"process\",\"config\\ud800\":\"value\\udc00\",\"compatible_printers\":\"Machine \\ud800\"}",
+          "importedAt": "2026-10-07T21:57:02.009Z",
+          "sourcePath": "<owned-temp>/slicer/user/default/process/UnicodeChild.json",
+          "syncedFromSlicerVersion": null,
+          "lastSyncedAt": "2026-10-07T21:57:02.009Z"
+        },
+        {
+          "id": 9,
+          "tenantId": "default",
+          "name": "Parent �",
+          "slicerFormat": "orca",
+          "compatiblePrinters": null,
+          "resolvedFlatConfig": "{\"name\":\"Parent \\ud800\",\"parent\\ud800\":\"value\\udc00\",\"shared\":\"parent\"}",
+          "importedAt": "2026-10-07T21:57:02.010Z",
+          "sourcePath": "<owned-temp>/slicer/user/default/process/UnicodeParent.json",
+          "syncedFromSlicerVersion": null,
+          "lastSyncedAt": "2026-10-07T21:57:02.010Z"
+        },
+        {
+          "id": 10,
+          "tenantId": "default",
+          "name": "Type fallback",
+          "slicerFormat": "orca",
+          "compatiblePrinters": null,
+          "resolvedFlatConfig": "{\"name\":\"Type fallback\",\"type\":\"fil\\ud800ament\"}",
+          "importedAt": "2026-10-07T21:57:02.010Z",
+          "sourcePath": "<owned-temp>/slicer/user/default/process/UnicodeType.json",
+          "syncedFromSlicerVersion": null,
+          "lastSyncedAt": "2026-10-07T21:57:02.010Z"
+        },
+        {
+          "id": 11,
+          "tenantId": "default",
+          "name": "�(�",
+          "slicerFormat": "orca",
+          "compatiblePrinters": null,
+          "resolvedFlatConfig": "{\"name\":\"�(�\"}",
+          "importedAt": "2026-10-07T21:57:02.011Z",
+          "sourcePath": "<owned-temp>/slicer/user/default/process/Utf8Continuation.json",
+          "syncedFromSlicerVersion": null,
+          "lastSyncedAt": "2026-10-07T21:57:02.011Z"
+        },
+        {
+          "id": 12,
+          "tenantId": "default",
+          "name": "�",
+          "slicerFormat": "orca",
+          "compatiblePrinters": null,
+          "resolvedFlatConfig": "{\"name\":\"�\"}",
+          "importedAt": "2026-10-07T21:57:02.012Z",
+          "sourcePath": "<owned-temp>/slicer/user/default/process/Utf8Ff.json",
+          "syncedFromSlicerVersion": null,
+          "lastSyncedAt": "2026-10-07T21:57:02.012Z"
+        },
+        {
+          "id": 13,
+          "tenantId": "default",
+          "name": "��",
+          "slicerFormat": "orca",
+          "compatiblePrinters": null,
+          "resolvedFlatConfig": "{\"name\":\"��\"}",
+          "importedAt": "2026-10-07T21:57:02.012Z",
+          "sourcePath": "<owned-temp>/slicer/user/default/process/Utf8Overlong.json",
+          "syncedFromSlicerVersion": null,
+          "lastSyncedAt": "2026-10-07T21:57:02.012Z"
+        },
+        {
+          "id": 14,
+          "tenantId": "default",
+          "name": "Bambu producer sample",
+          "slicerFormat": "bambu",
+          "compatiblePrinters": "Bambu X1 Carbon 0.4 nozzle",
+          "resolvedFlatConfig": "{\"name\":\"Bambu producer sample\",\"type\":\"process\",\"compatible_printers\":\"Bambu X1 Carbon 0.4 nozzle\",\"layer_height\":\"0.2\",\"sparse_infill_density\":\"15%\",\"wall_loops\":\"3\"}",
+          "importedAt": "2026-10-07T21:57:02.018Z",
+          "sourcePath": "<owned-temp>/bambu/user/default/process/BambuProducer.json",
+          "syncedFromSlicerVersion": null,
+          "lastSyncedAt": "2026-10-07T21:57:02.018Z"
+        },
+        {
+          "id": 15,
+          "tenantId": "default",
+          "name": "Prusa producer sample",
+          "slicerFormat": "prusa",
+          "compatiblePrinters": "Original Prusa MK4",
+          "resolvedFlatConfig": "{\"print_settings_id\":\"Prusa producer sample\",\"layer_height\":\"0.2\",\"perimeters\":\"3\",\"fill_density\":\"15%\",\"compatible_printers\":\"Original Prusa MK4\"}",
+          "importedAt": "2026-10-07T21:57:02.019Z",
+          "sourcePath": "<owned-temp>/prusa/print/PrusaProducer.ini",
+          "syncedFromSlicerVersion": "2.8.0",
+          "lastSyncedAt": "2026-10-07T21:57:02.019Z"
+        }
+      ],
+      "filament": [
+        {
+          "id": 5,
+          "tenantId": "default",
+          "name": "Below Half PLA",
+          "materialType": "PLA",
+          "materialTier": 1,
+          "nozzleTempC": 0,
+          "bedTempC": null,
+          "fanPct": null,
+          "extrusionMultiplier": null,
+          "pressureAdvance": null,
+          "retraction": null,
+          "rawJson": "{\"name\":\"Below Half PLA\",\"type\":\"filament\",\"nozzle_temperature\":0.49999999999999994}",
+          "rawIni": null,
+          "resolvedFlatConfig": "{\"name\":\"Below Half PLA\",\"type\":\"filament\",\"nozzle_temperature\":\"0.49999999999999994\"}",
+          "importedAt": "2026-10-07T21:57:02.014Z",
+          "sourcePath": "<owned-temp>/slicer/user/default/filament/BelowHalf.json",
+          "syncedFromSlicerVersion": null,
+          "lastSyncedAt": "2026-10-07T21:57:02.014Z"
+        },
+        {
+          "id": 6,
+          "tenantId": "default",
+          "name": "Huge PLA",
+          "materialType": "PLA",
+          "materialTier": 1,
+          "nozzleTempC": 1e+308,
+          "bedTempC": null,
+          "fanPct": null,
+          "extrusionMultiplier": null,
+          "pressureAdvance": null,
+          "retraction": null,
+          "rawJson": "{\"name\":\"Huge PLA\",\"type\":\"filament\",\"nozzle_temperature\":1e308}",
+          "rawIni": null,
+          "resolvedFlatConfig": "{\"name\":\"Huge PLA\",\"type\":\"filament\",\"nozzle_temperature\":\"1e+308\"}",
+          "importedAt": "2026-10-07T21:57:02.015Z",
+          "sourcePath": "<owned-temp>/slicer/user/default/filament/Huge.json",
+          "syncedFromSlicerVersion": null,
+          "lastSyncedAt": "2026-10-07T21:57:02.015Z"
+        },
+        {
+          "id": 7,
+          "tenantId": "default",
+          "name": "Large Integral PLA",
+          "materialType": "PLA",
+          "materialTier": 1,
+          "nozzleTempC": 4503599627370497,
+          "bedTempC": null,
+          "fanPct": null,
+          "extrusionMultiplier": null,
+          "pressureAdvance": null,
+          "retraction": null,
+          "rawJson": "{\"name\":\"Large Integral PLA\",\"type\":\"filament\",\"nozzle_temperature\":4503599627370497}",
+          "rawIni": null,
+          "resolvedFlatConfig": "{\"name\":\"Large Integral PLA\",\"type\":\"filament\",\"nozzle_temperature\":\"4503599627370497\"}",
+          "importedAt": "2026-10-07T21:57:02.016Z",
+          "sourcePath": "<owned-temp>/slicer/user/default/filament/LargeIntegral.json",
+          "syncedFromSlicerVersion": null,
+          "lastSyncedAt": "2026-10-07T21:57:02.016Z"
+        },
+        {
+          "id": 8,
+          "tenantId": "default",
+          "name": "Fancy PLA",
+          "materialType": "PLA",
+          "materialTier": 1,
+          "nozzleTempC": 0,
+          "bedTempC": 61,
+          "fanPct": 100,
+          "extrusionMultiplier": "0.98",
+          "pressureAdvance": null,
+          "retraction": null,
+          "rawJson": null,
+          "rawIni": "# generated by PrusaSlicer 2.8.0\nname = Fancy PLA\nnozzle_temperature = -0.5\nbed_temperature = 60.5\nfan_always_on = 1\nfilament_flow_ratio = 0.98\n",
+          "resolvedFlatConfig": "{\"name\":\"Fancy PLA\",\"nozzle_temperature\":\"-0.5\",\"bed_temperature\":\"60.5\",\"fan_always_on\":\"1\",\"filament_flow_ratio\":\"0.98\"}",
+          "importedAt": "2026-10-07T21:57:02.017Z",
+          "sourcePath": "<owned-temp>/slicer/user/default/filament/PLA.ini",
+          "syncedFromSlicerVersion": "2.8.0",
+          "lastSyncedAt": "2026-10-07T21:57:02.017Z"
+        }
+      ]
+    }
+  },
+  "route": {
+    "status": 200,
+    "profiles": [
+      {
+        "id": 7,
+        "kind": "process",
+        "name": "Astral 😀",
+        "slicerFormat": "orca",
+        "materialType": null,
+        "syncedFromSlicerVersion": null,
+        "lastSyncedAt": "2026-10-07T21:57:02.008Z",
+        "importedAt": "2026-10-07T21:57:02.008Z"
+      },
+      {
+        "id": 14,
+        "kind": "process",
+        "name": "Bambu producer sample",
+        "slicerFormat": "bambu",
+        "materialType": null,
+        "syncedFromSlicerVersion": null,
+        "lastSyncedAt": "2026-10-07T21:57:02.018Z",
+        "importedAt": "2026-10-07T21:57:02.018Z"
+      },
+      {
+        "id": 5,
+        "kind": "filament",
+        "name": "Below Half PLA",
+        "slicerFormat": null,
+        "materialType": "PLA",
+        "syncedFromSlicerVersion": null,
+        "lastSyncedAt": "2026-10-07T21:57:02.014Z",
+        "importedAt": "2026-10-07T21:57:02.014Z"
+      },
+      {
+        "id": 8,
+        "kind": "process",
+        "name": "Child �",
+        "slicerFormat": "orca",
+        "materialType": null,
+        "syncedFromSlicerVersion": null,
+        "lastSyncedAt": "2026-10-07T21:57:02.009Z",
+        "importedAt": "2026-10-07T21:57:02.009Z"
+      },
+      {
+        "id": 8,
+        "kind": "filament",
+        "name": "Fancy PLA",
+        "slicerFormat": null,
+        "materialType": "PLA",
+        "syncedFromSlicerVersion": "2.8.0",
+        "lastSyncedAt": "2026-10-07T21:57:02.017Z",
+        "importedAt": "2026-10-07T21:57:02.017Z"
+      },
+      {
+        "id": 6,
+        "kind": "filament",
+        "name": "Huge PLA",
+        "slicerFormat": null,
+        "materialType": "PLA",
+        "syncedFromSlicerVersion": null,
+        "lastSyncedAt": "2026-10-07T21:57:02.015Z",
+        "importedAt": "2026-10-07T21:57:02.015Z"
+      },
+      {
+        "id": 7,
+        "kind": "filament",
+        "name": "Large Integral PLA",
+        "slicerFormat": null,
+        "materialType": "PLA",
+        "syncedFromSlicerVersion": null,
+        "lastSyncedAt": "2026-10-07T21:57:02.016Z",
+        "importedAt": "2026-10-07T21:57:02.016Z"
+      },
+      {
+        "id": 3,
+        "kind": "printer",
+        "name": "Numeric machine",
+        "slicerFormat": "orca",
+        "materialType": null,
+        "syncedFromSlicerVersion": "2.3",
+        "lastSyncedAt": "2026-10-07T21:57:02.003Z",
+        "importedAt": "2026-10-07T21:57:02.003Z"
+      },
+      {
+        "id": 9,
+        "kind": "process",
+        "name": "Parent �",
+        "slicerFormat": "orca",
+        "materialType": null,
+        "syncedFromSlicerVersion": null,
+        "lastSyncedAt": "2026-10-07T21:57:02.010Z",
+        "importedAt": "2026-10-07T21:57:02.010Z"
+      },
+      {
+        "id": 15,
+        "kind": "process",
+        "name": "Prusa producer sample",
+        "slicerFormat": "prusa",
+        "materialType": null,
+        "syncedFromSlicerVersion": "2.8.0",
+        "lastSyncedAt": "2026-10-07T21:57:02.019Z",
+        "importedAt": "2026-10-07T21:57:02.019Z"
+      },
+      {
+        "id": 10,
+        "kind": "process",
+        "name": "Type fallback",
+        "slicerFormat": "orca",
+        "materialType": null,
+        "syncedFromSlicerVersion": null,
+        "lastSyncedAt": "2026-10-07T21:57:02.010Z",
+        "importedAt": "2026-10-07T21:57:02.010Z"
+      },
+      {
+        "id": 12,
+        "kind": "process",
+        "name": "�",
+        "slicerFormat": "orca",
+        "materialType": null,
+        "syncedFromSlicerVersion": null,
+        "lastSyncedAt": "2026-10-07T21:57:02.012Z",
+        "importedAt": "2026-10-07T21:57:02.012Z"
+      },
+      {
+        "id": 11,
+        "kind": "process",
+        "name": "�(�",
+        "slicerFormat": "orca",
+        "materialType": null,
+        "syncedFromSlicerVersion": null,
+        "lastSyncedAt": "2026-10-07T21:57:02.011Z",
+        "importedAt": "2026-10-07T21:57:02.011Z"
+      },
+      {
+        "id": 13,
+        "kind": "process",
+        "name": "��",
+        "slicerFormat": "orca",
+        "materialType": null,
+        "syncedFromSlicerVersion": null,
+        "lastSyncedAt": "2026-10-07T21:57:02.012Z",
+        "importedAt": "2026-10-07T21:57:02.012Z"
+      }
+    ]
+  },
+  "measurements": {
+    "fixtureCount": 14,
+    "maxChildBytes": 169,
+    "maxDecodedUtf16Units": 169,
+    "maxFlatEntries": 7,
+    "maxResolvedBytes": 181,
+    "representativeProducerSamples": [
+      "numeric-printer",
+      "bambu-producer-sample",
+      "prusa-producer-sample"
+    ]
+  }
+}
