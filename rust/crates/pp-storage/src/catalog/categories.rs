@@ -1,4 +1,14 @@
 use super::*;
+fn input_error(message: &str) -> anyhow::Error {
+    #[cfg(feature = "desktop_rebuild")]
+    {
+        CatalogFailure::Input(message.into()).into()
+    }
+    #[cfg(not(feature = "desktop_rebuild"))]
+    {
+        anyhow!("{message}")
+    }
+}
 const DEFAULTS: [&str; 6] = [
     "Printer kits",
     "Toolheads",
@@ -35,7 +45,7 @@ fn paths(input: &[String], strict: bool) -> Result<Vec<String>> {
         let segments: Vec<_> = path.split('/').collect();
         let valid = !path.is_empty() && segments.len() <= 9;
         if strict {
-            ensure!(valid, "Invalid category path")
+            ensure!(valid, input_error("Invalid category path"))
         }
         if !valid {
             continue;
@@ -51,7 +61,10 @@ fn paths(input: &[String], strict: bool) -> Result<Vec<String>> {
         }
     }
     if strict {
-        ensure!(!out.is_empty(), "At least one category is required")
+        ensure!(
+            !out.is_empty(),
+            input_error("At least one category is required")
+        )
     }
     Ok(out)
 }
@@ -91,7 +104,7 @@ pub(super) fn save(
         let from = normalize(&from).to_lowercase();
         ensure!(
             previous.iter().any(|p| p.to_lowercase() == from),
-            "Unknown source category"
+            input_error("Unknown source category")
         );
         let to = to
             .map(|t| {
@@ -99,7 +112,7 @@ pub(super) fn save(
                     .get(&normalize(&t).to_lowercase())
                     .cloned()
                     .ok_or_else(|| {
-                        anyhow!("Replacement category must be in the saved category list")
+                        input_error("Replacement category must be in the saved category list")
                     })
             })
             .transpose()?;
@@ -107,7 +120,7 @@ pub(super) fn save(
             let t = t.to_lowercase();
             ensure!(
                 t != from && !t.starts_with(&format!("{from}/")),
-                "Cannot move category inside itself"
+                input_error("Cannot move category inside itself")
             );
         }
         replacements_map.insert(from, to);
