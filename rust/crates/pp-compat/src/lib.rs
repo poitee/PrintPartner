@@ -539,7 +539,7 @@ impl Process {
             "socket_path": endpoint.socket,
             "generation": endpoint.generation,
             "key": hex::encode(key),
-            "lease": "test",
+            "lease": spec.lease,
             "parent_pid": std::process::id(),
             "port": spec.port
         });
@@ -751,6 +751,7 @@ pub(crate) struct ShellSpec {
     pub data_dir: PathBuf,
     pub runtime_dir: PathBuf,
     pub pidfile: PathBuf,
+    pub lease: String,
     pub port: u16,
 }
 
