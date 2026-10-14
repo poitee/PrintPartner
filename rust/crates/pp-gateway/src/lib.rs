@@ -563,7 +563,7 @@ async fn handle(
     let path = target.path;
     let mut origins = request.headers().get_all("origin").iter();
     let origin = origins.next();
-    let upgrade = header(&request, "upgrade").is_some();
+    let upgrade = request.headers().contains_key("upgrade");
     let unsafe_method = !matches!(request.method().as_str(), "GET" | "HEAD" | "OPTIONS");
     if origins.next().is_some()
         || origin.is_some_and(|value| value.as_bytes() != state.origin.as_bytes())
