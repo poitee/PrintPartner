@@ -105,7 +105,15 @@ pub fn discover_macos(kind: SlicerKind, roots: &NativeRoots) -> io::Result<Nativ
                 result = invalid(BundleProblem::Executable);
                 continue;
             }
-            let Ok(metadata) = plist::Value::from_file(bundle.join("Contents/Info.plist")) else {
+            let Ok(metadata_path) = fs::canonicalize(bundle.join("Contents/Info.plist")) else {
+                result = invalid(BundleProblem::Metadata);
+                continue;
+            };
+            if !metadata_path.starts_with(&canonical_bundle) || !metadata_path.is_file() {
+                result = invalid(BundleProblem::Metadata);
+                continue;
+            }
+            let Ok(metadata) = plist::Value::from_file(metadata_path) else {
                 result = invalid(BundleProblem::Metadata);
                 continue;
             };
