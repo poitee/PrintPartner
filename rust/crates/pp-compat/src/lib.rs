@@ -426,9 +426,27 @@ impl Process {
             let _ = child.wait().await;
             return Err(error.context("Could not record child ownership"));
         }
+        let child_identity = (|| -> Result<String> {
+            let marker: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(spec.data_dir.join(".desktop-owner.json"))?)?;
+            marker["child_process_identity"]
+                .as_str()
+                .filter(|identity| !identity.is_empty())
+                .map(str::to_string)
+                .context("Recorded child identity missing")
+        })();
+        let child_identity = match child_identity {
+            Ok(identity) => identity,
+            Err(error) => {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                return Err(error.context("Could not read recorded child ownership"));
+            }
+        };
         let mut stdin = child.stdin.take().context("Missing parent-liveness pipe")?;
         let setup = serde_json::json!({ "version":1, "data_dir":spec.data_dir, "socket_path":endpoint.socket,
-            "generation":endpoint.generation, "key":hex::encode(key), "lease":spec.lease, "parent_pid":std::process::id(), "port":spec.port });
+            "generation":endpoint.generation, "key":hex::encode(key), "lease":spec.lease, "parent_pid":std::process::id(),
+            "port":spec.port, "child_process_identity":child_identity });
         if stdin
             .write_all(format!("{setup}\n").as_bytes())
             .await

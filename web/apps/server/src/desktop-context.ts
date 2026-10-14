@@ -3,6 +3,7 @@ import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, re
 import { join } from "node:path";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
+import { presentDesktopChildCredential } from "./desktop-child-credential.js";
 import { acquireStorageLease, ownerIsStale } from "./storage-lease.js";
 import type { SessionUser } from "./routes/auth-types.js";
 
@@ -15,8 +16,14 @@ const setupSchema = z.strictObject({
   lease: z.string().regex(/^[a-f0-9]{64}$/),
   parent_pid: z.number().int().positive(),
   port: z.number().int().min(1).max(65535),
+  child_process_identity: z.string().min(1),
 });
-const markerSchema = z.object({ pid: z.number().int().positive(), lease_hash: z.string() });
+const markerSchema = z.object({
+  pid: z.number().int().positive(),
+  lease_hash: z.string(),
+  child_pid: z.number().int().positive(),
+  child_process_identity: z.string().min(1),
+});
 const assertionSchema = z.strictObject({
   version: z.literal(1), generation: z.string(), tenant: z.literal("default"),
   actor: z.literal("desktop-owner"), method: z.string(), target: z.string(),
@@ -41,9 +48,11 @@ export function installDesktopContext(input: unknown): void {
   if (inherited.dev !== ownerLock.dev || inherited.ino !== ownerLock.ino) throw new Error("Inherited storage lock rejected");
   const leaseHash = createHash("sha256").update(parsed.lease).digest("hex");
   if (marker.pid !== process.ppid || parsed.parent_pid !== process.ppid ||
-      marker.lease_hash !== leaseHash || mode !== 0o600 || parsed.data_dir !== dataDir) {
+      marker.lease_hash !== leaseHash || mode !== 0o600 || parsed.data_dir !== dataDir ||
+      marker.child_pid !== process.pid || marker.child_process_identity !== parsed.child_process_identity) {
     throw new Error("Desktop storage lease rejected");
   }
+  presentDesktopChildCredential(parsed.child_process_identity);
   context = parsed;
 }
 

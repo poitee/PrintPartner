@@ -311,21 +311,27 @@ const FILAMENT_PROFILES: FilamentProfileDef[] = [
   },
 ];
 
+function starterInsert(table: string, columns: string, values: string, missingOnly: boolean): string {
+  if (!missingOnly) return `INSERT OR IGNORE INTO ${table} (${columns}) VALUES (${values})`;
+  return `INSERT INTO ${table} (${columns}) SELECT ${values} WHERE NOT EXISTS (SELECT 1 FROM ${table} WHERE tenant_id = @tenantId AND name = @name)`;
+}
+
 /**
  * Seeds PP-native starter profiles into the database if they are not already
- * present. Uses INSERT OR IGNORE so it is safe to call on every startup — it
- * will not overwrite profiles a user has edited or renamed.
+ * present. The default insert ignores conflicts. `missingOnly` inserts only
+ * absent names, so an existing row does not advance sqlite_sequence.
  */
-export function seedStarterProfiles(sqlite: Database.Database): void {
+export function seedStarterProfiles(sqlite: Database.Database, mode: "ignore" | "missing" = "ignore"): void {
   const now = NOW();
+  const missingOnly = mode === "missing";
 
   // ---- printer (machine) profiles -----------------------------------------
-  const upsertPrinter = sqlite.prepare(`
-    INSERT OR IGNORE INTO printer_profiles
-      (tenant_id, name, slicer_format, extruder_count, resolved_flat_config, imported_at)
-    VALUES
-      (@tenantId, @name, @slicerFormat, @extruderCount, @resolvedFlatConfig, @importedAt)
-  `);
+  const upsertPrinter = sqlite.prepare(starterInsert(
+    "printer_profiles",
+    "tenant_id, name, slicer_format, extruder_count, resolved_flat_config, imported_at",
+    "@tenantId, @name, @slicerFormat, @extruderCount, @resolvedFlatConfig, @importedAt",
+    missingOnly,
+  ));
 
   const insertPrinterMany = sqlite.transaction((profiles: PrinterProfileDef[]) => {
     for (const m of profiles) {
@@ -343,12 +349,12 @@ export function seedStarterProfiles(sqlite: Database.Database): void {
   insertPrinterMany(PRINTER_PROFILES);
 
   // ---- process profiles ---------------------------------------------------
-  const upsertProcess = sqlite.prepare(`
-    INSERT OR IGNORE INTO process_profiles
-      (tenant_id, name, slicer_format, compatible_printers, resolved_flat_config, imported_at)
-    VALUES
-      (@tenantId, @name, @slicerFormat, @compatiblePrinters, @resolvedFlatConfig, @importedAt)
-  `);
+  const upsertProcess = sqlite.prepare(starterInsert(
+    "process_profiles",
+    "tenant_id, name, slicer_format, compatible_printers, resolved_flat_config, imported_at",
+    "@tenantId, @name, @slicerFormat, @compatiblePrinters, @resolvedFlatConfig, @importedAt",
+    missingOnly,
+  ));
 
   const insertProcessMany = sqlite.transaction((profiles: ProcessProfileDef[]) => {
     for (const p of profiles) {
@@ -366,16 +372,16 @@ export function seedStarterProfiles(sqlite: Database.Database): void {
   insertProcessMany(PROCESS_PROFILES);
 
   // ---- filament profiles --------------------------------------------------
-  const upsertFilament = sqlite.prepare(`
-    INSERT OR IGNORE INTO filament_profiles
-      (tenant_id, name, material_type, material_tier, nozzle_temp_c, bed_temp_c,
+  const upsertFilament = sqlite.prepare(starterInsert(
+    "filament_profiles",
+    `tenant_id, name, material_type, material_tier, nozzle_temp_c, bed_temp_c,
        fan_pct, extrusion_multiplier, pressure_advance, retraction,
-       resolved_flat_config, imported_at)
-    VALUES
-      (@tenantId, @name, @materialType, @materialTier, @nozzleTempC, @bedTempC,
+       resolved_flat_config, imported_at`,
+    `@tenantId, @name, @materialType, @materialTier, @nozzleTempC, @bedTempC,
        @fanPct, @extrusionMultiplier, @pressureAdvance, @retraction,
-       @resolvedFlatConfig, @importedAt)
-  `);
+       @resolvedFlatConfig, @importedAt`,
+    missingOnly,
+  ));
 
   const insertFilamentMany = sqlite.transaction((profiles: FilamentProfileDef[]) => {
     for (const f of profiles) {

@@ -1,5 +1,6 @@
 import { moonrakerHostSnapshot } from "./moonraker-host-snapshot.js";
 import { acquireDataDirectory, desktopContext, desktopPrincipal, registerDesktopBoundary } from "./desktop-context.js";
+import { rustOwnedCopy } from "./db/rust-owned.js";
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
@@ -573,7 +574,8 @@ export async function startServer(config: ServerConfig) {
   try {
     beginSourceSyncAdmission(config.dataDir);
     validateProductionConfig(config);
-    if (!config.databaseUrl) {
+    const ownership = rustOwnedCopy(config.dataDir);
+    if (!config.databaseUrl && ownership.kind !== "foreign") {
       const preparation = await prepareSqliteUpgrade({
         dataDir: config.dataDir,
         appVersion: config.version,

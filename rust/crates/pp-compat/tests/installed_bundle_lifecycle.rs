@@ -87,6 +87,7 @@ impl TestOwnership {
         ensure!(locked == 0, "Could not lock test data directory");
         let lease = hex::encode(rand::random::<[u8; 32]>());
         let marker = serde_json::json!({
+            "storage_protocol_version": 1,
             "pid": std::process::id(),
             "lease_hash": hex::encode(Sha256::digest(lease.as_bytes())),
             "runtime_dir": runtime_dir,
