@@ -415,7 +415,10 @@ fn refuses_fifo_marker_within_bound(fixture: &Fixture, fifo: &std::path::Path) {
                     if started.elapsed() < std::time::Duration::from_secs(2) => {}
                 Err(_) => {
                     // Release the blocked reader so the failure is reported, not hung.
-                    while receiver.try_recv().is_err() {
+                    while matches!(
+                        receiver.try_recv(),
+                        Err(std::sync::mpsc::TryRecvError::Empty)
+                    ) {
                         let _ = std::fs::OpenOptions::new()
                             .write(true)
                             .custom_flags(libc::O_NONBLOCK)
