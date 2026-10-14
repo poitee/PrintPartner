@@ -11,6 +11,7 @@
 //! bundled manifest again in memory. The Node process admits that file before
 //! HTTP handlers, MCP `start_sync`, job execution, and watcher timers.
 
+pub mod live_formats;
 pub mod manifest;
 pub mod resources;
 
@@ -26,6 +27,7 @@ use std::{
 };
 
 pub const SOURCE_SYNC_OPERATION: &str = "source.sync";
+pub const SOURCE_SYNC_LIVE_FORMAT: &str = "source-revision-workspace-v1";
 pub const SOURCE_SYNC_PARTICIPANTS: &[&str] = &[
     "http.POST /jobs/sync",
     "http.POST /api/v1/jobs/sync",
@@ -129,6 +131,12 @@ pub enum AdmissionError {
     IncompatibleRollback {
         operation: String,
     },
+    IncompatibleLiveFormat {
+        operation: String,
+        format: String,
+        node_reads: u32,
+        rust_writes: Option<u32>,
+    },
     DuplicateParticipant {
         id: String,
     },
@@ -200,6 +208,21 @@ impl std::fmt::Display for AdmissionError {
                     "incompatible live-format rollback for {operation}"
                 )
             }
+            Self::IncompatibleLiveFormat {
+                operation,
+                format,
+                node_reads,
+                rust_writes,
+            } => match rust_writes {
+                Some(written) => write!(
+                    formatter,
+                    "rollback of {operation} refused: Rust writes {format} {written}, Node reads up to {node_reads}"
+                ),
+                None => write!(
+                    formatter,
+                    "rollback of {operation} refused: no Rust writer for {format}"
+                ),
+            },
             Self::DuplicateParticipant { id } => {
                 write!(formatter, "duplicate participant {id}")
             }
@@ -310,7 +333,7 @@ pub fn admit_observed(
             value: parsed.operation,
         });
     }
-    if parsed.live_format.id != "source-revision-workspace-v1" {
+    if parsed.live_format.id != SOURCE_SYNC_LIVE_FORMAT {
         return Err(AdmissionError::UnknownLiveFormat {
             value: parsed.live_format.id,
         });

@@ -24,12 +24,22 @@ The manifest currently resolves 437 operations. Four are reviewed and 433 remain
 
 These are operation-wide unions across the tested branches, not runtime access enforcement or a complete resource census. The proof does not cover isolated or multi-user filesystem policy, PostgreSQL, every possible input, or future branches. Startup admission remains behind the existing default-off `desktop_rebuild` build and environment gates. No cutover or execution routing changes occur.
 
+## Live-format rollback
+
+A rollback returns an operation from Rust to Node after Rust wrote its resources. `OwnershipIndex::admit_rollback(participant)` admits it only when Node reads every format Rust leaves behind. Code maps each resource to one format: every table to `sqlite-schema`, `source-workspace` to `source-revision-workspace`, and `source-covers` to `source-covers`. The manifest's `live_formats` object declares the newest version Node reads and the version Rust writes for each format. A format is compatible only when a Rust writer exists and its version is at most Node's.
+
+The declared versions are pinned to source. Node `currentSchemaVersion` is 34 and Rust `pp-storage` stamps 35 after its jobs schema. Both sides read and write source snapshot manifest version 1. Rust has no cover writer, so `source-covers` declares `rust_writes: null`. The Source Sync record's `source-revision-workspace-v1` must match the declared workspace version.
+
+Today every reviewed operation refuses rollback on `sqlite-schema`, because the bundled Node refuses a schema newer than 34. Unresolved operations refuse with their unresolved-resources error, and unknown participants refuse as unclaimed. A missing, extra, duplicate, untyped or zero-version format, or an omitted `rust_writes`, fails admission. `ticket_t_7_live_formats` checks the literal refusals, an admitted rollback when Node reads schema 35, the covers refusal, and every malformed declaration.
+
+This is a gate for a later cutover. Nothing calls it at runtime yet, and no owner changes.
+
 Still open:
 
 - Tables and files for the 433 unresolved operations. The participant census does not prove their resource access. GRE-402 remains open.
 - Grouping Node participants across HTTP, tools, jobs, and hooks before any cutover. Today only `source.sync` groups participants across these kinds.
 - Startup hooks are found by call-name verbs (`start`, `migrate`, `sweep`, `backfill`, `prepare`, `seed`) in the server entry points. Timers started inside services are not enumerated.
-- Compatible rollback proof for every live format. This unit checks the Source Sync format declaration only.
+- Making rollback possible. Node must read schema 35, or Rust must stop at 34, and a Rust cover writer must exist before `source.sync` can roll back. Resource formats of the 433 unresolved operations stay unknown until their resources are reviewed.
 - Rust Source Sync cutover. Node stays the owner. #168 (`LocalSourceSyncWorker`) is a later base after restack, not this branch.
 - Switching every mapped participant together. Disabling Node aliases while the Node watcher still runs is forbidden.
 - A Rust failure must produce its own error and reconciliation result. It must not fall back into a Node mutation.

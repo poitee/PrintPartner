@@ -10,6 +10,7 @@
 //! Rust owner all fail admission. A lookup for an unclaimed participant fails
 //! instead of defaulting to Node.
 
+use super::live_formats::LiveFormats;
 use super::resources::{Coverage, Declarations, ResourceSet};
 use super::{
     AdmissionError, BUNDLED_SOURCE_SYNC_MANIFEST, Owner, SOURCE_SYNC_OPERATION,
@@ -51,6 +52,7 @@ pub struct Claim {
 pub struct OwnershipIndex {
     claims: BTreeMap<String, Claim>,
     resources: BTreeMap<String, Coverage>,
+    live_formats: LiveFormats,
 }
 
 impl OwnershipIndex {
@@ -72,6 +74,29 @@ impl OwnershipIndex {
         }
     }
 
+    /// Admit returning `participant`'s operation from Rust to Node.
+    ///
+    /// Every resource of the operation must have a Rust writer whose format
+    /// version Node reads. Unresolved resources refuse, as does any format
+    /// Node cannot read. Tables sort first, so the database schema reports
+    /// before file formats.
+    pub fn admit_rollback(&self, participant: &str) -> Result<&ResourceSet, AdmissionError> {
+        let resources = self.resources_for(participant)?;
+        for resource in resources {
+            let id = resource.live_format();
+            let format = self.live_formats.get(id);
+            if !format.rollback_compatible() {
+                return Err(AdmissionError::IncompatibleLiveFormat {
+                    operation: self.claims[participant].operation.clone(),
+                    format: id.as_str().to_string(),
+                    node_reads: format.node_reads,
+                    rust_writes: format.rust_writes,
+                });
+            }
+        }
+        Ok(resources)
+    }
+
     pub fn claims(&self) -> &BTreeMap<String, Claim> {
         &self.claims
     }
@@ -84,6 +109,7 @@ struct Manifest {
     operations: Vec<OperationEntry>,
     node_participants: NodeParticipants,
     resources: Declarations,
+    live_formats: LiveFormats,
 }
 
 #[derive(Deserialize)]
@@ -256,7 +282,12 @@ pub fn admit_manifest_documents(
         }
     }
     let resources = manifest.resources.admit(&claims, &source_sync)?;
-    Ok(OwnershipIndex { claims, resources })
+    let live_formats = manifest.live_formats.admit()?;
+    Ok(OwnershipIndex {
+        claims,
+        resources,
+        live_formats,
+    })
 }
 
 /// The grouped `source.sync` entry must be exactly the Node admission record.

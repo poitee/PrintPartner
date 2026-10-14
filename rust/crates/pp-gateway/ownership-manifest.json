@@ -692,5 +692,19 @@
       "tool.web_search",
       "worker.startManagedProfileSync"
     ]
+  },
+  "live_formats": {
+    "sqlite-schema": {
+      "node_reads": 34,
+      "rust_writes": 35
+    },
+    "source-revision-workspace": {
+      "node_reads": 1,
+      "rust_writes": 1
+    },
+    "source-covers": {
+      "node_reads": 1,
+      "rust_writes": null
+    }
   }
 }
