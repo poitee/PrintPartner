@@ -148,6 +148,7 @@ pub enum CutoverReceipt {
         operation: String,
         detail: String,
     },
+    /// Authority may have changed. Recover the record before deciding ownership.
     CommitUnproved {
         operation: String,
     },
@@ -315,6 +316,15 @@ pub fn plan(
 
 impl CutoverPlan {
     pub fn commit(self, data_dir: &Path, drained: DrainEvidence) -> CutoverReceipt {
+        self.commit_with_directory_sync(data_dir, drained, |dir| fs::File::open(dir)?.sync_all())
+    }
+
+    fn commit_with_directory_sync(
+        self,
+        data_dir: &Path,
+        drained: DrainEvidence,
+        sync_directory: impl FnOnce(&Path) -> std::io::Result<()>,
+    ) -> CutoverReceipt {
         let operation = self.operation;
         let DrainEvidence {
             tracked_idle,
@@ -339,16 +349,16 @@ impl CutoverPlan {
                 detail: error.to_string(),
             };
         }
-        let directory_synced = fs::File::open(data_dir)
-            .and_then(|directory| directory.sync_all())
-            .is_ok();
+        if sync_directory(data_dir).is_err() {
+            return CutoverReceipt::CommitUnproved { operation };
+        }
         let owned = &self.next.operations[&operation];
         CutoverReceipt::Committed {
             participants: owned.participants.len(),
             manifest_sha256: self.next.manifest_sha256.clone(),
             parity_sha256: owned.parity_sha256.clone(),
             fixtures: owned.fixtures,
-            directory_synced,
+            directory_synced: true,
             operation,
         }
     }
@@ -531,4 +541,54 @@ pub fn append_evidence(data_dir: &Path, evidence: &Evidence<'_>) -> std::io::Res
     }
     file.write_all(&line)?;
     file.sync_all()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn ticket_t_3_drain_cutover_directory_fsync_failure_is_unproved_after_rename() {
+        let dir = std::env::temp_dir().join(format!("pp-cutover-sync-{}", rand::random::<u64>()));
+        fs::create_dir(&dir).unwrap();
+        let index = super::super::manifest::admit_bundled_manifest().unwrap();
+        let operation = "http:POST /plans current";
+        let parity = json!({
+            "schema": "pp-operation-parity-v1", "operation": operation,
+            "manifest_sha256": index.digest(), "fixtures": 1, "passed": 1, "failed": 0,
+        });
+        let plan = plan(
+            Some(&index),
+            &OperationOwners::node_only(),
+            operation,
+            &parity.to_string(),
+        )
+        .unwrap();
+        let expected = serde_json::to_vec(&plan.next).unwrap();
+        let receipt = plan.commit_with_directory_sync(
+            &dir,
+            DrainEvidence {
+                tracked_idle: true,
+                gateway_idle: true,
+                compat: Some(CompatExit::Graceful),
+            },
+            |path| {
+                assert_eq!(fs::read(path.join(CUTOVER_FILE)).unwrap(), expected);
+                Err(std::io::Error::from_raw_os_error(libc::EIO))
+            },
+        );
+        assert_eq!(fs::read(dir.join(CUTOVER_FILE)).unwrap(), expected);
+        let (owners, _) = recover(&dir, Some(&index)).unwrap();
+        assert_eq!(fs::read(dir.join(CUTOVER_FILE)).unwrap(), expected);
+        assert_eq!(owners.owner_of("http.POST /plans"), Owner::Rust);
+        assert_eq!(owners.owner_of("http.POST /api/v1/plans"), Owner::Node);
+        fs::remove_dir_all(dir).unwrap();
+        assert_eq!(
+            serde_json::to_value(receipt).unwrap(),
+            json!({
+                "outcome": "commit_unproved", "operation": "http:POST /plans current",
+            })
+        );
+    }
 }

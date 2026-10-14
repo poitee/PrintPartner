@@ -290,14 +290,14 @@ struct Process {
 #[derive(Debug)]
 enum StopOutcome {
     Observed(ExitStatus),
-    ForcedAfterTimeout(ExitStatus),
+    Forced(ExitStatus),
 }
 
 impl StopOutcome {
     fn exit(&self) -> CompatExit {
         match self {
             Self::Observed(_) => CompatExit::Graceful,
-            Self::ForcedAfterTimeout(_) => CompatExit::Forced,
+            Self::Forced(_) => CompatExit::Forced,
         }
     }
 }
@@ -306,9 +306,9 @@ impl StopOutcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CompatExit {
-    /// The child exited inside the SIGTERM grace, or none was running.
+    /// The process group exited without parent-forced termination, or none was running.
     Graceful,
-    /// The grace ran out and the process group was SIGKILLed.
+    /// The parent SIGKILLed the leader or surviving process-group members.
     Forced,
 }
 
@@ -346,17 +346,15 @@ impl CleanupErrors {
 
 fn validate_stop_outcome(outcome: StopOutcome, intent: StopIntent) -> Result<()> {
     match (outcome, intent) {
-        (StopOutcome::Observed(_) | StopOutcome::ForcedAfterTimeout(_), StopIntent::Restart) => {
-            Ok(())
-        }
-        (StopOutcome::ForcedAfterTimeout(status), StopIntent::PlannedShutdown)
+        (StopOutcome::Observed(_) | StopOutcome::Forced(_), StopIntent::Restart) => Ok(()),
+        (StopOutcome::Forced(status), StopIntent::PlannedShutdown)
             if status.signal() == Some(libc::SIGKILL)
                 || status.signal() == Some(libc::SIGTERM)
                 || status.success() =>
         {
             Ok(())
         }
-        (StopOutcome::ForcedAfterTimeout(status), StopIntent::PlannedShutdown) => {
+        (StopOutcome::Forced(status), StopIntent::PlannedShutdown) => {
             bail!("Compatibility child required parent-forced termination: {status}")
         }
         (StopOutcome::Observed(status), StopIntent::PlannedShutdown)
@@ -592,7 +590,7 @@ impl Process {
                 Ok(report) => {
                     outcome = Some(match report.exit {
                         drain::GroupExit::Observed(status) => StopOutcome::Observed(status),
-                        drain::GroupExit::Forced(status) => StopOutcome::ForcedAfterTimeout(status),
+                        drain::GroupExit::Forced(status) => StopOutcome::Forced(status),
                     });
                     if !report.group_absent {
                         errors.capture::<()>(Err(anyhow::anyhow!("Process group still present")));
@@ -625,7 +623,7 @@ impl Process {
                                 outcome = Some(match report.exit {
                                     drain::GroupExit::Observed(status) => StopOutcome::Observed(status),
                                     drain::GroupExit::Forced(status) => {
-                                        StopOutcome::ForcedAfterTimeout(status)
+                                        StopOutcome::Forced(status)
                                     }
                                 });
                                 if !report.group_absent {
@@ -663,7 +661,7 @@ impl Process {
                                             errors.capture(result.context("Child reap failed"))
                                         {
                                             outcome =
-                                                Some(StopOutcome::ForcedAfterTimeout(status));
+                                                Some(StopOutcome::Forced(status));
                                         }
                                     }
                                     Err(error) => {
@@ -677,8 +675,12 @@ impl Process {
                     }
                 }
             }
-            unsafe {
-                libc::kill(-(pid as i32), libc::SIGKILL);
+            if drain::reap_process_group(pid) {
+                outcome = outcome.map(|outcome| match outcome {
+                    StopOutcome::Observed(status) | StopOutcome::Forced(status) => {
+                        StopOutcome::Forced(status)
+                    }
+                });
             }
             errors.capture(
                 tokio::time::timeout(Duration::from_secs(2), async {
@@ -1312,9 +1314,7 @@ mod tests {
 
         assert_eq!(
             super::classify_stop_outcome(
-                super::StopOutcome::ForcedAfterTimeout(std::process::ExitStatus::from_raw(
-                    libc::SIGKILL,
-                )),
+                super::StopOutcome::Forced(std::process::ExitStatus::from_raw(libc::SIGKILL)),
                 &active,
             )
             .unwrap(),
@@ -1444,27 +1444,21 @@ mod tests {
         );
         assert!(
             super::validate_stop_outcome(
-                super::StopOutcome::ForcedAfterTimeout(std::process::ExitStatus::from_raw(
-                    libc::SIGKILL,
-                )),
+                super::StopOutcome::Forced(std::process::ExitStatus::from_raw(libc::SIGKILL)),
                 super::StopIntent::PlannedShutdown,
             )
             .is_ok()
         );
         assert!(
             super::validate_stop_outcome(
-                super::StopOutcome::ForcedAfterTimeout(std::process::ExitStatus::from_raw(
-                    libc::SIGTERM,
-                )),
+                super::StopOutcome::Forced(std::process::ExitStatus::from_raw(libc::SIGTERM)),
                 super::StopIntent::PlannedShutdown,
             )
             .is_ok()
         );
         assert!(
             super::validate_stop_outcome(
-                super::StopOutcome::ForcedAfterTimeout(std::process::ExitStatus::from_raw(
-                    libc::SIGABRT,
-                )),
+                super::StopOutcome::Forced(std::process::ExitStatus::from_raw(libc::SIGABRT)),
                 super::StopIntent::PlannedShutdown,
             )
             .is_err()
@@ -1475,18 +1469,14 @@ mod tests {
     fn ticket_t_3_drain_planned_shutdown_accepts_sigterm_at_the_grace_boundary() {
         assert!(
             super::validate_stop_outcome(
-                super::StopOutcome::ForcedAfterTimeout(std::process::ExitStatus::from_raw(
-                    libc::SIGTERM,
-                )),
+                super::StopOutcome::Forced(std::process::ExitStatus::from_raw(libc::SIGTERM)),
                 super::StopIntent::PlannedShutdown,
             )
             .is_ok()
         );
         assert!(
             super::validate_stop_outcome(
-                super::StopOutcome::ForcedAfterTimeout(std::process::ExitStatus::from_raw(
-                    libc::SIGABRT,
-                )),
+                super::StopOutcome::Forced(std::process::ExitStatus::from_raw(libc::SIGABRT)),
                 super::StopIntent::PlannedShutdown,
             )
             .is_err()
@@ -1498,7 +1488,7 @@ mod tests {
         for status in [libc::SIGKILL, libc::SIGTERM, 0] {
             let status = std::process::ExitStatus::from_raw(status);
             assert_eq!(
-                super::StopOutcome::ForcedAfterTimeout(status).exit(),
+                super::StopOutcome::Forced(status).exit(),
                 super::CompatExit::Forced
             );
             assert_eq!(
@@ -1519,9 +1509,7 @@ mod tests {
         );
         assert!(
             super::validate_stop_outcome(
-                super::StopOutcome::ForcedAfterTimeout(std::process::ExitStatus::from_raw(
-                    libc::SIGKILL,
-                )),
+                super::StopOutcome::Forced(std::process::ExitStatus::from_raw(libc::SIGKILL)),
                 super::StopIntent::Restart,
             )
             .is_ok()
@@ -1549,11 +1537,30 @@ mod tests {
     }
 
     async fn stop_owned_child_at(
-        mut child: tokio::process::Child,
+        child: tokio::process::Child,
         eof_watchdog: bool,
         cancel_after: Option<Duration>,
     ) -> OwnedStop {
-        let pid = child.id().unwrap();
+        let cancelled = tokio_util::sync::CancellationToken::new();
+        if let Some(delay) = cancel_after {
+            let later = cancelled.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(delay).await;
+                later.cancel();
+            });
+        } else {
+            cancelled.cancel();
+        }
+        stop_owned_child_with(child, eof_watchdog, None, cancelled).await
+    }
+
+    async fn stop_owned_child_with(
+        mut child: tokio::process::Child,
+        eof_watchdog: bool,
+        observed: Option<(u32, std::process::ExitStatus)>,
+        cancelled: tokio_util::sync::CancellationToken,
+    ) -> OwnedStop {
+        let pid = observed.map(|(pid, _)| pid).or_else(|| child.id()).unwrap();
         let stdin = child.stdin.take();
         let runtime_dir = std::env::temp_dir().join(format!(
             "pp-t3-stop-{}-{}",
@@ -1578,18 +1585,11 @@ mod tests {
             logs: Vec::new(),
             parent_death: None,
         };
-        let cancelled = tokio_util::sync::CancellationToken::new();
-        if let Some(delay) = cancel_after {
-            let later = cancelled.clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(delay).await;
-                later.cancel();
-            });
-        } else {
-            cancelled.cancel();
-        }
         let started = std::time::Instant::now();
-        let (intent, exit) = process.stop(None, &cancelled, eof_watchdog).await.unwrap();
+        let (intent, exit) = process
+            .stop(observed.map(|(_, status)| status), &cancelled, eof_watchdog)
+            .await
+            .unwrap();
         let rejected = connections.admit().is_err();
         let group_absent = unsafe { libc::kill(-(pid as i32), 0) } < 0
             && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
@@ -1601,6 +1601,127 @@ mod tests {
             elapsed: started.elapsed(),
             rejected,
             group_absent,
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn ticket_t_3_drain_leader_exit_with_forced_descendant_reports_forced() {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+
+        struct Subreaper(libc::c_int);
+        impl Drop for Subreaper {
+            fn drop(&mut self) {
+                unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, self.0) };
+            }
+        }
+        let mut previous = 0;
+        assert_eq!(
+            unsafe { libc::prctl(libc::PR_GET_CHILD_SUBREAPER, &mut previous) },
+            0
+        );
+        let _restore = Subreaper(previous);
+        assert_eq!(unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1) }, 0);
+
+        for (planned, already_exited, cancel_on_eof) in [
+            (true, false, false),
+            (true, true, false),
+            (false, false, false),
+            (false, true, false),
+            (false, false, true),
+        ] {
+            let mut child = tokio::process::Command::new("python3")
+                .arg("-c")
+                .arg(
+                    r#"
+import os, signal, sys
+read, write = os.pipe()
+pid = os.fork()
+if pid == 0:
+    os.close(read)
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    os.write(write, b'1')
+    os.close(write)
+    while True:
+        signal.pause()
+os.close(write)
+os.read(read, 1)
+os.close(read)
+signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+print(pid, flush=True)
+sys.stdin.buffer.read()
+if sys.argv[1] == "wait":
+    print("eof", flush=True)
+    signal.pause()
+"#,
+                )
+                .arg(if cancel_on_eof { "wait" } else { "exit" })
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .process_group(0)
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap();
+            let mut line = String::new();
+            let mut stdout = BufReader::new(child.stdout.take().unwrap());
+            tokio::time::timeout(Duration::from_secs(5), stdout.read_line(&mut line))
+                .await
+                .unwrap()
+                .unwrap();
+            let descendant: i32 = line.trim().parse().unwrap();
+            let observed = if already_exited {
+                let pid = child.id().unwrap();
+                drop(child.stdin.take());
+                Some((pid, child.wait().await.unwrap()))
+            } else {
+                None
+            };
+            let cancelled = tokio_util::sync::CancellationToken::new();
+            if planned {
+                cancelled.cancel();
+            }
+            let on_eof = cancelled.clone();
+            let eof_task = tokio::spawn(async move {
+                if cancel_on_eof {
+                    let mut line = String::new();
+                    tokio::time::timeout(Duration::from_secs(5), stdout.read_line(&mut line))
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(line, "eof\n");
+                    on_eof.cancel();
+                }
+            });
+            let during_cleanup = cancelled.clone();
+            let reaper = tokio::spawn(async move {
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    loop {
+                        let mut status = 0;
+                        let result =
+                            unsafe { libc::waitpid(descendant, &mut status, libc::WNOHANG) };
+                        if result == descendant {
+                            during_cleanup.cancel();
+                            return status;
+                        }
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                    }
+                })
+                .await
+                .unwrap()
+            });
+            let stopped = stop_owned_child_with(child, false, observed, cancelled).await;
+            eof_task.await.unwrap();
+            let status = reaper.await.unwrap();
+            assert!(libc::WIFSIGNALED(status));
+            assert_eq!(libc::WTERMSIG(status), libc::SIGKILL);
+            assert!(stopped.group_absent);
+            assert!(stopped.rejected);
+            assert_eq!(stopped.intent, super::StopIntent::PlannedShutdown);
+            assert_eq!(
+                stopped.exit,
+                super::CompatExit::Forced,
+                "planned={planned}, already_exited={already_exited}"
+            );
         }
     }
 
