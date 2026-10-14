@@ -1,3 +1,4 @@
+import { StatusExecution } from "../status-execution.js";
 import { EventEmitter } from "node:events";
 import { createServer, type LookupFunction } from "node:net";
 import mqtt, { type IClientOptions } from "mqtt";
@@ -28,7 +29,10 @@ class FakeMqttClient extends EventEmitter {
       return this;
     },
   );
-  end = vi.fn((_force?: boolean) => this);
+  end = vi.fn((_force?: boolean, _options?: unknown, done?: () => void) => {
+    done?.();
+    return this;
+  });
   override removeAllListeners(): this {
     super.removeAllListeners();
     return this;
@@ -58,6 +62,8 @@ function mockMqttThatReports(print: Record<string, unknown>): BambuMqttConnect {
     return client as unknown as ReturnType<BambuMqttConnect>;
   };
 }
+
+const execution = new StatusExecution();
 
 describe("mapBambuGcodeState", () => {
   it("maps known tokens", () => {
@@ -160,14 +166,53 @@ describe("bambuAdapter", () => {
     }
   });
 
+  it("joins MQTT end and suppresses connect and subscribe callbacks after stop", async () => {
+    const execution = new StatusExecution();
+    const client = new FakeMqttClient();
+    let created!: () => void;
+    const connected = new Promise<void>((resolve) => { created = resolve; });
+    let subscribed: (() => void) | undefined;
+    let ended: (() => void) | undefined;
+    client.subscribe.mockImplementation((_topic, done) => {
+      subscribed = () => done?.(null);
+      return client;
+    });
+    client.end.mockImplementation((_force, _options, done) => {
+      ended = done;
+      return client;
+    });
+    setBambuMqttConnectForTests(() => {
+      created();
+      return client as unknown as ReturnType<BambuMqttConnect>;
+    });
+    const rejected = expect(execution.probe(bambuAdapter, {
+      host: "192.168.1.60", serial: "ABC123456", access_code: "12345678",
+    })).rejects.toThrow("Printer status execution stopped");
+    await connected;
+    client.emit("connect");
+    subscribed?.();
+    const stopped = execution.stop();
+    client.emit("connect");
+    subscribed?.();
+    expect(client.publish.mock.calls.map(([topic, payload, options]) => [topic, payload, options])).toEqual([
+      ["device/ABC123456/request", '{"pushing":{"sequence_id":"0","command":"pushall"}}', { qos: 0 }],
+    ]);
+    expect(execution.snapshot()).toEqual({ state: "stopping", tasks: [{ id: 1, provider: "bambu", operation: "probe" }] });
+    if (!ended) throw new Error("MQTT end was not requested");
+    ended();
+    await stopped;
+    await rejected;
+    expect(execution.snapshot()).toEqual({ state: "stopped", tasks: [] });
+  });
+
   it("requires host, access_code, and serial", async () => {
-    expect((await bambuAdapter.testConnection({})).ok).toBe(false);
+    expect((await execution.test(bambuAdapter, {})).ok).toBe(false);
     expect(
-      (await bambuAdapter.testConnection({ host: "192.168.1.80" })).message,
+      (await execution.test(bambuAdapter, { host: "192.168.1.80" })).message,
     ).toMatch(/access_code/i);
     expect(
       (
-        await bambuAdapter.testConnection({
+        await execution.test(bambuAdapter, {
           host: "192.168.1.80",
           access_code: "12345678",
         })
@@ -176,7 +221,7 @@ describe("bambuAdapter", () => {
   });
 
   it("rejects serial values with MQTT topic metacharacters", async () => {
-    const result = await bambuAdapter.testConnection({
+    const result = await execution.test(bambuAdapter, {
       host: "192.168.1.80",
       access_code: "12345678",
       serial: "01P00/#",
@@ -186,7 +231,7 @@ describe("bambuAdapter", () => {
   });
 
   it("rejects redacted access_code placeholder", async () => {
-    const result = await bambuAdapter.testConnection({
+    const result = await execution.test(bambuAdapter, {
       host: "192.168.1.80",
       access_code: "****",
       serial: "01P00A000000001",
@@ -199,7 +244,7 @@ describe("bambuAdapter", () => {
     const connect = vi.fn(mockMqttThatReports({ gcode_state: "IDLE", mc_percent: 0 }));
     setBambuMqttConnectForTests(connect);
 
-    const result = await bambuAdapter.testConnection({
+    const result = await execution.test(bambuAdapter, {
       host: "192.168.1.80",
       access_code: "lan-code",
       serial: "01P00A000000001",
@@ -237,7 +282,7 @@ describe("bambuAdapter", () => {
     setBambuMqttConnectForTests(connect);
 
     try {
-      const result = await bambuAdapter.testConnection({
+      const result = await execution.test(bambuAdapter, {
         host: "192.168.1.80",
         access_code: "lan-code",
         serial: "01P00A000000001",
@@ -261,7 +306,7 @@ describe("bambuAdapter", () => {
       }),
     );
 
-    const status = await bambuAdapter.getStatus!({
+    const status = await execution.probe(bambuAdapter, {
       host: "10.0.0.20",
       access_code: "87654321",
       serial: "01P00A000000099",
@@ -279,7 +324,7 @@ describe("bambuAdapter", () => {
       return client as unknown as ReturnType<BambuMqttConnect>;
     });
 
-    const statusPromise = bambuAdapter.getStatus!({
+    const statusPromise = execution.probe(bambuAdapter, {
       host: "192.168.1.90",
       access_code: "lan-code",
       serial: "01P00A000000002",
@@ -300,7 +345,7 @@ describe("bambuAdapter", () => {
   });
 
   it("listDevices returns configured serial without MQTT", async () => {
-    const devices = await bambuAdapter.listDevices!({
+    const devices = await execution.devices(bambuAdapter, {
       host: "192.168.1.80",
       serial: "01P00A000000001",
       access_code: "x",

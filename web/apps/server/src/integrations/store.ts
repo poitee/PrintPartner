@@ -1,3 +1,4 @@
+import type { StatusExecution, StatusPermit } from "./status-execution.js";
 import type {
   DeviceSummary,
   IntegrationConfig,
@@ -33,9 +34,6 @@ export type PrinterCameraAccess = {
 
 export type IntegrationAdapter = {
   type: IntegrationType;
-  testConnection(config: IntegrationConfig): Promise<IntegrationTestResult>;
-  listDevices?(config: IntegrationConfig): Promise<DeviceSummary[]>;
-  getStatus?(config: IntegrationConfig): Promise<PrinterHostStatus>;
   getObjectList?(config: IntegrationConfig): Promise<string[]>;
   files?: PrinterFileAccess;
   cameras?: PrinterCameraAccess;
@@ -50,7 +48,18 @@ export type IntegrationAdapter = {
    * Returns null when not supported or the value is unavailable.
    */
   getFilamentUsed?(config: IntegrationConfig): Promise<number | null>;
-};
+} & (
+  | {
+      getStatus(config: IntegrationConfig, permit: StatusPermit): Promise<PrinterHostStatus>;
+      testConnection(config: IntegrationConfig, permit: StatusPermit): Promise<IntegrationTestResult>;
+      listDevices?(config: IntegrationConfig, permit: StatusPermit): Promise<DeviceSummary[]>;
+    }
+  | {
+      getStatus?: undefined;
+      testConnection(config: IntegrationConfig): Promise<IntegrationTestResult>;
+      listDevices?(config: IntegrationConfig): Promise<DeviceSummary[]>;
+    }
+);
 
 export interface IntegrationPort {
   list(): IntegrationSummary[];
@@ -71,6 +80,7 @@ export interface IntegrationPort {
 }
 
 type IntegrationStoreDeps = {
+  statusExecution: StatusExecution;
   repo: AppRepository;
   getAdapter(type: IntegrationType): IntegrationAdapter | undefined;
 };
@@ -151,6 +161,7 @@ function withCapabilities(
 }
 
 export function createIntegrationPort(deps: IntegrationStoreDeps): IntegrationPort {
+  const execution = deps.statusExecution;
   return {
     list(): IntegrationSummary[] {
       return loadRaw(deps.repo).map((item) => withCapabilities(item, deps));
@@ -210,7 +221,7 @@ export function createIntegrationPort(deps: IntegrationStoreDeps): IntegrationPo
       if (!item) return { ok: false, message: "Integration not found" };
       const adapter = deps.getAdapter(item.type);
       if (!adapter) return { ok: false, message: `Unknown integration type: ${item.type}` };
-      return adapter.testConnection(item.config);
+      return execution.test(adapter, item.config);
     },
 
     async listDevices(id): Promise<DeviceSummary[]> {
@@ -219,7 +230,7 @@ export function createIntegrationPort(deps: IntegrationStoreDeps): IntegrationPo
       if (!item) return [];
       const adapter = deps.getAdapter(item.type);
       if (!adapter?.listDevices) return [];
-      return adapter.listDevices(item.config);
+      return execution.devices(adapter, item.config);
     },
 
     async getStatus(id): Promise<PrinterHostStatus> {
@@ -236,7 +247,7 @@ export function createIntegrationPort(deps: IntegrationStoreDeps): IntegrationPo
         return { state: "unknown", message: `Status not supported for ${item.type}` };
       }
       try {
-        return await adapter.getStatus(item.config);
+        return await execution.probe(adapter, item.config);
       } catch (e) {
         return {
           state: "offline",

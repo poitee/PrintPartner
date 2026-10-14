@@ -1,3 +1,4 @@
+import { StatusExecution } from "../integrations/status-execution.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -558,6 +559,7 @@ describe("print_jobs schema supports get_farm_status / get_print_stats", () => {
      */
     function withSpoolman(spools: Array<Record<string, unknown>>): string {
       const port = createIntegrationPort({
+        statusExecution: new StatusExecution(),
         repo,
         getAdapter: (type) => (type === "spoolman" ? spoolmanAdapter : undefined),
       });
@@ -656,6 +658,7 @@ describe("print_jobs schema supports get_farm_status / get_print_stats", () => {
 
     it("reports remaining as unknown, and raises no false alarm, when Spoolman is unreachable", async () => {
       const port = createIntegrationPort({
+        statusExecution: new StatusExecution(),
         repo,
         getAdapter: (type) => (type === "spoolman" ? spoolmanAdapter : undefined),
       });

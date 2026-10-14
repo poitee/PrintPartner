@@ -1,3 +1,4 @@
+import { StatusExecution } from "../integrations/status-execution.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -51,6 +52,7 @@ describe("resolveAssistantRuntime", () => {
 
   it("prefers an enabled ai_assistant settings integration over env", () => {
     const integrations = createIntegrationPort({
+      statusExecution: new StatusExecution(),
       repo,
       getAdapter: getIntegrationAdapter,
     });
@@ -84,6 +86,7 @@ describe("resolveAssistantRuntime", () => {
 
   it("normalizes a persisted SearXNG setting to the former DuckDuckGo fallback", () => {
     const integrations = createIntegrationPort({
+      statusExecution: new StatusExecution(),
       repo,
       getAdapter: getIntegrationAdapter,
     });
@@ -107,6 +110,7 @@ describe("resolveAssistantRuntime", () => {
 
   it("honors use_other_builds_as_examples=false from settings", () => {
     const integrations = createIntegrationPort({
+      statusExecution: new StatusExecution(),
       repo,
       getAdapter: getIntegrationAdapter,
     });
@@ -127,6 +131,7 @@ describe("resolveAssistantRuntime", () => {
 
   it("honors daily budgets from settings over env", () => {
     const integrations = createIntegrationPort({
+      statusExecution: new StatusExecution(),
       repo,
       getAdapter: getIntegrationAdapter,
     });
@@ -154,6 +159,7 @@ describe("resolveAssistantRuntime", () => {
 
   it("skips disabled settings and uses env", () => {
     const integrations = createIntegrationPort({
+      statusExecution: new StatusExecution(),
       repo,
       getAdapter: getIntegrationAdapter,
     });
@@ -179,6 +185,7 @@ describe("resolveAssistantRuntime", () => {
 
   it("enables via settings alone without AI_ENABLED", () => {
     const integrations = createIntegrationPort({
+      statusExecution: new StatusExecution(),
       repo,
       getAdapter: getIntegrationAdapter,
     });
@@ -209,6 +216,7 @@ describe("resolveAssistantRuntime", () => {
 
   it("honors max_tokens from settings over env", () => {
     const integrations = createIntegrationPort({
+      statusExecution: new StatusExecution(),
       repo,
       getAdapter: getIntegrationAdapter,
     });
@@ -230,6 +238,7 @@ describe("resolveAssistantRuntime", () => {
 
   it("resolves search, URL ingest, and ollama_num_ctx from settings over env", () => {
     const integrations = createIntegrationPort({
+      statusExecution: new StatusExecution(),
       repo,
       getAdapter: getIntegrationAdapter,
     });
@@ -265,6 +274,7 @@ describe("resolveAssistantRuntime", () => {
 
   it("leaves search overrides null when Settings omits them (env used at search layer)", () => {
     const integrations = createIntegrationPort({
+      statusExecution: new StatusExecution(),
       repo,
       getAdapter: getIntegrationAdapter,
     });

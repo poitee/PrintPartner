@@ -1,3 +1,4 @@
+import { StatusExecution } from "../status-execution.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { prusalinkAdapter } from "./prusalink.js";
 
@@ -97,6 +98,8 @@ function stubDownloadResponse(response: (signal: AbortSignal) => Response) {
   }));
 }
 
+const execution = new StatusExecution();
+
 describe("prusalinkAdapter", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -156,7 +159,7 @@ describe("prusalinkAdapter", () => {
   });
 
   it("requires password for testConnection", async () => {
-    const result = await prusalinkAdapter.testConnection({
+    const result = await execution.test(prusalinkAdapter, {
       base_url: "http://127.0.0.1",
       username: "maker",
     });
@@ -177,7 +180,7 @@ describe("prusalinkAdapter", () => {
       .mockResolvedValueOnce(jsonResponse({ printer: { state: "IDLE" } }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await prusalinkAdapter.testConnection({
+    const result = await execution.test(prusalinkAdapter, {
       base_url: "http://127.0.0.1",
       username: "maker",
       password: "printer-key",
@@ -330,7 +333,7 @@ describe("prusalinkAdapter", () => {
         }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const status = await prusalinkAdapter.getStatus!({
+    const status = await execution.probe(prusalinkAdapter, {
       base_url: "http://127.0.0.1",
       password: "printer-key",
     });
@@ -350,7 +353,7 @@ describe("prusalinkAdapter", () => {
       .mockResolvedValueOnce(jsonResponse({ printer: { state: "READY" } }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const status = await prusalinkAdapter.getStatus!({
+    const status = await execution.probe(prusalinkAdapter, {
       base_url: "http://127.0.0.1",
       password: "printer-key",
     });
@@ -371,7 +374,7 @@ describe("prusalinkAdapter", () => {
         }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const status = await prusalinkAdapter.getStatus!({
+    const status = await execution.probe(prusalinkAdapter, {
       base_url: "http://127.0.0.1",
       password: "printer-key",
     });

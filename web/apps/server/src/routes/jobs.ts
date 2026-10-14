@@ -1,3 +1,4 @@
+import type { StatusExecution } from "../integrations/status-execution.js";
 import type { FastifyInstance } from "fastify";
 import {
   filenameGroupingSchema,
@@ -36,8 +37,9 @@ import {
 export async function registerJobRoutes(
   app: FastifyInstance,
   jobs: InProcessJobRunner,
-  config?: { deployMode?: string },
+  config: { deployMode?: string; statusExecution: StatusExecution },
 ): Promise<void> {
+  const statusExecution = config.statusExecution;
   const limited = { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } };
   const hostedQuotaBytes = hostedPlanningPolicy(
     config?.deployMode === "saas" ? "saas" : "self-host",
@@ -365,7 +367,7 @@ export async function registerJobRoutes(
           let hostState: string = "unknown";
           try {
             const status = adapter?.getStatus
-              ? await adapter.getStatus(integration.config)
+              ? await statusExecution.probe(adapter, integration.config)
               : { state: "unknown" as const };
             hostState = status.state;
           } catch {
