@@ -1,0 +1,48 @@
+   Compiling pp-core v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre353-next-202610141227-9efa/rust/crates/pp-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.99s
+────────────
+ Nextest run ID e788ca55-4ef2-4179-baf6-903a59987006 with nextest profile: default
+    Starting 1 test across 1 binary (45 tests skipped)
+        FAIL [  26.589s] (1/1) pp-core::runtime_m0 ticket_t_68_desktop_account_mapping::mapped_account_reads_writes_and_restarts_without_foreign_changes
+  stdout ───
+
+    running 1 test
+
+    running 1 test
+    {"denied_statuses":[501,501,501,501,501,501,501,501,501,501],"disabled_capabilities_advertised":[true,true,false,false,false]}
+    test ticket_t_68_desktop_account_mapping::mapped_account_reads_writes_and_restarts_without_foreign_changes ... FAILED
+
+    failures:
+
+    failures:
+        ticket_t_68_desktop_account_mapping::mapped_account_reads_writes_and_restarts_without_foreign_changes
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 45 filtered out; finished in 26.56s
+
+
+    test ticket_t_68_desktop_account_mapping::mapped_account_reads_writes_and_restarts_without_foreign_changes ... FAILED
+
+    failures:
+
+    failures:
+        ticket_t_68_desktop_account_mapping::mapped_account_reads_writes_and_restarts_without_foreign_changes
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 45 filtered out; finished in 26.57s
+
+  stderr ───
+
+    thread 'ticket_t_68_desktop_account_mapping::mapped_account_reads_writes_and_restarts_without_foreign_changes' (480618) panicked at crates/pp-core/tests/runtime_m0/ticket_t_68_desktop_account_mapping.rs:34:5:
+
+    thread 'ticket_t_68_desktop_account_mapping::mapped_account_reads_writes_and_restarts_without_foreign_changes' (480620) panicked at crates/pp-core/tests/runtime_m0/ticket_t_68_desktop_account_mapping.rs:199:5:
+    assertion `left == right` failed
+      left: [501, 501, 501, 501, 501, 501, 501, 501, 501, 501]
+     right: [404, 404, 404, 404, 404, 404, 404, 404, 404, 404]
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+  Cancelling due to test failure: 
+────────────
+     Summary [  26.604s] 1 test run: 0 passed, 1 failed, 45 skipped
+        FAIL [  26.589s] (1/1) pp-core::runtime_m0 ticket_t_68_desktop_account_mapping::mapped_account_reads_writes_and_restarts_without_foreign_changes
+error: test run failed

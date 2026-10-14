@@ -1,0 +1,43 @@
+
+> @print-partner/server@0.1.0 test
+> vitest run src/services/printer-upload-shutdown.test.ts
+
+
+ RUN  v4.1.11 /persist/worktrees/t3/PrintPartner/owner-gre353-next-202610141227-9efa/web/apps/server
+
+ ❯ src/services/printer-upload-shutdown.test.ts (6 tests | 2 failed) 1454ms
+     × retains a direct upload after mapped shutdown 218ms
+     × retains a direct upload after unavailable shutdown 218ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/services/printer-upload-shutdown.test.ts > printer upload interrupted by shutdown > retains a direct upload after mapped shutdown
+ FAIL  src/services/printer-upload-shutdown.test.ts > printer upload interrupted by shutdown > retains a direct upload after unavailable shutdown
+AssertionError: expected 'done' to be 'error' // Object.is equality
+
+Expected: "error"
+Received: "done"
+
+ ❯ src/services/printer-upload-shutdown.test.ts:215:29
+    213|     const terminal = await f.jobs.waitForTerminal(jobId, 3000, tenant);
+    214|
+    215|     expect(terminal.status).toBe("error");
+       |                             ^
+    216|     expect(terminal.error).toBe(INTERRUPTED_PRINTER_SEND_ERROR);
+    217|     expect(existsSync(artifactPath)).toBe(true);
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  2 failed | 4 passed (6)
+   Start at  18:16:24
+   Duration  8.86s (transform 3.22s, setup 182ms, import 6.66s, tests 1.45s, environment 0ms)
+
+npm error Lifecycle script `test` failed with error:
+npm error code 1
+npm error path /persist/worktrees/t3/PrintPartner/owner-gre353-next-202610141227-9efa/web/apps/server
+npm error workspace @print-partner/server@0.1.0
+npm error location /persist/worktrees/t3/PrintPartner/owner-gre353-next-202610141227-9efa/web/apps/server
+npm error command failed
+npm error command sh -c vitest run src/services/printer-upload-shutdown.test.ts

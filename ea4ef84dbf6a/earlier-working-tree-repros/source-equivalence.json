@@ -1,0 +1,21 @@
+{
+  "proof_class": "source_equivalent_precommit_unsigned_linux",
+  "stage_commit": "99517b342adfdc4c635c069642dc4e07058fc3d6",
+  "source_sha256": {
+    "rust/crates/pp-core/tests/runtime_m0/ticket_t_68_desktop_account_mapping.rs": "aa11172b2d035089a5db5aa3425982d6eca22cb4e5614e2091a788866feaa605",
+    "web/apps/server/src/desktop.ts": "250adf73badf066940c55d65c071b061018b4ef3439a68654ace1b3a95f13a6f",
+    "web/apps/server/src/routes/auth-security.test.ts": "a894b40e8e5bf397f4670894a137a479aae66eebb4896e10a1dbdd5d797bf2bd",
+    "web/apps/server/src/routes/auth.ts": "49b1e337bf63f9a47b43bad0c89c32488288e9b7f7096728ef766ed412ed666b",
+    "web/apps/server/src/routes/health.ts": "41cdc8734c690cbb40a26837ee68ecee564cd09ef711de82f296457b584756c0",
+    "web/apps/server/src/services/printer-send-queue.ts": "6c755ea4612e826eb5887daf5367305d99b0bbaf36ef635b6aac60a60b43a528",
+    "web/apps/server/src/services/printer-upload-shutdown.test.ts": "86626212ef7f671330ec7e1183fcace36b60dfc302b9ffa83648015b301167cd"
+  },
+  "changed_compiled_modules_sha256": {
+    "desktop.js": "eef71aba6f0905679e6ef18ddab12916170be9cf965f39b5d11480aabfea68f7",
+    "routes/auth.js": "d1da0c3659c361ecd4b00b5804c929253edd9f071b5ea86ce1494e38b2a5f5e5",
+    "routes/health.js": "875d328487422c9cf6e08dc0fe4c394c0fb93c1ac17e61062c5004243c3e0bd4",
+    "services/printer-send-queue.js": "bf6c053fdfe306cf2b6ea2676a010c0d9d45cb9c472157488bc3a5a7af3a72fa"
+  },
+  "manifest_sha256": "6bfce940e8372143c87194a11b905fbd374cc2924ebaa38c6012230ca731ffbe",
+  "committed_head": "8e39f7a72d6faeb203603b59565b81d86ef70689"
+}

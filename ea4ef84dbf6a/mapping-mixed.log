@@ -1,0 +1,44 @@
+   Compiling pp-compat v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre353-next-202610141227-9efa/rust/crates/pp-compat)
+   Compiling pp-storage v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre353-next-202610141227-9efa/rust/crates/pp-storage)
+   Compiling pp-gateway v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre353-next-202610141227-9efa/rust/crates/pp-gateway)
+   Compiling pp-core v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre353-next-202610141227-9efa/rust/crates/pp-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 19.93s
+────────────
+ Nextest run ID 28bd782b-a021-4be6-91fa-ec67826e215a with nextest profile: default
+    Starting 2 tests across 1 binary (35 tests skipped)
+        PASS [  48.750s] (1/2) pp-core::runtime_m0 ticket_t_68_desktop_account_mapping::gates_off_refuse_existing_accounts_even_with_child_env
+  stdout ───
+
+    running 1 test
+
+    running 1 test
+    test ticket_t_68_desktop_account_mapping::gates_off_refuse_existing_accounts_even_with_child_env ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 36 filtered out; finished in 48.73s
+
+
+    {"case":"gates_off_refuse_existing_accounts_even_with_child_env","artifact":"/persist/tmp/pp-ticket-t-68-account-96ad95d3d965d523"}
+    test ticket_t_68_desktop_account_mapping::gates_off_refuse_existing_accounts_even_with_child_env ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 36 filtered out; finished in 48.74s
+
+
+        PASS [  49.905s] (2/2) pp-core::runtime_m0 ticket_t_68_desktop_account_mapping::compile_gate_off_refuses_mapping_despite_runtime_opt_in
+  stdout ───
+
+    running 1 test
+
+    running 1 test
+    test ticket_t_68_desktop_account_mapping::compile_gate_off_refuses_mapping_despite_runtime_opt_in ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 36 filtered out; finished in 49.88s
+
+
+    {"case":"compile_gate_off_refuses_mapping_despite_runtime_opt_in","artifact":"/persist/tmp/pp-ticket-t-68-account-61305f1df3cfef37"}
+    test ticket_t_68_desktop_account_mapping::compile_gate_off_refuses_mapping_despite_runtime_opt_in ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 36 filtered out; finished in 49.89s
+
+
+────────────
+     Summary [  49.906s] 2 tests run: 2 passed, 35 skipped

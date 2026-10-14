@@ -1,0 +1,17 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s
+────────────
+ Nextest run ID 7c5d2829-abc9-4849-997a-066bd171058d with nextest profile: default
+    Starting 1 test across 1 binary (36 tests skipped)
+        PASS [  16.854s] (1/1) pp-core::runtime_m0 ticket_t_12_unsafe_directory_is_refused_before_child_or_database_open
+  stdout ───
+
+    running 1 test
+    {"proof_class":"headless_unsigned","case":"unsafe_directory_refused","permissions":509,"error":"Unsafe data directory permissions","database_unchanged":true,"origin_unchanged":true,"ownership_artifacts_absent":true}
+    {"proof_class":"headless_unsigned","case":"unsafe_directory_refused","permissions":192,"error":"Unsafe data directory permissions","database_unchanged":true,"origin_unchanged":true,"ownership_artifacts_absent":true}
+    test ticket_t_12_unsafe_directory_is_refused_before_child_or_database_open ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 36 filtered out; finished in 16.84s
+
+
+────────────
+     Summary [  16.857s] 1 test run: 1 passed, 36 skipped

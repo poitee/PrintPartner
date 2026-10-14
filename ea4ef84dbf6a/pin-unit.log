@@ -1,0 +1,10 @@
+   Compiling pp-compat v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre353-next-202610141227-9efa/rust/crates/pp-compat)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.54s
+────────────
+ Nextest run ID ddd87a5d-2985-498d-81dd-f9344f61bee3 with nextest profile: default
+    Starting 3 tests across 1 binary (43 tests skipped)
+        PASS [   0.012s] (1/3) pp-compat account_pin::tests::disabled_does_not_read_or_change_setup
+        PASS [   0.013s] (2/3) pp-compat account_pin::tests::missing_and_present_pins_remain_immutable
+        PASS [   0.030s] (3/3) pp-compat account_pin::tests::unsafe_files_fail_without_blocking
+────────────
+     Summary [   0.031s] 3 tests run: 3 passed, 43 skipped

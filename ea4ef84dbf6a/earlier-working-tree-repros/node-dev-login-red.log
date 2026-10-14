@@ -1,0 +1,280 @@
+
+> @print-partner/server@0.1.0 test
+> vitest run src/services/printer-upload-shutdown.test.ts src/routes/auth-security.test.ts src/routes/single-user-auth.test.ts src/desktop-account.test.ts src/desktop-context.test.ts
+
+
+ RUN  v4.1.11 /persist/worktrees/t3/PrintPartner/owner-gre353-next-202610141227-9efa/web/apps/server
+
+ ❯ src/services/printer-upload-shutdown.test.ts (6 tests | 2 failed) 1422ms
+     × retains a direct upload after mapped shutdown 216ms
+     × retains a direct upload after unavailable shutdown 197ms
+{"level":30,"time":1792001892223,"pid":481733,"hostname":"agent-fleet-1","msg":"[profile-sync] watching bambu under /slicer-profiles/bambu"}
+{"level":30,"time":1792001892224,"pid":481733,"hostname":"agent-fleet-1","msg":"[profile-sync] watching orca under /slicer-profiles/orca"}
+{"level":30,"time":1792001892225,"pid":481733,"hostname":"agent-fleet-1","msg":"[profile-sync] watching prusa under /slicer-profiles/prusa"}
+{"level":30,"time":1792001892668,"pid":481733,"hostname":"agent-fleet-1","reqId":"req-1","req":{"method":"POST","url":"/printers","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001892689,"pid":481733,"hostname":"agent-fleet-1","workflowId":"1792001892688-84s9dee","method":"POST","url":"/printers","statusCode":200,"duration":10,"context":{"params":{},"query":{}},"msg":"POST /printers"}
+{"level":30,"time":1792001892689,"pid":481733,"hostname":"agent-fleet-1","reqId":"req-1","res":{"statusCode":200},"responseTime":18.95716100000027,"msg":"request completed"}
+{"level":30,"time":1792001892691,"pid":481733,"hostname":"agent-fleet-1","reqId":"req-2","req":{"method":"POST","url":"/sources","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001892704,"pid":481733,"hostname":"agent-fleet-1","workflowId":"1792001892704-prewbn1","method":"POST","url":"/sources","statusCode":200,"duration":11,"context":{"params":{},"query":{}},"msg":"POST /sources"}
+{"level":30,"time":1792001892704,"pid":481733,"hostname":"agent-fleet-1","reqId":"req-2","res":{"statusCode":200},"responseTime":12.754260000001523,"msg":"request completed"}
+{"level":30,"time":1792001892705,"pid":481733,"hostname":"agent-fleet-1","reqId":"req-3","req":{"method":"POST","url":"/plans","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001892714,"pid":481733,"hostname":"agent-fleet-1","workflowId":"1792001892714-j2zczlf","method":"POST","url":"/plans","statusCode":200,"duration":8,"context":{"params":{},"query":{}},"msg":"POST /plans"}
+{"level":30,"time":1792001892714,"pid":481733,"hostname":"agent-fleet-1","reqId":"req-3","res":{"statusCode":200},"responseTime":9.009200000000419,"msg":"request completed"}
+{"level":30,"time":1792001892717,"pid":481733,"hostname":"agent-fleet-1","msg":"[source-watcher] Stopped"}
+{"level":30,"time":1792001892718,"pid":481733,"hostname":"agent-fleet-1","msg":"[profile-sync] stopped"}
+{"level":30,"time":1792001892744,"pid":481733,"hostname":"agent-fleet-1","msg":"[profile-sync] watching bambu under /slicer-profiles/bambu"}
+{"level":30,"time":1792001892783,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-1","req":{"method":"POST","url":"/auth/dev-login","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":40,"time":1792001892793,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001892793-6rvexi8","method":"POST","url":"/auth/dev-login","statusCode":404,"duration":3,"context":{"params":{"*":"auth/dev-login"},"query":{}},"msg":"POST /auth/dev-login"}
+{"level":30,"time":1792001893004,"pid":481733,"hostname":"agent-fleet-1","reqId":"req-1","req":{"method":"GET","url":"/settings/api-keys","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001892744,"pid":481733,"hostname":"agent-fleet-1","msg":"[profile-sync] watching orca under /slicer-profiles/orca"}
+{"level":30,"time":1792001892744,"pid":481733,"hostname":"agent-fleet-1","msg":"[profile-sync] watching prusa under /slicer-profiles/prusa"}
+{"level":40,"time":1792001893005,"pid":481733,"hostname":"agent-fleet-1","workflowId":"1792001893005-d8yeihp","method":"GET","url":"/settings/api-keys","statusCode":401,"duration":0,"context":{"params":{},"query":{}},"msg":"GET /settings/api-keys"}
+{"level":30,"time":1792001893089,"pid":481733,"hostname":"agent-fleet-1","workflowId":"1792001893089-91gtf38","method":"POST","url":"/auth/register","statusCode":200,"duration":76,"context":{"params":{},"query":{}},"msg":"POST /auth/register"}
+{"level":30,"time":1792001893100,"pid":481733,"hostname":"agent-fleet-1","workflowId":"1792001893100-i0gal2m","method":"GET","url":"/settings/api-keys","statusCode":200,"duration":1,"context":{"params":{},"query":{}},"msg":"GET /settings/api-keys"}
+{"level":30,"time":1792001893103,"pid":481733,"hostname":"agent-fleet-1","workflowId":"1792001893103-gzxb0g9","method":"GET","url":"/printers","statusCode":200,"duration":1,"context":{"params":{},"query":{}},"msg":"GET /printers"}
+{"level":30,"time":1792001893113,"pid":481733,"hostname":"agent-fleet-1","workflowId":"1792001893113-vab5l7s","method":"GET","url":"/plans","statusCode":200,"duration":8,"context":{"params":{},"query":{}},"msg":"GET /plans"}
+{"level":30,"time":1792001893006,"pid":481733,"hostname":"agent-fleet-1","reqId":"req-1","res":{"statusCode":401},"responseTime":1.0354079999997339,"msg":"request completed"}
+{"level":30,"time":1792001893006,"pid":481733,"hostname":"agent-fleet-1","reqId":"req-2","req":{"method":"GET","url":"/health","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001893009,"pid":481733,"hostname":"agent-fleet-1","reqId":"req-2","res":{"statusCode":200},"responseTime":2.5552040000002307,"msg":"request completed"}
+{"level":30,"time":1792001893012,"pid":481733,"hostname":"agent-fleet-1","reqId":"req-3","req":{"method":"POST","url":"/auth/register","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001893089,"pid":481733,"hostname":"agent-fleet-1","reqId":"req-3","res":{"statusCode":200},"responseTime":77.50666099999944,"msg":"request completed"}
+{"level":30,"time":1792001893095,"pid":481733,"hostname":"agent-fleet-1","reqId":"req-4","req":{"method":"GET","url":"/health","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001893096,"pid":481733,"hostname":"agent-fleet-1","reqId":"req-4","res":{"statusCode":200},"responseTime":0.9827800000002753,"msg":"request completed"}
+{"level":30,"time":1792001893097,"pid":481733,"hostname":"agent-fleet-1","reqId":"req-5","req":{"method":"GET","url":"/settings/api-keys","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001893100,"pid":481733,"hostname":"agent-fleet-1","reqId":"req-5","res":{"statusCode":200},"responseTime":2.847195999998803,"msg":"request completed"}
+{"level":30,"time":1792001893101,"pid":481733,"hostname":"agent-fleet-1","reqId":"req-6","req":{"method":"GET","url":"/printers","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001893103,"pid":481733,"hostname":"agent-fleet-1","reqId":"req-6","res":{"statusCode":200},"responseTime":2.0230069999997795,"msg":"request completed"}
+{"level":30,"time":1792001893104,"pid":481733,"hostname":"agent-fleet-1","reqId":"req-7","req":{"method":"GET","url":"/plans","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001893113,"pid":481733,"hostname":"agent-fleet-1","reqId":"req-7","res":{"statusCode":200},"responseTime":8.854358000000502,"msg":"request completed"}
+{"level":30,"time":1792001893114,"pid":481733,"hostname":"agent-fleet-1","reqId":"req-8","req":{"method":"POST","url":"/auth/register","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001893131,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-1","req":{"method":"POST","url":"/auth/register","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001892790,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-1","msg":"Route POST:/auth/dev-login not found"}
+{"level":30,"time":1792001892794,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-1","res":{"statusCode":404},"responseTime":6.953190000000177,"msg":"request completed"}
+{"level":30,"time":1792001892796,"pid":481719,"hostname":"agent-fleet-1","msg":"[source-watcher] Stopped"}
+{"level":40,"time":1792001893117,"pid":481733,"hostname":"agent-fleet-1","workflowId":"1792001893117-z5dmiib","method":"POST","url":"/auth/register","statusCode":403,"duration":0,"context":{"params":{},"query":{}},"msg":"POST /auth/register"}
+{"level":30,"time":1792001893119,"pid":481733,"hostname":"agent-fleet-1","msg":"[source-watcher] Stopped"}
+{"level":30,"time":1792001893120,"pid":481733,"hostname":"agent-fleet-1","msg":"[profile-sync] stopped"}
+{"level":30,"time":1792001893118,"pid":481733,"hostname":"agent-fleet-1","reqId":"req-8","res":{"statusCode":403},"responseTime":3.0974569999998494,"msg":"request completed"}
+{"level":30,"time":1792001893222,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-1","res":{"statusCode":200},"responseTime":90.31534600000123,"msg":"request completed"}
+{"level":30,"time":1792001893537,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-1","req":{"method":"POST","url":"/auth/register","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001893222,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001893222-5dcxe8c","method":"POST","url":"/auth/register","statusCode":200,"duration":88,"context":{"params":{},"query":{}},"msg":"POST /auth/register"}
+{"level":30,"time":1792001893223,"pid":481719,"hostname":"agent-fleet-1","msg":"[source-watcher] Stopped"}
+{"level":30,"time":1792001893622,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-1","res":{"statusCode":200},"responseTime":83.96454199999971,"msg":"request completed"}
+{"level":30,"time":1792001893861,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-1","req":{"method":"POST","url":"/auth/register","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001893622,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001893622-ftfgk4x","method":"POST","url":"/auth/register","statusCode":200,"duration":82,"context":{"params":{},"query":{}},"msg":"POST /auth/register"}
+{"level":30,"time":1792001893632,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001893632-ndne4b6","method":"POST","url":"/auth/logout","statusCode":200,"duration":2,"context":{"params":{},"query":{}},"msg":"POST /auth/logout"}
+{"level":30,"time":1792001893634,"pid":481719,"hostname":"agent-fleet-1","msg":"[source-watcher] Stopped"}
+{"level":30,"time":1792001893628,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-2","req":{"method":"POST","url":"/auth/logout","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001893632,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-2","res":{"statusCode":200},"responseTime":3.522993000000497,"msg":"request completed"}
+{"level":30,"time":1792001893923,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-1","res":{"statusCode":200},"responseTime":61.84487099999933,"msg":"request completed"}
+{"level":30,"time":1792001893923,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001893923-eil019a","method":"POST","url":"/auth/register","statusCode":200,"duration":61,"context":{"params":{},"query":{}},"msg":"POST /auth/register"}
+{"level":30,"time":1792001893924,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-2","req":{"method":"POST","url":"/auth/login","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001893982,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001893982-u71ecuk","method":"POST","url":"/auth/login","statusCode":200,"duration":58,"context":{"params":{},"query":{}},"msg":"POST /auth/login"}
+{"level":30,"time":1792001893985,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001893985-50lrb46","method":"GET","url":"/auth/me","statusCode":200,"duration":1,"context":{"params":{},"query":{}},"msg":"GET /auth/me"}
+{"level":30,"time":1792001893982,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-2","res":{"statusCode":200},"responseTime":58.28413200000068,"msg":"request completed"}
+{"level":30,"time":1792001893983,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-3","req":{"method":"GET","url":"/auth/me","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001893985,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-3","res":{"statusCode":200},"responseTime":1.7769369999987248,"msg":"request completed"}
+{"level":30,"time":1792001893987,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-4","req":{"method":"POST","url":"/auth/change-password","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001894353,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-1","req":{"method":"POST","url":"/auth/register","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001894103,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001894103-60pec7y","method":"POST","url":"/auth/change-password","statusCode":200,"duration":115,"context":{"params":{},"query":{}},"msg":"POST /auth/change-password"}
+{"level":30,"time":1792001894111,"pid":481719,"hostname":"agent-fleet-1","msg":"[source-watcher] Stopped"}
+{"level":30,"time":1792001894104,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-4","res":{"statusCode":200},"responseTime":116.41116900000088,"msg":"request completed"}
+{"level":30,"time":1792001894105,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-5","req":{"method":"GET","url":"/health","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001894108,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-5","res":{"statusCode":200},"responseTime":3.2558109999990847,"msg":"request completed"}
+{"level":30,"time":1792001894109,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-6","req":{"method":"GET","url":"/health","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001894110,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-6","res":{"statusCode":200},"responseTime":1.6281890000009298,"msg":"request completed"}
+{"level":30,"time":1792001894439,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-1","res":{"statusCode":200},"responseTime":85.53766200000064,"msg":"request completed"}
+{"level":30,"time":1792001894438,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001894438-uzie36e","method":"POST","url":"/auth/register","statusCode":200,"duration":59,"context":{"params":{},"query":{}},"msg":"POST /auth/register"}
+{"level":30,"time":1792001894439,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-2","req":{"method":"POST","url":"/auth/change-password","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":40,"time":1792001894498,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001894498-nuaieje","method":"POST","url":"/auth/change-password","statusCode":401,"duration":57,"context":{"params":{},"query":{}},"msg":"POST /auth/change-password"}
+{"level":30,"time":1792001894501,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001894501-3vw6z1x","method":"GET","url":"/auth/me","statusCode":200,"duration":0,"context":{"params":{},"query":{}},"msg":"GET /auth/me"}
+{"level":30,"time":1792001894498,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-2","res":{"statusCode":401},"responseTime":58.62992800000029,"msg":"request completed"}
+{"level":30,"time":1792001894499,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-3","req":{"method":"GET","url":"/auth/me","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001894501,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-3","res":{"statusCode":200},"responseTime":1.3080399999998917,"msg":"request completed"}
+{"level":30,"time":1792001894501,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-4","req":{"method":"POST","url":"/auth/login","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001894559,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001894559-4efrq8m","method":"POST","url":"/auth/login","statusCode":200,"duration":57,"context":{"params":{},"query":{}},"msg":"POST /auth/login"}
+{"level":30,"time":1792001894559,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-4","res":{"statusCode":200},"responseTime":57.97400199999902,"msg":"request completed"}
+{"level":30,"time":1792001894560,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-5","req":{"method":"POST","url":"/auth/login","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":40,"time":1792001894617,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001894617-m8nmnvd","method":"POST","url":"/auth/login","statusCode":401,"duration":56,"context":{"params":{},"query":{}},"msg":"POST /auth/login"}
+{"level":30,"time":1792001894617,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-5","res":{"statusCode":401},"responseTime":56.713228999999046,"msg":"request completed"}
+{"level":30,"time":1792001894618,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-6","req":{"method":"POST","url":"/auth/change-password","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001894823,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-1","req":{"method":"GET","url":"/health","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":40,"time":1792001894618,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001894618-6cduyz5","method":"POST","url":"/auth/change-password","statusCode":401,"duration":0,"context":{"params":{},"query":{}},"msg":"POST /auth/change-password"}
+{"level":30,"time":1792001894619,"pid":481719,"hostname":"agent-fleet-1","msg":"[source-watcher] Stopped"}
+{"level":30,"time":1792001894618,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-6","res":{"statusCode":401},"responseTime":0.7018369999987044,"msg":"request completed"}
+{"level":30,"time":1792001894825,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-1","res":{"statusCode":200},"responseTime":0.879371999999421,"msg":"request completed"}
+{"level":30,"time":1792001894826,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-2","req":{"method":"POST","url":"/auth/register","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001895096,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-1","req":{"method":"GET","url":"/auth/github","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001895504,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-1","req":{"method":"POST","url":"/auth/register","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001894887,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001894887-0wuuyi0","method":"POST","url":"/auth/register","statusCode":200,"duration":60,"context":{"params":{},"query":{}},"msg":"POST /auth/register"}
+{"level":30,"time":1792001894890,"pid":481719,"hostname":"agent-fleet-1","msg":"[source-watcher] Stopped"}
+{"level":30,"time":1792001895097,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001895097-dn6es3o","method":"GET","url":"/auth/github","statusCode":302,"duration":1,"context":{"params":{},"query":{}},"msg":"GET /auth/github"}
+{"level":30,"time":1792001895099,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001895099-ffu0bia","method":"GET","url":"/auth/discord","statusCode":302,"duration":1,"context":{"params":{},"query":{}},"msg":"GET /auth/discord"}
+{"level":30,"time":1792001895099,"pid":481719,"hostname":"agent-fleet-1","msg":"[source-watcher] Stopped"}
+{"level":30,"time":1792001894887,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-2","res":{"statusCode":200},"responseTime":61.40715900000032,"msg":"request completed"}
+{"level":30,"time":1792001894888,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-3","req":{"method":"GET","url":"/health","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001894889,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-3","res":{"statusCode":200},"responseTime":1.2194060000001627,"msg":"request completed"}
+{"level":30,"time":1792001895097,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-1","res":{"statusCode":302},"responseTime":1.342730999998821,"msg":"request completed"}
+{"level":30,"time":1792001895098,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-2","req":{"method":"GET","url":"/auth/discord","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001895099,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-2","res":{"statusCode":302},"responseTime":0.550944000000527,"msg":"request completed"}
+{"level":30,"time":1792001895631,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-1","res":{"statusCode":200},"responseTime":126.96248700000069,"msg":"request completed"}
+{"level":30,"time":1792001895631,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001895631-u7pur81","method":"POST","url":"/auth/register","statusCode":200,"duration":125,"context":{"params":{},"query":{}},"msg":"POST /auth/register"}
+{"level":30,"time":1792001895632,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-2","req":{"method":"POST","url":"/auth/forgot-password","host":"print.example.com","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001896079,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-1","req":{"method":"POST","url":"/auth/register","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001895638,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001895638-jrsm3hi","method":"POST","url":"/auth/forgot-password","statusCode":200,"duration":4,"context":{"params":{},"query":{}},"msg":"POST /auth/forgot-password"}
+{"level":30,"time":1792001895640,"pid":481719,"hostname":"agent-fleet-1","msg":"[source-watcher] Stopped"}
+{"level":40,"time":1792001895637,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-2","to":"reset@example.com","resetUrl":"http://print.example.com/reset-password?token=XETrAI7djhca-WqvAyOLQ7d0hSx0R6xePLr9ypxH_ig","msg":"SMTP not configured; development password reset link logged"}
+{"level":30,"time":1792001895638,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-2","res":{"statusCode":200},"responseTime":5.268186999999671,"msg":"request completed"}
+{"level":30,"time":1792001896219,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-1","res":{"statusCode":200},"responseTime":139.94027200000164,"msg":"request completed"}
+{"level":30,"time":1792001896702,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-1","req":{"method":"GET","url":"/auth/github","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001897102,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-1","req":{"method":"GET","url":"/auth/github","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001897504,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-1","req":{"method":"POST","url":"/auth/register","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001896219,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001896219-ezor5mt","method":"POST","url":"/auth/register","statusCode":200,"duration":138,"context":{"params":{},"query":{}},"msg":"POST /auth/register"}
+{"level":30,"time":1792001896234,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001896233-peks31p","method":"GET","url":"/auth/github","statusCode":302,"duration":1,"context":{"params":{},"query":{}},"msg":"GET /auth/github"}
+{"level":30,"time":1792001896253,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001896253-pgcij9i","method":"GET","url":"/auth/callback?code=github-code&state=4dc5383876922c186d301d415b90c785","statusCode":302,"duration":16,"context":{"params":{},"query":{"code":"github-code","state":"4dc5383876922c186d301d415b90c785"}},"msg":"GET /auth/callback?code=github-code&state=4dc5383876922c186d301d415b90c785"}
+{"level":30,"time":1792001896257,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001896257-2v8n4j9","method":"GET","url":"/auth/me","statusCode":200,"duration":1,"context":{"params":{},"query":{}},"msg":"GET /auth/me"}
+{"level":30,"time":1792001896258,"pid":481719,"hostname":"agent-fleet-1","msg":"[source-watcher] Stopped"}
+{"level":30,"time":1792001896704,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001896704-q60jtc7","method":"GET","url":"/auth/github","statusCode":302,"duration":1,"context":{"params":{},"query":{}},"msg":"GET /auth/github"}
+{"level":30,"time":1792001896713,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001896713-e8w82xl","method":"GET","url":"/auth/callback?code=github-code&state=7188eae7eaf35e12802c515dcc8083ea","statusCode":302,"duration":8,"context":{"params":{},"query":{"code":"github-code","state":"7188eae7eaf35e12802c515dcc8083ea"}},"msg":"GET /auth/callback?code=github-code&state=7188eae7eaf35e12802c515dcc8083ea"}
+{"level":30,"time":1792001896717,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001896717-kz7tkwj","method":"GET","url":"/auth/me","statusCode":200,"duration":0,"context":{"params":{},"query":{}},"msg":"GET /auth/me"}
+{"level":30,"time":1792001896718,"pid":481719,"hostname":"agent-fleet-1","msg":"[source-watcher] Stopped"}
+{"level":30,"time":1792001897104,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001897104-7tqb88m","method":"GET","url":"/auth/github","statusCode":302,"duration":1,"context":{"params":{},"query":{}},"msg":"GET /auth/github"}
+{"level":30,"time":1792001897112,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001897112-s90u0ue","method":"GET","url":"/auth/callback?code=first-code&state=9bffaacd515511f2a6509cc9a28ff2d4","statusCode":302,"duration":7,"context":{"params":{},"query":{"code":"first-code","state":"9bffaacd515511f2a6509cc9a28ff2d4"}},"msg":"GET /auth/callback?code=first-code&state=9bffaacd515511f2a6509cc9a28ff2d4"}
+{"level":30,"time":1792001897115,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001897115-tu0ey3d","method":"GET","url":"/auth/me","statusCode":200,"duration":0,"context":{"params":{},"query":{}},"msg":"GET /auth/me"}
+{"level":30,"time":1792001897117,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001897117-cag4sqd","method":"GET","url":"/auth/github","statusCode":302,"duration":1,"context":{"params":{},"query":{}},"msg":"GET /auth/github"}
+{"level":30,"time":1792001897124,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001897124-yqti1rs","method":"GET","url":"/auth/callback?code=linked-code&state=26d6e12a7af894a241497d94e4bbb689","statusCode":302,"duration":5,"context":{"params":{},"query":{"code":"linked-code","state":"26d6e12a7af894a241497d94e4bbb689"}},"msg":"GET /auth/callback?code=linked-code&state=26d6e12a7af894a241497d94e4bbb689"}
+{"level":30,"time":1792001897127,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001897127-7p2fwys","method":"GET","url":"/auth/me","statusCode":200,"duration":1,"context":{"params":{},"query":{}},"msg":"GET /auth/me"}
+{"level":30,"time":1792001897128,"pid":481719,"hostname":"agent-fleet-1","msg":"[source-watcher] Stopped"}
+{"level":30,"time":1792001896704,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-1","res":{"statusCode":302},"responseTime":1.2349860000012995,"msg":"request completed"}
+{"level":30,"time":1792001896705,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-2","req":{"method":"GET","url":"/auth/callback?code=github-code&state=7188eae7eaf35e12802c515dcc8083ea","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001896714,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-2","res":{"statusCode":302},"responseTime":8.163744999999835,"msg":"request completed"}
+{"level":30,"time":1792001896715,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-3","req":{"method":"GET","url":"/auth/me","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001896717,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-3","res":{"statusCode":200},"responseTime":2.1513930000000983,"msg":"request completed"}
+{"level":30,"time":1792001896232,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-2","req":{"method":"GET","url":"/auth/github","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001896234,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-2","res":{"statusCode":302},"responseTime":1.319800999999643,"msg":"request completed"}
+{"level":30,"time":1792001896236,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-3","req":{"method":"GET","url":"/auth/callback?code=github-code&state=4dc5383876922c186d301d415b90c785","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001896253,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-3","res":{"statusCode":302},"responseTime":16.773674000000028,"msg":"request completed"}
+{"level":30,"time":1792001896254,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-4","req":{"method":"GET","url":"/auth/me","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001896257,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-4","res":{"statusCode":200},"responseTime":2.247540000000299,"msg":"request completed"}
+{"level":30,"time":1792001897104,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-1","res":{"statusCode":302},"responseTime":1.138238999999885,"msg":"request completed"}
+{"level":30,"time":1792001897105,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-2","req":{"method":"GET","url":"/auth/callback?code=first-code&state=9bffaacd515511f2a6509cc9a28ff2d4","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001897112,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-2","res":{"statusCode":302},"responseTime":7.067928000000393,"msg":"request completed"}
+{"level":30,"time":1792001897113,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-3","req":{"method":"GET","url":"/auth/me","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001897115,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-3","res":{"statusCode":200},"responseTime":1.7555949999987206,"msg":"request completed"}
+{"level":30,"time":1792001897116,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-4","req":{"method":"GET","url":"/auth/github","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001897117,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-4","res":{"statusCode":302},"responseTime":0.6838500000012573,"msg":"request completed"}
+{"level":30,"time":1792001897117,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-5","req":{"method":"GET","url":"/auth/callback?code=linked-code&state=26d6e12a7af894a241497d94e4bbb689","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001897124,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-5","res":{"statusCode":302},"responseTime":6.0295939999996335,"msg":"request completed"}
+{"level":30,"time":1792001897125,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-6","req":{"method":"GET","url":"/auth/me","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001897127,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-6","res":{"statusCode":200},"responseTime":1.8039779999999155,"msg":"request completed"}
+{"level":30,"time":1792001897648,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-1","res":{"statusCode":200},"responseTime":142.9913239999987,"msg":"request completed"}
+{"level":30,"time":1792001897936,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-1","req":{"method":"GET","url":"/auth/github","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001898280,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-1","req":{"method":"GET","url":"/auth/github","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001898615,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-1","req":{"method":"POST","url":"/auth/register","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001897648,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001897648-y4vog0j","method":"POST","url":"/auth/register","statusCode":200,"duration":106,"context":{"params":{},"query":{}},"msg":"POST /auth/register"}
+{"level":30,"time":1792001897650,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001897650-zwc8glu","method":"GET","url":"/auth/discord","statusCode":302,"duration":1,"context":{"params":{},"query":{}},"msg":"GET /auth/discord"}
+{"level":30,"time":1792001897657,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001897657-p81ov7l","method":"GET","url":"/auth/discord/callback?code=discord-code&state=54ff17c4339c1d805560804df4c4182e","statusCode":302,"duration":6,"context":{"params":{},"query":{"code":"discord-code","state":"54ff17c4339c1d805560804df4c4182e"}},"msg":"GET /auth/discord/callback?code=discord-code&state=54ff17c4339c1d805560804df4c4182e"}
+{"level":30,"time":1792001897659,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001897659-20s3fqj","method":"GET","url":"/auth/me","statusCode":200,"duration":0,"context":{"params":{},"query":{}},"msg":"GET /auth/me"}
+{"level":30,"time":1792001897660,"pid":481719,"hostname":"agent-fleet-1","msg":"[source-watcher] Stopped"}
+{"level":30,"time":1792001897937,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001897937-rl0gpdq","method":"GET","url":"/auth/github","statusCode":302,"duration":0,"context":{"params":{},"query":{}},"msg":"GET /auth/github"}
+{"level":50,"time":1792001897939,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001897939-easmmb1","method":"GET","url":"/auth/callback?code=github-code&state=65d877b4e5620f4f5373c95b47f67d47","statusCode":502,"duration":1,"context":{"params":{},"query":{"code":"github-code","state":"65d877b4e5620f4f5373c95b47f67d47"}},"msg":"GET /auth/callback?code=github-code&state=65d877b4e5620f4f5373c95b47f67d47"}
+{"level":30,"time":1792001897939,"pid":481719,"hostname":"agent-fleet-1","msg":"[source-watcher] Stopped"}
+{"level":30,"time":1792001898281,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001898281-jfearp9","method":"GET","url":"/auth/github","statusCode":302,"duration":1,"context":{"params":{},"query":{}},"msg":"GET /auth/github"}
+{"level":50,"time":1792001898285,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001898285-qg6strw","method":"GET","url":"/auth/callback?code=oauth-code&state=53acbc835db8e66a88fd779a90caa0a2","statusCode":504,"duration":3,"context":{"params":{},"query":{"code":"oauth-code","state":"53acbc835db8e66a88fd779a90caa0a2"}},"msg":"GET /auth/callback?code=oauth-code&state=53acbc835db8e66a88fd779a90caa0a2"}
+{"level":30,"time":1792001898287,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001898287-17fmxrw","method":"GET","url":"/auth/discord","statusCode":302,"duration":1,"context":{"params":{},"query":{}},"msg":"GET /auth/discord"}
+{"level":50,"time":1792001898288,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001898288-glfefg5","method":"GET","url":"/auth/discord/callback?code=oauth-code&state=718631d970c0f3c08fdbf236f823d247","statusCode":504,"duration":1,"context":{"params":{},"query":{"code":"oauth-code","state":"718631d970c0f3c08fdbf236f823d247"}},"msg":"GET /auth/discord/callback?code=oauth-code&state=718631d970c0f3c08fdbf236f823d247"}
+{"level":30,"time":1792001898290,"pid":481719,"hostname":"agent-fleet-1","msg":"[source-watcher] Stopped"}
+{"level":30,"time":1792001897649,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-2","req":{"method":"GET","url":"/auth/discord","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001897650,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-2","res":{"statusCode":302},"responseTime":0.9083480000008421,"msg":"request completed"}
+{"level":30,"time":1792001897651,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-3","req":{"method":"GET","url":"/auth/discord/callback?code=discord-code&state=54ff17c4339c1d805560804df4c4182e","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001897657,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-3","res":{"statusCode":302},"responseTime":5.375228000000789,"msg":"request completed"}
+{"level":30,"time":1792001897658,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-4","req":{"method":"GET","url":"/auth/me","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001897659,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-4","res":{"statusCode":200},"responseTime":1.6533850000014354,"msg":"request completed"}
+{"level":30,"time":1792001897937,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-1","res":{"statusCode":302},"responseTime":0.65625,"msg":"request completed"}
+{"level":30,"time":1792001897938,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-2","req":{"method":"GET","url":"/auth/callback?code=github-code&state=65d877b4e5620f4f5373c95b47f67d47","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001897939,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-2","res":{"statusCode":502},"responseTime":0.6576380000005884,"msg":"request completed"}
+{"level":30,"time":1792001898281,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-1","res":{"statusCode":302},"responseTime":1.203905999998824,"msg":"request completed"}
+{"level":30,"time":1792001898282,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-2","req":{"method":"GET","url":"/auth/callback?code=oauth-code&state=53acbc835db8e66a88fd779a90caa0a2","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":40,"time":1792001898283,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-2","err":{"type":"Error","message":"provider did not answer","stack":"TimeoutError: provider did not answer\n    at /persist/worktrees/t3/PrintPartner/owner-gre353-next-202610141227-9efa/web/apps/server/src/routes/auth-security.test.ts:797:25\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at async file:///persist/worktrees/t3/PrintPartner/owner-gre353-next-202610141227-9efa/web/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20","name":"TimeoutError"},"provider":"GitHub","failure":"timeout","msg":"OAuth provider request failed"}
+{"level":30,"time":1792001898285,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-2","res":{"statusCode":504},"responseTime":2.495060999997804,"msg":"request completed"}
+{"level":30,"time":1792001898286,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-3","req":{"method":"GET","url":"/auth/discord","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001898287,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-3","res":{"statusCode":302},"responseTime":0.6341250000004948,"msg":"request completed"}
+{"level":30,"time":1792001898287,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-4","req":{"method":"GET","url":"/auth/discord/callback?code=oauth-code&state=718631d970c0f3c08fdbf236f823d247","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":40,"time":1792001898288,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-4","err":{"type":"Error","message":"provider did not answer","stack":"TimeoutError: provider did not answer\n    at /persist/worktrees/t3/PrintPartner/owner-gre353-next-202610141227-9efa/web/apps/server/src/routes/auth-security.test.ts:797:25\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at async file:///persist/worktrees/t3/PrintPartner/owner-gre353-next-202610141227-9efa/web/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20","name":"TimeoutError"},"provider":"Discord","failure":"timeout","msg":"OAuth provider request failed"}
+{"level":30,"time":1792001898289,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-4","res":{"statusCode":504},"responseTime":1.0530139999973471,"msg":"request completed"}
+{"level":30,"time":1792001898712,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-1","res":{"statusCode":200},"responseTime":96.37810600000012,"msg":"request completed"}
+{"level":30,"time":1792001898712,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001898712-ubr09ru","method":"POST","url":"/auth/register","statusCode":200,"duration":95,"context":{"params":{},"query":{}},"msg":"POST /auth/register"}
+{"level":30,"time":1792001898713,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-2","req":{"method":"POST","url":"/auth/register","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001899126,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-1","req":{"method":"POST","url":"/auth/register","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001898805,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001898805-zzgy3pm","method":"POST","url":"/auth/register","statusCode":200,"duration":92,"context":{"params":{},"query":{}},"msg":"POST /auth/register"}
+{"level":40,"time":1792001898809,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001898809-0ml38yk","method":"GET","url":"/slicer-instances","statusCode":403,"duration":1,"context":{"params":{},"query":{}},"msg":"GET /slicer-instances"}
+{"level":30,"time":1792001898812,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001898812-tfpgfqv","method":"GET","url":"/slicer-instances","statusCode":200,"duration":1,"context":{"params":{},"query":{}},"msg":"GET /slicer-instances"}
+{"level":30,"time":1792001898813,"pid":481719,"hostname":"agent-fleet-1","msg":"[source-watcher] Stopped"}
+{"level":30,"time":1792001898805,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-2","res":{"statusCode":200},"responseTime":92.11655599999722,"msg":"request completed"}
+{"level":30,"time":1792001898806,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-3","req":{"method":"GET","url":"/slicer-instances","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001898809,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-3","res":{"statusCode":403},"responseTime":3.241095999997924,"msg":"request completed"}
+{"level":30,"time":1792001898809,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-4","req":{"method":"GET","url":"/slicer-instances","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001898812,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-4","res":{"statusCode":200},"responseTime":2.8633220000010624,"msg":"request completed"}
+{"level":30,"time":1792001899240,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-1","res":{"statusCode":200},"responseTime":113.2278989999977,"msg":"request completed"}
+{"level":30,"time":1792001899240,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001899240-ivkil6n","method":"POST","url":"/auth/register","statusCode":200,"duration":112,"context":{"params":{},"query":{}},"msg":"POST /auth/register"}
+{"level":30,"time":1792001899247,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001899247-x4p6q20","method":"POST","url":"/settings/api-keys","statusCode":201,"duration":5,"context":{"params":{},"query":{}},"msg":"POST /settings/api-keys"}
+{"level":30,"time":1792001899259,"pid":481719,"hostname":"agent-fleet-1","workflowId":"1792001899259-4y4rucb","method":"GET","url":"/api/v1/plans","statusCode":200,"duration":5,"context":{"params":{},"query":{}},"msg":"GET /api/v1/plans"}
+{"level":30,"time":1792001899260,"pid":481719,"hostname":"agent-fleet-1","msg":"[source-watcher] Stopped"}
+{"level":30,"time":1792001899241,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-2","req":{"method":"POST","url":"/settings/api-keys","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001899247,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-2","res":{"statusCode":201},"responseTime":5.662316999998438,"msg":"request completed"}
+{"level":30,"time":1792001899248,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-3","req":{"method":"GET","url":"/api/v1/plans","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792001899259,"pid":481719,"hostname":"agent-fleet-1","reqId":"req-3","res":{"statusCode":200},"responseTime":10.988659000002372,"msg":"request completed"}
+ ❯ src/routes/auth-security.test.ts (17 tests | 1 failed) 7728ms
+     × keeps mapped account reads while omitting backend session mutations 411ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/routes/auth-security.test.ts > production authentication routes > keeps mapped account reads while omitting backend session mutations
+AssertionError: /auth/dev-login: expected 200 to be 404 // Object.is equality
+
+- Expected
++ Received
+
+- 404
++ 200
+
+ ❯ src/routes/auth-security.test.ts:63:169
+     61|       expect((await app.inject({ method: "GET", url: "/auth/me" })).js…
+     62|       for (const url of ["/auth/dev-login", "/auth/logout", "/auth/log…
+     63|         expect((await app.inject({ method: "POST", url, payload: { log…
+       |                                                                                                                                                                         ^
+     64|       }
+     65|       for (const url of ["/auth/github", "/auth/callback", "/auth/disc…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯
+
+ FAIL  src/services/printer-upload-shutdown.test.ts > printer upload interrupted by shutdown > retains a direct upload after mapped shutdown
+ FAIL  src/services/printer-upload-shutdown.test.ts > printer upload interrupted by shutdown > retains a direct upload after unavailable shutdown
+AssertionError: expected 'done' to be 'error' // Object.is equality
+
+Expected: "error"
+Received: "done"
+
+ ❯ src/services/printer-upload-shutdown.test.ts:215:29
+    213|     const terminal = await f.jobs.waitForTerminal(jobId, 3000, tenant);
+    214|
+    215|     expect(terminal.status).toBe("error");
+       |                             ^
+    216|     expect(terminal.error).toBe(INTERRUPTED_PRINTER_SEND_ERROR);
+    217|     expect(existsSync(artifactPath)).toBe(true);
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/3]⎯
+
+
+ Test Files  2 failed | 3 passed (5)
+      Tests  3 failed | 89 passed (92)
+   Start at  18:18:00
+   Duration  18.93s (transform 13.44s, setup 919ms, import 32.31s, tests 21.28s, environment 2ms)
+
+npm error Lifecycle script `test` failed with error:
+npm error code 1
+npm error path /persist/worktrees/t3/PrintPartner/owner-gre353-next-202610141227-9efa/web/apps/server
+npm error workspace @print-partner/server@0.1.0
+npm error location /persist/worktrees/t3/PrintPartner/owner-gre353-next-202610141227-9efa/web/apps/server
+npm error command failed
+npm error command sh -c vitest run src/services/printer-upload-shutdown.test.ts src/routes/auth-security.test.ts src/routes/single-user-auth.test.ts src/desktop-account.test.ts src/desktop-context.test.ts

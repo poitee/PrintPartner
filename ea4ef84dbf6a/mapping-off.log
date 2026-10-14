@@ -1,0 +1,40 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.48s
+────────────
+ Nextest run ID 0ce41cc6-4b92-4abf-8d8a-725c30a6ada9 with nextest profile: default
+    Starting 2 tests across 1 binary (35 tests skipped)
+        PASS [  44.828s] (1/2) pp-core::runtime_m0 ticket_t_68_desktop_account_mapping::gates_off_refuse_existing_accounts_even_with_child_env
+  stdout ───
+
+    running 1 test
+
+    running 1 test
+    test ticket_t_68_desktop_account_mapping::gates_off_refuse_existing_accounts_even_with_child_env ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 36 filtered out; finished in 44.80s
+
+
+    {"case":"gates_off_refuse_existing_accounts_even_with_child_env","artifact":"/persist/tmp/pp-ticket-t-68-account-157862256fa646c6"}
+    test ticket_t_68_desktop_account_mapping::gates_off_refuse_existing_accounts_even_with_child_env ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 36 filtered out; finished in 44.81s
+
+
+        PASS [  50.955s] (2/2) pp-core::runtime_m0 ticket_t_68_desktop_account_mapping::compile_gate_off_refuses_mapping_despite_runtime_opt_in
+  stdout ───
+
+    running 1 test
+
+    running 1 test
+    test ticket_t_68_desktop_account_mapping::compile_gate_off_refuses_mapping_despite_runtime_opt_in ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 36 filtered out; finished in 50.93s
+
+
+    {"case":"compile_gate_off_refuses_mapping_despite_runtime_opt_in","artifact":"/persist/tmp/pp-ticket-t-68-account-24398508af3563fc"}
+    test ticket_t_68_desktop_account_mapping::compile_gate_off_refuses_mapping_despite_runtime_opt_in ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 36 filtered out; finished in 50.94s
+
+
+────────────
+     Summary [  50.956s] 2 tests run: 2 passed, 35 skipped
