@@ -16,6 +16,9 @@ use tokio::net::TcpListener;
 mod drain;
 mod rebuild;
 
+#[cfg(feature = "desktop_rebuild")]
+pub mod profile_interpreter;
+
 pub use rebuild::DesktopRebuild;
 
 pub use drain::{ShutdownGate, TrackedShutdownWork};

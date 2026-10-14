@@ -3323,6 +3323,8 @@ dependencies = [
  "pp-gateway",
  "pp-storage",
  "rand 0.9.5",
+ "regress 0.11.1",
+ "ryu-js",
  "serde",
  "serde_json",
  "sha2",
