@@ -138,7 +138,7 @@ jobs:
       - name: Install Chromium without system changes
         run: |
           npx --no-install playwright-core install chromium
-          node --input-type=module -e 'import { chromium } from "playwright-core"; console.log(`PLAYWRIGHT_CHROMIUM_EXECUTABLE=${chromium.executablePath()}`)' >> "$GITHUB_ENV"
+          node --input-type=module -e 'import { chromium } from "playwright-core"; console.log("PLAYWRIGHT_CHROMIUM_EXECUTABLE=" + chromium.executablePath())' >> "$GITHUB_ENV"
       - name: Build, bundle, runtime and browser checks
         run: npm run build && npm run test:workflow-smoke && npm run test:bundles -w @print-partner/web && npm run test:runtime && npm run test:browser
 

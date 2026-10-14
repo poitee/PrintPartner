@@ -38,10 +38,23 @@ jobs:
           mkdir -p "$RUNNER_TEMP/actionlint-bin"
           tar -xzf "$archive" -C "$RUNNER_TEMP/actionlint-bin" actionlint
           echo "$RUNNER_TEMP/actionlint-bin" >> "$GITHUB_PATH"
-      - name: Install native ShellCheck
-        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
-        with:
-          tool: shellcheck@0.11.0
-          fallback: none
+      - name: Install pinned native ShellCheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/shellcheck-v0.11.0.linux.x86_64.tar.xz"
+          curl --fail --location --retry 3 --output "$archive" \
+            https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
+          echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  $archive" | sha256sum -c -
+          python3 - "$archive" "$RUNNER_TEMP/actionlint-bin/shellcheck" <<'PYTHON'
+          from pathlib import Path
+          import sys
+          import tarfile
+
+          with tarfile.open(sys.argv[1], 'r:xz') as archive:
+              binary = archive.extractfile('shellcheck-v0.11.0/shellcheck')
+              Path(sys.argv[2]).write_bytes(binary.read())
+          PYTHON
+          chmod 755 "$RUNNER_TEMP/actionlint-bin/shellcheck"
       - name: Run actionlint
         run: actionlint
