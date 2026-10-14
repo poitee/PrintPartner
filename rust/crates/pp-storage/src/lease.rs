@@ -100,7 +100,6 @@ impl StorageLease {
         lock.try_lock_exclusive()
             .context("Data directory already owned")?;
         let marker_path = data_dir.join(".desktop-owner.json");
-        // Invalid marker evidence must not trigger retirement of an existing lease.
         read_prior_owner(&marker_path)?;
         let lease_guard = guard::StorageLease::acquire(&data_dir)?;
         if let Some((marker, pid)) = read_prior_owner(&marker_path)? {

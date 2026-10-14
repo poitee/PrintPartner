@@ -4,7 +4,6 @@ use std::path::PathBuf;
 #[path = "common/process.rs"]
 mod child_process;
 
-// Forked test children can briefly inherit another test's flock before exec.
 static ADMISSION_TEST: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 struct Fixture(PathBuf);
