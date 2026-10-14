@@ -28,6 +28,12 @@ pub(crate) enum EffectAdmissionPolicy {
 pub struct PhysicalOwner {
     storage: Arc<crate::Shared>,
 }
+#[cfg(feature = "desktop_rebuild")]
+impl PhysicalOwner {
+    pub(crate) fn storage_identity(&self) -> &Arc<crate::Shared> {
+        &self.storage
+    }
+}
 pub enum Credential {
     Session(Secret),
     RoutedKey { tenant: String, key: Secret },

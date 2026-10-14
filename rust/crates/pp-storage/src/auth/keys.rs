@@ -1,5 +1,9 @@
+#[cfg(feature = "desktop_rebuild")]
+mod authority;
 use super::{KeyInfo, KeyPrincipal, LocalCommit, Outcome, Secret, crypto, timestamp};
 use anyhow::{Result, anyhow, ensure};
+#[cfg(feature = "desktop_rebuild")]
+pub(crate) use authority::{admit_reference, resolve_ref, resolve_reference, stream_authority};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use hmac::{Hmac, Mac};
 use rusqlite::{OptionalExtension, Transaction, params};

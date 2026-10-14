@@ -195,6 +195,29 @@ An optional filament provider reads bounded JSON over HTTP, confines redirects t
 
 The second D3 PR remains dependent on later source and storage work. The reference acquisition and upload modules require retained capture from D5, the upload journal from D14, and import job methods from D15. Those APIs are absent on main. This port does not claim acquisition or upload completion and does not advance those slices.
 
+### D6 native-secret migration
+
+GRE-605 ports the reference native-secret migration protocol behind `desktop_rebuild`.
+The storage owner exposes an explicit `native_secret_migration()` library client.
+Opening storage does not create its receipt table; the first admitted preparation
+creates it transactionally. Preparation preserves the legacy `github_pat` setting
+and returns secret material plus a stable native-store locator. The caller must
+write and verify the native-store copy before confirming. Confirmation revalidates
+the physical storage owner, receipt generation, row identity and value before
+atomically deleting the legacy setting and recording completion. Reopening resumes
+the same receipt. The receipt contains no token bytes.
+
+This slice adds no native keychain provider or startup caller. Future user-visible
+migration must check the stored `PP_DESKTOP_REBUILD` setting before requesting
+preparation or confirmation. Auth scheduler and authority changes are a separate
+D6 PR; GRE-605 remains In Progress until both parts pass the coordinator gate.
+
+The same D6 foundation ports durable authority receipts for sessions and routed
+API keys. Receipts retain credential digests, tenant, subject and authentication
+policy, and revalidation rejects changed policy or revoked credentials. Physical
+owner admission checks the storage identity. These internal APIs compile behind
+the feature; D15/D16 will wire them into jobs. The current job engine is unchanged.
+
 ## Map one existing account
 
 Build with the `desktop_rebuild` Cargo feature and start with `PP_DESKTOP_REBUILD=1` or `PP_DESKTOP_REBUILD=true`.

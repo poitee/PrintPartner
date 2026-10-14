@@ -9,6 +9,8 @@ pub mod features;
 pub mod jobs;
 pub mod lease;
 #[cfg(feature = "desktop_rebuild")]
+pub mod native_secrets;
+#[cfg(feature = "desktop_rebuild")]
 pub mod profiles;
 pub mod read_model;
 mod schema;
@@ -74,6 +76,11 @@ enum WriterControl {
     AdmitDiskQuota(u32),
 }
 enum Envelope {
+    #[cfg(feature = "desktop_rebuild")]
+    NativeSecrets {
+        command: native_secrets::Command,
+        reply: native_secrets::Reply,
+    },
     #[cfg(feature = "desktop_rebuild")]
     Features {
         command: features::Command,
@@ -532,6 +539,15 @@ impl WriterOwner {
                     }
                 };
                 match envelope {
+                    #[cfg(feature = "desktop_rebuild")]
+                    Envelope::NativeSecrets { command, reply } => {
+                        let _ = reply.send(native_secrets::execute(
+                            &mut connection,
+                            &worker,
+                            command,
+                            admission,
+                        ));
+                    }
                     #[cfg(feature = "desktop_rebuild")]
                     Envelope::Features { command, reply } => {
                         let _ = reply.send(features::execute(&mut connection, command, admission));
