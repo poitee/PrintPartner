@@ -1,11 +1,20 @@
-use pp_compat::CompatExit;
-use pp_gateway::ownership::{
-    Owner,
-    cutover::{
-        self, BootReceipt, CUTOVER_FILE, CutoverError, CutoverReceipt, CutoverRefusal,
-        DrainEvidence, EVIDENCE_FILE, Evidence, OperationOwners,
+use axum::{
+    body::Body,
+    http::{HeaderMap, Request, Response, StatusCode},
+};
+use http_body_util::BodyExt;
+use hyper_util::rt::TokioIo;
+use pp_compat::{CompatExit, CompatHandle, Endpoint};
+use pp_gateway::{
+    Gateway,
+    ownership::{
+        Owner,
+        cutover::{
+            self, BootReceipt, CUTOVER_FILE, CutoverError, CutoverReceipt, CutoverRefusal,
+            DrainEvidence, EVIDENCE_FILE, Evidence, OperationOwners,
+        },
+        manifest::{OwnershipIndex, admit_manifest_documents},
     },
-    manifest::{OwnershipIndex, admit_manifest_documents},
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -13,6 +22,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
 };
 
 const CATALOG: &str = "filament.catalog";
@@ -52,6 +62,17 @@ fn index_from(edit: impl FnOnce(&mut serde_json::Value), operations: &str) -> Ow
         .as_array_mut()
         .unwrap()
         .retain(|worker| worker != "startManagedProfileSync");
+    let unresolved = manifest["resources"]["unresolved"].as_array_mut().unwrap();
+    unresolved.retain(|id| {
+        ![
+            "http:GET /filaments/catalog current",
+            "http:GET /ws/profile-sync current",
+            "worker.startManagedProfileSync",
+        ]
+        .iter()
+        .any(|old| id == old)
+    });
+    unresolved.extend([json!(CATALOG), json!(PROFILE_SYNC)]);
     edit(&mut manifest);
     admit_manifest_documents(&manifest.to_string(), operations, source_sync_text()).unwrap()
 }
@@ -67,6 +88,10 @@ fn index_with_extra_tool() -> OwnershipIndex {
                 .as_array_mut()
                 .unwrap()
                 .push(json!("ticket_t_3_drain_extra_tool"));
+            manifest["resources"]["unresolved"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!("tool.ticket_t_3_drain_extra_tool"));
         },
         include_str!("../operations.json"),
     )
@@ -204,6 +229,237 @@ fn ticket_t_3_drain_cutover_switches_whole_operation() {
         .collect();
     assert_eq!(rust_owned, BTreeSet::from(CATALOG_PARTICIPANTS));
     assert_eq!(owners.owner_of("http.GET /filaments/custom"), Owner::Node);
+}
+
+async fn exchange(
+    origin: &str,
+    path: &str,
+    method: &str,
+    cookie: Option<&str>,
+) -> (StatusCode, HeaderMap, Vec<u8>) {
+    let authority = origin.strip_prefix("http://").unwrap();
+    let socket = tokio::net::TcpStream::connect(authority).await.unwrap();
+    let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(socket))
+        .await
+        .unwrap();
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    let mut builder = Request::builder()
+        .uri(path)
+        .method(method)
+        .header("host", authority)
+        .header("origin", origin);
+    if let Some(cookie) = cookie {
+        builder = builder.header("cookie", cookie);
+    }
+    let body = if method == "POST" {
+        builder = builder.header("content-type", "application/json");
+        Body::from(r#"{"name":"cutover"}"#)
+    } else {
+        Body::empty()
+    };
+    let response = sender
+        .send_request(builder.body(body).unwrap())
+        .await
+        .unwrap();
+    let (head, body) = response.into_parts();
+    let bytes = body.collect().await.unwrap().to_bytes().to_vec();
+    (head.status, head.headers, bytes)
+}
+
+struct FakeNode {
+    compat: CompatHandle,
+    forwards: Arc<Mutex<Vec<String>>>,
+    _publication: tokio::sync::watch::Sender<Option<Arc<Endpoint>>>,
+    entered: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
+}
+
+fn fake_node(dir: &Path) -> FakeNode {
+    fake_node_with_hold(dir, false)
+}
+
+fn fake_node_with_hold(dir: &Path, hold: bool) -> FakeNode {
+    let socket = dir.join("node.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+    let forwards = Arc::new(Mutex::new(Vec::new()));
+    let seen = forwards.clone();
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let (notify_entered, notify_release) = (entered.clone(), release.clone());
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            let seen = seen.clone();
+            let (entered, release) = (notify_entered.clone(), notify_release.clone());
+            tokio::spawn(async move {
+                let service =
+                    hyper::service::service_fn(move |request: Request<hyper::body::Incoming>| {
+                        if request.uri().path() != "/__desktop/moonraker-hosts" {
+                            seen.lock().unwrap().push(format!(
+                                "{} {}",
+                                request.method(),
+                                request.uri().path()
+                            ));
+                        }
+                        let (entered, release) = (entered.clone(), release.clone());
+                        async move {
+                            if hold && request.uri().path() == "/plans" {
+                                entered.notify_one();
+                                release.notified().await;
+                            }
+                            Ok::<_, std::convert::Infallible>(Response::new(Body::from("{}")))
+                        }
+                    });
+                let _ = hyper::server::conn::http1::Builder::new()
+                    .serve_connection(TokioIo::new(stream), service)
+                    .await;
+            });
+        }
+    });
+    let (compat, publication) = CompatHandle::replaceable(Some(Endpoint::bound_to(&socket)));
+    FakeNode {
+        compat,
+        forwards,
+        _publication: publication,
+        entered,
+        release,
+    }
+}
+
+async fn session(gateway: &mut Gateway) -> (String, String) {
+    let origin = gateway.origin().to_owned();
+    let launch = gateway.take_launch_target().unwrap().into_url();
+    let (status, headers, _) =
+        exchange(&origin, launch.strip_prefix(&origin).unwrap(), "GET", None).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let cookie = headers["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    (origin, cookie)
+}
+
+async fn rust_owned_gateway(dir: &Path, node: &FakeNode) -> Gateway {
+    let index = fixture_index();
+    for operation in [CATALOG, PLANS_CREATE] {
+        assert!(matches!(
+            switch(&index, dir, operation),
+            CutoverReceipt::Committed { .. }
+        ));
+    }
+    let (owners, _) = cutover::recover(dir, Some(&index)).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    Gateway::start(listener, PathBuf::new(), node.compat.clone(), &owners).unwrap()
+}
+
+fn assert_rust_owner_unavailable(status: StatusCode, headers: &HeaderMap, body: &[u8]) {
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(!headers.contains_key("retry-after"));
+    if !body.is_empty() {
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(body).unwrap(),
+            json!({
+                "detail": "Operation is owned by the Rust runtime and has no handler yet",
+                "code": "rust_owner_unavailable",
+            })
+        );
+    }
+}
+
+#[tokio::test]
+async fn ticket_t_3_drain_cutover_gateway_routes_whole_operation() {
+    let dir = Scratch::new("gateway");
+    let node = fake_node(&dir.0);
+    let mut gateway = rust_owned_gateway(&dir.0, &node).await;
+    let (origin, cookie) = session(&mut gateway).await;
+    for (method, path) in [
+        ("GET", "/filaments/catalog"),
+        ("GET", "/api/v1/filaments/catalog"),
+        ("HEAD", "/filaments/catalog"),
+        ("HEAD", "/api/v1/filaments/catalog"),
+    ] {
+        let (status, headers, body) = exchange(&origin, path, method, Some(&cookie)).await;
+        assert_eq!(body.is_empty(), method == "HEAD", "{method} {path}");
+        assert_rust_owner_unavailable(status, &headers, &body);
+    }
+    assert!(node.forwards.lock().unwrap().is_empty());
+    let (status, _, _) = exchange(&origin, "/filaments/custom", "GET", Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        *node.forwards.lock().unwrap(),
+        vec!["GET /filaments/custom".to_owned()]
+    );
+    gateway.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn ticket_t_3_drain_cutover_no_mutation_failover() {
+    let dir = Scratch::new("failover");
+    let node = fake_node(&dir.0);
+    let mut gateway = rust_owned_gateway(&dir.0, &node).await;
+    let (origin, cookie) = session(&mut gateway).await;
+    for path in ["/plans", "/api/v2/plans"] {
+        let (status, headers, body) = exchange(&origin, path, "POST", Some(&cookie)).await;
+        assert_rust_owner_unavailable(status, &headers, &body);
+        assert!(!body.is_empty());
+    }
+    assert!(node.forwards.lock().unwrap().is_empty());
+    let (status, _, _) = exchange(&origin, "/filaments/custom", "POST", Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        *node.forwards.lock().unwrap(),
+        vec!["POST /filaments/custom".to_owned()]
+    );
+    gateway.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn ticket_t_3_drain_cutover_gateway_refuses_unregistered_rust_route() {
+    let mut registry: serde_json::Value =
+        serde_json::from_str(include_str!("../operations.json")).unwrap();
+    registry["routes"].as_array_mut().unwrap().push(json!({
+        "method": "POST",
+        "path": "/ticket-t-3-drain/rust-only",
+        "owner": "compat",
+        "effect": "local_commit",
+        "operation": "POST /ticket-t-3-drain/rust-only current",
+    }));
+    let index = index_from(
+        |manifest| {
+            manifest["resources"]["unresolved"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!("http:POST /ticket-t-3-drain/rust-only current"));
+        },
+        &registry.to_string(),
+    );
+    let dir = Scratch::new("unregistered");
+    let operation = "http:POST /ticket-t-3-drain/rust-only current";
+    assert!(matches!(
+        switch(&index, &dir.0, operation),
+        CutoverReceipt::Committed {
+            participants: 1,
+            ..
+        }
+    ));
+    let (owners, _) = cutover::recover(&dir.0, Some(&index)).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let error = Gateway::start(
+        listener,
+        PathBuf::new(),
+        CompatHandle::unpublished(),
+        &owners,
+    )
+    .err()
+    .unwrap();
+    assert_eq!(
+        error.to_string(),
+        "Rust-owned participant http.POST /ticket-t-3-drain/rust-only is not a registered route"
+    );
 }
 
 #[test]
@@ -463,7 +719,9 @@ fn ticket_t_3_drain_cutover_crash_before_rename_recovers_node() {
     assert!(!dir.0.join(CUTOVER_FILE).exists());
     assert_eq!(
         evidence_lines(&dir.0),
-        vec![json!({"event": "boot", "rust_operations": [], "abandoned_temporaries": 1})]
+        vec![
+            json!({"event": "boot", "rust_operations": [], "abandoned_temporaries": 1, "evidence_saved": true})
+        ]
     );
 }
 
@@ -626,7 +884,7 @@ fn ticket_t_3_drain_cutover_receipts_serialize_exactly() {
             evidence_saved: false,
         }))
         .unwrap(),
-        json!({"event": "boot", "rust_operations": [CATALOG], "abandoned_temporaries": 1})
+        json!({"event": "boot", "rust_operations": [CATALOG], "abandoned_temporaries": 1, "evidence_saved": false})
     );
     assert_eq!(
         serde_json::to_value(Evidence::BootFailed(
@@ -684,4 +942,97 @@ fn ticket_t_3_drain_cutover_evidence_log_appends_exact_lines() {
         .permissions()
         .mode();
     assert_eq!(mode & 0o777, 0o600);
+}
+
+#[tokio::test]
+async fn ticket_t_3_drain_cutover_gateway_drain_waits_for_inflight_forward() {
+    let dir = Scratch::new("inflight");
+    let node = fake_node_with_hold(&dir.0, true);
+    let owners = OperationOwners::node_only();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut gateway =
+        Gateway::start(listener, PathBuf::new(), node.compat.clone(), &owners).unwrap();
+    let (origin, cookie) = session(&mut gateway).await;
+    let request =
+        tokio::spawn(async move { exchange(&origin, "/plans", "POST", Some(&cookie)).await });
+    tokio::time::timeout(std::time::Duration::from_secs(5), node.entered.notified())
+        .await
+        .unwrap();
+    gateway.begin_drain();
+    let gateway_idle = gateway
+        .wait_idle(std::time::Duration::from_millis(50))
+        .await;
+    assert!(!gateway_idle);
+    let index = fixture_index();
+    assert_eq!(
+        plan_for(&index, &owners, PLANS_CREATE).commit(
+            &dir.0,
+            DrainEvidence {
+                gateway_idle,
+                ..DRAINED
+            }
+        ),
+        CutoverReceipt::DrainTimedOut {
+            operation: PLANS_CREATE.into(),
+            tracked_idle: true,
+            gateway_idle: false
+        }
+    );
+    assert!(!dir.0.join(CUTOVER_FILE).exists());
+    node.release.notify_one();
+    assert_eq!(request.await.unwrap().0, StatusCode::OK);
+    let gateway_idle = gateway.wait_idle(std::time::Duration::from_secs(1)).await;
+    assert!(gateway_idle);
+    assert!(matches!(
+        plan_for(&index, &owners, PLANS_CREATE).commit(
+            &dir.0,
+            DrainEvidence {
+                gateway_idle,
+                ..DRAINED
+            }
+        ),
+        CutoverReceipt::Committed { .. }
+    ));
+    gateway.stop().await.unwrap();
+}
+
+#[test]
+fn ticket_t_3_drain_cutover_record_and_evidence_fail_closed() {
+    use std::os::unix::fs::symlink;
+    let index = fixture_index();
+    let dir = Scratch::new("unsafe-record");
+    let path = dir.0.join(CUTOVER_FILE);
+    fs::write(&path, vec![b' '; 65537]).unwrap();
+    assert!(matches!(
+        cutover::recover(&dir.0, Some(&index)),
+        Err(CutoverError::Malformed { .. })
+    ));
+    fs::remove_file(&path).unwrap();
+    let target = dir.0.join("target");
+    fs::write(&target, "{}").unwrap();
+    symlink(&target, &path).unwrap();
+    assert!(matches!(
+        cutover::recover(&dir.0, Some(&index)),
+        Err(CutoverError::Malformed { .. })
+    ));
+    fs::remove_file(&path).unwrap();
+    assert!(matches!(
+        switch(&index, &dir.0, CATALOG),
+        CutoverReceipt::Committed { .. }
+    ));
+    fs::remove_file(dir.0.join(EVIDENCE_FILE)).unwrap();
+    symlink(&target, dir.0.join(EVIDENCE_FILE)).unwrap();
+    let (owners, boot) = cutover::recover(&dir.0, Some(&index)).unwrap();
+    assert!(!boot.evidence_saved);
+    assert_eq!(owners.owner_of(CATALOG_PARTICIPANTS[0]), Owner::Rust);
+    assert_eq!(fs::read_to_string(target).unwrap(), "{}");
+    let mut record: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    record["operations"][CATALOG]["fixtures"] = json!(0);
+    fs::write(path, record.to_string()).unwrap();
+    assert_eq!(
+        cutover::recover(&dir.0, Some(&index)).unwrap_err(),
+        CutoverError::NoParityFixtures {
+            operation: CATALOG.into()
+        }
+    );
 }

@@ -27,6 +27,8 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 mod assets;
 pub mod ownership;
 
+use ownership::{Owner, cutover::OperationOwners};
+
 pub const MUTATION_DRAIN: Duration = Duration::from_secs(5);
 
 pub struct LaunchTarget(String);
@@ -76,9 +78,16 @@ struct DeniedOperation {
 struct Operation {
     method: String,
     path: String,
-    owner: String,
+    #[serde(rename = "owner")]
+    registry_owner: String,
+    #[serde(skip, default = "node_owner")]
+    owner: Owner,
     effect: EffectClass,
 }
+fn node_owner() -> Owner {
+    Owner::Node
+}
+
 #[derive(Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 enum EffectClass {
@@ -133,7 +142,12 @@ pub struct Gateway {
 }
 
 impl Gateway {
-    pub fn start(listener: TcpListener, assets: PathBuf, compat: CompatHandle) -> Result<Self> {
+    pub fn start(
+        listener: TcpListener,
+        assets: PathBuf,
+        compat: CompatHandle,
+        owners: &OperationOwners,
+    ) -> Result<Self> {
         let address = listener.local_addr()?;
         anyhow::ensure!(
             address.ip().is_loopback(),
@@ -144,12 +158,19 @@ impl Gateway {
         let token = hex::encode(rand::random::<[u8; 32]>());
         let mut manifest: Manifest = serde_json::from_str(include_str!("../operations.json"))?;
         let mut seen = HashSet::new();
-        for route in &manifest.routes {
+        for route in &mut manifest.routes {
             anyhow::ensure!(
-                route.owner == "compat"
+                route.registry_owner == "compat"
                     && route.path.starts_with('/')
-                    && seen.insert((&route.method, &route.path)),
+                    && seen.insert(format!("http.{} {}", route.method, route.path)),
                 "Invalid operation ownership manifest"
+            );
+            route.owner = owners.owner_of(&format!("http.{} {}", route.method, route.path));
+        }
+        for participant in owners.rust_participants() {
+            anyhow::ensure!(
+                seen.contains(participant),
+                "Rust-owned participant {participant} is not a registered route"
             );
         }
         // The desktop lease data directory already holds the persistent receipt.
@@ -658,6 +679,20 @@ async fn handle(
             StatusCode::FORBIDDEN,
             "Origin required for operation with effects",
         );
+    }
+    if operation.owner == Owner::Rust {
+        let mut response = (
+            StatusCode::SERVICE_UNAVAILABLE,
+            axum::Json(serde_json::json!({
+                "detail": "Operation is owned by the Rust runtime and has no handler yet",
+                "code": "rust_owner_unavailable",
+            })),
+        )
+            .into_response();
+        if request.method() == "HEAD" {
+            *response.body_mut() = Body::empty();
+        }
+        return response;
     }
     if matches!(request.method().as_str(), "GET" | "HEAD")
         && let Some(id) = moonraker_status_id(&path)
@@ -1538,8 +1573,13 @@ mod tests {
         }
 
         let old_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let mut old =
-            Gateway::start(old_listener, PathBuf::new(), CompatHandle::unpublished()).unwrap();
+        let mut old = Gateway::start(
+            old_listener,
+            PathBuf::new(),
+            CompatHandle::unpublished(),
+            &super::OperationOwners::node_only(),
+        )
+        .unwrap();
         let old_origin = old.origin().to_owned();
         let target = old.take_launch_target().unwrap().into_url();
         let (status, headers) =
@@ -1553,8 +1593,13 @@ mod tests {
             .unwrap()
             .to_owned();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let mut new =
-            Gateway::start(listener, PathBuf::new(), CompatHandle::unpublished()).unwrap();
+        let mut new = Gateway::start(
+            listener,
+            PathBuf::new(),
+            CompatHandle::unpublished(),
+            &super::OperationOwners::node_only(),
+        )
+        .unwrap();
         let origin = new.origin().to_owned();
         assert_ne!(origin, old_origin);
         assert_eq!(
@@ -1795,7 +1840,8 @@ mod tests {
             .map(|path| super::Operation {
                 method: "GET".into(),
                 path: path.into(),
-                owner: "compat".into(),
+                registry_owner: "compat".into(),
+                owner: super::Owner::Node,
                 effect: super::EffectClass::Observation,
             })
             .collect();

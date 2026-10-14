@@ -1,22 +1,5 @@
-//! Whole-operation ownership cutover from Node to Rust.
-//!
-//! The checked-in manifest gives every operation to Node. One record in the
-//! storage-lease data directory, `operation-cutover.json`, lists the operations
-//! Rust owns, each with its full participant set. That record is the only
-//! switch, and [`CutoverPlan::commit`] is its only writer. A commit happens only
-//! when a parity receipt bound to the bundled manifest digest passed, the
-//! gateway and tracked work drained inside `MUTATION_DRAIN`, and the Node
-//! process group exited inside its SIGTERM grace. The writer holds the storage
-//! lease. Boot reads the record before Node is spawned, and a changed manifest,
-//! a partial participant set, or a hand-edited record fails closed.
-//!
-//! Node starts its own workers, jobs and startup hooks and does not read the
-//! record yet. Until it does, only an operation whose participants are all HTTP
-//! routes can switch, because the gateway alone fences HTTP. No API names a
-//! single participant, so no API can switch part of an operation.
-//!
-//! Every outcome is appended to `operation-cutover-evidence.jsonl`. That log is
-//! evidence only and is never read back for authority.
+//! Cutover commits after drain and graceful Node exit, while the storage lease is held.
+//! Only HTTP-only operations can switch until Node can honor the ownership record.
 
 use super::{
     Owner,
@@ -55,7 +38,6 @@ struct CutoverRecord {
 struct RustOwned {
     parity_sha256: String,
     fixtures: u32,
-    /// Expanded from the index, so Node can honor the record without it.
     participants: Vec<String>,
 }
 
@@ -70,8 +52,6 @@ struct ParityReceipt {
     failed: u32,
 }
 
-/// The effective owner of every participant: Node, with the committed record
-/// laid over it. Only [`OperationOwners::node_only`] and [`recover`] build one.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OperationOwners {
     record: Option<CutoverRecord>,
@@ -82,7 +62,6 @@ impl OperationOwners {
         Self::default()
     }
 
-    /// Keyed by index participant id, such as `http.GET /plans`.
     pub fn owner_of(&self, participant: &str) -> Owner {
         if self.rust_participants().any(|id| id == participant) {
             Owner::Rust
@@ -105,24 +84,19 @@ impl OperationOwners {
     }
 }
 
-/// A switch that passed every check that does not depend on the drain. Only
-/// [`plan`] builds one and only [`CutoverPlan::commit`] consumes it.
 #[derive(Debug)]
 pub struct CutoverPlan {
     operation: String,
     next: CutoverRecord,
 }
 
-/// What the caller observed while stopping. `commit` checks it itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DrainEvidence {
     pub tracked_idle: bool,
     pub gateway_idle: bool,
-    /// `None` when `Supervisor::shutdown` failed, so reaping is unproved.
     pub compat: Option<CompatExit>,
 }
 
-/// The outcome of a switch that passed [`plan`]. Only `Committed` changed the record.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum CutoverReceipt {
@@ -132,7 +106,6 @@ pub enum CutoverReceipt {
         manifest_sha256: String,
         parity_sha256: String,
         fixtures: u32,
-        /// The rename is the commit. A failed directory sync after it is reported, not undone.
         directory_synced: bool,
     },
     DrainTimedOut {
@@ -152,17 +125,14 @@ pub enum CutoverReceipt {
     },
 }
 
-/// Why a switch was refused before any drain. Nothing was written.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "reason", rename_all = "snake_case")]
 pub enum CutoverRefusal {
     FlagOff,
     UnknownOperation,
-    /// A gateway-owned or refused route belongs to the operation.
     NotSwitchable {
         participant: String,
     },
-    /// Node starts this participant itself and cannot be told to skip it yet.
     NodeCannotFence {
         participant: String,
     },
@@ -184,18 +154,15 @@ pub enum CutoverRefusal {
         expected: String,
         actual: String,
     },
-    /// The runtime was already stopping for another reason.
     ShutdownInProgress,
 }
 
-/// Boot failures. Each stops startup before bind and before Node is spawned.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "reason", rename_all = "snake_case")]
 pub enum CutoverError {
     Malformed {
         detail: String,
     },
-    /// Node alone would take the operation back with no parity or format gate.
     RecordWithoutFlag,
     RestartManifestChanged {
         recorded: String,
@@ -223,14 +190,10 @@ pub enum CutoverError {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct BootReceipt {
     pub rust_operations: Vec<String>,
-    /// Temporaries a crash left before the rename, now removed.
     pub abandoned_temporaries: u32,
-    /// False only when boot had something to record and the append failed.
-    #[serde(skip)]
     pub evidence_saved: bool,
 }
 
-/// One line of the evidence log.
 #[derive(Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Evidence<'a> {
@@ -250,7 +213,6 @@ enum Blocked<'a> {
     NodeCannotFence(&'a str),
 }
 
-/// The participants of an operation Rust may own, or the first one that blocks it.
 fn switchable<'a>(
     index: &'a OwnershipIndex,
     operation: &str,
@@ -272,8 +234,6 @@ fn switchable<'a>(
     Ok(participants)
 }
 
-/// Checks a switch while the runtime keeps serving, so a refusal costs no
-/// drain. `index` is `None` when the desktop rebuild flag is off.
 pub fn plan(
     index: Option<&OwnershipIndex>,
     owners: &OperationOwners,
@@ -344,7 +304,6 @@ pub fn plan(
 }
 
 impl CutoverPlan {
-    /// The only writer of the record. The caller holds the storage lease.
     pub fn commit(self, data_dir: &Path, drained: DrainEvidence) -> CutoverReceipt {
         let operation = self.operation;
         let DrainEvidence {
@@ -387,9 +346,14 @@ impl CutoverPlan {
     }
 }
 
-/// A reader sees the old record or the new one, never a partial write.
 fn write_record(data_dir: &Path, record: &CutoverRecord) -> std::io::Result<()> {
-    let encoded = serde_json::to_vec_pretty(record)?;
+    let encoded = serde_json::to_vec(record)?;
+    if encoded.len() as u64 > super::LEASE_FILE_LIMIT {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "cutover record exceeds read limit",
+        ));
+    }
     let temporary = data_dir.join(format!(
         "{TEMPORARY_PREFIX}{}{TEMPORARY_SUFFIX}",
         hex::encode(rand::random::<[u8; 16]>())
@@ -411,9 +375,6 @@ fn write_record(data_dir: &Path, record: &CutoverRecord) -> std::io::Result<()> 
     written
 }
 
-/// Applies the committed record at boot, after the storage lease is held and
-/// before Node is spawned or the gateway binds. A boot that finds neither a
-/// record nor a temporary writes nothing.
 pub fn recover(
     data_dir: &Path,
     index: Option<&OwnershipIndex>,
@@ -438,7 +399,7 @@ pub fn recover(
         let boot = BootReceipt {
             rust_operations: owners.rust_operations().map(str::to_owned).collect(),
             abandoned_temporaries,
-            evidence_saved: false,
+            evidence_saved: true,
         };
         Ok((owners, boot))
     });
@@ -544,7 +505,6 @@ fn admit_record(
     })
 }
 
-/// Appends one line to the evidence log. A failure never changes authority.
 pub fn append_evidence(data_dir: &Path, evidence: &Evidence<'_>) -> std::io::Result<()> {
     let mut line = serde_json::to_vec(evidence)?;
     line.push(b'\n');
