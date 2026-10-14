@@ -7574,6 +7574,10 @@ export class AppRepository {
       }
 
       const sourceAccepted = this.readAcceptedPlanOperationalSnapshot(id);
+      const features = this.getSettingSnapshot(planFeatureSettingKey(id));
+      if (features.kind === "stored") {
+        this.setSetting(planFeatureSettingKey(newProfile.id), features.value);
+      }
       const roleFilaments = this.getSetting(roleFilamentSettingKey(id));
       if (roleFilaments) {
         this.setSetting(roleFilamentSettingKey(newProfile.id), roleFilaments);

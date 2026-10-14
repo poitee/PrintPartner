@@ -20,6 +20,10 @@ type FeatureLayer = { readonly choices: FeatureChoices; readonly raw: Record<str
 const storedObjectSchema = z.custom<Record<string, unknown>>(
   (value) => typeof value === "object" && value !== null && !Array.isArray(value),
 );
+const losslessJsonSchema = z.object({
+  rawJSON: z.function({ input: [z.string()], output: z.unknown() }),
+});
+const numberSourceSchema = z.object({ source: z.string() });
 
 export function desktopFeaturesEnabled(): boolean {
   return process.env.PP_DESKTOP_REBUILD === "1" || process.env.PP_DESKTOP_REBUILD === "true";
@@ -30,7 +34,9 @@ export function parseFeatureLayer(
 ): FeatureLayer | null {
   if (snapshot.kind === "missing") return { choices: {}, raw: {} };
   try {
-    const stored: unknown = JSON.parse(snapshot.value);
+    const { rawJSON } = losslessJsonSchema.parse(JSON);
+    const stored: unknown = JSON.parse(snapshot.value, (_key: string, value: unknown, context?: unknown) =>
+      typeof value === "number" ? rawJSON(numberSourceSchema.parse(context).source) : value);
     const raw = storedObjectSchema.parse(stored);
     return { choices: choicesSchema.parse(raw), raw };
   } catch {

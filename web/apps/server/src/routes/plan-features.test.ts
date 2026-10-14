@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
+import { eq } from "drizzle-orm";
 import * as schema from "../db/schema.js";
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -197,6 +198,91 @@ describe("plan features and aggregate farm suggestions", () => {
     expect(JSON.parse(repo.getSetting(planKey()) ?? "null")).toEqual(JSON.parse(
       '{"future":{"nested":[null,1]},"__proto__":{"farm":false},"constructor":["saved"],"bambu":false}',
     ));
+  });
+
+  it("preserves every unknown numeric token across patches, clears and a conflicting writer", async () => {
+    const future = '{"limit":9007199254740993,"negative":-9007199254740993,"array":[1e400,1E-400,-0,1.2300e+05,{"n":123456789012345678901234567890}],"plain":[true,false,null,"9007199254740993"]}';
+    const retained = `"future":${future},"__proto__":{"n":9007199254740995},"constructor":[1e+030]`;
+    repo.setSetting(planKey(), `{${retained}}`);
+    repo.setSetting("feature_toggles", `{"farm":true,"future":${future}}`);
+    expect((await app.inject(url())).json()).toEqual({ profile_id: profileId, overrides: {},
+      effective: { ...defaults, farm: { enabled: true, source: "user" } } });
+    const patches = [
+      { body: { farm: false }, suffix: ',"farm":false' },
+      { body: { orders: true }, suffix: ',"farm":false,"orders":true' },
+      { body: {}, suffix: ',"farm":false,"orders":true' },
+      { body: { farm: null }, suffix: ',"orders":true' },
+      { body: { orders: null }, suffix: "" },
+    ];
+    for (const { body, suffix } of patches) {
+      expect((await patch(body)).statusCode).toBe(200);
+      expect(repo.getSettingSnapshot(planKey())).toEqual({ kind: "stored", value: `{${retained}${suffix}}` });
+    }
+    const otherSqlite = new SqliteDatabase(dataDir);
+    otherSqlite.connect();
+    const otherRepo = new AppRepository(getDb(otherSqlite), undefined, otherSqlite.reposDir);
+    const original = repo.compareAndSetOwnedPlanFeatures.bind(repo);
+    const writes = vi.spyOn(repo, "compareAndSetOwnedPlanFeatures").mockImplementationOnce((input) => {
+      otherRepo.setSetting(planKey(), `{${retained},"newer":{"n":9007199254740997}}`);
+      return original(input);
+    });
+    try {
+      expect((await patch({ farm: true })).json()).toEqual({ profile_id: profileId, overrides: { farm: true },
+        effective: { ...defaults, farm: { enabled: true, source: "plan" } } });
+      expect(otherRepo.getSettingSnapshot(planKey())).toEqual({ kind: "stored",
+        value: `{${retained},"newer":{"n":9007199254740997},"farm":true}` });
+      expect(writes.mock.calls).toHaveLength(2);
+    } finally { otherSqlite.close(); }
+    expect((await patch({ farm: null })).statusCode).toBe(200);
+    expect(repo.getSettingSnapshot(planKey())).toEqual({ kind: "stored",
+      value: `{${retained},"newer":{"n":9007199254740997}}` });
+  });
+
+  it.each([true, false])("duplicates archived plan farm %j verbatim and enforces it on the copy", async (farm) => {
+    const value = `{"farm":${farm},"future":{"limit":9007199254740993,"array":[1e400,null,"saved"]}}`;
+    repo.setSetting("feature_toggles", `{"farm":${!farm}}`);
+    repo.setSetting(planKey(), value);
+    getDb(sqlite).update(schema.buildProfiles).set({ archivedAt: "2026-10-14T00:00:00Z" })
+      .where(eq(schema.buildProfiles.id, profileId)).run();
+    const copy = repo.duplicateProfile(profileId, "Template copy", { clearCheckoff: true });
+    expect(copy.archived_at).toBeNull();
+    expect(repo.getSettingSnapshot(`feature_toggles:plan:${copy.id}`)).toEqual({ kind: "stored", value });
+    expect(repo.getSettingSnapshot(planKey())).toEqual({ kind: "stored", value });
+    for (const id of [profileId, copy.id]) {
+      expect((await app.inject(`/plans/${id}/features`)).json()).toEqual({ profile_id: id, overrides: { farm },
+        effective: { ...defaults, farm: { enabled: farm, source: "plan" } } });
+    }
+    saveQueue([queue("template-copy", copy.id), queue("legacy")]);
+    expect((await suggestions()).json()).toEqual(expectedSuggestion(farm ? ["template-copy"] : ["legacy"]));
+  });
+
+  it.each([undefined, "", "{}", '{"future":{"n":9007199254740993}}'])(
+    "duplicates the exact missing or stored feature snapshot %j", async (value) => {
+      if (value !== undefined) repo.setSetting(planKey(), value);
+      const copy = repo.duplicateProfile(profileId, "Snapshot copy");
+      expect(repo.getSettingSnapshot(`feature_toggles:plan:${copy.id}`)).toEqual(value === undefined
+        ? { kind: "missing" } : { kind: "stored", value });
+      const response = await app.inject(`/plans/${copy.id}/features`);
+      if (value === "") {
+        expect(response.statusCode).toBe(500);
+        expect(response.json()).toEqual(invalid);
+      } else {
+        expect(response.json()).toEqual({ profile_id: copy.id, overrides: {}, effective: defaults });
+      }
+    });
+
+  it("cannot duplicate a foreign plan or its feature snapshot", () => {
+    const foreign = tenantStorage.run("other", () => {
+      const id = repo.createProfile("Foreign template").id;
+      repo.setSetting(`feature_toggles:plan:${id}`, '{"farm":true,"future":9007199254740993}');
+      return id;
+    });
+    const settingWrites = vi.spyOn(repo, "setSetting");
+    expect(() => repo.duplicateProfile(foreign, "Forbidden copy")).toThrow("Profile not found");
+    expect(settingWrites.mock.calls).toEqual([]);
+    expect(repo.listProfileHeaders().map((profile) => profile.id)).toEqual([profileId]);
+    expect(tenantStorage.run("other", () => repo.getSettingSnapshot(`feature_toggles:plan:${foreign}`)))
+      .toEqual({ kind: "stored", value: '{"farm":true,"future":9007199254740993}' });
   });
 
   it.each([null, [], "", { farm: 1 }, { farm: "true" }, { farm: {} }, { farm: true, tenant_id: "other" },
