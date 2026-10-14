@@ -402,7 +402,7 @@ async fn ticket_t_12_unsafe_config_is_refused_before_any_database_open() {
 }
 
 #[tokio::test]
-async fn failed_bind_releases_owner_before_any_child() {
+async fn occupied_saved_port_recovers_before_child_start() {
     let data = std::env::temp_dir().join(format!(
         "pp-bind-m0-{}",
         hex::encode(rand::random::<[u8; 8]>())
@@ -414,12 +414,120 @@ async fn failed_bind_releases_owner_before_any_child() {
         format!("port = {}\n", occupied.local_addr().unwrap().port()),
     )
     .unwrap();
-    assert!(CoreRuntime::start(launch(data.clone())).await.is_err());
+    let mut runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    let old_port = occupied.local_addr().unwrap().port();
+    let new_port: u16 = runtime
+        .origin()
+        .rsplit(':')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_ne!(old_port, new_port);
+    assert_eq!(
+        runtime.origin_change(),
+        Some(&pp_core::OriginChange::PersistedPortInUse {
+            previous_port: std::num::NonZeroU16::new(old_port).unwrap(),
+            new_port: std::num::NonZeroU16::new(new_port).unwrap(),
+        })
+    );
+    assert_eq!(
+        std::fs::read_to_string(data.join("desktop.toml")).unwrap(),
+        format!("port = {new_port}\n")
+    );
+    let origin = runtime.origin().to_owned();
+    let stale = format!("pp_desktop_{old_port}=stale");
+    assert_eq!(
+        request(&origin, "/health", "GET", Some(&stale), None, None, None)
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    let target = runtime.take_launch_target().unwrap().into_url();
+    let (status, headers, _) = request(
+        &origin,
+        target.strip_prefix(&origin).unwrap(),
+        "GET",
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let cookie = headers["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    let wrong_name = format!(
+        "pp_desktop_{old_port}={}",
+        cookie.split_once('=').unwrap().1
+    );
+    assert_eq!(
+        request(
+            &origin,
+            "/auth/me",
+            "GET",
+            Some(&wrong_name),
+            None,
+            None,
+            None
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (status, _, bytes) =
+        request(&origin, "/auth/me", "GET", Some(cookie), None, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let principal: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(principal["user"]["user_id"], "desktop-owner");
+    assert_eq!(principal["user"]["provider"], "desktop");
+    assert_eq!(principal["user"]["is_admin"], true);
+    let handle = runtime.handle();
+    assert_eq!(
+        handle.browser_preferences().await.unwrap(),
+        pp_core::BrowserPreferences::default()
+    );
+    handle
+        .set_browser_preference(pp_core::BrowserPreference::Theme(Some(
+            pp_core::Theme::Light,
+        )))
+        .await
+        .unwrap();
+    handle
+        .set_browser_preference(pp_core::BrowserPreference::SidebarCollapsed(Some(true)))
+        .await
+        .unwrap();
+    assert_eq!(
+        runtime.handle().browser_preferences().await.unwrap(),
+        pp_core::BrowserPreferences {
+            theme: Some(pp_core::Theme::Light),
+            sidebar_collapsed: Some(true),
+            printer_poll_interval: None,
+        }
+    );
+    assert!(runtime.shutdown().await.complete());
     assert!(!data.join(".desktop-owner.json").exists());
-    assert!(!data.join("print-partner.db").exists());
-    drop(occupied);
-    let runtime = CoreRuntime::start(launch(data)).await.unwrap();
-    runtime.shutdown().await;
+    let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    assert_eq!(runtime.origin(), origin);
+    assert_eq!(runtime.origin_change(), None);
+    assert!(handle.browser_preferences().await.is_err());
+    assert_eq!(
+        runtime.handle().browser_preferences().await.unwrap().theme,
+        Some(pp_core::Theme::Light)
+    );
+    let cleared = runtime
+        .handle()
+        .set_browser_preference(pp_core::BrowserPreference::Theme(None))
+        .await
+        .unwrap();
+    assert_eq!(cleared.theme, None);
+    assert_eq!(cleared.sidebar_collapsed, Some(true));
+    assert!(runtime.shutdown().await.complete());
+    std::fs::remove_dir_all(data).unwrap();
 }
 
 #[tokio::test]
