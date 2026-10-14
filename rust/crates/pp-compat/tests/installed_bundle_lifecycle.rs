@@ -222,6 +222,8 @@ async fn installed_bundle_start_health_shutdown() -> Result<()> {
     )?;
     let port = free_loopback_port()?;
     let supervisor = Supervisor::start(SpawnSpec {
+        #[cfg(feature = "desktop_rebuild")]
+        account_pin: pp_compat::DesktopAccountPin::Disabled,
         bundle,
         data_dir: ownership.data_dir.clone(),
         runtime_dir: ownership.runtime_dir.clone(),

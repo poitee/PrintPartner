@@ -1,3 +1,7 @@
+#[cfg(feature = "desktop_rebuild")]
+mod account_pin;
+#[cfg(feature = "desktop_rebuild")]
+pub use account_pin::DesktopAccountPin;
 pub mod drain;
 mod logs;
 pub use logs::recent_diagnostics;
@@ -45,6 +49,8 @@ pub struct Bundle {
 }
 
 pub struct SpawnSpec {
+    #[cfg(feature = "desktop_rebuild")]
+    pub account_pin: DesktopAccountPin,
     pub bundle: Bundle,
     pub data_dir: PathBuf,
     pub runtime_dir: PathBuf,
@@ -467,6 +473,12 @@ impl Process {
         let setup = serde_json::json!({ "version":1, "data_dir":spec.data_dir, "socket_path":endpoint.socket,
             "generation":endpoint.generation, "key":hex::encode(key), "lease":spec.lease, "parent_pid":std::process::id(),
             "port":spec.port, "child_process_identity":child_identity });
+        #[cfg(feature = "desktop_rebuild")]
+        let setup = {
+            let mut setup = setup;
+            spec.account_pin.apply(&mut setup);
+            setup
+        };
         if stdin
             .write_all(format!("{setup}\n").as_bytes())
             .await

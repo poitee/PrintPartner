@@ -13,6 +13,10 @@ use std::{
 #[path = "runtime_m0/drain.rs"]
 mod drain;
 
+#[cfg(target_os = "linux")]
+#[path = "runtime_m0/ticket_t_68_desktop_account_mapping.rs"]
+mod ticket_t_68_desktop_account_mapping;
+
 fn launch(data: PathBuf) -> DesktopLaunch {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../..")
