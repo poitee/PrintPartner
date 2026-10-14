@@ -3,7 +3,9 @@ name: Desktop runtime
 on:
   workflow_dispatch:
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
     paths:
+      - ".github/workflows/ci-runner-plan.yml"
       - 'rust/**'
       - 'rust-toolchain.toml'
       - 'web/apps/server/**'
@@ -18,6 +20,7 @@ on:
   push:
     branches: [main, master]
     paths:
+      - ".github/workflows/ci-runner-plan.yml"
       - 'rust/**'
       - 'rust-toolchain.toml'
       - 'web/apps/server/**'
@@ -42,8 +45,14 @@ defaults:
     shell: bash
 
 jobs:
+  ci-plan:
+    uses: ./.github/workflows/ci-runner-plan.yml
+
   runtime:
-    runs-on: ubuntu-24.04
+    needs: [ci-plan]
+    if: ${{ needs.ci-plan.outputs.linux == 'true' }}
+    # The approved /usr/bin/node sudo rule is limited to the x64 tool cache.
+    runs-on: ${{ fromJSON(needs.ci-plan.outputs.hosted == 'true' && '["ubuntu-latest"]' || '["self-hosted","linux","fleet","X64"]') }}
     timeout-minutes: 45
     env:
       VITE_PRINT_PARTNER_DESKTOP: '1'
@@ -81,7 +90,10 @@ jobs:
         run: |
           rustup toolchain install 1.99.0 --profile minimal
           rustc --version --verbose > "$PP_EVIDENCE/rust-version.txt"
-          sudo ln -sf "$(command -v node)" /usr/bin/node
+          test -x "$RUNNER_TOOL_CACHE/node/24.21.0/x64/bin/node"
+          if [[ ! /usr/bin/node -ef "$RUNNER_TOOL_CACHE/node/24.21.0/x64/bin/node" ]]; then
+            sudo /usr/bin/ln -sf "$RUNNER_TOOL_CACHE/node/24.21.0/x64/bin/node" /usr/bin/node
+          fi
           test "$(/usr/bin/node --version)" = v24.21.0
           /usr/bin/node -p 'JSON.stringify({node:process.version,abi:process.versions.modules,os:process.platform,arch:process.arch})' > "$PP_EVIDENCE/node-version.json"
           npm --prefix web ci 2>&1 | tee "$PP_EVIDENCE/npm-ci.log"
@@ -142,7 +154,9 @@ jobs:
           retention-days: 14
 
   source-artifacts:
-    runs-on: ubuntu-24.04
+    needs: [ci-plan]
+    if: ${{ needs.ci-plan.outputs.linux == 'true' }}
+    runs-on: ${{ fromJSON(needs.ci-plan.outputs.linux-runner) }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -153,9 +167,28 @@ jobs:
           node-version: '24.21.0'
       - name: Install source artifact validation tools
         run: |
+          set -euo pipefail
+          packages_installed() {
+            for package in "$@"; do
+              if [[ "$(dpkg-query -W -f="\${db:Status-Status}" "$package" 2>/dev/null)" == installed ]]; then
+                continue
+              fi
+              if [[ "$package" == webkit2gtk-driver ]] && {
+                [[ "$(dpkg-query -W -f="\${db:Status-Status}" webkitgtk-webdriver 2>/dev/null)" == installed ]] ||
+                  command -v WebKitWebDriver >/dev/null
+              }; then
+                continue
+              fi
+              return 1
+            done
+          }
+          if packages_installed strace time; then
+            echo "Required packages are installed; skipping apt"
+          else
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends strace time
+          fi
           rustup toolchain install 1.99.0 --profile minimal
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends strace time
       - name: Build Node and Rust snapshot implementations
         id: source_artifacts_build
         run: |
@@ -205,7 +238,9 @@ jobs:
           retention-days: 14
 
   rust-verify:
-    runs-on: ubuntu-24.04
+    needs: [ci-plan]
+    if: ${{ needs.ci-plan.outputs.linux == 'true' }}
+    runs-on: ${{ fromJSON(needs.ci-plan.outputs.linux-runner) }}
     timeout-minutes: 45
     env:
       CARGO_INCREMENTAL: '0'
@@ -234,7 +269,8 @@ jobs:
           # verify.py must only talk to the 127.0.0.1 origin Rust prints; any
           # attempt to reach a LAN printer (192.168.*, incl. .80/.81) is rejected
           # and counted, then fails the job below.
-          sudo iptables -N PP_LAN_GUARD
+          sudo iptables -N PP_LAN_GUARD || sudo iptables -F PP_LAN_GUARD
+          while sudo iptables -D OUTPUT -d 192.168.0.0/16 -m conntrack --ctstate NEW -j PP_LAN_GUARD; do :; done
           sudo iptables -A PP_LAN_GUARD -j REJECT
           sudo iptables -I OUTPUT -d 192.168.0.0/16 -m conntrack --ctstate NEW -j PP_LAN_GUARD
           sudo iptables -L OUTPUT -n -v | tee "$PP_EVIDENCE/egress-guard-before.txt"
@@ -250,6 +286,15 @@ jobs:
           blocked="$(sudo iptables -L PP_LAN_GUARD -n -v -x | awk 'NR>2 {sum+=$1} END {print sum+0}')"
           echo "blocked_lan_packets=$blocked" | tee "$PP_EVIDENCE/egress-guard-result.txt"
           test "$blocked" -eq 0
+      - name: Remove private LAN egress guard
+        if: always()
+        run: |
+          set -euo pipefail
+          if sudo iptables -L PP_LAN_GUARD -n -v -x >/dev/null 2>&1; then
+            while sudo iptables -D OUTPUT -d 192.168.0.0/16 -m conntrack --ctstate NEW -j PP_LAN_GUARD; do :; done
+            sudo iptables -F PP_LAN_GUARD
+            sudo iptables -X PP_LAN_GUARD
+          fi
       - name: Summarize verification checks
         if: always()
         run: |

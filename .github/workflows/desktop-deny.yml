@@ -2,7 +2,9 @@ name: Desktop cargo-deny
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
     paths:
+      - ".github/workflows/ci-runner-plan.yml"
       - 'rust/**'
       - '.github/workflows/desktop-deny.yml'
   workflow_dispatch:
@@ -15,21 +17,25 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  ci-plan:
+    uses: ./.github/workflows/ci-runner-plan.yml
+
   cargo-deny:
+    needs: [ci-plan]
+    if: ${{ (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository || needs.ci-plan.outputs.hosted == 'true') && needs.ci-plan.outputs.linux == 'true' }}
+    runs-on: ${{ fromJSON(needs.ci-plan.outputs.linux-runner) }}
     name: cargo deny check
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      # Pin EmbarkStudios/cargo-deny-action@v2.1.1 (cargo-deny 0.20.2).
-      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25
+      - name: Install pinned native cargo-deny
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
         with:
-          manifest-path: rust/Cargo.toml
-          command: check
-          # --all-features matches [graph].all-features. Advisory exceptions are
-          # limited to the two documented GTK3 IDs in rust/deny.toml.
-          arguments: --all-features
-          rust-version: '1.99.0'
+          tool: cargo-deny@0.20.2
+          fallback: none
+      - name: Install pinned Rust checks
+        run: rustup toolchain install 1.99.0 --profile minimal
+      - name: Check dependency policy
+        run: cargo deny --log-level warn --manifest-path rust/Cargo.toml --all-features check

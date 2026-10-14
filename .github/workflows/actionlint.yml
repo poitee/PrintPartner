@@ -2,6 +2,7 @@ name: Actionlint
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
     paths:
       - ".github/workflows/**"
   push:
@@ -12,20 +13,70 @@ on:
 
 permissions:
   contents: read
-  checks: write
-  pull-requests: write
 
 jobs:
+  ci-plan:
+    uses: ./.github/workflows/ci-runner-plan.yml
+
   actionlint:
-    runs-on: ubuntu-latest
+    needs: [ci-plan]
+    if: ${{ needs.ci-plan.outputs.linux == 'true' }}
+    runs-on: ${{ fromJSON(needs.ci-plan.outputs.linux-runner) }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Install pinned native actionlint
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$RUNNER_ARCH" in
+            X64)
+              arch=amd64
+              checksum=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+              ;;
+            ARM64)
+              arch=arm64
+              checksum=325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6
+              ;;
+            *) echo "Unsupported runner architecture: $RUNNER_ARCH" >&2; exit 1 ;;
+          esac
+          archive="$RUNNER_TEMP/actionlint_1.7.12_linux_${arch}.tar.gz"
+          curl --fail --location --retry 3 --output "$archive" \
+            "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_${arch}.tar.gz"
+          echo "$checksum  $archive" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/actionlint-bin"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/actionlint-bin" actionlint
+          echo "$RUNNER_TEMP/actionlint-bin" >> "$GITHUB_PATH"
+      - name: Install pinned native ShellCheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$RUNNER_ARCH" in
+            X64)
+              arch=x86_64
+              checksum=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+              ;;
+            ARM64)
+              arch=aarch64
+              checksum=12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588
+              ;;
+            *) echo "Unsupported runner architecture: $RUNNER_ARCH" >&2; exit 1 ;;
+          esac
+          archive="$RUNNER_TEMP/shellcheck-v0.11.0.linux.${arch}.tar.xz"
+          curl --fail --location --retry 3 --output "$archive" \
+            "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.${arch}.tar.xz"
+          echo "$checksum  $archive" | sha256sum -c -
+          python3 - "$archive" "$RUNNER_TEMP/actionlint-bin/shellcheck" <<'PYTHON'
+          from pathlib import Path
+          import sys
+          import tarfile
+
+          with tarfile.open(sys.argv[1], 'r:xz') as archive:
+              binary = archive.extractfile('shellcheck-v0.11.0/shellcheck')
+              Path(sys.argv[2]).write_bytes(binary.read())
+          PYTHON
+          chmod 755 "$RUNNER_TEMP/actionlint-bin/shellcheck"
       - name: Run actionlint
-        uses: reviewdog/action-actionlint@a8ac3eea598697a830f7d8e701fc9fcbfde88974 # v1.80.0
-        with:
-          fail_level: error
-          filter_mode: nofilter
-          reporter: github-check
+        run: actionlint
