@@ -17,12 +17,12 @@ pub enum Request {
         decisions: EditDecisions,
     },
     Rebase {
-        idempotency_key: String,
+        idempotency_key: IdempotencyKey,
         request: RebaseRequest,
     },
     List {},
     Recompute {
-        idempotency_key: String,
+        idempotency_key: IdempotencyKey,
         options: RecomputeOptions,
     },
     PrepareApply {
@@ -31,7 +31,7 @@ pub enum Request {
     },
     Select {
         draft_id: PositiveId,
-        idempotency_key: String,
+        idempotency_key: IdempotencyKey,
         request: crate::reconciliation::ReconciliationRequest,
     },
     Read {
@@ -244,9 +244,9 @@ impl TryFrom<RebaseRequestWire> for RebaseRequest {
 #[serde(deny_unknown_fields)]
 pub struct PartChoice {
     pub quantity: crate::autosave::Quantity,
-    pub role: String,
+    pub role: Role,
     #[serde(deserialize_with = "crate::reconciliation::required_nullable")]
-    pub color: Option<String>,
+    pub color: Option<HexColor>,
 }
 
 fn source_map<'de, T: Deserialize<'de>, D: serde::Deserializer<'de>>(
@@ -270,4 +270,71 @@ fn source_map<'de, T: Deserialize<'de>, D: serde::Deserializer<'de>>(
             Ok(sources)
         })
         .transpose()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(try_from = "String")]
+pub struct IdempotencyKey(String);
+
+impl TryFrom<String> for IdempotencyKey {
+    type Error = &'static str;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        let value = value.trim().to_owned();
+        if !(1..=160).contains(&value.encode_utf16().count()) {
+            return Err("idempotency key must contain 1 to 160 characters");
+        }
+        Ok(Self(value))
+    }
+}
+
+impl IdempotencyKey {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(try_from = "String")]
+pub struct Role(String);
+
+impl TryFrom<String> for Role {
+    type Error = &'static str;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        if value.trim().is_empty() || value.encode_utf16().count() > 200 {
+            return Err("role must be nonblank and at most 200 characters");
+        }
+        Ok(Self(value))
+    }
+}
+
+impl Role {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String")]
+pub struct HexColor(String);
+
+impl TryFrom<String> for HexColor {
+    type Error = &'static str;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        if value.len() != 7
+            || !value.starts_with('#')
+            || !value.bytes().skip(1).all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err("color must be a six-digit hex value prefixed with #");
+        }
+        Ok(Self(value))
+    }
+}
+
+impl HexColor {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }

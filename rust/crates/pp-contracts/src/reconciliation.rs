@@ -178,13 +178,42 @@ pub enum Outcome {
         workspace: Option<Box<Workspace>>,
     },
     BaseChanged {
-        workspace: Box<Workspace>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        workspace: Option<Box<Workspace>>,
     },
     NotOpen {
-        workspace: Box<Workspace>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        workspace: Option<Box<Workspace>>,
     },
-    AcceptedBaselineRequired,
-    IdempotencyConflict,
+    AcceptedBaselineRequired {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        workspace: Option<Box<Workspace>>,
+    },
+    IdempotencyConflict {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        workspace: Option<Box<Workspace>>,
+    },
+    InputsChanged {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        workspace: Option<Box<Workspace>>,
+    },
+    BaseUnchanged {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        workspace: Option<Box<Workspace>>,
+    },
+    MergeConflicts {
+        conflicts: Vec<RebaseConflict>,
+    },
+    ReconciliationRequired {
+        reason: crate::publication::ReconciliationReason,
+    },
+    ProductionActive {
+        checkoff_link_count: usize,
+        send_queue_item_count: usize,
+    },
+    CheckoffRemapUnsafe {
+        unmappable: Vec<crate::publication::UnmappableLink>,
+    },
     DomainError {
         code: String,
     },
@@ -205,4 +234,42 @@ where
     T: Deserialize<'de>,
 {
     Option::<T>::deserialize(deserializer)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum RebaseConflict {
+    SourceIdentity {
+        source_part_id: PositiveId,
+        source_layer: Text<0, 1000>,
+    },
+    TargetMissing {
+        source_part_id: PositiveId,
+        target_part_ids: Vec<PositiveId>,
+    },
+    TargetAmbiguous {
+        source_part_id: PositiveId,
+        target_part_ids: Vec<PositiveId>,
+    },
+    TargetCollision {
+        source_part_ids: Vec<PositiveId>,
+        target_part_id: PositiveId,
+    },
+    ConcurrentDecision {
+        source_part_id: PositiveId,
+        target_part_id: PositiveId,
+        field: RebaseField,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RebaseField {
+    Included,
+    QuantityOverride,
 }

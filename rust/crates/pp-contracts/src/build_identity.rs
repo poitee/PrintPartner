@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String")]
 pub struct BuildName(String);
 
 impl BuildName {
@@ -20,10 +21,18 @@ impl BuildName {
     }
 }
 
+impl TryFrom<String> for BuildName {
+    type Error = &'static str;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::parse(value)
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateBuildRequest {
-    pub name: String,
+    pub name: BuildName,
     pub base_project_id: Option<crate::autosave::PositiveId>,
 }
 
