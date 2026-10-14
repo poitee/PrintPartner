@@ -285,6 +285,10 @@
             "name": "app_settings"
           }
         ]
+      },
+      {
+        "operation": "tool.get_workflow_help",
+        "resources": []
       }
     ],
     "unresolved": [
@@ -673,7 +677,6 @@
       "tool.get_remaining",
       "tool.get_source_docs",
       "tool.get_source_inventory",
-      "tool.get_workflow_help",
       "tool.import_guide_notes",
       "tool.ingest_guide_text",
       "tool.ingest_guide_url",

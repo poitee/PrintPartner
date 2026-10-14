@@ -10,6 +10,7 @@ import { SqliteDatabase } from "../db/client.js";
 import { AppRepository } from "../db/repository.js";
 import * as schema from "../db/schema.js";
 import { tenantStorage } from "../middleware/tenant-context.js";
+import { WORKFLOW_GUIDE } from "../routes/workflow-guide.js";
 import { invokeAssistantTool } from "./tools.js";
 
 const observer = vi.hoisted(() => {
@@ -48,7 +49,7 @@ const TABLES = ["table:app_settings", "table:projects", "table:source_docs"];
 const FILE_RESOURCES = ["file:source-workspace", "table:projects", "table:source_docs"];
 const manifest = z.object({ resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -417,4 +418,43 @@ it("traces preview_source_naming reads, fallbacks and tenant settings against it
   const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.preview_source_naming");
   if (!entry || entry.operation === "source.sync") throw new Error("Missing naming declaration");
   expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(namingTables);
+});
+
+
+it("traces get_workflow_help as an explicitly resource-free operation", async () => {
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.get_workflow_help");
+  if (!entry || entry.operation === "source.sync") throw new Error("Missing workflow help declaration");
+  expect(entry.resources).toEqual([]);
+  const expected = WORKFLOW_GUIDE.length > 3500 ? `${WORKFLOW_GUIDE.slice(0, 3480)}\n…[truncated]` : WORKFLOW_GUIDE;
+  for (const tenantId of ["default", "tenant-b"]) {
+    for (const input of [{}, { source_id: sourceId, plan_id: 999999, query: "ignored" }]) {
+      statements = [];
+      observer.state.files = [];
+      observer.state.active = true;
+      let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+      try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("get_workflow_help", input, { repo })); }
+      finally { observer.state.active = false; }
+      expect(output.content).toBe(expected);
+      expect(output.content).toContain("# Print Partner workflow");
+      expect(output.content.length).toBeLessThanOrEqual(3500);
+      expect(statements).toEqual([]);
+      expect(observer.state.files).toEqual([]);
+    }
+  }
+});
+
+it("rejects an undeclared read against the empty get_workflow_help resource set", async () => {
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  try {
+    await invokeAssistantTool("get_workflow_help", {}, { repo });
+    repo.listSources();
+  } finally { observer.state.active = false; }
+  const observed = [...new Set(statements.map((sql) => tableForObservedSelect(sql)))].sort();
+  expect(observed).toEqual(["table:projects", "table:source_docs"]);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.get_workflow_help");
+  if (!entry || entry.operation === "source.sync") throw new Error("Missing workflow help declaration");
+  const declared = entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort();
+  expect(() => expect(observed).toEqual(declared)).toThrow();
 });

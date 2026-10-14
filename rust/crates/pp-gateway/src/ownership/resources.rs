@@ -54,6 +54,8 @@ pub(super) struct Declarations {
 enum ReviewedEntry {
     #[serde(rename = "source.sync")]
     SourceSync { import: SourceSyncImport },
+    #[serde(rename = "tool.get_workflow_help")]
+    GetWorkflowHelp { resources: Vec<ResourceId> },
     #[serde(rename = "tool.read_source_file")]
     ReadSourceFile { resources: Vec<ResourceId> },
     #[serde(rename = "tool.search_source_files")]
@@ -96,6 +98,9 @@ impl ReviewedEntry {
                     })
                     .collect::<Result<ResourceSet, _>>()?;
                 return Ok(("source.sync", resources));
+            }
+            Self::GetWorkflowHelp { resources } => {
+                ("tool.get_workflow_help", resources, BTreeSet::new())
             }
             Self::ReadSourceFile { resources } => (
                 "tool.read_source_file",
@@ -176,6 +181,7 @@ impl Declarations {
         }
         for id in [
             "source.sync",
+            "tool.get_workflow_help",
             "tool.read_source_file",
             "tool.search_source_files",
             "tool.preview_source_naming",
