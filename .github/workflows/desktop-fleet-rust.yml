@@ -165,6 +165,8 @@ jobs:
         if: steps.workspace.outputs.manifest != '' && env.PARTITION == '1'
         run: |
           cargo test --locked --manifest-path rust/Cargo.toml -p pp-contracts --features desktop_rebuild
+          cargo test --locked --manifest-path rust/Cargo.toml -p pp-domain --features desktop_rebuild
+          cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib features
           cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test profiles
           cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --lib --features desktop_rebuild
       - name: Test Rust with nextest
