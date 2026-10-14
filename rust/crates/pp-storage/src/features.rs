@@ -134,12 +134,15 @@ impl FeatureClient {
     }
 }
 
-pub(super) fn execute(connection: &mut Connection, command: Command) -> Result<View> {
-    let behavior = match command.patch {
-        Some(_) => TransactionBehavior::Immediate,
-        None => TransactionBehavior::Deferred,
+pub(super) fn execute(
+    connection: &mut Connection,
+    command: Command,
+    admission: crate::writer_admission::Deadline,
+) -> Result<View> {
+    let tx = match command.patch {
+        Some(_) => crate::writer_admission::begin_immediate(connection, admission)?,
+        None => connection.transaction_with_behavior(TransactionBehavior::Deferred)?,
     };
-    let tx = connection.transaction_with_behavior(behavior)?;
     let tenant = match command.credential {
         Credential::Session(secret) => auth::read_session_tenant(&tx, &secret, command.policy)?,
         Credential::ApiKey {
