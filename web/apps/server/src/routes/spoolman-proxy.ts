@@ -1,8 +1,9 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { IntegrationPort } from "../integrations/store.js";
 import { getIntegrationConfig } from "../integrations/store.js";
 import type { AppRepository } from "../db/repository.js";
 import { sendProblem } from "../lib/api-error.js";
+import { readFeatureAccess } from "../lib/feature-access.js";
 import {
   listSpoolmanFilaments,
   listSpoolmanSpools,
@@ -28,7 +29,17 @@ export async function registerSpoolmanProxyRoutes(
   app: FastifyInstance,
   deps: RouteDeps,
 ): Promise<void> {
-  app.get("/integrations/:id/spoolman/filaments", async (request, reply) => {
+  const requireInventoryAccess = async (_request: FastifyRequest, reply: FastifyReply) => {
+    const access = readFeatureAccess(() => deps.repo, "spoolman");
+    if (access.kind !== "allowed") {
+      const status = access.kind === "disabled" ? 403 : 500;
+      return reply.status(status).send({
+        status, title: access.kind === "disabled" ? "Forbidden" : "Internal Server Error",
+        detail: access.error, code: access.code,
+      });
+    }
+  };
+  app.get("/integrations/:id/spoolman/filaments", { preHandler: requireInventoryAccess }, async (request, reply) => {
     const id = (request.params as { id: string }).id;
     if (!deps.integrations.get(id)) {
       return sendProblem(reply, 404, "Not Found", "Integration not found");
@@ -52,7 +63,7 @@ export async function registerSpoolmanProxyRoutes(
     }
   });
 
-  app.get("/integrations/:id/spoolman/spools", async (request, reply) => {
+  app.get("/integrations/:id/spoolman/spools", { preHandler: requireInventoryAccess }, async (request, reply) => {
     const id = (request.params as { id: string }).id;
     if (!deps.integrations.get(id)) {
       return sendProblem(reply, 404, "Not Found", "Integration not found");
