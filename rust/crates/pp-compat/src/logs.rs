@@ -145,15 +145,23 @@ struct LogFile {
     bytes: u64,
 }
 
+fn open_log(path: &Path) -> std::io::Result<File> {
+    let file = OpenOptions::new()
+        .append(true)
+        .create(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
+    }
+    Ok(file)
+}
+
 impl Logs {
     pub(crate) fn open(directory: PathBuf) -> std::io::Result<Self> {
         std::fs::create_dir_all(&directory)?;
-        let path = directory.join("desktop.jsonl");
-        let file = OpenOptions::new()
-            .append(true)
-            .create(true)
-            .mode(0o600)
-            .open(path)?;
+        let file = open_log(&directory.join("desktop.jsonl"))?;
         let bytes = file.metadata()?.len();
         let day = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -194,11 +202,7 @@ impl Logs {
                         std::fs::rename(source, target)?;
                     }
                 }
-                log.file = OpenOptions::new()
-                    .append(true)
-                    .create(true)
-                    .mode(0o600)
-                    .open(log.directory.join("desktop.jsonl"))?;
+                log.file = open_log(&log.directory.join("desktop.jsonl"))?;
                 log.bytes = 0;
                 log.day = now / 86400;
                 Ok(())
