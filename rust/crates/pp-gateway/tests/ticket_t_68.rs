@@ -185,6 +185,80 @@ async fn ticket_t_68_ambiguous_origin_cannot_redeem_bootstrap() {
 }
 
 #[tokio::test]
+async fn ticket_t_68_nontext_upgrade_cannot_redeem_bootstrap_without_origin() {
+    let mut gateway = gateway().await;
+    let origin = gateway.origin().to_owned();
+    let launch = gateway.take_launch_target().unwrap().into_url();
+    let target = launch.strip_prefix(&origin).unwrap();
+    let token = target.split_once("token=").unwrap().1;
+    let (status, headers, body) = exchange(
+        &origin,
+        request(&origin, target).header("upgrade", HeaderValue::from_bytes(b"\xff").unwrap()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    private_response(&headers);
+    assert!(!headers.contains_key("set-cookie"));
+    assert!(!headers.contains_key("location"));
+    assert!(!String::from_utf8(body).unwrap().contains(token));
+    let (status, headers, _) = exchange(&origin, request(&origin, target)).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    private_response(&headers);
+    gateway.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn ticket_t_68_nontext_upgrade_requires_origin_for_session_requests() {
+    let mut gateway = gateway().await;
+    let origin = gateway.origin().to_owned();
+    let (cookie, token) = bootstrap_session(&mut gateway).await;
+    let runtime = || request(&origin, "/__runtime").header("cookie", &cookie);
+    let cases = [
+        runtime().header("upgrade", HeaderValue::from_bytes(b"\xff").unwrap()),
+        runtime()
+            .header("upgrade", HeaderValue::from_bytes(b"\xff").unwrap())
+            .header("upgrade", "websocket"),
+        runtime().header("upgrade", "websocket"),
+        runtime().header("upgrade", ""),
+    ];
+    let mut unexpected = Vec::new();
+    for builder in cases {
+        let (status, headers, body) = exchange(&origin, builder).await;
+        if status != StatusCode::FORBIDDEN {
+            unexpected.push(status);
+        } else {
+            private_response(&headers);
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+                serde_json::json!({"detail": "Invalid Origin"})
+            );
+        }
+        assert!(!headers.contains_key("set-cookie"));
+        assert!(!headers.contains_key("location"));
+        assert!(!String::from_utf8(body).unwrap().contains(&token));
+    }
+    for builder in [
+        runtime(),
+        runtime().header("x-unrelated", HeaderValue::from_bytes(b"\xff").unwrap()),
+        runtime()
+            .header("origin", &origin)
+            .header("upgrade", "websocket"),
+    ] {
+        let (status, _, body) = exchange(&origin, builder).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap()["compat"]["state"],
+            "starting"
+        );
+    }
+    gateway.stop().await.unwrap();
+    assert!(
+        unexpected.is_empty(),
+        "expected FORBIDDEN, got {unexpected:?}"
+    );
+}
+
+#[tokio::test]
 async fn ticket_t_68_session_requires_origin_for_logout_and_revokes_access() {
     let mut gateway = gateway().await;
     let origin = gateway.origin().to_owned();
