@@ -16,6 +16,9 @@ use tokio::net::TcpListener;
 mod drain;
 mod rebuild;
 
+#[cfg(feature = "desktop_rebuild")]
+pub mod layout;
+
 #[cfg(test)]
 mod origin_tests;
 
