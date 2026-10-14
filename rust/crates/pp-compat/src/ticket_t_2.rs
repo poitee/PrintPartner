@@ -224,6 +224,19 @@ async fn ticket_t_2_repeated_start_stop_no_duplicate_child() {
         "repeated start/stop spawned a duplicate child: {:?}",
         recorded_pids(&scratch.pidfile())
     );
+    let rows = diagnostic_rows(&scratch);
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row["event"] == "compat_reaped")
+            .count(),
+        3
+    );
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row["event"] == "compat_failure")
+            .count(),
+        0
+    );
     assert!(wall.elapsed() < Duration::from_secs(8));
 }
 
@@ -304,4 +317,175 @@ async fn ticket_t_2_readiness_timeout_no_leaked_task() {
     shutdown(supervisor).await;
     assert!(live_pids(&scratch.pidfile()).is_empty());
     assert!(wall.elapsed() < Duration::from_secs(8));
+    let rows = diagnostic_rows(&scratch);
+    let failure = rows
+        .iter()
+        .find(|row| row["event"] == "compat_failure")
+        .unwrap();
+    assert_eq!(failure["reason"], "readiness_timeout");
+    assert!(failure["termination"].is_null());
+}
+
+fn diagnostic_rows(scratch: &Scratch) -> Vec<serde_json::Value> {
+    std::fs::read_to_string(scratch.root.join("data/logs/desktop.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|row| serde_json::from_str(row).unwrap())
+        .collect()
+}
+
+#[tokio::test]
+async fn ticket_t_2_crash_diagnostics_preserve_exit_without_backend_secrets() {
+    let scratch = Scratch::new("crash-facts");
+    let mut spec = shell_spec(&scratch);
+    spec.script = "read line; printf '%s\\n' '{\"level\":50,\"event\":\"desktop_start_failed\",\"message\":\"SECRET_TOKEN_PRIVATE_PATH\"}'; exit 7";
+    let supervisor =
+        super::Supervisor::launch_shell(spec, super::SupervisorConfig::default()).unwrap();
+    let mut status = supervisor.handle.status.clone();
+    wait_status(&mut status, |state| {
+        matches!(state, super::Status::Backoff { .. })
+    })
+    .await;
+    supervisor.disarm_restarts();
+    shutdown(supervisor).await;
+    assert!(live_pids(&scratch.pidfile()).is_empty());
+    let rows = diagnostic_rows(&scratch);
+    let failure = rows
+        .iter()
+        .find(|row| row["event"] == "compat_failure")
+        .unwrap();
+    assert_eq!(failure["reason"], "child_exit");
+    assert_eq!(
+        failure["termination"],
+        serde_json::json!({"kind":"exit_code","value":7})
+    );
+    assert!(rows.iter().any(|row| row["event"] == "compat_start_failed"));
+    assert!(
+        !serde_json::to_string(&rows)
+            .unwrap()
+            .contains("SECRET_TOKEN_PRIVATE_PATH")
+    );
+}
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn ticket_t_2_spawn_failure_is_classified_without_private_error_chain() {
+    let scratch = Scratch::new("spawn-facts");
+    let supervisor = super::Supervisor::start_with_config(
+        release_spec(&scratch),
+        super::SupervisorConfig::default(),
+    )
+    .unwrap();
+    let mut status = supervisor.handle.status.clone();
+    wait_status(&mut status, |state| {
+        matches!(state, super::Status::Backoff { .. })
+    })
+    .await;
+    supervisor.disarm_restarts();
+    shutdown(supervisor).await;
+    let rows = diagnostic_rows(&scratch);
+    let failure = rows
+        .iter()
+        .find(|row| row["event"] == "compat_failure")
+        .unwrap();
+    assert_eq!(failure["reason"], "spawn_failed");
+    assert!(failure["termination"].is_null());
+    assert!(
+        !serde_json::to_string(&rows)
+            .unwrap()
+            .contains(scratch.root.to_str().unwrap())
+    );
+}
+
+#[tokio::test]
+async fn ticket_t_2_crash_signal_is_distinct_from_parent_cleanup() {
+    let scratch = Scratch::new("signal-facts");
+    let mut spec = shell_spec(&scratch);
+    spec.script = "read line; kill -TERM $$";
+    let supervisor =
+        super::Supervisor::launch_shell(spec, super::SupervisorConfig::default()).unwrap();
+    let mut status = supervisor.handle.status.clone();
+    wait_status(&mut status, |state| {
+        matches!(state, super::Status::Backoff { .. })
+    })
+    .await;
+    supervisor.disarm_restarts();
+    shutdown(supervisor).await;
+    let rows = diagnostic_rows(&scratch);
+    let failure = rows
+        .iter()
+        .find(|row| row["event"] == "compat_failure")
+        .unwrap();
+    assert_eq!(failure["reason"], "child_exit");
+    assert_eq!(
+        failure["termination"],
+        serde_json::json!({"kind":"signal","value":15})
+    );
+    assert!(live_pids(&scratch.pidfile()).is_empty());
+}
+
+#[tokio::test]
+async fn ticket_t_2_three_health_failures_record_cause_without_cleanup_exit() {
+    let scratch = Scratch::new("health-facts");
+    let mut spec = shell_spec(&scratch);
+    spec.script = r#"exec /usr/bin/node -e 'const http=require("node:http"); const input=require("node:readline").createInterface({input:process.stdin}); input.on("close",()=>process.exit(0)); input.once("line",line=>{const setup=JSON.parse(line); let checks=0; http.createServer((req,res)=>{checks++; res.setHeader("Content-Type","application/json"); res.end(JSON.stringify({ok:checks===1,version:"ticket-t-2-unreleased",release:{commit:"ticket-t-2-unreleased"}}));}).listen(setup.socket_path);});'"#;
+    let supervisor =
+        super::Supervisor::launch_shell(spec, super::SupervisorConfig::default()).unwrap();
+    let mut status = supervisor.handle.status.clone();
+    wait_status(&mut status, |state| {
+        matches!(state, super::Status::Ready { .. })
+    })
+    .await;
+    tokio::time::timeout(Duration::from_secs(35), async {
+        while !matches!(*status.borrow(), super::Status::Backoff { .. }) {
+            status.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("three real ten-second liveness checks");
+    supervisor.disarm_restarts();
+    shutdown(supervisor).await;
+    let rows = diagnostic_rows(&scratch);
+    let failures: Vec<_> = rows
+        .iter()
+        .filter(|row| row["event"] == "compat_failure")
+        .collect();
+    assert_eq!(failures.len(), 1);
+    assert_eq!(failures[0]["reason"], "health_lost");
+    assert!(failures[0]["termination"].is_null());
+    assert_eq!(recorded_pids(&scratch.pidfile()).len(), 1);
+    assert!(live_pids(&scratch.pidfile()).is_empty());
+}
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn ticket_t_2_guard_logs_five_failure_facts_then_stops_restarts() {
+    let scratch = Scratch::new("guard-facts");
+    let supervisor = super::Supervisor::start_with_config(
+        release_spec(&scratch),
+        super::SupervisorConfig::default(),
+    )
+    .unwrap();
+    let mut status = supervisor.handle.status.clone();
+    wait_status(&mut status, |state| matches!(state, super::Status::Guarded)).await;
+    let rows = diagnostic_rows(&scratch);
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row["event"] == "compat_failure")
+            .count(),
+        5
+    );
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row["event"] == "compat_crash_guard")
+            .count(),
+        1
+    );
+    supervisor.disarm_restarts();
+    shutdown(supervisor).await;
+    let rows = diagnostic_rows(&scratch);
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row["event"] == "compat_starting")
+            .count(),
+        5
+    );
 }
