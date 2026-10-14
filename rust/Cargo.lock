@@ -3455,6 +3455,7 @@ dependencies = [
  "hmac",
  "icu_collator",
  "libc",
+ "pp-domain",
  "rand 0.9.5",
  "regress 0.11.1",
  "rusqlite",

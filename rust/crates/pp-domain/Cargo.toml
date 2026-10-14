@@ -16,3 +16,4 @@ serde_json.workspace = true
 
 [features]
 codegen = ["dep:schemars"]
+desktop_rebuild = []
