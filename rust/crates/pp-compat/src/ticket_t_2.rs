@@ -725,6 +725,49 @@ async fn shutdown_guard_shell(supervisor: super::Supervisor, scratch: &Scratch) 
 }
 
 #[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn ticket_t_2_duplicate_recovery_cannot_bypass_next_crash_guard() {
+    let scratch = Scratch::new("duplicate-recovery");
+    let supervisor = super::Supervisor::launch_shell(
+        crash_guard_spec(&scratch),
+        super::SupervisorConfig::default(),
+    )
+    .unwrap();
+    for count in 1..=5 {
+        wait_shell_crash(&supervisor, &scratch, count, count == 5).await;
+        if count < 5 {
+            advance_crash_backoff(&supervisor).await;
+        }
+    }
+    let handle = supervisor.handle.clone();
+    handle.recover().await.unwrap();
+    // No yield between requests: both callers observe the same guarded state.
+    assert!(
+        handle.recover().await.is_err(),
+        "duplicate restart accepted"
+    );
+    for count in 6..=10 {
+        wait_shell_crash(&supervisor, &scratch, count, count == 10).await;
+        if count < 10 {
+            advance_crash_backoff(&supervisor).await;
+        }
+    }
+    tokio::time::advance(Duration::from_secs(300)).await;
+    pump_for(Duration::from_millis(20)).await;
+    assert!(matches!(*handle.status.borrow(), super::Status::Guarded));
+    assert_eq!(recorded_pids(&scratch.pidfile()).len(), 10);
+    assert!(live_pids(&scratch.pidfile()).is_empty());
+    assert_eq!(shutdown(supervisor).await, super::CompatExit::Interrupted);
+    tokio::time::advance(Duration::from_secs(300)).await;
+    pump_for(Duration::from_millis(20)).await;
+    assert_eq!(recorded_pids(&scratch.pidfile()).len(), 10);
+    assert!(
+        recorded_pids(&scratch.pidfile())
+            .into_iter()
+            .all(super::drain::process_group_absent)
+    );
+}
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn ticket_t_2_five_shell_crashes_guard_until_explicit_recovery() {
     let scratch = Scratch::new("guard-runtime");
     let supervisor = super::Supervisor::launch_shell(
