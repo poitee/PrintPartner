@@ -203,7 +203,6 @@ fn load_layers(tx: &Transaction<'_>, tenant: &str, plan: Option<PositiveId>) -> 
     Ok(Layers { user, plan })
 }
 
-/// Uses an already authenticated tenant within the caller's transaction.
 pub(crate) fn resolve_for_tenant(
     tx: &Transaction<'_>,
     tenant: &str,
