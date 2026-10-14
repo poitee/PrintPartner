@@ -22,6 +22,8 @@ The streaming smoke test holds a download open through the drain deadline and
 requires exit 1 with only `gateway_drain_timed_out`, plus child cleanup, removal
 of the runtime directory and owner marker, and reacquisition of the storage lock.
 Its ordinary logout case still requires exit 0.
+The portable server smoke likewise holds a WebSocket open across SIGTERM and
+requires the exact timeout receipt, exit 1, and complete resource cleanup.
 
 The tests in `rust/crates/pp-core/tests/runtime_m0/drain.rs` launch the measured
 Node bundle through the public core API. Each case runs in a separate process so
