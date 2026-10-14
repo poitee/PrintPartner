@@ -2,6 +2,8 @@ pub mod auth;
 pub mod catalog;
 pub mod jobs;
 pub mod lease;
+#[cfg(feature = "desktop_rebuild")]
+pub mod profiles;
 pub mod read_model;
 mod schema;
 
