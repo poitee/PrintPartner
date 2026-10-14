@@ -355,6 +355,244 @@ async fn mapped_account_reads_writes_and_restarts_without_foreign_changes() {
 
 #[cfg(feature = "desktop_rebuild")]
 #[tokio::test]
+async fn launch_credentials_are_revoked_on_same_origin_account_switch() {
+    let Some(data) = isolated(
+        "launch_credentials_are_revoked_on_same_origin_account_switch",
+        true,
+    )
+    .await
+    else {
+        return;
+    };
+    fixture(&data).await;
+    mapping(&data, selected());
+    let mut runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    assert!(runtime.desktop_rebuild().enabled());
+    let old_launch_origin = runtime.origin().to_owned();
+    let old_bootstrap_target = runtime.take_launch_target().unwrap().into_url();
+    let (status, headers, _) = request(
+        &old_launch_origin,
+        old_bootstrap_target
+            .strip_prefix(&old_launch_origin)
+            .unwrap(),
+        "GET",
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let old_session_cookie = headers["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    let (status, me) = api(&runtime, &old_session_cookie, "/auth/me", "GET", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(me["user"]["user_id"], "account-a");
+    let (status, own) = api(&runtime, &old_session_cookie, "/plans/101", "GET", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(own["name"], "Owned Plan");
+    assert!(runtime.shutdown().await.complete());
+
+    mapping(
+        &data,
+        json!({"version":1,"kind":"existing-account","user_id":"account-b","tenant_id":"account-b"}),
+    );
+    let mut runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    let new_launch_origin = runtime.origin().to_owned();
+    let new_bootstrap_target = runtime.take_launch_target().unwrap().into_url();
+    assert_eq!(new_launch_origin, old_launch_origin);
+    assert!(new_bootstrap_target != old_bootstrap_target);
+    assert_eq!(
+        api(&runtime, &old_session_cookie, "/auth/me", "GET", None)
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        api(
+            &runtime,
+            &old_session_cookie,
+            "/plans/202",
+            "PATCH",
+            Some(json!({"name":"Stale before redemption"})),
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (status, headers, _) = request(
+        &new_launch_origin,
+        old_bootstrap_target
+            .strip_prefix(&old_launch_origin)
+            .unwrap(),
+        "GET",
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(!headers.contains_key("set-cookie"));
+    assert!(!headers.contains_key("location"));
+    assert_eq!(headers["cache-control"], "no-store");
+    assert_eq!(headers["referrer-policy"], "no-referrer");
+    assert_eq!(
+        api(&runtime, &old_session_cookie, "/auth/logout", "POST", None)
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), runtime.shutdown_requested())
+            .await
+            .is_err(),
+        "stale logout before redemption requested shutdown"
+    );
+
+    let (status, headers, body) = request(
+        &new_launch_origin,
+        new_bootstrap_target
+            .strip_prefix(&new_launch_origin)
+            .unwrap(),
+        "GET",
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(headers["location"], "/");
+    assert_eq!(headers["cache-control"], "no-store");
+    assert_eq!(headers["referrer-policy"], "no-referrer");
+    assert!(body.is_empty());
+    let set_cookie = headers["set-cookie"].to_str().unwrap();
+    assert!(set_cookie.split(';').any(|part| part.trim() == "HttpOnly"));
+    assert!(
+        set_cookie
+            .split(';')
+            .any(|part| part.trim() == "SameSite=Strict")
+    );
+    assert!(set_cookie.split(';').any(|part| part.trim() == "Path=/"));
+    let new_session_cookie = set_cookie.split(';').next().unwrap().to_owned();
+    assert!(new_session_cookie != old_session_cookie);
+    assert_eq!(
+        new_session_cookie.split_once('=').unwrap().0,
+        old_session_cookie.split_once('=').unwrap().0
+    );
+    let (status, me) = api(&runtime, &new_session_cookie, "/auth/me", "GET", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(me["user"]["user_id"], "account-b");
+    let (status, own) = api(&runtime, &new_session_cookie, "/plans/202", "GET", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(own["name"], "Foreign Plan");
+    assert_eq!(
+        api(&runtime, &new_session_cookie, "/plans/101", "GET", None)
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        api(&runtime, &old_session_cookie, "/auth/me", "GET", None)
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        api(
+            &runtime,
+            &old_session_cookie,
+            "/plans/202",
+            "PATCH",
+            Some(json!({"name":"Stale after redemption"})),
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        api(&runtime, &old_session_cookie, "/auth/logout", "POST", None)
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (status, headers, _) = request(
+        &new_launch_origin,
+        old_bootstrap_target
+            .strip_prefix(&old_launch_origin)
+            .unwrap(),
+        "GET",
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(!headers.contains_key("set-cookie"));
+    assert!(!headers.contains_key("location"));
+    assert_eq!(headers["cache-control"], "no-store");
+    assert_eq!(headers["referrer-policy"], "no-referrer");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), runtime.shutdown_requested())
+            .await
+            .is_err(),
+        "stale credentials after redemption requested shutdown"
+    );
+    let (status, me) = api(&runtime, &new_session_cookie, "/auth/me", "GET", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(me["user"]["user_id"], "account-b");
+    let (status, own) = api(&runtime, &new_session_cookie, "/plans/202", "GET", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(own["name"], "Foreign Plan");
+    assert_eq!(
+        api(
+            &runtime,
+            &new_session_cookie,
+            "/plans/202",
+            "PATCH",
+            Some(json!({"name":"Fresh account-b edit"})),
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let (status, own) = api(&runtime, &new_session_cookie, "/plans/202", "GET", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(own["name"], "Fresh account-b edit");
+    assert!(runtime.shutdown().await.complete());
+    println!(
+        "{}",
+        json!({
+            "case":"launch_credentials_are_revoked_on_same_origin_account_switch",
+            "proof_class":"headless_unsigned",
+            "origin":new_launch_origin,
+            "same_origin":true,
+            "old_account_authenticated":true,
+            "old_cookie_denied_before_and_after_redemption":true,
+            "old_bootstrap_denied_before_and_after_redemption":true,
+            "bootstrap_denial_has_no_credentials_or_redirect":true,
+            "stale_logout_did_not_request_shutdown":true,
+            "fresh_bootstrap_clean_redirect_and_cookie_attributes":true,
+            "same_cookie_name_with_new_value":true,
+            "new_account_authenticated_and_own_plan_readable":true,
+            "old_account_plan_unavailable":true,
+            "stale_mutations_did_not_take_effect":true,
+            "fresh_cookie_remained_valid":true,
+            "fresh_mutation_accepted":true,
+            "both_shutdown_receipts_complete":true
+        })
+    );
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
 async fn mapping_refusals_happen_before_product_writes() {
     let Some(root) = isolated("mapping_refusals_happen_before_product_writes", true).await else {
         return;
