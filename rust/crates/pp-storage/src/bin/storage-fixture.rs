@@ -16,8 +16,11 @@ enum HoldCommand {
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let directory = Path::new(args.get(2).ok_or_else(|| {
-        anyhow!("Usage: storage-fixture initialize|settings|hold DIRECTORY CLOCK")
+        anyhow!("Usage: storage-fixture initialize|settings|hold|contend DIRECTORY CLOCK")
     })?);
+    if args[1] == "contend" {
+        return contend(directory);
+    }
     let clock = args
         .get(3)
         .map(String::as_str)
@@ -100,5 +103,28 @@ fn main() -> Result<()> {
         }
     }
     owner.shutdown()?;
+    Ok(())
+}
+
+/// Stands in for the recorded Node child, which writes the owner's copy through
+/// its own SQLite connection. Holds a half-finished business transaction until
+/// stdin says commit; killing the process instead abandons it mid-transaction.
+fn contend(directory: &Path) -> Result<()> {
+    let connection = rusqlite::Connection::open(directory.join("print-partner.db"))?;
+    connection.busy_timeout(Duration::from_secs(5))?;
+    let upsert = "INSERT INTO app_settings(tenant_id,key,value) VALUES('tenant-a',?1,'1') ON CONFLICT(tenant_id,key) DO UPDATE SET value=excluded.value";
+    connection.execute_batch("BEGIN IMMEDIATE")?;
+    connection.execute(upsert, ["transfer-debit"])?;
+    println!("{}", serde_json::json!({"event": "locked"}));
+    io::stdout().flush()?;
+    let mut line = String::new();
+    io::stdin().lock().read_line(&mut line)?;
+    if line.trim() != "commit" {
+        return Err(anyhow!("Expected commit, got {line:?}"));
+    }
+    connection.execute(upsert, ["transfer-credit"])?;
+    connection.execute_batch("COMMIT")?;
+    println!("{}", serde_json::json!({"event": "committed"}));
+    io::stdout().flush()?;
     Ok(())
 }

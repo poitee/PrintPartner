@@ -743,3 +743,164 @@ fn ticket_t_7_writer_node_live_child_keeps_a_dead_owner_exclusive() {
     std::fs::remove_dir_all(&dir).unwrap();
     remove_probe(&probe);
 }
+
+struct Contender {
+    process: StopProcess,
+    stdout: BufReader<std::process::ChildStdout>,
+}
+
+fn lock_from_another_process(dir: &Path) -> Contender {
+    let mut child = child_process::command(env!("CARGO_BIN_EXE_storage-fixture"))
+        .args(["contend", dir.to_str().unwrap()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .unwrap();
+    let stdout = BufReader::new(child.stdout.take().unwrap());
+    let (locked, stdout) = read_ready(stdout);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&locked).unwrap(),
+        serde_json::json!({"event": "locked"})
+    );
+    Contender {
+        process: StopProcess(Some(child)),
+        stdout,
+    }
+}
+
+fn transfer_setting(key: &str, value: &str) -> SettingCommand {
+    SettingCommand::Set(Setting {
+        tenant: "tenant-a".into(),
+        key: key.into(),
+        value: value.into(),
+    })
+}
+
+fn submit(owner: &WriterOwner, command: SettingCommand) -> pp_storage::WriteReply {
+    owner
+        .client()
+        .submit(
+            command,
+            &std::sync::atomic::AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .unwrap()
+}
+
+fn read_setting(owner: &WriterOwner, key: &str) -> SettingSnapshot {
+    let read = owner.client().reader(Duration::ZERO).unwrap();
+    read.snapshot("tenant-a", key).unwrap()
+}
+
+#[test]
+fn ticket_t_7_writer_waits_for_another_process_and_never_interleaves() {
+    let dir = temp_dir("contend-commit");
+    let (owner, _) = WriterOwner::open(&dir, Limits::default()).unwrap();
+    let mut contender = lock_from_another_process(&dir);
+    assert_eq!(
+        read_setting(&owner, "transfer-debit"),
+        SettingSnapshot::Missing
+    );
+
+    let reply = submit(
+        &owner,
+        SettingCommand::CompareAndSet {
+            setting: Setting {
+                tenant: "tenant-a".into(),
+                key: "transfer-debit".into(),
+                value: "rust".into(),
+            },
+            expected: SettingSnapshot::Missing,
+        },
+    );
+    assert!(
+        matches!(
+            reply.recv_timeout(Duration::from_millis(500)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ),
+        "writer ran inside another process's transaction"
+    );
+
+    let process = contender.process.0.as_mut().unwrap();
+    writeln!(process.stdin.as_mut().unwrap(), "commit").unwrap();
+    let (committed, _) = read_ready(contender.stdout);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&committed).unwrap(),
+        serde_json::json!({"event": "committed"})
+    );
+    assert!(process.wait().unwrap().success());
+    contender.process.0.take();
+
+    // The compare runs after the whole foreign transaction, so it sees the debit.
+    assert!(!reply.recv_timeout(Duration::from_secs(5)).unwrap().unwrap());
+    let one = SettingSnapshot::Stored { value: "1".into() };
+    assert_eq!(read_setting(&owner, "transfer-debit"), one);
+    assert_eq!(read_setting(&owner, "transfer-credit"), one);
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn ticket_t_7_writer_bounds_busy_and_rolls_back_a_killed_process() {
+    let dir = temp_dir("contend-kill");
+    let (owner, _) = WriterOwner::open(&dir, Limits::default()).unwrap();
+    let mut contender = lock_from_another_process(&dir);
+
+    let started = std::time::Instant::now();
+    let busy = submit(&owner, transfer_setting("rust-write", "blocked"))
+        .recv_timeout(Duration::from_secs(15))
+        .unwrap()
+        .unwrap_err();
+    let waited = started.elapsed();
+    assert!(
+        matches!(
+            busy.downcast_ref::<rusqlite::Error>(),
+            Some(rusqlite::Error::SqliteFailure(code, _))
+                if code.code == rusqlite::ErrorCode::DatabaseBusy
+        ),
+        "{busy:#}"
+    );
+    assert!(
+        waited >= Duration::from_millis(4500) && waited < Duration::from_secs(10),
+        "busy wait was {waited:?}, not the 5s busy_timeout"
+    );
+
+    let process = contender.process.0.as_mut().unwrap();
+    process.kill().unwrap();
+    assert!(!process.wait().unwrap().success());
+    contender.process.0.take();
+
+    let started = std::time::Instant::now();
+    assert!(
+        submit(&owner, transfer_setting("rust-write", "after-kill"))
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap()
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "killed transaction kept the write lock for {:?}",
+        started.elapsed()
+    );
+    assert_eq!(
+        read_setting(&owner, "transfer-debit"),
+        SettingSnapshot::Missing
+    );
+    assert_eq!(
+        read_setting(&owner, "transfer-credit"),
+        SettingSnapshot::Missing
+    );
+    assert_eq!(
+        read_setting(&owner, "rust-write"),
+        SettingSnapshot::Stored {
+            value: "after-kill".into()
+        }
+    );
+    owner.shutdown().unwrap();
+    assert_eq!(
+        snapshot(&dir, "tenant-a", "transfer-debit"),
+        SettingSnapshot::Missing
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
