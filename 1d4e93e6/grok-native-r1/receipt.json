@@ -1,0 +1,303 @@
+{
+  "result": "PASS",
+  "proof_class": "native_linux_webkitgtk_webgl",
+  "native_permissions": {
+    "result": "PASS",
+    "commands": [
+      {
+        "command": "plugin:app|exit",
+        "expected_permission": "core:app:allow-exit",
+        "status": "rejected",
+        "rejection_message": "app.exit not allowed. Permissions associated with this command: core:app:allow-exit"
+      },
+      {
+        "command": "plugin:window|close",
+        "expected_permission": "core:window:allow-close",
+        "status": "rejected",
+        "rejection_message": "window.close not allowed. Permissions associated with this command: core:window:allow-close"
+      },
+      {
+        "command": "plugin:window|destroy",
+        "expected_permission": "core:window:allow-destroy",
+        "status": "rejected",
+        "rejection_message": "window.destroy not allowed. Permissions associated with this command: core:window:allow-destroy"
+      },
+      {
+        "command": "plugin:webview|create_webview_window",
+        "expected_permission": "core:webview:allow-create-webview-window",
+        "status": "rejected",
+        "rejection_message": "webview.create_webview_window not allowed. Permissions associated with this command: core:webview:allow-create-webview-window"
+      },
+      {
+        "command": "plugin:fs|read_file",
+        "expected_permission": null,
+        "status": "rejected",
+        "rejection_message": "fs.read_file not allowed. Plugin not found"
+      },
+      {
+        "command": "plugin:shell|execute",
+        "expected_permission": null,
+        "status": "rejected",
+        "rejection_message": "shell.execute not allowed. Plugin not found"
+      }
+    ],
+    "parent": {
+      "global_api_absent": true,
+      "labels": {
+        "currentWindow": {
+          "label": "main"
+        },
+        "currentWebview": {
+          "label": "main"
+        }
+      },
+      "origin": "http://127.0.0.1:42685"
+    },
+    "after": {
+      "url_preserved": true,
+      "document_preserved": true,
+      "root_preserved": true,
+      "token_preserved": true
+    }
+  },
+  "navigation": {
+    "source_url": "http://127.0.0.1:42685/builds",
+    "sample_count": 31,
+    "blob_url": "blob:http://127.0.0.1:42685/587105d3-c061-4a25-83cc-17cccefffe46",
+    "blob_created": true,
+    "blob_origin_matches": true,
+    "blob_bytes_match": true,
+    "blob_type": "text/html",
+    "attempt_scheduled": true,
+    "final_href": "http://127.0.0.1:42685/builds",
+    "blob_document_seen": false,
+    "attempt_observed": true,
+    "document_preserved": true,
+    "blob_script_executed": false,
+    "root_present": true,
+    "observation_seconds": 3.0180653679999523,
+    "http_control_url": "http://127.0.0.1:42685/builds?navigation_control=43afeda4b9ac923cf406342882752ef9",
+    "http_control_scheduled": true,
+    "http_control_loaded": true,
+    "http_control_blob_script_executed": false,
+    "result": "PASS"
+  },
+  "remote_frames": {
+    "policies": {
+      "strict": "frame-src 'none'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+      "relaxed": "frame-src http://127.0.0.1:33603; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+    },
+    "observations": {
+      "positive": {
+        "phase": "positive",
+        "parent_href": "http://127.0.0.1:33269/positive",
+        "parent_origin": "http://127.0.0.1:33269",
+        "target_url": "http://127.0.0.1:33603/child/07a6bb0408b2240b3e55a22b4fe2d7a7",
+        "attempt_token": "07a6bb0408b2240b3e55a22b4fe2d7a7",
+        "child_origin": "http://127.0.0.1:33603",
+        "events": [],
+        "sample_count": 29,
+        "preflight": {
+          "python": true,
+          "browser_credentials_omit": true
+        },
+        "attempt_intact": true,
+        "parent_preserved": true,
+        "message": true,
+        "duration_seconds": 3.059642226995493,
+        "request_delta": [
+          {
+            "route": "positive-document",
+            "time": 51563.949723424
+          },
+          {
+            "route": "positive-beacon",
+            "time": 51563.958227906
+          }
+        ],
+        "document_get_count": 1,
+        "beacon_count": 1,
+        "denial_result": "target_executed"
+      },
+      "strict": {
+        "phase": "strict",
+        "parent_href": "http://127.0.0.1:33269/strict",
+        "parent_origin": "http://127.0.0.1:33269",
+        "target_url": "http://127.0.0.1:33603/child/7855e994b7e6c1450b0cf6510e6dd0e2",
+        "attempt_token": "7855e994b7e6c1450b0cf6510e6dd0e2",
+        "child_origin": "http://127.0.0.1:33603",
+        "events": [
+          {
+            "disposition": "enforce",
+            "isTrusted": true,
+            "documentURI": "http://127.0.0.1:33269/strict",
+            "violatedDirective": "frame-src",
+            "timeStamp": 59.00000000000001,
+            "originalPolicy": "frame-src 'none'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+            "blockedURI": "http://127.0.0.1:33603",
+            "effectiveDirective": "frame-src"
+          }
+        ],
+        "sample_count": 29,
+        "preflight": {
+          "python": true,
+          "browser_credentials_omit": true
+        },
+        "attempt_intact": true,
+        "parent_preserved": true,
+        "message": false,
+        "duration_seconds": 3.031816044000152,
+        "seconds_after_enforcing_event": 3.022880349002662,
+        "request_delta": [],
+        "document_get_count": 0,
+        "beacon_count": 0,
+        "denial_result": null
+      },
+      "negative": {
+        "phase": "negative",
+        "parent_href": "http://127.0.0.1:33269/negative",
+        "parent_origin": "http://127.0.0.1:33269",
+        "target_url": "http://127.0.0.1:33603/child/6ec27adbf17bc256ed00436a3de1f891",
+        "attempt_token": "6ec27adbf17bc256ed00436a3de1f891",
+        "child_origin": "http://127.0.0.1:33603",
+        "events": [],
+        "sample_count": 29,
+        "preflight": {
+          "python": true,
+          "browser_credentials_omit": true
+        },
+        "attempt_intact": true,
+        "parent_preserved": true,
+        "message": true,
+        "duration_seconds": 3.0169913439967786,
+        "request_delta": [
+          {
+            "route": "negative-document",
+            "time": 51570.426392575
+          },
+          {
+            "route": "negative-beacon",
+            "time": 51570.43838532
+          }
+        ],
+        "document_get_count": 1,
+        "beacon_count": 1,
+        "denial_result": "target_executed"
+      },
+      "native": {
+        "phase": "native",
+        "parent_href": "http://127.0.0.1:42685/builds?navigation_control=43afeda4b9ac923cf406342882752ef9",
+        "parent_origin": "http://127.0.0.1:42685",
+        "target_url": "http://127.0.0.1:33603/child/67d197ceb948bbebef7e315eeefe9b36",
+        "attempt_token": "67d197ceb948bbebef7e315eeefe9b36",
+        "child_origin": "http://127.0.0.1:33603",
+        "events": [
+          {
+            "disposition": "enforce",
+            "isTrusted": true,
+            "documentURI": "http://127.0.0.1:42685/builds?navigation_control=43afeda4b9ac923cf406342882752ef9",
+            "violatedDirective": "frame-src",
+            "timeStamp": 14742,
+            "originalPolicy": "frame-src 'none'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+            "blockedURI": "http://127.0.0.1:33603",
+            "effectiveDirective": "frame-src"
+          }
+        ],
+        "sample_count": 29,
+        "preflight": {
+          "python": true,
+          "browser_credentials_omit": true
+        },
+        "attempt_intact": true,
+        "parent_preserved": true,
+        "message": false,
+        "duration_seconds": 3.082993041003647,
+        "seconds_after_enforcing_event": 3.0384148480006843,
+        "request_delta": [],
+        "document_get_count": 0,
+        "beacon_count": 0,
+        "denial_result": null
+      }
+    },
+    "cleanup": {
+      "control_driver_reaped": true,
+      "fixture_threads_stopped": true,
+      "errors": []
+    },
+    "engine": {
+      "native": {
+        "path": "/usr/lib/x86_64-linux-gnu/libwebkit2gtk-4.1.so.0.21.10",
+        "sha256": "32ca85d893950e1cea287881397fe5793acf4b4709e08605ccbc59636a37574b"
+      },
+      "control": {
+        "path": "/usr/lib/x86_64-linux-gnu/libwebkit2gtk-4.1.so.0.21.10",
+        "sha256": "32ca85d893950e1cea287881397fe5793acf4b4709e08605ccbc59636a37574b"
+      },
+      "native_capabilities": {
+        "browserName": "wry",
+        "browserVersion": "0.57",
+        "platformName": "linux",
+        "acceptInsecureCerts": false,
+        "strictFileInteractability": false,
+        "setWindowRect": true,
+        "unhandledPromptBehavior": "dismiss and notify",
+        "pageLoadStrategy": "normal",
+        "proxy": {},
+        "timeouts": {
+          "script": 60000,
+          "pageLoad": 60000,
+          "implicit": 0
+        }
+      },
+      "control_capabilities": {
+        "browserName": "MiniBrowser",
+        "browserVersion": "2.52.6",
+        "platformName": "linux",
+        "acceptInsecureCerts": false,
+        "strictFileInteractability": false,
+        "setWindowRect": true,
+        "unhandledPromptBehavior": "dismiss and notify",
+        "pageLoadStrategy": "normal",
+        "proxy": {},
+        "timeouts": {
+          "script": 15000,
+          "pageLoad": 15000,
+          "implicit": 0
+        }
+      }
+    },
+    "result": "PASS"
+  },
+  "commit": "1d4e93e63313eb99d1bcbacf99cf773f720ba441",
+  "capabilities": {
+    "browserName": "wry",
+    "browserVersion": "0.57",
+    "platformName": "linux",
+    "acceptInsecureCerts": false,
+    "strictFileInteractability": false,
+    "setWindowRect": true,
+    "unhandledPromptBehavior": "dismiss and notify",
+    "pageLoadStrategy": "normal",
+    "proxy": {},
+    "timeouts": {
+      "script": 60000,
+      "pageLoad": 60000,
+      "implicit": 0
+    }
+  },
+  "fixture_sha256": "2bd1216d41ab548fb46a0e0c8ab0dca1b055a962a7aa751d57085cd3eaf201cf",
+  "source_id": 1,
+  "plan_id": 1,
+  "gl_error": 0,
+  "visible_pixels": 1839,
+  "width": 320,
+  "mesh": {
+    "url": "http://127.0.0.1:42685/parts/1/mesh",
+    "matched": true
+  },
+  "center_visible_pixels": 1721,
+  "unique_colors": 6,
+  "height": 240,
+  "webgl": "WebGL 2.0",
+  "renderer": "WebKit WebGL"
+}
