@@ -12,6 +12,7 @@ import type { FastifyInstance } from "fastify";
 import type { ServerConfig } from "../config.js";
 import type { AppRepository } from "../db/repository.js";
 import type { IntegrationPort } from "../integrations/store.js";
+import { readFarmAccess } from "../lib/farm-access.js";
 import { loadFleet } from "../services/printer-fleet.js";
 import {
   sendFarmDigest,
@@ -41,6 +42,15 @@ export async function registerDiscordDigestRoute(
       if (config?.authRequired) {
         return reply.status(401).send({ detail: "Authentication required" });
       }
+    }
+
+    const access = readFarmAccess(() => deps.repo);
+    if (access.kind !== "allowed") {
+      const status = access.kind === "disabled" ? 403 : 500;
+      return reply.status(status).send({
+        status, title: access.kind === "disabled" ? "Forbidden" : "Internal Server Error",
+        detail: access.error, code: access.code,
+      });
     }
 
     const webhookUrl = deps.repo.getSetting("discord_notify_webhook_url") || null;
