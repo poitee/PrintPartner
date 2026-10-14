@@ -8,9 +8,10 @@ pub mod lease;
 pub mod profiles;
 pub mod read_model;
 mod schema;
+mod writer_admission;
 
 use anyhow::{Result, anyhow, ensure};
-use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 pub use schema::SchemaReady;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -184,7 +185,11 @@ fn writer_control(connection: &Connection, control: WriterControl) -> Result<u32
         }
     }
 }
-fn execute(connection: &mut Connection, work: Work) -> Result<bool> {
+fn execute(
+    connection: &mut Connection,
+    work: Work,
+    admission: writer_admission::Deadline,
+) -> Result<bool> {
     let command = match work {
         Work::Setting(command) => command,
         Work::Backup(path) => {
@@ -192,18 +197,26 @@ fn execute(connection: &mut Connection, work: Work) -> Result<bool> {
             return Ok(true);
         }
     };
-    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    #[cfg(test)]
+    tests::observe_setting(|attempts| attempts.executions += 1);
+    let tx = writer_admission::begin_immediate(connection, admission)?;
     let setting = match command {
         SettingCommand::Set(setting) => setting,
         SettingCommand::CompareAndSet { setting, expected } => {
             if snapshot(&tx, &setting.tenant, &setting.key)? != expected {
+                #[cfg(test)]
+                tests::observe_setting(|attempts| attempts.commits += 1);
                 tx.commit()?;
                 return Ok(false);
             }
             setting
         }
     };
+    #[cfg(test)]
+    tests::observe_setting(|attempts| attempts.inserts += 1);
     tx.execute("INSERT INTO app_settings(tenant_id,key,value) VALUES(?1,?2,?3) ON CONFLICT(tenant_id,key) DO UPDATE SET value=excluded.value",params![setting.tenant,setting.key,setting.value])?;
+    #[cfg(test)]
+    tests::observe_setting(|attempts| attempts.commits += 1);
     tx.commit()?;
     Ok(true)
 }
@@ -408,7 +421,7 @@ impl WriterOwner {
         let mut catalog_state = catalog::State::new(lease.data_dir().to_owned());
         let join = thread::spawn(move || {
             loop {
-                let envelope = {
+                let (envelope, admission) = {
                     let mut queue = worker.queue.lock().expect("Writer admission poisoned");
                     while queue.pending.is_empty() && !queue.closed {
                         queue = worker
@@ -418,8 +431,9 @@ impl WriterOwner {
                     }
                     match queue.pending.pop_front() {
                         Some(envelope) => {
+                            let admission = writer_admission::Deadline::at_dequeue();
                             worker.changed.notify_all();
-                            envelope
+                            (envelope, admission)
                         }
                         None => break,
                     }
@@ -427,7 +441,7 @@ impl WriterOwner {
                 match envelope {
                     #[cfg(feature = "desktop_rebuild")]
                     Envelope::Features { command, reply } => {
-                        let _ = reply.send(features::execute(&mut connection, command));
+                        let _ = reply.send(features::execute(&mut connection, command, admission));
                     }
                     Envelope::Read { command, reply } => {
                         let _ = reply.send(read_model::execute(&mut connection, command));
@@ -437,28 +451,40 @@ impl WriterOwner {
                             &mut connection,
                             &mut catalog_state,
                             command,
+                            admission,
                         ));
                     }
                     Envelope::CatalogRequest { command, reply } => {
-                        let result = catalog::execute(&mut connection, &mut catalog_state, command)
-                            .and_then(|r| match r {
-                                catalog::Reply::Outcome(o) => Ok(o),
-                                _ => Err(anyhow!("Unexpected catalog reply")),
-                            });
+                        let result = catalog::execute(
+                            &mut connection,
+                            &mut catalog_state,
+                            command,
+                            admission,
+                        )
+                        .and_then(|r| match r {
+                            catalog::Reply::Outcome(o) => Ok(o),
+                            _ => Err(anyhow!("Unexpected catalog reply")),
+                        });
                         let _ = reply.send(result);
                     }
                     Envelope::Jobs { command, reply } => {
-                        let _ = reply.send(jobs::execute(&mut connection, command, effect_policy));
+                        let _ = reply.send(jobs::execute(
+                            &mut connection,
+                            command,
+                            effect_policy,
+                            admission,
+                        ));
                     }
                     Envelope::Setting { work, reply } => {
-                        let _ = reply.send(execute(&mut connection, work));
+                        let _ = reply.send(execute(&mut connection, work, admission));
                     }
                     Envelope::Auth {
                         command,
                         policy,
                         reply,
                     } => {
-                        let _ = reply.send(auth::execute(&mut connection, command, policy));
+                        let _ =
+                            reply.send(auth::execute(&mut connection, command, policy, admission));
                     }
                     Envelope::WriterControl { control, reply } => {
                         let _ = reply.send(writer_control(&connection, control));

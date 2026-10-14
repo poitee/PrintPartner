@@ -685,8 +685,9 @@ pub(crate) fn execute(
     connection: &mut Connection,
     command: Command,
     effect_policy: EffectAdmissionPolicy,
+    admission: crate::writer_admission::Deadline,
 ) -> Result<Outcome> {
-    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let tx = crate::writer_admission::begin_immediate(connection, admission)?;
     let outcome = match command {
         Command::User {
             credential,
@@ -1805,6 +1806,7 @@ mod tests {
             &mut connection,
             claim_command("holder"),
             EffectAdmissionPolicy::Legacy,
+            crate::writer_admission::Deadline::at_dequeue(),
         )
         .unwrap() else {
             panic!("held claim");
@@ -1863,6 +1865,7 @@ mod tests {
             &mut connection,
             claim_command("second"),
             EffectAdmissionPolicy::Legacy,
+            crate::writer_admission::Deadline::at_dequeue(),
         ) {
             Err(error) => error,
             Ok(_) => panic!("in-flight claim committed under the page budget"),
@@ -1901,6 +1904,7 @@ mod tests {
             &mut connection,
             claim_command("second"),
             EffectAdmissionPolicy::Legacy,
+            crate::writer_admission::Deadline::at_dequeue(),
         )
         .unwrap() else {
             panic!("claim after raising the quota");
@@ -1932,6 +1936,7 @@ mod tests {
             &mut connection,
             claim_command("holder"),
             EffectAdmissionPolicy::Legacy,
+            crate::writer_admission::Deadline::at_dequeue(),
         )
         .unwrap() else {
             panic!("held claim");
@@ -1950,6 +1955,7 @@ mod tests {
             &mut connection,
             claim_command("second"),
             EffectAdmissionPolicy::Legacy,
+            crate::writer_admission::Deadline::at_dequeue(),
         ) {
             Err(error) => error,
             Ok(_) => panic!("in-flight claim committed"),
@@ -1981,6 +1987,7 @@ mod tests {
             &mut connection,
             claim_command("second"),
             EffectAdmissionPolicy::Legacy,
+            crate::writer_admission::Deadline::at_dequeue(),
         )
         .unwrap() else {
             panic!("claim after the commit failure");

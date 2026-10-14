@@ -837,6 +837,7 @@ fn ticket_t_7_writer_waits_for_another_process_and_never_interleaves() {
     let one = SettingSnapshot::Stored { value: "1".into() };
     assert_eq!(read_setting(&owner, "transfer-debit"), one);
     assert_eq!(read_setting(&owner, "transfer-credit"), one);
+    eprintln!("foreign commit completed, waiting CAS returned false, both transfer rows present");
     owner.shutdown().unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
 }
@@ -853,6 +854,7 @@ fn ticket_t_7_writer_bounds_busy_and_rolls_back_a_killed_process() {
         .unwrap()
         .unwrap_err();
     let waited = started.elapsed();
+    eprintln!("monotonic admission busy refusal delivered after {waited:?}");
     assert!(
         matches!(
             busy.downcast_ref::<rusqlite::Error>(),
@@ -861,10 +863,7 @@ fn ticket_t_7_writer_bounds_busy_and_rolls_back_a_killed_process() {
         ),
         "{busy:#}"
     );
-    assert!(
-        waited >= Duration::from_millis(4500) && waited < Duration::from_secs(10),
-        "busy wait was {waited:?}, not the 5s busy_timeout"
-    );
+    assert_eq!(read_setting(&owner, "rust-write"), SettingSnapshot::Missing);
 
     let process = contender.process.0.as_mut().unwrap();
     process.kill().unwrap();
@@ -902,5 +901,38 @@ fn ticket_t_7_writer_bounds_busy_and_rolls_back_a_killed_process() {
         snapshot(&dir, "tenant-a", "transfer-debit"),
         SettingSnapshot::Missing
     );
+    assert_eq!(
+        snapshot(&dir, "tenant-a", "transfer-credit"),
+        SettingSnapshot::Missing
+    );
+    assert_eq!(
+        snapshot(&dir, "tenant-a", "rust-write"),
+        SettingSnapshot::Stored {
+            value: "after-kill".into()
+        }
+    );
+    let (owner, _) = WriterOwner::open(&dir, Limits::default()).unwrap();
+    assert_eq!(
+        read_setting(&owner, "transfer-debit"),
+        SettingSnapshot::Missing
+    );
+    assert_eq!(
+        read_setting(&owner, "transfer-credit"),
+        SettingSnapshot::Missing
+    );
+    assert_eq!(
+        read_setting(&owner, "rust-write"),
+        SettingSnapshot::Stored {
+            value: "after-kill".into()
+        }
+    );
+    owner.shutdown().unwrap();
+    eprintln!(
+        "foreign holder killed and reaped, next command committed, both abandoned rows absent, after-kill value persisted through owner reopen"
+    );
     std::fs::remove_dir_all(&dir).unwrap();
+    assert!(
+        waited >= Duration::from_millis(4500) && waited < Duration::from_secs(10),
+        "admission and reply delivery took {waited:?}, outside the 4.5s-10s host watchdog"
+    );
 }

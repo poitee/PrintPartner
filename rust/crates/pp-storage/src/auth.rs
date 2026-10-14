@@ -8,7 +8,7 @@ pub use policy::{
 use crate::{Envelope, SettingsClient, WriterOwner};
 use anyhow::{Result, anyhow, bail, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 use std::{
     sync::{
@@ -820,8 +820,9 @@ pub(super) fn execute(
     connection: &mut Connection,
     command: Command,
     policy: AuthPolicy,
+    admission: crate::writer_admission::Deadline,
 ) -> Result<Reply> {
-    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let tx = crate::writer_admission::begin_immediate(connection, admission)?;
     let outcome = match command {
         Command::Status => {
             return Ok(Reply::Outcome(Outcome::Status(policy::status(
