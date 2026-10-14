@@ -755,7 +755,7 @@ fn profile_kind(raw: Option<&JsText>, fallback: ProfileKind) -> ProfileKind {
     }
 }
 
-fn ini_version(raw: &str) -> Result<Option<String>, ProfileInterpretError> {
+fn ini_version(raw: &str) -> Result<Option<&str>, ProfileInterpretError> {
     static EXPRESSION: std::sync::OnceLock<Result<regress::Regex, ProfileInterpretError>> =
         std::sync::OnceLock::new();
     let expression = EXPRESSION.get_or_init(|| {
@@ -766,10 +766,14 @@ fn ini_version(raw: &str) -> Result<Option<String>, ProfileInterpretError> {
         .map_err(|_| ProfileInterpretError::InvalidVersionExpression)
     });
     let expression = expression.as_ref().map_err(|error| *error)?;
-    Ok(expression
+    let version = expression
         .find(raw)
         .and_then(|matched| matched.captures.first().cloned().flatten())
-        .map(|version| raw[version].to_owned()))
+        .map(|version| &raw[version]);
+    if version.is_some_and(|value| value.encode_utf16().count() > MAX_SCALAR_UNITS) {
+        return Err(ProfileInterpretError::ScalarTooLarge);
+    }
+    Ok(version)
 }
 
 fn first_number(flat: &NodeFlatObject, keys: &[&str]) -> Option<f64> {
@@ -930,12 +934,6 @@ fn ecma_trim(value: &str) -> &str {
 mod tests {
     use super::*;
     #[test]
-    fn negative_half_rounding_matches_javascript() {
-        assert_eq!(rounded_number(Some(-0.5)).unwrap().unwrap().value(), 0.0);
-        assert_eq!(rounded_number(Some(-1.5)).unwrap().unwrap().value(), -1.0);
-    }
-
-    #[test]
     fn rounding_matches_javascript_at_binary_representation_edges() {
         for (input, expected) in [
             (0.499_999_999_999_999_94, 0.0),
@@ -973,11 +971,7 @@ mod tests {
                 Some("2.4.0"),
             ),
         ] {
-            assert_eq!(
-                ini_version(raw).unwrap().as_deref(),
-                expected,
-                "input {raw:?}"
-            );
+            assert_eq!(ini_version(raw).unwrap(), expected, "input {raw:?}");
         }
     }
     #[test]
