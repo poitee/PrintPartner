@@ -198,7 +198,6 @@ fn one_parent_merges_config_but_cannot_supply_typed_child_fields() {
 
 #[test]
 fn duplicate_values_keep_first_key_position_and_node_index_order() {
-    // Node capture duplicate-to-null at d73b6d8d records the empty resolved object.
     let duplicate = ready(br#"{"a":"first","a":null}"#, ProfileKind::Process);
     assert_eq!(duplicate["provenance"]["resolved_flat_config"], "{}");
     let actual = ready(
@@ -213,7 +212,6 @@ fn duplicate_values_keep_first_key_position_and_node_index_order() {
 
 #[test]
 fn numeric_stringification_and_projection_follow_javascript() {
-    // Node capture numeric-edges at d73b6d8d supplies this resolved JSON literal.
     let numeric = ready(
         br#"{"unsafe":9007199254740993,"huge":1e308,"overflow":1e400,"small":1e-7,"large":1e21,"negativeZero":-0}"#,
         ProfileKind::Process,
@@ -234,7 +232,6 @@ fn numeric_stringification_and_projection_follow_javascript() {
     );
     assert_eq!(fractional["nozzle_diameter_mm"], "0.4");
     assert_eq!(fractional["extruder_count"], -1.0);
-    // Node capture writer rows Below Half PLA and Large Integral PLA at d73b6d8d.
     for (temperature, expected) in [
         ("0.49999999999999994", 0.0),
         ("4503599627370497", 4_503_599_627_370_497_f64),
@@ -308,7 +305,6 @@ fn public_errors_bound_malformed_input_depth_keys_scalars_and_entries() {
 
 #[test]
 fn captured_surrogate_parent_request_and_flat_config_preserve_utf16() {
-    // Node capture surrogate-fields at d73b6d8d supplies the raw and expected JSON.
     let raw = br#"{"name":"\uD800","low":"\uDC00","pair":"\uD83D\uDE00","key\uD800":"value\uDC00","type":"pro\uD800cess","inherits":"Parent\uD800","config":{"value":"x\uD800"}}"#;
     let pending = pending(raw, ProfileKind::Process);
     assert_eq!(
@@ -329,7 +325,6 @@ fn captured_surrogate_parent_request_and_flat_config_preserve_utf16() {
 
 #[test]
 fn invalid_utf8_uses_node_replacement_before_json_parsing() {
-    // Node capture repository rows Utf8Ff, Utf8Overlong, Utf8Continuation at d73b6d8d.
     for (invalid, expected) in [
         (vec![0xff], "�"),
         (vec![0xc0, 0xaf], "��"),
