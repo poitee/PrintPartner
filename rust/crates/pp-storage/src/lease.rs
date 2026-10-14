@@ -29,14 +29,21 @@ pub struct StorageLease {
 
 /// Create private Unix store directories and admit existing owner-controlled stores.
 /// Existing modes and data-directory aliases are preserved. Existing lock entries
-/// must be owner-controlled regular files with one link. Ancestor permissions,
-/// platform ACL policy, and data-directory replacement remain separate concerns.
+/// must be owner-controlled regular files with one link. Ancestors must be root or
+/// effective-user owned and deny group/other write unless sticky. These are path
+/// snapshots, not confinement. ACL policy and path replacement remain separate concerns.
 pub fn prepare_directory(path: &Path) -> Result<PathBuf> {
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    validate_input_ancestors(&path)?;
     std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
-        .create(path)?;
-    let metadata = std::fs::metadata(path)?;
+        .create(&path)?;
+    let metadata = std::fs::metadata(&path)?;
     ensure!(metadata.is_dir(), "Data directory is not a directory");
     ensure!(
         metadata.uid() == unsafe { libc::geteuid() }
@@ -45,12 +52,42 @@ pub fn prepare_directory(path: &Path) -> Result<PathBuf> {
         "Unsafe data directory permissions"
     );
     let directory = path.canonicalize()?;
+    validate_resolved_ancestors(&directory, false)?;
     match std::fs::symlink_metadata(directory.join(".desktop.lock")) {
         Ok(metadata) => validate_lock_metadata(&metadata)?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
     }
     Ok(directory)
+}
+
+fn validate_input_ancestors(path: &Path) -> Result<()> {
+    for prefix in path.ancestors() {
+        match std::fs::symlink_metadata(prefix) {
+            Ok(_) => {
+                // Resolve every existing prefix before mkdir, including aliases whose
+                // target has unsafe parents hidden by the input spelling.
+                validate_resolved_ancestors(&prefix.canonicalize()?, prefix != path)?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
+fn validate_resolved_ancestors(path: &Path, include_self: bool) -> Result<()> {
+    let euid = unsafe { libc::geteuid() };
+    for ancestor in path.ancestors().skip(usize::from(!include_self)) {
+        let metadata = std::fs::metadata(ancestor)?;
+        ensure!(
+            metadata.is_dir()
+                && (metadata.uid() == 0 || metadata.uid() == euid)
+                && (metadata.mode() & 0o022 == 0 || metadata.mode() & 0o1000 != 0),
+            "Unsafe data directory ancestor"
+        );
+    }
+    Ok(())
 }
 
 fn validate_lock_metadata(metadata: &std::fs::Metadata) -> Result<()> {

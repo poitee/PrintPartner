@@ -60,6 +60,7 @@ pub fn startup_diagnostic(error: &anyhow::Error) -> String {
             "Desktop shutdown incomplete" => Some("shutdown_incomplete"),
             "Data directory already owned" => Some("data_directory_owned"),
             "Unsafe data directory permissions" => Some("data_directory_permissions"),
+            "Unsafe data directory ancestor" => Some("data_directory_ancestor"),
             "storage_lease_marker_invalid" => Some("storage_lease_marker_invalid"),
             "Persisted desktop origin is unavailable" => Some("persisted_origin_unavailable"),
             "Release artifact missing" | "Release root missing" => Some("release_missing"),
@@ -580,6 +581,20 @@ mod tests {
             assert!(startup_diagnostic(&anyhow::anyhow!(cause)).ends_with(code));
         }
     }
+
+    #[test]
+    fn ticket_t_12_startup_diagnostic_redacts_unsafe_ancestor_paths() {
+        let secret = "private/path?bootstrap=secret-token";
+        let error = anyhow::anyhow!(secret)
+            .context("Unsafe data directory ancestor")
+            .context("Desktop core startup failed");
+        assert_eq!(
+            startup_diagnostic(&error),
+            "desktop_startup_failed: core_startup -> data_directory_ancestor"
+        );
+        assert!(!startup_diagnostic(&error).contains(secret));
+    }
+
     #[test]
     fn startup_diagnostics_classify_invalid_storage_markers_without_private_causes() {
         let secret = "private/path?bootstrap=secret-token";
