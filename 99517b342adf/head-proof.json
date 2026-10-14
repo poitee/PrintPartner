@@ -1,0 +1,267 @@
+{
+  "head": "99517b342adfdc4c635c069642dc4e07058fc3d6",
+  "result": "PASS",
+  "proof_class": "unsigned_linux_real_gateway_node_account_mapping",
+  "stage": "/persist/home/.local/state/pstack-t3/gre353-owner-mapping/exact-99517b342adf-stage",
+  "commands": [
+    [
+      "web-build.log",
+      [
+        "npm",
+        "--prefix",
+        "web",
+        "run",
+        "build"
+      ]
+    ],
+    [
+      "stage.log",
+      [
+        "python3",
+        "rust/scripts/stage-desktop.py",
+        "--web",
+        "web",
+        "--node",
+        "/opt/agent-fleet/artifacts/.local/share/mise/installs/node/24.21.0/bin/node",
+        "--output",
+        "/persist/home/.local/state/pstack-t3/gre353-owner-mapping/exact-99517b342adf-stage",
+        "--commit",
+        "99517b342adfdc4c635c069642dc4e07058fc3d6"
+      ]
+    ],
+    [
+      "node-tests.log",
+      [
+        "npm",
+        "--prefix",
+        "web",
+        "run",
+        "test",
+        "-w",
+        "@print-partner/server",
+        "--",
+        "src/desktop-account.test.ts",
+        "src/desktop-context.test.ts"
+      ]
+    ],
+    [
+      "typecheck.log",
+      [
+        "npm",
+        "--prefix",
+        "web",
+        "run",
+        "typecheck",
+        "-w",
+        "@print-partner/server"
+      ]
+    ],
+    [
+      "fmt.log",
+      [
+        "cargo",
+        "fmt",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--all",
+        "--check"
+      ]
+    ],
+    [
+      "pin-unit.log",
+      [
+        "cargo",
+        "nextest",
+        "run",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "-p",
+        "pp-compat",
+        "--features",
+        "desktop_rebuild",
+        "--lib",
+        "--no-tests=fail",
+        "-E",
+        "test(account_pin)"
+      ]
+    ],
+    [
+      "mixed-feature.log",
+      [
+        "cargo",
+        "check",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "-p",
+        "pp-core",
+        "--features",
+        "pp-compat/desktop_rebuild"
+      ]
+    ],
+    [
+      "pin-unit-off.log",
+      [
+        "cargo",
+        "nextest",
+        "run",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "-p",
+        "pp-compat",
+        "--lib",
+        "--no-tests=fail",
+        "-E",
+        "test(account_pin)"
+      ]
+    ],
+    [
+      "mapping-mixed.log",
+      [
+        "cargo",
+        "nextest",
+        "run",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "-p",
+        "pp-core",
+        "--features",
+        "pp-compat/desktop_rebuild",
+        "--test",
+        "runtime_m0",
+        "--success-output=immediate",
+        "--no-tests=fail",
+        "-E",
+        "test(ticket_t_68_desktop_account_mapping)"
+      ]
+    ],
+    [
+      "artifacts-on.jsonl",
+      [
+        "cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "-p",
+        "pp-core",
+        "--features",
+        "desktop_rebuild",
+        "--test",
+        "runtime_m0",
+        "--no-run",
+        "--message-format=json"
+      ]
+    ],
+    [
+      "mapping-on.log",
+      [
+        "cargo",
+        "nextest",
+        "run",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "-p",
+        "pp-core",
+        "--features",
+        "desktop_rebuild",
+        "--test",
+        "runtime_m0",
+        "--success-output=immediate",
+        "--no-tests=fail",
+        "-E",
+        "test(ticket_t_68_desktop_account_mapping)"
+      ]
+    ],
+    [
+      "artifacts-off.jsonl",
+      [
+        "cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "-p",
+        "pp-core",
+        "--test",
+        "runtime_m0",
+        "--no-run",
+        "--message-format=json"
+      ]
+    ],
+    [
+      "mapping-off.log",
+      [
+        "cargo",
+        "nextest",
+        "run",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "-p",
+        "pp-core",
+        "--test",
+        "runtime_m0",
+        "--success-output=immediate",
+        "--no-tests=fail",
+        "-E",
+        "test(ticket_t_68_desktop_account_mapping)"
+      ]
+    ],
+    [
+      "lifecycle-off.log",
+      [
+        "cargo",
+        "nextest",
+        "run",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "-p",
+        "pp-core",
+        "--test",
+        "runtime_m0",
+        "--success-output=immediate",
+        "--no-tests=fail",
+        "-E",
+        "test(protected_real_node_lifecycle)"
+      ]
+    ]
+  ],
+  "source_and_manifest_sha256": {
+    "docs/desktop-rebuild.md": "502b6768edf4050572038e0ce50555dc19ab70f55aefef9a348cee46dab380d8",
+    "rust/crates/pp-compat/Cargo.toml": "9556a2b3a7aada7e1a7e3b7c149e20a7f973ef21b6a76f4c454a40f8598fbfe4",
+    "rust/crates/pp-compat/src/account_pin.rs": "36ec75b5a95d72122bcdea5bc0e98f50a765a4fed25ce7c3942e18cef43e7010",
+    "rust/crates/pp-compat/src/lib.rs": "bf2a32153f8b3ffe449a90b1b39547ee39d9eab683e6a0b35e9a6d8bebe8c5d5",
+    "rust/crates/pp-compat/src/ticket_t_2.rs": "24b0198090fdeeb73e334f66e8d66e3bfe7c52346fd332d577d379ea47426554",
+    "rust/crates/pp-compat/tests/installed_bundle_lifecycle.rs": "6187b2e11391aa4f6ed299e34b2e582a0da16766edadf2192b9fcf9dd25342f8",
+    "rust/crates/pp-core/Cargo.toml": "510f86455939a253b8056a319940b683e88abe2d05d510cc9710020c864fc0f6",
+    "rust/crates/pp-core/src/lib.rs": "768b0407d3914ef5ddaf2ca1922d23b65598f733fcf2f3a646056efb8fa10efa",
+    "rust/crates/pp-core/tests/runtime_m0.rs": "7a0244eff8cf38e74c48f647abf1257d576f831a08a4c9bcda3c4cce0bed9330",
+    "rust/crates/pp-core/tests/runtime_m0/ticket_t_68_desktop_account_mapping.rs": "b6a6d78a8da352868368d13b2455424fb8a57313da4a1bf70b9c056c1f6001fd",
+    "web/apps/server/src/adapters/self-host/index.ts": "8aaa5ebf23721f23fb5620418ef2684c4709b0b4dc415669bb1044d6da7e6147",
+    "web/apps/server/src/app.ts": "9c93583cb09c546b73c8cf26ad5638672e26cb19bc317b738ef82857575217d0",
+    "web/apps/server/src/db/client.ts": "cbe04011918dc217e7ea331aa5f502172583d9e716c787c7a4337fa29a599a56",
+    "web/apps/server/src/desktop-account.test.ts": "bbf0d65d8b4e5322433aa2ef46390b4d759a429b20e7b5d0d7e1cb5ccdab5906",
+    "web/apps/server/src/desktop-account.ts": "fe95b3f8d2fdfb7b4e9b1ab3c7778e2eb26d46d3c2c065c354aae031dd6dd3e7",
+    "web/apps/server/src/desktop-context.ts": "407ebac0356d77076820086c05870a4e6d42ca26165c15292074198c8bcb79c0",
+    "web/apps/server/src/desktop.ts": "4432d09e683611ef583049e1050c6f6eeac9444ee984553ab39f000871626397",
+    "stage/bundle-manifest.json": "651e71a372fa4b20e2eb6ffa5123f24b1c5f747de5eafea9a8780a740e42175b"
+  },
+  "runtime_test_artifacts": {
+    "on": {
+      "binary": "/persist/home/.local/state/pstack-t3/gre353-next/target/debug/deps/runtime_m0-9980aa3da977b6a6",
+      "sha256": "16a510f89fe8c91242ba47130099d99a4fb470b0489e0bb2be494ffd8040fe50"
+    },
+    "off": {
+      "binary": "/persist/home/.local/state/pstack-t3/gre353-next/target/debug/deps/runtime_m0-52810bddb93625e1",
+      "sha256": "f782e8253810f1a5e3db16b3ff9ec0e8e55e7c502455eb2c20e38818d10f5508"
+    }
+  },
+  "native_ui_claim": false,
+  "macos_or_signed_release_claim": false
+}

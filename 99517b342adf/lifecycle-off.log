@@ -1,0 +1,16 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
+────────────
+ Nextest run ID 432a9214-a8dc-4bfd-b81f-43a18e1abc41 with nextest profile: default
+    Starting 1 test across 1 binary (35 tests skipped)
+        PASS [  49.897s] (1/1) pp-core::runtime_m0 protected_real_node_lifecycle
+  stdout ───
+
+    running 1 test
+    {"proof_class":"headless_unsigned","case":"protected_real_node_lifecycle","origin":"http://127.0.0.1:44353","child_reaped":true,"persisted_origin":true,"build_id":1,"data_dir":"/persist/tmp/pp-m0-4f46c9fd5f372f7d"}
+    test protected_real_node_lifecycle ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 35 filtered out; finished in 49.88s
+
+
+────────────
+     Summary [  49.899s] 1 test run: 1 passed, 35 skipped

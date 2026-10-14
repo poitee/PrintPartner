@@ -1,0 +1,4 @@
+    Checking pp-compat v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre353-next-202610141227-9efa/rust/crates/pp-compat)
+    Checking pp-gateway v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre353-next-202610141227-9efa/rust/crates/pp-gateway)
+    Checking pp-core v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre353-next-202610141227-9efa/rust/crates/pp-core)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.33s

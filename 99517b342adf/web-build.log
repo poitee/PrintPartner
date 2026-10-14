@@ -1,0 +1,139 @@
+
+> print-partner-web@3.3.0 build
+> npm run build -w @print-partner/contracts && npm run build -w @print-partner/domain && npm run build -w @print-partner/server && npm run build -w @print-partner/web
+
+
+> @print-partner/contracts@0.1.0 build
+> node ../../scripts/atomic-package-build.mjs --project tsconfig.build.json
+
+
+> @print-partner/domain@0.1.0 build
+> node ../../scripts/atomic-package-build.mjs --project tsconfig.build.json
+
+
+> @print-partner/server@0.1.0 build
+> node ../../scripts/atomic-package-build.mjs --project tsconfig.build.json --copy src/data data --require-file data/ambrosia_fallback.json --require-file data/assistant-domain/_global/alias_map.yaml --require-file data/assistant-domain/_global/merge_conflicts.yaml --require-file data/assistant-domain/_global/pitfalls.md --require-file data/assistant-domain/_global/stacks.yaml --require-file data/assistant-domain/sources/README.md --require-file data/kit-catalog.yaml --require-file data/legal/ATTRIBUTION.md --require-file data/legal/LICENSE --require-file data/legal/LICENSE-SUMMARY.md --require-file data/legal/THIRD_PARTY_NOTICES.md --require-file data/manifests/registry-index.yaml --require-file data/path-hints.yaml --require-file data/postgres/0000_init.sql --require-file data/printer_presets.json --require-file data/source-sync-ownership.json
+
+
+> @print-partner/web@0.1.0 build
+> tsc -p tsconfig.json --noEmit && vite build --manifest
+
+vite v8.3.4 building client environment for production...
+transforming...
+[plugin rolldown:vite-resolve] Module "node:path" has been externalized for browser compatibility, imported by "/persist/worktrees/t3/PrintPartner/owner-gre353-next-202610141227-9efa/web/packages/domain/dist/releases/release-mv8euv9c-468435-36b30df0-49c3-4522-9ef0-0d285fe5d4ab/scanner.js". See https://vite.dev/guide/troubleshooting.html#module-externalized-for-browser-compatibility for more details.
+[plugin rolldown:vite-resolve] Module "node:fs" has been externalized for browser compatibility, imported by "/persist/worktrees/t3/PrintPartner/owner-gre353-next-202610141227-9efa/web/packages/domain/dist/releases/release-mv8euv9c-468435-36b30df0-49c3-4522-9ef0-0d285fe5d4ab/stl-bounds.js". See https://vite.dev/guide/troubleshooting.html#module-externalized-for-browser-compatibility for more details.
+[plugin rolldown:vite-resolve] Module "node:fs" has been externalized for browser compatibility, imported by "/persist/worktrees/t3/PrintPartner/owner-gre353-next-202610141227-9efa/web/packages/domain/dist/releases/release-mv8euv9c-468435-36b30df0-49c3-4522-9ef0-0d285fe5d4ab/stl-mesh.js". See https://vite.dev/guide/troubleshooting.html#module-externalized-for-browser-compatibility for more details.
+[plugin rolldown:vite-resolve] Module "node:fs" has been externalized for browser compatibility, imported by "/persist/worktrees/t3/PrintPartner/owner-gre353-next-202610141227-9efa/web/packages/domain/dist/releases/release-mv8euv9c-468435-36b30df0-49c3-4522-9ef0-0d285fe5d4ab/scanner.js". See https://vite.dev/guide/troubleshooting.html#module-externalized-for-browser-compatibility for more details.
+✓ 2962 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/desktop-build.json                               0.05 kB │ gzip:   0.07 kB
+dist/index.html                                       3.03 kB │ gzip:   1.05 kB
+dist/.vite/manifest.json                             38.73 kB │ gzip:   4.19 kB
+dist/assets/index-mT8luoJt.css                      117.22 kB │ gzip:  20.61 kB
+dist/assets/runtime-YJFYZbFF.js                       0.16 kB │ gzip:   0.14 kB
+dist/assets/chevron-right-HswoMG7f.js                 0.16 kB │ gzip:   0.16 kB
+dist/assets/copy-Cb15xCMU.js                          0.27 kB │ gzip:   0.23 kB
+dist/assets/PageHeaderActions-D5eo0cuk.js             0.29 kB │ gzip:   0.22 kB
+dist/assets/pencil-DRF_IR5W.js                        0.31 kB │ gzip:   0.24 kB
+dist/assets/folder-open-tmn7-uwj.js                   0.32 kB │ gzip:   0.24 kB
+dist/assets/clipboard-check-CWpoYyws.js               0.34 kB │ gzip:   0.25 kB
+dist/assets/useMediaQuery-TFSZoYIo.js                 0.37 kB │ gzip:   0.25 kB
+dist/assets/trash-iNr24hEv.js                         0.38 kB │ gzip:   0.25 kB
+dist/assets/externalAccess-DqAF9sH4.js                0.41 kB │ gzip:   0.28 kB
+dist/assets/fetchWithRetry-D3ppF2Vf.js                0.41 kB │ gzip:   0.30 kB
+dist/assets/buildTracking-CXXNmbBb.js                 0.42 kB │ gzip:   0.28 kB
+dist/assets/hammer-Cdo_hHWp.js                        0.43 kB │ gzip:   0.30 kB
+dist/assets/jsx-runtime-DREnUpxT.js                   0.43 kB │ gzip:   0.30 kB
+dist/assets/QueryClientProvider-DanxYLWs.js           0.45 kB │ gzip:   0.30 kB
+dist/assets/exportActions-DS-KywoK.js                 0.45 kB │ gzip:   0.30 kB
+dist/assets/file-archive-CAcDcACP.js                  0.46 kB │ gzip:   0.30 kB
+dist/assets/upload-CBXLvLVg.js                        0.47 kB │ gzip:   0.26 kB
+dist/assets/workflowState-bJFoFn2V.js                 0.51 kB │ gzip:   0.22 kB
+dist/assets/ellipsis-BVHtFKyi.js                      0.51 kB │ gzip:   0.31 kB
+dist/assets/printerCheckoff-C7bm5CsZ.js               0.53 kB │ gzip:   0.30 kB
+dist/assets/textarea-CEx4jsez.js                      0.55 kB │ gzip:   0.37 kB
+dist/assets/skeleton-DtnzcgSh.js                      0.67 kB │ gzip:   0.44 kB
+dist/assets/FilamentSwatch-DlqAlGFY.js                0.71 kB │ gzip:   0.35 kB
+dist/assets/printerPlanBind-BiTrkuGq.js               0.72 kB │ gzip:   0.42 kB
+dist/assets/useEngineHealth-Dem2d1Si.js               0.86 kB │ gzip:   0.55 kB
+dist/assets/plansList-CJ-gCUwL.js                     0.87 kB │ gzip:   0.45 kB
+dist/assets/BuildSaveFlushContext-DpYXvijZ.js         0.88 kB │ gzip:   0.47 kB
+dist/assets/stlNaming-BYMlK8KO.js                     0.90 kB │ gzip:   0.46 kB
+dist/assets/badge-CsmLYe7a.js                         0.91 kB │ gzip:   0.47 kB
+dist/assets/AuthScreen-NzCBmYvi.js                    0.97 kB │ gzip:   0.49 kB
+dist/assets/NotFoundPage-BjqtIaJv.js                  1.00 kB │ gzip:   0.50 kB
+dist/assets/settings-yu0pD2PP.js                      1.04 kB │ gzip:   0.40 kB
+dist/assets/slicers-K5nkClA2.js                       1.05 kB │ gzip:   0.35 kB
+dist/assets/rolldown-runtime-Dd_uD5pT.js              1.10 kB │ gzip:   0.62 kB
+dist/assets/table-JdnNkDBK.js                         1.19 kB │ gzip:   0.48 kB
+dist/assets/PageShell-4fV6Nnvn.js                     1.20 kB │ gzip:   0.57 kB
+dist/assets/browserFiles-yHjpyAJ7.js                  1.44 kB │ gzip:   0.56 kB
+dist/assets/media-DxelQmoS.js                         1.46 kB │ gzip:   0.71 kB
+dist/assets/productionSend-Kt2Ielqx.js                1.50 kB │ gzip:   0.64 kB
+dist/assets/ResetPasswordPage-N76hH5_w.js             1.79 kB │ gzip:   0.91 kB
+dist/assets/asyncView-CspLGfHQ.js                     1.79 kB │ gzip:   0.92 kB
+dist/assets/planLayers-byzKADQW.js                    1.84 kB │ gzip:   0.72 kB
+dist/assets/colorPresets-Di47fNA6.js                  1.98 kB │ gzip:   0.88 kB
+dist/assets/BuildSummaryHeader-CCBmj4rZ.js            2.11 kB │ gzip:   0.98 kB
+dist/assets/EmptyState-C5PWM1tA.js                    2.21 kB │ gzip:   0.85 kB
+dist/assets/ForgotPasswordPage-Dvhz8nOY.js            2.24 kB │ gzip:   1.13 kB
+dist/assets/PrinterSendQueuePanel-DLc0fKMu.js         3.12 kB │ gzip:   1.34 kB
+dist/assets/loader-circle-CkICAXPt.js                 3.26 kB │ gzip:   1.59 kB
+dist/assets/ReferenceShareImport-rJ6Rwqx-.js          3.31 kB │ gzip:   1.50 kB
+dist/assets/tabs-CUf2XpIj.js                          3.39 kB │ gzip:   1.49 kB
+dist/assets/AcceptedPlate3DPreview-DercYjbj.js        3.43 kB │ gzip:   1.83 kB
+dist/assets/mutation-BEvf_tNk.js                      3.44 kB │ gzip:   1.14 kB
+dist/assets/ObjectProposalRows-C3VwquJL.js            3.67 kB │ gzip:   1.50 kB
+dist/assets/LoginPage-5xY1DU3Z.js                     3.69 kB │ gzip:   1.56 kB
+dist/assets/printerFleet-Dgse16Eo.js                  3.83 kB │ gzip:   1.42 kB
+dist/assets/sliced-object-matching-BVb9fZTO.js        3.98 kB │ gzip:   1.61 kB
+dist/assets/UnattributedPrintCard-BWtJAPwG.js         4.55 kB │ gzip:   1.72 kB
+dist/assets/buildSourceLayers-By5SgCqm.js             4.63 kB │ gzip:   2.07 kB
+dist/assets/engineTransport-DSXt84uw.js               4.85 kB │ gzip:   1.87 kB
+dist/assets/checkbox-DaybozfL.js                      5.21 kB │ gzip:   2.15 kB
+dist/assets/dist-CY5fNZSX.js                          5.30 kB │ gzip:   1.96 kB
+dist/assets/previewTheme-CXBqYQPS.js                  5.39 kB │ gzip:   2.40 kB
+dist/assets/profiles-Db_-PbWY.js                      5.42 kB │ gzip:   1.74 kB
+dist/assets/PrinterLiveStrip-Dv1hXvum.js              5.49 kB │ gzip:   2.32 kB
+dist/assets/BoardPage-CppZntKb.js                     5.68 kB │ gzip:   2.04 kB
+dist/assets/sources-CX6w3qZF.js                       5.81 kB │ gzip:   2.13 kB
+dist/assets/stlThumbnail-CPTn0gXh.js                  6.29 kB │ gzip:   2.65 kB
+dist/assets/radio-group-CxtqqEvR.js                   6.45 kB │ gzip:   2.55 kB
+dist/assets/parseSlicedObjects-Dg_DmYGh.js            6.67 kB │ gzip:   2.65 kB
+dist/assets/ShareBuildExportDialog-DFPjwtyA.js        7.77 kB │ gzip:   2.93 kB
+dist/assets/react-CQOZoUwg.js                         7.87 kB │ gzip:   3.00 kB
+dist/assets/SourceCategoryManager-Cb2hQh6V.js         8.11 kB │ gzip:   3.36 kB
+dist/assets/printerStatuses-4MFx2Dzs.js               8.17 kB │ gzip:   3.30 kB
+dist/assets/waitForSheetThumbnails-BOG26hzl.js        9.03 kB │ gzip:   3.96 kB
+dist/assets/keys-a1C09BuD.js                          9.21 kB │ gzip:   3.39 kB
+dist/assets/GlobalProductionPage-cKh5caSr.js          9.60 kB │ gzip:   3.11 kB
+dist/assets/workPackageProjection-BQew8KM8.js         9.71 kB │ gzip:   3.37 kB
+dist/assets/SourceUpdateIntervalSelect-DmsaDtjv.js   10.17 kB │ gzip:   3.29 kB
+dist/assets/PlansPage-Dvf2Vnyu.js                    10.89 kB │ gzip:   3.52 kB
+dist/assets/HelpPage-wAr1ImTe.js                     13.26 kB │ gzip:   4.07 kB
+dist/assets/PrinterSendPanel-DZpoid5s.js             14.24 kB │ gzip:   4.86 kB
+dist/assets/ImportRulesTree-DgI-Gt4M.js              14.45 kB │ gzip:   4.76 kB
+dist/assets/query-glhT793E.js                        14.58 kB │ gzip:   4.98 kB
+dist/assets/Preview3D-D0qgFH4q.js                    14.90 kB │ gzip:   6.12 kB
+dist/assets/dist-D9tJbqVn.js                         15.35 kB │ gzip:   5.48 kB
+dist/assets/PrintersPage-BaTIMNh5.js                 16.35 kB │ gzip:   5.67 kB
+dist/assets/OrbitControls-BjK9232k.js                19.84 kB │ gzip:   4.40 kB
+dist/assets/select-DtxD5IQh.js                       21.44 kB │ gzip:   7.36 kB
+dist/assets/dist-BjSwkVf_.js                         24.01 kB │ gzip:   8.68 kB
+dist/assets/dist-CfBINrlR.js                         25.72 kB │ gzip:   9.98 kB
+dist/assets/PrinterFilesView-Byz2HOJJ.js             28.52 kB │ gzip:   8.53 kB
+dist/assets/BuildPage-Bo05Ex7S.js                    32.95 kB │ gzip:  10.10 kB
+dist/assets/SortableDragHandle-BC_Bh73g.js           45.68 kB │ gzip:  15.10 kB
+dist/assets/PartsPage-Ddty2GN-.js                    71.36 kB │ gzip:  20.26 kB
+dist/assets/BrandMark-B84YAiQn.js                    75.80 kB │ gzip:  22.60 kB
+dist/assets/SourcesPage-Buw3BO6_.js                  88.89 kB │ gzip:  25.69 kB
+dist/assets/jszip.min-BKkSLVCN.js                    95.94 kB │ gzip:  28.48 kB
+dist/assets/SettingsPage-DBAHykL2.js                101.85 kB │ gzip:  24.88 kB
+dist/assets/CheckoffPage-B_Ik3lls.js                109.04 kB │ gzip:  30.50 kB
+dist/assets/ExportPage-CrG4VOi5.js                  134.37 kB │ gzip:  38.74 kB
+dist/assets/AuthenticatedApp-B0ikLZzp.js            196.10 kB │ gzip:  58.01 kB
+dist/assets/index-3A-yVndX.js                       449.70 kB │ gzip: 137.24 kB
+dist/assets/previewRig-BQm806uM.js                  549.11 kB │ gzip: 137.52 kB
+
+✓ built in 2.01s
