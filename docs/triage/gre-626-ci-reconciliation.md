@@ -25,6 +25,8 @@ Main also has later protections for Rust raw C strings, unterminated strings, an
 
 The documentation is the complete D31 change. It adds no workflow, runner, dependency, or product behavior. No feature flag is needed. The missing automatic whole-workspace lint scope and extra Desktop runtime triggers are explicitly dropped, not claimed as present.
 
+Web CI does not trigger for a Rust-only change. Such a change therefore lacks an automatic run of the workaround check. Adding the check to hosted Desktop runtime would close that gap, but that expansion is also deliberately dropped under the local-first constraint. The existing command remains available for local verification. The manual chain-tip gate's final summary fails if Clippy fails, despite the Clippy step's `continue-on-error` setting.
+
 Run the existing checks from the repository root after installing the web dependencies:
 
 ```sh
