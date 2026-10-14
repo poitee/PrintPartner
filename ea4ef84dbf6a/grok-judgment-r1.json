@@ -1,0 +1,16 @@
+{
+  "head": "ea4ef84dbf6a92c08ffb0d96bf2fc1a09f5f0ac4",
+  "score": 10,
+  "criteria": 1,
+  "visual": null,
+  "notes": "Unsigned Linux slice only. Explicit same-id mapping is admitted only when desktop_rebuild is compiled and PP_DESKTOP_REBUILD is 1 or true. Independent Node 24.21.0 suite passed 92/92. Feature-on gateway mapping passed 9/9 against the exact-head stage. Feature-off and compat-only mixed builds each passed the two gate refusals. Live CI is 21 pass and 2 completed skips, with nothing pending or failing. No UI claim. Legacy default-tenant migration, native handoff, macOS, and signed release stay out of scope.",
+  "blockers": [],
+  "items": {
+    "criteria": 5,
+    "tests": 2,
+    "visual": null,
+    "logs": 2,
+    "scope": 1
+  },
+  "gate": "pass"
+}

@@ -1,0 +1,40 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.58s
+────────────
+[32;1m Nextest run[0m ID [1mee2d38e1-3024-4f31-a554-22808df0f9df[0m with nextest profile: [1mdefault[0m
+[32;1m    Starting[0m [1m2[0m tests across [1m1[0m binary ([1m35[0m tests [33;1mskipped[0m)
+[32;1m        PASS[0m [  44.941s] (1/2) [35;1mpp-core::runtime_m0[0m [36mticket_t_68_desktop_account_mapping[0m[36m::[0m[34;1mcompile_gate_off_refuses_mapping_despite_runtime_opt_in[0m
+[32;1m [0m [32;1mstdout[0m [32;1m───[0m
+
+    running 1 test
+
+    running 1 test
+    test ticket_t_68_desktop_account_mapping::compile_gate_off_refuses_mapping_despite_runtime_opt_in ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 36 filtered out; finished in 44.92s
+
+
+    {"case":"compile_gate_off_refuses_mapping_despite_runtime_opt_in","artifact":"/persist/tmp/pp-ticket-t-68-account-83b1ff678b869ad0"}
+    test ticket_t_68_desktop_account_mapping::compile_gate_off_refuses_mapping_despite_runtime_opt_in ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 36 filtered out; finished in 44.93s
+    [0m
+
+[32;1m        PASS[0m [  45.257s] (2/2) [35;1mpp-core::runtime_m0[0m [36mticket_t_68_desktop_account_mapping[0m[36m::[0m[34;1mgates_off_refuse_existing_accounts_even_with_child_env[0m
+[32;1m [0m [32;1mstdout[0m [32;1m───[0m
+
+    running 1 test
+
+    running 1 test
+    test ticket_t_68_desktop_account_mapping::gates_off_refuse_existing_accounts_even_with_child_env ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 36 filtered out; finished in 45.23s
+
+
+    {"case":"gates_off_refuse_existing_accounts_even_with_child_env","artifact":"/persist/tmp/pp-ticket-t-68-account-745d91eefb850412"}
+    test ticket_t_68_desktop_account_mapping::gates_off_refuse_existing_accounts_even_with_child_env ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 36 filtered out; finished in 45.24s
+    [0m
+
+────────────
+[32;1m     Summary[0m [  45.259s] [1m2[0m tests run: [1m2[0m [32;1mpassed[0m, [1m35[0m [33;1mskipped[0m

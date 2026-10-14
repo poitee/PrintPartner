@@ -1,0 +1,184 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.65s
+────────────
+[32;1m Nextest run[0m ID [1m30977bb5-8853-4ed2-9713-8402b6826e1a[0m with nextest profile: [1mdefault[0m
+[32;1m    Starting[0m [1m9[0m tests across [1m1[0m binary ([1m38[0m tests [33;1mskipped[0m)
+[32;1m        PASS[0m [  20.478s] (1/9) [35;1mpp-core::runtime_m0[0m [36mticket_t_68_desktop_account_mapping[0m[36m::[0m[34;1mfresh_store_stays_synthetic_when_enabled[0m
+[32;1m [0m [32;1mstdout[0m [32;1m───[0m
+
+    running 1 test
+
+    running 1 test
+    test ticket_t_68_desktop_account_mapping::fresh_store_stays_synthetic_when_enabled ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 46 filtered out; finished in 20.44s
+
+
+    {"case":"fresh_store_stays_synthetic_when_enabled","artifact":"/persist/tmp/pp-ticket-t-68-account-4b07fcda5c95565f"}
+    test ticket_t_68_desktop_account_mapping::fresh_store_stays_synthetic_when_enabled ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 46 filtered out; finished in 20.46s
+    [0m
+
+[32;1m        PASS[0m [  24.969s] (2/9) [35;1mpp-core::runtime_m0[0m [36mticket_t_68_desktop_account_mapping[0m[36m::[0m[34;1mmapped_metadata_demotion_deletion_and_restore_refusal[0m
+[32;1m [0m [32;1mstdout[0m [32;1m───[0m
+
+    running 1 test
+
+    running 1 test
+    test ticket_t_68_desktop_account_mapping::mapped_metadata_demotion_deletion_and_restore_refusal ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 46 filtered out; finished in 24.93s
+
+
+    {"case":"mapped_metadata_demotion_deletion_and_restore_refusal","artifact":"/persist/tmp/pp-ticket-t-68-account-201250e88f55ff24"}
+    test ticket_t_68_desktop_account_mapping::mapped_metadata_demotion_deletion_and_restore_refusal ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 46 filtered out; finished in 24.94s
+    [0m
+
+[32;1m        PASS[0m [  41.126s] (3/9) [35;1mpp-core::runtime_m0[0m [36mticket_t_68_desktop_account_mapping[0m[36m::[0m[34;1mdatabase_replacement_including_alias_fails_closed[0m
+[32;1m [0m [32;1mstdout[0m [32;1m───[0m
+
+    running 1 test
+
+    running 1 test
+    test ticket_t_68_desktop_account_mapping::database_replacement_including_alias_fails_closed ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 46 filtered out; finished in 41.09s
+
+
+    {"case":"database_replacement_including_alias_fails_closed","artifact":"/persist/tmp/pp-ticket-t-68-account-b27692532080e77b"}
+    test ticket_t_68_desktop_account_mapping::database_replacement_including_alias_fails_closed ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 46 filtered out; finished in 41.10s
+    [0m
+
+[32;1m        PASS[0m [  45.950s] (4/9) [35;1mpp-core::runtime_m0[0m [36mticket_t_68_desktop_account_mapping[0m[36m::[0m[34;1mgates_off_refuse_existing_accounts_even_with_child_env[0m
+[32;1m [0m [32;1mstdout[0m [32;1m───[0m
+
+    running 1 test
+
+    running 1 test
+    test ticket_t_68_desktop_account_mapping::gates_off_refuse_existing_accounts_even_with_child_env ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 46 filtered out; finished in 45.92s
+
+
+    {"case":"gates_off_refuse_existing_accounts_even_with_child_env","artifact":"/persist/tmp/pp-ticket-t-68-account-3b0151d02fb48c23"}
+    test ticket_t_68_desktop_account_mapping::gates_off_refuse_existing_accounts_even_with_child_env ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 46 filtered out; finished in 45.93s
+    [0m
+
+[32;1m        PASS[0m [  48.946s] (5/9) [35;1mpp-core::runtime_m0[0m [36mticket_t_68_desktop_account_mapping[0m[36m::[0m[34;1mmapped_account_reads_writes_and_restarts_without_foreign_changes[0m
+[32;1m [0m [32;1mstdout[0m [32;1m───[0m
+
+    running 1 test
+
+    running 1 test
+    test ticket_t_68_desktop_account_mapping::mapped_account_reads_writes_and_restarts_without_foreign_changes ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 46 filtered out; finished in 48.92s
+
+
+    {"case":"mapped_account_reads_writes_and_restarts_without_foreign_changes","artifact":"/persist/tmp/pp-ticket-t-68-account-2f01f70c60480ed2"}
+    test ticket_t_68_desktop_account_mapping::mapped_account_reads_writes_and_restarts_without_foreign_changes ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 46 filtered out; finished in 48.93s
+    [0m
+
+[33;1m        SLOW[0m [> 60.000s] (───) [35;1mpp-core::runtime_m0[0m [36mticket_t_68_desktop_account_mapping[0m[36m::[0m[34;1mmapping_pin_survives_compat_crash_and_full_restart[0m
+[33;1m        SLOW[0m [> 60.000s] (───) [35;1mpp-core::runtime_m0[0m [36mticket_t_68_desktop_account_mapping[0m[36m::[0m[34;1mpresent_mapping_pin_rejects_removal_after_crash[0m
+[33;1m        SLOW[0m [> 60.000s] (───) [35;1mpp-core::runtime_m0[0m [36mticket_t_68_desktop_account_mapping[0m[36m::[0m[34;1mmapping_refusals_happen_before_product_writes[0m
+[33;1m        SLOW[0m [> 60.000s] (───) [35;1mpp-core::runtime_m0[0m [36mticket_t_68_desktop_account_mapping[0m[36m::[0m[34;1mmissing_mapping_pin_rejects_later_account_after_crash[0m
+[32;1m        PASS[0m [  63.347s] (6/9) [35;1mpp-core::runtime_m0[0m [36mticket_t_68_desktop_account_mapping[0m[36m::[0m[34;1mpresent_mapping_pin_rejects_removal_after_crash[0m
+[32;1m [0m [32;1mstdout[0m [32;1m───[0m
+
+    running 1 test
+    test ticket_t_68_desktop_account_mapping::present_mapping_pin_rejects_removal_after_crash has been running for over 60 seconds
+
+    running 1 test
+    test ticket_t_68_desktop_account_mapping::present_mapping_pin_rejects_removal_after_crash has been running for over 60 seconds
+    {"case":"removed_pin_after_crash","data":"/persist/tmp/pp-ticket-t-68-account-e3aa41cc0f9c4056","status":503,"body":{"type":"about:blank","title":"Service Unavailable","status":503,"detail":"Compatibility backend unavailable"}}
+    test ticket_t_68_desktop_account_mapping::present_mapping_pin_rejects_removal_after_crash ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 46 filtered out; finished in 63.32s
+
+
+    {"case":"present_mapping_pin_rejects_removal_after_crash","artifact":"/persist/tmp/pp-ticket-t-68-account-e3aa41cc0f9c4056"}
+    test ticket_t_68_desktop_account_mapping::present_mapping_pin_rejects_removal_after_crash ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 46 filtered out; finished in 63.34s
+    [0m
+
+[32;1m        PASS[0m [  83.272s] (7/9) [35;1mpp-core::runtime_m0[0m [36mticket_t_68_desktop_account_mapping[0m[36m::[0m[34;1mmapping_pin_survives_compat_crash_and_full_restart[0m
+[32;1m [0m [32;1mstdout[0m [32;1m───[0m
+
+    running 1 test
+    test ticket_t_68_desktop_account_mapping::mapping_pin_survives_compat_crash_and_full_restart has been running for over 60 seconds
+
+    running 1 test
+    test ticket_t_68_desktop_account_mapping::mapping_pin_survives_compat_crash_and_full_restart has been running for over 60 seconds
+    {"case":"mapping_pin_after_crash","data":"/persist/tmp/pp-ticket-t-68-account-e318e45abee188b2","status":503,"body":{"type":"about:blank","title":"Service Unavailable","status":503,"detail":"Compatibility backend unavailable"}}
+    test ticket_t_68_desktop_account_mapping::mapping_pin_survives_compat_crash_and_full_restart ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 46 filtered out; finished in 83.24s
+
+
+    {"case":"mapping_pin_survives_compat_crash_and_full_restart","artifact":"/persist/tmp/pp-ticket-t-68-account-e318e45abee188b2"}
+    test ticket_t_68_desktop_account_mapping::mapping_pin_survives_compat_crash_and_full_restart ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 46 filtered out; finished in 83.25s
+    [0m
+
+[32;1m        PASS[0m [  84.273s] (8/9) [35;1mpp-core::runtime_m0[0m [36mticket_t_68_desktop_account_mapping[0m[36m::[0m[34;1mmissing_mapping_pin_rejects_later_account_after_crash[0m
+[32;1m [0m [32;1mstdout[0m [32;1m───[0m
+
+    running 1 test
+    test ticket_t_68_desktop_account_mapping::missing_mapping_pin_rejects_later_account_after_crash has been running for over 60 seconds
+
+    running 1 test
+    test ticket_t_68_desktop_account_mapping::missing_mapping_pin_rejects_later_account_after_crash has been running for over 60 seconds
+    {"case":"missing_pin_after_crash","data":"/persist/tmp/pp-ticket-t-68-account-137576de7294bb9c","status":503,"body":{"type":"about:blank","title":"Service Unavailable","status":503,"detail":"Compatibility backend unavailable"}}
+    test ticket_t_68_desktop_account_mapping::missing_mapping_pin_rejects_later_account_after_crash ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 46 filtered out; finished in 84.24s
+
+
+    {"case":"missing_mapping_pin_rejects_later_account_after_crash","artifact":"/persist/tmp/pp-ticket-t-68-account-137576de7294bb9c"}
+    test ticket_t_68_desktop_account_mapping::missing_mapping_pin_rejects_later_account_after_crash ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 46 filtered out; finished in 84.26s
+    [0m
+
+[33;1m        SLOW[0m [>120.000s] (───) [35;1mpp-core::runtime_m0[0m [36mticket_t_68_desktop_account_mapping[0m[36m::[0m[34;1mmapping_refusals_happen_before_product_writes[0m
+[32;1m        PASS[0m [ 156.934s] (9/9) [35;1mpp-core::runtime_m0[0m [36mticket_t_68_desktop_account_mapping[0m[36m::[0m[34;1mmapping_refusals_happen_before_product_writes[0m
+[32;1m [0m [32;1mstdout[0m [32;1m───[0m
+
+    running 1 test
+    test ticket_t_68_desktop_account_mapping::mapping_refusals_happen_before_product_writes has been running for over 60 seconds
+
+    running 1 test
+    {"refused":"no-map","data":"/persist/tmp/pp-ticket-t-68-account-c935eea8b8fcc906/no-map"}
+    {"refused":"corrupt","data":"/persist/tmp/pp-ticket-t-68-account-c935eea8b8fcc906/corrupt"}
+    {"refused":"unknown-field","data":"/persist/tmp/pp-ticket-t-68-account-c935eea8b8fcc906/unknown-field"}
+    test ticket_t_68_desktop_account_mapping::mapping_refusals_happen_before_product_writes has been running for over 60 seconds
+    {"refused":"unknown-user","data":"/persist/tmp/pp-ticket-t-68-account-c935eea8b8fcc906/unknown-user"}
+    {"refused":"mismatch","data":"/persist/tmp/pp-ticket-t-68-account-c935eea8b8fcc906/mismatch"}
+    {"refused":"default","data":"/persist/tmp/pp-ticket-t-68-account-c935eea8b8fcc906/default"}
+    {"refused":"public-mode","data":"/persist/tmp/pp-ticket-t-68-account-c935eea8b8fcc906/public-mode"}
+    {"refused":"symlink","data":"/persist/tmp/pp-ticket-t-68-account-c935eea8b8fcc906/symlink"}
+    {"refused":"old-schema","data":"/persist/tmp/pp-ticket-t-68-account-c935eea8b8fcc906/old-schema"}
+    test ticket_t_68_desktop_account_mapping::mapping_refusals_happen_before_product_writes ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 46 filtered out; finished in 156.89s
+
+
+    {"case":"mapping_refusals_happen_before_product_writes","artifact":"/persist/tmp/pp-ticket-t-68-account-c935eea8b8fcc906"}
+    test ticket_t_68_desktop_account_mapping::mapping_refusals_happen_before_product_writes ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 46 filtered out; finished in 156.92s
+    [0m
+
+────────────
+[32;1m     Summary[0m [ 156.938s] [1m9[0m tests run: [1m9[0m [32;1mpassed[0m ([1m4[0m [33;1mslow[0m), [1m38[0m [33;1mskipped[0m

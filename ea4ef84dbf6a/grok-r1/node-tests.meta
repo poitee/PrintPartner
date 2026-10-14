@@ -1,0 +1,3 @@
+BEGIN node-tests 2026-10-14T19:20:53Z
+npm --prefix web run test -w @print-partner/server -- src/desktop-account.test.ts src/desktop-context.test.ts src/routes/auth-security.test.ts src/services/printer-upload-shutdown.test.ts 
+exit 0

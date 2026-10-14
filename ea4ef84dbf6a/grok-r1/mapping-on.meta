@@ -1,0 +1,3 @@
+BEGIN mapping-on 2026-10-14T19:21:13Z
+cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-core --features desktop_rebuild --test runtime_m0 --success-output=immediate --no-tests=fail -E test\(ticket_t_68_desktop_account_mapping\) 
+exit 0

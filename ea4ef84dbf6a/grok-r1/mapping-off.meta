@@ -1,0 +1,3 @@
+BEGIN mapping-off 2026-10-14T19:23:52Z
+cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-core --test runtime_m0 --success-output=immediate --no-tests=fail -E test\(ticket_t_68_desktop_account_mapping\) 
+exit 0

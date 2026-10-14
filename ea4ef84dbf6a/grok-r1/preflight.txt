@@ -1,0 +1,9 @@
+started 2026-10-14T19:20:53Z
+head ea4ef84dbf6a92c08ffb0d96bf2fc1a09f5f0ac4
+origin ea4ef84dbf6a92c08ffb0d96bf2fc1a09f5f0ac4
+status 0
+node v24.21.0 /opt/agent-fleet/artifacts/.local/share/mise/installs/node/24.21.0/bin/node
+manifest /persist/home/.local/state/pstack-t3/gre353-owner-mapping/exact-ea4ef84dbf6a-stage/bundle-manifest.json
+manifest_sha256 f8e351da43c7574b9de308d612d2fdc60d2918865b2a197cc6e99d52ff4ad466
+manifest_commit ea4ef84dbf6a92c08ffb0d96bf2fc1a09f5f0ac4
+manifest_node v24.21.0
