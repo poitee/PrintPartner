@@ -3420,6 +3420,10 @@ dependencies = [
 [[package]]
 name = "pp-services"
 version = "0.1.0"
+dependencies = [
+ "plist",
+ "tempfile",
+]
 
 [[package]]
 name = "pp-source"
@@ -3455,6 +3459,7 @@ dependencies = [
  "hmac",
  "icu_collator",
  "libc",
+ "pp-domain",
  "rand 0.9.5",
  "regress 0.11.1",
  "rusqlite",

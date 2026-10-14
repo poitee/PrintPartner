@@ -10,6 +10,7 @@ import * as artifactDigest from "../services/artifact-digest.js";
 import { PlanDraftWorkspaceService } from "../services/plan-draft-workspace.js";
 import { backfillAcceptedPlanRevisions } from "./accepted-plan-revisions.js";
 import { backfillCurrentRequiredUnitSets } from "./required-units.js";
+import { storageWorkerEnv } from "../desktop-context.js";
 import { getDb, SqliteDatabase } from "./client.js";
 import { AppRepository } from "./repository.js";
 import { MAX_PLAN_DRAFT_LIFECYCLE_VERSION } from "../services/plan-drafts.js";
@@ -4075,7 +4076,7 @@ selections:
 import { getDb, SqliteDatabase } from "./src/db/client.ts";
 import { AppRepository } from "./src/db/repository.ts";
 import { parseRequiredUnitToken } from "./src/services/required-units.ts";
-const database = new SqliteDatabase(process.argv[1]);
+const database = new SqliteDatabase(process.argv[1], "parent");
 database.connect();
 const repo = new AppRepository(getDb(database), "default", database.reposDir);
 writeFileSync(process.argv[4], "ready");
@@ -4092,7 +4093,7 @@ database.close();`,
         startPath,
         attemptedPath,
       ],
-      { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] },
+      { cwd: process.cwd(), env: { ...process.env, ...storageWorkerEnv(first.root) }, stdio: ["ignore", "pipe", "pipe"] },
     );
     let childOutput = "";
     child.stdout?.on("data", (chunk: Buffer) => {

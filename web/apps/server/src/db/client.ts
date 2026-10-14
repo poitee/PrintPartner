@@ -8,37 +8,69 @@ import { schemaMigrations } from "./migrations-sqlite.js";
 import { seedStarterProfiles } from "./seed-starter-profiles.js";
 import { repairSourceRevisionTenantOwnershipSqlite } from "./source-revision-tenant-repair.js";
 import { assertUpgradableSchemaVersion, readSchemaVersion } from "./upgrade-guard.js";
-import { databaseSchemaIsCurrent, rustOwnedCopy } from "./rust-owned.js";
+import { databaseSchemaIsCurrent, parentReservedCopy, rustOwnedCopy } from "./rust-owned.js";
+import { retainDataDirectory } from "../desktop-context.js";
 
 export type DrizzleDb = BetterSQLite3Database<typeof schema>;
 
+// "own" reserves the copy for this process. "parent" is for a worker spawned by
+// the process that already reserved it, such as a multi-process contention test.
+// The worker holds no lease of its own, so it must close before its parent releases.
+export type DataDirectoryLease = "own" | "parent";
+
 export class SqliteDatabase {
   private sqlite: Database.Database | null = null;
+  private releaseDataDirectory: (() => void) | null = null;
   readonly dbPath: string;
   readonly dataDir: string;
+  private readonly lease: DataDirectoryLease;
   readonly reposDir: string;
   readonly sourcesDir: string;
 
   drizzle: DrizzleDb | null = null;
 
-  constructor(dataDir: string) {
+  constructor(dataDir: string, lease: DataDirectoryLease = "own") {
     this.dataDir = dataDir;
+    this.lease = lease;
     this.dbPath = join(dataDir, "print-partner.db");
     this.reposDir = join(dataDir, "repos");
     this.sourcesDir = join(dataDir, "sources");
   }
 
-  // Writer processes reserve the copy before they connect. startServer, the MCP
-  // server and the migrate CLI hold acquireDataDirectory, and the desktop child
-  // runs under its parent's lease. Connect only refuses a copy another runtime owns.
+  // Connect holds the copy until close. It shares a lease this process already
+  // holds, and the recorded desktop child runs under its parent's lease.
   connect(): void {
-    const ownership = rustOwnedCopy(this.dataDir);
-    if (ownership.kind === "foreign") {
-      throw new Error("Rust owns this data directory; Node will not migrate or write");
+    if (this.sqlite) throw new Error("Database already connected");
+    // Finish a release that a failed close left pending before reserving again.
+    this.close();
+    let ownership: "absent" | "child";
+    if (this.lease === "parent") {
+      if (!parentReservedCopy(this.dataDir)) {
+        throw new Error("The parent process does not hold this data directory; Node will not migrate or write");
+      }
+      // Seed like a recorded child, so a worker on a current schema does not
+      // advance sqlite_sequence just by connecting.
+      ownership = "child";
+    } else {
+      const copy = rustOwnedCopy(this.dataDir);
+      if (copy.kind === "foreign") {
+        throw new Error("Another process owns this data directory; Node will not migrate or write");
+      }
+      ownership = copy.kind;
+      if (ownership === "absent") this.releaseDataDirectory = retainDataDirectory(this.dataDir);
     }
+    try {
+      this.open(ownership);
+    } catch (error) {
+      this.close();
+      throw error;
+    }
+  }
+
+  private open(ownership: "absent" | "child"): void {
     // A recorded child reopening the current schema restores missing starters
     // only, so existing starter rows do not advance sqlite_sequence.
-    const seedMode = ownership.kind === "child" && databaseSchemaIsCurrent(this.dbPath) ? "missing" : "ignore";
+    const seedMode = ownership === "child" && databaseSchemaIsCurrent(this.dbPath) ? "missing" : "ignore";
     mkdirSync(dirname(this.dbPath), { recursive: true });
     const sqlite = new Database(this.dbPath);
     try {
@@ -154,6 +186,8 @@ export class SqliteDatabase {
   close(): void {
     this.sqlite?.close();
     this.sqlite = null;
+    this.releaseDataDirectory?.();
+    this.releaseDataDirectory = null;
     this.drizzle = null;
   }
 

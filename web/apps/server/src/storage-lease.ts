@@ -4,6 +4,9 @@ import { join } from "node:path";
 
 const instanceIdentity = `instance:${randomBytes(16).toString("hex")}`;
 
+/** Environment key a reserving process hands its own lease identity to a worker through. */
+export const storageParentIdentityEnv = "PP_STORAGE_PARENT_IDENTITY";
+
 export function processIdentity(pid: number): string {
   try {
     const boot = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
