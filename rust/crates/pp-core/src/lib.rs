@@ -379,15 +379,11 @@ impl CoreRuntime {
         self.finish_shutdown().await.0
     }
 
-    #[allow(
-        clippy::result_large_err,
-        reason = "Refusal returns the running runtime to its owner"
-    )]
     pub async fn shutdown_with_cutover(
         mut self,
         operation: &str,
         parity: &str,
-    ) -> Result<(ShutdownReceipt, CutoverReceipt), (Self, CutoverRefusal)> {
+    ) -> Result<(ShutdownReceipt, CutoverReceipt), Box<(Self, CutoverRefusal)>> {
         let planned = cutover::plan(self.ownership.as_deref(), &self.owners, operation, parity);
         let refusal = match planned {
             Err(refusal) => refusal,
@@ -425,7 +421,7 @@ impl CoreRuntime {
         {
             self.evidence_unsaved = true;
         }
-        Err((self, refusal))
+        Err(Box::new((self, refusal)))
     }
 
     async fn finish_shutdown(&mut self) -> (ShutdownReceipt, Option<CutoverReceipt>) {
