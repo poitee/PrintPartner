@@ -10,6 +10,12 @@ The command builds the trusted React assets and real compatibility server, creat
 
 Closing the window hides it while core continues. The tray has Show, service status, a guarded Restart service action, and Quit. Quit and supported OS exits wait for the consuming core shutdown before the process returns. The webview receives no native commands. Navigation stays at the exact core origin and popups are denied. Existing external handoff flows need a separately validated native UX before they are accepted as working.
 
+Set `PP_DESKTOP_RECOVERY_UI=1` to add View logs and Open data folder to the native tray. This partial recovery UI defaults to off. View logs reads a bounded recent history and removes unknown events and fields before display. It remains available when the compatibility service stops. Restart service admits one request per crash-guard episode. Local crash records retain only known failure categories and numeric exit codes or signals. They contain no backend messages, paths, credentials, or panic payloads.
+
+Native offline backup restore and opt-in Rust Sentry delivery remain unavailable. The tray does not call the live restore route. A safe restore must retain the original storage lease and stop all writers before replacing files.
+
+In a debug build, add `--test-recovery-logs --test-exit-seconds 20` to the native launch command to open the same Service logs dialog for a repeatable UI probe. The timed shutdown still completes while the dialog is open. Release builds reject both probe arguments.
+
 On the nonprivileged Linux development host, set `PP_NATIVE_SYSROOT` to the already extracted GTK/WebKit SDK. `native-sdk.sh` reads that SDK without changing it. Other hosts use their target-native development packages. This SDK does not produce a portable Linux distribution image.
 
 ## Create an unsigned target-native stage

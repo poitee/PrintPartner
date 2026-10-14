@@ -8,6 +8,7 @@ use tauri::{
     tray::TrayIconBuilder,
     webview::NewWindowResponse,
 };
+mod recovery;
 
 #[cfg(all(not(debug_assertions), feature = "desktop-e2e"))]
 compile_error!("the desktop-e2e feature is not part of a release build");
@@ -86,6 +87,7 @@ fn run() -> Result<u8> {
     let mut stage = None;
     let mut data = None;
     let mut test_exit = None;
+    let mut test_recovery_logs = false;
     while let Some(argument) = args.next() {
         match argument.as_str() {
             "--dev-stage" if cfg!(debug_assertions) => {
@@ -105,6 +107,7 @@ fn run() -> Result<u8> {
                         .parse::<u64>()?,
                 )
             }
+            "--test-recovery-logs" if cfg!(debug_assertions) => test_recovery_logs = true,
             _ => anyhow::bail!("Unsupported desktop launch argument"),
         }
     }
@@ -131,8 +134,9 @@ fn run() -> Result<u8> {
         )?,
     };
     let launch = ResourceLayout::read(&stage)
-        .and_then(|layout| layout.into_launch(data))
+        .and_then(|layout| layout.into_launch(data.clone()))
         .context("Desktop resource verification failed")?;
+    let probe_diagnostics = recovery::RecoveryUi::new(data.clone());
     let mut core = runtime
         .block_on(CoreRuntime::start(launch))
         .context("Desktop core startup failed")?;
@@ -154,7 +158,8 @@ fn run() -> Result<u8> {
                 let _ = hide.hide();
             }
         });
-        let watch = build_tray(&app, core.handle()).context("Native tray initialization failed")?;
+        let watch =
+            build_tray(&app, core.handle(), data).context("Native tray initialization failed")?;
         Ok((window, watch))
     })();
     let (window, status_watch) = match setup {
@@ -182,6 +187,9 @@ fn run() -> Result<u8> {
             status_watch.abort();
         }
         if cfg!(debug_assertions) && test_exit.is_some() && matches!(event, tauri::RunEvent::Ready) {
+            if test_recovery_logs {
+                probe_diagnostics.view_logs(_app);
+            }
             let window = window.clone();
             let app = _app.clone();
             let _ = window.close();
@@ -219,14 +227,25 @@ fn run() -> Result<u8> {
 fn build_tray(
     app: &tauri::App,
     handle: CoreHandle,
+    data: PathBuf,
 ) -> Result<tauri::async_runtime::JoinHandle<()>> {
     let show = MenuItem::with_id(app, "show", "Show Print Partner", true, None::<&str>)?;
     let status = MenuItem::with_id(app, "status", "Service ready", false, None::<&str>)?;
     let recover = MenuItem::with_id(app, "recover", "Restart service", false, None::<&str>)?;
+    let logs = MenuItem::with_id(app, "logs", "View logs", true, None::<&str>)?;
+    let folder = MenuItem::with_id(app, "data", "Open data folder", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Print Partner", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &status, &recover, &quit])?;
+    let recovery_ui = std::env::var("PP_DESKTOP_RECOVERY_UI").is_ok_and(|value| value == "1");
+    let menu = if recovery_ui {
+        Menu::with_items(app, &[&show, &status, &logs, &recover, &folder, &quit])?
+    } else {
+        Menu::with_items(app, &[&show, &status, &recover, &quit])?
+    };
     let status_receiver = handle.subscribe();
     let recovery = handle.clone();
+    let gate = std::sync::Arc::new(recovery::RecoveryGate::default());
+    let recovery_gate = gate.clone();
+    let diagnostics = recovery::RecoveryUi::new(data);
     TrayIconBuilder::with_id("printpartner")
         .icon(
             app.default_window_icon()
@@ -243,11 +262,10 @@ fn build_tray(
                 }
             }
             "recover" => {
-                let handle = recovery.clone();
-                tauri::async_runtime::spawn(async move {
-                    let _ = handle.recover_compat().await;
-                });
+                recovery::restart(app, recovery.clone(), recovery_gate.clone());
             }
+            "logs" if recovery_ui => diagnostics.view_logs(app),
+            "data" if recovery_ui => diagnostics.open_data(app),
             "quit" => app.exit(0),
             _ => {}
         })
@@ -266,7 +284,7 @@ fn build_tray(
                 CoreStatus::Stopped => "Service stopped",
                 CoreStatus::Failed => "Service failed",
             };
-            let guarded = matches!(state, CoreStatus::Guarded);
+            let guarded = gate.observe(&state);
             let (status, recover) = (status.clone(), recover.clone());
             if app_handle
                 .run_on_main_thread(move || {
