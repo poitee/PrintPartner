@@ -1,8 +1,7 @@
 import { chmodSync, readFileSync, rmdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { installDesktopContext, desktopContext, mappedDesktopTenant, mappedDesktopDatabaseAvailable, closeDesktopAccount } from "./desktop-context.js";
-import { tenantStorage } from "./middleware/tenant-context.js";
-import { interruptInFlightPrinterSends, interruptPrinterUploadsOnShutdown } from "./services/printer-send-queue.js";
+import { interruptPrinterUploadsOnShutdown } from "./services/printer-send-queue.js";
 
 async function setupFromParent(): Promise<unknown> {
   return new Promise((resolve, reject) => {
@@ -31,11 +30,10 @@ const stop = async () => {
   try {
     if (runtime) {
       const tenant = mappedDesktopTenant();
-      if (!tenant) interruptPrinterUploadsOnShutdown(runtime.ports);
-      else if (mappedDesktopDatabaseAvailable() && runtime.ports.repository) {
-        const repository = runtime.ports.repository;
-        tenantStorage.run(tenant, () => interruptInFlightPrinterSends(repository));
-      }
+      interruptPrinterUploadsOnShutdown(
+        tenant && !mappedDesktopDatabaseAvailable() ? {} : runtime.ports,
+        tenant ?? undefined,
+      );
     }
     await runtime?.app.close();
     await runtime?.ports.db.close();

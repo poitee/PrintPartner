@@ -3,6 +3,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import Database from "better-sqlite3";
+import Fastify from "fastify";
+import cookie from "@fastify/cookie";
+import { getDb } from "../db/client.js";
+import { AuthStore } from "../services/auth-store.js";
+import * as desktopContext from "../desktop-context.js";
+import { registerAuthRoutes } from "./auth.js";
+import { registerHealthRoutes } from "./health.js";
 import { buildApp } from "../app.js";
 import { createSelfHostPorts } from "../adapters/self-host/index.js";
 import { loadConfig, type ServerConfig } from "../config.js";
@@ -32,8 +39,52 @@ describe("production authentication routes", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
     if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
     else process.env.NODE_ENV = originalNodeEnv;
+  });
+
+  it("keeps mapped account reads while omitting backend session mutations", async () => {
+    delete process.env.NODE_ENV;
+    vi.spyOn(desktopContext, "mappedDesktopTenant").mockReturnValue("account-a");
+    const dir = mkdtempSync(join(tmpdir(), "pp-auth-mapped-"));
+    const ports = createSelfHostPorts(dir);
+    await ports.db.connect();
+    const auth = new AuthStore(getDb(ports.db.sqlite));
+    auth.createUser({ email: "selected@example.test", displayName: "Selected" });
+    const foreign = auth.createUser({ email: "foreign@example.test", displayName: "Foreign" });
+    auth.createSession(foreign.id, "email");
+    const db = new Database(join(dir, "print-partner.db"), { readonly: true });
+    const snapshot = () => ["users", "sessions", "auth_identities", "password_reset_tokens"].map((table) => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all());
+    const before = snapshot();
+    const app = Fastify();
+    await app.register(cookie);
+    app.decorateRequest("sessionUser", null);
+    app.addHook("onRequest", async (request) => {
+      request.sessionUser = { user_id: "account-a", tenant_id: "account-a", login: "selected", display_name: "Selected", email: null, provider: "desktop", is_admin: false };
+    });
+    const config = { ...loadConfig(), multiUser: true, registrationOpen: true, smtpConfigured: true, githubOAuthConfigured: true, discordOAuthConfigured: true };
+    registerAuthRoutes(app, config, auth);
+    await registerHealthRoutes(app, config, ports, auth);
+    try {
+      expect((await app.inject({ method: "GET", url: "/auth/me" })).json().user.user_id).toBe("account-a");
+      for (const url of ["/auth/dev-login", "/auth/logout", "/auth/login", "/auth/register", "/auth/forgot-password", "/auth/reset-password", "/auth/change-password"]) {
+        expect((await app.inject({ method: "POST", url, payload: { login: "fixture", email: "fixture@example.test", password: "fixture-password" } })).statusCode, url).toBe(404);
+      }
+      for (const url of ["/auth/github", "/auth/callback", "/auth/discord", "/auth/discord/callback"]) {
+        expect((await app.inject({ method: "GET", url })).statusCode, url).toBe(404);
+      }
+      expect(snapshot()).toEqual(before);
+      const health = await app.inject({ method: "GET", url: "/health" });
+      expect(health.statusCode).toBe(200);
+      expect(health.json().registration_open).toBe(false);
+      for (const capability of ["backups", "multi_user_auth", "password_reset_email", "github_oauth", "discord_oauth"]) expect(health.json().capabilities).not.toContain(capability);
+    } finally {
+      await app.close();
+      db.close();
+      await ports.db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("does not register the development login route", async () => {
@@ -258,11 +309,12 @@ describe("production authentication routes", () => {
 
   it("reports whether the health request has an authenticated session", async () => {
     const dir = mkdtempSync(join(tmpdir(), "pp-auth-production-health-"));
-    const { app, ports } = await makeProductionApp(dir);
+    const { app, ports } = await makeProductionApp(dir, { smtpConfigured: true, githubOAuthConfigured: true, discordOAuthConfigured: true });
 
     try {
       const anonymous = await app.inject({ method: "GET", url: "/health" });
       expect(anonymous.json()).toMatchObject({ multi_user: true, authenticated: false });
+      expect(anonymous.json().capabilities).toEqual(expect.arrayContaining(["backups", "multi_user_auth", "password_reset_email", "github_oauth", "discord_oauth"]));
 
       const registration = await app.inject({
         method: "POST",

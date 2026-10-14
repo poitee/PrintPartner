@@ -116,6 +116,7 @@ async fn foreign_snapshot(data: &Path) -> Value {
           if (!db.prepare(`PRAGMA table_info("${name}")`).all().some(c => c.name === 'tenant_id')) continue;
           result[name] = db.prepare(`SELECT * FROM "${name}" WHERE tenant_id <> 'account-a' ORDER BY rowid`).all();
         }
+        for (const table of ['sessions','auth_identities','password_reset_tokens']) result[table] = db.prepare(`SELECT * FROM "${table}" ORDER BY rowid`).all();
         result.users = db.prepare("SELECT * FROM users WHERE id <> 'account-a' ORDER BY id").all();
         db.close(); console.log(JSON.stringify(result));
     "#).await
@@ -181,6 +182,40 @@ async fn mapped_account_reads_writes_and_restarts_without_foreign_changes() {
         me["user"],
         json!({"user_id":"account-a","login":"a@example.test","display_name":"Selected account","email":"a@example.test","provider":"desktop","hasPassword":true,"is_admin":false})
     );
+    let mut denied = Vec::new();
+    for path in [
+        "/auth/dev-login",
+        "/auth/login",
+        "/auth/register",
+        "/auth/forgot-password",
+        "/auth/reset-password",
+        "/auth/change-password",
+    ] {
+        let (status, _) = api(&runtime, &cookie, path, "POST", Some(json!({"login":"fixture","email":"b@example.test","password":"fixture-password","token":"fixture","current_password":"fixture","new_password":"fixture-password"}))).await;
+        denied.push(status.as_u16());
+    }
+    for path in [
+        "/auth/github",
+        "/auth/callback",
+        "/auth/discord",
+        "/auth/discord/callback",
+    ] {
+        denied.push(api(&runtime, &cookie, path, "GET", None).await.0.as_u16());
+    }
+    let (status, health) = api(&runtime, &cookie, "/health", "GET", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let capabilities = health["capabilities"].as_array().unwrap();
+    let advertised = [
+        "backups",
+        "multi_user_auth",
+        "password_reset_email",
+        "github_oauth",
+        "discord_oauth",
+    ]
+    .map(|name| capabilities.contains(&json!(name)));
+    assert_eq!(denied, vec![501; 10]);
+    assert_eq!(advertised, [false; 5]);
+    assert_eq!(foreign_snapshot(&data).await, before);
     let (status, own) = api(&runtime, &cookie, "/plans/101", "GET", None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(own["name"], "Owned Plan");
