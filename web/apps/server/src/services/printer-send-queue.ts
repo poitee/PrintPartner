@@ -3,14 +3,28 @@ import type { PrinterHostStatus, PrinterSendQueueItem } from "@print-partner/con
 import type { PrinterMachine } from "@print-partner/domain";
 import type { AppRepository } from "../db/repository.js";
 import { getIntegrationConfig } from "../integrations/store.js";
+import { tenantStorage } from "../middleware/tenant-context.js";
 import { loadFleet } from "./printer-fleet.js";
 import {
   assertPrinterUploadArtifactPath,
   getPrinterSendQueueItem,
   listActivePrinterSendQueue,
   loadPrinterSendQueue,
+  PRINTER_SEND_QUEUE_SETTINGS_KEY,
   updatePrinterSendQueueItem,
 } from "./printer-send-queue-store.js";
+
+let printerUploadsHalted = false;
+
+/** True after shutdown has refused further printer-upload success in this process. */
+export function printerUploadsAreHalted(): boolean {
+  return printerUploadsHalted;
+}
+
+/** Test-only. A new process starts unhalted; tests share one process. */
+export function resetPrinterUploadHaltForTests(): void {
+  printerUploadsHalted = false;
+}
 
 type StartPrinterUploadJob = (payload: {
   printer_id: string;
@@ -209,7 +223,7 @@ export async function drainPrinterSendQueue(
   return results;
 }
 
-const INTERRUPTED_PRINTER_SEND_ERROR =
+export const INTERRUPTED_PRINTER_SEND_ERROR =
   "Interrupted by process restart. Printer outcome is unknown, so this send was not marked successful. The staged file remains for an explicit retry. This process will not retry a print on its own.";
 
 function interruptSendingItem(
@@ -227,11 +241,39 @@ function interruptSendingItem(
 export function reconcilePrinterSendsAfterProcessStart(
   repo: AppRepository,
 ): PrinterSendQueueItem[] {
+  return interruptInFlightPrinterSends(repo);
+}
+
+export function interruptInFlightPrinterSends(
+  repo: AppRepository,
+): PrinterSendQueueItem[] {
   const changed: PrinterSendQueueItem[] = [];
   for (const item of loadPrinterSendQueue(repo)) {
     if (item.state !== "sending") continue;
     const updated = interruptSendingItem(repo, item.id);
     if (updated) changed.push(updated);
+  }
+  return changed;
+}
+
+type ShutdownPorts = {
+  repository?: AppRepository | null;
+  db?: { defaultRepository?: AppRepository | null };
+};
+
+export function interruptPrinterUploadsOnShutdown(source: ShutdownPorts): PrinterSendQueueItem[] {
+  printerUploadsHalted = true;
+  const repo = source.repository ?? source.db?.defaultRepository ?? null;
+  if (!repo) return [];
+  const tenantIds = new Set<string>(["default"]);
+  if (typeof repo.listTenantIdsForSetting === "function") {
+    for (const tenantId of repo.listTenantIdsForSetting(PRINTER_SEND_QUEUE_SETTINGS_KEY)) {
+      tenantIds.add(tenantId);
+    }
+  }
+  const changed: PrinterSendQueueItem[] = [];
+  for (const tenantId of tenantIds) {
+    changed.push(...tenantStorage.run(tenantId, () => interruptInFlightPrinterSends(repo)));
   }
   return changed;
 }

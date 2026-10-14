@@ -93,6 +93,7 @@ function assertClosedStateGraph(capture: { [key: string]: Json }): void {
 }
 
 function assertRouteStateInvariants(capture: { [key: string]: Json }): void {
+  const states = object(capture.states);
   const routes = capture.route_cases;
   assert(Array.isArray(routes), "route_cases");
   routes.forEach((entry, index) => {
@@ -108,6 +109,11 @@ function assertRouteStateInvariants(capture: { [key: string]: Json }): void {
     }
     if (invariants.includes("one-publication")) {
       assert.notEqual(before, after, `${label}: one-publication requires different before and after states`);
+    }
+    if (invariants.includes("current-plate-head-invalidated")) {
+      const heads = object(object(states[after]).database).accepted_plate_heads;
+      assert(Array.isArray(heads), `${label}: accepted_plate_heads`);
+      assert.equal(heads.length, 0, `${label}: current-plate-head-invalidated requires an empty accepted_plate_heads table`);
     }
   });
 }
