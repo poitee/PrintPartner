@@ -1,6 +1,6 @@
 import { moonrakerHostSnapshot } from "./moonraker-host-snapshot.js";
 import { acquireDataDirectory, desktopContext, desktopPrincipal, registerDesktopBoundary } from "./desktop-context.js";
-import { databaseSchemaIsCurrent, rustOwnedCopy } from "./db/rust-owned.js";
+import { rustOwnedCopy } from "./db/rust-owned.js";
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
@@ -575,11 +575,7 @@ export async function startServer(config: ServerConfig) {
     beginSourceSyncAdmission(config.dataDir);
     validateProductionConfig(config);
     const ownership = rustOwnedCopy(config.dataDir);
-    const childAlreadyCurrent =
-      ownership.kind === "child" &&
-      databaseSchemaIsCurrent(join(config.dataDir, "print-partner.db"));
-    const skipSchemaStartup = ownership.kind === "foreign" || childAlreadyCurrent;
-    if (!config.databaseUrl && !skipSchemaStartup) {
+    if (!config.databaseUrl && ownership.kind !== "foreign") {
       const preparation = await prepareSqliteUpgrade({
         dataDir: config.dataDir,
         appVersion: config.version,
@@ -600,9 +596,8 @@ export async function startServer(config: ServerConfig) {
     try {
       await ports.db.connect();
 
-      // Rust schema setup does not copy these Node-only rows, so a child on
-      // schema 34 still has to run them. They are idempotent.
-      if (ownership.kind !== "foreign" && ports.repository) {
+      // One-time migration: move print_outcomes blob → print_job_parts SQL rows.
+      if (ports.repository) {
         try {
           const { migratePrintOutcomesBlob } = await import(
             "./services/printer-outcomes-store.js"
@@ -613,7 +608,8 @@ export async function startServer(config: ServerConfig) {
         }
       }
 
-      if (ownership.kind !== "foreign" && ports.repository) {
+      // Best-effort: upsert Advisor notes from shipped/imported domain pack onto matching sources.
+      if (ports.repository) {
         try {
           const { backfillAdvisorNotesFromDomainPack } = await import(
             "./assistant/domain-pack.js"
