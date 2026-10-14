@@ -6,6 +6,8 @@ rust-version.workspace = true
 license.workspace = true
 
 [features]
+default = []
+desktop_rebuild = ["pp-core/desktop_rebuild"]
 desktop-e2e = ["dep:tauri-plugin-wdio-webdriver"]
 
 [dependencies]
