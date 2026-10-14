@@ -241,11 +241,6 @@ impl Directory {
         Ok(())
     }
 
-    pub(crate) fn remove_empty_directory(&self, name: &str) -> Result<()> {
-        fs::unlinkat(&self.0, name, AtFlags::REMOVEDIR)?;
-        Ok(())
-    }
-
     pub(crate) fn remove_owned_file(&self, name: &str, owned: &File) -> Result<()> {
         self.require_owned_file(name, owned)?;
         fs::unlinkat(&self.0, name, AtFlags::empty())?;
