@@ -274,6 +274,117 @@ mod tests {
         }
     }
 
+    fn fifo(path: &Path) {
+        use std::os::unix::ffi::OsStrExt;
+        let path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+    }
+
+    #[test]
+    fn ticket_t_2_log_open_rejects_fifo_with_peer() {
+        let scratch = Scratch::new();
+        let path = scratch.0.join("logs/desktop.jsonl");
+        fifo(&path);
+        let _peer = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap();
+        assert!(Logs::open(scratch.0.join("logs")).is_err());
+    }
+
+    #[test]
+    fn ticket_t_2_log_open_rejects_readerless_fifo_promptly() {
+        const CHILD_PATH: &str = "PP_TEST_READERLESS_LOG_FIFO";
+        if let Some(directory) = std::env::var_os(CHILD_PATH) {
+            assert!(Logs::open(PathBuf::from(directory)).is_err());
+            return;
+        }
+        let scratch = Scratch::new();
+        fifo(&scratch.0.join("logs/desktop.jsonl"));
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "logs::tests::ticket_t_2_log_open_rejects_readerless_fifo_promptly",
+                "--nocapture",
+            ])
+            .env(CHILD_PATH, scratch.0.join("logs"))
+            .spawn()
+            .unwrap();
+        let started = std::time::Instant::now();
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(status.success(), "FIFO admission child failed: {status}");
+                break;
+            }
+            if started.elapsed() >= std::time::Duration::from_secs(2) {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("readerless FIFO blocked log admission for 2 seconds");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn ticket_t_2_log_open_rejects_symlink_without_writing_target() {
+        let scratch = Scratch::new();
+        let target = scratch.0.join("outside");
+        std::fs::write(&target, "unchanged\n").unwrap();
+        std::os::unix::fs::symlink(&target, scratch.0.join("logs/desktop.jsonl")).unwrap();
+        let result = Logs::open(scratch.0.join("logs"));
+        if let Ok(logs) = &result {
+            logs.event(Event::Ready, 30);
+        }
+        assert_eq!(std::fs::read_to_string(target).unwrap(), "unchanged\n");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn ticket_t_2_log_rotation_rejects_dangling_symlink_replacement() {
+        let scratch = Scratch::new();
+        let path = scratch.0.join("logs/desktop.jsonl");
+        let logs = Logs::open(scratch.0.join("logs")).unwrap();
+        logs.event(Event::Starting, 30);
+        let before = std::fs::read(&path).unwrap();
+        let original = scratch.0.join("original");
+        std::fs::rename(&path, &original).unwrap();
+        let target = scratch.0.join("outside");
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        logs.0.lock().unwrap().day = 0;
+        logs.event(Event::Ready, 30);
+        assert!(!target.exists(), "rotation created the symlink target");
+        assert_eq!(std::fs::read(original).unwrap(), before);
+        assert!(std::fs::symlink_metadata(path).unwrap().is_symlink());
+    }
+
+    #[tokio::test]
+    async fn ticket_t_2_log_appends_redacted_records_and_rotates_regular_files() {
+        let scratch = Scratch::new();
+        let path = scratch.0.join("logs/desktop.jsonl");
+        let seed = b"{\"time\":1,\"level\":30,\"event\":\"compat_starting\"}\n";
+        std::fs::write(&path, seed).unwrap();
+        let logs = Logs::open(scratch.0.join("logs")).unwrap();
+        logs.capture(&b"{\"level\":50,\"message\":\"SECRET_TOKEN\"}\n"[..])
+            .await;
+        let appended = std::fs::read(&path).unwrap();
+        assert!(appended.starts_with(seed));
+        let row: serde_json::Value = serde_json::from_slice(&appended[seed.len()..]).unwrap();
+        assert_eq!(row["event"], "compat_output");
+        assert_eq!(row["level"], 50);
+        assert_eq!(row.as_object().unwrap().len(), 3);
+        logs.0.lock().unwrap().day = 0;
+        logs.event(Event::Ready, 30);
+        assert_eq!(
+            std::fs::read(scratch.0.join("logs/desktop.1.jsonl")).unwrap(),
+            appended
+        );
+        let row: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(row["event"], "compat_ready");
+        assert_eq!(row["level"], 30);
+        assert_eq!(row.as_object().unwrap().len(), 3);
+    }
+
     #[test]
     fn ticket_t_2_log_view_reprojects_legacy_rows_and_rejects_private_fields() {
         let scratch = Scratch::new();
