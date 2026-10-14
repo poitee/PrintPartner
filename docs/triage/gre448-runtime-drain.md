@@ -59,3 +59,15 @@ cutover, and restart evidence. GRE-448 remains In Progress. Worker fencing, Rust
 handlers, operator entry, real parity generation, rollback rules, interrupted
 upload coverage beyond the already merged fixtures, and Mac logout evidence
 remain outside this slice. This is headless unsigned evidence.
+
+The pp-compat simulator acceptance test
+`ticket_t_3_drain_repeated_eof_interrupts_mutation_without_resend` runs three
+supervisor starts against a real Node Unix-socket server. Each POST records its
+payload before withholding the response. The server ignores SIGTERM so its
+recorded EOF and exit prove that shutdown closed the parent pipe. Each cycle
+requires graceful shutdown within five seconds, an unknown dispatch outcome,
+zero tracked connection tasks, a closed stale endpoint, exactly one accepted
+payload, and an absent old process group before the next start. It emits the
+exact accumulated event log and failure strings. This proves the compat transport
+under a simulator; the merged printer-upload fixtures cover persisted job retry
+policy. It does not prove parent death during desktop startup or Mac logout.

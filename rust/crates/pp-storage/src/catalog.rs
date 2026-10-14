@@ -4,7 +4,7 @@ mod naming;
 
 use crate::{Envelope, SettingsClient, WriterOwner, auth};
 use anyhow::{Result, anyhow, ensure};
-use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::{
@@ -411,8 +411,9 @@ pub(super) fn execute(
     connection: &mut Connection,
     state: &mut State,
     command: Command,
+    admission: crate::writer_admission::Deadline,
 ) -> Result<Reply> {
-    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let tx = crate::writer_admission::begin_immediate(connection, admission)?;
     match command {
         Command::End(token) => {
             ensure!(state.active.remove(&token).is_some(), "Unknown work lease");

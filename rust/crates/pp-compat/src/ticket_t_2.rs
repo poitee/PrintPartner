@@ -814,6 +814,8 @@ async fn ticket_t_2_shell_crashes_expire_outside_default_guard_window() {
 }
 
 struct HealthFixture {
+    delay_ms: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    hung: std::sync::Arc<std::sync::atomic::AtomicBool>,
     completed: tokio::sync::watch::Receiver<usize>,
     health: std::sync::Arc<std::sync::Mutex<serde_json::Value>>,
     probes: std::sync::Arc<std::sync::Mutex<Vec<tokio::time::Instant>>>,
@@ -836,12 +838,18 @@ impl HealthFixture {
             "release": {"commit": "ticket-t-2-unreleased"}
         })));
         let probes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let hung = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let hang_response = hung.clone();
+        let delay_ms = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let response_delay = delay_ms.clone();
         let response = health.clone();
         let received = probes.clone();
         let task = tokio::spawn(async move {
             loop {
                 let (stream, _) = listener.accept().await.unwrap();
                 let response = response.clone();
+                let hung = hang_response.clone();
+                let delay_ms = response_delay.clone();
                 let received = received.clone();
                 let key = key.clone();
                 let generation = generation.clone();
@@ -889,7 +897,15 @@ impl HealthFixture {
                             assert_eq!(assertion["target"], "/health");
                             received.lock().unwrap().push(tokio::time::Instant::now());
                             let body = response.lock().unwrap().to_string();
+                            let hang = hung.load(std::sync::atomic::Ordering::SeqCst);
+                            let delay = delay_ms.load(std::sync::atomic::Ordering::SeqCst);
                             async move {
+                                if hang {
+                                    std::future::pending::<()>().await;
+                                }
+                                if delay > 0 {
+                                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                                }
                                 Ok::<_, std::convert::Infallible>(axum::http::Response::new(
                                     axum::body::Body::from(body),
                                 ))
@@ -897,10 +913,12 @@ impl HealthFixture {
                         }),
                     )
                     .await
-                    .unwrap();
+                    .ok();
             }
         });
         Self {
+            delay_ms,
+            hung,
             completed,
             health,
             probes,
@@ -1077,6 +1095,114 @@ async fn ticket_t_2_unhealthy_startup_stops_polling_at_thirty_seconds() {
     );
 }
 
+#[tokio::test]
+async fn ticket_t_3_drain_repeated_eof_interrupts_mutation_without_resend() {
+    use axum::{body::Body, http::Request};
+
+    let scratch = Scratch::new("repeated-eof-upload");
+    let events = scratch.root.join("data/upload-events");
+    let mut expected = String::new();
+    let mut previous = Vec::new();
+    for cycle in 0..3 {
+        assert!(
+            previous
+                .iter()
+                .all(|pid| super::drain::process_group_absent(*pid))
+        );
+
+        let supervisor = super::Supervisor::launch_shell(
+            super::ShellSpec {
+                script: concat!(
+                    "exec /usr/bin/node -e '",
+                    include_str!("fixtures/drain-upload.cjs"),
+                    "'"
+                ),
+                ..shell_spec(&scratch)
+            },
+            super::SupervisorConfig::default(),
+        )
+        .unwrap();
+        let handle = supervisor.handle.clone();
+        let mut status = handle.status.clone();
+        wait_status(&mut status, |state| {
+            matches!(state, super::Status::Ready { .. })
+        })
+        .await;
+        let pid = match *status.borrow() {
+            super::Status::Ready { pid, .. } => pid,
+            _ => unreachable!(),
+        };
+        assert_eq!(recorded_pids(&scratch.pidfile()).len(), cycle + 1);
+        assert_eq!(live_pids(&scratch.pidfile()), vec![pid]);
+        let endpoint = handle.endpoint().unwrap();
+        let sending = endpoint.clone();
+        let upload = tokio::spawn(async move {
+            sending
+                .forward(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/upload")
+                        .body(Body::from(format!("payload-{cycle}")))
+                        .unwrap(),
+                )
+                .await
+        });
+        expected.push_str(&format!("POST /upload payload-{cycle}\n"));
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if std::fs::read_to_string(&events).unwrap_or_default() == expected {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("fixture did not accept mutation");
+        assert!(!upload.is_finished());
+        supervisor.disarm_restarts();
+        let started = tokio::time::Instant::now();
+        let exit = shutdown(supervisor).await;
+        let shutdown_elapsed = started.elapsed();
+        assert_eq!(exit, super::CompatExit::Graceful);
+        assert!(shutdown_elapsed < Duration::from_secs(5));
+        let error = tokio::time::timeout(Duration::from_secs(1), upload)
+            .await
+            .unwrap()
+            .unwrap()
+            .expect_err("interrupted mutation cannot report success");
+        assert_eq!(error.to_string(), "Compatibility dispatch outcome unknown");
+        assert!(handle.endpoint().is_none());
+        assert!(endpoint.connections.tasks.is_empty());
+        assert!(super::drain::process_group_absent(pid));
+        assert!(live_pids(&scratch.pidfile()).is_empty());
+        let refused = endpoint
+            .forward(
+                Request::builder()
+                    .method("POST")
+                    .uri("/upload")
+                    .body(Body::from("must-not-resend"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(refused.to_string(), "Compatibility generation is stopping");
+        expected.push_str("EOF\n");
+        assert_eq!(std::fs::read_to_string(&events).unwrap(), expected);
+        assert_eq!(recorded_pids(&scratch.pidfile()).len(), cycle + 1);
+        println!(
+            "{}",
+            serde_json::json!({
+                "case": "repeated_eof_upload", "cycle": cycle, "pid": pid,
+                "compat_exit": "graceful", "old_group_absent": true,
+                "shutdown_ms": shutdown_elapsed.as_millis(),
+                "connection_tasks": 0, "mutation_error": error.to_string(),
+                "stale_endpoint_error": refused.to_string(), "events": expected,
+            })
+        );
+        previous.push(pid);
+    }
+}
+
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn ticket_t_2_process_exit_obeys_every_backoff_deadline_and_cap() {
     let scratch = Scratch::new("backoff-deadlines");
@@ -1133,4 +1259,127 @@ async fn ticket_t_2_process_exit_obeys_every_backoff_deadline_and_cap() {
     shutdown_guard_shell(supervisor, &scratch).await;
     assert_eq!(recorded_pids(&scratch.pidfile()).len(), 8);
     assert!(live_pids(&scratch.pidfile()).is_empty());
+}
+
+async fn readiness_remaining_budget(hung: bool) {
+    let scratch = Scratch::new("hung-readiness");
+    let started = tokio::time::Instant::now();
+    let (supervisor, fixture) = health_supervisor(&scratch).await;
+    while started.elapsed() < Duration::from_millis(29500) {
+        fixture
+            .tick(Duration::from_millis(250), fixture.count() + 1)
+            .await;
+    }
+    fixture
+        .hung
+        .store(hung, std::sync::atomic::Ordering::SeqCst);
+    fixture
+        .delay_ms
+        .store(300, std::sync::atomic::Ordering::SeqCst);
+    *fixture.health.lock().unwrap() = serde_json::json!({
+        "ok":true,"version":"ticket-t-2-unreleased","release":{"commit":"ticket-t-2-unreleased"}
+    });
+    let count = fixture.count();
+    tokio::time::advance(Duration::from_millis(250)).await;
+    pump_until(|| fixture.count() == count + 1).await;
+    tokio::time::advance(Duration::from_millis(249)).await;
+    pump_for(Duration::from_millis(20)).await;
+    assert!(matches!(
+        *supervisor.handle.status.borrow(),
+        super::Status::Starting
+    ));
+    assert_eq!(live_pids(&scratch.pidfile()).len(), 1);
+    tokio::time::advance(Duration::from_millis(1)).await;
+    pump_until(|| matches!(*supervisor.handle.status.borrow(), super::Status::Stopping)).await;
+    assert_eq!(started.elapsed(), Duration::from_secs(30));
+    assert!(supervisor.handle.endpoint().is_none());
+    tokio::time::resume();
+    let mut status = supervisor.handle.status.clone();
+    wait_status(&mut status, |state| {
+        matches!(state, super::Status::Backoff { .. })
+    })
+    .await;
+    supervisor.disarm_restarts();
+    shutdown(supervisor).await;
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(60)).await;
+    pump_for(Duration::from_millis(20)).await;
+    assert!(
+        recorded_pids(&scratch.pidfile())
+            .iter()
+            .all(|pid| super::drain::process_group_absent(*pid))
+    );
+    assert_eq!(recorded_pids(&scratch.pidfile()).len(), 1);
+    assert!(live_pids(&scratch.pidfile()).is_empty());
+    assert!(
+        diagnostic_rows(&scratch)
+            .iter()
+            .any(|row| row["reason"] == "readiness_timeout")
+    );
+}
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn ticket_t_2_hung_liveness_times_out_three_times_and_shutdown_cancels_restart() {
+    let scratch = Scratch::new("hung-liveness");
+    let (supervisor, fixture) = health_supervisor(&scratch).await;
+    *fixture.health.lock().unwrap() = serde_json::json!({
+        "ok":true,"version":"ticket-t-2-unreleased","release":{"commit":"ticket-t-2-unreleased"}
+    });
+    fixture.tick(Duration::from_millis(250), 2).await;
+    pump_until(|| supervisor.handle.endpoint().is_some()).await;
+    fixture
+        .hung
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    for failure in 1..=3 {
+        tokio::time::advance(Duration::from_secs(10)).await;
+        pump_until(|| fixture.count() == 2 + failure).await;
+        tokio::time::advance(Duration::from_millis(1999)).await;
+        pump_for(Duration::from_millis(20)).await;
+        assert!(supervisor.handle.endpoint().is_some());
+        assert_eq!(recorded_pids(&scratch.pidfile()).len(), 1);
+        assert_eq!(live_pids(&scratch.pidfile()).len(), 1);
+        fixture.tick(Duration::from_millis(1), 2 + failure).await;
+        if failure < 3 {
+            assert!(supervisor.handle.endpoint().is_some());
+        }
+    }
+    pump_until(|| matches!(*supervisor.handle.status.borrow(), super::Status::Stopping)).await;
+    assert!(supervisor.handle.endpoint().is_none());
+    // Reap with real time, then stop while the restart timer is pending.
+    tokio::time::resume();
+    let mut status = supervisor.handle.status.clone();
+    wait_status(&mut status, |state| {
+        matches!(state, super::Status::Backoff { .. })
+    })
+    .await;
+    tokio::time::pause();
+    assert!(live_pids(&scratch.pidfile()).is_empty());
+    supervisor.disarm_restarts();
+    tokio::time::resume();
+    shutdown(supervisor).await;
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(60)).await;
+    pump_for(Duration::from_millis(20)).await;
+    assert!(
+        recorded_pids(&scratch.pidfile())
+            .iter()
+            .all(|pid| super::drain::process_group_absent(*pid))
+    );
+    assert!(
+        diagnostic_rows(&scratch)
+            .iter()
+            .any(|row| row["reason"] == "health_lost")
+    );
+    assert_eq!(recorded_pids(&scratch.pidfile()).len(), 1);
+    assert!(live_pids(&scratch.pidfile()).is_empty());
+}
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn ticket_t_2_hung_readiness_is_cut_off_at_remaining_budget() {
+    readiness_remaining_budget(true).await;
+}
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn ticket_t_2_slow_readiness_cannot_publish_after_remaining_budget() {
+    readiness_remaining_budget(false).await;
 }

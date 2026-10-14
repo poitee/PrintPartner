@@ -842,6 +842,7 @@ fn ticket_t_7_writer_waits_for_another_process_and_never_interleaves() {
     let one = SettingSnapshot::Stored { value: "1".into() };
     assert_eq!(read_setting(&owner, "transfer-debit"), one);
     assert_eq!(read_setting(&owner, "transfer-credit"), one);
+    eprintln!("foreign commit completed, waiting CAS returned false, both transfer rows present");
     owner.shutdown().unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
 }
@@ -872,6 +873,7 @@ fn assert_busy_timeout_and_killed_transaction_rollback(collect_after: Duration) 
         .expect("busy write did not reply within the caller's 15-second deadline")
         .unwrap_err();
     let waited = started.elapsed();
+    eprintln!("monotonic admission busy refusal delivered after {waited:?}");
     assert!(
         matches!(
             busy.downcast_ref::<rusqlite::Error>(),
@@ -880,12 +882,7 @@ fn assert_busy_timeout_and_killed_transaction_rollback(collect_after: Duration) 
         ),
         "{busy:#}"
     );
-    // SQLite counts busy-handler sleep, while collection can include scheduler delay.
-    // https://www.sqlite.org/c3ref/busy_timeout.html
-    assert!(
-        waited >= Duration::from_millis(4500),
-        "busy handler returned after {waited:?}, before the configured 5s timeout"
-    );
+    assert_eq!(read_setting(&owner, "rust-write"), SettingSnapshot::Missing);
 
     let process = contender.process.0.as_mut().unwrap();
     process.kill().unwrap();
@@ -925,5 +922,44 @@ fn assert_busy_timeout_and_killed_transaction_rollback(collect_after: Duration) 
         snapshot(&dir, "tenant-a", "transfer-debit"),
         SettingSnapshot::Missing
     );
+    assert_eq!(
+        snapshot(&dir, "tenant-a", "transfer-credit"),
+        SettingSnapshot::Missing
+    );
+    assert_eq!(
+        snapshot(&dir, "tenant-a", "rust-write"),
+        SettingSnapshot::Stored {
+            value: "after-kill".into()
+        }
+    );
+    let (owner, _) = WriterOwner::open(&dir, Limits::default()).unwrap();
+    assert_eq!(
+        read_setting(&owner, "transfer-debit"),
+        SettingSnapshot::Missing
+    );
+    assert_eq!(
+        read_setting(&owner, "transfer-credit"),
+        SettingSnapshot::Missing
+    );
+    assert_eq!(
+        read_setting(&owner, "rust-write"),
+        SettingSnapshot::Stored {
+            value: "after-kill".into()
+        }
+    );
+    owner.shutdown().unwrap();
+    eprintln!(
+        "foreign holder killed and reaped, next command committed, both abandoned rows absent, after-kill value persisted through owner reopen"
+    );
     std::fs::remove_dir_all(&dir).unwrap();
+    assert!(
+        waited >= Duration::from_millis(4500),
+        "admission and reply collection took {waited:?}, before the configured 5s timeout"
+    );
+    if collect_after.is_zero() {
+        assert!(
+            waited < Duration::from_secs(10),
+            "admission and reply delivery took {waited:?}, outside the 10s host watchdog"
+        );
+    }
 }
