@@ -56,6 +56,8 @@ import { readBuildWorkflowWorkspace } from "../services/build-workflow.js";
 import { MAX_BULK_JSON_BODY_BYTES } from "../services/upload-limits.js";
 import { SOURCE_PHASE_MANIFEST_FILENAME } from "../services/source-workspace.js";
 
+import { readPlanFeatures, patchPlanFeatures, type PlanFeatureResult } from "../services/plan-features.js";
+
 const variantSelectionBody = z.object({
   selection: z.record(z.string(), z.string()).default({}),
   source_id: z.number().int().positive().optional(),
@@ -65,6 +67,27 @@ type RouteDeps = { repo: AppRepository; dataDir: string; reposDir: string; thumb
 export type PlanSummaryContract = "accepted" | "legacy-v1";
 
 type PlanRouteOptions = { readonly summaryContract?: PlanSummaryContract };
+
+function sendPlanFeatures(request: FastifyRequest, reply: FastifyReply, result: PlanFeatureResult) {
+  if (result.kind === "invalid_storage") {
+    request.log.error({ operation: "plan_features", method: request.method, code: "FEATURE_TOGGLES_INVALID" },
+      "Stored feature toggles are invalid");
+  }
+  switch (result.kind) {
+    case "ready": return reply.send(result.view);
+    case "unavailable":
+    case "not_found": return reply.status(404).send({ detail: "Plan not found" });
+    case "invalid_input": return reply.status(400).send({ detail: "Invalid plan feature input" });
+    case "invalid_storage": return reply.status(500).send({
+      detail: "Stored feature toggles are invalid.", code: "FEATURE_TOGGLES_INVALID",
+    });
+    case "conflict": return reply.status(409).send({ detail: "Plan features changed; reload and retry" });
+    default: {
+      const exhaustive: never = result;
+      return exhaustive;
+    }
+  }
+}
 
 function presentProfile(summary: AcceptedProfileSummary, contract: PlanSummaryContract) {
   if (contract === "accepted") return { kind: "ready" as const, profile: toProfileSummary(summary) };
@@ -117,6 +140,13 @@ export async function registerPlanRoutes(
   options: PlanRouteOptions = {},
 ): Promise<void> {
   const contract = options.summaryContract ?? "accepted";
+
+  app.get("/plans/:id/features", async (request, reply) =>
+    sendPlanFeatures(request, reply, readPlanFeatures(deps.repo, request.params)),
+  );
+  app.patch("/plans/:id/features", async (request, reply) =>
+    sendPlanFeatures(request, reply, patchPlanFeatures(deps.repo, request.params, request.body)),
+  );
 
   app.get("/plans", async (request, reply) => {
     try {

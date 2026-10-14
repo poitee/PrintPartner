@@ -81,6 +81,12 @@ import { and, asc, count, desc, eq, gte, isNotNull, isNull, ne, sql } from "driz
 import { dirname, resolve } from "node:path";
 import type { DrizzleDb } from "./client.js";
 import {
+  planFeatureSettingKey,
+  planFeatureSettingPrefix,
+  type OwnedPlanFeatureCompareAndSetInput,
+  type OwnedPlanFeatureSnapshot,
+} from "./plan-feature-settings.js";
+import {
   settingSnapshotsEqual,
   type SettingCompareAndSetInput,
   type SettingSnapshot,
@@ -88,6 +94,8 @@ import {
 import {
   asSyncDb,
   compareAndSetPostgresSetting,
+  compareAndSetPostgresOwnedPlanFeatures,
+  deletePostgresOwnedProfile,
   isSyncSqliteDrizzle,
   runSerializedSettingsMutation,
   type AppDrizzleDb,
@@ -1979,6 +1987,39 @@ export class AppRepository {
       this.setSetting(input.key, input.value);
       return true;
     }, "immediate");
+  }
+
+  compareAndSetOwnedPlanFeatures(input: OwnedPlanFeatureCompareAndSetInput): boolean {
+    if (!this.syncSqlite) {
+      return compareAndSetPostgresOwnedPlanFeatures(this.driverDb, { ...input, tenantId: this.tenantId });
+    }
+    return this.transaction(() => {
+      if (!this.getOwnedProfileIdentity(input.profileId)) return false;
+      return this.compareAndSetSetting({
+        key: planFeatureSettingKey(input.profileId), expected: input.expected, value: input.value,
+      });
+    }, "immediate");
+  }
+
+  getOwnedPlanFeatureSnapshots(profileIds: readonly number[]): OwnedPlanFeatureSnapshot[] {
+    const ids = [...new Set(profileIds)];
+    const snapshots: OwnedPlanFeatureSnapshot[] = [];
+    const { buildProfiles, appSettings } = this.schema;
+    for (let offset = 0; offset < ids.length; offset += 500) {
+      const rows = this.db.select({ profileId: buildProfiles.id, value: appSettings.value })
+        .from(buildProfiles)
+        .leftJoin(appSettings, and(
+          eq(appSettings.tenantId, buildProfiles.tenantId),
+          eq(appSettings.key, sql`${planFeatureSettingPrefix} || cast(${buildProfiles.id} as text)`),
+        ))
+        .where(and(eq(buildProfiles.tenantId, this.tenantId), inArray(buildProfiles.id, ids.slice(offset, offset + 500))))
+        .all();
+      for (const row of rows) {
+        snapshots.push({ profileId: row.profileId, snapshot: row.value === null
+          ? { kind: "missing" } : { kind: "stored", value: row.value } });
+      }
+    }
+    return snapshots;
   }
 
   recordAppEvent(input: {
@@ -7263,16 +7304,19 @@ export class AppRepository {
   }
 
   deleteProfile(id: number): void {
+    const settingKeys = [productionSetupSettingKey(id), roleFilamentSettingKey(id), planFeatureSettingKey(id)];
+    if (!this.syncSqlite) {
+      deletePostgresOwnedProfile(this.driverDb, { tenantId: this.tenantId, profileId: id, settingKeys });
+      return;
+    }
     const mutate = () => {
-      if (this.syncSqlite) this.db.run(sql.raw("PRAGMA defer_foreign_keys = ON"));
+      if (!this.getOwnedProfileIdentity(id)) return;
+      this.db.run(sql.raw("PRAGMA defer_foreign_keys = ON"));
       this.db
         .delete(this.schema.appSettings)
         .where(and(
           eq(this.schema.appSettings.tenantId, this.tenantId),
-          inArray(this.schema.appSettings.key, [
-            productionSetupSettingKey(id),
-            roleFilamentSettingKey(id),
-          ]),
+          inArray(this.schema.appSettings.key, settingKeys),
         ))
         .run();
       this.db
@@ -7280,8 +7324,7 @@ export class AppRepository {
         .where(and(eq(this.schema.buildProfiles.tenantId, this.tenantId), eq(this.schema.buildProfiles.id, id)))
         .run();
     };
-    if (this.syncSqlite) this.transaction(mutate, "immediate");
-    else mutate();
+    this.transaction(mutate, "immediate");
   }
 
   renameProfile(id: number, name: string): ProfileHeader {
@@ -7531,6 +7574,10 @@ export class AppRepository {
       }
 
       const sourceAccepted = this.readAcceptedPlanOperationalSnapshot(id);
+      const features = this.getSettingSnapshot(planFeatureSettingKey(id));
+      if (features.kind === "stored") {
+        this.setSetting(planFeatureSettingKey(newProfile.id), features.value);
+      }
       const roleFilaments = this.getSetting(roleFilamentSettingKey(id));
       if (roleFilaments) {
         this.setSetting(roleFilamentSettingKey(newProfile.id), roleFilaments);

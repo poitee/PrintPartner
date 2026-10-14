@@ -1,6 +1,7 @@
 import type { DrizzleDb } from "./client.js";
 import type { PostgresDrizzleDb } from "./client-postgres.js";
 import type { SettingCompareAndSetInput } from "./setting-compare-and-set.js";
+import { planFeatureSettingKey, type OwnedPlanFeatureCompareAndSetInput } from "./plan-feature-settings.js";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
@@ -21,6 +22,8 @@ export type PostgresSyncQuery = {
   sql: string;
   params: unknown[];
   arrayMode?: boolean;
+  /** Run these statements before the query on one connection in a READ COMMITTED transaction. */
+  beforeInTransaction?: Array<{ sql: string; params: unknown[] }>;
 };
 
 export type PostgresSyncResult = {
@@ -78,6 +81,55 @@ export function compareAndSetPostgresSetting(
     );
   }
   return result.rowCount === 1;
+}
+
+export function compareAndSetPostgresOwnedPlanFeatures(
+  db: AppDrizzleDb,
+  input: OwnedPlanFeatureCompareAndSetInput & { tenantId: string },
+): boolean {
+  const query = postgresSyncQueries.get(db);
+  if (!query) throw new Error("Postgres synchronous query bridge is not registered");
+  const owned = `WITH owned AS MATERIALIZED (
+    SELECT id FROM build_profiles WHERE tenant_id = $1 AND id = $4 FOR KEY SHARE
+  )`;
+  const params: unknown[] = [input.tenantId, planFeatureSettingKey(input.profileId), input.value, input.profileId];
+  const result = input.expected.kind === "missing"
+    ? query({
+        sql: `${owned} INSERT INTO app_settings (tenant_id, key, value)
+          SELECT $1, $2, $3 FROM owned
+          ON CONFLICT (tenant_id, key) DO NOTHING`,
+        params,
+      })
+    : query({
+        sql: `${owned} UPDATE app_settings SET value = $3
+          FROM owned WHERE app_settings.tenant_id = $1 AND key = $2 AND value = $5`,
+        params: [...params, input.expected.value],
+      });
+  assertPostgresSyncResultWithinLimits(result);
+  if (result.rowCount !== 0 && result.rowCount !== 1) {
+    throw new Error(`Postgres owned plan compare-and-set changed ${result.rowCount} rows`);
+  }
+  return result.rowCount === 1;
+}
+
+export function deletePostgresOwnedProfile(
+  db: AppDrizzleDb,
+  input: { tenantId: string; profileId: number; settingKeys: string[] },
+): void {
+  const query = postgresSyncQueries.get(db);
+  if (!query) throw new Error("Postgres synchronous query bridge is not registered");
+  const result = query({
+    beforeInTransaction: [{
+      sql: "SELECT id FROM build_profiles WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
+      params: [input.tenantId, input.profileId],
+    }],
+    sql: `WITH deleted AS (
+      DELETE FROM build_profiles WHERE tenant_id = $1 AND id = $2 RETURNING id
+    ) DELETE FROM app_settings WHERE tenant_id = $1 AND key = ANY($3::text[])
+      AND EXISTS (SELECT 1 FROM deleted)`,
+    params: [input.tenantId, input.profileId, input.settingKeys],
+  });
+  assertPostgresSyncResultWithinLimits(result);
 }
 
 /** True when Drizzle exposes sync SQLite-style builders (`.all` / sync `.transaction`). */

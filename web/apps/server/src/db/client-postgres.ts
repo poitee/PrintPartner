@@ -41,6 +41,12 @@ let client;
     }));
     client = new Client({ connectionString: input.databaseUrl });
     await client.connect();
+    if (input.beforeInTransaction) {
+      await client.query("BEGIN ISOLATION LEVEL READ COMMITTED");
+      for (const statement of input.beforeInTransaction) {
+        await client.query(statement.sql, statement.params);
+      }
+    }
     const result = await client.query(
       input.arrayMode ? { text: input.sql, rowMode: "array" } : input.sql,
       input.params,
@@ -61,8 +67,10 @@ let client;
         \`result byte limit of 8 MiB exceeded (received \${payloadBytes.toLocaleString("en-US")} bytes)\`,
       );
     }
+    if (input.beforeInTransaction) await client.query("COMMIT");
     process.stdout.write(payload);
   } catch (error) {
+    if (client) await client.query("ROLLBACK").catch(() => {});
     process.stdout.write(JSON.stringify({
       ok: false,
       error: error instanceof Error ? error.message : String(error),

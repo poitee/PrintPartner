@@ -243,3 +243,76 @@ test("raw drift cannot hide behind unchanged normalized evidence", () => {
   object(object(copy).raw).capture = null;
   assert.throws(() => compare(golden, copy), /Raw and normalized evidence differ/);
 });
+
+function changedRouteFiles(endpoint: "before" | "after", update: (state: { [key: string]: Json }) => void): Json {
+  const copy = structuredClone(golden);
+  const envelope = object(copy);
+  const raw = object(envelope.raw);
+  assert(typeof raw.data_directory === "string");
+  const capture = object(raw.capture);
+  const states = object(capture.states);
+  const route = named(capture, "route_cases", "bound-http-final-inclusion-and-quantity");
+  const previous = route[endpoint];
+  assert(typeof previous === "string");
+  const state = object(states[previous]);
+  update(state);
+  const next = digest(canonical(normalize(state, raw.data_directory)));
+  delete states[previous];
+  states[next] = state;
+  for (const key of ["initial_state", "final_state"]) {
+    if (capture[key] === previous) capture[key] = next;
+  }
+  for (const { collection, keys } of [
+    { collection: "setup_operations", keys: ["state"] },
+    { collection: "route_cases", keys: ["before", "after"] },
+  ]) {
+    const entries = capture[collection];
+    assert(Array.isArray(entries));
+    for (const entry of entries) {
+      const record = object(entry);
+      for (const key of keys) {
+        if (record[key] === previous) record[key] = next;
+      }
+    }
+  }
+  envelope.normalized = normalize(raw.capture, raw.data_directory);
+  return copy;
+}
+
+const fileChanges: { name: string; update: (files: Json[]) => void }[] = [
+  { name: "digest", update: (files) => { object(files[0]).sha256 = "f".repeat(64); } },
+  { name: "byte count", update: (files) => {
+    const file = object(files[0]);
+    assert(typeof file.bytes === "number");
+    file.bytes += 1;
+  } },
+  { name: "path", update: (files) => { object(files[0]).path = "$DATA/changed.stl"; } },
+  { name: "addition", update: (files) => { files.push(structuredClone(files[0])); } },
+  { name: "removal", update: (files) => { files.pop(); } },
+  { name: "reorder", update: (files) => {
+    assert(files.length >= 2);
+    [files[0], files[1]] = [files[1], files[0]];
+  } },
+];
+for (const { name, update } of fileChanges) {
+  test(`rehashed publication file ${name} fails parity against itself`, () => {
+    const corrupt = changedRouteFiles("after", (state) => {
+      const files = state.files;
+      assert(Array.isArray(files) && files.length > 0);
+      update(files);
+    });
+    assert.throws(
+      () => compare(corrupt, structuredClone(corrupt)),
+      /route_cases\.bound-http-final-inclusion-and-quantity: fixture-file-hashes-unchanged/,
+    );
+  });
+}
+for (const endpoint of ["before", "after"] satisfies ("before" | "after")[]) {
+  test(`rehashed publication with malformed ${endpoint} files fails parity against itself`, () => {
+    const corrupt = changedRouteFiles(endpoint, (state) => { state.files = null; });
+    assert.throws(
+      () => compare(corrupt, structuredClone(corrupt)),
+      /route_cases\.bound-http-final-inclusion-and-quantity: fixture-file-hashes-unchanged/,
+    );
+  });
+}
