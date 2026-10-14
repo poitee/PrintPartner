@@ -191,6 +191,7 @@ impl Logs {
         row.push('\n');
         if log.day != now / 86400 || log.bytes + row.len() as u64 > 10 * 1024 * 1024 {
             let rotate = (|| -> std::io::Result<()> {
+                open_log(&log.directory.join("desktop.jsonl"))?;
                 for index in (1..=6).rev() {
                     let source = if index == 1 {
                         log.directory.join("desktop.jsonl")
