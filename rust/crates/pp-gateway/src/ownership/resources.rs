@@ -58,6 +58,8 @@ enum ReviewedEntry {
     ReadSourceFile { resources: Vec<ResourceId> },
     #[serde(rename = "tool.search_source_files")]
     SearchSourceFiles { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.preview_source_naming")]
+    PreviewSourceNaming { resources: Vec<ResourceId> },
     #[serde(rename = "tool.list_sources")]
     ListSources { resources: Vec<ResourceId> },
     #[serde(rename = "tool.list_source_categories")]
@@ -112,6 +114,11 @@ impl ReviewedEntry {
                     Table(SourceDocs),
                     File(FileFamily::SourceWorkspace),
                 ]),
+            ),
+            Self::PreviewSourceNaming { resources } => (
+                "tool.preview_source_naming",
+                resources,
+                BTreeSet::from([Table(Projects), Table(AppSettings)]),
             ),
             Self::ListSources { resources } => (
                 "tool.list_sources",
@@ -171,6 +178,7 @@ impl Declarations {
             "source.sync",
             "tool.read_source_file",
             "tool.search_source_files",
+            "tool.preview_source_naming",
             "tool.list_sources",
             "tool.list_source_categories",
         ] {

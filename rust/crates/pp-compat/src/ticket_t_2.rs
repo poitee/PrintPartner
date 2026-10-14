@@ -1183,3 +1183,61 @@ async fn ticket_t_3_drain_repeated_eof_interrupts_mutation_without_resend() {
         previous.push(pid);
     }
 }
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn ticket_t_2_process_exit_obeys_every_backoff_deadline_and_cap() {
+    let scratch = Scratch::new("backoff-deadlines");
+    // Expire previous crashes so the independent five-crash guard does not
+    // prevent observation of the later backoff attempts. No child reaches Ready.
+    let supervisor = super::Supervisor::launch_shell(
+        super::ShellSpec {
+            script: r#"trap 'exit 7' USR1; read line || exit 1; data=${line#*'"data_dir":"'}; data=${data%%'"'*}; echo $$ > "$data/armed"; while read line; do :; done"#,
+            ..shell_spec(&scratch)
+        },
+        super::SupervisorConfig {
+            crash_guard_window: Duration::ZERO,
+            ..super::SupervisorConfig::default()
+        },
+    )
+    .unwrap();
+    for (attempt, millis) in [500, 1000, 2000, 4000, 8000, 30_000, 30_000]
+        .into_iter()
+        .enumerate()
+    {
+        let count = attempt + 1;
+        wait_live(&scratch.pidfile(), count).await;
+        assert_eq!(recorded_pids(&scratch.pidfile()).len(), count);
+        let pid = recorded_pids(&scratch.pidfile())[attempt];
+        pump_until(|| {
+            std::fs::read_to_string(scratch.root.join("data/armed"))
+                .is_ok_and(|text| text.trim() == pid.to_string())
+        })
+        .await;
+        assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGUSR1) }, 0);
+        wait_shell_crash(&supervisor, &scratch, count, false).await;
+        assert!(matches!(
+            *supervisor.handle.status.borrow(),
+            super::Status::Backoff { attempt: actual } if actual == attempt
+        ));
+        let started = tokio::time::Instant::now();
+        tokio::time::advance(Duration::from_millis(millis - 1)).await;
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(recorded_pids(&scratch.pidfile()).len(), count);
+        assert!(live_pids(&scratch.pidfile()).is_empty());
+        assert!(matches!(
+            *supervisor.handle.status.borrow(),
+            super::Status::Backoff { attempt: actual } if actual == attempt
+        ));
+        tokio::time::advance(Duration::from_millis(1)).await;
+        wait_live(&scratch.pidfile(), count + 1).await;
+        assert_eq!(started.elapsed(), Duration::from_millis(millis));
+        assert_eq!(recorded_pids(&scratch.pidfile()).len(), count + 1);
+        assert!(super::drain::process_group_absent(pid));
+        assert!(supervisor.handle.endpoint.borrow().is_none());
+    }
+    shutdown_guard_shell(supervisor, &scratch).await;
+    assert_eq!(recorded_pids(&scratch.pidfile()).len(), 8);
+    assert!(live_pids(&scratch.pidfile()).is_empty());
+}

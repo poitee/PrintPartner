@@ -48,7 +48,7 @@ const TABLES = ["table:app_settings", "table:projects", "table:source_docs"];
 const FILE_RESOURCES = ["file:source-workspace", "table:projects", "table:source_docs"];
 const manifest = z.object({ resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -145,7 +145,7 @@ afterEach(() => {
   fs.rmSync(userRoot, { recursive: true, force: true });
 });
 
-async function invoke(tool: typeof TOOL_IDS[number] | "search_source_files", input: Record<string, unknown>, expected: string[], tenantId = "default") {
+async function invoke(tool: typeof TOOL_IDS[number] | "search_source_files" | "preview_source_naming", input: Record<string, unknown>, expected: string[], tenantId = "default") {
   statements = [];
   observer.state.files = [];
   observer.state.active = true;
@@ -368,4 +368,53 @@ it("rejects unsupported SQL shapes and filesystem calls after recording", async 
   sqlite.exec("UPDATE projects SET name = name");
   observer.state.active = false;
   expect(() => statements.map((sql) => tableForObservedSelect(sql))).toThrow("Unsupported SQL: UPDATE projects SET name = name");
+});
+
+
+it("traces preview_source_naming reads, fallbacks and tenant settings against its exact union", async () => {
+  const namingTables = ["table:app_settings", "table:projects"];
+  const paths = ["parts/[a]_bracket_x4.stl", "widget_qty3.stl"];
+  const previews = z.array(z.object({ path: z.string(), quantity: z.number(), role: z.string() }));
+  const preview = async (input: Record<string, unknown>, expected: string[], tenantId = "default") => {
+    const output = await invoke("preview_source_naming", input, expected, tenantId);
+    expect(observer.state.files).toEqual([]);
+    return output;
+  };
+  for (const input of [{}, { paths: [] }, { paths: "part.stl" }]) {
+    expect(await preview(input, [])).toEqual({ error: "paths required" });
+  }
+  expect(previews.parse((await preview({ paths }, ["table:app_settings"])).results)).toEqual([
+    { path: paths[0], quantity: 4, role: "accent" },
+    { path: paths[1], quantity: 1, role: "primary" },
+  ]);
+  for (const source_id of [sourceId, String(sourceId), 999999, 0, -1]) {
+    const output = await preview({ paths, source_id }, namingTables);
+    expect(previews.parse(output.results).map(({ quantity }) => quantity)).toEqual([4, 1]);
+  }
+  expect((await preview({ paths: [null, 42, {}], source_id: sourceId }, namingTables)).results).toEqual([]);
+  expect(previews.parse((await preview({ paths, source_id: "invalid" }, ["table:app_settings"])).results).map(({ quantity }) => quantity)).toEqual([4, 1]);
+
+  repo.setSetting("stl_naming_defaults", JSON.stringify({ ...repo.getGlobalNaming(), quantity: { regex: String.raw`_qty([0-9]+)\.stl$`, default: 2 } }));
+  expect(previews.parse((await preview({ paths, source_id: sourceId }, namingTables)).results).map(({ quantity }) => quantity)).toEqual([2, 3]);
+  repo.updateSource(sourceId, { metadata: { naming: { use_defaults: false, override: { quantity: { default: 7 } } } } });
+  expect(previews.parse((await preview({ paths, source_id: sourceId }, namingTables)).results).map(({ quantity }) => quantity)).toEqual([7, 3]);
+  expect(previews.parse((await preview({ paths, source_id: sourceId, profile: { quantity: { default: 9 } } }, namingTables)).results).map(({ quantity }) => quantity)).toEqual([9, 3]);
+  expect(await preview({ paths, source_id: sourceId, profile: { quantity: { regex: "[" } } }, namingTables)).toHaveProperty("error", expect.stringMatching(/invalid/i));
+
+  repo.updateSource(sourceId, { metadata: { naming: { use_defaults: "invalid" } } });
+  expect(previews.parse((await preview({ paths, source_id: sourceId }, namingTables)).results).map(({ quantity }) => quantity)).toEqual([2, 3]);
+  repo.setSetting("stl_naming_defaults", "not-json");
+  expect(previews.parse((await preview({ paths, source_id: sourceId }, namingTables)).results).map(({ quantity }) => quantity)).toEqual([4, 1]);
+
+  await tenantStorage.run("tenant-b", async () => {
+    repo.setSetting("stl_naming_defaults", JSON.stringify({ ...repo.getGlobalNaming(), quantity: { regex: String.raw`_qty([0-9]+)\.stl$`, default: 11 } }));
+    const ownSource = repo.createSource({ name: "Tenant B", source_kind: "local" });
+    expect(previews.parse((await preview({ paths, source_id: ownSource.id }, namingTables, "tenant-b")).results).map(({ quantity }) => quantity)).toEqual([11, 3]);
+    expect(previews.parse((await preview({ paths, source_id: sourceId }, namingTables, "tenant-b")).results).map(({ quantity }) => quantity)).toEqual([11, 3]);
+  });
+  expect(previews.parse((await preview({ paths, source_id: sourceId }, namingTables)).results).map(({ quantity }) => quantity)).toEqual([4, 1]);
+  expect([...unions.get("preview_source_naming") ?? []].sort()).toEqual(namingTables);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.preview_source_naming");
+  if (!entry || entry.operation === "source.sync") throw new Error("Missing naming declaration");
+  expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(namingTables);
 });
