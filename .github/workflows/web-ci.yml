@@ -199,6 +199,11 @@ jobs:
             endfacet
           endsolid cube
           STL
+      - name: Remove stale print-partner-ci container
+        run: |
+          if docker container inspect print-partner-ci >/dev/null 2>&1; then
+            docker rm --force print-partner-ci
+          fi
       - name: Start production container
         run: |
           docker run --detach --name print-partner-ci \
@@ -222,3 +227,9 @@ jobs:
           SOURCE_URL: /smoke-source
           SOURCE_UPLOAD_FILE: ${{ runner.temp }}/smoke-source/cube.stl
         run: ./web/scripts/workflow-smoke.sh
+      - name: Remove print-partner-ci container
+        if: always()
+        run: |
+          if docker container inspect print-partner-ci >/dev/null 2>&1; then
+            docker rm --force print-partner-ci
+          fi

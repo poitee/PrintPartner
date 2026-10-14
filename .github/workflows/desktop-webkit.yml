@@ -63,12 +63,20 @@ jobs:
             libayatana-appindicator3-dev librsvg2-dev pkg-config \
             webkit2gtk-driver xvfb xauth dbus-x11 libgl1-mesa-dri libegl1 mesa-utils; then
             echo "Required packages are installed; skipping apt"
+          elif [[ "$RUNNER_ENVIRONMENT" == self-hosted ]]; then
+            echo "::error::Fleet prerequisites are missing. Restore the provisioned package set; its narrow sudoers rule does not permit changing the WebDriver package list."
+            exit 1
           else
             sudo apt-get update
+            if apt-cache show webkit2gtk-driver >/dev/null 2>&1; then
+              driver_package=webkit2gtk-driver
+            else
+              driver_package=webkitgtk-webdriver
+            fi
             sudo apt-get install -y --no-install-recommends \
               libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev \
               libayatana-appindicator3-dev librsvg2-dev pkg-config \
-              webkit2gtk-driver xvfb xauth dbus-x11 libgl1-mesa-dri libegl1 mesa-utils
+              "$driver_package" xvfb xauth dbus-x11 libgl1-mesa-dri libegl1 mesa-utils
           fi
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:

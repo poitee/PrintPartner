@@ -25,7 +25,8 @@ jobs:
   gate:
     needs: [ci-plan]
     if: ${{ needs.ci-plan.outputs.linux == 'true' }}
-    runs-on: ${{ fromJSON(needs.ci-plan.outputs.linux-runner) }}
+    # The approved /usr/bin/node sudo rule is limited to the x64 tool cache.
+    runs-on: ${{ fromJSON(needs.ci-plan.outputs.hosted == 'true' && '["ubuntu-latest"]' || '["self-hosted","linux","fleet","X64"]') }}
     timeout-minutes: 90
     env:
       VITE_PRINT_PARTNER_DESKTOP: '1'

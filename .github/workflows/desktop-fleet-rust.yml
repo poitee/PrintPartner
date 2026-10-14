@@ -48,7 +48,8 @@ jobs:
   rust-partition-1:
     needs: [ci-plan]
     if: ${{ (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository || needs.ci-plan.outputs.hosted == 'true') && needs.ci-plan.outputs.linux == 'true' }}
-    runs-on: ${{ fromJSON(needs.ci-plan.outputs.linux-runner) }}
+    # The approved /usr/bin/node sudo rule is limited to the x64 tool cache.
+    runs-on: ${{ fromJSON(needs.ci-plan.outputs.hosted == 'true' && '["ubuntu-latest"]' || '["self-hosted","linux","fleet","X64"]') }}
     name: Rust partition (1/2)
     timeout-minutes: 45
     env:
@@ -249,7 +250,8 @@ jobs:
   rust-partition-2:
     needs: [ci-plan]
     if: ${{ (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository || needs.ci-plan.outputs.hosted == 'true') && needs.ci-plan.outputs.linux == 'true' }}
-    runs-on: ${{ fromJSON(needs.ci-plan.outputs.linux-runner) }}
+    # The approved /usr/bin/node sudo rule is limited to the x64 tool cache.
+    runs-on: ${{ fromJSON(needs.ci-plan.outputs.hosted == 'true' && '["ubuntu-latest"]' || '["self-hosted","linux","fleet","X64"]') }}
     name: Rust partition (2/2)
     timeout-minutes: 45
     env:
