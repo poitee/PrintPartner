@@ -74,11 +74,6 @@ enum WriterControl {
 }
 enum Envelope {
     #[cfg(feature = "desktop_rebuild")]
-    AuthReady {
-        ready: VecDeque<auth::rebuild::WriterWork>,
-        next: QueueClass,
-    },
-    #[cfg(feature = "desktop_rebuild")]
     Features {
         command: features::Command,
         reply: mpsc::Sender<Result<features::View>>,
@@ -107,6 +102,11 @@ enum Envelope {
         command: auth::Command,
         policy: auth::AuthPolicy,
         reply: mpsc::Sender<Result<auth::Reply>>,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    AuthReady {
+        ready: VecDeque<auth::rebuild::WriterWork>,
+        next: QueueClass,
     },
     WriterControl {
         control: WriterControl,
@@ -491,8 +491,6 @@ impl WriterOwner {
                 };
                 match envelope {
                     #[cfg(feature = "desktop_rebuild")]
-                    Envelope::AuthReady { .. } => unreachable!(),
-                    #[cfg(feature = "desktop_rebuild")]
                     Envelope::Features { command, reply } => {
                         let _ = reply.send(features::execute(&mut connection, command));
                     }
@@ -527,6 +525,8 @@ impl WriterOwner {
                     } => {
                         let _ = reply.send(auth::execute(&mut connection, command, policy));
                     }
+                    #[cfg(feature = "desktop_rebuild")]
+                    Envelope::AuthReady { .. } => unreachable!(),
                     Envelope::WriterControl { control, reply } => {
                         let _ = reply.send(writer_control(&connection, control));
                     }
