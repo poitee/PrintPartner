@@ -127,10 +127,27 @@ async fn ticket_t_12_unreadable_config_is_refused_without_replacement() {
     let fixture = Fixture::new();
     std::fs::write(fixture.config(), "port = 12345\n").unwrap();
     std::fs::set_permissions(fixture.config(), std::fs::Permissions::from_mode(0o000)).unwrap();
+    let readable = std::fs::File::open(fixture.config());
+    if readable.is_ok() {
+        std::fs::set_permissions(fixture.config(), std::fs::Permissions::from_mode(0o600)).unwrap();
+        eprintln!("permission-denial case skipped: this process can read mode 000 files");
+        return;
+    }
+    assert_eq!(
+        readable.unwrap_err().kind(),
+        std::io::ErrorKind::PermissionDenied
+    );
     let owner = StorageLease::acquire(&fixture.0).unwrap();
     let result = bind_origin(&owner).await;
     std::fs::set_permissions(fixture.config(), std::fs::Permissions::from_mode(0o600)).unwrap();
-    assert!(result.is_err(), "unreadable config accepted");
+    assert_eq!(
+        result
+            .unwrap_err()
+            .downcast_ref::<std::io::Error>()
+            .unwrap()
+            .kind(),
+        std::io::ErrorKind::PermissionDenied
+    );
     assert_eq!(std::fs::read(fixture.config()).unwrap(), b"port = 12345\n");
 }
 
