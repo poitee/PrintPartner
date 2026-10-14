@@ -1,5 +1,7 @@
 pub mod auth;
 pub mod catalog;
+#[cfg(feature = "desktop_rebuild")]
+pub mod features;
 pub mod jobs;
 pub mod lease;
 #[cfg(feature = "desktop_rebuild")]
@@ -67,6 +69,11 @@ enum WriterControl {
     AdmitDiskQuota(u32),
 }
 enum Envelope {
+    #[cfg(feature = "desktop_rebuild")]
+    Features {
+        command: features::Command,
+        reply: mpsc::Sender<Result<features::View>>,
+    },
     Read {
         command: read_model::Command,
         reply: mpsc::Sender<Result<read_model::Batch>>,
@@ -382,6 +389,10 @@ impl WriterOwner {
                     }
                 };
                 match envelope {
+                    #[cfg(feature = "desktop_rebuild")]
+                    Envelope::Features { command, reply } => {
+                        let _ = reply.send(features::execute(&mut connection, command));
+                    }
                     Envelope::Read { command, reply } => {
                         let _ = reply.send(read_model::execute(&mut connection, command));
                     }
