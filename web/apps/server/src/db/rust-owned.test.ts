@@ -66,7 +66,7 @@ describe("rust owner marker", () => {
     expect(rustOwnedCopy(dir)).toEqual({ kind: "absent" });
   });
 
-  it("does not treat a non-Linux instance token as this Linux process", () => {
+  it("matches an instance token only where this process identity is an instance token", () => {
     const dir = markerDir({
       storage_protocol_version: 1,
       pid: deadPid(),
@@ -74,7 +74,39 @@ describe("rust owner marker", () => {
       child_pid: process.pid,
       child_process_identity: `instance:${"ab".repeat(16)}`,
     });
-    expect(rustOwnedCopy(dir)).toEqual({ kind: "absent" });
+    expect(rustOwnedCopy(dir)).toEqual({ kind: process.platform === "linux" ? "absent" : "child" });
+  });
+
+  it("keeps an unknown protocol marker blocking after its owner dies", () => {
+    const dir = markerDir({
+      storage_protocol_version: 2,
+      pid: deadPid(),
+      process_identity: "prior",
+    });
+    expect(rustOwnedCopy(dir)).toEqual({ kind: "foreign" });
+    expect(() => new SqliteDatabase(dir).connect()).toThrow(/will not migrate or write/);
+    expect(existsSync(join(dir, "print-partner.db"))).toBe(false);
+  });
+
+  it("keeps a protocol marker with an unreadable child blocking", () => {
+    const dir = markerDir({
+      storage_protocol_version: 1,
+      pid: deadPid(),
+      process_identity: "prior",
+      child_pid: "not-a-pid",
+    });
+    expect(rustOwnedCopy(dir)).toEqual({ kind: "foreign" });
+  });
+
+  it("releases a dead standalone marker and keeps this process's own marker", () => {
+    const dead = markerDir({ pid: deadPid(), kind: "standalone", process_identity: "prior" });
+    expect(rustOwnedCopy(dead)).toEqual({ kind: "absent" });
+    const ours = markerDir({
+      pid: process.pid,
+      kind: "standalone",
+      process_identity: processIdentity(process.pid),
+    });
+    expect(rustOwnedCopy(ours)).toEqual({ kind: "absent" });
   });
 
   it("refuses connect while another process holds the lease and the marker is absent", () => {

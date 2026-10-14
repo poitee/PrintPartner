@@ -79,8 +79,39 @@ function recordedChildIsLive(marker: RustOwnerMarker): boolean {
 type MarkerFile =
   | { readonly kind: "missing" }
   | { readonly kind: "unreadable" }
-  | { readonly kind: "other" }
+  | { readonly kind: "retirable" }
+  | { readonly kind: "unrecognized" }
   | { readonly kind: "live"; readonly marker: RustOwnerMarker };
+
+function recordOf(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "object" || value === null) return null;
+  return value as Record<string, unknown>;
+}
+
+// Rust retires a marker only for a dead standalone writer, a dead protocol-1
+// writer with no child, or a dead recorded child. Any other shape keeps blocking.
+function markerIsRetirable(value: unknown): boolean {
+  const record = recordOf(value);
+  if (!record || !isPid(record.pid)) return false;
+  const ownerIdentity = typeof record.process_identity === "string" ? record.process_identity : undefined;
+  if (processStillOwnsIdentity(record.pid, ownerIdentity)) return false;
+  if (record.kind === "standalone") return true;
+  const childPidPresent = "child_pid" in record && record.child_pid !== undefined;
+  const childIdentityPresent = "child_process_identity" in record && record.child_process_identity !== undefined;
+  if (record.storage_protocol_version === 1 && !childPidPresent && !childIdentityPresent) return true;
+  if (!isPid(record.child_pid) || typeof record.child_process_identity !== "string") return false;
+  if (record.child_process_identity.length === 0) return false;
+  return !processStillOwnsIdentity(record.child_pid, record.child_process_identity);
+}
+
+function markerIsOurStandalone(value: unknown): boolean {
+  const record = recordOf(value);
+  if (!record || record.kind !== "standalone" || record.pid !== process.pid) return false;
+  const identity = typeof record.process_identity === "string" && record.process_identity.length > 0
+    ? record.process_identity
+    : undefined;
+  return processStillOwnsIdentity(process.pid, identity);
+}
 
 function readMarkerFile(dataDir: string): MarkerFile {
   const markerPath = join(dataDir, ".desktop-owner.json");
@@ -91,10 +122,12 @@ function readMarkerFile(dataDir: string): MarkerFile {
   } catch {
     return { kind: "unreadable" };
   }
-  if (!isRustOwnerMarker(parsed)) return { kind: "other" };
-  const ownerLive = processStillOwnsIdentity(parsed.pid, recordedIdentity(parsed, "process_identity"));
-  if (!ownerLive && !recordedChildIsLive(parsed)) return { kind: "other" };
-  return { kind: "live", marker: parsed };
+  if (isRustOwnerMarker(parsed)) {
+    const ownerLive = processStillOwnsIdentity(parsed.pid, recordedIdentity(parsed, "process_identity"));
+    if (ownerLive || recordedChildIsLive(parsed)) return { kind: "live", marker: parsed };
+  }
+  if (markerIsRetirable(parsed) || markerIsOurStandalone(parsed)) return { kind: "retirable" };
+  return { kind: "unrecognized" };
 }
 
 function isLeaseOwner(value: unknown): value is { pid: number; process_identity?: string } {
@@ -139,7 +172,9 @@ export function rustOwnedCopy(dataDir: string): RustOwnedCopy {
     if (isRecordedChild(marker.marker)) return { kind: "child" };
     return { kind: "foreign" };
   }
-  if (marker.kind === "unreadable" || leaseBlocksOtherWriters(dataDir)) return { kind: "foreign" };
+  if (marker.kind === "unreadable" || marker.kind === "unrecognized" || leaseBlocksOtherWriters(dataDir)) {
+    return { kind: "foreign" };
+  }
   return { kind: "absent" };
 }
 
