@@ -255,6 +255,23 @@
             "name": "app_settings"
           }
         ]
+      },
+      {
+        "operation": "tool.search_source_files",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "projects"
+          },
+          {
+            "kind": "table",
+            "name": "source_docs"
+          },
+          {
+            "kind": "file",
+            "name": "source-workspace"
+          }
+        ]
       }
     ],
     "unresolved": [
@@ -677,7 +694,6 @@
       "tool.propose_verify_printer_checkoff",
       "tool.remove_layer",
       "tool.search_plan_parts",
-      "tool.search_source_files",
       "tool.set_base",
       "tool.set_source_git_ref",
       "tool.start_sync",
