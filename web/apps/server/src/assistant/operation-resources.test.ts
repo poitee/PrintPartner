@@ -9,6 +9,7 @@ import { z } from "zod";
 import { SqliteDatabase } from "../db/client.js";
 import { AppRepository } from "../db/repository.js";
 import * as schema from "../db/schema.js";
+import { tenantStorage } from "../middleware/tenant-context.js";
 import { invokeAssistantTool } from "./tools.js";
 
 const observer = vi.hoisted(() => {
@@ -47,21 +48,22 @@ const TABLES = ["table:app_settings", "table:projects", "table:source_docs"];
 const FILE_RESOURCES = ["file:source-workspace", "table:projects", "table:source_docs"];
 const manifest = z.object({ resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
 
-function tableForObservedSelect(statement: unknown): string {
+function tableForObservedSelect(statement: unknown, tenantId = "default"): string {
   const sql = z.string().parse(statement);
   const literal = "'(?:[^']|'')*'";
+  const activeTenant = `'${tenantId.replaceAll("'", "''")}'`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const columns = '"[a-z_]+"(?:, "[a-z_]+")*';
-  const tenant = `"projects"\\."tenant_id" = ${literal}`;
+  const tenant = `"projects"\\."tenant_id" = ${activeTenant}`;
   const shapes: [string, RegExp][] = [
     ["projects", new RegExp(`^select ${columns} from "projects" where ${tenant} order by "projects"\\."name" asc$`)],
-    ["projects", new RegExp(`^select ${columns} from "projects" where \\(${tenant} and "projects"\\."id" = [1-9][0-9]*(?:\\.0)?\\)$`)],
-    ["source_docs", new RegExp(`^select "project_id", count\\(\\*\\) from "source_docs" where "source_docs"\\."tenant_id" = ${literal} group by "source_docs"\\."project_id"$`)],
-    ["app_settings", new RegExp(`^select ${columns} from "app_settings" where \\("app_settings"\\."tenant_id" = ${literal} and "app_settings"\\."key" = ${literal}\\)$`)],
+    ["projects", new RegExp(`^select ${columns} from "projects" where \\(${tenant} and "projects"\\."id" = -?(?:0|[1-9][0-9]*)(?:\\.0)?\\)$`)],
+    ["source_docs", new RegExp(`^select "project_id", count\\(\\*\\) from "source_docs" where "source_docs"\\."tenant_id" = ${activeTenant} group by "source_docs"\\."project_id"$`)],
+    ["app_settings", new RegExp(`^select ${columns} from "app_settings" where \\("app_settings"\\."tenant_id" = ${activeTenant} and "app_settings"\\."key" = ${literal}\\)$`)],
   ];
   const match = shapes.find(([, pattern]) => pattern.test(sql));
   if (!match) throw new Error(`Unsupported SQL: ${sql}`);
@@ -72,11 +74,13 @@ function under(root: string, path: string): boolean {
   const rel = relative(root, path);
   return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 }
-function fileResources(roots: string[]): string[] {
+function fileResources(roots: string[], traversal = false): string[] {
   const descriptors = new Map<number, string>();
   const resources = new Set<string>();
   for (const { api, args, result } of observer.state.files) {
-    expect(["realpathSync", "existsSync", "statSync", "openSync", "readSync", "closeSync"], `Unsupported filesystem call ${api}`).toContain(api);
+    expect(["realpathSync", "existsSync", "statSync", "openSync", "readSync", "closeSync", ...(traversal ? ["readdirSync", "lstatSync"] : [])], `Unsupported filesystem call ${api}`).toContain(api);
+    if (api === "readdirSync") expect(args).toEqual([args[0], { withFileTypes: true }]);
+    if (api === "lstatSync") expect(args).toEqual([args[0]]);
     const path = typeof args[0] === "number" ? descriptors.get(args[0]) : args[0];
     expect(typeof path, api).toBe("string");
     if (typeof path !== "string") throw new Error(`Unclassified path for ${api}`);
@@ -141,15 +145,20 @@ afterEach(() => {
   fs.rmSync(userRoot, { recursive: true, force: true });
 });
 
-async function invoke(tool: typeof TOOL_IDS[number], input: Record<string, unknown>, expected: string[]) {
+async function invoke(tool: typeof TOOL_IDS[number] | "search_source_files", input: Record<string, unknown>, expected: string[], tenantId = "default") {
   statements = [];
   observer.state.files = [];
   observer.state.active = true;
   let result: Awaited<ReturnType<typeof invokeAssistantTool>>;
-  try { result = await invokeAssistantTool(tool, input, { repo }); }
+  try { result = await tenantStorage.run(tenantId, () => invokeAssistantTool(tool, input, { repo })); }
   finally { observer.state.active = false; }
-  const observed = [...new Set([...statements.map(tableForObservedSelect), ...fileResources([root, userRoot])])].sort();
+  const roots = [root, userRoot];
+  if (tool === "search_source_files") roots.push(join(dataDir, "repos", String(unsyncedId)));
+  const observed = [...new Set([...statements.map((sql) => tableForObservedSelect(sql, tenantId)), ...fileResources(roots, tool === "search_source_files")])].sort();
   expect(observed).toEqual(expected);
+  if (tool === "search_source_files") {
+    expect(observer.state.files.every(({ api }) => ["existsSync", "readdirSync", "lstatSync", "statSync"].includes(api))).toBe(true);
+  }
   const union = unions.get(tool) ?? new Set<string>();
   for (const resource of observed) union.add(resource);
   unions.set(tool, union);
@@ -204,7 +213,9 @@ it("traces all three pinned tools against independent unions and the admitted de
   expect(categories.uncategorized_sources).toBe(2);
   expect(observer.state.files).toEqual([]);
   expect([...unions.keys()].sort()).toEqual([...TOOL_IDS].sort());
-  const reviewed = manifest.resources.reviewed.filter((entry) => entry.operation !== "source.sync");
+  const reviewed = manifest.resources.reviewed
+    .filter((entry) => entry.operation !== "source.sync")
+    .filter((entry) => TOOL_IDS.some((id) => entry.operation === `tool.${id}`));
   expect(reviewed.map((entry) => entry.operation).sort()).toEqual(TOOL_IDS.map((id) => `tool.${id}`).sort());
   for (const entry of reviewed) {
     expect([...unions.get(entry.operation.slice(5)) ?? []].sort()).toEqual(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort());
@@ -217,6 +228,109 @@ it("traces all three pinned tools against independent unions and the admitted de
   expect(empty.uncategorized_sources).toBe(0);
 });
 
+it("traces search_source_files against an independent union with trusted real roots", async () => {
+  const tables = ["table:projects", "table:source_docs"];
+  const error = "source_id or source_name required";
+  const files = [{ path: "Needle.txt", byte_size: 4 }, { path: "nested/needle.bin", byte_size: 3 }];
+  fs.writeFileSync(join(root, "Needle.txt"), "four");
+  fs.mkdirSync(join(root, "nested"));
+  fs.writeFileSync(join(root, "nested", "needle.bin"), Buffer.from([65, 0, 66]));
+  for (const directory of [".git", "node_modules", ".docs-text"]) {
+    fs.mkdirSync(join(root, directory));
+    fs.writeFileSync(join(root, directory, "needle.txt"), "excluded");
+  }
+  for (const [target, name] of [
+    [join(root, "Needle.txt"), "needle-inside-file"],
+    [join(dataDir, "outside.txt"), "needle-outside-file"],
+    [join(root, "nested"), "needle-inside-dir"],
+    [userRoot, "needle-outside-dir"],
+  ]) fs.symlinkSync(target, join(root, name));
+  for (const selector of [{ source_id: sourceId }, { source_name: " fixture " }, { source_id: String(sourceId), source_name: "UserLocal" }]) {
+    expect(await invoke("search_source_files", { ...selector, query: " NEEDLE " }, FILE_RESOURCES)).toEqual({
+      source: { id: sourceId, name: "Fixture", last_commit_sha: null }, query: "needle", files, total_matches: 2, truncated: false,
+    });
+    const accesses = observer.state.files;
+    expect(accesses[0]).toEqual({ api: "existsSync", args: [root], result: true });
+    expect(accesses.filter(({ api }) => api === "readdirSync").map(({ args }) => args[0]).sort()).toEqual([
+      root, join(root, "directory"), join(root, "nested"),
+    ].sort());
+    for (const directory of [".git", "node_modules", ".docs-text"]) {
+      expect(accesses.some(({ args }) => args[0] === join(root, directory))).toBe(false);
+    }
+    for (const name of ["needle-inside-file", "needle-outside-file", "needle-inside-dir", "needle-outside-dir"]) {
+      expect(accesses.filter(({ args }) => args[0] === join(root, name)).map(({ api }) => api)).toEqual(["lstatSync"]);
+    }
+  }
+  for (const input of [{}, { source_name: " " }, { source_id: "invalid" }, { source_id: null }]) {
+    expect(await invoke("search_source_files", { ...input, query: "needle" }, [])).toEqual({ error });
+  }
+  for (const source_id of [999999, 0, -1]) {
+    expect(await invoke("search_source_files", { source_id, source_name: "Fixture", query: "needle" }, ["table:projects"])).toEqual({ error });
+  }
+  expect(await invoke("search_source_files", { source_name: "Missing", query: "needle" }, tables)).toEqual({ error });
+  expect(await invoke("search_source_files", { source_id: unsyncedId, query: "" }, FILE_RESOURCES)).toEqual({ error: "Source is not synchronized" });
+  expect(observer.state.files).toEqual([{ api: "existsSync", args: [join(dataDir, "repos", String(unsyncedId))], result: false }]);
+  sqlite.prepare("UPDATE projects SET local_path = NULL WHERE id = ?").run(unsyncedId);
+  expect(await invoke("search_source_files", { source_id: unsyncedId, query: "" }, tables)).toEqual({ error: "Source is not synchronized" });
+  expect(observer.state.files).toEqual([]);
+  const missingId = repo.createSource({ name: "MissingRoot", source_kind: "local", local_path: join(root, "missing") }).id;
+  expect(await invoke("search_source_files", { source_id: missingId, query: "" }, FILE_RESOURCES)).toEqual({ error: "Source is not synchronized" });
+  expect(observer.state.files).toEqual([{ api: "existsSync", args: [join(root, "missing")], result: false }]);
+  for (const query of [undefined, "", " "]) {
+    expect(await invoke("search_source_files", { source_id: sourceId, query }, FILE_RESOURCES)).toEqual({ error: "query required" });
+    expect(observer.state.files).toEqual([{ api: "existsSync", args: [root], result: true }]);
+  }
+  expect(await invoke("search_source_files", { source_id: sourceId, query: "no-matches" }, FILE_RESOURCES)).toEqual({
+    source: { id: sourceId, name: "Fixture", last_commit_sha: null }, query: "no-matches", files: [], total_matches: 0, truncated: false,
+  });
+  expect((await invoke("search_source_files", { source_id: userId, query: "readme" }, FILE_RESOURCES)).files).toEqual([{ path: "README.md", byte_size: 16 }]);
+  const fileId = repo.createSource({ name: "FileRoot", source_kind: "local", local_path: join(root, "README.md") }).id;
+  expect(await invoke("search_source_files", { source_id: fileId, query: "readme" }, FILE_RESOURCES)).toEqual({
+    source: { id: fileId, name: "FileRoot", last_commit_sha: null }, query: "readme", files: [], total_matches: 0, truncated: false,
+  });
+  expect(observer.state.files.map(({ api }) => api)).toEqual(["existsSync", "readdirSync"]);
+
+  const limitRoot = join(root, "limits");
+  fs.mkdirSync(limitRoot);
+  const matches = Array.from({ length: 205 }, (_, index) => ({ path: `match-${String(index).padStart(3, "0")}.txt`, byte_size: 1 }));
+  for (const file of matches) fs.writeFileSync(join(limitRoot, file.path), "x");
+  const limitId = repo.createSource({ name: "Limits", source_kind: "local", local_path: limitRoot }).id;
+  for (const [limit, count] of [[undefined, 50], [0, 1], [-9, 1], [2, 2], [999, 200]] satisfies [number | undefined, number][]) {
+    expect(await invoke("search_source_files", { source_id: limitId, query: "match", limit }, FILE_RESOURCES)).toEqual({
+      source: { id: limitId, name: "Limits", last_commit_sha: null }, query: "match",
+      files: matches.slice(0, count), total_matches: 205, truncated: true,
+    });
+    expect(observer.state.files.filter(({ api }) => api === "statSync").length).toBe(205);
+    expect(observer.state.files.filter(({ api }) => api === "lstatSync").length).toBe(205);
+  }
+
+  fs.symlinkSync(userRoot, join(root, "root-link"));
+  fs.mkdirSync(join(userRoot, "ancestor"));
+  fs.writeFileSync(join(userRoot, "ancestor", "README.md"), "ancestor");
+  for (const [path, expected] of [
+    [join(root, "root-link"), [{ path: "ancestor/README.md", byte_size: 8 }, { path: "README.md", byte_size: 16 }]],
+    [join(root, "root-link", "ancestor"), [{ path: "README.md", byte_size: 8 }]],
+  ] satisfies [string, { path: string; byte_size: number }[]][]) {
+    const id = repo.createSource({ name: path, source_kind: "local", local_path: path }).id;
+    expect((await invoke("search_source_files", { source_id: id, query: "readme" }, FILE_RESOURCES)).files).toEqual(expected);
+  }
+
+  const otherId = tenantStorage.run("other", () => repo.createSource({ name: "Fixture", source_kind: "local", local_path: userRoot }).id);
+  for (const tenantId of ["default", "other"]) {
+    const output = await invoke("search_source_files", { source_name: "Fixture", query: "readme" }, FILE_RESOURCES, tenantId);
+    expect(output.source).toEqual({ id: tenantId === "default" ? sourceId : otherId, name: "Fixture", last_commit_sha: null });
+    expect(output.files).toEqual(tenantId === "default" ? [{ path: "README.md", byte_size: 20 }] : [
+      { path: "ancestor/README.md", byte_size: 8 }, { path: "README.md", byte_size: 16 },
+    ]);
+  }
+  expect(await invoke("search_source_files", { source_id: sourceId, source_name: "Fixture", query: "readme" }, ["table:projects"], "other")).toEqual({ error });
+  expect((await invoke("search_source_files", { source_id: otherId, query: "readme" }, FILE_RESOURCES, "other")).source).toEqual({ id: otherId, name: "Fixture", last_commit_sha: null });
+  expect([...unions.get("search_source_files") ?? []].sort()).toEqual(["file:source-workspace", "table:projects", "table:source_docs"]);
+  const declaration = manifest.resources.reviewed.find((entry) => entry.operation === "tool.search_source_files");
+  if (!declaration || declaration.operation === "source.sync") throw new Error("Missing search declaration");
+  expect(declaration.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(["file:source-workspace", "table:projects", "table:source_docs"]);
+});
+
 it("rejects unsupported SQL shapes and filesystem calls after recording", async () => {
   for (const sql of [
     'select * from "projects" join "source_docs" on 1=1',
@@ -225,6 +339,7 @@ it("rejects unsupported SQL shapes and filesystem calls after recording", async 
     'select "id" from "projects"; select "id" from "source_docs"',
     'select "id" from "projects" where "projects"."tenant_id" = \'default\' order by "projects"."name" asc -- ignored',
     'select "id" from "projects" as "source_docs"',
+    'select "id" from "projects" where "projects"."tenant_id" = \'other\' order by "projects"."name" asc',
   ]) expect(() => tableForObservedSelect(sql)).toThrow(`Unsupported SQL: ${sql}`);
   for (const [api, read] of [
     ["readFileSync", () => fs.readFileSync(join(root, "README.md"), "utf8")],
@@ -238,8 +353,19 @@ it("rejects unsupported SQL shapes and filesystem calls after recording", async 
     expect(text).toBe("Actual fixture text\n");
     expect(() => fileResources([root])).toThrow(`Unsupported filesystem call ${api}`);
   }
+  for (const [api, read] of [
+    ["readFileSync", () => fs.readFileSync(join(root, "absent.md"), "utf8")],
+    ["promises.readFile", () => fs.promises.readFile(join(root, "absent.md"), "utf8")],
+  ] satisfies [string, () => string | Promise<string>][]) {
+    observer.state.files = [];
+    observer.state.active = true;
+    try { await expect(Promise.resolve().then(read)).rejects.toMatchObject({ code: "ENOENT" }); }
+    finally { observer.state.active = false; }
+    expect(observer.state.files.map(({ api }) => api)).toEqual([api]);
+    expect(() => fileResources([root])).toThrow("Unsupported filesystem call");
+  }
   observer.state.active = true;
   sqlite.exec("UPDATE projects SET name = name");
   observer.state.active = false;
-  expect(() => statements.map(tableForObservedSelect)).toThrow("Unsupported SQL: UPDATE projects SET name = name");
+  expect(() => statements.map((sql) => tableForObservedSelect(sql))).toThrow("Unsupported SQL: UPDATE projects SET name = name");
 });

@@ -59,6 +59,7 @@ pub fn startup_diagnostic(error: &anyhow::Error) -> String {
             "Native tray initialization failed" => Some("tray_initialization"),
             "Desktop shutdown incomplete" => Some("shutdown_incomplete"),
             "Data directory already owned" => Some("data_directory_owned"),
+            "Unsafe data directory permissions" => Some("data_directory_permissions"),
             "storage_lease_marker_invalid" => Some("storage_lease_marker_invalid"),
             "Persisted desktop origin is unavailable" => Some("persisted_origin_unavailable"),
             "Release artifact missing" | "Release root missing" => Some("release_missing"),
@@ -557,6 +558,14 @@ mod tests {
             startup_diagnostic(&error),
             "desktop_startup_failed: resources_unavailable -> os_error=13"
         );
+        let error = anyhow::anyhow!(secret)
+            .context("Unsafe data directory permissions")
+            .context("Desktop core startup failed");
+        assert_eq!(
+            startup_diagnostic(&error),
+            "desktop_startup_failed: core_startup -> data_directory_permissions"
+        );
+        assert!(!startup_diagnostic(&error).contains(secret));
         for (cause, code) in [
             ("Release artifact missing", "release_missing"),
             (

@@ -2,6 +2,7 @@ use pp_storage::{
     Limits, Setting, SettingCommand, SettingSnapshot, WriterOwner,
     lease::{StorageLease, record_child},
 };
+use std::os::unix::fs::DirBuilderExt;
 use std::{
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
@@ -37,7 +38,11 @@ fn temp_dir(name: &str) -> PathBuf {
         "pp-t7-{name}-{}-{nanos}-{serial}",
         std::process::id()
     ));
-    std::fs::create_dir(&path).unwrap();
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&path)
+        .unwrap();
     path
 }
 
@@ -843,14 +848,28 @@ fn ticket_t_7_writer_waits_for_another_process_and_never_interleaves() {
 
 #[test]
 fn ticket_t_7_writer_bounds_busy_and_rolls_back_a_killed_process() {
+    assert_busy_timeout_and_killed_transaction_rollback(Duration::ZERO);
+}
+
+#[test]
+fn ticket_t_7_writer_busy_timeout_survives_a_delayed_reply_collector() {
+    assert_busy_timeout_and_killed_transaction_rollback(Duration::from_millis(10_200));
+}
+
+fn assert_busy_timeout_and_killed_transaction_rollback(collect_after: Duration) {
     let dir = temp_dir("contend-kill");
     let (owner, _) = WriterOwner::open(&dir, Limits::default()).unwrap();
     let mut contender = lock_from_another_process(&dir);
 
     let started = std::time::Instant::now();
-    let busy = submit(&owner, transfer_setting("rust-write", "blocked"))
-        .recv_timeout(Duration::from_secs(15))
-        .unwrap()
+    let reply = submit(&owner, transfer_setting("rust-write", "blocked"));
+    thread::sleep(collect_after);
+    let busy = reply
+        .recv_timeout(
+            (started + Duration::from_secs(15))
+                .saturating_duration_since(std::time::Instant::now()),
+        )
+        .expect("busy write did not reply within the caller's 15-second deadline")
         .unwrap_err();
     let waited = started.elapsed();
     assert!(
@@ -861,15 +880,19 @@ fn ticket_t_7_writer_bounds_busy_and_rolls_back_a_killed_process() {
         ),
         "{busy:#}"
     );
+    // SQLite counts busy-handler sleep, while collection can include scheduler delay.
+    // https://www.sqlite.org/c3ref/busy_timeout.html
     assert!(
-        waited >= Duration::from_millis(4500) && waited < Duration::from_secs(10),
-        "busy wait was {waited:?}, not the 5s busy_timeout"
+        waited >= Duration::from_millis(4500),
+        "busy handler returned after {waited:?}, before the configured 5s timeout"
     );
 
     let process = contender.process.0.as_mut().unwrap();
     process.kill().unwrap();
     assert!(!process.wait().unwrap().success());
     contender.process.0.take();
+
+    assert_eq!(read_setting(&owner, "rust-write"), SettingSnapshot::Missing);
 
     let started = std::time::Instant::now();
     assert!(

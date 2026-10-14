@@ -175,8 +175,8 @@ async fn start_resources(
         .canonicalize()
         .context("React assets unavailable")?;
     pp_compat::verify_bundle(&input.bundle, &assets)?;
-    std::fs::create_dir_all(&input.data_dir)?;
-    if let Some(released) = StorageLease::retry_failed_release_if_present(&input.data_dir)? {
+    let data_dir = pp_storage::lease::prepare_directory(&input.data_dir)?;
+    if let Some(released) = StorageLease::retry_failed_release_if_present(&data_dir)? {
         anyhow::ensure!(
             released.marker_removed
                 && released.runtime_removed
@@ -185,7 +185,7 @@ async fn start_resources(
             "Storage cleanup still incomplete; ownership retained"
         );
     }
-    let mut owner = StorageLease::acquire(&input.data_dir)?;
+    let mut owner = StorageLease::acquire(&data_dir)?;
     let account_pin =
         pp_compat::DesktopAccountPin::capture(owner.data_dir(), desktop_rebuild.enabled())?;
     let (owners, boot) = cutover::recover(owner.data_dir(), ownership)

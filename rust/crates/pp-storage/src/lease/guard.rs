@@ -209,13 +209,20 @@ impl StorageLease {
         let _ = std::fs::remove_dir_all(candidate);
         result
     }
+    pub(crate) fn detach(&mut self) -> Result<()> {
+        if let Some(path) = &self.path
+            && path != &self.detached
+        {
+            std::fs::rename(path, &self.detached)?;
+            self.path = Some(self.detached.clone());
+        }
+        Ok(())
+    }
+
     pub(crate) fn release(&mut self) -> Result<()> {
+        self.detach()?;
         if let Some(path) = &self.path {
-            if path != &self.detached {
-                std::fs::rename(path, &self.detached)?;
-                self.path = Some(self.detached.clone());
-            }
-            std::fs::remove_dir_all(self.path.as_ref().expect("Lease path present"))?;
+            std::fs::remove_dir_all(path)?;
             self.path = None;
         }
         Ok(())
@@ -229,6 +236,8 @@ impl Drop for StorageLease {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "macos")]
+    use std::os::unix::fs::DirBuilderExt;
     #[test]
     fn child_recording_refuses_a_different_owner_without_modifying_its_marker() {
         let directory = std::env::temp_dir().join(format!(
@@ -272,7 +281,11 @@ mod tests {
             "pp-macos-lease-{}",
             hex::encode(rand::random::<[u8; 16]>())
         ));
-        std::fs::create_dir(&directory).unwrap();
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&directory)
+            .unwrap();
         let identity = super::process_identity(std::process::id()).unwrap();
         assert!(identity.starts_with("instance:"));
         assert_eq!(

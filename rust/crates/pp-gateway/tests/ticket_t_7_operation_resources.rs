@@ -42,6 +42,14 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
             File(FileFamily::SourceWorkspace),
         ]))
     );
+    assert_eq!(
+        index.resources_for("tool.search_source_files"),
+        Ok(&BTreeSet::from([
+            Table(Projects),
+            Table(SourceDocs),
+            File(FileFamily::SourceWorkspace),
+        ]))
+    );
     let sync: ResourceSet = BTreeSet::from([
         Table(Projects),
         Table(SourceRevisions),
@@ -90,6 +98,7 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.read_source_file",
         "tool.list_sources",
         "tool.list_source_categories",
+        "tool.search_source_files",
     ]);
     let resolved: BTreeSet<_> = index
         .claims()
@@ -117,7 +126,7 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
 
 #[test]
 fn each_reviewed_resource_is_required_exactly_once() {
-    for entry in 1..=3 {
+    for entry in 1..=4 {
         let original = manifest();
         let id = original["resources"]["reviewed"][entry]["operation"]
             .as_str()
@@ -157,7 +166,7 @@ fn each_reviewed_resource_is_required_exactly_once() {
 
 #[test]
 fn reviewed_states_cannot_disappear_downgrade_or_repeat() {
-    for entry in 0..=3 {
+    for entry in 0..=4 {
         let mut value = manifest();
         let removed = value["resources"]["reviewed"]
             .as_array_mut()
@@ -336,6 +345,7 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
         "tool.read_source_file",
         "tool.list_sources",
         "tool.list_source_categories",
+        "tool.search_source_files",
     ] {
         for participants in [vec![id], vec![]] {
             let mut value = manifest();
@@ -367,6 +377,9 @@ fn reviewed_participants_cannot_swap_operations() {
         ("tool.read_source_file", "tool.list_sources"),
         ("tool.read_source_file", "tool.list_source_categories"),
         ("tool.list_sources", "tool.list_source_categories"),
+        ("tool.read_source_file", "tool.search_source_files"),
+        ("tool.search_source_files", "tool.list_sources"),
+        ("tool.search_source_files", "tool.list_source_categories"),
     ] {
         let mut value = manifest();
         regroup(&mut value, first, &[second]);
