@@ -310,3 +310,65 @@ async fn ticket_t_68_expired_bootstrap_remains_private() {
     );
     gateway.stop().await.unwrap();
 }
+
+#[tokio::test]
+async fn ticket_t_68_ipv4_wildcard_listener_is_rejected() {
+    rejects_listener("0.0.0.0:0").await;
+}
+
+#[tokio::test]
+async fn ticket_t_68_ipv6_wildcard_listener_is_rejected() {
+    rejects_listener("[::]:0").await;
+}
+
+async fn rejects_listener(address: &str) {
+    let listener = tokio::net::TcpListener::bind(address).await.unwrap();
+    match Gateway::start(listener, PathBuf::new(), CompatHandle::unpublished()) {
+        Ok(gateway) => {
+            gateway.stop().await.unwrap();
+            panic!("Gateway admitted a non-loopback listener at {address}");
+        }
+        Err(error) => assert_eq!(
+            error.to_string(),
+            "Desktop gateway requires a loopback listener"
+        ),
+    }
+}
+
+#[tokio::test]
+async fn ticket_t_68_loopback_listeners_preserve_protected_bootstrap() {
+    for address in ["127.0.0.1:0", "[::1]:0"] {
+        let listener = tokio::net::TcpListener::bind(address).await.unwrap();
+        let mut gateway =
+            Gateway::start(listener, PathBuf::new(), CompatHandle::unpublished()).unwrap();
+        let origin = gateway.origin().to_owned();
+        let launch = gateway.take_launch_target().unwrap().into_url();
+        let (status, _, _) = exchange(&origin, request(&origin, "/__runtime")).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let (status, headers, _) = exchange(
+            &origin,
+            request(&origin, launch.strip_prefix(&origin).unwrap()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::SEE_OTHER);
+        private_response(&headers);
+        assert_eq!(headers["location"], "/");
+        let cookie = headers["set-cookie"]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap();
+        let (status, _, body) = exchange(
+            &origin,
+            request(&origin, "/__runtime").header("cookie", cookie),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap()["compat"]["state"],
+            "starting"
+        );
+        gateway.stop().await.unwrap();
+    }
+}
