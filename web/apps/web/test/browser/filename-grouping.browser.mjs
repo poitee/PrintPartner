@@ -78,7 +78,7 @@ try {
   assert.equal(await page.getByRole("button", { name: "Download sorted STL files", exact: true }).isDisabled(), true);
   await editor.getByRole("button", { name: "Use Milo rules" }).click();
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.screenshot({ path: "/tmp/pp-filename-grouping-mobile.png", fullPage: true });
+  await page.screenshot({ path: `${process.env.RUNNER_TEMP ?? "/tmp"}/pp-filename-grouping-mobile-${randomUUID()}.png`, fullPage: true });
   assert.equal(await page.evaluate(() => globalThis.document.documentElement.scrollWidth > globalThis.innerWidth), false);
   assert.deepEqual(errors, []);
   const recoveryPage = await browser.newPage();
