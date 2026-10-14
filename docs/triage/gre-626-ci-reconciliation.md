@@ -11,7 +11,7 @@ Every source commit below is dropped. Existing implementations cover the marker-
 | Source commit | Decision and evidence on main |
 | --- | --- |
 | `1f2ba05e78399ebc1430d493efa76714b92a4634` | Drop. `79b69701` introduced the workaround check. Web CI already runs the check and its tests. The manual `chain-tip-gate.yml` already runs `cargo clippy --locked --workspace --all-targets -- -D warnings` after installing desktop libraries. Automatic Desktop runtime still lints selected backend crates. Extending that hosted job to every crate and adding desktop libraries is deliberately declined here. The proposed workspace lint table restates Clippy's default groups and levels, so its per-crate inheritance adds no stricter policy. Adding workaround path triggers would launch another hosted workflow for changes already covered by Web CI. |
-| `dde8462f7a616fe7dd4681a00e588d3779f746f5` | Drop. `66fae662` already counts markers in block comments and refuses baseline increases during `--update`. Main tests cover both behaviors. Web CI runs those tests, so another copy in Desktop runtime is unnecessary. |
+| `dde8462f7a616fe7dd4681a00e588d3779f746f5` | Drop. `66fae662` already counts markers in block comments and refuses baseline increases during `--update`. Main tests cover both behaviors. Web CI runs those tests for its matched paths. A Desktop runtime invocation would add Rust-only coverage, which is explicitly declined below under the local-first constraint. |
 | `ca9828fa470cea649a9c1a84ed21d434e57474df` | Drop. `bddb722e` and `122e7ba0` already count shell and YAML markers conservatively. `countText` counts every physical shell and YAML line. Rust whitespace and multiline attributes have dedicated tests on main. |
 | `8984efa5c42aea60a034216ae17ef743eeb2f7b3` | Drop. Main already has `countRustAllowMarkers` and `countRustAllowMeta`, including nested `cfg_attr` handling. Tests restrict counts to emitted lint attributes. Main requires no direct YAML parser dependency because every YAML line is counted. Manifest changes already trigger Web CI. Adding manifest triggers to hosted Desktop runtime is deliberately declined. |
 | `f7924d1906a3ebe5b148b4a2ae64e98c4bffdd65` | Drop. `122e7ba0` already counts every physical YAML line without parsing. Main has no direct `yaml` dependency in `web/package.json`. |
@@ -38,8 +38,12 @@ git diff --check
 Reproduce the comparison with:
 
 ```sh
-git cherry 164db7d0bfe46d53ffbbdb3398bff36d5d448b30 3d4f177a0221e4e8eb4f50d2d58d959be0969f4c
-git diff 164db7d0bfe46d53ffbbdb3398bff36d5d448b30 3d4f177a0221e4e8eb4f50d2d58d959be0969f4c -- scripts/workaround-ratchet.mjs scripts/workaround-ratchet.test.mjs .github/workflows/desktop-runtime.yml rust/Cargo.toml
+git fetch origin refs/heads/main refs/pull/155/head:refs/triage/gre-626/pr-155
+test "$(git rev-parse refs/triage/gre-626/pr-155)" = 3d4f177a0221e4e8eb4f50d2d58d959be0969f4c
+git cherry 164db7d0bfe46d53ffbbdb3398bff36d5d448b30 refs/triage/gre-626/pr-155
+git diff 164db7d0bfe46d53ffbbdb3398bff36d5d448b30 refs/triage/gre-626/pr-155 -- scripts/workaround-ratchet.mjs scripts/workaround-ratchet.test.mjs .github/workflows/desktop-runtime.yml rust/Cargo.toml 'rust/crates/*/Cargo.toml' web/package.json web/package-lock.json web/scripts/workaround-yaml.mjs
 ```
+
+The tip assertion prevents a later update to #155 from silently changing this comparison. Use a full clone so main's recorded historical commit is available.
 
 After this record merges under the review and CI gate, close #155 with a comment naming the reconciliation merge SHA. Keep its source branch.
