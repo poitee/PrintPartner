@@ -638,6 +638,26 @@ fn ticket_t_3_drain_cutover_unreaped_compat_changes_nothing() {
 }
 
 #[test]
+fn ticket_t_3_drain_cutover_interrupted_compat_changes_nothing() {
+    let drained = DrainEvidence {
+        compat: Some(CompatExit::Interrupted),
+        ..DRAINED
+    };
+    let expected = CutoverReceipt::CompatInterrupted {
+        operation: PLANS_CREATE.into(),
+    };
+    assert_commit_changes_nothing(drained, expected.clone());
+    let index = fixture_index();
+    let dir = Scratch::new("interrupted");
+    let (owners, _) = cutover::recover(&dir.0, Some(&index)).unwrap();
+    assert_eq!(
+        plan_for(&index, &owners, PLANS_CREATE).commit(&dir.0, drained),
+        expected
+    );
+    assert!(!dir.0.join(CUTOVER_FILE).exists());
+}
+
+#[test]
 fn ticket_t_3_drain_cutover_force_killed_compat_changes_nothing() {
     assert_commit_changes_nothing(
         DrainEvidence {
@@ -762,6 +782,12 @@ fn ticket_t_3_drain_cutover_receipts_serialize_exactly() {
                 operation: operation(),
             },
             json!({"outcome": "compat_not_reaped", "operation": CATALOG}),
+        ),
+        (
+            CutoverReceipt::CompatInterrupted {
+                operation: operation(),
+            },
+            json!({"outcome": "compat_interrupted", "operation": CATALOG}),
         ),
         (
             CutoverReceipt::CompatForceKilled {

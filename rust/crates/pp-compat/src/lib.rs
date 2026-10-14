@@ -302,14 +302,16 @@ impl StopOutcome {
     }
 }
 
-/// How the compatibility child ended on the final planned shutdown.
+/// Evidence from the last compatibility child when supervision ends.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CompatExit {
-    /// The process group exited without parent-forced termination, or none was running.
+    /// A planned stop exited without parent-forced termination, or no child ever started.
     Graceful,
     /// The parent SIGKILLed the leader or surviving process-group members.
     Forced,
+    /// The last child was reaped after an unplanned exit or failed readiness/health.
+    Interrupted,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -844,6 +846,7 @@ impl Supervisor {
                 let mut failure = logs::FailureReason::SpawnFailed;
                 let mut termination = None;
                 if let Ok(mut process) = process {
+                    exit = CompatExit::Interrupted;
                     failure = logs::FailureReason::ReadinessTimeout;
                     let mut ready = false;
                     let mut observed_exit = None;
@@ -927,6 +930,7 @@ impl Supervisor {
                             .map(logs::Termination::ExitCode)
                             .or_else(|| status.signal().map(logs::Termination::Signal));
                     }
+                    let planned_stop = cancelled.is_cancelled() && observed_exit.is_none();
                     let (stop_intent, stop_exit) = match process
                         .stop(observed_exit, &cancelled, config.eof_watchdog)
                         .await
@@ -945,8 +949,13 @@ impl Supervisor {
                         }
                     };
                     logs.event(logs::Event::Reaped, 30);
-                    if stop_intent == StopIntent::PlannedShutdown {
+                    if stop_exit == CompatExit::Forced {
                         exit = stop_exit;
+                    }
+                    if stop_intent == StopIntent::PlannedShutdown {
+                        if planned_stop {
+                            exit = stop_exit;
+                        }
                         break;
                     }
                 } else if cancelled.is_cancelled() {

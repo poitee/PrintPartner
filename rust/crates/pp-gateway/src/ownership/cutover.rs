@@ -141,6 +141,9 @@ pub enum CutoverReceipt {
     CompatNotReaped {
         operation: String,
     },
+    CompatInterrupted {
+        operation: String,
+    },
     CompatForceKilled {
         operation: String,
     },
@@ -341,6 +344,9 @@ impl CutoverPlan {
         match compat {
             None => return CutoverReceipt::CompatNotReaped { operation },
             Some(CompatExit::Forced) => return CutoverReceipt::CompatForceKilled { operation },
+            Some(CompatExit::Interrupted) => {
+                return CutoverReceipt::CompatInterrupted { operation };
+            }
             Some(CompatExit::Graceful) => {}
         }
         if let Err(error) = write_record(data_dir, &self.next) {
