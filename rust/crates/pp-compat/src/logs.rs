@@ -362,6 +362,52 @@ mod tests {
         assert!(std::fs::symlink_metadata(path).unwrap().is_symlink());
     }
 
+    #[test]
+    fn ticket_t_2_log_rotation_preserves_archives_with_dangling_active_symlink() {
+        for size_rollover in [false, true] {
+            let scratch = Scratch::new();
+            let directory = scratch.0.join("logs");
+            let path = directory.join("desktop.jsonl");
+            let logs = Logs::open(directory.clone()).unwrap();
+            logs.event(Event::Starting, 30);
+            let before = std::fs::read(&path).unwrap();
+            let original = scratch.0.join("original");
+            std::fs::rename(&path, &original).unwrap();
+            let target = scratch.0.join("outside");
+            std::os::unix::fs::symlink(&target, &path).unwrap();
+            let archives = ["one\n", "two\n", "three\n", "four\n", "five\n", "six\n"];
+            for (index, bytes) in archives.iter().enumerate() {
+                std::fs::write(
+                    directory.join(format!("desktop.{}.jsonl", index + 1)),
+                    bytes,
+                )
+                .unwrap();
+            }
+            {
+                let mut log = logs.0.lock().unwrap();
+                if size_rollover {
+                    log.bytes = 10 * 1024 * 1024;
+                } else {
+                    log.day = 0;
+                }
+            }
+            for _ in 0..3 {
+                logs.event(Event::Ready, 30);
+            }
+            for (index, bytes) in archives.iter().enumerate() {
+                assert_eq!(
+                    std::fs::read(directory.join(format!("desktop.{}.jsonl", index + 1))).ok(),
+                    Some(bytes.as_bytes().to_vec()),
+                    "archive {} changed after repeated events, size_rollover={size_rollover}",
+                    index + 1
+                );
+            }
+            assert!(!target.exists(), "rotation created the symlink target");
+            assert_eq!(std::fs::read(original).unwrap(), before);
+            assert!(std::fs::symlink_metadata(path).unwrap().is_symlink());
+        }
+    }
+
     #[tokio::test]
     async fn ticket_t_2_log_appends_redacted_records_and_rotates_regular_files() {
         let scratch = Scratch::new();
