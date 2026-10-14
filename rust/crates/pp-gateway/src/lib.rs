@@ -135,6 +135,10 @@ pub struct Gateway {
 impl Gateway {
     pub fn start(listener: TcpListener, assets: PathBuf, compat: CompatHandle) -> Result<Self> {
         let address = listener.local_addr()?;
+        anyhow::ensure!(
+            address.ip().is_loopback(),
+            "Desktop gateway requires a loopback listener"
+        );
         let host = address.to_string();
         let origin = format!("http://{host}");
         let token = hex::encode(rand::random::<[u8; 32]>());
