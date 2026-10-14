@@ -1,6 +1,6 @@
 {
   "scope": "Observed desktop self-host registration; Node owns domain/background/file effects",
-  "registry_sha256": "7dbc3c4230b20add460532bbcb7173895540a8d68dad7660e0d0ec51c5c1aa50",
+  "registry_sha256": "29187a67a38ef4b57becb6a1ef15be41a765af4c97e81e32d2185ea95e5fe2ee",
   "gateway_owned": [
     {
       "method": "POST",
@@ -4300,16 +4300,6 @@
       "effect_reason": "Conservatively guarded GET/HEAD: no audited pure-read exception; provider or local effects may occur"
     },
     {
-      "method": "POST",
-      "path": "/auth/logout",
-      "owner": "compat",
-      "effect": "local_commit",
-      "operation": "POST /auth/logout current",
-      "contract": "current",
-      "websocket": false,
-      "effect_reason": "Node owns the complete local transaction or file publication"
-    },
-    {
       "method": "GET",
       "path": "/auth/me",
       "owner": "compat",
@@ -7848,6 +7838,11 @@
     },
     {
       "method": "POST",
+      "path": "/auth/change-password",
+      "reason": "Native bootstrap owns desktop authentication; OAuth and development login are unavailable"
+    },
+    {
+      "method": "POST",
       "path": "/auth/dev-login",
       "reason": "Native bootstrap owns desktop authentication; OAuth and development login are unavailable"
     },
@@ -7863,12 +7858,42 @@
     },
     {
       "method": "GET",
+      "path": "/auth/discord/callback",
+      "reason": "Native bootstrap owns desktop authentication; OAuth and development login are unavailable"
+    },
+    {
+      "method": "HEAD",
+      "path": "/auth/discord/callback",
+      "reason": "Native bootstrap owns desktop authentication; OAuth and development login are unavailable"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/forgot-password",
+      "reason": "Native bootstrap owns desktop authentication; OAuth and development login are unavailable"
+    },
+    {
+      "method": "GET",
       "path": "/auth/github",
       "reason": "Native bootstrap owns desktop authentication; OAuth and development login are unavailable"
     },
     {
       "method": "HEAD",
       "path": "/auth/github",
+      "reason": "Native bootstrap owns desktop authentication; OAuth and development login are unavailable"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/login",
+      "reason": "Native bootstrap owns desktop authentication; OAuth and development login are unavailable"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/register",
+      "reason": "Native bootstrap owns desktop authentication; OAuth and development login are unavailable"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/reset-password",
       "reason": "Native bootstrap owns desktop authentication; OAuth and development login are unavailable"
     },
     {

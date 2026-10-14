@@ -280,6 +280,11 @@ impl CoreRuntime {
         compat_config: SupervisorConfig,
     ) -> Result<Self> {
         let desktop_rebuild = DesktopRebuild::from_env();
+        if desktop_rebuild.enabled() {
+            pp_gateway::ownership::manifest::admit_bundled_manifest().map_err(|error| {
+                anyhow::anyhow!("Operation ownership admission failed: {error}")
+            })?;
+        }
         let (started, startup) = tokio::sync::oneshot::channel();
         let (stop, stopped) = tokio::sync::oneshot::channel();
         let (completed, completion) = tokio::sync::oneshot::channel();

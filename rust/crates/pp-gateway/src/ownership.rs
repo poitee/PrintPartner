@@ -11,6 +11,8 @@
 //! bundled manifest again in memory. The Node process admits that file before
 //! HTTP handlers, MCP `start_sync`, job execution, and watcher timers.
 
+pub mod manifest;
+
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 #[cfg(unix)]
@@ -126,6 +128,9 @@ pub enum AdmissionError {
     DuplicateParticipant {
         id: String,
     },
+    UnknownParticipant {
+        id: String,
+    },
     ParticipantSetMismatch {
         missing: Vec<String>,
         unexpected: Vec<String>,
@@ -190,6 +195,9 @@ impl std::fmt::Display for AdmissionError {
             }
             Self::DuplicateParticipant { id } => {
                 write!(formatter, "duplicate participant {id}")
+            }
+            Self::UnknownParticipant { id } => {
+                write!(formatter, "unknown participant {id} has no owner")
             }
             Self::ParticipantSetMismatch {
                 missing,
