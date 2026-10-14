@@ -19,6 +19,9 @@ mod rebuild;
 #[cfg(feature = "desktop_rebuild")]
 pub mod layout;
 
+#[cfg(feature = "desktop_rebuild")]
+pub mod profile_interpreter;
+
 #[cfg(test)]
 mod origin_tests;
 

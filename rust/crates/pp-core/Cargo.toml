@@ -7,7 +7,7 @@ license.workspace = true
 
 [features]
 default = []
-desktop_rebuild = ["pp-storage/desktop_rebuild"]
+desktop_rebuild = ["pp-storage/desktop_rebuild", "dep:ryu-js", "dep:regress"]
 
 [dependencies]
 pp-storage = { path = "../pp-storage" }
@@ -23,6 +23,8 @@ libc.workspace = true
 tokio-util.workspace = true
 pp-compat = { path = "../pp-compat" }
 pp-gateway = { path = "../pp-gateway" }
+ryu-js = { version = "=1.0.2", optional = true }
+regress = { version = "=0.11.1", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
