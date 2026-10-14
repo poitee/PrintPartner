@@ -259,10 +259,18 @@ impl CompatHandle {
         self.endpoint.borrow().clone()
     }
     pub async fn recover(&self) -> Result<()> {
-        if !matches!(*self.status.borrow(), Status::Guarded) {
+        let status = self.status.borrow();
+        if !matches!(*status, Status::Guarded) {
             bail!("Recovery is available only after the crash guard stops the child");
         }
-        self.recover.send(()).await.context("Supervisor stopped")
+        // Keep the status read lock through admission so Starting can drain
+        // every request admitted against this guard before spawning again.
+        let result = self.recover.try_send(()).map_err(|error| match error {
+            mpsc::error::TrySendError::Full(()) => anyhow::anyhow!("Recovery already requested"),
+            mpsc::error::TrySendError::Closed(()) => anyhow::anyhow!("Supervisor stopped"),
+        });
+        drop(status);
+        result
     }
 }
 
@@ -849,6 +857,9 @@ impl Supervisor {
                     break;
                 }
                 states.send_replace(Status::Starting);
+                // A concurrent caller may enqueue after the guard receives the
+                // first request. Starting closes admission before draining it.
+                while recovery.try_recv().is_ok() {}
                 logs.event(logs::Event::Starting, 30);
                 let process = obtain(&source, &logs).await;
                 let mut failure = logs::FailureReason::SpawnFailed;
