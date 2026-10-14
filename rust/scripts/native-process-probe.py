@@ -13,15 +13,29 @@ def validate(returncode, stdout, stderr, data):
     records = [json.loads(line) for line in stdout.strip().splitlines()]
     receipt = records[-1]
     window = next(record['native_window'] for record in records if 'native_window' in record)
-    assert window['close_hid'] and window['show_visible'], window
-    assert receipt['compat_reaped'] and receipt['storage_released'] and receipt['gateway_stopped'] and not receipt['errors'], receipt
+    assert window.get('close_hid') is True and window.get('show_visible') is True, window
+    assert (
+        receipt.get('compat_reaped') is True
+        and receipt.get('storage_released') is True
+        and receipt.get('gateway_stopped') is True
+        and receipt.get('marker_removed') is True
+        and receipt.get('runtime_removed') is True
+        and receipt.get('errors') == []
+    ), receipt
     assert not (data / '.desktop-owner.json').exists()
     return receipt, window
 
 
 def self_test():
     window = {'close_hid': True, 'show_visible': True}
-    receipt = {'compat_reaped': True, 'storage_released': True, 'gateway_stopped': True, 'errors': []}
+    receipt = {
+        'compat_reaped': True,
+        'storage_released': True,
+        'gateway_stopped': True,
+        'marker_removed': True,
+        'runtime_removed': True,
+        'errors': [],
+    }
     with tempfile.TemporaryDirectory(prefix='pp-native-self-test-') as fixture:
         data = pathlib.Path(fixture)
 
@@ -31,10 +45,17 @@ def self_test():
 
         assert check() == (receipt, window)
         failures = [lambda: check(code=1)]
-        for key in window:
-            failures.append(lambda key=key: check(native={**window, key: False}))
-        for key in receipt:
-            failures.append(lambda key=key: check(shutdown={**receipt, key: ['fixture error'] if key == 'errors' else False}))
+        for key in ('close_hid', 'show_visible'):
+            for value in (False, None, 0, 1, 'true', [True], {'ok': True}):
+                failures.append(lambda key=key, value=value: check(native={**window, key: value}))
+            failures.append(lambda key=key: check(native={name: value for name, value in window.items() if name != key}))
+        for key in ('compat_reaped', 'storage_released', 'gateway_stopped', 'marker_removed', 'runtime_removed'):
+            for value in (False, None, 0, 1, 'true', [True], {'ok': True}):
+                failures.append(lambda key=key, value=value: check(shutdown={**receipt, key: value}))
+            failures.append(lambda key=key: check(shutdown={name: value for name, value in receipt.items() if name != key}))
+        for value in (['fixture error'], None, False, '', {}):
+            failures.append(lambda value=value: check(shutdown={**receipt, 'errors': value}))
+        failures.append(lambda: check(shutdown={name: value for name, value in receipt.items() if name != 'errors'}))
         for failure in failures:
             try:
                 failure()
@@ -49,7 +70,7 @@ def self_test():
             pass
         else:
             raise AssertionError('Leaked desktop owner was accepted')
-    print('PASS: native-process-probe self-tests (valid receipt and 8 rejected failures)')
+    print(f'PASS: native-process-probe self-tests (valid receipt and {len(failures) + 1} rejected failures)')
 
 
 if '--self-test' in sys.argv[1:]:
