@@ -358,7 +358,7 @@ fn server_node(web: &Path) -> PathBuf {
     candidates.push(PathBuf::from("node"));
     let mut errors = Vec::new();
     for candidate in candidates {
-        let output = Command::new(&candidate)
+        let output = child_process::command(&candidate)
             .args([
                 "--input-type=module",
                 "-e",
@@ -423,7 +423,7 @@ fn run_node_probe(
     probe: &Path,
 ) -> serde_json::Value {
     let tsx = web.join("node_modules/tsx/dist/cli.mjs");
-    let mut child = Command::new(node)
+    let mut child = child_process::command(node)
         .arg(&tsx)
         .arg(probe)
         .arg(mode)
@@ -538,7 +538,11 @@ fn stamp_schema_version(dir: &Path, version: &str) {
 }
 
 fn exited_pid() -> u32 {
-    let mut child = Command::new("sh").arg("-c").arg("exit 0").spawn().unwrap();
+    let mut child = child_process::command("sh")
+        .arg("-c")
+        .arg("exit 0")
+        .spawn()
+        .unwrap();
     let pid = child.id();
     let status = child.wait().unwrap();
     assert!(status.success());
@@ -556,17 +560,19 @@ fn write_orphan_marker(dir: &Path, child_pid: u32, child_identity: &str) {
     std::fs::write(dir.join(".desktop-owner.json"), marker.to_string()).unwrap();
 }
 
-fn release_database(dir: &Path, owner: WriterOwner) {
-    let runtime = std::fs::read(dir.join(".desktop-owner.json"))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .and_then(|marker| marker["runtime_dir"].as_str().map(PathBuf::from));
-    owner.shutdown().unwrap();
-    if let Some(runtime) = runtime {
-        let _ = std::fs::remove_dir_all(runtime);
-    }
-    assert!(dir.join("print-partner.db").exists());
-    assert!(!dir.join(".desktop-owner.json").exists());
+// Desktop startup holds StorageLease and lets its recorded Node child create
+// the database, so the copy carries Node's schema rather than WriterOwner's.
+fn desktop_lease_with_node_schema(
+    dir: &Path,
+    web: &Path,
+    node: &Path,
+    probe: &Path,
+) -> StorageLease {
+    let lease = StorageLease::acquire(dir).unwrap();
+    let event = run_node_probe("bootstrap", dir, web, node, probe);
+    assert_eq!(event["event"], "connected", "{event}");
+    assert_eq!(event["after"]["version"], "34", "{event}");
+    lease
 }
 
 fn sequence_of(event: &serde_json::Value, side: &str, name: &str) -> i64 {
@@ -598,7 +604,7 @@ fn ticket_t_7_writer_node_refuses_migration_and_writes_on_a_rust_owned_copy() {
     let node = server_node(&web);
     let probe = write_probe(&web);
     let dir = temp_dir("node-foreign");
-    let (owner, _) = WriterOwner::open(&dir, Limits::default()).unwrap();
+    let (owner, ready) = WriterOwner::open(&dir, Limits::default()).unwrap();
     let event = run_node_probe("foreign", &dir, &web, &node, &probe);
     assert_eq!(event["event"], "refused", "{event}");
     assert!(
@@ -608,7 +614,11 @@ fn ticket_t_7_writer_node_refuses_migration_and_writes_on_a_rust_owned_copy() {
             .contains("will not migrate or write"),
         "{event}"
     );
-    assert_eq!(event["before"]["version"], "34", "{event}");
+    assert_eq!(
+        event["before"]["version"],
+        ready.version.to_string(),
+        "{event}"
+    );
     assert_stable_fingerprint(&event);
     owner.shutdown().unwrap();
     stamp_schema_version(&dir, "33");
@@ -634,7 +644,7 @@ fn ticket_t_7_writer_node_refuses_to_upgrade_an_unsupported_rust_owned_schema() 
         event["message"]
             .as_str()
             .unwrap()
-            .contains("not the supported schema"),
+            .contains("will not migrate or write"),
         "{event}"
     );
     assert_eq!(event["before"]["version"], "33", "{event}");
@@ -650,12 +660,13 @@ fn ticket_t_7_writer_node_child_asserts_schema_without_migrating() {
     let node = server_node(&web);
     let probe = write_probe(&web);
     let dir = temp_dir("node-child");
-    let (owner, _) = WriterOwner::open(&dir, Limits::default()).unwrap();
+    let lease = desktop_lease_with_node_schema(&dir, &web, &node, &probe);
     let event = run_node_probe("child", &dir, &web, &node, &probe);
     assert_eq!(event["event"], "connected", "{event}");
     assert_eq!(event["before"]["version"], "34", "{event}");
     assert_stable_fingerprint(&event);
-    release_owner(&dir, owner);
+    lease.release();
+    std::fs::remove_dir_all(&dir).unwrap();
     remove_probe(&probe);
 }
 
@@ -691,14 +702,16 @@ fn ticket_t_7_writer_node_live_child_keeps_a_dead_owner_exclusive() {
     let node = server_node(&web);
     let probe = write_probe(&web);
     let dir = temp_dir("node-orphan");
-    let (owner, _) = WriterOwner::open(&dir, Limits::default()).unwrap();
-    release_database(&dir, owner);
+    desktop_lease_with_node_schema(&dir, &web, &node, &probe).release();
+    assert!(!dir.join(".desktop-owner.json").exists());
     let event = run_node_probe("orphan", &dir, &web, &node, &probe);
     assert_eq!(event["event"], "connected", "{event}");
     assert_eq!(event["before"]["version"], "34", "{event}");
     assert_stable_fingerprint(&event);
 
-    let mut sleeper = StopProcess(Some(Command::new("sleep").arg("120").spawn().unwrap()));
+    let mut sleeper = StopProcess(Some(
+        child_process::command("sleep").arg("120").spawn().unwrap(),
+    ));
     let child_pid = sleeper.0.as_ref().unwrap().id();
     write_orphan_marker(&dir, child_pid, &child_process_identity(child_pid));
     let refused = run_node_probe("foreign", &dir, &web, &node, &probe);

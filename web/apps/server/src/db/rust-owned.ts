@@ -170,19 +170,6 @@ function isRecordedChild(marker: RustOwnerMarker): boolean {
   }
 }
 
-export function leaseHeldByThisProcess(dataDir: string): boolean {
-  const ownerPath = join(dataDir, ".desktop-lease", "owner.json");
-  if (!existsSync(ownerPath)) return false;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(readFileSync(ownerPath, "utf8"));
-  } catch {
-    return false;
-  }
-  if (!isCompleteLeaseOwner(parsed)) return false;
-  return parsed.pid === process.pid && processStillOwnsIdentity(parsed.pid, parsed.process_identity);
-}
-
 export function rustOwnedCopy(dataDir: string): RustOwnedCopy {
   const marker = readMarkerFile(dataDir);
   if (marker.kind === "live") {
@@ -201,20 +188,6 @@ export function databaseSchemaIsCurrent(dbPath: string): boolean {
   const sqlite = new Database(dbPath, { readonly: true, fileMustExist: true });
   try {
     return readSchemaVersion(sqlite) === currentSchemaVersion;
-  } finally {
-    sqlite.close();
-  }
-}
-
-export function assertSupportedRustSchema(dbPath: string): void {
-  const sqlite = new Database(dbPath, { readonly: true, fileMustExist: true });
-  try {
-    const version = readSchemaVersion(sqlite);
-    if (version !== currentSchemaVersion) {
-      throw new Error(
-        `Rust-owned database schema ${version} is not the supported schema ${currentSchemaVersion}`,
-      );
-    }
   } finally {
     sqlite.close();
   }

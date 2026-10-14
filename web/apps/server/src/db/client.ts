@@ -1,26 +1,19 @@
 import Database from "better-sqlite3";
 import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
-import { existsSync, mkdirSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { acquireStorageLease } from "../storage-lease.js";
 import * as schema from "./schema.js";
 import { currentSchemaVersion, schemaVersionKey } from "./schema.js";
 import { schemaMigrations } from "./migrations-sqlite.js";
 import { seedStarterProfiles } from "./seed-starter-profiles.js";
 import { repairSourceRevisionTenantOwnershipSqlite } from "./source-revision-tenant-repair.js";
 import { assertUpgradableSchemaVersion, readSchemaVersion } from "./upgrade-guard.js";
-import {
-  assertSupportedRustSchema,
-  databaseSchemaIsCurrent,
-  leaseHeldByThisProcess,
-  rustOwnedCopy,
-} from "./rust-owned.js";
+import { databaseSchemaIsCurrent, rustOwnedCopy } from "./rust-owned.js";
 
 export type DrizzleDb = BetterSQLite3Database<typeof schema>;
 
 export class SqliteDatabase {
   private sqlite: Database.Database | null = null;
-  private releaseLease: (() => void) | null = null;
   readonly dbPath: string;
   readonly dataDir: string;
   readonly reposDir: string;
@@ -35,16 +28,18 @@ export class SqliteDatabase {
     this.sourcesDir = join(dataDir, "sources");
   }
 
+  // Writer processes reserve the copy before they connect. startServer, the MCP
+  // server and the migrate CLI hold acquireDataDirectory, and the desktop child
+  // runs under its parent's lease. Connect only refuses a copy another runtime owns.
   connect(): void {
     const ownership = rustOwnedCopy(this.dataDir);
     if (ownership.kind === "foreign") {
-      this.refuseRustOwnedCopy();
+      throw new Error("Rust owns this data directory; Node will not migrate or write");
     }
     // The desktop lease records this process before any SQL file exists.
     // Skip version-advancing migrations only after that schema is already current.
     const childAlreadyCurrent =
       ownership.kind === "child" && databaseSchemaIsCurrent(this.dbPath);
-    const releaseAdmission = this.reserveUnownedCopy(ownership.kind);
     mkdirSync(dirname(this.dbPath), { recursive: true });
     const sqlite = new Database(this.dbPath);
     try {
@@ -66,31 +61,10 @@ export class SqliteDatabase {
         this.runMigrations();
         seedStarterProfiles(this.sqlite);
       }
-      this.releaseLease = releaseAdmission;
     } catch (error) {
       sqlite.close();
       this.sqlite = null;
       this.drizzle = null;
-      releaseAdmission?.();
-      throw error;
-    }
-  }
-
-  private refuseRustOwnedCopy(): never {
-    if (existsSync(this.dbPath)) assertSupportedRustSchema(this.dbPath);
-    throw new Error("Rust owns this data directory; Node will not migrate or write");
-  }
-
-  // Reserve the unowned observation. A lease this process already holds, including
-  // the desktop parent and acquireDataDirectory, stays with that caller.
-  private reserveUnownedCopy(kind: "absent" | "child"): (() => void) | null {
-    if (kind !== "absent" || leaseHeldByThisProcess(this.dataDir)) return null;
-    mkdirSync(this.dataDir, { recursive: true });
-    try {
-      return acquireStorageLease(this.dataDir).release;
-    } catch (error) {
-      const again = rustOwnedCopy(this.dataDir);
-      if (again.kind === "foreign") this.refuseRustOwnedCopy();
       throw error;
     }
   }
@@ -190,15 +164,9 @@ export class SqliteDatabase {
   }
 
   close(): void {
-    try {
-      this.sqlite?.close();
-    } finally {
-      this.sqlite = null;
-      this.drizzle = null;
-      const release = this.releaseLease;
-      this.releaseLease = null;
-      release?.();
-    }
+    this.sqlite?.close();
+    this.sqlite = null;
+    this.drizzle = null;
   }
 
   /** Create a transactionally consistent snapshot, including committed WAL data. */

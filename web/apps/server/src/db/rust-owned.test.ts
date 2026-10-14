@@ -198,22 +198,6 @@ describe("rust owner marker", () => {
     expect(owner.instance).toBe("cd".repeat(16));
   });
 
-  it("acquires the shared lease before opening an unowned database and releases it on close", () => {
-    const dir = mkdtempSync(join(tmpdir(), "pp-rust-owned-"));
-    roots.push(dir);
-    const database = new SqliteDatabase(dir);
-    database.connect();
-    const owner = JSON.parse(readFileSync(join(dir, ".desktop-lease", "owner.json"), "utf8")) as {
-      pid: number;
-      process_identity: string;
-    };
-    expect(owner.pid).toBe(process.pid);
-    expect(owner.process_identity).toBe(processIdentity(process.pid));
-    expect(existsSync(join(dir, "print-partner.db"))).toBe(true);
-    database.close();
-    expect(existsSync(join(dir, ".desktop-lease"))).toBe(false);
-  });
-
   it("restores a missing assembled column for a current recorded child without replaying seeds", () => {
     const dir = mkdtempSync(join(tmpdir(), "pp-rust-owned-"));
     roots.push(dir);
