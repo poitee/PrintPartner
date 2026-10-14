@@ -115,6 +115,7 @@ jobs:
         run: |
           python3 rust/tests/workflow_m0.py 2>&1 | tee "$PP_EVIDENCE/workflow.log"
           python3 rust/tests/lifecycle_m0.py 2>&1 | tee "$PP_EVIDENCE/lifecycle.log"
+          PP_TEST_REAL_SERVER="$GITHUB_WORKSPACE/rust/target/debug/pp-server" python3 -m unittest discover -s .cursor/skills/verify-print-partner-rust/helpers -p test_launch.py -k ForceKillTest 2>&1 | tee "$PP_EVIDENCE/launcher-sigkill.log"
       - name: Verify gateway effects and product routes
         run: |
           python3 rust/tests/gateway_effects.py 2>&1 | tee "$PP_EVIDENCE/gateway-effects.log"

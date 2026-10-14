@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import shlex
 import shutil
 import signal
 import subprocess
@@ -923,6 +924,249 @@ class StopDuringBuildTest(unittest.TestCase):
                 if child_pid is not None and process_alive(child_pid):
                     with contextlib.suppress(ProcessLookupError):
                         os.kill(child_pid, signal.SIGKILL)
+
+
+class GuardStartupTest(unittest.TestCase):
+    def test_sigkill_during_watcher_setup_leaves_no_descendants(self):
+        for mode in ("run", "server"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                pidfile, armed = root / "worker.pid", root / "arming"
+                binary = root / "server"
+                write_executable(binary, f'#!/bin/sh\nsleep 600 &\necho $! > "{pidfile}"\nwait\n')
+                driver = f"""import sys, time
+from pathlib import Path
+sys.path.insert(0, {str(HELPER.parent)!r})
+import verify
+original = verify.guard_group
+def delayed(*args):
+    time.sleep(0.3)
+    Path({str(armed)!r}).touch()
+    time.sleep(2)
+    return original(*args)
+verify.guard_group = delayed
+if {mode!r} == 'run':
+    verify.run({str(root)!r}, {str(binary)!r})
+else:
+    verify.serve(Path({str(binary)!r}), Path({str(root)!r}), 'node', 'commit', None)
+"""
+                with (root / "log").open("w") as log:
+                    launcher = subprocess.Popen([sys.executable, "-c", driver], stdout=log, stderr=log)
+                try:
+                    deadline = time.monotonic() + 10
+                    while not armed.exists() and time.monotonic() < deadline:
+                        time.sleep(0.01)
+                    self.assertTrue(armed.exists(), "watcher setup was not reached")
+                    launcher.kill()
+                    launcher.wait(timeout=5)
+                    time.sleep(2.2)
+                    if pidfile.exists():
+                        self.assertTrue(wait_until_gone(int(pidfile.read_text()), 3),
+                                        "worker escaped during watcher startup")
+                finally:
+                    if launcher.poll() is None:
+                        launcher.kill()
+                        launcher.wait(timeout=5)
+                    if pidfile.exists():
+                        with contextlib.suppress(ProcessLookupError):
+                            os.kill(int(pidfile.read_text()), signal.SIGKILL)
+
+
+class ForceKillTest(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get("PP_TEST_REAL_SERVER"), "requires a measured pp-server build")
+    def test_sigkill_real_launcher_stops_node(self):
+        binary = Path(os.environ["PP_TEST_REAL_SERVER"]).resolve()
+        root = Path(subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip())
+        with tempfile.TemporaryDirectory(prefix="pp-real-kill-") as temporary:
+            log = Path(temporary) / "launch.log"
+            data_path = Path(temporary) / "data-path"
+            native_node = subprocess.check_output(["node", "-p", "process.execPath"], text=True).strip()
+            node_bin = Path(temporary) / "bin"
+            node_bin.mkdir()
+            (node_bin / "node").symlink_to(native_node)
+            environment = dict(os.environ, PATH=f"{node_bin}{os.pathsep}{os.environ['PATH']}")
+            driver = f"""import sys
+from pathlib import Path
+sys.path.insert(0, {str(HELPER.parent)!r})
+import verify
+verify.build = lambda *_: Path({str(binary)!r})
+original = verify.start_server
+def start(binary, root, node, commit, fixture, *args, **kwargs):
+    Path({str(data_path)!r}).write_text(str(fixture / 'data'))
+    return original(binary, root, node, commit, fixture, *args, **kwargs)
+verify.start_server = start
+verify.main()
+"""
+            with log.open("w") as output:
+                launcher = subprocess.Popen([sys.executable, "-c", driver, "launch", "--repo", str(root)],
+                                            stdout=output, stderr=subprocess.STDOUT, env=environment)
+            server_pid = node_pid = None
+            try:
+                deadline = time.monotonic() + 90
+                while "PP_SERVER_URL=" not in log.read_text() and launcher.poll() is None:
+                    self.assertLess(time.monotonic(), deadline, log.read_text())
+                    time.sleep(0.05)
+                fields = dict(token.split("=", 1) for line in log.read_text().splitlines()
+                              if line.startswith("PP_SERVER_URL=") for token in line.split())
+                server_pid = int(fields["PP_SERVER_PID"])
+                data = Path(data_path.read_text())
+                marker = data / ".desktop-owner.json"
+                original = marker.read_bytes()
+                owner = json.loads(original)
+                self.assertEqual(owner["pid"], server_pid)
+                node_pid = owner["child_pid"]
+                self.assertTrue(process_alive(node_pid), "Node must be running before SIGKILL")
+                launcher.kill()
+                self.assertEqual(launcher.wait(timeout=5), -signal.SIGKILL)
+                self.assertTrue(wait_until_gone(server_pid, 10), "server outlived launcher")
+                self.assertTrue(wait_until_gone(node_pid, 10), "Node outlived launcher")
+            finally:
+                if launcher.poll() is None:
+                    launcher.kill()
+                    launcher.wait(timeout=5)
+                for pid in (server_pid, node_pid):
+                    if pid is not None and process_alive(pid):
+                        with contextlib.suppress(ProcessLookupError):
+                            os.kill(pid, signal.SIGKILL)
+
+    def test_sigkill_while_serving_leaves_no_server_or_node_children(self):
+        node = shlex.quote(shutil.which('node'))
+        server = (f'{node} -e "setInterval(() => {{}}, 1000)" &\necho $! > "$PP_TEST_PIDFILE.tmp"\nmv "$PP_TEST_PIDFILE.tmp" "$PP_TEST_PIDFILE"\n'
+                  'mkdir -p "$2"\n'
+                  'printf "{\\"runtime_dir\\": \\"%s\\"}" "$PP_TEST_RUNTIME" > "$2/.desktop-owner.json"\n'
+                  'echo "http://127.0.0.1:49152"\nwait\n')
+        self.assert_sigkill_leaves_no_children(npm_body="exit 0\n", server_body=server, wait_for="PP_SERVER_URL=")
+
+    def test_sigkill_during_build_leaves_no_build_children(self):
+        node = shlex.quote(shutil.which('node'))
+        npm = f'{node} -e "setInterval(() => {{}}, 1000)" &\necho $! > "$PP_TEST_PIDFILE.tmp"\nmv "$PP_TEST_PIDFILE.tmp" "$PP_TEST_PIDFILE"\nwait\n'
+        self.assert_sigkill_leaves_no_children(npm_body=npm, server_body=None, wait_for=None)
+
+    def assert_sigkill_leaves_no_children(self, npm_body, server_body, wait_for):
+        with tempfile.TemporaryDirectory(prefix="pp-launch-sigkill-test-") as temporary:
+            temp = Path(temporary)
+            root = make_fixture_repo(temp / "repo")
+            bin_dir = temp / "bin"
+            bin_dir.mkdir()
+            runtime = temp / "runtime"
+            runtime.mkdir()
+            server = bin_dir / "pp-server"
+            write_executable(bin_dir / "node", "#!/bin/sh\nexit 0\n")
+            write_executable(bin_dir / "npm", "#!/bin/sh\n" + npm_body)
+            write_executable(server, "#!/bin/sh\n" + (server_body or "exit 0\n"))
+            write_executable(bin_dir / "cargo", "#!/bin/sh\necho '{\"reason\":\"compiler-artifact\","
+                                                 "\"target\":{\"name\":\"pp-server\"},"
+                                                 f"\"executable\":\"{server}\"}}'\n")
+            (root / "rust/scripts").mkdir(parents=True)
+            (root / "rust/scripts/build-desktop-manifest.py").write_text("")
+            pidfile = temp / "child.pid"
+            env = dict(os.environ, PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                       PP_TEST_PIDFILE=str(pidfile), PP_TEST_RUNTIME=str(runtime))
+            log = temp / "launch.log"
+            with log.open("w") as stdout:
+                process = subprocess.Popen([sys.executable, str(HELPER), "launch", "--repo", str(root)],
+                                           env=env, stdout=stdout, stderr=subprocess.STDOUT, text=True)
+            child_pid = server_pid = None
+            try:
+                deadline = time.monotonic() + 60
+                while not pidfile.exists() and time.monotonic() < deadline:
+                    time.sleep(0.05)
+                self.assertTrue(pidfile.exists(), "background child never started")
+                child_pid = int(pidfile.read_text())
+                self.assertTrue(process_alive(child_pid), "background child should be running before SIGKILL")
+                if wait_for is not None:
+                    deadline = time.monotonic() + BUILD_TIMEOUT
+                    while wait_for not in log.read_text() and time.monotonic() < deadline:
+                        time.sleep(0.05)
+                    line = next(line for line in log.read_text().splitlines() if line.startswith(wait_for))
+                    server_pid = int(dict(token.split("=", 1) for token in line.split())["PP_SERVER_PID"])
+
+                process.kill()
+                process.wait(timeout=10)
+
+                self.assertTrue(wait_until_gone(child_pid, 10), "background child outlived the force-killed launcher")
+                if server_pid is not None:
+                    self.assertTrue(wait_until_gone(server_pid, 10), "pp-server outlived the force-killed launcher")
+                print(f"SIGKILL -> launcher gone; background child pid {child_pid} gone"
+                      + (f"; pp-server pid {server_pid} gone" if server_pid is not None else ""))
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=10)
+                for pid in (child_pid, server_pid):
+                    if pid is not None and process_alive(pid):
+                        with contextlib.suppress(ProcessLookupError):
+                            os.kill(pid, signal.SIGKILL)
+
+
+class GuardReleaseTest(unittest.TestCase):
+    def test_normal_commands_reap_their_watchers(self):
+        verify = load_verify()
+        for _ in range(3):
+            process = verify.guarded_popen([sys.executable, "-c", "pass"])
+            watcher = process.guard[2]
+            self.assertEqual(process.wait(timeout=5), 0)
+            verify.release_guard(process.guard)
+            self.assertEqual(watcher.returncode, 0)
+            with self.assertRaises(ChildProcessError):
+                os.waitpid(watcher.pid, os.WNOHANG)
+
+
+    def _session_leader(self):
+        leader = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(60)"],
+            start_new_session=True,
+        )
+        return leader
+
+    def _arm(self, verify, group):
+        read_fd, write_fd = os.pipe()
+        done_fd, done_write = os.pipe()
+        watcher = verify.guard_group(group, read_fd, done_write)
+        os.close(read_fd)
+        os.close(done_write)
+        return watcher, done_fd, write_fd
+
+    def test_release_byte_leaves_the_group_alive(self):
+        verify = load_verify()
+        leader = self._session_leader()
+        watcher = None
+        try:
+            watcher, done_fd, write_fd = self._arm(verify, leader.pid)
+            verify.release_guard((done_fd, write_fd))
+            self.assertTrue(process_alive(leader.pid))
+            self.assertEqual(watcher.wait(timeout=5), 0)
+            watcher = None
+        finally:
+            if watcher is not None and watcher.poll() is None:
+                watcher.kill()
+                watcher.wait(timeout=5)
+            if leader.poll() is None:
+                leader.kill()
+                leader.wait(timeout=5)
+
+    def test_eof_without_release_kills_the_group(self):
+        verify = load_verify()
+        leader = self._session_leader()
+        watcher = None
+        try:
+            watcher, done_fd, write_fd = self._arm(verify, leader.pid)
+            os.close(write_fd)
+            self.assertTrue(wait_until_gone(leader.pid, 5))
+            try:
+                while os.read(done_fd, 1):
+                    pass
+            finally:
+                os.close(done_fd)
+            self.assertEqual(watcher.wait(timeout=5), 0)
+            watcher = None
+        finally:
+            if watcher is not None and watcher.poll() is None:
+                watcher.kill()
+                watcher.wait(timeout=5)
+            if leader.poll() is None:
+                leader.kill()
+                leader.wait(timeout=5)
 
 
 if __name__ == "__main__":
