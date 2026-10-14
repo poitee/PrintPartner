@@ -13,13 +13,13 @@ import { tenantStorage } from "../middleware/tenant-context.js";
 import { registerTenantMiddleware } from "./auth.js";
 import { registerIntegrationRoutes } from "./integrations.js";
 
-const disabled = { status: 403, title: "Forbidden", detail: "Feature bambu is disabled.", code: "FEATURE_DISABLED" };
 const invalid = { status: 500, title: "Internal Server Error", detail: "Stored feature toggles are invalid.", code: "FEATURE_TOGGLES_INVALID" };
 const missing = { status: 404, title: "Not Found", detail: "Integration not found" };
 const operations = ["status", "devices", "test"] as const;
 const outputs = { status: { state: "idle", message: "Cached printer ready" }, devices: { devices: [{ id: "printer-1", name: "Workshop printer" }] }, test: { ok: true, message: "Connected to Workshop" } };
 
-describe("Bambu inspection feature admission", () => {
+describe.each(["bambu", "spoolman"] as const)("%s inspection feature admission", (feature) => {
+  const disabled = { status: 403, title: "Forbidden", detail: `Feature ${feature} is disabled.`, code: "FEATURE_DISABLED" };
   let dataDir: string;
   let sqlite: SqliteDatabase;
   let repo: AppRepository;
@@ -41,13 +41,13 @@ describe("Bambu inspection feature admission", () => {
     vi.stubEnv("PP_DESKTOP_REBUILD", "1");
     vi.stubEnv("DEPLOY_MODE", "self-host");
     cache.clear();
-    dataDir = mkdtempSync(join(tmpdir(), "pp-bambu-features-"));
+    dataDir = mkdtempSync(join(tmpdir(), `pp-${feature}-features-`));
     sqlite = new SqliteDatabase(dataDir);
     sqlite.connect();
     repo = new AppRepository(getDb(sqlite), undefined, sqlite.reposDir);
     execution = new StatusExecution();
     integrations = createIntegrationPort({ repo, statusExecution: execution, getAdapter: (type) => ({ type, getStatus: probe, testConnection, listDevices }) });
-    id = integrations.create({ type: "bambu", name: "Workshop", config: { host: "printer", access_code: "secret" } }).id;
+    id = integrations.create({ type: feature, name: "Workshop", config: { host: "printer", access_code: "secret", url: "http://spoolman.invalid" } }).id;
     app = Fastify();
     app.decorateRequest("tenantId", "default");
     app.addHook("onRequest", (request, _reply, done) => {
@@ -88,7 +88,7 @@ describe("Bambu inspection feature admission", () => {
     expect(response.json()).toEqual(outputs[operation]);
   }
   for (const operation of operations) {
-    it.each([undefined, "{}", '{"bambu":false}'])(`${operation} denies defaults or explicit off %j`, async (value) => {
+    it.each([undefined, "{}", JSON.stringify({ [feature]: false })])(`${operation} denies defaults or explicit off %j`, async (value) => {
       if (value !== undefined) repo.setSetting("feature_toggles", value);
       const runtime = vi.spyOn(execution, operation === "status" ? "probe" : operation === "devices" ? "devices" : "test");
       const response = await inspect(operation);
@@ -100,7 +100,7 @@ describe("Bambu inspection feature admission", () => {
       expect(runtime).toHaveBeenCalledTimes(0);
       noWork();
     });
-    it.each(["{", "[]", "null", '{"bambu":"yes"}', '{"bambu":true,"farm":0}'])(`${operation} rejects invalid snapshot %j`, async (value) => {
+    it.each(["{", "[]", "null", JSON.stringify({ [feature]: "yes" }), JSON.stringify({ [feature]: true, farm: 0 })])(`${operation} rejects invalid snapshot %j`, async (value) => {
       repo.setSetting("feature_toggles", value);
       const response = await inspect(operation);
       expect(response.statusCode).toBe(500);
@@ -111,31 +111,31 @@ describe("Bambu inspection feature admission", () => {
       noWork();
     });
     it(`${operation} opts in then revokes before warm adapter output`, async () => {
-      repo.setSetting("feature_toggles", '{"bambu":true}');
+      repo.setSetting("feature_toggles", JSON.stringify({ [feature]: true }));
       await allowed(operation);
       expect(probe).toHaveBeenCalledTimes(operation === "status" ? 1 : 0);
       expect(testConnection).toHaveBeenCalledTimes(operation === "test" ? 1 : 0);
       expect(listDevices).toHaveBeenCalledTimes(operation === "devices" ? 1 : 0);
       if (operation === "status") expect(cache.get("printer")).toEqual({ state: "idle", message: "Cached printer ready" });
       vi.clearAllMocks();
-      repo.setSetting("feature_toggles", '{"bambu":false}');
+      repo.setSetting("feature_toggles", JSON.stringify({ [feature]: false }));
       const runtime = vi.spyOn(execution, operation === "status" ? "probe" : operation === "devices" ? "devices" : "test");
       const denied = await inspect(operation);
       expect(denied.statusCode).toBe(403);
       expect(denied.json()).toEqual(disabled);
       expect(runtime).toHaveBeenCalledTimes(0);
       noWork();
-      repo.setSetting("feature_toggles", '{"bambu":true}');
+      repo.setSetting("feature_toggles", JSON.stringify({ [feature]: true }));
       await allowed(operation);
     });
     it(`${operation} isolates tenant choices, IDs and Plan overrides`, async () => {
-      repo.setSetting("feature_toggles:plan:1", '{"bambu":true}');
+      repo.setSetting("feature_toggles:plan:1", JSON.stringify({ [feature]: true }));
       expect((await inspect(operation)).json()).toEqual(disabled);
-      repo.setSetting("feature_toggles", '{"bambu":true}');
-      repo.setSetting("feature_toggles:plan:1", '{"bambu":false}');
+      repo.setSetting("feature_toggles", JSON.stringify({ [feature]: true }));
+      repo.setSetting("feature_toggles:plan:1", JSON.stringify({ [feature]: false }));
       const otherId = tenantStorage.run("other", () => {
-        repo.setSetting("feature_toggles", '{"bambu":false}');
-        return integrations.create({ type: "bambu", name: "Other", config: {} }).id;
+        repo.setSetting("feature_toggles", JSON.stringify({ [feature]: false }));
+        return integrations.create({ type: feature, name: "Other", config: {} }).id;
       });
       await allowed(operation);
       vi.clearAllMocks();
@@ -146,10 +146,17 @@ describe("Bambu inspection feature admission", () => {
         expect(response.json()).toEqual(missing);
       }
       noWork();
-      tenantStorage.run("other", () => repo.setSetting("feature_toggles", '{"bambu":true}'));
+      tenantStorage.run("other", () => repo.setSetting("feature_toggles", JSON.stringify({ [feature]: true })));
       await allowed(operation, otherId, "other");
     });
-    it(`${operation} preserves non-Bambu inspection with malformed choices`, async () => {
+    it(`${operation} requires its own choice even when the other optional connector is enabled`, async () => {
+      repo.setSetting("feature_toggles", JSON.stringify({ [feature === "bambu" ? "spoolman" : "bambu"]: true }));
+      const response = await inspect(operation);
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toEqual(disabled);
+      noWork();
+    });
+    it(`${operation} preserves unrelated inspection with malformed choices`, async () => {
       repo.setSetting("feature_toggles", "invalid JSON");
       const other = integrations.create({ type: "moonraker", name: "Other", config: {} });
       const reads = vi.spyOn(repo, "getSettingSnapshot");
@@ -172,20 +179,20 @@ describe("Bambu inspection feature admission", () => {
     vi.stubEnv("PP_DESKTOP_REBUILD", flag);
     for (const operation of operations) expect((await inspect(operation)).json()).toEqual(disabled);
     noWork();
-    repo.setSetting("feature_toggles", '{"bambu":true,"future":{"nested":[null]}}');
+    repo.setSetting("feature_toggles", JSON.stringify({ [feature]: true, future: { nested: [null] } }));
     for (const operation of operations) await allowed(operation);
   });
   it("keeps saved metadata and CRUD usable while disabled", async () => {
     repo.setSetting("feature_toggles", "invalid JSON");
     const listed = await app.inject("/api/v1/integrations");
     expect(listed.statusCode).toBe(200);
-    expect(listed.json().integrations).toEqual([expect.objectContaining({ id, type: "bambu", name: "Workshop", config: { host: "printer", access_code: "****" }, capabilities: { files: false, cameras: false, status: true } })]);
+    expect(listed.json().integrations).toEqual([expect.objectContaining({ id, type: feature, name: "Workshop", config: { host: "printer", access_code: "****", url: "http://spoolman.invalid" }, capabilities: { files: false, cameras: false, status: true } })]);
     const updated = await app.inject({ method: "PATCH", url: `/api/v1/integrations/${id}`, payload: { name: "Renamed" } });
     expect(updated.statusCode).toBe(200);
-    expect(updated.json()).toEqual(expect.objectContaining({ id, name: "Renamed", config: { host: "printer", access_code: "****" } }));
-    const created = await app.inject({ method: "POST", url: "/api/v1/integrations", payload: { type: "bambu", name: "New", config: {} } });
+    expect(updated.json()).toEqual(expect.objectContaining({ id, name: "Renamed", config: { host: "printer", access_code: "****", url: "http://spoolman.invalid" } }));
+    const created = await app.inject({ method: "POST", url: "/api/v1/integrations", payload: { type: feature, name: "New", config: {} } });
     expect(created.statusCode).toBe(201);
-    expect(created.json()).toEqual(expect.objectContaining({ type: "bambu", name: "New", config: {} }));
+    expect(created.json()).toEqual(expect.objectContaining({ type: feature, name: "New", config: {} }));
     expect((await app.inject({ method: "DELETE", url: `/api/v1/integrations/${id}` })).statusCode).toBe(204);
     expect(integrations.list().map((item) => item.name)).toEqual(["New"]);
     noWork();
