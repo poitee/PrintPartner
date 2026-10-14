@@ -28,6 +28,10 @@ fn malformed(detail: &str) -> AdmissionError {
 #[test]
 fn reviewed_sets_aliases_and_complete_unresolved_partition() {
     let index = admit_bundled_manifest().unwrap();
+    assert_eq!(
+        index.resources_for("tool.get_workflow_help"),
+        Ok(&BTreeSet::new())
+    );
     let lists = BTreeSet::from([Table(Projects), Table(SourceDocs), Table(AppSettings)]);
     assert_eq!(index.resources_for("tool.list_sources"), Ok(&lists));
     assert_eq!(
@@ -99,6 +103,7 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         .collect();
     let reviewed = BTreeSet::from([
         "source.sync",
+        "tool.get_workflow_help",
         "tool.read_source_file",
         "tool.list_sources",
         "tool.list_source_categories",
@@ -166,7 +171,13 @@ fn each_reviewed_resource_is_required_exactly_once() {
         ] {
             let mut value = original.clone();
             value["resources"]["reviewed"][entry]["resources"] = resources;
-            assert_eq!(admit(&value).unwrap_err(), expected());
+            if value["resources"]["reviewed"][entry]["resources"]
+                == original["resources"]["reviewed"][entry]["resources"]
+            {
+                assert!(admit(&value).is_ok());
+            } else {
+                assert_eq!(admit(&value).unwrap_err(), expected());
+            }
         }
         let mut value = original.clone();
         value["resources"]["reviewed"][entry]["resources"]
@@ -359,6 +370,7 @@ fn regroup(value: &mut Value, operation: &str, participants: &[&str]) {
 #[test]
 fn reviewed_participants_cannot_move_to_unresolved_operations() {
     for id in [
+        "tool.get_workflow_help",
         "tool.read_source_file",
         "tool.list_sources",
         "tool.list_source_categories",
@@ -392,6 +404,7 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
 #[test]
 fn reviewed_participants_cannot_swap_operations() {
     for (first, second) in [
+        ("tool.get_workflow_help", "tool.preview_source_naming"),
         ("tool.preview_source_naming", "tool.list_sources"),
         ("tool.search_source_files", "tool.preview_source_naming"),
         ("tool.read_source_file", "tool.list_sources"),
@@ -472,6 +485,52 @@ fn ticket_t_7_ownership_preview_naming_owner_and_unknown_resource_fail_closed() 
     };
     assert!(
         detail.contains("unknown variant `unreviewed_naming`"),
+        "{detail}"
+    );
+}
+
+#[test]
+fn ticket_t_7_ownership_workflow_help_is_reviewed_empty_and_node_owned() {
+    use pp_gateway::ownership::{Owner, manifest::Disposition};
+    let id = "tool.get_workflow_help";
+    let index = admit_bundled_manifest().unwrap();
+    assert_eq!(
+        index.lookup(id).unwrap().disposition,
+        Disposition::Owned(Owner::Node)
+    );
+    assert_eq!(index.admit_rollback(id), Ok(&BTreeSet::new()));
+    for owner in ["rust", "python"] {
+        let mut value = manifest();
+        regroup(&mut value, id, &[id]);
+        value["operations"]
+            .as_array_mut()
+            .unwrap()
+            .last_mut()
+            .unwrap()["owner"] = json!(owner);
+        let expected = if owner == "rust" {
+            AdmissionError::UnsupportedRustOwner {
+                participant: id.into(),
+            }
+        } else {
+            AdmissionError::UnknownOwner {
+                value: owner.into(),
+            }
+        };
+        assert_eq!(admit(&value).unwrap_err(), expected);
+    }
+    let mut value = manifest();
+    let entry = value["resources"]["reviewed"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|entry| entry["operation"] == id)
+        .unwrap();
+    entry["resources"] = json!([{"kind":"table", "name":"unknown_workflow_table"}]);
+    let AdmissionError::Malformed(detail) = admit(&value).unwrap_err() else {
+        panic!("unknown workflow resource admitted");
+    };
+    assert!(
+        detail.contains("unknown variant `unknown_workflow_table`"),
         "{detail}"
     );
 }
