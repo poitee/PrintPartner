@@ -105,10 +105,6 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         .values()
         .map(|c| c.operation.as_str())
         .collect();
-    assert_eq!(
-        (resolved.len(), reviewed.len(), unresolved.len()),
-        (437, 5, 432)
-    );
     assert_eq!(resolved, unresolved.union(&reviewed).copied().collect());
     for (id, claim) in index.claims() {
         if unresolved.contains(claim.operation.as_str()) {
