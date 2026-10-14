@@ -1,3 +1,4 @@
+import { readFarmAccess } from "../lib/farm-access.js";
 import { chargeTenantDiskBytes, TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
 import {
   OwnershipAdmissionError,
@@ -2854,6 +2855,10 @@ export async function invokeAssistantTool(
       }
 
       case "get_farm_status": {
+        const access = readFarmAccess(ctx.repo);
+        if (access.kind !== "allowed") {
+          return { content: JSON.stringify({ error: access.error, code: access.code }) };
+        }
         const fleet = (await import("../services/printer-fleet.js")).loadFleet(ctx.repo);
         const { buildSpoolLookup, printerFilamentStatus, idleSinceFor, lastActivityByPrinter } =
           await import("../services/farm-filament.js");
