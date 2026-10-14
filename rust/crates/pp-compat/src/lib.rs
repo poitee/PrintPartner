@@ -870,8 +870,8 @@ impl Supervisor {
                                 biased;
                                 _ = cancelled.cancelled() => None,
                                 _ = disarmed.cancelled() => None,
-                                probe = process.endpoint.ready(source.bundle(), &cancelled) => {
-                                    Some(probe)
+                                probe = tokio::time::timeout_at(deadline, process.endpoint.ready(source.bundle(), &cancelled)) => {
+                                    Some(probe.unwrap_or(false))
                                 }
                             };
                             match probe {
@@ -892,7 +892,7 @@ impl Supervisor {
                                 biased;
                                 _ = cancelled.cancelled() => break,
                                 _ = disarmed.cancelled() => break,
-                                _ = tokio::time::sleep(Duration::from_millis(250)) => {}
+                                _ = tokio::time::sleep_until(std::cmp::min(deadline, tokio::time::Instant::now() + Duration::from_millis(250))) => {}
                             }
                         }
                     }
