@@ -749,6 +749,61 @@ selections:
     database.close();
   });
 
+  it("GRE-487 keeps rapid Plan edits when a delayed stale PATCH arrives last", () => {
+    const { database, raw, profile, repo, draft } = editableDraftFixture();
+    const bracket = draft.parts.find((part) => part.filename === "bracket.stl");
+    const gear = draft.parts.find((part) => part.filename === "gear.stl");
+    if (!bracket || !gear) throw new Error("editable draft Parts are missing");
+    const delayedPatch = {
+      profileId: profile.id,
+      draftId: draft.id,
+      expectedSnapshotDigest: draft.snapshotDigest,
+      decision: { kind: "set_quantity_override", partIds: [gear.id], value: 2 },
+    } satisfies Parameters<AppRepository["editPlanDraftParts"]>[0];
+    const inclusion = repo.editPlanDraftParts({
+      profileId: profile.id,
+      draftId: draft.id,
+      expectedSnapshotDigest: draft.snapshotDigest,
+      decision: { kind: "set_included", partIds: [bracket.id], value: false },
+    });
+    expect(inclusion.kind).toBe("updated");
+    if (inclusion.kind !== "updated") throw new Error("inclusion PATCH was not applied");
+    const acceptedBefore = snapshotTables(raw, ACCEPTED_STATE_TABLES);
+    const concurrent = new AppRepository(getDb(database), "default", database.reposDir);
+    const nativeTransaction = repo.transaction.bind(repo);
+    repo.transaction = <T>(fn: () => T, behavior: "deferred" | "immediate" = "deferred"): T => {
+      let snapshotDigest = inclusion.draft.snapshotDigest;
+      for (const value of [2, 3, 4]) {
+        const edited = concurrent.editPlanDraftParts({
+          profileId: profile.id,
+          draftId: draft.id,
+          expectedSnapshotDigest: snapshotDigest,
+          decision: { kind: "set_quantity_override", partIds: [gear.id], value },
+        });
+        expect(edited.kind).toBe("updated");
+        if (edited.kind !== "updated") throw new Error("quantity PATCH was not applied");
+        snapshotDigest = edited.draft.snapshotDigest;
+      }
+      return nativeTransaction(fn, behavior);
+    };
+    const replacement = repo.recomputePlanDraft({
+      profileId: profile.id, actor: "test:user", idempotencyKey: "gre487-rapid-edits", applyManifest: false,
+    });
+    repo.transaction = nativeTransaction;
+    expect(replacement.kind).toBe("created");
+    if (replacement.kind !== "created") throw new Error("replacement draft was not created");
+    expect(repo.editPlanDraftParts(delayedPatch)).toEqual({ kind: "not_open", state: "abandoned" });
+    const persisted = repo.getPlanDraft(profile.id, replacement.draft.id);
+    expect(persisted?.parts.map((part) => ({
+      filename: part.filename, included: part.included, quantity: part.quantityEffective,
+    })).sort((left, right) => left.filename.localeCompare(right.filename))).toEqual([
+      { filename: "bracket.stl", included: false, quantity: 1 },
+      { filename: "gear.stl", included: true, quantity: 4 },
+    ]);
+    expect(snapshotTables(raw, ACCEPTED_STATE_TABLES)).toEqual(acceptedBefore);
+    database.close();
+  });
+
   it("persists accepted-baseline planning fields and duplicate-key diff across restart", () => {
     const { database, raw, repo } = fixture();
     const sourceRoot = join(database.reposDir, "accepted-source");
