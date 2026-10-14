@@ -317,3 +317,89 @@ fn mixed_dispositions_for_one_operation_are_rejected() {
         malformed("mixed dispositions for gateway.owned")
     );
 }
+
+fn regroup(value: &mut Value, operation: &str, participants: &[&str]) {
+    value["node_participants"]["tool"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|name| {
+            !participants.contains(&format!("tool.{}", name.as_str().unwrap()).as_str())
+        });
+    value["operations"].as_array_mut().unwrap().push(json!({
+        "operation": operation, "owner": "node", "participants": participants
+    }));
+}
+
+#[test]
+fn reviewed_participants_cannot_move_to_unresolved_operations() {
+    for id in [
+        "tool.read_source_file",
+        "tool.list_sources",
+        "tool.list_source_categories",
+    ] {
+        for participants in [vec![id], vec![]] {
+            let mut value = manifest();
+            regroup(&mut value, "tool.regrouped", &participants);
+            value["node_participants"]["tool"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|name| format!("tool.{}", name.as_str().unwrap()) != id);
+            regroup(&mut value, id, &["tool.get_source_docs"]);
+            let unresolved = value["resources"]["unresolved"].as_array_mut().unwrap();
+            unresolved.retain(|operation| operation != "tool.get_source_docs");
+            if !participants.is_empty() {
+                unresolved.push(json!("tool.regrouped"));
+            }
+            assert_eq!(
+                admit(&value).err(),
+                Some(malformed(&format!(
+                    "reviewed participant {id} must belong to operation {id}"
+                ))),
+                "{id}, participants={participants:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn reviewed_participants_cannot_swap_operations() {
+    for (first, second) in [
+        ("tool.read_source_file", "tool.list_sources"),
+        ("tool.read_source_file", "tool.list_source_categories"),
+        ("tool.list_sources", "tool.list_source_categories"),
+    ] {
+        let mut value = manifest();
+        regroup(&mut value, first, &[second]);
+        regroup(&mut value, second, &[first]);
+        assert_eq!(
+            admit(&value).err(),
+            Some(malformed(&format!(
+                "reviewed participant {first} must belong to operation {first}"
+            ))),
+            "{first}, {second}"
+        );
+    }
+}
+
+#[test]
+fn unresolved_participants_can_share_a_regrouped_operation() {
+    let mut value = manifest();
+    regroup(
+        &mut value,
+        "tool.source_queries",
+        &["tool.get_source_docs", "tool.get_source_inventory"],
+    );
+    let unresolved = value["resources"]["unresolved"].as_array_mut().unwrap();
+    unresolved.retain(|id| id != "tool.get_source_docs" && id != "tool.get_source_inventory");
+    unresolved.push(json!("tool.source_queries"));
+    let index = admit(&value).unwrap();
+    for id in ["tool.get_source_docs", "tool.get_source_inventory"] {
+        assert_eq!(index.lookup(id).unwrap().operation, "tool.source_queries");
+        assert_eq!(
+            index.resources_for(id),
+            Err(AdmissionError::UnresolvedResources {
+                operation: "tool.source_queries".into()
+            })
+        );
+    }
+}

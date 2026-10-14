@@ -167,6 +167,13 @@ impl Declarations {
                     "missing reviewed resources for {id}"
                 )));
             }
+            if id != "source.sync"
+                && claims.get(id).map(|claim| claim.operation.as_str()) != Some(id)
+            {
+                return Err(AdmissionError::Malformed(format!(
+                    "reviewed participant {id} must belong to operation {id}"
+                )));
+            }
         }
         for id in self.unresolved {
             if states.insert(id.clone(), Coverage::Unresolved).is_some() {
