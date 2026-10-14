@@ -168,6 +168,7 @@ async fn start_resources(
     input: DesktopLaunch,
     compat_config: SupervisorConfig,
     ownership: Option<&OwnershipIndex>,
+    desktop_rebuild: DesktopRebuild,
 ) -> Result<Resources> {
     let assets = input
         .assets
@@ -185,6 +186,8 @@ async fn start_resources(
         );
     }
     let mut owner = StorageLease::acquire(&data_dir)?;
+    let account_pin =
+        pp_compat::DesktopAccountPin::capture(owner.data_dir(), desktop_rebuild.enabled())?;
     let (owners, boot) = cutover::recover(owner.data_dir(), ownership)
         .map_err(|error| anyhow::anyhow!("Operation cutover recovery failed: {error:?}"))?;
     if !boot.evidence_saved {
@@ -195,6 +198,7 @@ async fn start_resources(
     let (listener, origin_change) = bind_origin(&owner).await?;
     let supervisor = Supervisor::start_with_config(
         SpawnSpec {
+            account_pin,
             bundle: input.bundle,
             data_dir: owner.data_dir().to_owned(),
             runtime_dir: owner.runtime_dir().to_owned(),
@@ -287,7 +291,7 @@ impl CoreRuntime {
                     }
                 };
                 runtime.block_on(async move {
-                    let mut resources = match start_resources(input, compat_config, worker_ownership.as_deref()).await {
+                    let mut resources = match start_resources(input, compat_config, worker_ownership.as_deref(), desktop_rebuild).await {
                         Ok(resources) => resources,
                         Err(error) => {
                             let _ = started.send(Err(error));

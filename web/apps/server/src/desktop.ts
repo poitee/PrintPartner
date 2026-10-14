@@ -1,7 +1,6 @@
-import { chmodSync, existsSync, readFileSync, rmdirSync, rmSync } from "node:fs";
+import { chmodSync, readFileSync, rmdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
-import Database from "better-sqlite3";
-import { installDesktopContext, desktopContext } from "./desktop-context.js";
+import { installDesktopContext, desktopContext, mappedDesktopTenant, mappedDesktopDatabaseAvailable, closeDesktopAccount } from "./desktop-context.js";
 import { interruptPrinterUploadsOnShutdown } from "./services/printer-send-queue.js";
 
 async function setupFromParent(): Promise<unknown> {
@@ -29,9 +28,16 @@ const stop = async () => {
   stopping = true;
   const deadline = setTimeout(() => process.kill(-process.pid, "SIGKILL"), 9000);
   try {
-    if (runtime) interruptPrinterUploadsOnShutdown(runtime.ports);
+    if (runtime) {
+      const tenant = mappedDesktopTenant();
+      interruptPrinterUploadsOnShutdown(
+        tenant && !mappedDesktopDatabaseAvailable() ? {} : runtime.ports,
+        tenant ?? undefined,
+      );
+    }
     await runtime?.app.close();
     await runtime?.ports.db.close();
+    closeDesktopAccount();
   } finally {
     clearTimeout(deadline);
     const setup = desktopContext();
@@ -57,14 +63,6 @@ try {
   process.once("SIGINT", () => { void stop(); });
   const setup = desktopContext();
   if (!setup) throw new Error("Desktop setup missing");
-  const dbPath = join(setup.data_dir, "print-partner.db");
-  if (existsSync(dbPath)) {
-    const db = new Database(dbPath, { readonly: true });
-    try {
-      const table = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'").get();
-      if (table && db.prepare("SELECT 1 FROM users LIMIT 1").get()) throw new Error("Existing accounts require explicit desktop owner mapping");
-    } finally { db.close(); }
-  }
   process.env.PRINT_PARTNER_DATA_DIR = setup.data_dir;
   process.env.PRINT_PARTNER_UPDATE_CHECK = "0";
   const { loadConfig } = await import("./config.js");
@@ -73,7 +71,7 @@ try {
   config.port = setup.port;
   config.authRequired = true;
   config.registrationOpen = false;
-  config.multiUser = false;
+  config.multiUser = mappedDesktopTenant() !== null;
   config.singleUserAuth = false;
   config.trustProxy = false;
   config.staticDir = null;

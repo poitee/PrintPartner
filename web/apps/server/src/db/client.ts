@@ -13,6 +13,8 @@ import { retainDataDirectory } from "../desktop-context.js";
 
 export type DrizzleDb = BetterSQLite3Database<typeof schema>;
 
+export type SqliteStartupPolicy = "migrate" | "existing-current-schema";
+
 // "own" reserves the copy for this process. "parent" is for a worker spawned by
 // the process that already reserved it, such as a multi-process contention test.
 // The worker holds no lease of its own, so it must close before its parent releases.
@@ -29,7 +31,7 @@ export class SqliteDatabase {
 
   drizzle: DrizzleDb | null = null;
 
-  constructor(dataDir: string, lease: DataDirectoryLease = "own") {
+  constructor(dataDir: string, lease: DataDirectoryLease = "own", private readonly startupPolicy: SqliteStartupPolicy = "migrate") {
     this.dataDir = dataDir;
     this.lease = lease;
     this.dbPath = join(dataDir, "print-partner.db");
@@ -72,9 +74,13 @@ export class SqliteDatabase {
     // only, so existing starter rows do not advance sqlite_sequence.
     const seedMode = ownership === "child" && databaseSchemaIsCurrent(this.dbPath) ? "missing" : "ignore";
     mkdirSync(dirname(this.dbPath), { recursive: true });
-    const sqlite = new Database(this.dbPath);
+    const sqlite = new Database(this.dbPath, { fileMustExist: this.startupPolicy === "existing-current-schema" });
     try {
-      assertUpgradableSchemaVersion(readSchemaVersion(sqlite));
+      const version = readSchemaVersion(sqlite);
+      if (this.startupPolicy === "existing-current-schema" && version !== currentSchemaVersion) {
+        throw new Error("Mapped desktop requires the current database schema");
+      }
+      assertUpgradableSchemaVersion(version);
     } catch (error) {
       sqlite.close();
       throw error;
@@ -89,8 +95,10 @@ export class SqliteDatabase {
     this.sqlite.pragma("journal_mode = WAL");
     this.sqlite.pragma("foreign_keys = ON");
     this.drizzle = drizzle(this.sqlite, { schema });
-    this.runMigrations();
-    seedStarterProfiles(this.sqlite, seedMode);
+    if (this.startupPolicy === "migrate") {
+      this.runMigrations();
+      seedStarterProfiles(this.sqlite, seedMode);
+    }
   }
 
   private runMigrations(): void {

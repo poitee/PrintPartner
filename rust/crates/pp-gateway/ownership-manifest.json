@@ -272,6 +272,19 @@
             "name": "source-workspace"
           }
         ]
+      },
+      {
+        "operation": "tool.preview_source_naming",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "projects"
+          },
+          {
+            "kind": "table",
+            "name": "app_settings"
+          }
+        ]
       }
     ],
     "unresolved": [
@@ -669,7 +682,6 @@
       "tool.list_example_builds",
       "tool.list_plan_snapshots",
       "tool.list_plans",
-      "tool.preview_source_naming",
       "tool.propose_add_build_checklist_items",
       "tool.propose_add_custom_filament",
       "tool.propose_add_source",

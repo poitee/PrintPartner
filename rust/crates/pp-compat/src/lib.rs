@@ -1,3 +1,5 @@
+mod account_pin;
+pub use account_pin::DesktopAccountPin;
 pub mod drain;
 mod logs;
 pub use logs::recent_diagnostics;
@@ -45,6 +47,7 @@ pub struct Bundle {
 }
 
 pub struct SpawnSpec {
+    pub account_pin: DesktopAccountPin,
     pub bundle: Bundle,
     pub data_dir: PathBuf,
     pub runtime_dir: PathBuf,
@@ -466,9 +469,10 @@ impl Process {
             }
         };
         let mut stdin = child.stdin.take().context("Missing parent-liveness pipe")?;
-        let setup = serde_json::json!({ "version":1, "data_dir":spec.data_dir, "socket_path":endpoint.socket,
+        let mut setup = serde_json::json!({ "version":1, "data_dir":spec.data_dir, "socket_path":endpoint.socket,
             "generation":endpoint.generation, "key":hex::encode(key), "lease":spec.lease, "parent_pid":std::process::id(),
             "port":spec.port, "child_process_identity":child_identity });
+        spec.account_pin.apply(&mut setup);
         if stdin
             .write_all(format!("{setup}\n").as_bytes())
             .await

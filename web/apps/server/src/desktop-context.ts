@@ -3,11 +3,12 @@ import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, re
 import { join } from "node:path";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
+import { admitDesktopAccount, accountModeSchema, type DesktopAccount } from "./desktop-account.js";
 import { presentDesktopChildCredential } from "./desktop-child-credential.js";
 import { acquireStorageLease, ownerIsStale, storageParentIdentityEnv } from "./storage-lease.js";
 import type { SessionUser } from "./routes/auth-types.js";
 
-const setupSchema = z.strictObject({
+const baseSetupSchema = z.strictObject({
   version: z.literal(1),
   data_dir: z.string().min(1),
   socket_path: z.string().min(1),
@@ -18,6 +19,7 @@ const setupSchema = z.strictObject({
   port: z.number().int().min(1).max(65535),
   child_process_identity: z.string().min(1),
 });
+const setupSchema = z.union([baseSetupSchema.extend({ account_mode: accountModeSchema }), baseSetupSchema]);
 const markerSchema = z.object({
   pid: z.number().int().positive(),
   lease_hash: z.string(),
@@ -30,6 +32,7 @@ const assertionSchema = z.strictObject({
   issued_at: z.number().int().nonnegative(),
 });
 let context: z.infer<typeof setupSchema> | null = null;
+let account: DesktopAccount = { kind: "synthetic" };
 const principals = new WeakMap<FastifyRequest, SessionUser>();
 
 export function desktopContext() {
@@ -53,6 +56,7 @@ export function installDesktopContext(input: unknown): void {
     throw new Error("Desktop storage lease rejected");
   }
   presentDesktopChildCredential(parsed.child_process_identity);
+  account = admitDesktopAccount(dataDir, "account_mode" in parsed ? parsed.account_mode.pin : { kind: "disabled" });
   context = parsed;
 }
 
@@ -78,6 +82,20 @@ function assertDataDirectoryAvailable(dataDir: string): void {
   throw new Error("Data directory is already owned; stop the other process before opening another writer");
 }
 
+export function mappedDesktopTenant(): string | null {
+  if (account.kind !== "existing") return null;
+  return account.mapping.tenant_id;
+}
+
+export function mappedDesktopDatabaseAvailable(): boolean {
+  if (account.kind !== "existing") return true;
+  try { account.assertDatabase(); return true; } catch { return false; }
+}
+
+export function closeDesktopAccount(): void {
+  if (account.kind === "existing") account.close();
+}
+
 export function desktopPrincipal(request: FastifyRequest): SessionUser | null {
   return principals.get(request) ?? null;
 }
@@ -92,7 +110,7 @@ export function registerDesktopBoundary(app: FastifyInstance): void {
     delete request.headers["x-pp-signature"];
     try {
       const principal = verifyDesktopPrincipal({ encoded, signature, method: request.method, target: request.url, now: Date.now() }, setup);
-      principals.set(request, { user_id: principal.actor, tenant_id: principal.tenant,
+      principals.set(request, account.kind === "existing" ? account.principal() : { user_id: principal.actor, tenant_id: principal.tenant,
         login: "desktop", display_name: "Desktop owner", email: null, provider: "desktop", is_admin: true });
     } catch {
       return reply.status(401).send({ detail: "Valid desktop principal required" });

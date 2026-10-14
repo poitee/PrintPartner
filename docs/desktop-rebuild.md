@@ -192,3 +192,45 @@ API keys. Receipts retain credential digests, tenant, subject and authentication
 policy, and revalidation rejects changed policy or revoked credentials. Physical
 owner admission checks the storage identity. These internal APIs compile behind
 the feature; D15/D16 will wire them into jobs. The current job engine is unchanged.
+
+## Map one existing account
+
+Build with the `desktop_rebuild` Cargo feature and start with `PP_DESKTOP_REBUILD=1` or `PP_DESKTOP_REBUILD=true`.
+Both gates must be enabled. Node receives the account mode through the verified parent setup pipe.
+A child environment variable cannot enable mapping.
+
+Stop every process that uses the data directory before configuring a mapping.
+Upgrade the copy with the existing unmapped browser or server first.
+Mapped startup requires the exact current `schema_version` in `app_settings` and performs no data or schema migration.
+
+Create `desktop-account.json` in the data directory with this exact shape.
+Replace both account IDs with the existing user's `users.id`.
+
+```json
+{"version":1,"kind":"existing-account","user_id":"account-a","tenant_id":"account-a"}
+```
+
+Set its permissions to `0600` and its owner to the user who runs the desktop process.
+The file must be a regular file, at most 4096 bytes, with no symlink at its path.
+Unknown fields, malformed JSON, missing users, a `default` account, and unequal user and tenant IDs fail startup before product database writes.
+The mapping selects exactly one account. It never selects the first row or changes stored tenant ownership.
+Legacy copies whose account data belongs to `default` remain unsupported.
+
+Core pins mapping presence and the SHA256 of its bytes under the storage lease for the full runtime lifetime.
+Every compatibility child checks the same pin before product startup.
+A changed, removed, or newly created file rejects compatibility restarts until you stop and restart the full runtime.
+Edit the file while the full runtime is stopped, then restart to select a different account.
+Each authenticated request reads the selected user's current email, display name, password presence, and administrator flag.
+The session provider is `desktop`. A nonadmin account stays nonadmin, and deletion rejects subsequent authenticated requests.
+
+Mapped mode uses the isolated Source filesystem policy and runs tenant workers only for the selected account.
+It skips global starter seeding, Source ownership repair, legacy export and manifest migration, outcome conversion, Advisor backfill, and shared transfer artifact sweeping.
+It does not modify foreign or `default` product rows to make them accessible.
+Backup routes, including restore, are unavailable while mapped.
+Replacing the database file, including through a symlink alias, rejects subsequent authenticated requests and stops scheduling tenant work.
+Stop the runtime before restoring or replacing a copy, then restart for fresh admission.
+Live external in-place database replacement is unsupported. Use the existing storage lease rather than writing around it.
+
+With both gates enabled, an empty copy without a mapping retains the synthetic desktop owner.
+An existing copy with users requires a valid mapping.
+With either gate disabled, existing users remain refused and the original synthetic setup protocol remains unchanged.
