@@ -4,7 +4,7 @@
 use super::{
     Owner,
     manifest::{Disposition, OwnershipIndex},
-    open_lease_file, read_lease_file,
+    open_lease_file, read_bounded_file,
 };
 use pp_compat::CompatExit;
 use serde::{Deserialize, Serialize};
@@ -20,6 +20,7 @@ use std::{
 
 pub const CUTOVER_FILE: &str = "operation-cutover.json";
 pub const EVIDENCE_FILE: &str = "operation-cutover-evidence.jsonl";
+const CUTOVER_RECORD_LIMIT: u64 = 256 * 1024;
 const RECORD_SCHEMA: &str = "pp-operation-cutover-v1";
 const PARITY_SCHEMA: &str = "pp-operation-parity-v1";
 const TEMPORARY_PREFIX: &str = ".operation-cutover.";
@@ -372,7 +373,7 @@ impl CutoverPlan {
 
 fn write_record(data_dir: &Path, record: &CutoverRecord) -> std::io::Result<()> {
     let encoded = serde_json::to_vec(record)?;
-    if encoded.len() as u64 > super::LEASE_FILE_LIMIT {
+    if encoded.len() as u64 > CUTOVER_RECORD_LIMIT {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "cutover record exceeds read limit",
@@ -458,13 +459,11 @@ fn remove_temporaries(data_dir: &Path) -> Result<u32, CutoverError> {
 
 fn read_record(data_dir: &Path) -> Result<Option<String>, CutoverError> {
     match open_lease_file(&data_dir.join(CUTOVER_FILE)) {
-        Ok(Some(file)) => {
-            read_lease_file(file)
-                .map(Some)
-                .map_err(|error| CutoverError::Malformed {
-                    detail: format!("cutover record {error}"),
-                })
-        }
+        Ok(Some(file)) => read_bounded_file(file, CUTOVER_RECORD_LIMIT)
+            .map(Some)
+            .map_err(|error| CutoverError::Malformed {
+                detail: format!("cutover record {error}"),
+            }),
         Ok(None) => Ok(None),
         Err(error) => Err(CutoverError::Malformed {
             detail: format!("cutover record is not a regular file or cannot be opened: {error}"),
@@ -530,6 +529,14 @@ fn admit_record(
 }
 
 pub fn append_evidence(data_dir: &Path, evidence: &Evidence<'_>) -> std::io::Result<()> {
+    append_evidence_with_directory_sync(data_dir, evidence, |dir| fs::File::open(dir)?.sync_all())
+}
+
+fn append_evidence_with_directory_sync(
+    data_dir: &Path,
+    evidence: &Evidence<'_>,
+    sync_directory: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> std::io::Result<()> {
     let mut line = serde_json::to_vec(evidence)?;
     line.push(b'\n');
     let mut options = fs::OpenOptions::new();
@@ -546,13 +553,63 @@ pub fn append_evidence(data_dir: &Path, evidence: &Evidence<'_>) -> std::io::Res
         ));
     }
     file.write_all(&line)?;
-    file.sync_all()
+    file.sync_all()?;
+    sync_directory(data_dir)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn ticket_t_3_drain_evidence_directory_sync_failure_preserves_authority() {
+        let dir = std::env::temp_dir().join(format!("pp-evidence-sync-{}", rand::random::<u64>()));
+        fs::create_dir(&dir).unwrap();
+        let index = super::super::manifest::admit_bundled_manifest().unwrap();
+        let operation = "http:POST /plans current";
+        let parity = json!({
+            "schema": "pp-operation-parity-v1", "operation": operation,
+            "manifest_sha256": index.digest(), "fixtures": 1, "passed": 1, "failed": 0,
+        });
+        let receipt = plan(
+            Some(&index),
+            &OperationOwners::node_only(),
+            operation,
+            &parity.to_string(),
+        )
+        .unwrap()
+        .commit(
+            &dir,
+            DrainEvidence {
+                tracked_idle: true,
+                gateway_idle: true,
+                compat: Some(CompatExit::Graceful),
+            },
+        );
+        assert!(matches!(receipt, CutoverReceipt::Committed { .. }));
+        let authority = fs::read(dir.join(CUTOVER_FILE)).unwrap();
+        let mut expected_log = Vec::new();
+        for _ in 0..2 {
+            expected_log.extend(serde_json::to_vec(&Evidence::Cutover(&receipt)).unwrap());
+            expected_log.push(b'\n');
+            let error =
+                append_evidence_with_directory_sync(&dir, &Evidence::Cutover(&receipt), |path| {
+                    assert_eq!(path, dir);
+                    assert_eq!(fs::read(path.join(EVIDENCE_FILE)).unwrap(), expected_log);
+                    Err(std::io::Error::from_raw_os_error(libc::EIO))
+                })
+                .unwrap_err();
+            assert_eq!(error.raw_os_error(), Some(libc::EIO));
+            assert_eq!(fs::read(dir.join(CUTOVER_FILE)).unwrap(), authority);
+        }
+        let (owners, boot) = recover(&dir, Some(&index)).unwrap();
+        assert!(boot.evidence_saved);
+        assert_eq!(owners.owner_of("http.POST /plans"), Owner::Rust);
+        assert_eq!(owners.owner_of("http.POST /api/v1/plans"), Owner::Node);
+        assert_eq!(fs::read(dir.join(CUTOVER_FILE)).unwrap(), authority);
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn ticket_t_3_drain_cutover_directory_fsync_failure_is_unproved_after_rename() {

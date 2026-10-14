@@ -832,7 +832,7 @@ fn open_lease_file(path: &Path) -> std::io::Result<Option<fs::File>> {
     }
 }
 
-fn read_lease_file(file: fs::File) -> std::io::Result<String> {
+fn read_bounded_file(file: fs::File, limit: u64) -> std::io::Result<String> {
     let metadata = file.metadata()?;
     if !metadata.is_file() || metadata.file_type().is_symlink() {
         return Err(std::io::Error::new(
@@ -841,11 +841,11 @@ fn read_lease_file(file: fs::File) -> std::io::Result<String> {
         ));
     }
     let mut text = String::new();
-    file.take(LEASE_FILE_LIMIT + 1).read_to_string(&mut text)?;
-    if text.len() as u64 > LEASE_FILE_LIMIT {
+    file.take(limit + 1).read_to_string(&mut text)?;
+    if text.len() as u64 > limit {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!("exceeds {LEASE_FILE_LIMIT} bytes"),
+            format!("exceeds {limit} bytes"),
         ));
     }
     Ok(text)
@@ -868,7 +868,7 @@ fn read_opened_receipt(
     file: fs::File,
     admitted: &AdmittedOperation,
 ) -> Result<AdmissionReceipt, AdmissionError> {
-    let existing = read_lease_file(file)
+    let existing = read_bounded_file(file, LEASE_FILE_LIMIT)
         .map_err(|error| AdmissionError::Malformed(format!("admission receipt {error}")))?;
     let receipt = parse_receipt(&existing, admitted)?;
     if receipt.manifest_sha256 != admitted.manifest_sha256 {

@@ -958,11 +958,13 @@ fn ticket_t_3_drain_cutover_record_and_evidence_fail_closed() {
     assert_eq!(fs::read_dir(&blocked.0).unwrap().count(), 1);
     let dir = Scratch::new("unsafe-record");
     let path = dir.0.join(CUTOVER_FILE);
-    fs::write(&path, vec![b' '; 65537]).unwrap();
-    assert!(matches!(
-        cutover::recover(&dir.0, Some(&index)),
-        Err(CutoverError::Malformed { .. })
-    ));
+    fs::write(&path, vec![b' '; 256 * 1024 + 1]).unwrap();
+    assert_eq!(
+        cutover::recover(&dir.0, Some(&index)).unwrap_err(),
+        CutoverError::Malformed {
+            detail: "cutover record exceeds 262144 bytes".into()
+        }
+    );
     fs::remove_file(&path).unwrap();
     let target = dir.0.join("target");
     fs::write(&target, "{}").unwrap();
@@ -986,6 +988,66 @@ fn ticket_t_3_drain_cutover_record_and_evidence_fail_closed() {
         cutover::recover(&dir.0, Some(&index)).unwrap_err(),
         json!({"reason": "no_parity_fixtures", "operation": CATALOG}),
     );
+}
+
+#[test]
+fn ticket_t_3_drain_cutover_all_bundled_http_operations_recover() {
+    use pp_gateway::ownership::manifest::{Disposition, admit_bundled_manifest};
+    let index = admit_bundled_manifest().unwrap();
+    let operations: BTreeSet<_> = index
+        .claims()
+        .values()
+        .map(|claim| claim.operation.as_str())
+        .filter(|operation| {
+            index.participants_of(operation).iter().all(|id| {
+                id.starts_with("http.")
+                    && index.lookup(id).unwrap().disposition == Disposition::Owned(Owner::Node)
+            })
+        })
+        .collect();
+    assert_eq!(operations.len(), 292);
+    let expected: BTreeSet<_> = operations
+        .iter()
+        .flat_map(|op| index.participants_of(op))
+        .collect();
+    let dir = Scratch::new("all-http");
+    let mut owners = OperationOwners::node_only();
+    for operation in &operations {
+        let receipt = plan_for(&index, &owners, operation).commit(&dir.0, DRAINED);
+        assert!(
+            matches!(receipt, CutoverReceipt::Committed { .. }),
+            "{receipt:?}"
+        );
+        let (recovered, boot) = cutover::recover(&dir.0, Some(&index)).unwrap();
+        assert!(boot.evidence_saved);
+        owners = recovered;
+    }
+    assert_eq!(
+        owners.rust_operations().collect::<BTreeSet<_>>(),
+        operations
+    );
+    assert_eq!(
+        owners.rust_participants().collect::<BTreeSet<_>>(),
+        expected
+    );
+    for id in index.claims().keys() {
+        assert_eq!(
+            owners.owner_of(id),
+            if expected.contains(id.as_str()) {
+                Owner::Rust
+            } else {
+                Owner::Node
+            },
+            "{id}"
+        );
+    }
+    let bytes = fs::read(dir.0.join(CUTOVER_FILE)).unwrap().len();
+    println!(
+        "bundled cutover operations={}, participants={}, serialized_bytes={bytes}",
+        operations.len(),
+        expected.len()
+    );
+    assert!(bytes > 64 * 1024 && bytes <= 256 * 1024);
 }
 
 fn assert_json(value: impl serde::Serialize, expected: serde_json::Value) {
