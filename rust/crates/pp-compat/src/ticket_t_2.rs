@@ -1075,3 +1075,109 @@ async fn ticket_t_2_unhealthy_startup_stops_polling_at_thirty_seconds() {
             .any(|row| row["reason"] == "readiness_timeout")
     );
 }
+
+#[tokio::test]
+async fn ticket_t_3_drain_repeated_eof_interrupts_mutation_without_resend() {
+    use axum::{body::Body, http::Request};
+
+    let scratch = Scratch::new("repeated-eof-upload");
+    let events = scratch.root.join("data/upload-events");
+    let mut expected = String::new();
+    let mut previous = Vec::new();
+    for cycle in 0..3 {
+        assert!(
+            previous
+                .iter()
+                .all(|pid| super::drain::process_group_absent(*pid))
+        );
+
+        let supervisor = super::Supervisor::launch_shell(
+            super::ShellSpec {
+                script: concat!(
+                    "exec /usr/bin/node -e '",
+                    include_str!("fixtures/drain-upload.cjs"),
+                    "'"
+                ),
+                ..shell_spec(&scratch)
+            },
+            super::SupervisorConfig::default(),
+        )
+        .unwrap();
+        let handle = supervisor.handle.clone();
+        let mut status = handle.status.clone();
+        wait_status(&mut status, |state| {
+            matches!(state, super::Status::Ready { .. })
+        })
+        .await;
+        let pid = match *status.borrow() {
+            super::Status::Ready { pid, .. } => pid,
+            _ => unreachable!(),
+        };
+        assert_eq!(recorded_pids(&scratch.pidfile()).len(), cycle + 1);
+        assert_eq!(live_pids(&scratch.pidfile()), vec![pid]);
+        let endpoint = handle.endpoint().unwrap();
+        let sending = endpoint.clone();
+        let upload = tokio::spawn(async move {
+            sending
+                .forward(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/upload")
+                        .body(Body::from(format!("payload-{cycle}")))
+                        .unwrap(),
+                )
+                .await
+        });
+        expected.push_str(&format!("POST /upload payload-{cycle}\n"));
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if std::fs::read_to_string(&events).unwrap_or_default() == expected {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("fixture did not accept mutation");
+        assert!(!upload.is_finished());
+        supervisor.disarm_restarts();
+        let started = tokio::time::Instant::now();
+        assert_eq!(shutdown(supervisor).await, super::CompatExit::Graceful);
+        assert!(started.elapsed() < Duration::from_secs(5));
+        let error = tokio::time::timeout(Duration::from_secs(1), upload)
+            .await
+            .unwrap()
+            .unwrap()
+            .expect_err("interrupted mutation cannot report success");
+        assert_eq!(error.to_string(), "Compatibility dispatch outcome unknown");
+        assert!(handle.endpoint().is_none());
+        assert!(endpoint.connections.tasks.is_empty());
+        assert!(super::drain::process_group_absent(pid));
+        assert!(live_pids(&scratch.pidfile()).is_empty());
+        let refused = endpoint
+            .forward(
+                Request::builder()
+                    .method("POST")
+                    .uri("/upload")
+                    .body(Body::from("must-not-resend"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(refused.to_string(), "Compatibility generation is stopping");
+        expected.push_str("EOF\n");
+        assert_eq!(std::fs::read_to_string(&events).unwrap(), expected);
+        assert_eq!(recorded_pids(&scratch.pidfile()).len(), cycle + 1);
+        println!(
+            "{}",
+            serde_json::json!({
+                "case": "repeated_eof_upload", "cycle": cycle, "pid": pid,
+                "compat_exit": "graceful", "old_group_absent": true,
+            "shutdown_ms": started.elapsed().as_millis(),
+                "connection_tasks": 0, "mutation_error": error.to_string(),
+                "stale_endpoint_error": refused.to_string(), "events": expected,
+            })
+        );
+        previous.push(pid);
+    }
+}
