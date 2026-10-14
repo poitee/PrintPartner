@@ -453,6 +453,67 @@ fn ticket_t_7_ownership_manifest_source_sync_group_matches_admission() {
 }
 
 #[test]
+fn ticket_t_7_ownership_manifest_registry_owner_fails_closed() {
+    let mut registry: serde_json::Value = serde_json::from_str(operations_text()).unwrap();
+    let route = registry["routes"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|route| route["method"] == "POST" && route["path"] == "/jobs/sync")
+        .unwrap();
+    route["owner"] = serde_json::json!("unreviewed");
+    assert_eq!(
+        admit_manifest_documents(
+            &manifest_value().to_string(),
+            &registry.to_string(),
+            source_sync_text(),
+        )
+        .unwrap_err(),
+        AdmissionError::UnknownOwner {
+            value: "unreviewed".to_string()
+        }
+    );
+}
+
+#[test]
+fn ticket_t_7_ownership_manifest_registry_claim_without_manifest_entry() {
+    let manifest = manifest_value().to_string();
+    let mut registry: serde_json::Value = serde_json::from_str(operations_text()).unwrap();
+    registry["routes"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "method": "POST", "path": "/future/registry-claim", "owner": "compat",
+            "operation": "POST /future/registry-claim current"
+        }));
+    let index =
+        admit_manifest_documents(&manifest, &registry.to_string(), source_sync_text()).unwrap();
+    assert_eq!(
+        index.lookup("http.POST /future/registry-claim"),
+        Ok(&Claim {
+            operation: "http:POST /future/registry-claim current".to_string(),
+            disposition: Disposition::Owned(Owner::Node),
+        })
+    );
+
+    for owner in ["unreviewed", "rust", "node", ""] {
+        registry["routes"]
+            .as_array_mut()
+            .unwrap()
+            .last_mut()
+            .unwrap()["owner"] = serde_json::json!(owner);
+        assert_eq!(
+            admit_manifest_documents(&manifest, &registry.to_string(), source_sync_text())
+                .unwrap_err(),
+            AdmissionError::UnknownOwner {
+                value: owner.to_string()
+            },
+            "{owner}"
+        );
+    }
+}
+
+#[test]
 fn ticket_t_7_ownership_manifest_registry_double_claim_rejected() {
     let mut registry: serde_json::Value = serde_json::from_str(operations_text()).unwrap();
     let logout = serde_json::json!({

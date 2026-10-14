@@ -2,7 +2,9 @@
 //!
 //! The index joins three bundled documents. `ownership-manifest.json` groups
 //! participants into operations. `operations.json` is the gateway's HTTP route
-//! registry, generated from the Fastify route union. The Source Sync manifest is
+//! registry, generated from the Fastify route union. Each route's validated
+//! `owner` and `operation` supply its registry claim. Explicit manifest groups
+//! take precedence, and HEAD inherits its GET group. The Source Sync manifest is
 //! the Node admission record. A participant claimed twice, an HTTP alias group
 //! split across operations, a claim on a route the registry does not have, and a
 //! Rust owner all fail admission. A lookup for an unclaimed participant fails
@@ -188,6 +190,10 @@ pub fn admit_manifest_documents(
                 value: route.owner.clone(),
             });
         }
+        let registry_claim = Claim {
+            operation: format!("http:{}", route.operation),
+            disposition: Disposition::Owned(Owner::parse(&route.owner)?),
+        };
         if !registered.insert(id.clone()) {
             return Err(AdmissionError::DuplicateParticipant { id });
         }
@@ -199,10 +205,7 @@ pub fn admit_manifest_documents(
             .get(&id)
             .cloned()
             .or(inherited)
-            .unwrap_or_else(|| Claim {
-                operation: format!("http:{}", route.operation),
-                disposition: Disposition::Owned(Owner::Node),
-            });
+            .unwrap_or(registry_claim);
         claims.insert(id, assigned.clone());
         alias_groups
             .entry(route.operation.as_str())
