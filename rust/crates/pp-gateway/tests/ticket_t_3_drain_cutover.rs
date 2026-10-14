@@ -358,51 +358,43 @@ fn assert_rust_owner_unavailable(status: StatusCode, headers: &HeaderMap, body: 
     }
 }
 
-#[tokio::test]
-async fn ticket_t_3_drain_cutover_gateway_routes_whole_operation() {
+async fn assert_gateway_ownership(routes: &[(&str, &str)], node_method: &str) {
     let dir = Scratch::new("gateway");
     let node = fake_node(&dir.0);
     let mut gateway = rust_owned_gateway(&dir.0, &node).await;
     let (origin, cookie) = session(&mut gateway).await;
-    for (method, path) in [
-        ("GET", "/filaments/catalog"),
-        ("GET", "/api/v1/filaments/catalog"),
-        ("HEAD", "/filaments/catalog"),
-        ("HEAD", "/api/v1/filaments/catalog"),
-    ] {
+    for &(method, path) in routes {
         let (status, headers, body) = exchange(&origin, path, method, Some(&cookie)).await;
         assert_eq!(body.is_empty(), method == "HEAD", "{method} {path}");
         assert_rust_owner_unavailable(status, &headers, &body);
     }
     assert!(node.forwards.lock().unwrap().is_empty());
-    let (status, _, _) = exchange(&origin, "/filaments/custom", "GET", Some(&cookie)).await;
+    let (status, _, _) = exchange(&origin, "/filaments/custom", node_method, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         *node.forwards.lock().unwrap(),
-        vec!["GET /filaments/custom".to_owned()]
+        vec![format!("{node_method} /filaments/custom")]
     );
     gateway.stop().await.unwrap();
 }
 
 #[tokio::test]
+async fn ticket_t_3_drain_cutover_gateway_routes_whole_operation() {
+    assert_gateway_ownership(
+        &[
+            ("GET", "/filaments/catalog"),
+            ("GET", "/api/v1/filaments/catalog"),
+            ("HEAD", "/filaments/catalog"),
+            ("HEAD", "/api/v1/filaments/catalog"),
+        ],
+        "GET",
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn ticket_t_3_drain_cutover_no_mutation_failover() {
-    let dir = Scratch::new("failover");
-    let node = fake_node(&dir.0);
-    let mut gateway = rust_owned_gateway(&dir.0, &node).await;
-    let (origin, cookie) = session(&mut gateway).await;
-    for path in ["/plans", "/api/v2/plans"] {
-        let (status, headers, body) = exchange(&origin, path, "POST", Some(&cookie)).await;
-        assert_rust_owner_unavailable(status, &headers, &body);
-        assert!(!body.is_empty());
-    }
-    assert!(node.forwards.lock().unwrap().is_empty());
-    let (status, _, _) = exchange(&origin, "/filaments/custom", "POST", Some(&cookie)).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(
-        *node.forwards.lock().unwrap(),
-        vec!["POST /filaments/custom".to_owned()]
-    );
-    gateway.stop().await.unwrap();
+    assert_gateway_ownership(&[("POST", "/plans"), ("POST", "/api/v2/plans")], "POST").await;
 }
 
 #[tokio::test]
@@ -791,54 +783,45 @@ fn ticket_t_3_drain_cutover_receipts_serialize_exactly() {
             json!({"outcome": "commit_failed", "operation": CATALOG, "detail": "disk full"}),
         ),
     ] {
-        assert_eq!(serde_json::to_value(&receipt).unwrap(), expected);
-        let mut line = expected.clone();
+        assert_json(&receipt, expected.clone());
+        let mut line = expected;
         line["event"] = json!("cutover");
-        assert_eq!(
-            serde_json::to_value(Evidence::Cutover(&receipt)).unwrap(),
-            line
-        );
+        assert_json(Evidence::Cutover(&receipt), line);
     }
-    assert_eq!(
-        serde_json::to_value(Evidence::Refused {
+    assert_json(
+        Evidence::Refused {
             operation: CATALOG,
             refusal: &CutoverRefusal::ParityFailures {
                 fixtures: 3,
                 passed: 2,
                 failed: 1,
             },
-        })
-        .unwrap(),
+        },
         json!({"event": "refused", "operation": CATALOG, "reason": "parity_failures",
-            "fixtures": 3, "passed": 2, "failed": 1})
+            "fixtures": 3, "passed": 2, "failed": 1}),
     );
-    assert_eq!(
-        serde_json::to_value(Evidence::Refused {
+    assert_json(
+        Evidence::Refused {
             operation: CATALOG,
             refusal: &CutoverRefusal::FlagOff,
-        })
-        .unwrap(),
-        json!({"event": "refused", "operation": CATALOG, "reason": "flag_off"})
+        },
+        json!({"event": "refused", "operation": CATALOG, "reason": "flag_off"}),
     );
-    assert_eq!(
-        serde_json::to_value(Evidence::Boot(&BootReceipt {
+    assert_json(
+        Evidence::Boot(&BootReceipt {
             rust_operations: vec![CATALOG.into()],
             abandoned_temporaries: 1,
             evidence_saved: false,
-        }))
-        .unwrap(),
-        json!({"event": "boot", "rust_operations": [CATALOG], "abandoned_temporaries": 1, "evidence_saved": false})
+        }),
+        json!({"event": "boot", "rust_operations": [CATALOG], "abandoned_temporaries": 1, "evidence_saved": false}),
     );
-    assert_eq!(
-        serde_json::to_value(Evidence::BootFailed(
-            &CutoverError::RestartManifestChanged {
-                recorded: "aa".into(),
-                bundled: "bb".into(),
-            }
-        ))
-        .unwrap(),
+    assert_json(
+        Evidence::BootFailed(&CutoverError::RestartManifestChanged {
+            recorded: "aa".into(),
+            bundled: "bb".into(),
+        }),
         json!({"event": "boot_failed", "reason": "restart_manifest_changed",
-            "recorded": "aa", "bundled": "bb"})
+            "recorded": "aa", "bundled": "bb"}),
     );
 }
 
