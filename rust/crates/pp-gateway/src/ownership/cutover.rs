@@ -162,6 +162,10 @@ pub enum CutoverReceipt {
 #[serde(tag = "reason", rename_all = "snake_case")]
 pub enum CutoverRefusal {
     FlagOff,
+    OwnershipManifestMismatch {
+        recorded: String,
+        current: String,
+    },
     UnknownOperation,
     NotSwitchable {
         participant: String,
@@ -274,6 +278,14 @@ pub fn plan(
     parity: &str,
 ) -> Result<CutoverPlan, CutoverRefusal> {
     let index = index.ok_or(CutoverRefusal::FlagOff)?;
+    if let Some(record) = &owners.record
+        && record.manifest_sha256 != index.digest()
+    {
+        return Err(CutoverRefusal::OwnershipManifestMismatch {
+            recorded: record.manifest_sha256.clone(),
+            current: index.digest().to_owned(),
+        });
+    }
     let participants = switchable(index, operation).map_err(|blocked| match blocked {
         Blocked::Unknown => CutoverRefusal::UnknownOperation,
         Blocked::NotSwitchable(id) => CutoverRefusal::NotSwitchable {

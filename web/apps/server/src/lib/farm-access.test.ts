@@ -212,7 +212,8 @@ describe("tenant-global farm access through live handlers", () => {
       expect(host.mock.calls).toEqual([]);
       expect(network.mock.calls).toEqual([]);
       expect((await app.inject("/printer-send-queue/suggestions")).statusCode).toBe(value === '{"farm":false}' ? 403 : 500);
-      expect(reads.mock.calls).toEqual([]);
+      expect(reads.mock.calls).toEqual(value === '{"farm":false}' ? [["printer.send_queue"]] : []);
+      reads.mockClear();
     }
     repo.setSetting("feature_toggles", '{"farm":true}');
     const result = JSON.parse((await invokeAssistantTool("get_farm_status", {}, { repo, integrations })).content);
