@@ -341,6 +341,10 @@
           {
             "kind": "table",
             "name": "plan_revision_inputs"
+          },
+          {
+            "kind": "file",
+            "name": "source-workspace"
           }
         ]
       }

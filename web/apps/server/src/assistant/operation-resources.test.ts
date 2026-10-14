@@ -10,6 +10,7 @@ import { SqliteDatabase } from "../db/client.js";
 import { AppRepository } from "../db/repository.js";
 import * as schema from "../db/schema.js";
 import { tenantStorage } from "../middleware/tenant-context.js";
+import { ISOLATED_SOURCE_FILESYSTEM } from "../services/source-filesystem-policy.js";
 import { digestEffectiveNaming } from "../services/plan-freshness.js";
 import { WORKFLOW_GUIDE } from "../routes/workflow-guide.js";
 import { invokeAssistantTool } from "./tools.js";
@@ -554,7 +555,73 @@ it("traces list_plans headers, part counts, freshness and tenant isolation again
   expect([...union].sort()).toEqual(tables);
   const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.list_plans");
   if (!entry || entry.operation === "source.sync") throw new Error("Missing list plans declaration");
-  expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(tables);
+  expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(["file:source-workspace", ...tables]);
+});
+
+it("traces list_plans isolated workspace probes and refusals against its operation-wide union", async () => {
+  const repos = join(dataDir, "repos");
+  const workspace = join(repos, String(sourceId));
+  const revisionRoot = join(workspace, "revisions", "a");
+  fs.mkdirSync(revisionRoot, { recursive: true });
+  const escape = join(workspace, "escape");
+  fs.symlinkSync(userRoot, escape, "dir");
+  const isolatedRepo = new AppRepository(drizzle(sqlite, { schema }), undefined, repos, schema, { sourceFilesystemPolicy: ISOLATED_SOURCE_FILESYSTEM });
+  const plan = repo.createProfile("Isolated", sourceId);
+  const revision = repo.recordSourceRevision({ sourceId, upstreamRevisionKey: "a", manifestDigest: "a".repeat(64), snapshotLocator: `${sourceId}/revisions/a`, syncedAt: "2026-01-01", completeness: "complete" });
+  sqlite.prepare("UPDATE projects SET current_source_revision_id = ? WHERE id = ?").run(revision.id, sourceId);
+  const inputSet = sqlite.prepare("INSERT INTO plan_revision_input_sets (tenant_id, profile_id, input_set_digest, expected_input_count, format_version, recorded_at, published_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run("default", plan.id, "fixture", 0, 2, "2026-01-01", "2026-01-01");
+  sqlite.prepare("INSERT INTO plan_accepted_input_sets (tenant_id, profile_id, input_set_id, accepted_at) VALUES (?, ?, ?, ?)").run("default", plan.id, Number(inputSet.lastInsertRowid), "2026-01-01");
+  const tables = ["table:app_settings", "table:build_profiles", "table:parts", "table:plan_accepted_input_sets", "table:plan_revision_input_sets", "table:plan_revision_inputs", "table:profile_layers", "table:projects", "table:source_revisions"];
+  const union = new Set<string>();
+  async function trace(path: string | null, calls: [string, string][], revisionCalls = revisionProbes, refused = false) {
+    sqlite.prepare("UPDATE projects SET local_path = ? WHERE id = ?").run(path, sourceId);
+    statements = [];
+    observer.state.files = [];
+    observer.state.active = true;
+    let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+    try { output = await tenantStorage.run("default", () => invokeAssistantTool("list_plans", {}, { repo: isolatedRepo })); }
+    finally { observer.state.active = false; }
+    expect(JSON.parse(output.content)).toEqual(refused
+      ? { error: "Active Source revision has an unsafe snapshot locator" }
+      : { plans: [{ id: plan.id, name: "Isolated", part_count: 0, build_stale: true }] });
+    expect(observer.state.files.map(({ api, args }) => [api, ...args])).toEqual([...calls, ...revisionCalls]);
+    const observed = [...new Set(statements.flatMap((sql) => resourcesForPlanSelect(sql, "default")))].sort();
+    expect(observed).toEqual(tables);
+    for (const sql of statements) expect(() => resourcesForPlanSelect(sql, "other")).toThrow("Unsupported SQL:");
+    for (const resource of observed) union.add(resource);
+    for (const resource of fileResources([repos], true)) union.add(resource);
+  }
+  const prefix: [string, string][] = [["realpathSync", repos], ["lstatSync", workspace], ["realpathSync", workspace]];
+  const revisionProbes: [string, string][] = [...prefix, ["realpathSync", revisionRoot], ["statSync", revisionRoot]];
+  await trace(revisionRoot, revisionProbes);
+  await trace(workspace, [...prefix, ["realpathSync", workspace], ["statSync", workspace]]);
+  await trace(join(workspace, "missing"), [...prefix, ["realpathSync", join(workspace, "missing")]]);
+  await trace(escape, [...prefix, ["realpathSync", escape]]);
+  await trace(userRoot, [["realpathSync", repos]]);
+  await trace(null, []);
+  fs.rmSync(revisionRoot, { recursive: true });
+  fs.symlinkSync(userRoot, revisionRoot, "dir");
+  await trace(workspace, [...prefix, ["realpathSync", workspace], ["statSync", workspace]], [...prefix, ["realpathSync", revisionRoot]], true);
+  fs.rmSync(revisionRoot);
+  fs.mkdirSync(revisionRoot);
+  fs.rmSync(workspace, { recursive: true });
+  fs.symlinkSync(userRoot, workspace, "dir");
+  await trace(workspace, [["realpathSync", repos], ["lstatSync", workspace]], [["realpathSync", repos], ["lstatSync", workspace]], true);
+  fs.rmSync(workspace);
+  await trace(workspace, [["realpathSync", repos], ["lstatSync", workspace]], [["realpathSync", repos], ["lstatSync", workspace]], true);
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  let other: Awaited<ReturnType<typeof invokeAssistantTool>>;
+  try { other = await tenantStorage.run("other", () => invokeAssistantTool("list_plans", {}, { repo: isolatedRepo })); }
+  finally { observer.state.active = false; }
+  expect(JSON.parse(other.content)).toEqual({ plans: [] });
+  expect([...new Set(statements.flatMap((sql) => resourcesForPlanSelect(sql, "other")))].sort()).toEqual(["table:app_settings", "table:build_profiles", "table:parts"]);
+  expect(observer.state.files).toEqual([]);
+  expect([...union].sort()).toEqual(["file:source-workspace", ...tables]);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.list_plans");
+  if (!entry || entry.operation === "source.sync") throw new Error("Missing list plans declaration");
+  expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(["file:source-workspace", ...tables]);
 });
 
 function resourcesForPlanSelect(statement: unknown, tenantId: string): string[] {

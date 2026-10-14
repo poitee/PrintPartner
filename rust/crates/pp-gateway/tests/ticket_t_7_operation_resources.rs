@@ -106,7 +106,8 @@ fn ticket_t_7_ownership_list_plans_has_complete_node_owned_resources() {
         {"kind": "table", "name": "app_settings"},
         {"kind": "table", "name": "plan_accepted_input_sets"},
         {"kind": "table", "name": "plan_revision_input_sets"},
-        {"kind": "table", "name": "plan_revision_inputs"}
+        {"kind": "table", "name": "plan_revision_inputs"},
+        {"kind": "file", "name": "source-workspace"}
     ]))
     .unwrap();
     assert_eq!(resources, &expected);
@@ -129,6 +130,19 @@ fn ticket_t_7_ownership_list_plans_has_complete_node_owned_resources() {
         admit(&compatible).unwrap().admit_rollback(id),
         Ok(&expected)
     );
+    for rust_writes in [None, Some(2)] {
+        compatible["live_formats"]["source-revision-workspace"]["rust_writes"] = json!(rust_writes);
+        assert_eq!(
+            admit(&compatible).unwrap().admit_rollback(id),
+            Err(AdmissionError::IncompatibleLiveFormat {
+                operation: id.into(),
+                format: "source-revision-workspace".into(),
+                node_reads: 1,
+                rust_writes,
+            })
+        );
+    }
+    compatible["live_formats"]["source-revision-workspace"]["rust_writes"] = json!(1);
     compatible["live_formats"]["sqlite-schema"]["rust_writes"] = Value::Null;
     assert_eq!(
         admit(&compatible).unwrap().admit_rollback(id),
@@ -761,6 +775,22 @@ fn ticket_t_7_ownership_list_plans_refuses_before_effects() {
         };
         marker = false;
         assert_eq!(execute(&value, &mut marker), Err(expected));
+        assert!(!marker);
+    }
+    for rust_writes in [None, Some(2)] {
+        let mut incompatible_workspace = compatible.clone();
+        incompatible_workspace["live_formats"]["source-revision-workspace"]["rust_writes"] =
+            json!(rust_writes);
+        marker = false;
+        assert_eq!(
+            execute(&incompatible_workspace, &mut marker),
+            Err(AdmissionError::IncompatibleLiveFormat {
+                operation: id.into(),
+                format: "source-revision-workspace".into(),
+                node_reads: 1,
+                rust_writes,
+            })
+        );
         assert!(!marker);
     }
     marker = false;

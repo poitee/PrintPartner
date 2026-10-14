@@ -157,6 +157,7 @@ impl ReviewedEntry {
                     Table(PlanAcceptedInputSets),
                     Table(PlanRevisionInputSets),
                     Table(PlanRevisionInputs),
+                    File(FileFamily::SourceWorkspace),
                 ]),
             ),
             Self::ListSources { resources } => (
