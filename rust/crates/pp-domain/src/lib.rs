@@ -1,3 +1,5 @@
+#[cfg(feature = "desktop_rebuild")]
+pub mod features;
 pub mod gcode_objects;
 
 use serde::{Deserialize, Deserializer, Serialize, de};
