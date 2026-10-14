@@ -246,13 +246,38 @@ fn numeric_stringification_and_projection_follow_javascript() {
 }
 
 #[test]
+fn json_tree_entry_budget_is_shared() {
+    let array = format!("[{}]", vec!["0"; 8_192].join(","));
+    let smaller = format!("[{}]", vec!["0"; 8_189].join(","));
+    let boundary = format!(r#"{{"value":[{array},{smaller}]}}"#);
+    assert_eq!(
+        ready(boundary.as_bytes(), ProfileKind::Process)["provenance"]["resolved_flat_config"],
+        r#"{"value":"0"}"#
+    );
+    let object = format!(
+        "{{{}}}",
+        (0..8_192)
+            .map(|i| format!(r#""k{i}":null"#))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    for child in [array, object] {
+        let raw = format!(r#"{{"ignored":[{child},{child}]}}"#);
+        assert_eq!(
+            interpret_profile(document(raw.as_bytes(), ProfileKind::Process)).unwrap_err(),
+            ProfileInterpretError::TooManyEntries
+        );
+    }
+}
+
+#[test]
 fn json_arrays_are_bounded_before_flattening() {
     let raw = format!(r#"{{"ignored":[{}]}}"#, vec!["null"; 16_385].join(","));
     assert!(matches!(
         interpret_profile(document(raw.as_bytes(), ProfileKind::Process)),
         Err(ProfileInterpretError::TooManyEntries)
     ));
-    let raw = format!(r#"{{"value":[{}]}}"#, vec!["0"; 16_384].join(","));
+    let raw = format!(r#"{{"value":[{}]}}"#, vec!["0"; 16_383].join(","));
     assert_eq!(
         ready(raw.as_bytes(), ProfileKind::Process)["provenance"]["resolved_flat_config"],
         r#"{"value":"0"}"#

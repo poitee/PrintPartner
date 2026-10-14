@@ -339,11 +339,16 @@ enum JsValue {
 struct JsonParser<'a> {
     raw: &'a str,
     position: usize,
+    remaining_entries: usize,
 }
 
 impl<'a> JsonParser<'a> {
     fn new(raw: &'a str) -> Self {
-        Self { raw, position: 0 }
+        Self {
+            raw,
+            position: 0,
+            remaining_entries: MAX_ENTRIES,
+        }
     }
 
     fn parse(mut self) -> Result<JsValue, ProfileInterpretError> {
@@ -398,6 +403,9 @@ impl<'a> JsonParser<'a> {
             if !self.consume(b':') {
                 return Err(ProfileInterpretError::InvalidJson);
             }
+            if !entries.contains_key(key.as_utf16()) {
+                self.consume_entry()?;
+            }
             let value = self.parse_value(depth)?;
             let position = entries.len();
             match entries.entry(key.as_utf16().to_vec()) {
@@ -405,9 +413,6 @@ impl<'a> JsonParser<'a> {
                     entry.get_mut().2 = value;
                 }
                 std::collections::btree_map::Entry::Vacant(entry) => {
-                    if position == MAX_ENTRIES {
-                        return Err(ProfileInterpretError::TooManyEntries);
-                    }
                     entry.insert((position, key, value));
                 }
             }
@@ -437,9 +442,7 @@ impl<'a> JsonParser<'a> {
             return Ok(JsValue::Array(values));
         }
         loop {
-            if values.len() == MAX_ENTRIES {
-                return Err(ProfileInterpretError::TooManyEntries);
-            }
+            self.consume_entry()?;
             values.push(self.parse_value(depth)?);
             self.skip_whitespace();
             if self.consume(b']') {
@@ -450,6 +453,14 @@ impl<'a> JsonParser<'a> {
             }
             self.skip_whitespace();
         }
+    }
+
+    fn consume_entry(&mut self) -> Result<(), ProfileInterpretError> {
+        self.remaining_entries = self
+            .remaining_entries
+            .checked_sub(1)
+            .ok_or(ProfileInterpretError::TooManyEntries)?;
+        Ok(())
     }
 
     fn parse_string(&mut self) -> Result<JsText, ProfileInterpretError> {
