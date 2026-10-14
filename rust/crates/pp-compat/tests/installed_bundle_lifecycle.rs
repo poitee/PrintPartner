@@ -232,6 +232,19 @@ async fn installed_bundle_start_health_shutdown() -> Result<()> {
     let mut status = supervisor.handle.status.clone();
     let (generation, ready_pid) = wait_for_ready(&mut status).await?;
     ensure!(process_exists(ready_pid)?, "Ready child PID is absent");
+    let marker: serde_json::Value = serde_json::from_slice(&std::fs::read(
+        ownership.data_dir.join(".desktop-owner.json"),
+    )?)?;
+    ensure!(
+        marker["child_pid"] == ready_pid,
+        "Ready child ownership was not recorded"
+    );
+    ensure!(
+        marker["child_process_identity"]
+            .as_str()
+            .is_some_and(|identity| identity.starts_with("instance:")),
+        "Ready child instance identity was not recorded"
+    );
     let socket = ownership
         .runtime_dir
         .join(format!("{}.sock", &generation[..12]));

@@ -1,6 +1,4 @@
-#[cfg(target_os = "linux")]
-use anyhow::Context;
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::{
     io::Write,
@@ -46,7 +44,7 @@ pub(crate) fn owner_is_stale(pid: u32, identity: Option<&str>) -> bool {
 
 // On platforms without foreign-process identity lookup, use an instance token.
 // A live foreign PID cannot be declared stale from a token mismatch there.
-pub(crate) fn record_child(directory: &Path, pid: u32) -> Result<()> {
+pub fn record_child(directory: &Path, pid: u32) -> Result<()> {
     #[cfg(target_os = "linux")]
     let identity = process_identity(pid)?;
     #[cfg(not(target_os = "linux"))]
@@ -83,6 +81,23 @@ fn publish_child_marker(directory: &Path, path: &Path, marker: &serde_json::Valu
         let _ = std::fs::remove_file(&temporary);
     }
     result
+}
+
+pub(crate) fn ensure_stale_owner(marker: &serde_json::Value) -> Result<()> {
+    let pid = marker["pid"]
+        .as_u64()
+        .filter(|pid| *pid > 0 && *pid <= i32::MAX as u64)
+        .context("Invalid prior writer PID")? as u32;
+    anyhow::ensure!(
+        owner_is_stale(pid, marker["process_identity"].as_str())
+            && (marker["kind"] == "standalone"
+                || (marker["storage_protocol_version"].as_u64() == Some(1)
+                    && marker.get("child_pid").is_none()
+                    && marker.get("child_process_identity").is_none())
+                || child_is_stale(marker)),
+        "A prior writer may still be alive"
+    );
+    Ok(())
 }
 
 pub(crate) fn child_is_stale(marker: &serde_json::Value) -> bool {

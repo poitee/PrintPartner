@@ -46,6 +46,9 @@ fn redact(value: &mut Value) {
         Value::Array(items) => items.iter_mut().for_each(redact),
         _ => {}
     }
+    // pp-storage enables serde_json preserve_order, and Cargo unifies that
+    // feature through the workspace. Snapshots record BTree order.
+    value.sort_all_objects();
 }
 
 fn redact_object(map: &mut Map<String, Value>) {
@@ -72,11 +75,13 @@ fn boundary_error_value(error: BoundaryError) -> Value {
         .next()
         .unwrap_or_default()
         .to_owned();
-    json!({
+    let mut value = json!({
         "category": error.category,
         "field": error.field,
         "detail": detail,
-    })
+    });
+    value.sort_all_objects();
+    value
 }
 
 #[test]

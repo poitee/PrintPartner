@@ -1,5 +1,8 @@
 pub mod auth;
+pub mod catalog;
+pub mod jobs;
 pub mod lease;
+pub mod read_model;
 mod schema;
 
 use anyhow::{Result, anyhow, ensure};
@@ -57,7 +60,27 @@ enum Work {
     Setting(SettingCommand),
     Backup(PathBuf),
 }
+enum WriterControl {
+    PageCount,
+    AdmitDiskQuota(u32),
+}
 enum Envelope {
+    Read {
+        command: read_model::Command,
+        reply: mpsc::Sender<Result<read_model::Batch>>,
+    },
+    Catalog {
+        command: catalog::Command,
+        reply: mpsc::Sender<Result<catalog::Reply>>,
+    },
+    CatalogRequest {
+        command: catalog::Command,
+        reply: mpsc::Sender<Result<catalog::Outcome>>,
+    },
+    Jobs {
+        command: jobs::Command,
+        reply: mpsc::Sender<Result<jobs::Outcome>>,
+    },
     Setting {
         work: Work,
         reply: mpsc::Sender<Result<bool>>,
@@ -66,6 +89,10 @@ enum Envelope {
         command: auth::Command,
         policy: auth::AuthPolicy,
         reply: mpsc::Sender<Result<auth::Reply>>,
+    },
+    WriterControl {
+        control: WriterControl,
+        reply: mpsc::Sender<Result<u32>>,
     },
 }
 struct Queue {
@@ -76,6 +103,7 @@ struct Shared {
     queue: Mutex<Queue>,
     changed: Condvar,
     capacity: usize,
+    job_admission: Mutex<Option<Arc<jobs::WorkerAdmission>>>,
 }
 #[derive(Clone)]
 pub struct SettingsClient {
@@ -113,6 +141,39 @@ fn snapshot(connection: &Connection, tenant: &str, key: &str) -> Result<SettingS
         None => SettingSnapshot::Missing,
         Some(value) => SettingSnapshot::Stored { value },
     })
+}
+fn writer_control(connection: &Connection, control: WriterControl) -> Result<u32> {
+    match control {
+        WriterControl::PageCount => {
+            let pages: i64 = connection.query_row("PRAGMA page_count", [], |row| row.get(0))?;
+            u32::try_from(pages).map_err(|_| anyhow!("Database page count exceeds u32"))
+        }
+        WriterControl::AdmitDiskQuota(max_pages) => {
+            // SQLite clamps max_page_count: a value below the current page
+            // count becomes that count, and a value above 0xfffffffe becomes
+            // 0xfffffffe. Reject both before the PRAGMA so a refusal leaves
+            // the previous limit unchanged.
+            const SQLITE_MAX_PAGE_COUNT: u32 = 0xffff_fffe;
+            ensure!(max_pages > 0, "Disk quota must be positive");
+            ensure!(
+                max_pages <= SQLITE_MAX_PAGE_COUNT,
+                "Disk quota {max_pages} exceeds the SQLite page limit"
+            );
+            let pages: i64 = connection.query_row("PRAGMA page_count", [], |row| row.get(0))?;
+            ensure!(
+                i64::from(max_pages) >= pages,
+                "Disk quota {max_pages} is below the current database size"
+            );
+            connection.pragma_update(None, "max_page_count", i64::from(max_pages))?;
+            let applied: i64 =
+                connection.query_row("PRAGMA max_page_count", [], |row| row.get(0))?;
+            ensure!(
+                applied == i64::from(max_pages),
+                "Disk quota {max_pages} is below the current database size"
+            );
+            Ok(max_pages)
+        }
+    }
 }
 fn execute(connection: &mut Connection, work: Work) -> Result<bool> {
     let command = match work {
@@ -271,6 +332,7 @@ impl WriterOwner {
             std::fs::create_dir_all(lease.data_dir().join(name))?;
         }
         let (mut connection, ready) = schema::initialize(&path, version, seed_timestamp)?;
+        jobs::recover(&mut connection)?;
         let mut idle = Vec::new();
         for _ in 0..limits.readers {
             let reader = Connection::open_with_flags(
@@ -295,8 +357,10 @@ impl WriterOwner {
             }),
             changed: Condvar::new(),
             capacity: limits.queued_writes,
+            job_admission: Mutex::new(None),
         });
         let worker = shared.clone();
+        let mut catalog_state = catalog::State::new(lease.data_dir().to_owned());
         let join = thread::spawn(move || {
             loop {
                 let envelope = {
@@ -316,6 +380,27 @@ impl WriterOwner {
                     }
                 };
                 match envelope {
+                    Envelope::Read { command, reply } => {
+                        let _ = reply.send(read_model::execute(&mut connection, command));
+                    }
+                    Envelope::Catalog { command, reply } => {
+                        let _ = reply.send(catalog::execute(
+                            &mut connection,
+                            &mut catalog_state,
+                            command,
+                        ));
+                    }
+                    Envelope::CatalogRequest { command, reply } => {
+                        let result = catalog::execute(&mut connection, &mut catalog_state, command)
+                            .and_then(|r| match r {
+                                catalog::Reply::Outcome(o) => Ok(o),
+                                _ => Err(anyhow!("Unexpected catalog reply")),
+                            });
+                        let _ = reply.send(result);
+                    }
+                    Envelope::Jobs { command, reply } => {
+                        let _ = reply.send(jobs::execute(&mut connection, command));
+                    }
                     Envelope::Setting { work, reply } => {
                         let _ = reply.send(execute(&mut connection, work));
                     }
@@ -325,6 +410,9 @@ impl WriterOwner {
                         reply,
                     } => {
                         let _ = reply.send(auth::execute(&mut connection, command, policy));
+                    }
+                    Envelope::WriterControl { control, reply } => {
+                        let _ = reply.send(writer_control(&connection, control));
                     }
                 }
             }
@@ -341,6 +429,48 @@ impl WriterOwner {
     }
     pub fn client(&self) -> SettingsClient {
         self.client.clone()
+    }
+
+    pub fn database_pages(&self) -> Result<u32> {
+        self.writer_control(WriterControl::PageCount)
+    }
+
+    pub fn admit_disk_quota(&self, max_pages: u32) -> Result<u32> {
+        self.writer_control(WriterControl::AdmitDiskQuota(max_pages))
+    }
+
+    fn writer_control(&self, control: WriterControl) -> Result<u32> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let receiver = {
+            let mut queue = self
+                .client
+                .shared
+                .queue
+                .lock()
+                .map_err(|_| anyhow!("Writer admission poisoned"))?;
+            loop {
+                ensure!(!queue.closed, "Storage stopped");
+                if queue.pending.len() < self.client.shared.capacity {
+                    let (reply, receiver) = mpsc::channel();
+                    queue
+                        .pending
+                        .push_back(Envelope::WriterControl { control, reply });
+                    self.client.shared.changed.notify_all();
+                    break receiver;
+                }
+                ensure!(Instant::now() < deadline, "Writer queue full");
+                queue = self
+                    .client
+                    .shared
+                    .changed
+                    .wait_timeout(queue, Duration::from_millis(5))
+                    .map_err(|_| anyhow!("Writer admission poisoned"))?
+                    .0;
+            }
+        };
+        receiver
+            .recv()
+            .map_err(|_| anyhow!("Writer stopped without disk quota result"))?
     }
     pub fn backup(&self, destination: &Path) -> Result<()> {
         let lease = self

@@ -1,0 +1,6 @@
+{
+  "databaseSha256": "9ce633bfa673fce4d380e3b11dd9fd66a985183088567a5c78913503eface747",
+  "source": "Node 24.21.0 SqliteDatabase / recomputePlanDraft / editPlanDraftParts / savePlanDraftRequiredUnitReconciliation / applyPlanChanges",
+  "generator": "outputs/plan-read-model/node-fixture.mts",
+  "head": "16b680a6c3b1becf86e5ca95567e34ead443a6ae"
+}
