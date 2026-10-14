@@ -1,3 +1,7 @@
+#[cfg(feature = "desktop_rebuild")]
+mod auth_scheduler;
+#[cfg(feature = "desktop_rebuild")]
+use auth_scheduler::*;
 pub mod auth;
 pub mod catalog;
 #[cfg(feature = "desktop_rebuild")]
@@ -69,6 +73,11 @@ enum WriterControl {
     AdmitDiskQuota(u32),
 }
 enum Envelope {
+    #[cfg(feature = "desktop_rebuild")]
+    AuthReady {
+        ready: VecDeque<auth::rebuild::WriterWork>,
+        next: QueueClass,
+    },
     #[cfg(feature = "desktop_rebuild")]
     Features {
         command: features::Command,
@@ -208,6 +217,18 @@ fn execute(connection: &mut Connection, work: Work) -> Result<bool> {
     Ok(true)
 }
 impl SettingsClient {
+    #[cfg(feature = "desktop_rebuild")]
+    pub(crate) fn enqueue_auth(&self, work: auth::rebuild::WriterWork) {
+        let mut queue = self.shared.queue.lock().expect("Writer admission poisoned");
+        if queue.closed {
+            drop(queue);
+            auth::rebuild::finish_stopped(work);
+            return;
+        }
+        push_auth_ready(&mut queue.pending, work);
+        self.shared.changed.notify_all();
+    }
+
     fn enqueue(&self, work: Work, cancelled: &AtomicBool, wait: Duration) -> Result<WriteReply> {
         let deadline = Instant::now() + wait;
         let mut queue = self
@@ -409,6 +430,7 @@ impl WriterOwner {
         let mut catalog_state = catalog::State::new(lease.data_dir().to_owned());
         let join = thread::spawn(move || {
             loop {
+                #[cfg(not(feature = "desktop_rebuild"))]
                 let envelope = {
                     let mut queue = worker.queue.lock().expect("Writer admission poisoned");
                     while queue.pending.is_empty() && !queue.closed {
@@ -425,7 +447,51 @@ impl WriterOwner {
                         None => break,
                     }
                 };
+                #[cfg(feature = "desktop_rebuild")]
+                let scheduled = {
+                    let mut queue = worker.queue.lock().expect("Writer admission poisoned");
+                    loop {
+                        if let Some(scheduled) = schedule(&mut queue.pending, Instant::now()) {
+                            worker.changed.notify_all();
+                            break Some(scheduled);
+                        }
+                        if queue.closed && queue.pending.is_empty() {
+                            break None;
+                        }
+                        if let Some(retry) = earliest_auth_retry(&queue.pending) {
+                            let wait = retry.saturating_duration_since(Instant::now());
+                            queue = worker
+                                .changed
+                                .wait_timeout(queue, wait)
+                                .expect("Writer admission poisoned")
+                                .0;
+                        } else {
+                            queue = worker
+                                .changed
+                                .wait(queue)
+                                .expect("Writer admission poisoned");
+                        }
+                    }
+                };
+                #[cfg(feature = "desktop_rebuild")]
+                let Some(scheduled) = scheduled else {
+                    break;
+                };
+                #[cfg(feature = "desktop_rebuild")]
+                let envelope = match scheduled {
+                    Scheduled::Normal(envelope) => envelope,
+                    Scheduled::Auth(work) => {
+                        if let Some(retry) = auth::rebuild::advance(&mut connection, work) {
+                            let mut queue = worker.queue.lock().expect("Writer admission poisoned");
+                            push_auth_ready(&mut queue.pending, retry);
+                            worker.changed.notify_all();
+                        }
+                        continue;
+                    }
+                };
                 match envelope {
+                    #[cfg(feature = "desktop_rebuild")]
+                    Envelope::AuthReady { .. } => unreachable!(),
                     #[cfg(feature = "desktop_rebuild")]
                     Envelope::Features { command, reply } => {
                         let _ = reply.send(features::execute(&mut connection, command));

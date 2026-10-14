@@ -169,3 +169,26 @@ GRE-598 adds `pp_core::review_observations` behind `desktop_rebuild`. Library ca
 An optional filament provider reads bounded JSON over HTTP, confines redirects to its original origin, and resolves only its configured integration's filament identifiers. Provider reads reuse the checked `pp-net` address policy and pin DNS answers before connecting. Cloud metadata destinations are rejected. Provider failures fall back to catalog-only lookup. Cancellation returns an error. No application routes or startup paths call these library methods, so runtime behavior remains unchanged. Later drafts API integration must check the stored `PP_DESKTOP_REBUILD` setting.
 
 The second D3 PR remains dependent on later source and storage work. The reference acquisition and upload modules require retained capture from D5, the upload journal from D14, and import job methods from D15. Those APIs are absent on main. This port does not claim acquisition or upload completion and does not advance those slices.
+
+### D6 auth scheduling
+
+GRE-605 adds `WriterOwner::rebuild_auth_with_policy(policy, lifetimes)` behind
+`desktop_rebuild`. This explicit library constructor returns `RebuildAuthClient`.
+The existing `auth` and `auth_with_policy` constructors retain their existing pool
+and default session/key lifetimes with the feature off or on. No runtime caller
+selects the rebuild client. D23/D26 must check the stored `PP_DESKTOP_REBUILD`
+setting before selecting it.
+
+The rebuild client admits at most 34 flows and sends only password hashing and
+verification to two KDF workers. SQL stages run through the storage writer;
+status, session resolution, logout and key operations can progress while both KDF
+workers are occupied. Ready auth work alternates with ordinary writer work, and
+full KDF queues retry without blocking that writer. Shutdown rejects late KDF
+results. Credential compare-and-swap checks remain in the shared SQL executor.
+`AuthLifetimes::shorter` supports shorter sessions and optional key expiry.
+
+The port preserves main's `User::has_password`, HMAC key hashing, hostile-cost
+checks and legacy constructors. The reference's subscription revalidation calls
+remain deferred to D15, where subscriptions are introduced. Native-secret and
+durable-authority support is the other D6 PR. Neither PR completes GRE-605 until
+both clear the coordinator's exact-head Grok Build gate.
