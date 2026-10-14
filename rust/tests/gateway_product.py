@@ -37,6 +37,7 @@ def main():
     opener = urllib.request.build_opener(NoRedirect)
     cookie = None
     origin = None
+    expected_exit = 0
     def request(path, method="GET", body=None, headers=None, allowed=(200, 201, 202, 204)):
         values = {"Origin": origin}
         if cookie:
@@ -231,14 +232,31 @@ def main():
             slow, response = slow_download()
             active, _ = request("/__runtime")
             assert active["gateway"]["active_requests"] >= 2 and active["gateway"]["active_upgrades"] == 1, active
+            marker = json.loads((fixture / "data/.desktop-owner.json").read_text())
+            runtime_dir = Path(marker["runtime_dir"])
             started = time.monotonic()
+            expected_exit = 1
             process.terminate()
             time.sleep(.2)
             denied_during_drain, _ = request("/plans", "POST", {"name": "must not be created during drain"}, allowed=(503,))
             process.wait(timeout=17)
             elapsed = time.monotonic() - started
-            assert process.returncode == 0, process.stderr.read()
+            shutdown_stderr = process.stderr.read()
+            shutdown_receipt = json.loads(process.stdout.read())
+            assert process.returncode == expected_exit, (process.returncode, shutdown_stderr, shutdown_receipt)
+            assert shutdown_stderr.strip() == "Error: Desktop shutdown incomplete", shutdown_stderr
+            assert shutdown_receipt == {
+                "proof_class": "headless_unsigned", "tracked_idle": True, "gateway_idle": False,
+                "compat_exit": "graceful", "compat_reaped": True, "storage_released": True,
+                "gateway_stopped": True, "marker_removed": True, "runtime_removed": True,
+                "errors": ["gateway_drain_timed_out"],
+            }, shutdown_receipt
+            assert 5 <= elapsed < 17, elapsed
             assert not Path(f"/proc/{child_pid}").exists(), "Node child was not reaped"
+            assert not runtime_dir.exists(), "runtime directory survived shutdown"
+            with (fixture / "data/.desktop.lock").open("rb") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(lock, fcntl.LOCK_UN)
             assert live_ws.wait(timeout=3) == 0, live_ws.stderr.read()
             ws_closed = json.loads(live_ws.stdout.readline())
             assert ws_closed["closed"] is True
@@ -248,8 +266,10 @@ def main():
                        "rss_peak_growth_bytes": peak_growth, "cancelled_readers_joined": traffic["gateway"],
                        "download_replay_sha256_equal": True, "revision_count_unchanged": True,
                        "shutdown_accepted": active["gateway"], "shutdown_seconds": elapsed,
-                       "shutdown_exit": process.returncode, "websocket_close": ws_closed,
-                       "drain_write_status": 503, "node_reaped": True}
+                       "shutdown_exit": process.returncode, "shutdown_receipt": shutdown_receipt,
+                       "websocket_close": ws_closed,
+                       "drain_write_status": 503, "node_reaped": True,
+                       "runtime_removed": True, "storage_lock_reacquired": True}
         else:
             live_ws = hold_websocket()
             marker = json.loads((fixture / "data/.desktop-owner.json").read_text())
@@ -284,7 +304,7 @@ def main():
         if process.poll() is None:
             process.terminate()
             process.wait(timeout=17)
-        assert process.returncode == 0, process.stderr.read()
+        assert process.returncode == expected_exit, process.stderr.read()
         credentials.unlink(missing_ok=True)
         assert not (fixture / "data/.desktop-owner.json").exists(), "owner marker survived shutdown"
 
