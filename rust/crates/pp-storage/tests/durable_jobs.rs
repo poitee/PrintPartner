@@ -4397,7 +4397,133 @@ fn filename_grouping_normalizes_before_hashing_and_persistence() {
 }
 
 #[test]
+fn gre_526_startup_surfaces_queued_oversized_documents() {
+    let (path, owner) = fixture();
+    let damaged = enqueue(&owner, "damaged", Payload::CheckSourceUpdates {});
+    let healthy = enqueue(&owner, "healthy", Payload::CheckSourceUpdates {});
+    owner.shutdown().unwrap();
+    let raw = Connection::open(path.join("print-partner.db")).unwrap();
+    let document = format!("{{\"padding\":\"{}\"}}", "x".repeat(JOB_DOC_SIZE_LIMIT));
+    raw.execute(
+        "UPDATE durable_jobs SET document=?2 WHERE id=?1",
+        rusqlite::params![damaged.job_id, document],
+    )
+    .unwrap();
+    drop(raw);
+
+    for _ in 0..2 {
+        let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
+        let Outcome::Quarantined(rows) = call(
+            &owner,
+            UserOperation::Quarantined {
+                before: None,
+                limit: 200,
+            },
+        )
+        .unwrap() else {
+            panic!("Expected quarantine list");
+        };
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].job_id, damaged.job_id);
+        assert!(rows[0].reason.contains("131072-byte limit"));
+        let Outcome::List(rows) =
+            call(&owner, UserOperation::List(JobListQuery::default())).unwrap()
+        else {
+            panic!("Expected list");
+        };
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].job_id, healthy.job_id);
+        owner.shutdown().unwrap();
+    }
+    let stored: (String, String, i64) = readonly(&path)
+        .query_row(
+            "SELECT document,state,version FROM durable_jobs WHERE id=?1",
+            [&damaged.job_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        stored,
+        (document, "quarantined".into(), damaged.state_version + 1)
+    );
+}
+
+#[test]
+fn gre_526_recovery_growth_does_not_block_startup_or_restart() {
+    let (path, owner) = fixture();
+    let damaged = enqueue(&owner, "damaged", Payload::CheckSourceUpdates {});
+    let healthy = enqueue(&owner, "healthy", Payload::CheckSourceUpdates {});
+    owner.shutdown().unwrap();
+    let raw = Connection::open(path.join("print-partner.db")).unwrap();
+    let original: String = raw
+        .query_row(
+            "SELECT document FROM durable_jobs WHERE id=?1",
+            [&damaged.job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut value: serde_json::Value = serde_json::from_str(&original).unwrap();
+    value["state"] = "running".into();
+    value["state_version"] = 9.into();
+    value["generation"] = 9.into();
+    value["attempt"] = 1.into();
+    value["lease_until"] = 0.into();
+    value["_attempt_fence"] = "".into();
+    value["_attempt_worker"] = "".into();
+    value["recovery"] = "".into();
+    let width = JOB_DOC_SIZE_LIMIT - serde_json::to_string(&value).unwrap().len();
+    value["recovery"] = "x".repeat(width).into();
+    let document = serde_json::to_string(&value).unwrap();
+    assert_eq!(document.len(), JOB_DOC_SIZE_LIMIT);
+    raw.execute("UPDATE durable_jobs SET document=?2,state='running',version=9,generation=9,lease_until=0 WHERE id=?1",
+        rusqlite::params![damaged.job_id, document]).unwrap();
+    drop(raw);
+
+    for _ in 0..2 {
+        let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
+        let Outcome::Quarantined(rows) = call(
+            &owner,
+            UserOperation::Quarantined {
+                before: None,
+                limit: 200,
+            },
+        )
+        .unwrap() else {
+            panic!("Expected quarantine list");
+        };
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].job_id, damaged.job_id);
+        assert!(
+            call(
+                &owner,
+                UserOperation::Get {
+                    job_id: damaged.job_id.clone()
+                }
+            )
+            .is_err()
+        );
+        let Outcome::List(rows) =
+            call(&owner, UserOperation::List(JobListQuery::default())).unwrap()
+        else {
+            panic!("Expected list");
+        };
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].job_id, healthy.job_id);
+        owner.shutdown().unwrap();
+    }
+    let stored: (String, String, i64) = readonly(&path)
+        .query_row(
+            "SELECT document,state,version FROM durable_jobs WHERE id=?1",
+            [&damaged.job_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(stored, (document, "quarantined".into(), 10));
+}
+
+#[test]
 fn gre_526_startup_and_load_skip_and_log_invalid_saved_rows() {
+    use sha2::{Digest, Sha256};
     const CHILD_DATA_DIR: &str = "PP_GRE_526_CHILD_DATA_DIR";
     if let Some(path) = std::env::var_os(CHILD_DATA_DIR) {
         let (owner, _) = WriterOwner::open(&PathBuf::from(path), Limits::default()).unwrap();
@@ -4461,14 +4587,14 @@ fn gre_526_startup_and_load_skip_and_log_invalid_saved_rows() {
         String::from_utf8_lossy(&output.stderr)
     );
     let log = String::from_utf8(output.stderr).unwrap();
-    assert!(
-        log.contains("Skipping invalid durable job row corrupt-row"),
-        "{log}"
-    );
-    assert!(
-        log.contains("Skipping invalid durable job row oversized-row"),
-        "{log}"
-    );
+    for id in ["corrupt-row", "oversized-row"] {
+        let job_ref = hex::encode(Sha256::digest(id.as_bytes()));
+        assert!(
+            log.contains(&format!("job_ref={}", &job_ref[..16])),
+            "{log}"
+        );
+        assert!(!log.contains(id), "{log}");
+    }
     assert!(
         log.contains(&format!("exceeding the {JOB_DOC_SIZE_LIMIT}-byte limit")),
         "{log}"
@@ -4490,6 +4616,84 @@ fn gre_526_startup_and_load_skip_and_log_invalid_saved_rows() {
         )
         .unwrap();
     assert_eq!(corrupt, "{}");
+}
+
+#[test]
+fn gre_526_startup_diagnostics_are_bounded_and_redacted() {
+    const CHILD_DATA_DIR: &str = "PP_GRE_526_REDACTION_CHILD_DATA_DIR";
+    if let Some(path) = std::env::var_os(CHILD_DATA_DIR) {
+        let (owner, _) = WriterOwner::open(&PathBuf::from(path), Limits::default()).unwrap();
+        let Outcome::Quarantined(rows) = call(
+            &owner,
+            UserOperation::Quarantined {
+                before: None,
+                limit: 200,
+            },
+        )
+        .unwrap() else {
+            panic!("Expected quarantine list");
+        };
+        assert_eq!(rows.len(), 20);
+        for row in rows {
+            assert_eq!(
+                row.reason,
+                "Invalid durable job document; operator inspection required"
+            );
+        }
+        let Outcome::List(rows) =
+            call(&owner, UserOperation::List(JobListQuery::default())).unwrap()
+        else {
+            panic!("Expected list");
+        };
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].state, PersistentState::Queued);
+        owner.shutdown().unwrap();
+        return;
+    }
+
+    let (path, owner) = fixture();
+    let healthy = enqueue(&owner, "healthy", Payload::CheckSourceUpdates {});
+    owner.shutdown().unwrap();
+    let raw = Connection::open(path.join("print-partner.db")).unwrap();
+    let original: String = raw
+        .query_row(
+            "SELECT document FROM durable_jobs WHERE id=?1",
+            [&healthy.job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut document: serde_json::Value = serde_json::from_str(&original).unwrap();
+    document["state"] = format!("sensitive-document-value{}", "x".repeat(8192)).into();
+    let document = serde_json::to_string(&document).unwrap();
+    for index in 0..20 {
+        let id = format!("sensitive-row-id\n{}-{index}", "y".repeat(8192));
+        raw.execute("INSERT INTO durable_jobs(id,tenant,kind,state,resource,version,generation,lease_until,created,updated,document)
+            SELECT ?1,tenant,kind,state,resource,version,generation,lease_until,created,updated,?2 FROM durable_jobs WHERE id=?3",
+            rusqlite::params![id, document, healthy.job_id]).unwrap();
+    }
+    drop(raw);
+    let output = child_process::command(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "gre_526_startup_diagnostics_are_bounded_and_redacted",
+            "--nocapture",
+        ])
+        .env(CHILD_DATA_DIR, &path)
+        .output()
+        .unwrap();
+    let log = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {log}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(!log.contains("sensitive-"), "{log}");
+    assert!(log.lines().count() <= 27, "{log}");
+    assert!(log.lines().all(|line| line.len() <= 200), "{log}");
+    assert!(
+        log.contains("Additional invalid durable job rows skipped: 12"),
+        "{log}"
+    );
 }
 
 #[test]
