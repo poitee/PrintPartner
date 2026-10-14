@@ -865,6 +865,17 @@ impl HealthFixture {
                                 .expect("authenticated health request");
                             let assertion: serde_json::Value =
                                 serde_json::from_slice(&hex::decode(principal).unwrap()).unwrap();
+                            assert_eq!(assertion.as_object().unwrap().len(), 7);
+                            assert_eq!(assertion["version"], 1);
+                            assert_eq!(assertion["tenant"], "default");
+                            assert_eq!(assertion["actor"], "desktop-owner");
+                            let issued_at = assertion["issued_at"].as_u64().unwrap();
+                            let now = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap()
+                                .as_millis() as i128;
+                            let age = now - i128::from(issued_at);
+                            assert!((-1000..=30_000).contains(&age), "principal age {age} ms");
                             assert_eq!(assertion["generation"], generation);
                             assert_eq!(assertion["method"], "GET");
                             assert_eq!(assertion["target"], "/health");
