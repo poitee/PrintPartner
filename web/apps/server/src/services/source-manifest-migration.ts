@@ -1,5 +1,6 @@
 import type { AppRepository } from "../db/repository.js";
 import { tenantStorage } from "../middleware/tenant-context.js";
+import { OwnershipAdmissionError, requireSourceSyncParticipant } from "../ownership/source-sync-admission.js";
 import {
   archiveLegacySourceManifest,
   inspectLegacySourceManifest,
@@ -49,6 +50,8 @@ export async function migrateLegacySourceManifestOverrides(
     inspectLegacy?: typeof inspectLegacySourceManifest;
   } = {},
 ): Promise<LegacySourceManifestMigrationReport> {
+  const checkAdmission = () => requireSourceSyncParticipant("migration.migrateLegacySourceManifestOverridesForTenant");
+  checkAdmission();
   const migrated: LegacySourceManifestMigration[] = [];
   const retained: RetainedLegacySourceManifest[] = [];
 
@@ -94,6 +97,7 @@ export async function migrateLegacySourceManifestOverrides(
           observedLegacy,
           repo.reposDir,
           source.id,
+          checkAdmission,
         );
         migrated.push({
           sourceId: source.id,
@@ -103,6 +107,7 @@ export async function migrateLegacySourceManifestOverrides(
           changedDuringMigration: archived?.matchesObservedContent === false,
         });
       } catch (error) {
+        if (error instanceof OwnershipAdmissionError) throw error;
         retained.push({
           sourceId: source.id,
           legacyPath: observedLegacy.legacyPath,
@@ -125,6 +130,7 @@ export async function migrateLegacySourceManifestOverrides(
     let activated;
     try {
       activated = await publishSourceManifestRevision({
+        beforePublish: checkAdmission,
         repo,
         sourceId: source.id,
         manifestYaml: yaml,
@@ -158,6 +164,7 @@ export async function migrateLegacySourceManifestOverrides(
         observedLegacy,
         repo.reposDir,
         source.id,
+        checkAdmission,
       );
       migrated.push({
         sourceId: source.id,
@@ -167,6 +174,7 @@ export async function migrateLegacySourceManifestOverrides(
         changedDuringMigration: archived?.matchesObservedContent === false,
       });
     } catch (error) {
+      if (error instanceof OwnershipAdmissionError) throw error;
       retained.push({
         sourceId: source.id,
         legacyPath: observedLegacy.legacyPath,

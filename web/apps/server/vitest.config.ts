@@ -12,5 +12,6 @@ export default defineConfig({
     // Raise the global defaults instead of chasing one flaky test at a time.
     testTimeout: 15000,
     hookTimeout: 15000,
+    setupFiles: ["./src/ownership/admission-session-reset.ts"],
   },
 });

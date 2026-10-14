@@ -30,6 +30,7 @@ import {
   removeObsoleteHostedWorkingTree,
 } from "./local-source-revision.js";
 
+import { beginSourceSyncAdmission, packagedSourceSyncManifestPath, requireSourceSyncParticipant } from "../ownership/source-sync-admission.js";
 vi.mock("node:fs/promises", { spy: true });
 
 const roots: string[] = [];
@@ -53,6 +54,39 @@ function fixture() {
 }
 
 describe("publishLocalSourceWorkingTree", () => {
+  it("refuses local publication when admission changes during staging", async () => {
+    const f = fixture();
+    writeFileSync(join(f.workingTree, "z.stl"), "solid second\nendsolid second\n");
+    const manifest = join(f.dir, "ownership.json");
+    const original = readFileSync(packagedSourceSyncManifestPath(), "utf8");
+    const previous = process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST;
+    const before = f.repo.getProjectRow(f.source.id);
+    const actualFs = await vi.importActual<typeof fsPromises>("node:fs/promises");
+    try {
+      writeFileSync(manifest, original);
+      process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST = manifest;
+      beginSourceSyncAdmission(f.dir);
+      const copy = vi.mocked(fsPromises.copyFile).mockImplementationOnce(async (...args) => {
+        await actualFs.copyFile(...args);
+        writeFileSync(manifest, `${original}\n`);
+      });
+      await expect(publishLocalSourceWorkingTree({
+        repo: f.repo, reposDir: f.sqlite.reposDir, sourceId: f.source.id, workingTree: f.workingTree,
+        beforePublish: () => requireSourceSyncParticipant("assistant.propose_import_source_files"),
+      })).rejects.toThrow(/runtime manifest does not match/);
+      expect(copy).toHaveBeenCalledTimes(1);
+      expect(f.repo.getProjectRow(f.source.id)).toEqual(before);
+      expect(f.repo.listSourceRevisions(f.source.id)).toEqual([]);
+      const workspace = join(f.sqlite.reposDir, String(f.source.id));
+      expect(readdirSync(workspace).filter((name) => name.startsWith(".local-source-") || name === "revisions")).toEqual([]);
+    } finally {
+      vi.restoreAllMocks();
+      if (previous === undefined) delete process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST;
+      else process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST = previous;
+      f.sqlite.close();
+    }
+  });
+
   it("seeds suggested rules when legacy imported paths contain only whitespace", async () => {
     const { sqlite, repo, source, workingTree } = fixture();
     try {
@@ -609,6 +643,48 @@ describe("candidate publication", () => {
     expect(readFileSync(join(active.local_path!, "license.txt"), "utf8")).toBe("license bytes");
     expect(readFileSync(join(active.local_path!, ".source-info"), "utf8")).toBe("hidden bytes");
     sqlite.close();
+  });
+
+  it.each(["index", "fallback"])("preserves active docs when admission is revoked before %s writes", async (stage) => {
+    const f = fixture();
+    const prior = process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST;
+    try {
+      writeFileSync(join(f.workingTree, "readme.md"), "Original docs");
+      const active = await publishLocalSourceWorkingTree({
+        repo: f.repo, reposDir: f.sqlite.reposDir, sourceId: f.source.id, workingTree: f.workingTree,
+      });
+      const localPath = active.local_path;
+      const revisionId = active.current_source_revision_id;
+      if (!localPath || revisionId == null) throw new Error("Source was not activated");
+      indexDocsForActivatedRevision({ repo: f.repo, sourceId: f.source.id, localPath, revisionId });
+      const docs = f.repo.listSourceDocs(f.source.id);
+      expect(docs).toHaveLength(1);
+      const row = f.repo.getProjectRow(f.source.id);
+      const manifest = join(f.dir, "ownership.json");
+      const original = readFileSync(packagedSourceSyncManifestPath(), "utf8");
+      writeFileSync(manifest, original);
+      process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST = manifest;
+      beginSourceSyncAdmission(f.dir);
+      if (stage === "index") {
+        writeFileSync(manifest, `${original}\n`);
+      } else {
+        vi.spyOn(f.repo, "replaceSourceDocs").mockImplementationOnce(() => {
+          writeFileSync(manifest, `${original}\n`);
+          throw new Error("Injected indexing failure");
+        });
+      }
+      expect(() => indexDocsForActivatedRevision({
+        repo: f.repo, sourceId: f.source.id, localPath, revisionId,
+        beforePublish: () => requireSourceSyncParticipant("http.POST /sources/:id/upload-files"),
+      })).toThrow(/runtime manifest does not match/);
+      expect(f.repo.listSourceDocs(f.source.id)).toEqual(docs);
+      expect(f.repo.getProjectRow(f.source.id)).toEqual(row);
+    } finally {
+      vi.restoreAllMocks();
+      if (prior === undefined) delete process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST;
+      else process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST = prior;
+      f.sqlite.close();
+    }
   });
 
   it("clears the active revision's docs when indexing fails and ignores a stale revision", async () => {

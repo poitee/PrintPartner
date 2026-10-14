@@ -94,7 +94,7 @@ describe("local upload Source revisions", () => {
       payload,
       headers,
     });
-    expect(uploaded.statusCode).toBe(200);
+    expect(uploaded.statusCode, uploaded.body).toBe(200);
     const source = uploaded.json() as {
       current_source_revision_id?: number;
       local_path?: string;

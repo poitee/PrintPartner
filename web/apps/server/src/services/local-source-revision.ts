@@ -30,6 +30,7 @@ import {
   PHASE_MANIFEST_TOO_LARGE_DETAIL,
 } from "./upload-limits.js";
 import { isRecord } from "../lib/guards.js";
+import { OwnershipAdmissionError } from "../ownership/source-sync-admission.js";
 
 export const SOURCE_PUBLICATION_UNAVAILABLE_DETAIL =
   "Source revision publication is unavailable on experimental PostgreSQL because atomic publication transactions are not supported.";
@@ -215,6 +216,7 @@ function resourcesWithManifest(
 }
 
 async function materializeLocalSourceWorkingTree(input: {
+  beforePublish?: () => undefined;
   reposDir: string;
   sourceId: number;
   workingTree: string;
@@ -236,7 +238,9 @@ async function materializeLocalSourceWorkingTree(input: {
     maxDocumentationBytes: input.maxDocumentationBytes,
     maxTotalBytes: input.maxTotalBytes,
   });
+  input.beforePublish?.();
   await mkdir(sourceWorkspace, { recursive: true });
+  input.beforePublish?.();
   const stagingRoot = await mkdtemp(join(sourceWorkspace, ".local-source-"));
   let published: PublishedSourceSnapshot | undefined;
   let workError: unknown;
@@ -250,11 +254,14 @@ async function materializeLocalSourceWorkingTree(input: {
       }
       const stagedPath = resolveUnderRoot(stagingRoot, file.relativePath);
       if (!stagedPath) throw new Error(`Unsafe Source snapshot path: ${file.relativePath}`);
+      input.beforePublish?.();
       await mkdir(dirname(stagedPath), { recursive: true });
+      input.beforePublish?.();
       chargeTenantDiskBytes(file.sizeHintBytes);
       await copyFile(file.absolutePath, stagedPath);
     }
     if (input.manifestYaml !== undefined) {
+      input.beforePublish?.();
       chargeTenantDiskBytes(Buffer.byteLength(input.manifestYaml));
       await writeFile(
         join(stagingRoot, SOURCE_MANIFEST_FILENAME),
@@ -281,6 +288,7 @@ async function materializeLocalSourceWorkingTree(input: {
       retainUntilRelease: true,
     });
     published = await store.materialize({
+      beforePublish: input.beforePublish,
       sourceId: input.sourceId,
       upstreamRevisionKey,
       files,
@@ -314,6 +322,7 @@ async function materializeLocalSourceWorkingTree(input: {
 }
 
 function registerAndActivateSnapshot(input: {
+  beforePublish?: () => undefined;
   repo: AppRepository;
   sourceId: number;
   observed: SourceActivationObservation;
@@ -324,6 +333,7 @@ function registerAndActivateSnapshot(input: {
   suggestedImportRules?: string[];
 }): SourceSummary {
   return input.repo.transaction(() => {
+    input.beforePublish?.();
     const revision = input.repo.recordSourceRevision({
       sourceId: input.sourceId,
       upstreamRevisionKey: input.snapshot.upstreamRevisionKey,
@@ -356,6 +366,7 @@ type ActivatedSourceDocsIndex =
   | { outcome: "unchanged"; revisionId: number; activeRevisionId: number | null };
 
 export function indexDocsForActivatedRevision(input: {
+  beforePublish?: () => undefined;
   repo: AppRepository;
   sourceId: number;
   localPath: string;
@@ -369,10 +380,12 @@ export function indexDocsForActivatedRevision(input: {
       if (current !== input.revisionId) {
         return { outcome: "unchanged", revisionId: input.revisionId, activeRevisionId: current };
       }
-      const indexed = indexSourceDocsFromDisk(input.repo, input.sourceId, input.localPath);
+      input.beforePublish?.();
+      const indexed = indexSourceDocsFromDisk(input.repo, input.sourceId, input.localPath, undefined, input.beforePublish);
       return { outcome: "indexed", docCount: indexed.doc_count, pendingPdfs: indexed.pending_pdfs };
     }, "immediate");
   } catch (error) {
+    if (error instanceof OwnershipAdmissionError) throw error;
     const reason = error instanceof Error ? error.message : "documentation indexing failed";
     try {
       return input.repo.transaction(() => {
@@ -380,10 +393,12 @@ export function indexDocsForActivatedRevision(input: {
         if (current !== input.revisionId) {
           return { outcome: "unchanged", revisionId: input.revisionId, activeRevisionId: current };
         }
+        input.beforePublish?.();
         input.repo.replaceSourceDocs(input.sourceId, []);
         return { outcome: "cleared", revisionId: input.revisionId, reason };
       }, "immediate");
-    } catch {
+    } catch (cleanupError) {
+      if (cleanupError instanceof OwnershipAdmissionError) throw cleanupError;
       return { outcome: "unchanged", revisionId: input.revisionId, activeRevisionId: null };
     }
   }
@@ -411,6 +426,7 @@ function releaseUnreferencedSnapshot(
 
 /** Activate a Git snapshot on the shared rollback path. A failed activation removes only a snapshot this call created and nothing still referenced. */
 export function activateSyncedSourceSnapshot(input: {
+  beforePublish?: () => undefined;
   repo: AppRepository;
   reposDir: string;
   sourceId: number;
@@ -419,6 +435,7 @@ export function activateSyncedSourceSnapshot(input: {
   sourceVersion: string;
 }): SourceSummary {
   return activateMaterializedSnapshot({
+    beforePublish: input.beforePublish,
     repo: input.repo,
     reposDir: input.reposDir,
     sourceId: input.sourceId,
@@ -431,6 +448,7 @@ export function activateSyncedSourceSnapshot(input: {
 }
 
 function activateMaterializedSnapshot(input: {
+  beforePublish?: () => undefined;
   repo: AppRepository;
   reposDir: string;
   sourceId: number;
@@ -443,6 +461,7 @@ function activateMaterializedSnapshot(input: {
 }): SourceSummary {
   try {
     return registerAndActivateSnapshot({
+      beforePublish: input.beforePublish,
       repo: input.repo,
       sourceId: input.sourceId,
       observed: input.observed,
@@ -467,6 +486,7 @@ function activateMaterializedSnapshot(input: {
 }
 
 export async function publishLocalSourceWorkingTree(input: {
+  beforePublish?: () => undefined;
   repo: AppRepository;
   reposDir: string;
   sourceId: number;
@@ -478,6 +498,7 @@ export async function publishLocalSourceWorkingTree(input: {
   maxDocumentationBytes?: number;
   maxTotalBytes?: number;
 }): Promise<SourceSummary> {
+  input.beforePublish?.();
   assertSourcePublicationSupported(input.repo);
   const observed = input.observed ?? input.repo.getSourceActivationObservation(input.sourceId);
   if (!observed) throw new Error("Source not found");
@@ -486,6 +507,7 @@ export async function publishLocalSourceWorkingTree(input: {
   const maxDocumentationBytes = input.maxDocumentationBytes ?? DEFAULT_LOCAL_SNAPSHOT_DOCS_BYTES;
   const maxTotalBytes = input.maxTotalBytes ?? DEFAULT_LOCAL_SNAPSHOT_TOTAL_BYTES;
   const snapshot = await materializeLocalSourceWorkingTree({
+    beforePublish: input.beforePublish,
     reposDir: input.reposDir,
     sourceId: input.sourceId,
     workingTree: input.workingTree,
@@ -495,6 +517,7 @@ export async function publishLocalSourceWorkingTree(input: {
     maxTotalBytes,
   });
   return activateMaterializedSnapshot({
+    beforePublish: input.beforePublish,
     repo: input.repo,
     reposDir: input.reposDir,
     sourceId: input.sourceId,
@@ -508,11 +531,13 @@ export async function publishLocalSourceWorkingTree(input: {
 }
 
 export async function publishSourceManifestRevision(input: {
+  beforePublish?: () => undefined;
   repo: AppRepository;
   sourceId: number;
   manifestYaml: string;
   observed?: SourceActivationObservation;
 }): Promise<SourceSummary> {
+  input.beforePublish?.();
   assertSourcePublicationSupported(input.repo);
   try {
     loadManifestYaml(input.manifestYaml);
@@ -547,6 +572,7 @@ export async function publishSourceManifestRevision(input: {
       retainUntilRelease: true,
     })
       .deriveFileReplacement({
+        beforePublish: input.beforePublish,
         sourceId: input.sourceId,
         baseRevisionKey: activeRevision.upstream_revision_key,
         sourceVersion: observed.lastCommitSha,
@@ -558,6 +584,7 @@ export async function publishSourceManifestRevision(input: {
       });
   } else {
     snapshot = await materializeLocalSourceWorkingTree({
+      beforePublish: input.beforePublish,
       reposDir: input.repo.reposDir,
       sourceId: input.sourceId,
       workingTree: source.localPath,
@@ -569,6 +596,7 @@ export async function publishSourceManifestRevision(input: {
   }
 
   return activateMaterializedSnapshot({
+    beforePublish: input.beforePublish,
     repo: input.repo,
     reposDir: input.repo.reposDir,
     sourceId: input.sourceId,
@@ -582,6 +610,7 @@ export async function publishSourceManifestRevision(input: {
 
 /** Drop a pre-snapshot hosted working tree after activation. Never removes the active path. */
 export async function removeObsoleteHostedWorkingTree(input: {
+  beforePublish?: () => undefined;
   sourcesDir: string;
   sourceId: number;
   activePath: string | null | undefined;
@@ -591,5 +620,6 @@ export async function removeObsoleteHostedWorkingTree(input: {
     const active = resolve(input.activePath);
     if (active === legacy || active.startsWith(legacy + sep)) return;
   }
+  input.beforePublish?.();
   await rm(legacy, { recursive: true, force: true });
 }

@@ -37,6 +37,7 @@ import {
 } from "./middleware/tenant-context.js";
 import fastifyStatic from "@fastify/static";
 import { existsSync } from "node:fs";
+import { beginSourceSyncAdmission } from "./ownership/source-sync-admission.js";
 import { dirname, join, resolve } from "node:path";
 import { isBrowserDocumentNavigation, isSpaClientPath } from "./lib/spa-nav.js";
 import type { SaasDbStore } from "./adapters/saas/index.js";
@@ -317,6 +318,7 @@ async function configureApp(app: FastifyInstance, config: ServerConfig, ports: R
   await registerOpenApi(app, config);
 
   if (repository) {
+    beginSourceSyncAdmission(config.dataDir);
     if (config.deployMode === "self-host") {
       migrateLegacySelfHostExports(config.dataDir, repository);
     }
@@ -569,6 +571,7 @@ async function configureApp(app: FastifyInstance, config: ServerConfig, ports: R
 export async function startServer(config: ServerConfig) {
   const releaseOwner = acquireDataDirectory(config.dataDir);
   try {
+    beginSourceSyncAdmission(config.dataDir);
     validateProductionConfig(config);
     if (!config.databaseUrl) {
       const preparation = await prepareSqliteUpgrade({

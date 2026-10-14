@@ -34,6 +34,7 @@ import { runWithTenantDiskQuota, withoutTenantDiskQuota, TenantDiskQuotaError } 
 import { runPrinterUploadJob } from "./printer-upload-job.js";
 import { reconcileSendQueueJobResult } from "./printer-send-queue.js";
 import { getLogger } from "./logger.js";
+import { OwnershipAdmissionError, requireSourceSyncParticipant } from "../ownership/source-sync-admission.js";
 import {
   ACCEPTED_PLATE_EXPORT_LIMITS,
   materializeAcceptedPlateExport,
@@ -85,6 +86,12 @@ type JobRunnerOptions = {
   completedJobGlobalMax?: number;
   completedJobRetentionMs?: number;
 };
+
+function requireSourceJobAdmission(kind: JobSnapshot["kind"]): void {
+  if (kind === "sync" || kind === "import-scan" || kind === "extract-source-docs" || kind === "check-source-updates") {
+    requireSourceSyncParticipant(`job.${kind}`);
+  }
+}
 
 export class InProcessJobRunner {
   private readonly jobs = new Map<string, JobSnapshot>();
@@ -209,7 +216,11 @@ export class InProcessJobRunner {
     if (meta) meta.updatedAt = Date.now();
   }
 
-  private emit(jobId: string, patch: Partial<JobSnapshot>): void {
+  private emit(
+    jobId: string,
+    patch: Partial<JobSnapshot>,
+    options: { notifyWebhooks: boolean } = { notifyWebhooks: true },
+  ): void {
     const snap = this.jobs.get(jobId);
     if (!snap) return;
     Object.assign(snap, patch);
@@ -221,6 +232,17 @@ export class InProcessJobRunner {
       listener(event);
     }
     if (event.status === "done" || event.status === "error") {
+      if (!options.notifyWebhooks) {
+        this.pruneCompletedJobs();
+        return;
+      }
+      try {
+        requireSourceJobAdmission(event.kind);
+      } catch (error) {
+        if (!(error instanceof OwnershipAdmissionError)) throw error;
+        this.pruneCompletedJobs();
+        return;
+      }
       void dispatchWebhooks(this.repo, event.status === "done" ? "job.done" : "job.error", {
         job_id: event.job_id,
         kind: event.kind,
@@ -257,6 +279,10 @@ export class InProcessJobRunner {
     if (!STARTABLE_JOB_KINDS.has(kind)) {
       throw new Error(`Unsupported job kind: ${kind}`);
     }
+    if (kind === "sync") requireSourceSyncParticipant("job.sync");
+    if (kind === "import-scan") requireSourceSyncParticipant("job.import-scan");
+    if (kind === "extract-source-docs") requireSourceSyncParticipant("job.extract-source-docs");
+    if (kind === "check-source-updates") requireSourceSyncParticipant("job.check-source-updates");
     this.pruneCompletedJobs();
     const jobId = crypto.randomUUID();
     const snap: JobSnapshot = {
@@ -388,16 +414,20 @@ export class InProcessJobRunner {
         }, async () => {
           let result: Record<string, unknown>;
           if (kind === "sync") {
+            requireSourceSyncParticipant("job.sync");
             result = await this.runSync(jobId, payload);
           } else if (kind === "import-scan") {
+            requireSourceSyncParticipant("job.import-scan");
             const projectId = Number(payload.project_id);
             result = await syncProjectById(this.repo, this.deps.reposDir, projectId, undefined, {
+              beforePublish: () => requireSourceSyncParticipant("job.import-scan"),
               maxDocsBytes: this.deps.sourceDocsMaxBytes,
               onProgress: (patch) => this.emit(jobId, patch),
               enqueuePdfExtract: (pid) =>
                 this.start("extract-source-docs", { project_id: pid }, tenantId),
             });
           } else if (kind === "extract-source-docs") {
+            requireSourceSyncParticipant("job.extract-source-docs");
             result = await this.runExtractSourceDocs(jobId, payload);
           } else if (kind === "check-source-updates") {
             result = await checkAllSourceUpdates(this.repo);
@@ -419,6 +449,7 @@ export class InProcessJobRunner {
           }
           return result;
         });
+        requireSourceJobAdmission(kind);
         const doneMessage =
           kind === "export-stl-pack"
             ? exportStlPackJobMessage(result)
@@ -451,7 +482,7 @@ export class InProcessJobRunner {
             error: errMsg,
             result: null,
             finished_at: new Date().toISOString(),
-          });
+          }, { notifyWebhooks: !(e instanceof OwnershipAdmissionError) });
         } catch {
           // Best-effort: if the repo/db connection is already gone (e.g. test
           // teardown raced a still-running background job), there's nothing
@@ -493,6 +524,7 @@ export class InProcessJobRunner {
       });
     }
     for (let i = 0; i < ids.length; i++) {
+      requireSourceSyncParticipant("job.sync");
       const id = ids[i]!;
       const row = this.repo.getProjectRow(id);
       this.emit(jobId, {
@@ -503,6 +535,7 @@ export class InProcessJobRunner {
         results.push({
           project_id: id,
           ...(await syncProjectById(this.repo, this.deps.reposDir, id, undefined, {
+            beforePublish: () => requireSourceSyncParticipant("job.sync"),
             maxDocsBytes: this.deps.sourceDocsMaxBytes,
             onProgress: (patch) => this.emit(jobId, patch),
             enqueuePdfExtract: (pid) =>
@@ -510,7 +543,7 @@ export class InProcessJobRunner {
           })),
         });
       } catch (e) {
-        if (e instanceof TenantDiskQuotaError) throw e;
+        if (e instanceof OwnershipAdmissionError || e instanceof TenantDiskQuotaError) throw e;
         const errMsg = e instanceof Error ? e.message : String(e);
         const isRateLimit = /rate limit exceeded/i.test(errMsg);
         const friendly = isRateLimit
@@ -549,6 +582,7 @@ export class InProcessJobRunner {
     this.emit(jobId, { message: "Extracting PDF text…", progress: 15 });
     const pdfTextStorage = sourcePdfTextStorage(this.repo, projectId, row.localPath);
     const result = await extractPendingPdfsForSource(this.repo, projectId, row.localPath, {
+      beforePublish: () => requireSourceSyncParticipant("job.extract-source-docs"),
       ...pdfTextStorage,
       onProgress: (msg, progress) => this.emit(jobId, { message: msg, progress }),
     });

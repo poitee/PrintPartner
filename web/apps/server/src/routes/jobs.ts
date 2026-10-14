@@ -28,6 +28,10 @@ import {
 import { DIRECT_EXPORT_3MF_LIMITS } from "../services/accepted-direct-export-3mf.js";
 import type { InProcessJobRunner } from "../services/job-runner.js";
 import { isRecord, positiveSafeInteger } from "./job-route-inputs.js";
+import {
+  OwnershipAdmissionError,
+  requireSourceSyncParticipant,
+} from "../ownership/source-sync-admission.js";
 
 export async function registerJobRoutes(
   app: FastifyInstance,
@@ -56,6 +60,15 @@ export async function registerJobRoutes(
   }
 
   app.post("/jobs/sync", limited, async (request, reply) => {
+    try {
+      requireSourceSyncParticipant("http.POST /jobs/sync");
+      requireSourceSyncParticipant("http.POST /api/v1/jobs/sync");
+    } catch (error) {
+      if (error instanceof OwnershipAdmissionError) {
+        return reply.status(503).send({ detail: error.message });
+      }
+      throw error;
+    }
     if (await refuseIfHostedQuotaExceeded(reply, request.tenantId)) return;
     const body = (request.body ?? {}) as Record<string, unknown>;
     const job_id = await jobs.start("sync", body, request.tenantId);
@@ -63,18 +76,45 @@ export async function registerJobRoutes(
   });
 
   app.post("/jobs/import-scan", async (request, reply) => {
+    try {
+      requireSourceSyncParticipant("http.POST /jobs/import-scan");
+      requireSourceSyncParticipant("http.POST /api/v1/jobs/import-scan");
+    } catch (error) {
+      if (error instanceof OwnershipAdmissionError) {
+        return reply.status(503).send({ detail: error.message });
+      }
+      throw error;
+    }
     if (await refuseIfHostedQuotaExceeded(reply, request.tenantId)) return;
     const body = request.body as { project_id?: number };
     const job_id = await jobs.start("import-scan", { project_id: body.project_id }, request.tenantId);
     return { job_id };
   });
 
-  app.post("/jobs/check-source-updates", async (request) => {
+  app.post("/jobs/check-source-updates", async (request, reply) => {
+    try {
+      requireSourceSyncParticipant("http.POST /jobs/check-source-updates");
+      requireSourceSyncParticipant("http.POST /api/v1/jobs/check-source-updates");
+    } catch (error) {
+      if (error instanceof OwnershipAdmissionError) {
+        return reply.status(503).send({ detail: error.message });
+      }
+      throw error;
+    }
     const job_id = await jobs.start("check-source-updates", {}, request.tenantId);
     return { job_id };
   });
 
   app.post("/jobs/extract-source-docs", async (request, reply) => {
+    try {
+      requireSourceSyncParticipant("http.POST /jobs/extract-source-docs");
+      requireSourceSyncParticipant("http.POST /api/v1/jobs/extract-source-docs");
+    } catch (error) {
+      if (error instanceof OwnershipAdmissionError) {
+        return reply.status(503).send({ detail: error.message });
+      }
+      throw error;
+    }
     if (await refuseIfHostedQuotaExceeded(reply, request.tenantId)) return;
     const body = request.body as { project_id?: number };
     const job_id = await jobs.start(

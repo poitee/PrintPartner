@@ -403,6 +403,7 @@ export async function fetchGithubRepoTreeSummary(
 }
 
 type SyncGithubOptions = {
+  beforePublish?: () => undefined;
   maxStlFiles?: number;
   /** Timeout for each raw file response and body stream. */
   fileTimeoutMs?: number;
@@ -572,6 +573,7 @@ export async function syncGithubSource(input: SyncGithubSourceInput): Promise<Sy
     retainUntilRelease: input.retainSnapshot === true,
   });
   const snapshot = await store.materialize({
+    beforePublish: options?.beforePublish,
     sourceId,
     upstreamRevisionKey: githubSnapshotRevisionKey(commitSha, metadataPaths),
     files,
