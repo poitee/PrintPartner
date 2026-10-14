@@ -112,7 +112,7 @@ jobs:
   server-smoke:
     needs: [ci-plan, changes, linux-precheck]
     if: ${{ (!cancelled() && (needs.changes.outputs.macos == 'false' || needs.linux-precheck.result == 'success')) && ((needs.changes.outputs.macos == 'false' && needs.ci-plan.outputs.linux == 'true') || (needs.changes.outputs.macos != 'false' && needs.ci-plan.outputs.macos == 'true')) }}
-    runs-on: ${{ fromJSON(needs.changes.outputs.macos != 'false' && needs.ci-plan.outputs.macos-runner || needs.ci-plan.outputs.linux-runner) }}
+    runs-on: ${{ fromJSON(needs.changes.outputs.macos != 'false' && '["macos-latest"]' || needs.ci-plan.outputs.linux-runner) }}
     # Report a status on a cheap runner when macOS work is not selected.
     # Unknown/failed selection still runs the full macOS smoke.
     timeout-minutes: 30
@@ -169,7 +169,7 @@ jobs:
   bundle:
     needs: [ci-plan, changes, linux-precheck]
     if: ${{ (!cancelled() && needs.changes.outputs.macos != 'false' && needs.linux-precheck.result == 'success') && needs.ci-plan.outputs.macos == 'true' }}
-    runs-on: ${{ fromJSON(needs.ci-plan.outputs.macos-runner) }}
+    runs-on: macos-latest
     # Explicit architecture jobs keep both check names present even when skipped.
     name: bundle (macos-26, arm64, arm64, aarch64-apple-darwin, ee35ee364a0c626df7852d9a5bc0c5394b6440772e9...
     # Honor concurrency cancellation and require an approved runner.
@@ -328,7 +328,7 @@ jobs:
   macos-storage-gate:
     needs: [ci-plan, changes, linux-precheck]
     if: ${{ (!cancelled() && needs.changes.outputs.macos != 'false' && needs.linux-precheck.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || needs.ci-plan.outputs.hosted == 'true')) && needs.ci-plan.outputs.macos == 'true' }}
-    runs-on: ${{ fromJSON(needs.ci-plan.outputs.macos-runner) }}
+    runs-on: macos-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
