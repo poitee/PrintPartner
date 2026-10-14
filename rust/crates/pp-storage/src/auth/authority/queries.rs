@@ -1,8 +1,3 @@
-#![allow(
-    dead_code,
-    reason = "Streaming and reconciliation callers land in D15/D21"
-)]
-
 use super::super::*;
 
 pub(crate) struct StreamAuthority {

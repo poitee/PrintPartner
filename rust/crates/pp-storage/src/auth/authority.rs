@@ -395,6 +395,65 @@ mod tests {
         assert!(!encoded.to_string().contains(key.expose()));
         let key_basis = decode(encoded).unwrap();
         assert_eq!(resolve(&tx, &key_basis, policy).unwrap().0, user.tenant_id);
+        assert_eq!(
+            queries::job_key_actor_ref(&tx, &user.tenant_id, &key).unwrap(),
+            (user.tenant_id.clone(), format!("key:{}", info.id))
+        );
+        let job_session = crate::jobs::Credential::Session(Secret::new(token.expose().into()));
+        let job_key = crate::jobs::Credential::RoutedKey {
+            tenant: user.tenant_id.clone(),
+            key: Secret::new(key.expose().into()),
+        };
+        let read_session =
+            crate::read_model::Credential::Session(Secret::new(token.expose().into()));
+        let read_key = crate::read_model::Credential::ApiKey {
+            routed_tenant: user.tenant_id.clone(),
+            secret: Secret::new(key.expose().into()),
+        };
+        for (job, read, subject, actor, has_expiry) in [
+            (
+                job_session,
+                read_session,
+                format!("user:{}", user.user_id),
+                user.user_id.clone(),
+                true,
+            ),
+            (
+                job_key,
+                read_key,
+                format!("key:{}", info.id),
+                format!("tenant:{}", user.tenant_id),
+                false,
+            ),
+        ] {
+            let stream = queries::resolve_stream_authority(&tx, &job, policy, false).unwrap();
+            assert_eq!(stream.tenant, user.tenant_id);
+            assert_eq!(stream.subject, subject);
+            if has_expiry {
+                assert!(stream.expires_at.is_some_and(
+                    |expiry| expiry > time::OffsetDateTime::now_utc().unix_timestamp()
+                ));
+            } else {
+                assert!(stream.expires_at.is_none());
+            }
+            match stream.identity {
+                queries::StreamAuthorityIdentity::Session(digest) => {
+                    assert_eq!(digest, crypto::digest(token.expose()))
+                }
+                queries::StreamAuthorityIdentity::Key { tenant, key_id } => {
+                    assert_eq!((tenant, key_id), (user.tenant_id.clone(), info.id.clone()))
+                }
+            }
+            let expected = (user.tenant_id.clone(), actor);
+            assert_eq!(
+                queries::observe_reconciliation_actor(&tx, &read, policy).unwrap(),
+                expected
+            );
+            assert_eq!(
+                queries::reconciliation_actor(&tx, read, policy).unwrap(),
+                expected
+            );
+        }
         tx.commit().unwrap();
         run(Request::RevokeKey {
             session: Secret::new(token.expose().into()),
