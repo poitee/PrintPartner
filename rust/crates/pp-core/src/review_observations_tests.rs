@@ -1,0 +1,431 @@
+#![cfg(test)]
+
+use super::*;
+use pp_storage::read_model::{Input, Part, Profile};
+use serde_json::json;
+
+struct Fixture {
+    root: PathBuf,
+    snapshot: Snapshot,
+    observer: SnapshotReviewObserver,
+}
+impl Fixture {
+    fn new() -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "pp-review-{}",
+            hex::encode(rand::random::<[u8; 16]>())
+        ));
+        let repos = root.join("repos");
+        let source = repos.join("tenant/source/revision");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(root.join("thumbs")).unwrap();
+        fs::write(source.join("part.stl"), b"solid test").unwrap();
+        let snapshot = Snapshot {
+            format: "accepted-build-v1",
+            profile: Profile {
+                id: 1,
+                name: "test".into(),
+                order_number: None,
+                special_request: None,
+                archived_at: None,
+            },
+            plan_version: 1,
+            revision_id: 1,
+            revision_number: 1,
+            revision_digest: "digest".into(),
+            accepted_at: "now".into(),
+            required_unit_mapping_digest: "mapping".into(),
+            provenance: Provenance::Tracked {
+                input_set_id: 1,
+                input_set_digest: "input".into(),
+                inputs: vec![Input {
+                    input_id: 7,
+                    source_id: 1,
+                    source_layer: "source".into(),
+                    layer_order: 0,
+                    effective_naming_digest: "name".into(),
+                    tracking_kind: "revision".into(),
+                    source_revision_id: Some(1),
+                    manifest_digest: Some("manifest".into()),
+                    snapshot_root: Some(source.to_str().unwrap().into()),
+                    source_synced_at: None,
+                }],
+            },
+            parts: vec![Part {
+                revision_part_id: 1,
+                projection_part_id: 9,
+                part_key: "part".into(),
+                relative_path: "part.stl".into(),
+                filename: "part.stl".into(),
+                source_layer: "source".into(),
+                status: "ready".into(),
+                role_inferred: "body".into(),
+                role_override: None,
+                effective_role: "body".into(),
+                filament_color_id: None,
+                filament_custom_hex: None,
+                spoolman_spool_id: None,
+                quantity_inferred: 1,
+                quantity_override: None,
+                quantity_effective: 1,
+                included: true,
+                notes: String::new(),
+                github_blob_url: None,
+                geometry_same: None,
+                requirement: None,
+                option_group_id: None,
+                manifest_source: None,
+                artifact: Artifact::Tracked {
+                    source_id: 1,
+                    source_revision_id: 1,
+                    snapshot_root: source.to_str().unwrap().into(),
+                    relative_path: "part.stl".into(),
+                    expected_sha256:
+                        "4e6931576efead51995a7cd8d36d2ef2aae3d1bf36e6f1827c71e32dde079ba7".into(),
+                },
+                units: vec![],
+            }],
+        };
+        let observer = SnapshotReviewObserver::new(repos, Some(root.join("thumbs"))).unwrap();
+        Self {
+            root,
+            snapshot,
+            observer,
+        }
+    }
+    fn source(&self) -> PathBuf {
+        self.root.join("repos/tenant/source/revision")
+    }
+    fn observe(&self) -> ReviewObservations {
+        self.observer
+            .review_observations(&self.snapshot, &AtomicBool::new(false))
+            .unwrap()
+    }
+    fn artifact_mut(&mut self) -> (&mut String, &mut String, &mut String) {
+        let Artifact::Tracked {
+            snapshot_root,
+            relative_path,
+            expected_sha256,
+            ..
+        } = &mut self.snapshot.parts[0].artifact
+        else {
+            panic!("tracked fixture")
+        };
+        (snapshot_root, relative_path, expected_sha256)
+    }
+}
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        fs::remove_dir_all(&self.root).unwrap();
+    }
+}
+
+#[test]
+fn review_reports_artifacts_thumbnails_and_included_parts() {
+    let mut f = Fixture::new();
+    let observed = f.observe();
+    assert_eq!(observed.available_input_roots, HashSet::from([7]));
+    assert!(!observed.media_by_part_id[&9].artifact_missing);
+    assert!(observed.media_by_part_id[&9].thumb_empty);
+    let digest = &f.artifact_mut().2.clone();
+    let name = hex::encode(Sha256::digest(format!(
+        "accepted-thumbnail-v3\0thumbnail\0{digest}\0body\0"
+    )));
+    fs::write(
+        f.root.join("thumbs").join(format!("{name}.png")),
+        [137, 80, 78, 71, 13, 10, 26, 10],
+    )
+    .unwrap();
+    assert!(!f.observe().media_by_part_id[&9].thumb_empty);
+    fs::write(f.source().join("part.stl"), "changed").unwrap();
+    let observed = f.observe();
+    assert!(observed.media_by_part_id[&9].artifact_missing);
+    assert!(!observed.media_by_part_id[&9].thumb_empty);
+    f.snapshot.parts[0].included = false;
+    assert!(f.observe().media_by_part_id.is_empty());
+}
+
+#[test]
+fn review_matches_unique_case_insensitive_paths() {
+    let mut f = Fixture::new();
+    *f.artifact_mut().1 = "PART.STL".into();
+    assert!(!f.observe().media_by_part_id[&9].artifact_missing);
+    fs::write(f.source().join("PART.STL"), "solid test").unwrap();
+    assert!(f.observe().media_by_part_id[&9].artifact_missing);
+}
+
+#[test]
+fn review_rejects_traversal_and_symlink_artifacts() {
+    let mut f = Fixture::new();
+    for path in [
+        "../part.stl",
+        "/part.stl",
+        "a\\part.stl",
+        "a:part.stl",
+        "./part.stl",
+    ] {
+        *f.artifact_mut().1 = path.into();
+        assert!(f.observe().media_by_part_id[&9].artifact_missing, "{path}");
+    }
+    *f.artifact_mut().1 = "part.stl".into();
+    fs::remove_file(f.source().join("part.stl")).unwrap();
+    fs::write(f.root.join("outside.stl"), "solid test").unwrap();
+    std::os::unix::fs::symlink(f.root.join("outside.stl"), f.source().join("part.stl")).unwrap();
+    assert!(f.observe().media_by_part_id[&9].artifact_missing);
+    fs::create_dir(f.root.join("outside")).unwrap();
+    std::os::unix::fs::symlink(f.root.join("outside"), f.root.join("repos/link")).unwrap();
+    *f.artifact_mut().0 = f.root.join("repos/link").to_str().unwrap().into();
+    assert!(f.observe().media_by_part_id[&9].artifact_missing);
+    *f.artifact_mut().0 = f.root.to_str().unwrap().into();
+    assert!(f.observe().media_by_part_id[&9].artifact_missing);
+}
+
+#[test]
+fn review_enforces_cancellation_and_shared_read_budgets() {
+    let f = Fixture::new();
+    let error = f
+        .observer
+        .review_observations(&f.snapshot, &AtomicBool::new(true))
+        .unwrap_err();
+    assert_eq!(error.to_string(), "Review observation cancelled");
+    let observer = f
+        .observer
+        .clone()
+        .with_observation_limits(ObservationLimits {
+            artifact_bytes: 9,
+            ..Default::default()
+        })
+        .unwrap();
+    let error = observer
+        .review_observations(&f.snapshot, &AtomicBool::new(false))
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Review observation artifact budget exceeded"
+    );
+    let observer = f
+        .observer
+        .clone()
+        .with_observation_limits(ObservationLimits {
+            entries: 1,
+            ..Default::default()
+        })
+        .unwrap();
+    let error = observer
+        .review_observations(&f.snapshot, &AtomicBool::new(false))
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Review observation entry budget exceeded"
+    );
+    assert!(
+        f.observer
+            .clone()
+            .with_observation_limits(ObservationLimits {
+                elapsed: Duration::ZERO,
+                ..Default::default()
+            })
+            .is_err()
+    );
+}
+
+#[test]
+fn filament_parsing_resolves_only_matching_integrations_and_spools() {
+    let lookup = SnapshotFilamentLookup {
+        integration_id: "local".into(),
+        filaments: parse_filaments(&json!({"results": [
+            {"id": "2", "name": "Red", "vendor": {"name": "Maker"}, "material": "PLA", "color_hex": "FF0000"},
+            {"id": -1, "name": "invalid"}
+        ]})),
+        spools: parse_spools(&json!([
+            {"id": 3, "filament_id": 2, "remaining_weight": "12.5"},
+            {"id": 4, "filament": {"id": 2}, "remaining_weight": 8},
+            {"id": 5, "filament_id": 2, "remaining_weight": 9, "archived": true},
+            {"id": 6, "filament_id": 2, "remaining_weight": "NaN"}
+        ])),
+    };
+    let resolved = lookup
+        .for_part(Some("spoolman:local:filament:2"), None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(resolved.combo_label, "Maker PLA · Red");
+    assert_eq!(resolved.hex.as_deref(), Some("#ff0000"));
+    assert_eq!(
+        resolved
+            .spools
+            .iter()
+            .map(|s| (s.spool_id, s.remaining_g))
+            .collect::<Vec<_>>(),
+        vec![(3, 12.5), (4, 8.0)]
+    );
+    let selected = lookup
+        .for_part(
+            Some("spoolman:local:filament:2"),
+            Some("spoolman:local:spool:4"),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(selected.spools[0].spool_id, 4);
+    assert!(
+        lookup
+            .for_part(Some("spoolman:foreign:filament:2"), None)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn filament_provider_reads_local_http_and_falls_back_on_failure() {
+    use axum::{Router, routing::get};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = Router::new()
+        .route(
+            "/api/v1/filament",
+            get(|| async { axum::Json(json!([{"id": 2, "name": "Red"}])) }),
+        )
+        .route(
+            "/api/v1/spool",
+            get(|| async {
+                axum::Json(json!([{"id": 3, "filament_id": 2, "remaining_weight": 10}]))
+            }),
+        );
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let mut f = Fixture::new();
+    f.snapshot.parts[0].filament_color_id = Some("spoolman:local:filament:2".into());
+    f.observer = f.observer.clone().with_filament_provider(
+        FilamentProviderConfig::new(&format!("http://{address}/api/v1"), "local", None).unwrap(),
+    );
+    let lookup = f
+        .observer
+        .filament_lookup(&f.snapshot, Arc::new(AtomicBool::new(false)))
+        .await
+        .unwrap();
+    let resolved = lookup
+        .for_part(Some("spoolman:local:filament:2"), None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(resolved.combo_label, "Red");
+    assert_eq!(resolved.spools[0].remaining_g, 10.0);
+    let error = f
+        .observer
+        .filament_lookup(&f.snapshot, Arc::new(AtomicBool::new(true)))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(error.to_string(), "Filament observation cancelled");
+    server.abort();
+    let _ = server.await;
+    let lookup = f
+        .observer
+        .filament_lookup(&f.snapshot, Arc::new(AtomicBool::new(false)))
+        .await
+        .unwrap();
+    assert!(
+        lookup
+            .for_part(Some("spoolman:local:filament:2"), None)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn filament_http_bounds_redirects_origin_and_response_bytes() {
+    use axum::{Router, http::StatusCode, response::Redirect, routing::get};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = Router::new()
+        .route(
+            "/api/v1/filament",
+            get(|| async { Redirect::temporary("/rows") }),
+        )
+        .route("/rows", get(|| async { "[{\"id\":2,\"name\":\"Red\"}]" }))
+        .route(
+            "/foreign/api/v1/filament",
+            get(|| async { Redirect::temporary("http://127.0.0.1:1/rows") }),
+        )
+        .route(
+            "/error/api/v1/filament",
+            get(|| async { StatusCode::UNAUTHORIZED }),
+        );
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let cancelled = AtomicBool::new(false);
+    let config = FilamentProviderConfig::new(&format!("http://{address}"), "local", None).unwrap();
+    assert_eq!(
+        fetch_json(&client, &config, "filament", &cancelled)
+            .await
+            .unwrap(),
+        json!([{"id":2,"name":"Red"}])
+    );
+    let limited = config
+        .clone()
+        .with_limits(Duration::from_secs(1), 4, 1)
+        .unwrap();
+    assert_eq!(
+        fetch_json(&client, &limited, "filament", &cancelled)
+            .await
+            .unwrap_err()
+            .to_string(),
+        "Filament response too large"
+    );
+    let limited = config.with_limits(Duration::from_secs(1), 1024, 0).unwrap();
+    assert_eq!(
+        fetch_json(&client, &limited, "filament", &cancelled)
+            .await
+            .unwrap_err()
+            .to_string(),
+        "Too many filament redirects"
+    );
+    let foreign = FilamentProviderConfig::new(
+        &format!("http://{address}/foreign"),
+        "local",
+        Some("secret".into()),
+    )
+    .unwrap();
+    assert_eq!(
+        fetch_json(&client, &foreign, "filament", &cancelled)
+            .await
+            .unwrap_err()
+            .to_string(),
+        "Filament redirect changed origin"
+    );
+    let error =
+        FilamentProviderConfig::new(&format!("http://{address}/error"), "local", None).unwrap();
+    assert_eq!(
+        fetch_json(&client, &error, "filament", &cancelled)
+            .await
+            .unwrap_err()
+            .to_string(),
+        "Filament provider refused read"
+    );
+    server.abort();
+    let _ = server.await;
+}
+
+#[test]
+fn filament_config_rejects_ambiguous_urls_and_limit_expansion() {
+    for url in [
+        "file:///tmp/provider",
+        "http://user@localhost",
+        "http://localhost?query",
+        "http://localhost#fragment",
+    ] {
+        assert!(
+            FilamentProviderConfig::new(url, "local", None).is_err(),
+            "{url}"
+        );
+    }
+    assert!(FilamentProviderConfig::new("http://localhost", "bad:identity", None).is_err());
+    assert!(FilamentProviderConfig::new("http://localhost", "local", Some(" ".into())).is_err());
+    let config = FilamentProviderConfig::new("http://localhost", "local", None).unwrap();
+    assert_eq!(
+        config.endpoint("filament").as_str(),
+        "http://localhost/api/v1/filament"
+    );
+    assert!(config.with_limits(Duration::from_secs(9), 1024, 1).is_err());
+}
