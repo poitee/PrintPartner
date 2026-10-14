@@ -2855,7 +2855,7 @@ export async function invokeAssistantTool(
       }
 
       case "get_farm_status": {
-        const access = readFarmAccess(ctx.repo);
+        const access = readFarmAccess(() => ctx.repo);
         if (access.kind !== "allowed") {
           return { content: JSON.stringify({ error: access.error, code: access.code }) };
         }

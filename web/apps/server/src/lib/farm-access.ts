@@ -8,7 +8,7 @@ const featureTogglesSchema = z.object({
   spoolman: z.boolean().optional(),
 });
 
-export type FarmAccess =
+type FarmAccess =
   | { kind: "allowed" }
   | {
       kind: "disabled";
@@ -21,11 +21,11 @@ export type FarmAccess =
       error: "Stored feature toggles are invalid.";
     };
 
-export function readFarmAccess(repo: AppRepository): FarmAccess {
+export function readFarmAccess(getRepo: () => AppRepository): FarmAccess {
   if (process.env.PP_DESKTOP_REBUILD !== "1" && process.env.PP_DESKTOP_REBUILD !== "true") {
     return { kind: "allowed" };
   }
-  return resolveFarmAccess(repo.getSettingSnapshot("feature_toggles"));
+  return resolveFarmAccess(getRepo().getSettingSnapshot("feature_toggles"));
 }
 
 function resolveFarmAccess(snapshot: ReturnType<AppRepository["getSettingSnapshot"]>): FarmAccess {

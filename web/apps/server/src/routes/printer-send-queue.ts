@@ -84,7 +84,7 @@ export async function registerPrinterSendQueueRoutes(
     "/printer-send-queue/suggestions",
     { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } },
     async (request, reply) => {
-      const access = readFarmAccess(deps.repo);
+      const access = readFarmAccess(() => deps.repo);
       if (access.kind !== "allowed") {
         const status = access.kind === "disabled" ? 403 : 500;
         return reply.status(status).send({

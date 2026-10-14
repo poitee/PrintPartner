@@ -311,7 +311,7 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
       tools: [
         ...productToolSpecs()
           .filter((tool) =>
-            tool.name !== "get_farm_status" || readFarmAccess(getRepo()).kind === "allowed",
+            tool.name !== "get_farm_status" || readFarmAccess(getRepo).kind === "allowed",
           )
           .map(jsonSchemaToMcp),
         ...META_TOOLS.map((t) => ({
@@ -442,7 +442,7 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
       }
 
       if (name === "get_farm_status") {
-        const access = readFarmAccess(getRepo());
+        const access = readFarmAccess(getRepo);
         if (access.kind !== "allowed") {
           return {
             content: [{

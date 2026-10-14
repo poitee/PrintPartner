@@ -73,8 +73,8 @@ describe("tenant-global farm access through live handlers", () => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
   });
-  async function mcp() {
-    const server = createProductMcpServer({ getRepo: () => repo, jobs, config: loadConfig(), pending: new Map() });
+  async function mcp(getRepo = () => repo) {
+    const server = createProductMcpServer({ getRepo, jobs, config: loadConfig(), pending: new Map() });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "farm-test", version: "1" });
     clients.push(client);
@@ -82,6 +82,11 @@ describe("tenant-global farm access through live handlers", () => {
     await client.connect(clientTransport);
     return client;
   }
+  it("MCP tools/list includes farm with an unset rebuild flag without acquiring the repository", async () => {
+    delete process.env.PP_DESKTOP_REBUILD;
+    const client = await mcp(() => { throw new Error("tools/list must not read the repository"); });
+    expect((await client.listTools()).tools.some((tool) => tool.name === "get_farm_status")).toBe(true);
+  });
   for (const prefix of ["", "/api/v1"]) {
     it(`${prefix || "root"} suggestions deny missing and false farm, allow true, and leave the single-printer queue available`, async () => {
       for (const value of [undefined, '{"farm":false}', '{"farm":true}']) {
