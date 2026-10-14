@@ -20,6 +20,7 @@ import {
 import type { AssistantProposedAction } from "@print-partner/contracts";
 import { buildSourceCategoryTree, isAssistantUiAction } from "@print-partner/contracts";
 import { join } from "node:path";
+import { readFarmAccess } from "../lib/farm-access.js";
 import type { ServerConfig } from "../config.js";
 import { createAssistantPort } from "../assistant/create-assistant.js";
 import { resolveAssistantRuntime } from "../assistant/resolve-assistant.js";
@@ -311,7 +312,11 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
     assertEnabled();
     return {
       tools: [
-        ...productToolSpecs().map(jsonSchemaToMcp),
+        ...productToolSpecs()
+          .filter((tool) =>
+            tool.name !== "get_farm_status" || readFarmAccess(getRepo).kind === "allowed",
+          )
+          .map(jsonSchemaToMcp),
         ...META_TOOLS.map((t) => ({
           name: t.name,
           description: t.description,
@@ -439,6 +444,18 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
         };
       }
 
+      if (name === "get_farm_status") {
+        const access = readFarmAccess(getRepo);
+        if (access.kind !== "allowed") {
+          return {
+            content: [{
+              type: "text" as const,
+              text: JSON.stringify({ error: access.error, code: access.code }),
+            }],
+            isError: true,
+          };
+        }
+      }
       const result = await invokeAssistantTool(name, args, toolCtx(extra.signal));
       if (result.proposedAction && !isAssistantUiAction(result.proposedAction.type)) {
         pending.set(result.proposedAction.id, result.proposedAction);
