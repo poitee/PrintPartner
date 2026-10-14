@@ -3,13 +3,30 @@ from pathlib import Path
 import shutil
 import subprocess
 
-ALLOWED = {"pp-api": {"pp-storage"}, "pp-source": set(), "pp-storage": {"pp-domain"}, "pp-core": {"pp-gateway", "pp-compat", "pp-storage"}, "pp-gateway": {"pp-compat", "pp-drivers", "pp-net"}, "pp-compat": set(), "pp-server": {"pp-core"}, "pp-contracts": {"pp-api-types"}, "pp-desktop": {"pp-core"}, "pp-domain": set(), "pp-api-types": {"pp-domain"}, "pp-net": set(), "pp-drivers": {"pp-net", "pp-api-types"}, "pp-services": set()}
+ALLOWED = {"pp-api": {"pp-storage"}, "pp-source": set(), "pp-storage": {"pp-domain"}, "pp-core": {"pp-gateway", "pp-compat", "pp-storage", "pp-source"}, "pp-gateway": {"pp-compat", "pp-drivers", "pp-net"}, "pp-compat": set(), "pp-server": {"pp-core"}, "pp-contracts": {"pp-api-types"}, "pp-desktop": {"pp-core"}, "pp-domain": set(), "pp-api-types": {"pp-domain"}, "pp-net": set(), "pp-drivers": {"pp-net", "pp-api-types"}, "pp-services": set()}
+
+
+def source_edge_is_gated(package, dependency):
+    if not dependency.get("optional", False):
+        return False
+    features = package.get("features", {})
+    return "dep:pp-source" in features.get("desktop_rebuild", []) and all(
+        name == "desktop_rebuild" or not any(
+            member in {"dep:pp-source", "pp-source"} or member.startswith("pp-source/")
+            for member in members
+        )
+        for name, members in features.items()
+    )
 
 
 def violations(packages):
     return [(package["name"], dependency["name"]) for package in packages
             for dependency in package["dependencies"]
-            if dependency["name"].startswith("pp-") and dependency["name"] not in ALLOWED[package["name"]]]
+            if dependency["name"].startswith("pp-") and (
+                dependency["name"] not in ALLOWED[package["name"]]
+                or (package["name"] == "pp-core" and dependency["name"] == "pp-source"
+                    and not source_edge_is_gated(package, dependency))
+            )]
 
 
 manifest = Path(__file__).resolve().parents[1] / "Cargo.toml"
@@ -32,6 +49,13 @@ def planted_edges_rejected():
         ([{"name": "pp-contracts", "dependencies": [{"name": "pp-gateway"}]}], [("pp-contracts", "pp-gateway")]),
         ([{"name": "pp-domain", "dependencies": [{"name": "pp-net"}]}], [("pp-domain", "pp-net")]),
     )
+    source = {"name": "pp-core", "dependencies": [{"name": "pp-source", "optional": True}],
+              "features": {"default": [], "desktop_rebuild": ["dep:pp-source", "pp-source/desktop_rebuild"]}}
+    ungated = {**source, "dependencies": [{"name": "pp-source", "optional": False}]}
+    default_on = {**source, "features": {**source["features"], "default": ["dep:pp-source"]}}
+    alternate = {**source, "features": {**source["features"], "other": ["pp-source/other"]}}
+    cases += (([alternate], [("pp-core", "pp-source")]), ([source], []), ([ungated], [("pp-core", "pp-source")]),
+              ([default_on], [("pp-core", "pp-source")]))
     return all(violations(packages) == expected for packages, expected in cases)
 
 
