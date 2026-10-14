@@ -6,7 +6,7 @@ Print Partner's Rust workspace under `rust/crates` is the protected runtime foun
 
 ## Crates on main
 
-As of 2026-10-12, main contains 13 workspace crates. `pp-storage` landed through PR #128.
+As of 2026-10-13, main contains 14 workspace crates. `pp-storage` landed through PR #128 and `pp-api` (auth only) through PR #130.
 
 | Crate | Role |
 | --- | --- |
@@ -18,6 +18,7 @@ As of 2026-10-12, main contains 13 workspace crates. `pp-storage` landed through
 | `pp-services` | Native Orca/Bambu slicer discovery. Broader use cases on domain ports remain planned; the crate has no workspace dependency. |
 | `pp-storage` | SQLite owner, migrations, bounded settings writer, read-only pool, storage lease, and safe backups. Node still owns application SQL operations. |
 | `pp-source` | Immutable local Source snapshot materialization and bounded ZIP extraction (filesystem bytes and manifest). Does not own SQL, catalog activation, or HTTP routes. |
+| `pp-api` | Rust HTTP API surface. On main it holds the auth module only and may depend on `pp-storage`. The rebuild slices D23 to D25 add auth HTTP, drafts HTTP, and builds/jobs HTTP behind `desktop_rebuild`. |
 | `pp-gateway` | Loopback listeners, session/bootstrap policy, route ownership, and proxy to the Node compatibility child. |
 | `pp-compat` | Temporary Node process supervisor, release measurement, and private Unix-socket proxy. |
 | `pp-core` | Composition root: storage lease, gateway and supervisor lifetimes, desktop launch wiring. |
@@ -26,7 +27,7 @@ As of 2026-10-12, main contains 13 workspace crates. `pp-storage` landed through
 
 ## Crates planned with the desktop rebuild
 
-`pp-api` is not a workspace member on main yet. `pp-storage` is already on main; the rebuild slices (D6 to D22) extend it with authentication and domain operations. These planned changes retain the open questions below.
+`pp-api` and `pp-storage` are already on main; the rebuild slices (D6 to D22) extend it with authentication and domain operations. These planned changes retain the open questions below.
 
 | Crate | Role |
 | --- | --- |

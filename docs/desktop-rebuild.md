@@ -34,7 +34,7 @@ Each slice is done when:
 - the existing suites pass with the feature off and on, and the default build is unchanged;
 - a reviewer engine other than the author's scores it above 8 on the exact head, with all checks green.
 
-Slices land in this order. Linear tracks each one under GRE-595.
+Slices land in this order. Linear tracks each one under GRE-595. A slice is one Linear item and may ship as several PRs (D16 is planned as three). Some modules already exist on main from earlier PRs (for example #129 to #131); a slice ports only the delta from the reference branch.
 
 | Slice | Linear | Scope |
 | --- | --- | --- |
@@ -65,7 +65,7 @@ Slices land in this order. Linear tracks each one under GRE-595.
 | D25 | GRE-620 | pp-api builds HTTP and jobs |
 | D26 | GRE-621 | Web and server wiring behind the flag |
 
-Gap slices added in triage on 2026-10-13 cover commits that are not in the reference branch:
+Gap slices added in triage on 2026-10-13 cover commits that are not in the reference branch. The flag rule applies to D27 to D30. D31 is CI-only and D32 is a docs-only audit, so neither needs the flag.
 
 | Slice | Linear | Scope | Lands after |
 | --- | --- | --- | --- |
