@@ -10,7 +10,7 @@ fn collision_key(path: &str) -> String {
 
 /// Unicode 16 NFC, then the same case fold, then Unicode 16 NFC again.
 /// Names that were distinct NFC under Unicode 16 stay distinct here.
-fn collision_key_unicode16(path: &str) -> String {
+pub(crate) fn collision_key_unicode16(path: &str) -> String {
     keyed(path, true)
 }
 

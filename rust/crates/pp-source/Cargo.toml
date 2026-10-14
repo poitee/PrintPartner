@@ -5,6 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+default = []
+desktop_rebuild = []
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true

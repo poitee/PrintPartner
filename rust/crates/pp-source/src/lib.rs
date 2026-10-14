@@ -2,6 +2,8 @@ mod acl;
 pub mod archive;
 mod directory;
 pub mod media;
+#[cfg(feature = "desktop_rebuild")]
+pub mod observation;
 mod path_policy;
 mod unicode16;
 

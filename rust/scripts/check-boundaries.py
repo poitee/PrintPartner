@@ -3,13 +3,38 @@ from pathlib import Path
 import shutil
 import subprocess
 
-ALLOWED = {"pp-api": {"pp-storage"}, "pp-source": set(), "pp-storage": {"pp-domain"}, "pp-core": {"pp-gateway", "pp-compat", "pp-storage"}, "pp-gateway": {"pp-compat", "pp-drivers", "pp-net"}, "pp-compat": set(), "pp-server": {"pp-core"}, "pp-contracts": {"pp-api-types"}, "pp-desktop": {"pp-core"}, "pp-domain": set(), "pp-api-types": {"pp-domain"}, "pp-net": set(), "pp-drivers": {"pp-net", "pp-api-types"}, "pp-services": set()}
+ALLOWED = {"pp-api": {"pp-storage"}, "pp-source": set(), "pp-storage": {"pp-domain"}, "pp-core": {"pp-gateway", "pp-compat", "pp-storage", "pp-source", "pp-net"}, "pp-gateway": {"pp-compat", "pp-drivers", "pp-net"}, "pp-compat": set(), "pp-server": {"pp-core"}, "pp-contracts": {"pp-api-types"}, "pp-desktop": {"pp-core"}, "pp-domain": set(), "pp-api-types": {"pp-domain"}, "pp-net": set(), "pp-drivers": {"pp-net", "pp-api-types"}, "pp-services": set()}
+
+
+def rebuild_edge_is_gated(package, dependency):
+    if not dependency.get("optional", False):
+        return False
+    features = package.get("features", {})
+    reachable, pending = set(), ["default"]
+    while pending:
+        member = pending.pop()
+        if member not in reachable:
+            reachable.add(member)
+            pending.extend(features.get(member, []))
+    name = dependency["name"]
+    activation = {name, f"dep:{name}"}
+    return "desktop_rebuild" not in reachable and f"dep:{name}" in features.get("desktop_rebuild", []) and all(
+        feature == "desktop_rebuild" or not any(
+            member in activation or member.startswith(f"{name}/")
+            for member in members
+        )
+        for feature, members in features.items()
+    )
 
 
 def violations(packages):
     return [(package["name"], dependency["name"]) for package in packages
             for dependency in package["dependencies"]
-            if dependency["name"].startswith("pp-") and dependency["name"] not in ALLOWED[package["name"]]]
+            if dependency["name"].startswith("pp-") and (
+                dependency["name"] not in ALLOWED[package["name"]]
+                or (package["name"] == "pp-core" and dependency["name"] in {"pp-source", "pp-net"}
+                    and not rebuild_edge_is_gated(package, dependency))
+            )]
 
 
 manifest = Path(__file__).resolve().parents[1] / "Cargo.toml"
@@ -32,6 +57,14 @@ def planted_edges_rejected():
         ([{"name": "pp-contracts", "dependencies": [{"name": "pp-gateway"}]}], [("pp-contracts", "pp-gateway")]),
         ([{"name": "pp-domain", "dependencies": [{"name": "pp-net"}]}], [("pp-domain", "pp-net")]),
     )
+    source = {"name": "pp-core", "dependencies": [{"name": "pp-source", "optional": True}],
+              "features": {"default": [], "desktop_rebuild": ["dep:pp-source", "pp-source/desktop_rebuild"]}}
+    ungated = {**source, "dependencies": [{"name": "pp-source", "optional": False}]}
+    default_on = {**source, "features": {**source["features"], "default": ["dep:pp-source"]}}
+    alternate = {**source, "features": {**source["features"], "other": ["pp-source/other"]}}
+    transitive = {**source, "features": {**source["features"], "default": ["desktop_rebuild"]}}
+    cases += (([transitive], [("pp-core", "pp-source")]), ([alternate], [("pp-core", "pp-source")]), ([source], []), ([ungated], [("pp-core", "pp-source")]),
+              ([default_on], [("pp-core", "pp-source")]))
     return all(violations(packages) == expected for packages, expected in cases)
 
 
