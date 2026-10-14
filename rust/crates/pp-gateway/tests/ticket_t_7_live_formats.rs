@@ -86,6 +86,7 @@ fn bundled_rollback_refuses_every_reviewed_operation_on_the_newer_schema() {
         ("http.HEAD /sources/:id/docs", "source.sync"),
         ("mcp.start_sync", "source.sync"),
         ("tool.read_source_file", "tool.read_source_file"),
+        ("tool.search_source_files", "tool.search_source_files"),
         ("tool.list_sources", "tool.list_sources"),
         ("tool.list_source_categories", "tool.list_source_categories"),
     ] {
@@ -118,14 +119,16 @@ fn rollback_admits_only_when_node_reads_every_written_format() {
     let mut value = manifest();
     value["live_formats"]["sqlite-schema"]["node_reads"] = json!(35);
     let index = admit(&value).unwrap();
-    assert_eq!(
-        index.admit_rollback("tool.read_source_file"),
-        Ok(&BTreeSet::from([
-            Table(Projects),
-            Table(SourceDocs),
-            File(FileFamily::SourceWorkspace),
-        ]))
-    );
+    for participant in ["tool.read_source_file", "tool.search_source_files"] {
+        assert_eq!(
+            index.admit_rollback(participant),
+            Ok(&BTreeSet::from([
+                Table(Projects),
+                Table(SourceDocs),
+                File(FileFamily::SourceWorkspace),
+            ]))
+        );
+    }
     assert_eq!(
         index.admit_rollback("tool.list_sources"),
         Ok(&BTreeSet::from([
@@ -150,17 +153,17 @@ fn rollback_admits_only_when_node_reads_every_written_format() {
     );
 
     value["live_formats"]["source-revision-workspace"]["rust_writes"] = json!(2);
-    assert_eq!(
-        admit(&value)
-            .unwrap()
-            .admit_rollback("tool.read_source_file"),
-        Err(AdmissionError::IncompatibleLiveFormat {
-            operation: "tool.read_source_file".into(),
-            format: "source-revision-workspace".into(),
-            node_reads: 1,
-            rust_writes: Some(2),
-        })
-    );
+    for participant in ["tool.read_source_file", "tool.search_source_files"] {
+        assert_eq!(
+            admit(&value).unwrap().admit_rollback(participant),
+            Err(AdmissionError::IncompatibleLiveFormat {
+                operation: participant.into(),
+                format: "source-revision-workspace".into(),
+                node_reads: 1,
+                rust_writes: Some(2),
+            })
+        );
+    }
 }
 
 #[test]

@@ -56,6 +56,8 @@ enum ReviewedEntry {
     SourceSync { import: SourceSyncImport },
     #[serde(rename = "tool.read_source_file")]
     ReadSourceFile { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.search_source_files")]
+    SearchSourceFiles { resources: Vec<ResourceId> },
     #[serde(rename = "tool.list_sources")]
     ListSources { resources: Vec<ResourceId> },
     #[serde(rename = "tool.list_source_categories")]
@@ -95,6 +97,15 @@ impl ReviewedEntry {
             }
             Self::ReadSourceFile { resources } => (
                 "tool.read_source_file",
+                resources,
+                BTreeSet::from([
+                    Table(Projects),
+                    Table(SourceDocs),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
+            Self::SearchSourceFiles { resources } => (
+                "tool.search_source_files",
                 resources,
                 BTreeSet::from([
                     Table(Projects),
@@ -159,6 +170,7 @@ impl Declarations {
         for id in [
             "source.sync",
             "tool.read_source_file",
+            "tool.search_source_files",
             "tool.list_sources",
             "tool.list_source_categories",
         ] {
