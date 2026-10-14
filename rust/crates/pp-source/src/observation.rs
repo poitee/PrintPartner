@@ -2,6 +2,7 @@ use crate::directory::Directory;
 use rustix::fs;
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashSet,
     io::{self, Read},
     path::Path,
 };
@@ -20,10 +21,19 @@ pub enum Failure<E> {
 pub struct Inventory {
     root: Directory,
     paths: Vec<String>,
+    ambiguous: HashSet<String>,
 }
 impl Inventory {
     pub fn matching_path(&self, path: &str) -> Option<usize> {
         let key = crate::path_policy::collision_key(path);
+        if key
+            .match_indices('/')
+            .map(|(end, _)| &key[..end])
+            .chain(std::iter::once(key.as_str()))
+            .any(|prefix| self.ambiguous.contains(prefix))
+        {
+            return None;
+        }
         let mut matches = self
             .paths
             .iter()
@@ -42,8 +52,16 @@ impl Inventory {
         let mut inventory = Self {
             root,
             paths: Vec::new(),
+            ambiguous: HashSet::new(),
         };
-        walk(&inventory.root, "", 0, &mut inventory.paths, budget)?;
+        walk(
+            &inventory.root,
+            "",
+            0,
+            &mut inventory.paths,
+            &mut inventory.ambiguous,
+            budget,
+        )?;
         Ok(Some(inventory))
     }
     pub fn hash<B: ReadBudget>(
@@ -76,6 +94,7 @@ fn walk<B: ReadBudget>(
     prefix: &str,
     depth: usize,
     out: &mut Vec<String>,
+    ambiguous: &mut HashSet<String>,
     budget: &mut B,
 ) -> Result<(), Failure<B::Error>> {
     let Ok(entries) = fs::Dir::read_from(&dir.0) else {
@@ -93,19 +112,24 @@ fn walk<B: ReadBudget>(
         names.push(name.into_owned());
     }
     names.sort();
+    let mut seen = HashSet::new();
     for name in names {
         let path = if prefix.is_empty() {
             name.clone()
         } else {
             format!("{prefix}/{name}")
         };
+        let key = crate::path_policy::collision_key(&path);
+        if !seen.insert(key.clone()) {
+            ambiguous.insert(key);
+        }
         let Ok(stat) = fs::statat(&dir.0, name.as_str(), fs::AtFlags::SYMLINK_NOFOLLOW) else {
             continue;
         };
         match fs::FileType::from_raw_mode(stat.st_mode) {
             fs::FileType::Directory => {
                 if let Ok(child) = dir.child(&name, false) {
-                    walk(&child, &path, depth + 1, out, budget)?;
+                    walk(&child, &path, depth + 1, out, ambiguous, budget)?;
                 }
             }
             fs::FileType::RegularFile if name.to_lowercase().ends_with(".stl") => out.push(path),

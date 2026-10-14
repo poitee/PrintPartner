@@ -587,3 +587,19 @@ async fn filament_dns_rejects_metadata_answers_and_pins_lan_answers() {
         .collect::<Vec<_>>();
     assert_eq!(addresses, vec!["127.0.0.1:0".parse().unwrap()]);
 }
+
+#[test]
+fn review_rejects_ambiguous_directory_prefixes() {
+    let mut f = Fixture::new();
+    fs::remove_file(f.source().join("part.stl")).unwrap();
+    fs::create_dir_all(f.source().join("A")).unwrap();
+    fs::create_dir_all(f.source().join("a")).unwrap();
+    fs::write(f.source().join("A/x.stl"), "solid test").unwrap();
+    fs::write(f.source().join("a/y.stl"), "other").unwrap();
+    *f.artifact_mut().1 = "a/x.stl".into();
+    if fs::read_dir(f.source()).unwrap().count() == 2 {
+        assert!(f.observe().media_by_part_id[&9].artifact_missing);
+    } else {
+        assert!(!f.observe().media_by_part_id[&9].artifact_missing);
+    }
+}
