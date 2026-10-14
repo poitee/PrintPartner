@@ -39,6 +39,13 @@ pub(crate) fn owner_is_stale(pid: u32, identity: Option<&str>) -> bool {
     if result < 0 {
         return std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
     }
+    #[cfg(target_os = "linux")]
+    if std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+        stat.rsplit_once(')')
+            .is_some_and(|(_, fields)| matches!(fields.split_whitespace().next(), Some("Z" | "X")))
+    }) {
+        return true;
+    }
     identity.is_some_and(|identity| process_identity(pid).is_ok_and(|actual| actual != identity))
 }
 
@@ -318,7 +325,24 @@ mod tests {
             .spawn()
             .unwrap();
         let pid = dead.id();
+        #[cfg(target_os = "linux")]
+        let stale_before_reaping = {
+            let identity = super::process_identity(pid).unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while !super::owner_is_stale(pid, Some(&identity))
+                && std::time::Instant::now() < deadline
+            {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            assert_eq!(unsafe { libc::kill(pid as i32, 0) }, 0);
+            super::owner_is_stale(pid, Some(&identity))
+        };
         dead.wait().unwrap();
+        #[cfg(target_os = "linux")]
+        assert!(
+            stale_before_reaping,
+            "a zombie must not block lease recovery"
+        );
         assert!(super::child_is_stale(
             &json!({"child_pid": pid, "child_process_identity": "prior"})
         ));
