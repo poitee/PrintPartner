@@ -111,6 +111,10 @@ async fn protected_real_node_lifecycle() {
     let mut runtime = CoreRuntime::start(launch(data.clone()))
         .await
         .expect("real Node reaches verified readiness");
+    assert!(
+        !runtime.desktop_rebuild().enabled(),
+        "lifecycle proof runs with the rebuild off"
+    );
     let origin = runtime.origin().to_owned();
     let target = runtime.take_launch_target().unwrap().into_url();
     assert!(runtime.take_launch_target().is_err());
