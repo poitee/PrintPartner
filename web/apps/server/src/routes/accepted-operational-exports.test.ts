@@ -1,3 +1,4 @@
+import { StatusExecution } from "../integrations/status-execution.js";
 import { acceptPlanForTest } from "../test/accept-plan.js";
 import Fastify from "fastify";
 import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -127,7 +128,7 @@ describe("accepted operational export routes", () => {
       });
       const app = Fastify();
       cleanups.push(() => app.close());
-      await registerJobRoutes(app, runner);
+      await registerJobRoutes(app, runner, { statusExecution: new StatusExecution() });
 
       const response = await app.inject(`/plans/${profile.id}/filename-grouping`);
 
@@ -152,7 +153,7 @@ describe("accepted operational export routes", () => {
     });
     const app = Fastify();
     cleanups.push(() => app.close());
-    await registerJobRoutes(app, runner);
+    await registerJobRoutes(app, runner, { statusExecution: new StatusExecution() });
 
     const response = await app.inject(`/plans/${profile.id}/filename-grouping`);
 
@@ -182,7 +183,7 @@ describe("accepted operational export routes", () => {
     const app = Fastify({ logger: { level: "error", stream: { write: (line) => requestLog.push(line) } } });
     cleanups.push(() => app.close());
     await registerRequestLoggingMiddleware(app);
-    await registerJobRoutes(app, runner);
+    await registerJobRoutes(app, runner, { statusExecution: new StatusExecution() });
 
     const response = await app.inject(`/plans/${profile.id}/filename-grouping`);
 
@@ -212,7 +213,7 @@ describe("accepted operational export routes", () => {
     });
     const app = Fastify();
     cleanups.push(() => app.close());
-    await registerJobRoutes(app, runner);
+    await registerJobRoutes(app, runner, { statusExecution: new StatusExecution() });
 
     const response = await app.inject(`/plans/${profile.id}/filename-grouping`);
 

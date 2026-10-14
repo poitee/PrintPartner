@@ -1,3 +1,4 @@
+import { StatusExecution } from "../integrations/status-execution.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -111,7 +112,7 @@ describe("assistant routes", () => {
     const repo = ports.repository!;
     const { createIntegrationPort } = await import("../integrations/store.js");
     const { getIntegrationAdapter } = await import("../integrations/registry.js");
-    createIntegrationPort({ repo, getAdapter: getIntegrationAdapter }).create({
+    createIntegrationPort({ repo, getAdapter: getIntegrationAdapter, statusExecution: new StatusExecution() }).create({
       type: "ai_assistant",
       name: "Ollama",
       config: {

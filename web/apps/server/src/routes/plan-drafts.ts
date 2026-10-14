@@ -137,7 +137,7 @@ export async function registerPlanDraftRoutes(
       const captured = deps.repo.transaction(() => ({
         accepted: deps.repo.readAcceptedPlanOperationalSnapshot(profileId),
         summary: deps.repo.readAcceptedProfileSummary(profileId),
-      }));
+      }), "deferred");
       if (captured.accepted.kind !== "ready" || captured.summary.kind !== "found" ||
         captured.accepted.snapshot.planVersion < result.receipt.planVersion) {
         throw new Error("Saved Plan snapshot is unavailable");

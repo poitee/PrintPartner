@@ -349,6 +349,9 @@ fn ticket_t_7_ownership_manifest_split_alias_rejected() {
         "plans.list",
         &["http.GET /plans", "http.GET /api/v2/plans"],
     );
+    let unresolved = manifest["resources"]["unresolved"].as_array_mut().unwrap();
+    unresolved.retain(|id| id != "http:GET /plans current");
+    unresolved.push(serde_json::json!("plans.list"));
     let index = admit_value(&manifest).unwrap();
     assert_eq!(
         index.lookup("http.HEAD /api/v2/plans").unwrap().operation,
@@ -477,7 +480,7 @@ fn ticket_t_7_ownership_manifest_registry_owner_fails_closed() {
 
 #[test]
 fn ticket_t_7_ownership_manifest_registry_claim_without_manifest_entry() {
-    let manifest = manifest_value().to_string();
+    let mut manifest = manifest_value();
     let mut registry: serde_json::Value = serde_json::from_str(operations_text()).unwrap();
     registry["routes"]
         .as_array_mut()
@@ -486,6 +489,24 @@ fn ticket_t_7_ownership_manifest_registry_claim_without_manifest_entry() {
             "method": "POST", "path": "/future/registry-claim", "owner": "compat",
             "operation": "POST /future/registry-claim current"
         }));
+    assert_eq!(
+        admit_manifest_documents(
+            &manifest.to_string(),
+            &registry.to_string(),
+            source_sync_text()
+        )
+        .unwrap_err(),
+        AdmissionError::Malformed(
+            "missing resource state for http:POST /future/registry-claim current".into()
+        )
+    );
+    manifest["resources"]["unresolved"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!(
+            "http:POST /future/registry-claim current"
+        ));
+    let manifest = manifest.to_string();
     let index =
         admit_manifest_documents(&manifest, &registry.to_string(), source_sync_text()).unwrap();
     assert_eq!(

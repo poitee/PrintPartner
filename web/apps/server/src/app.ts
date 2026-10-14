@@ -1,3 +1,4 @@
+import { StatusExecution } from "./integrations/status-execution.js";
 import { moonrakerHostSnapshot } from "./moonraker-host-snapshot.js";
 import { acquireDataDirectory, desktopContext, desktopPrincipal, registerDesktopBoundary } from "./desktop-context.js";
 import { rustOwnedCopy } from "./db/rust-owned.js";
@@ -319,6 +320,8 @@ async function configureApp(app: FastifyInstance, config: ServerConfig, ports: R
   await registerOpenApi(app, config);
 
   if (repository) {
+    const statusExecution = new StatusExecution();
+    app.addHook("preClose", async () => { await statusExecution.stop(); });
     beginSourceSyncAdmission(config.dataDir);
     if (config.deployMode === "self-host") {
       migrateLegacySelfHostExports(config.dataDir, repository);
@@ -394,6 +397,7 @@ async function configureApp(app: FastifyInstance, config: ServerConfig, ports: R
     }
 
     const coreDeps = {
+      statusExecution,
       repo: repository,
       reposDir: ports.reposDir ?? join(config.dataDir, "repos"),
       sourcesDir: ports.sourcesDir ?? join(config.dataDir, "sources"),

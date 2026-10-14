@@ -135,6 +135,10 @@ pub struct Gateway {
 impl Gateway {
     pub fn start(listener: TcpListener, assets: PathBuf, compat: CompatHandle) -> Result<Self> {
         let address = listener.local_addr()?;
+        anyhow::ensure!(
+            address.ip().is_loopback(),
+            "Desktop gateway requires a loopback listener"
+        );
         let host = address.to_string();
         let origin = format!("http://{host}");
         let token = hex::encode(rand::random::<[u8; 32]>());
@@ -1494,6 +1498,116 @@ mod ticket_t_2;
 #[cfg(test)]
 mod tests {
     use tokio_util::sync::CancellationToken;
+
+    #[tokio::test]
+    async fn changed_port_rejects_old_cookie_and_accepts_fresh_bootstrap() {
+        use super::*;
+        use http_body_util::BodyExt;
+        use hyper_util::rt::TokioIo;
+
+        async fn exchange(
+            origin: &str,
+            target: &str,
+            cookie: Option<&str>,
+        ) -> (StatusCode, axum::http::HeaderMap) {
+            let socket = tokio::net::TcpStream::connect(origin.strip_prefix("http://").unwrap())
+                .await
+                .unwrap();
+            let (mut sender, connection) =
+                hyper::client::conn::http1::handshake(TokioIo::new(socket))
+                    .await
+                    .unwrap();
+            let connection = tokio::spawn(connection);
+            let mut request = Request::builder()
+                .uri(target)
+                .header("host", origin.strip_prefix("http://").unwrap())
+                .header("connection", "close");
+            if let Some(cookie) = cookie {
+                request = request.header("cookie", cookie);
+            }
+            let response = sender
+                .send_request(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            let (head, body) = response.into_parts();
+            body.collect().await.unwrap();
+            drop(sender);
+            connection.await.unwrap().unwrap();
+            (head.status, head.headers)
+        }
+
+        let old_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut old =
+            Gateway::start(old_listener, PathBuf::new(), CompatHandle::unpublished()).unwrap();
+        let old_origin = old.origin().to_owned();
+        let target = old.take_launch_target().unwrap().into_url();
+        let (status, headers) =
+            exchange(&old_origin, target.strip_prefix(&old_origin).unwrap(), None).await;
+        assert_eq!(status, StatusCode::SEE_OTHER);
+        let old_cookie = headers["set-cookie"]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_owned();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut new =
+            Gateway::start(listener, PathBuf::new(), CompatHandle::unpublished()).unwrap();
+        let origin = new.origin().to_owned();
+        assert_ne!(origin, old_origin);
+        assert_eq!(
+            exchange(&origin, "/__runtime", Some(&old_cookie)).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        let target = new.take_launch_target().unwrap().into_url();
+        let (status, headers) = exchange(
+            &origin,
+            target.strip_prefix(&origin).unwrap(),
+            Some(&old_cookie),
+        )
+        .await;
+        assert_eq!(status, StatusCode::SEE_OTHER);
+        let cookie = headers["set-cookie"]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap();
+        let wrong_name = format!(
+            "{}={}",
+            old_cookie.split_once('=').unwrap().0,
+            cookie.split_once('=').unwrap().1
+        );
+        assert_eq!(
+            exchange(&origin, "/__runtime", Some(&wrong_name)).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            exchange(&origin, "/__runtime", Some(cookie)).await.0,
+            StatusCode::OK
+        );
+        assert_ne!(
+            cookie.split_once('=').unwrap().0,
+            old_cookie.split_once('=').unwrap().0
+        );
+        assert_eq!(
+            exchange(
+                &origin,
+                "/__runtime",
+                Some(&format!("{old_cookie}; {cookie}"))
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            exchange(&origin, "/__runtime", Some(&old_cookie)).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        old.stop().await.unwrap();
+        new.stop().await.unwrap();
+    }
 
     #[test]
     fn encoded_artifact_segments_preserve_safe_names_and_reject_ambiguity() {

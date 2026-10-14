@@ -10,6 +10,7 @@
 //! Rust owner all fail admission. A lookup for an unclaimed participant fails
 //! instead of defaulting to Node.
 
+use super::resources::{Coverage, Declarations, ResourceSet};
 use super::{
     AdmissionError, BUNDLED_SOURCE_SYNC_MANIFEST, Owner, SOURCE_SYNC_OPERATION,
     SOURCE_SYNC_PARTICIPANTS,
@@ -17,7 +18,7 @@ use super::{
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const MANIFEST_SCHEMA: &str = "pp-ownership-manifest-v1";
+pub const MANIFEST_SCHEMA: &str = "pp-ownership-manifest-v2";
 const BUNDLED_MANIFEST: &str = include_str!("../../ownership-manifest.json");
 const BUNDLED_OPERATIONS: &str = include_str!("../../operations.json");
 const PARTICIPANT_KINDS: &[&str] = &[
@@ -49,6 +50,7 @@ pub struct Claim {
 #[derive(Debug)]
 pub struct OwnershipIndex {
     claims: BTreeMap<String, Claim>,
+    resources: BTreeMap<String, Coverage>,
 }
 
 impl OwnershipIndex {
@@ -58,6 +60,16 @@ impl OwnershipIndex {
             .ok_or_else(|| AdmissionError::UnknownParticipant {
                 id: participant.to_string(),
             })
+    }
+
+    pub fn resources_for(&self, participant: &str) -> Result<&ResourceSet, AdmissionError> {
+        let claim = self.lookup(participant)?;
+        match &self.resources[&claim.operation] {
+            Coverage::Reviewed(resources) => Ok(resources),
+            Coverage::Unresolved => Err(AdmissionError::UnresolvedResources {
+                operation: claim.operation.clone(),
+            }),
+        }
     }
 
     pub fn claims(&self) -> &BTreeMap<String, Claim> {
@@ -71,6 +83,7 @@ struct Manifest {
     schema: String,
     operations: Vec<OperationEntry>,
     node_participants: NodeParticipants,
+    resources: Declarations,
 }
 
 #[derive(Deserialize)]
@@ -158,7 +171,7 @@ pub fn admit_manifest_documents(
             claim(&mut claims, id, &entry.operation, Disposition::Owned(owner))?;
         }
     }
-    admit_source_sync(&manifest, source_sync)?;
+    let source_sync = admit_source_sync(&manifest, source_sync)?;
 
     let node = &manifest.node_participants;
     for (kind, names) in [
@@ -242,11 +255,15 @@ pub fn admit_manifest_documents(
             });
         }
     }
-    Ok(OwnershipIndex { claims })
+    let resources = manifest.resources.admit(&claims, &source_sync)?;
+    Ok(OwnershipIndex { claims, resources })
 }
 
 /// The grouped `source.sync` entry must be exactly the Node admission record.
-fn admit_source_sync(manifest: &Manifest, source_sync: &str) -> Result<(), AdmissionError> {
+fn admit_source_sync(
+    manifest: &Manifest,
+    source_sync: &str,
+) -> Result<super::AdmittedOperation, AdmissionError> {
     let admitted = super::admit_observed(source_sync, SOURCE_SYNC_PARTICIPANTS)?;
     let entry = manifest
         .operations
@@ -276,7 +293,7 @@ fn admit_source_sync(manifest: &Manifest, source_sync: &str) -> Result<(), Admis
                 .collect(),
         });
     }
-    Ok(())
+    Ok(admitted)
 }
 
 fn claim(

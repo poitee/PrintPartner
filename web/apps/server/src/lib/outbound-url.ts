@@ -280,29 +280,39 @@ export async function safeOutboundFetch(
   throw new OutboundUrlError(`Too many redirects fetching ${rawUrl}`);
 }
 
+export type ConnectorRequestInit = RequestInit & {
+  joinTransport?: (closed: Promise<void>) => void;
+};
+
 export async function safeConnectorFetch(
   rawUrl: string,
-  init: RequestInit = {},
+  init: ConnectorRequestInit = {},
   options: OutboundUrlOptions = { allowPrivate: true },
 ): Promise<Response> {
+  init.signal?.throwIfAborted();
   const url = await assertSafeOutboundUrl(rawUrl, options);
+  init.signal?.throwIfAborted();
   const dispatcher = new Agent({
     connect: {
       autoSelectFamily: true,
       lookup: createCheckedLookup(options),
     },
   });
+  let finish!: () => void;
+  const closed = new Promise<void>((resolve) => { finish = resolve; });
+  init.joinTransport?.(closed);
+  const destroy = () => { void dispatcher.destroy().then(finish, finish); };
   const requestInit: RequestInit = { ...init, redirect: "manual" };
   Object.defineProperty(requestInit, "dispatcher", { value: dispatcher });
   try {
     const response = await fetch(url, requestInit);
     if (!(response instanceof Response)) {
-      dispatcher.destroy();
+      destroy();
       return response;
     }
-    return responseWithDispatcher(response, dispatcher, false);
+    return responseWithDispatcher(response, dispatcher, false, destroy);
   } catch (error) {
-    dispatcher.destroy();
+    destroy();
     throw error;
   }
 }
@@ -311,6 +321,7 @@ function responseWithDispatcher(
   response: Response,
   dispatcher: Agent,
   redirected: boolean,
+  destroy = () => { void dispatcher.destroy(); },
 ): Response {
   const reader = response.body?.getReader();
   const body = reader ? new ReadableStream<Uint8Array>({
@@ -319,24 +330,24 @@ function responseWithDispatcher(
         const result = await reader.read();
         if (result.done) {
           controller.close();
-          dispatcher.destroy();
+          destroy();
         } else {
           controller.enqueue(result.value);
         }
       } catch (error) {
         controller.error(error);
-        dispatcher.destroy();
+        destroy();
       }
     },
     async cancel(reason) {
       try {
         await reader.cancel(reason);
       } finally {
-        dispatcher.destroy();
+        destroy();
       }
     },
   }, { highWaterMark: 0 }) : null;
-  if (!body) dispatcher.destroy();
+  if (!body) destroy();
   const wrapped = new Response(body, {
     status: response.status,
     statusText: response.statusText,

@@ -120,7 +120,7 @@ async function readSidecarJson(response: Response, maxBytes: number): Promise<un
   return JSON.parse(new TextDecoder().decode(bytes));
 }
 
-export const slicerSidecarAdapter: IntegrationAdapter = {
+export const slicerSidecarAdapter = {
   type: "slicer_sidecar",
 
   async testConnection(config: IntegrationConfig): Promise<IntegrationTestResult> {
@@ -171,4 +171,4 @@ export const slicerSidecarAdapter: IntegrationAdapter = {
     }
     return { ok: false, message: lastMessage };
   },
-};
+} satisfies IntegrationAdapter;

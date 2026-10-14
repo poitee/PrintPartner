@@ -664,7 +664,9 @@ fn ticket_t_7_ownership_call_sites_match_manifest() {
     assert!(!gateway.contains("boot_source_sync("));
     let core = read(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../pp-core/src/lib.rs"));
     let admitted = core.find("boot_bundled_source_sync(").unwrap();
-    let bound = core.find("let listener = bind_origin(").unwrap();
+    let bound = core
+        .find("let (listener, origin_change) = bind_origin(")
+        .expect("core startup must bind the origin and capture its change disclosure");
     let supervised = core.find("Supervisor::start_with_config(").unwrap();
     assert!(admitted < bound && bound < supervised);
     let admit_at = app.find("beginSourceSyncAdmission(").unwrap();

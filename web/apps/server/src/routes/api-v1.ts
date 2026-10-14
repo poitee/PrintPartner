@@ -24,6 +24,7 @@ export async function registerApiV1Plugin(
   });
   await registerMcpHttpRoutes(app, {
     getRepo: () => deps.repo,
+    statusExecution: deps.statusExecution,
     jobs: deps.jobs,
     config: deps.config,
     validateApiKey,

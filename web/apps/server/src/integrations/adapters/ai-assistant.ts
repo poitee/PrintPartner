@@ -90,7 +90,7 @@ async function safeGet(
   return safeConnectorFetch(url, { ...init, signal: AbortSignal.timeout(8000) }, { allowPrivate });
 }
 
-export const aiAssistantAdapter: IntegrationAdapter = {
+export const aiAssistantAdapter = {
   type: "ai_assistant",
 
   async testConnection(config: IntegrationConfig): Promise<IntegrationTestResult> {
@@ -178,4 +178,4 @@ export const aiAssistantAdapter: IntegrationAdapter = {
       };
     }
   },
-};
+} satisfies IntegrationAdapter;

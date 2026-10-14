@@ -7,7 +7,7 @@ import { slicerSidecarAdapter } from "./adapters/slicer-sidecar.js";
 import { aiAssistantAdapter } from "./adapters/ai-assistant.js";
 import { homeAssistantAdapter } from "./adapters/home-assistant.js";
 
-const adapters: IntegrationAdapter[] = [
+const adapters = [
   moonrakerAdapter,
   prusalinkAdapter,
   bambuAdapter,
@@ -15,7 +15,7 @@ const adapters: IntegrationAdapter[] = [
   slicerSidecarAdapter,
   aiAssistantAdapter,
   homeAssistantAdapter,
-];
+] satisfies IntegrationAdapter[];
 
 export function getIntegrationAdapter(type: string): IntegrationAdapter | undefined {
   return adapters.find((a) => a.type === type);

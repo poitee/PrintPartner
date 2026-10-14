@@ -1,3 +1,4 @@
+import { StatusExecution } from "../integrations/status-execution.js";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -33,7 +34,7 @@ async function fixture(tenantId = "default") {
   const ports = createSelfHostPorts(dir);
   await ports.db.connect();
   const repo = ports.repository;
-  const integrations = createIntegrationPort({ repo, getAdapter: getIntegrationAdapter });
+  const integrations = createIntegrationPort({ repo, getAdapter: getIntegrationAdapter, statusExecution: new StatusExecution() });
   tenantStorage.run(tenantId, () => {
     const integration = integrations.create({
       type: "moonraker",

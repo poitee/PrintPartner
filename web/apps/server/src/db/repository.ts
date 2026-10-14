@@ -2025,8 +2025,11 @@ export class AppRepository {
   /**
    * Run a native SQLite transaction or serialize Postgres callbacks in this process.
    * Cross-process Postgres writes must use a database-native atomic operation.
+   * SQLite defaults to immediate: a deferred transaction that reads and then
+   * writes fails busy, without waiting, when another process holds the write lock.
+   * Pass "deferred" only for read-only snapshots.
    */
-  transaction<T>(fn: () => T, behavior: "deferred" | "immediate" = "deferred"): T {
+  transaction<T>(fn: () => T, behavior: "deferred" | "immediate" = "immediate"): T {
     if (this.syncSqlite) {
       return this.db.transaction(fn, { behavior });
     }

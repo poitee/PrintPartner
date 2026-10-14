@@ -156,32 +156,55 @@ impl StorageLease {
             file.write_all(&serde_json::to_vec(&owner)?)?;
             file.sync_all()?;
             for _ in 0..16 {
-                match std::fs::rename(&candidate, &lease) {
-                    Ok(()) => {
-                        return Ok(Self {
-                            path: Some(lease),
-                            identity,
-                            detached: directory
-                                .join(format!(".desktop-lease-release-{}", owner.instance)),
-                        });
+                match std::fs::symlink_metadata(&lease) {
+                    Ok(metadata) => {
+                        anyhow::ensure!(metadata.is_dir(), "storage_lease_marker_invalid")
                     }
-                    Err(error)
-                        if matches!(error.raw_os_error(), Some(libc::ENOTEMPTY | libc::EEXIST)) => {
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        match std::fs::rename(&candidate, &lease) {
+                            Ok(()) => {
+                                return Ok(Self {
+                                    path: Some(lease),
+                                    identity,
+                                    detached: directory
+                                        .join(format!(".desktop-lease-release-{}", owner.instance)),
+                                });
+                            }
+                            Err(error)
+                                if matches!(
+                                    error.raw_os_error(),
+                                    Some(libc::ENOTEMPTY | libc::EEXIST)
+                                ) =>
+                            {
+                                continue;
+                            }
+                            Err(error) => return Err(error.into()),
+                        }
                     }
                     Err(error) => return Err(error.into()),
                 }
                 let bytes = match std::fs::read(lease.join("owner.json")) {
                     Ok(bytes) => bytes,
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                    Err(error) => return Err(error.into()),
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::NotFound
+                            && !lease.try_exists()? =>
+                    {
+                        continue;
+                    }
+                    Err(error) => return Err(error).context("storage_lease_marker_invalid"),
                 };
-                let prior: Owner = serde_json::from_slice(&bytes)?;
+                let prior: Owner =
+                    serde_json::from_slice(&bytes).context("storage_lease_marker_invalid")?;
                 anyhow::ensure!(
                     prior.pid > 0
                         && prior.pid <= i32::MAX as u32
                         && prior.instance.len() == 32
                         && prior.instance.bytes().all(|c| c.is_ascii_hexdigit())
-                        && owner_is_stale(prior.pid, Some(&prior.process_identity)),
+                        && !prior.process_identity.trim().is_empty(),
+                    "storage_lease_marker_invalid"
+                );
+                anyhow::ensure!(
+                    owner_is_stale(prior.pid, Some(&prior.process_identity)),
                     "Data directory already owned"
                 );
                 // A retained nonempty destination prevents stale observers from retiring a new lease.

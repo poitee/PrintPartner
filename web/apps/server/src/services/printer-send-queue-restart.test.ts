@@ -1,3 +1,4 @@
+import { StatusExecution } from "../integrations/status-execution.js";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -196,7 +197,7 @@ describe("printer send restart reconciliation", () => {
     const jobs = createJobRunner(() => repo, exportsDir);
     const app = Fastify();
     app.decorateRequest("tenantId", "default");
-    await registerJobRoutes(app, jobs);
+    await registerJobRoutes(app, jobs, { statusExecution: new StatusExecution() });
 
     try {
       const response = await app.inject({ method: "GET", url: "/jobs/job-missing" });

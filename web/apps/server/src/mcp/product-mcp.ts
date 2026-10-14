@@ -1,3 +1,4 @@
+import type { StatusExecution } from "../integrations/status-execution.js";
 /**
  * Shared product MCP handlers (stdio + streamable HTTP).
  * Mutating tools only propose; confirm_apply / dismiss_proposed_action apply.
@@ -19,6 +20,7 @@ import {
 import type { AssistantProposedAction } from "@print-partner/contracts";
 import { buildSourceCategoryTree, isAssistantUiAction } from "@print-partner/contracts";
 import { join } from "node:path";
+import { readFarmAccess } from "../lib/farm-access.js";
 import type { ServerConfig } from "../config.js";
 import { createAssistantPort } from "../assistant/create-assistant.js";
 import { resolveAssistantRuntime } from "../assistant/resolve-assistant.js";
@@ -102,6 +104,7 @@ function jsonSchemaToMcp(spec: (typeof ASSISTANT_TOOL_SPECS)[number]) {
 const SOURCE_CATEGORIES_URI = "print-partner://source-categories";
 
 type ProductMcpDeps = {
+  statusExecution: StatusExecution;
   getRepo: () => AppRepository;
   jobs: InProcessJobRunner;
   config: ServerConfig;
@@ -144,6 +147,7 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
     if (!integrationsPort) {
       integrationsPort = createIntegrationPort({
         repo: getRepo(),
+        statusExecution: deps.statusExecution,
         getAdapter: getIntegrationAdapter,
       });
     }
@@ -308,7 +312,11 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
     assertEnabled();
     return {
       tools: [
-        ...productToolSpecs().map(jsonSchemaToMcp),
+        ...productToolSpecs()
+          .filter((tool) =>
+            tool.name !== "get_farm_status" || readFarmAccess(getRepo).kind === "allowed",
+          )
+          .map(jsonSchemaToMcp),
         ...META_TOOLS.map((t) => ({
           name: t.name,
           description: t.description,
@@ -436,6 +444,18 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
         };
       }
 
+      if (name === "get_farm_status") {
+        const access = readFarmAccess(getRepo);
+        if (access.kind !== "allowed") {
+          return {
+            content: [{
+              type: "text" as const,
+              text: JSON.stringify({ error: access.error, code: access.code }),
+            }],
+            isError: true,
+          };
+        }
+      }
       const result = await invokeAssistantTool(name, args, toolCtx(extra.signal));
       if (result.proposedAction && !isAssistantUiAction(result.proposedAction.type)) {
         pending.set(result.proposedAction.id, result.proposedAction);

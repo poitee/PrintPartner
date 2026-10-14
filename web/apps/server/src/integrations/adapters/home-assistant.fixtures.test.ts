@@ -1,3 +1,4 @@
+import { StatusExecution } from "../status-execution.js";
 import { readFileSync, readdirSync } from "node:fs";
 import type { IntegrationTestResult, PrinterHostStatus } from "@print-partner/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -68,6 +69,8 @@ function mockFixtureResponse(name: string) {
   return fetchMock;
 }
 
+const execution = new StatusExecution();
+
 describe(`Home Assistant JSON fixtures (${fixtureNames.length} fixtures)`, () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -97,7 +100,7 @@ describe(`Home Assistant JSON fixtures (${fixtureNames.length} fixtures)`, () =>
 
   it.each(Object.keys(expectedStatuses))("maps adapter status for %s", async (name) => {
     const fetchMock = mockFixtureResponse(name);
-    const actual = await homeAssistantAdapter.getStatus!({
+    const actual = await execution.probe(homeAssistantAdapter, {
       ...config,
       entity_id: "sensor.printer_state",
     });
@@ -110,7 +113,7 @@ describe(`Home Assistant JSON fixtures (${fixtureNames.length} fixtures)`, () =>
 
   it.each(Object.keys(expectedConnections))("probes adapter connection for %s", async (name) => {
     const fetchMock = mockFixtureResponse(name);
-    const actual = await homeAssistantAdapter.testConnection(config);
+    const actual = await execution.test(homeAssistantAdapter, config);
     expect(actual).toStrictEqual(expectedConnections[name]);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe(`${config.base_url}/api/`);

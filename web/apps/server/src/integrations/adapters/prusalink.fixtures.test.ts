@@ -1,3 +1,4 @@
+import { StatusExecution } from "../status-execution.js";
 import { readdirSync, readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { prusalinkAdapter } from "./prusalink.js";
@@ -45,6 +46,8 @@ function stubResponses(routes: Record<string, string>) {
 
 afterEach(() => vi.unstubAllGlobals());
 
+const execution = new StatusExecution();
+
 describe("7 PrusaLink fixtures parsed through the TS adapter", () => {
   it("covers the complete fixture inventory", () => {
     expect(readdirSync(fixtureDirectory).filter((name) => name.endsWith(".json")).sort())
@@ -53,7 +56,7 @@ describe("7 PrusaLink fixtures parsed through the TS adapter", () => {
 
   it("digest-401: parses the challenge into authenticated requests", async () => {
     const fetchMock = stubResponses({ "/api/v1/status": "status-idle" });
-    expect((await prusalinkAdapter.getStatus!(config)).state).toBe("idle");
+    expect((await execution.probe(prusalinkAdapter, config)).state).toBe("idle");
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const authorization = new Headers(fetchMock.mock.calls[1]![1]?.headers)
       .get("Authorization");
@@ -67,14 +70,14 @@ describe("7 PrusaLink fixtures parsed through the TS adapter", () => {
 
   it("info: reads the connection label from version/info metadata", async () => {
     stubResponses({ "/api/v1/info": "info", "/api/v1/status": "status-idle" });
-    expect(await prusalinkAdapter.testConnection(config)).toEqual({
+    expect(await execution.test(prusalinkAdapter, config)).toEqual({
       ok: true, message: "Connected (Fixture Prusa, state: idle)",
     });
   });
 
   it("status-idle: maps READY and reads temperatures", async () => {
     stubResponses({ "/api/v1/status": "status-idle" });
-    expect(await prusalinkAdapter.getStatus!(config)).toMatchObject({
+    expect(await execution.probe(prusalinkAdapter, config)).toMatchObject({
       state: "idle", message: "Idle", ip_address: "192.0.2.10",
       nozzle_temperature_c: 24.5, nozzle_target_c: 0,
       bed_temperature_c: 23, bed_target_c: 0,
@@ -83,7 +86,7 @@ describe("7 PrusaLink fixtures parsed through the TS adapter", () => {
 
   it("status-printing: reads progress, filename, ETA and temperatures", async () => {
     stubResponses({ "/api/v1/status": "status-printing" });
-    expect(await prusalinkAdapter.getStatus!(config)).toMatchObject({
+    expect(await execution.probe(prusalinkAdapter, config)).toMatchObject({
       state: "printing", progress: 33, filename: "benchy.gcode",
       eta_seconds: 1200, message: "Printing benchy.gcode",
       nozzle_temperature_c: 214.5, nozzle_target_c: 215,
@@ -93,7 +96,7 @@ describe("7 PrusaLink fixtures parsed through the TS adapter", () => {
 
   it("status-error: maps ERROR", async () => {
     stubResponses({ "/api/v1/status": "status-error" });
-    expect(await prusalinkAdapter.getStatus!(config)).toMatchObject({
+    expect(await execution.probe(prusalinkAdapter, config)).toMatchObject({
       state: "error", message: "ERROR", nozzle_temperature_c: 30,
       nozzle_target_c: 0, bed_temperature_c: 25, bed_target_c: 0,
     });
@@ -112,7 +115,7 @@ describe("7 PrusaLink fixtures parsed through the TS adapter", () => {
       }
       return routedFetch(input, init);
     });
-    expect(await prusalinkAdapter.getStatus!(config)).toMatchObject({
+    expect(await execution.probe(prusalinkAdapter, config)).toMatchObject({
       state: "printing", filename: "bracket.bgcode", progress: 43,
       eta_seconds: 900, message: "Printing bracket.bgcode",
     });

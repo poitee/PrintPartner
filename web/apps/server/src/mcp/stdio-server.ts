@@ -1,3 +1,4 @@
+import { StatusExecution } from "../integrations/status-execution.js";
 import { acquireDataDirectory } from "../desktop-context.js";
 /**
  * Thin stdio MCP server exposing Print Partner product verbs.
@@ -37,12 +38,14 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  const statusExecution = new StatusExecution();
   const ports = createPorts(config);
   const releaseOwner = acquireDataDirectory(config.dataDir);
   let stopping = false;
   const stop = async () => {
     if (stopping) return;
     stopping = true;
+    await statusExecution.stop();
     await ports.db.close();
     releaseOwner();
     process.exit(0);
@@ -90,6 +93,7 @@ async function main(): Promise<void> {
       planEnv && Number.isFinite(Number(planEnv)) ? Math.trunc(Number(planEnv)) : null;
 
     const server = createProductMcpServer({
+      statusExecution,
       getRepo,
       jobs,
       config,
@@ -106,6 +110,7 @@ async function main(): Promise<void> {
         `${defaultPlanId != null ? `, plan=${defaultPlanId}` : ""})`,
     );
   } catch (error) {
+    await statusExecution.stop();
     await ports.db.close();
     releaseOwner();
     throw error;

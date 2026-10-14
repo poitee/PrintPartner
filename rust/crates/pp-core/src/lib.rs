@@ -3,18 +3,16 @@ use pp_compat::{Bundle, CompatHandle, SpawnSpec, Supervisor};
 use pp_gateway::{Gateway, LaunchTarget};
 use pp_storage::lease::StorageLease;
 use serde::Serialize;
-use std::{
-    fs::{File, OpenOptions},
-    io::{Read, Write},
-    net::{Ipv4Addr, SocketAddrV4},
-    os::unix::fs::OpenOptionsExt,
-    path::PathBuf,
-    time::Duration,
-};
-use tokio::net::TcpListener;
-
+use std::{path::PathBuf, time::Duration};
 mod drain;
+mod origin;
+mod preferences;
 mod rebuild;
+mod state_file;
+
+pub use origin::OriginChange;
+use origin::bind_origin;
+pub use preferences::{BrowserPreference, BrowserPreferences, PrinterPollInterval, Theme};
 
 #[cfg(feature = "desktop_rebuild")]
 pub mod layout;
@@ -48,70 +46,11 @@ pub use pp_compat::recent_diagnostics;
 pub use pp_compat::{Bundle as VerifiedBundle, Status as CoreStatus};
 pub use pp_gateway::LaunchTarget as DesktopLaunchTarget;
 
-async fn bind_origin(owner: &StorageLease) -> Result<TcpListener> {
-    let path = owner.data_dir().join("desktop.toml");
-    let config = match OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(&path)
-    {
-        Ok(file) => {
-            anyhow::ensure!(file.metadata()?.is_file(), "Invalid desktop.toml");
-            let mut config = String::new();
-            file.take(4097).read_to_string(&mut config)?;
-            anyhow::ensure!(config.len() <= 4096, "Invalid desktop.toml");
-            Some(config)
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => return Err(error).context("Desktop configuration unavailable"),
-    };
-    let port = if let Some(config) = config {
-        let value = config
-            .trim()
-            .strip_prefix("port = ")
-            .context("Invalid desktop.toml")?;
-        let port: u16 = value.parse().context("Invalid persisted port")?;
-        anyhow::ensure!(port > 0, "Invalid persisted port");
-        port
-    } else {
-        0
-    };
-    let listener = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port))
-        .await
-        .context("Persisted desktop origin is unavailable")?;
-    if port == 0 {
-        persist_initial_origin(owner, listener.local_addr()?.port())?;
-    }
-    Ok(listener)
-}
-
-fn persist_initial_origin(owner: &StorageLease, port: u16) -> Result<()> {
-    let temporary = owner.data_dir().join(format!(
-        "desktop-{}.toml.new",
-        hex::encode(rand::random::<[u8; 8]>())
-    ));
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&temporary)?;
-    let result = (|| -> Result<()> {
-        writeln!(file, "port = {port}")?;
-        file.sync_all()?;
-        std::fs::hard_link(&temporary, owner.data_dir().join("desktop.toml"))?;
-        Ok(())
-    })();
-    let cleanup = std::fs::remove_file(&temporary);
-    result?;
-    cleanup?;
-    File::open(owner.data_dir())?.sync_all()?;
-    Ok(())
-}
-
 pub struct CoreHandle {
     compat: CompatHandle,
     monitoring: pp_gateway::MonitoringControl,
     gate: ShutdownGate,
+    preferences: preferences::Client,
 }
 impl Clone for CoreHandle {
     fn clone(&self) -> Self {
@@ -119,10 +58,22 @@ impl Clone for CoreHandle {
             compat: self.compat.clone(),
             monitoring: self.monitoring.clone(),
             gate: self.gate.clone(),
+            preferences: self.preferences.clone(),
         }
     }
 }
 impl CoreHandle {
+    pub async fn browser_preferences(&self) -> Result<BrowserPreferences> {
+        self.preferences.read().await
+    }
+
+    pub async fn set_browser_preference(
+        &self,
+        field: BrowserPreference,
+    ) -> Result<BrowserPreferences> {
+        self.preferences.update(field).await
+    }
+
     /// Power adapters can cancel/join status sockets before acknowledging sleep.
     /// Hide-to-tray deliberately leaves monitoring running.
     pub async fn suspend_monitoring(&self) {
@@ -150,11 +101,13 @@ pub struct CoreRuntime {
     completion: Option<tokio::sync::oneshot::Receiver<ShutdownReceipt>>,
     worker: Option<std::thread::JoinHandle<()>>,
     origin: String,
+    origin_change: Option<OriginChange>,
     handle: CoreHandle,
     launch: Option<LaunchTarget>,
     shutdown_requested: pp_gateway::ShutdownRequested,
 }
 struct Resources {
+    origin_change: Option<OriginChange>,
     gateway: Gateway,
     supervisor: Supervisor,
     owner: StorageLease,
@@ -214,7 +167,7 @@ async fn start_resources(
     let mut owner = StorageLease::acquire(&input.data_dir)?;
     pp_gateway::ownership::boot_bundled_source_sync(owner.data_dir())
         .map_err(|error| anyhow::anyhow!("Source Sync ownership admission failed: {error}"))?;
-    let listener = bind_origin(&owner).await?;
+    let (listener, origin_change) = bind_origin(&owner).await?;
     let supervisor = Supervisor::start_with_config(
         SpawnSpec {
             bundle: input.bundle,
@@ -265,6 +218,7 @@ async fn start_resources(
         }
     };
     Ok(Resources {
+        origin_change,
         gateway,
         supervisor,
         owner,
@@ -314,6 +268,7 @@ impl CoreRuntime {
                     };
                     let requested_by_gateway = resources.gateway.shutdown_requested();
                     let requested_by_adapter = requested_by_gateway.clone();
+                    let (preferences, mut commands) = preferences::Client::channel();
                     let public = resources.gateway.take_launch_target().map(|launch| {
                         (
                             resources.gateway.origin().to_owned(),
@@ -321,23 +276,35 @@ impl CoreRuntime {
                                 compat: resources.supervisor.handle.clone(),
                                 monitoring: resources.gateway.monitoring_control(),
                                 gate: resources.gate.clone(),
+                                preferences,
                             },
                             launch,
                             requested_by_adapter,
+                            resources.origin_change.clone(),
                         )
                     });
                     if started.send(public).is_ok() {
-                        tokio::select! {
-                            _ = stopped => {}
-                            _ = requested_by_gateway.wait() => {}
+                        let gateway_stopped = requested_by_gateway.wait();
+                        tokio::pin!(stopped, gateway_stopped);
+                        loop {
+                            tokio::select! {
+                                biased;
+                                _ = &mut stopped => break,
+                                _ = &mut gateway_stopped => break,
+                                command = commands.recv() => match command {
+                                    Some(command) => command.execute(&resources.owner),
+                                    None => break,
+                                }
+                            }
                         }
                     }
+                    preferences::settle(&mut commands, &resources.owner).await;
                     let receipt = stop_resources(resources).await;
                     let _ = completed.send(receipt);
                 });
             })
             .context("Core owner thread unavailable")?;
-        let (origin, handle, launch, shutdown_requested) =
+        let (origin, handle, launch, shutdown_requested, origin_change) =
             startup.await.context("Core owner startup failed")??;
         Ok(Self {
             desktop_rebuild,
@@ -345,6 +312,7 @@ impl CoreRuntime {
             completion: Some(completion),
             worker: Some(worker),
             origin,
+            origin_change,
             handle,
             launch: Some(launch),
             shutdown_requested,
@@ -352,6 +320,10 @@ impl CoreRuntime {
     }
     pub fn desktop_rebuild(&self) -> DesktopRebuild {
         self.desktop_rebuild
+    }
+
+    pub fn origin_change(&self) -> Option<&OriginChange> {
+        self.origin_change.as_ref()
     }
 
     pub fn origin(&self) -> &str {

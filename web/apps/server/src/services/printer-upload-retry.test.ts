@@ -1,3 +1,4 @@
+import { StatusExecution } from "../integrations/status-execution.js";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,7 +27,7 @@ async function fixture() {
   const ports = createSelfHostPorts(dir);
   await ports.db.connect();
   const repo = ports.repository;
-  const integrations = createIntegrationPort({ repo, getAdapter: getIntegrationAdapter });
+  const integrations = createIntegrationPort({ repo, getAdapter: getIntegrationAdapter, statusExecution: new StatusExecution() });
   const integration = integrations.create({
     type: "moonraker", name: "Fixture host",
     config: { base_url: "http://127.0.0.1:1", enabled: true },
