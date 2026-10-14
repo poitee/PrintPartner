@@ -449,8 +449,12 @@ impl WriterOwner {
                 match envelope {
                     #[cfg(feature = "desktop_rebuild")]
                     Envelope::NativeSecrets { command, reply } => {
-                        let _ =
-                            reply.send(native_secrets::execute(&mut connection, &worker, command));
+                        let _ = reply.send(native_secrets::execute(
+                            &mut connection,
+                            &worker,
+                            command,
+                            admission,
+                        ));
                     }
                     #[cfg(feature = "desktop_rebuild")]
                     Envelope::Features { command, reply } => {

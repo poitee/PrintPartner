@@ -1,5 +1,5 @@
 use crate::{Envelope, SettingsClient, Shared, WriterOwner};
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use sha2::{Digest, Sha256};
 use std::{
     error::Error,
@@ -186,8 +186,13 @@ fn load_receipt(connection: &Connection) -> Result<Option<MigrationReceiptRow>, 
     )
 }
 
-fn prepare(connection: &mut Connection, owner: Arc<Shared>) -> Result<Outcome, StorageError> {
-    let tx = database_error(connection.transaction_with_behavior(TransactionBehavior::Immediate))?;
+fn prepare(
+    connection: &mut Connection,
+    owner: Arc<Shared>,
+    admission: crate::writer_admission::Deadline,
+) -> Result<Outcome, StorageError> {
+    let tx = crate::writer_admission::begin_immediate(connection, admission)
+        .map_err(|_| StorageError(StorageFailure::Database))?;
     database_error(tx.execute_batch(include_str!("native_secrets/schema.sql")))?;
     let receipt = load_receipt(&tx)?;
     let legacy = || {
@@ -278,8 +283,13 @@ fn prepare(connection: &mut Connection, owner: Arc<Shared>) -> Result<Outcome, S
     }
 }
 
-fn confirm(connection: &mut Connection, prepared: PreparedSecret) -> Result<Outcome, StorageError> {
-    let tx = database_error(connection.transaction_with_behavior(TransactionBehavior::Immediate))?;
+fn confirm(
+    connection: &mut Connection,
+    prepared: PreparedSecret,
+    admission: crate::writer_admission::Deadline,
+) -> Result<Outcome, StorageError> {
+    let tx = crate::writer_admission::begin_immediate(connection, admission)
+        .map_err(|_| StorageError(StorageFailure::Database))?;
     let Some(receipt) = load_receipt(&tx)? else {
         return Err(StorageError(StorageFailure::Superseded));
     };
@@ -352,6 +362,7 @@ pub(crate) fn execute(
     connection: &mut Connection,
     storage: &Arc<Shared>,
     command: Command,
+    admission: crate::writer_admission::Deadline,
 ) -> Result<Outcome, StorageError> {
     let owner = match &command {
         Command::Prepare { owner } | Command::Confirm { owner, .. } => owner,
@@ -360,12 +371,12 @@ pub(crate) fn execute(
         return Err(StorageError(StorageFailure::Superseded));
     }
     match command {
-        Command::Prepare { owner } => prepare(connection, owner),
+        Command::Prepare { owner } => prepare(connection, owner, admission),
         Command::Confirm { prepared, .. } => {
             if !Arc::ptr_eq(storage, &prepared.owner) {
                 return Err(StorageError(StorageFailure::Superseded));
             }
-            confirm(connection, prepared)
+            confirm(connection, prepared, admission)
         }
     }
 }
@@ -462,5 +473,67 @@ impl WriterOwner {
         NativeSecretMigrationClient {
             storage: self.client(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Limits, Setting, SettingCommand};
+
+    #[test]
+    fn expired_admission_prevents_preparation_and_legacy_removal() {
+        let root = crate::tests::directory("native-secret-expired-admission");
+        let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+        let storage = owner.client();
+        storage
+            .submit(
+                SettingCommand::Set(Setting {
+                    tenant: TENANT.into(),
+                    key: LEGACY_KEY.into(),
+                    value: "test-token".into(),
+                }),
+                &AtomicBool::new(false),
+                Duration::from_secs(5),
+            )
+            .unwrap()
+            .recv()
+            .unwrap()
+            .unwrap();
+        let mut connection = Connection::open(root.join("print-partner.db")).unwrap();
+        let admission = crate::writer_admission::Deadline::at_dequeue();
+        std::thread::sleep(crate::schema::BUSY_TIMEOUT + Duration::from_millis(20));
+        assert!(matches!(
+            prepare(&mut connection, storage.shared.clone(), admission),
+            Err(error) if error.failure() == StorageFailure::Database
+        ));
+        let exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='native_secret_migrations')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!exists);
+        let prepared = match owner
+            .native_secret_migration()
+            .prepare(&AtomicBool::new(false), Duration::from_secs(5))
+            .unwrap()
+        {
+            MigrationPreparation::Prepared(value) => value,
+            _ => panic!("expected preparation"),
+        };
+        assert!(matches!(
+            confirm(&mut connection, prepared, admission),
+            Err(error) if error.failure() == StorageFailure::Database
+        ));
+        let retained: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM app_settings WHERE key='github_pat' AND value='test-token')",
+            [], |row| row.get(0),
+        ).unwrap();
+        assert!(retained);
+        drop(connection);
+        owner.shutdown().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
