@@ -128,6 +128,9 @@ struct Resources {
 #[derive(Serialize, Debug)]
 pub struct ShutdownReceipt {
     pub proof_class: &'static str,
+    pub tracked_idle: bool,
+    pub gateway_idle: bool,
+    pub compat_exit: Option<pp_compat::CompatExit>,
     pub compat_reaped: bool,
     pub storage_released: bool,
     pub gateway_stopped: bool,
@@ -140,6 +143,9 @@ impl ShutdownReceipt {
     fn failed(category: &'static str) -> Self {
         Self {
             proof_class: "headless_unsigned",
+            tracked_idle: false,
+            gateway_idle: false,
+            compat_exit: None,
             compat_reaped: false,
             storage_released: false,
             gateway_stopped: false,
@@ -149,7 +155,9 @@ impl ShutdownReceipt {
         }
     }
     pub fn complete(&self) -> bool {
-        self.compat_reaped
+        self.tracked_idle
+            && self.gateway_idle
+            && self.compat_reaped
             && self.storage_released
             && self.gateway_stopped
             && self.errors.is_empty()
@@ -467,6 +475,9 @@ async fn stop_resources(
     let gateway_stopped = resources.gateway.stop().await.is_ok();
     let mut receipt = ShutdownReceipt {
         proof_class: "headless_unsigned",
+        tracked_idle,
+        gateway_idle,
+        compat_exit: compat,
         compat_reaped,
         gateway_stopped,
         storage_released: false,
@@ -474,6 +485,12 @@ async fn stop_resources(
         runtime_removed: false,
         errors: Vec::new(),
     };
+    if !tracked_idle {
+        receipt.errors.push("tracked_drain_timed_out");
+    }
+    if !gateway_idle {
+        receipt.errors.push("gateway_drain_timed_out");
+    }
     let cutover = plan.map(|plan| {
         plan.commit(
             resources.owner.data_dir(),
@@ -495,7 +512,10 @@ async fn stop_resources(
     }
     if !compat_reaped {
         receipt.errors.push("compat_cleanup_unproved");
+    }
+    if !tracked_idle || !compat_reaped {
         resources.owner.retain_until_process_exit();
+        receipt.errors.push("storage_ownership_retained");
         return (receipt, cutover);
     }
     let released = resources.owner.release();

@@ -172,6 +172,7 @@ jobs:
           cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --lib --features desktop_rebuild
           cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --test profile_interpreter --features desktop_rebuild
           cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --test profile_interpreter_parity --features desktop_rebuild
+          cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-core --test runtime_m0 --features desktop_rebuild --no-tests=fail -E 'test(ticket_t_3_drain)' --success-output immediate
       - name: Test Rust with nextest
         if: steps.workspace.outputs.manifest != ''
         shell: bash
