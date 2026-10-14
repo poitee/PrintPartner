@@ -18,30 +18,33 @@ pub enum Failure<E> {
     UnsafePath,
 }
 pub struct Inventory {
-    root: Option<Directory>,
+    root: Directory,
     paths: Vec<String>,
 }
 impl Inventory {
-    pub fn paths(&self) -> &[String] {
-        &self.paths
+    pub fn matching_path(&self, path: &str) -> Option<usize> {
+        let key = crate::path_policy::collision_key(path);
+        let mut matches = self
+            .paths
+            .iter()
+            .enumerate()
+            .filter(|(_, value)| crate::path_policy::collision_key(value) == key);
+        let (index, _) = matches.next()?;
+        matches.next().is_none().then_some(index)
     }
-    pub fn scan<B: ReadBudget>(logical: &Path, budget: &mut B) -> Result<Self, Failure<B::Error>> {
+    pub fn scan<B: ReadBudget>(
+        logical: &Path,
+        budget: &mut B,
+    ) -> Result<Option<Self>, Failure<B::Error>> {
+        let Ok(root) = Directory::open_root(logical) else {
+            return Ok(None);
+        };
         let mut inventory = Self {
-            root: None,
+            root,
             paths: Vec::new(),
         };
-        if !std::fs::symlink_metadata(logical).is_ok_and(|m| m.is_dir()) {
-            return Ok(inventory);
-        }
-        let Ok(canonical) = logical.canonicalize() else {
-            return Ok(inventory);
-        };
-        let Ok(root) = Directory::open_root(&canonical) else {
-            return Ok(inventory);
-        };
-        walk(&root, "", 0, &mut inventory.paths, budget)?;
-        inventory.root = Some(root);
-        Ok(inventory)
+        walk(&inventory.root, "", 0, &mut inventory.paths, budget)?;
+        Ok(Some(inventory))
     }
     pub fn hash<B: ReadBudget>(
         &self,
@@ -49,8 +52,8 @@ impl Inventory {
         budget: &mut B,
     ) -> Result<(u64, String), Failure<B::Error>> {
         let path = self.paths.get(index).ok_or(Failure::UnsafePath)?;
-        let root = self.root.as_ref().ok_or(Failure::UnsafePath)?;
-        let mut file = root
+        let mut file = self
+            .root
             .file(path, false)
             .map_err(|_| Failure::Io(io::ErrorKind::Other))?;
         let mut buf = [0u8; 65536];

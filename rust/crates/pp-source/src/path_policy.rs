@@ -4,7 +4,7 @@ use caseless::Caseless;
 use std::collections::{BTreeMap, BTreeSet};
 use unicode_normalization::UnicodeNormalization;
 
-fn collision_key(path: &str) -> String {
+pub(crate) fn collision_key(path: &str) -> String {
     keyed(path, false)
 }
 

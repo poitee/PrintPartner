@@ -418,7 +418,7 @@ fn ensure_root<'a>(
         std::collections::hash_map::Entry::Occupied(entry) => Ok(entry.into_mut()),
         std::collections::hash_map::Entry::Vacant(entry) => {
             let observed = match observer.snapshot_root(value, budget)? {
-                Some(path) => Some(Inventory::scan(&path, budget).map_err(source_failure)?),
+                Some(path) => Inventory::scan(&path, budget).map_err(source_failure)?,
                 None => None,
             };
             Ok(entry.insert(observed))
@@ -519,18 +519,14 @@ fn artifact_missing(
     let Some(inventory) = inventory else {
         return Ok(true);
     };
-    let matches = inventory
-        .paths()
-        .iter()
-        .enumerate()
-        .filter(|(_, path)| path.eq_ignore_ascii_case(relative))
-        .map(|(index, _)| index)
-        .collect::<Vec<_>>();
-    if matches.len() != 1 {
+    let Some(index) = inventory.matching_path(relative) else {
         return Ok(true);
+    };
+    match inventory.hash(index, budget) {
+        Ok((bytes, digest)) => Ok(bytes == 0 || digest != expected_sha256),
+        Err(SourceFailure::Budget(error)) => Err(error),
+        Err(SourceFailure::Io(_) | SourceFailure::UnsafePath) => Ok(true),
     }
-    let (bytes, digest) = inventory.hash(matches[0], budget).map_err(source_failure)?;
-    Ok(bytes == 0 || digest != expected_sha256)
 }
 
 #[derive(Clone)]
@@ -621,63 +617,67 @@ async fn fetch_json(
     resource: &str,
     cancelled: &AtomicBool,
 ) -> Result<Value> {
-    let initial = config.endpoint(resource);
-    let mut current = initial.clone();
-    for redirects in 0..=config.max_redirects {
-        ensure!(
-            !cancelled.load(Ordering::Acquire),
-            "Filament observation cancelled"
-        );
-        let mut request = client.get(current.clone());
-        if let Some(api_key) = &config.api_key {
-            request = request.bearer_auth(api_key.trim());
-        }
-        let response = request.send().await?;
-        if matches!(
-            response.status(),
-            StatusCode::MOVED_PERMANENTLY
-                | StatusCode::FOUND
-                | StatusCode::SEE_OTHER
-                | StatusCode::TEMPORARY_REDIRECT
-                | StatusCode::PERMANENT_REDIRECT
-        ) {
-            ensure!(
-                redirects < config.max_redirects,
-                "Too many filament redirects"
-            );
-            let location = response
-                .headers()
-                .get(header::LOCATION)
-                .and_then(|value| value.to_str().ok())
-                .ok_or_else(|| anyhow!("Filament redirect has no location"))?;
-            let next = current.join(location)?;
-            ensure!(
-                next.origin() == initial.origin(),
-                "Filament redirect changed origin"
-            );
-            current = next;
-            continue;
-        }
-        ensure!(
-            response.status().is_success(),
-            "Filament provider refused read"
-        );
-        let mut response = response;
-        let mut bytes = Vec::new();
-        while let Some(chunk) = response.chunk().await? {
+    tokio::time::timeout(config.timeout, async {
+        let initial = config.endpoint(resource);
+        let mut current = initial.clone();
+        for redirects in 0..=config.max_redirects {
             ensure!(
                 !cancelled.load(Ordering::Acquire),
                 "Filament observation cancelled"
             );
+            let mut request = client.get(current.clone());
+            if let Some(api_key) = &config.api_key {
+                request = request.bearer_auth(api_key.trim());
+            }
+            let response = request.send().await?;
+            if matches!(
+                response.status(),
+                StatusCode::MOVED_PERMANENTLY
+                    | StatusCode::FOUND
+                    | StatusCode::SEE_OTHER
+                    | StatusCode::TEMPORARY_REDIRECT
+                    | StatusCode::PERMANENT_REDIRECT
+            ) {
+                ensure!(
+                    redirects < config.max_redirects,
+                    "Too many filament redirects"
+                );
+                let location = response
+                    .headers()
+                    .get(header::LOCATION)
+                    .and_then(|value| value.to_str().ok())
+                    .ok_or_else(|| anyhow!("Filament redirect has no location"))?;
+                let next = current.join(location)?;
+                ensure!(
+                    next.origin() == initial.origin(),
+                    "Filament redirect changed origin"
+                );
+                current = next;
+                continue;
+            }
             ensure!(
-                bytes.len().saturating_add(chunk.len()) <= config.max_response_bytes,
-                "Filament response too large"
+                response.status().is_success(),
+                "Filament provider refused read"
             );
-            bytes.extend_from_slice(&chunk);
+            let mut response = response;
+            let mut bytes = Vec::new();
+            while let Some(chunk) = response.chunk().await? {
+                ensure!(
+                    !cancelled.load(Ordering::Acquire),
+                    "Filament observation cancelled"
+                );
+                ensure!(
+                    bytes.len().saturating_add(chunk.len()) <= config.max_response_bytes,
+                    "Filament response too large"
+                );
+                bytes.extend_from_slice(&chunk);
+            }
+            return Ok(serde_json::from_slice(&bytes)?);
         }
-        return Ok(serde_json::from_slice(&bytes)?);
-    }
-    Err(anyhow!("Filament redirect limit exceeded"))
+        Err(anyhow!("Filament redirect limit exceeded"))
+    })
+    .await
+    .map_err(|_| anyhow!("Filament observation timed out"))?
 }
 
 fn rows(value: &Value) -> &[Value] {
@@ -728,7 +728,13 @@ fn parse_filaments(value: &Value) -> HashMap<i64, ProviderFilament> {
                 let value = value.trim().trim_start_matches('#');
                 valid_hex(value).then(|| format!("#{}", value.to_ascii_lowercase()))
             });
-            Some((id, ProviderFilament { label, hex }))
+            Some((
+                id,
+                ProviderFilament {
+                    label,
+                    hex: Some(hex.unwrap_or_else(|| "#888888".into())),
+                },
+            ))
         })
         .collect()
 }

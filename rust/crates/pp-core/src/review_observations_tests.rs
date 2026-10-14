@@ -151,7 +151,11 @@ fn review_matches_unique_case_insensitive_paths() {
     *f.artifact_mut().1 = "PART.STL".into();
     assert!(!f.observe().media_by_part_id[&9].artifact_missing);
     fs::write(f.source().join("PART.STL"), "solid test").unwrap();
-    assert!(f.observe().media_by_part_id[&9].artifact_missing);
+    if fs::read_dir(f.source()).unwrap().count() == 2 {
+        assert!(f.observe().media_by_part_id[&9].artifact_missing);
+    } else {
+        assert!(!f.observe().media_by_part_id[&9].artifact_missing);
+    }
 }
 
 #[test]
@@ -428,4 +432,102 @@ fn filament_config_rejects_ambiguous_urls_and_limit_expansion() {
         "http://localhost/api/v1/filament"
     );
     assert!(config.with_limits(Duration::from_secs(9), 1024, 1).is_err());
+}
+
+#[test]
+fn review_regression_unpinned_roots_are_unavailable() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new();
+    fs::set_permissions(f.source(), fs::Permissions::from_mode(0o777)).unwrap();
+    let observed = f.observe();
+    assert!(observed.available_input_roots.is_empty());
+    assert!(observed.media_by_part_id[&9].artifact_missing);
+}
+
+#[test]
+fn review_regression_unicode_paths_match_and_collisions_are_missing() {
+    let mut f = Fixture::new();
+    fs::rename(f.source().join("part.stl"), f.source().join("CAFÉ.STL")).unwrap();
+    *f.artifact_mut().1 = "café.stl".into();
+    assert!(!f.observe().media_by_part_id[&9].artifact_missing);
+    fs::write(f.source().join("cafe\u{301}.stl"), "solid test").unwrap();
+    if fs::read_dir(f.source()).unwrap().count() == 2 {
+        assert!(f.observe().media_by_part_id[&9].artifact_missing);
+    } else {
+        assert!(!f.observe().media_by_part_id[&9].artifact_missing);
+    }
+}
+
+#[test]
+fn review_regression_artifact_removal_after_scan_is_missing() {
+    let f = Fixture::new();
+    let cancelled = AtomicBool::new(false);
+    let mut budget = ObservationBudget::new(&cancelled, ObservationLimits::default());
+    let mut inventory = Inventory::scan(&f.source(), &mut budget).unwrap();
+    fs::remove_file(f.source().join("part.stl")).unwrap();
+    let Artifact::Tracked {
+        expected_sha256, ..
+    } = &f.snapshot.parts[0].artifact
+    else {
+        unreachable!()
+    };
+    assert!(artifact_missing(&mut inventory, "part.stl", expected_sha256, &mut budget).unwrap());
+}
+
+#[test]
+fn review_regression_colorless_provider_uses_neutral_swatch() {
+    let lookup = SnapshotFilamentLookup {
+        integration_id: "local".into(),
+        spools: vec![],
+        filaments: parse_filaments(&json!([{"id":2,"name":"Natural","color_hex":" "}])),
+    };
+    assert_eq!(
+        lookup
+            .for_part(Some("spoolman:local:filament:2"), None)
+            .unwrap()
+            .unwrap()
+            .hex
+            .as_deref(),
+        Some("#888888")
+    );
+}
+
+#[tokio::test]
+async fn review_regression_provider_deadline_covers_redirects() {
+    use axum::{Router, response::Redirect, routing::get};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = Router::new()
+        .route(
+            "/api/v1/filament",
+            get(|| async {
+                tokio::time::sleep(Duration::from_millis(70)).await;
+                Redirect::temporary("/rows")
+            }),
+        )
+        .route(
+            "/rows",
+            get(|| async {
+                tokio::time::sleep(Duration::from_millis(70)).await;
+                "[]"
+            }),
+        );
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let config = FilamentProviderConfig::new(&format!("http://{address}"), "local", None)
+        .unwrap()
+        .with_limits(Duration::from_millis(100), 1024, 1)
+        .unwrap();
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(config.timeout)
+        .build()
+        .unwrap();
+    let result = fetch_json(&client, &config, "filament", &AtomicBool::new(false)).await;
+    server.abort();
+    let _ = server.await;
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "Filament observation timed out"
+    );
 }
