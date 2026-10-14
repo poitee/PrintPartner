@@ -200,13 +200,23 @@ jobs:
         with:
           node-version: '24.21.0'
           architecture: ${{ env.NODE_ARCH }}
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      # Cached Tauri CLI archive; the pinned SHA-256 below is still verified
+      # on every run, so a poisoned cache entry fails closed.
+      - name: Restore Tauri CLI archive
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/tauri-cli-cache
+          key: tauri-cli-2.12.1-${{ env.RUST_HOST }}-${{ env.TAURI_CLI_SHA256 }}
       - name: Install pinned Rust and Tauri CLI
         run: |
           rustup toolchain install 1.99.0 --profile minimal
           rustc --version --verbose | tee "$PP_EVIDENCE/rust-version.txt"
           test "$(rustc --version --verbose | sed -n 's/^host: //p')" = '${{ env.RUST_HOST }}'
-          cli_archive="$RUNNER_TEMP/cargo-tauri.zip"
-          curl --fail --location --retry 3 --output "$cli_archive" \
+          mkdir -p "$RUNNER_TEMP/tauri-cli-cache"
+          cli_archive="$RUNNER_TEMP/tauri-cli-cache/cargo-tauri.zip"
+          test -s "$cli_archive" || curl --fail --location --retry 3 --output "$cli_archive" \
             'https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v2.12.1/cargo-tauri-${{ env.RUST_HOST }}.zip'
           printf '%s  %s\n' '${{ env.TAURI_CLI_SHA256 }}' "$cli_archive" \
             | shasum -a 256 -c - | tee "$PP_EVIDENCE/tauri-install.log"
@@ -217,6 +227,13 @@ jobs:
             | tee "$PP_EVIDENCE/tauri-version.txt"
           grep -Fx 'tauri-cli 2.12.1' "$PP_EVIDENCE/tauri-version.txt"
           echo "$RUNNER_TEMP/tauri-cli/bin" >> "$GITHUB_PATH"
+      # Per-arch Rust cache (release target dir + registry). Saved only from
+      # main/nightly so PR runs restore but never evict the shared entry.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: rust -> target
+          key: macos-bundle-${{ env.ARCH }}
+          save-if: ${{ github.event_name != 'pull_request' }}
       - name: Build desktop React and target-native production modules
         run: |
           node -p 'JSON.stringify({node:process.version,abi:process.versions.modules,os:process.platform,arch:process.arch})' | tee "$PP_EVIDENCE/node-version.json"
