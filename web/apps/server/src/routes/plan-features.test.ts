@@ -1,6 +1,9 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import Database from "better-sqlite3";
+import { drizzle } from "drizzle-orm/better-sqlite3";
+import * as schema from "../db/schema.js";
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrinterSendQueueItem } from "@print-partner/contracts";
@@ -12,7 +15,7 @@ import { getIntegrationAdapter } from "../integrations/registry.js";
 import { tenantStorage } from "../middleware/tenant-context.js";
 import { InProcessJobRunner } from "../services/job-runner.js";
 import { saveFleet } from "../services/printer-fleet.js";
-import { patchPlanFeatures } from "../services/plan-features.js";
+import { patchPlanFeatures, selectFarmSuggestionItems } from "../services/plan-features.js";
 import { registerPlanRoutes } from "./plans.js";
 import { registerPrinterSendQueueRoutes } from "./printer-send-queue.js";
 
@@ -200,7 +203,7 @@ describe("plan features and aggregate farm suggestions", () => {
     { future: true }, { constructor: true }, JSON.parse('{"__proto__":true}')])(
     "rejects invalid patch %j without writes", async (body) => {
       repo.setSetting(planKey(), '{"orders":false}');
-      const writes = vi.spyOn(repo, "compareAndSetSetting");
+      const writes = vi.spyOn(repo, "compareAndSetOwnedPlanFeatures");
       expect((await patch(body)).statusCode).toBe(400);
       expect(repo.getSettingSnapshot(planKey())).toEqual({ kind: "stored", value: '{"orders":false}' });
       expect(writes.mock.calls).toEqual([]);
@@ -209,7 +212,7 @@ describe("plan features and aggregate farm suggestions", () => {
   it.each(["0", "-1", "1.5", "1e0", "0x1", "01", "%20", "%20%31", "9007199254740992", "Infinity"])(
     "rejects coercion or unsafe ID %s before storage", async (id) => {
       const reads = vi.spyOn(repo, "getSettingSnapshot");
-      const writes = vi.spyOn(repo, "compareAndSetSetting");
+      const writes = vi.spyOn(repo, "compareAndSetOwnedPlanFeatures");
       expect((await patch({ farm: true }, `/plans/${id}/features`)).statusCode).toBe(400);
       expect((await app.inject(`/plans/${id}/features`)).statusCode).toBe(400);
       expect(reads.mock.calls).toEqual([]);
@@ -228,7 +231,7 @@ describe("plan features and aggregate farm suggestions", () => {
     repo.setSetting(planKey(), '{"farm":true}');
     repo.deleteProfile(profileId);
     const reads = vi.spyOn(repo, "getSettingSnapshot");
-    const writes = vi.spyOn(repo, "compareAndSetSetting");
+    const writes = vi.spyOn(repo, "compareAndSetOwnedPlanFeatures");
     for (const id of [foreign, profileId, 999999]) {
       for (const method of ["GET", "PATCH"] satisfies Array<"GET" | "PATCH">) {
         const response = await app.inject({ method, url: `/plans/${id}/features`,
@@ -247,7 +250,7 @@ describe("plan features and aggregate farm suggestions", () => {
         repo.setSetting("feature_toggles", '{"farm":true}');
         repo.setSetting(planKey(), '{"farm":true}');
         repo.setSetting(key, value);
-        const writes = vi.spyOn(repo, "compareAndSetSetting");
+        const writes = vi.spyOn(repo, "compareAndSetOwnedPlanFeatures");
         for (const response of [await app.inject(url()), await patch({ farm: true })]) {
           expect(response.statusCode).toBe(500);
           expect(response.json()).toEqual(invalid);
@@ -266,7 +269,7 @@ describe("plan features and aggregate farm suggestions", () => {
       repo.setSetting(planKey(), "invalid");
       saveQueue([queue("legacy"), queue("owned", profileId)]);
       const reads = vi.spyOn(repo, "getSettingSnapshot");
-      const writes = vi.spyOn(repo, "compareAndSetSetting");
+      const writes = vi.spyOn(repo, "compareAndSetOwnedPlanFeatures");
       for (const prefix of ["", "/api/v1", "/api/v2"]) {
         expect((await app.inject(`${prefix}${url()}`)).statusCode).toBe(404);
         expect((await patch({ farm: true }, `${prefix}${url()}`)).statusCode).toBe(404);
@@ -285,8 +288,8 @@ describe("plan features and aggregate farm suggestions", () => {
     const otherSqlite = new SqliteDatabase(dataDir);
     otherSqlite.connect();
     const otherRepo = new AppRepository(getDb(otherSqlite), undefined, otherSqlite.reposDir);
-    const original = repo.compareAndSetSetting.bind(repo);
-    const writes = vi.spyOn(repo, "compareAndSetSetting").mockImplementationOnce((input) => {
+    const original = repo.compareAndSetOwnedPlanFeatures.bind(repo);
+    const writes = vi.spyOn(repo, "compareAndSetOwnedPlanFeatures").mockImplementationOnce((input) => {
       otherRepo.setSetting(planKey(), '{"orders":true,"future":[1]}');
       return original(input);
     });
@@ -299,10 +302,59 @@ describe("plan features and aggregate farm suggestions", () => {
     } finally { otherSqlite.close(); }
   });
 
+  it.each([undefined, '{}'])("rejects a patch if a second SQLite connection deletes the plan before CAS with %j", async (stored) => {
+    if (stored !== undefined) repo.setSetting(planKey(), stored);
+    const otherSqlite = new SqliteDatabase(dataDir);
+    otherSqlite.connect();
+    const otherRepo = new AppRepository(getDb(otherSqlite), undefined, otherSqlite.reposDir);
+    const original = repo.compareAndSetOwnedPlanFeatures.bind(repo);
+    vi.spyOn(repo, "compareAndSetOwnedPlanFeatures").mockImplementationOnce((input) => {
+      otherRepo.deleteProfile(profileId);
+      return original(input);
+    });
+    try {
+      const response = await patch({ farm: true });
+      expect(response.statusCode).toBe(404);
+      expect(response.json()).toEqual({ detail: "Plan not found" });
+      expect(otherRepo.getSettingSnapshot(planKey())).toEqual({ kind: "missing" });
+    } finally { otherSqlite.close(); }
+  });
+
+  it("deletes retained plan settings and preserves a foreign plan's settings", () => {
+    const keys = [`production_setup:${profileId}`, `role_filaments_${profileId}`, planKey()];
+    for (const key of keys) repo.setSetting(key, '{"retained":true}');
+    const otherSqlite = new SqliteDatabase(dataDir);
+    otherSqlite.connect();
+    const otherRepo = new AppRepository(getDb(otherSqlite), undefined, otherSqlite.reposDir);
+    try {
+      tenantStorage.run("other", () => otherRepo.deleteProfile(profileId));
+      expect(keys.map((key) => repo.getSettingSnapshot(key))).toEqual([
+        { kind: "stored", value: '{"retained":true}' },
+        { kind: "stored", value: '{"retained":true}' },
+        { kind: "stored", value: '{"retained":true}' },
+      ]);
+      const foreign = tenantStorage.run("other", () => {
+        const id = otherRepo.createProfile("Foreign retained plan").id;
+        otherRepo.setSetting(`feature_toggles:plan:${id}`, '{"farm":true}');
+        return id;
+      });
+      repo.setSetting(`feature_toggles:plan:${foreign}`, '{"future":true}');
+      otherRepo.deleteProfile(foreign);
+      expect(repo.getSettingSnapshot(`feature_toggles:plan:${foreign}`)).toEqual({ kind: "stored", value: '{"future":true}' });
+      expect(tenantStorage.run("other", () => otherRepo.getSettingSnapshot(`feature_toggles:plan:${foreign}`)))
+        .toEqual({ kind: "stored", value: '{"farm":true}' });
+      otherRepo.deleteProfile(profileId);
+      expect(repo.getOwnedProfileIdentity(profileId)).toBeNull();
+      expect(keys.map((key) => repo.getSettingSnapshot(key))).toEqual([
+        { kind: "missing" }, { kind: "missing" }, { kind: "missing" },
+      ]);
+    } finally { otherSqlite.close(); }
+  });
+
   it("stops after five CAS conflicts and preserves the latest writer", async () => {
-    const original = repo.compareAndSetSetting.bind(repo);
+    const original = repo.compareAndSetOwnedPlanFeatures.bind(repo);
     let version = 0;
-    const writes = vi.spyOn(repo, "compareAndSetSetting").mockImplementation((input) => {
+    const writes = vi.spyOn(repo, "compareAndSetOwnedPlanFeatures").mockImplementation((input) => {
       repo.setSetting(planKey(), JSON.stringify({ orders: true, future: ++version }));
       return original(input);
     });
@@ -314,8 +366,8 @@ describe("plan features and aggregate farm suggestions", () => {
   });
 
   it("rechecks corruption and ownership after a CAS conflict", async () => {
-    const original = repo.compareAndSetSetting.bind(repo);
-    const writes = vi.spyOn(repo, "compareAndSetSetting").mockImplementationOnce((input) => {
+    const original = repo.compareAndSetOwnedPlanFeatures.bind(repo);
+    const writes = vi.spyOn(repo, "compareAndSetOwnedPlanFeatures").mockImplementationOnce((input) => {
       repo.setSetting(planKey(), "");
       return original(input);
     });
@@ -323,13 +375,13 @@ describe("plan features and aggregate farm suggestions", () => {
     expect(writes.mock.calls).toHaveLength(1);
     writes.mockRestore();
     repo.setSetting(planKey(), "{}");
-    const deletion = vi.spyOn(repo, "compareAndSetSetting").mockImplementationOnce(() => {
+    const deletion = vi.spyOn(repo, "compareAndSetOwnedPlanFeatures").mockImplementationOnce(() => {
       repo.deleteProfile(profileId);
       return false;
     });
     expect((await patch({ farm: true })).statusCode).toBe(404);
     expect(deletion.mock.calls).toHaveLength(1);
-    expect(repo.getSettingSnapshot(planKey())).toEqual({ kind: "stored", value: "{}" });
+    expect(repo.getSettingSnapshot(planKey())).toEqual({ kind: "missing" });
   });
 
   it("filters aggregate suggestions by live stored plans while leaving the manual queue readable", async () => {
@@ -345,7 +397,7 @@ describe("plan features and aggregate farm suggestions", () => {
     const reads = vi.spyOn(repo, "getSettingSnapshot");
     const filaments = vi.spyOn(repo, "listParts");
     expect((await suggestions()).json()).toEqual(expectedSuggestion(["eligible-a", "eligible-b"]));
-    expect(reads.mock.calls.filter(([key]) => key === planKey())).toEqual([[planKey()]]);
+    expect(reads.mock.calls.filter(([key]) => key === planKey())).toEqual([]);
     expect(reads.mock.calls.some(([key]) => key === `feature_toggles:plan:${foreign}`)).toBe(false);
     expect(filaments.mock.calls).toEqual([[profileId, 10_000, 0], [profileId, 10_000, 0]]);
     expect((await app.inject("/printer-send-queue")).json()).toEqual({ items });
@@ -357,6 +409,45 @@ describe("plan features and aggregate farm suggestions", () => {
     expect((await suggestions()).json()).toEqual(expectedSuggestion(["legacy"]));
     saveQueue([queue("hidden", hidden)]);
     expect((await suggestions()).json()).toEqual({ suggestions: [] });
+  });
+
+  it("reads bounded owned-plan batches from SQLite and retains duplicate queue items across the batch boundary", () => {
+    const ids = repo.transaction(() => Array.from({ length: 501 }, (_, index) => repo.createProfile(`Batch ${index}`).id));
+    const first = ids[0];
+    const last = ids[500];
+    if (first === undefined || last === undefined) throw new Error("Batch fixture is incomplete");
+    const foreign = tenantStorage.run("other", () => {
+      const id = repo.createProfile("Foreign batch plan").id;
+      repo.setSetting(`feature_toggles:plan:${id}`, "corrupt foreign setting");
+      return id;
+    });
+    repo.setSetting("feature_toggles", '{"farm":false}');
+    repo.setSetting(`feature_toggles:plan:${first}`, '{"farm":true}');
+    repo.setSetting(`feature_toggles:plan:${last}`, '{"farm":true}');
+    const queued = ids.map((id, index) => queue(`batch-${index}`, id));
+    saveQueue([...queued, queue("duplicate-first", first), queue("duplicate-last", last),
+      queue("foreign", foreign), queue("missing", 999999), queue("legacy")]);
+    const raw = new Database(sqlite.dbPath);
+    const queries: Array<{ query: string; params: unknown[] }> = [];
+    const counted = new AppRepository(drizzle(raw, { schema,
+      logger: { logQuery: (query, params) => queries.push({ query, params }) },
+    }), undefined, sqlite.reposDir);
+    try {
+      const result = selectFarmSuggestionItems(counted);
+      expect(result.kind).toBe("allowed");
+      if (result.kind !== "allowed") throw new Error("Expected allowed farm selection");
+      expect(result.items.map((item) => item.id)).toEqual(["batch-0", "batch-500", "duplicate-first", "duplicate-last"]);
+      const batches = queries.filter(({ query }) => query.includes('left join "app_settings"'));
+      expect(batches.map(({ params }) => params.length)).toEqual([502, 5]);
+      expect(queries.filter(({ query }) => query.includes('from "build_profiles"'))).toHaveLength(2);
+      repo.setSetting(`feature_toggles:plan:${last}`, "");
+      expect(selectFarmSuggestionItems(counted)).toEqual({ kind: "invalid_storage" });
+      expect(counted.getOwnedPlanFeatureSnapshots([first, ids[1] ?? first, last, foreign, 999999])).toEqual([
+        { profileId: first, snapshot: { kind: "stored", value: '{"farm":true}' } },
+        { profileId: ids[1], snapshot: { kind: "missing" } },
+        { profileId: last, snapshot: { kind: "stored", value: "" } },
+      ]);
+    } finally { raw.close(); }
   });
 
   it("profileless legacy items inherit user farm and missing plan overrides inherit both ways", async () => {

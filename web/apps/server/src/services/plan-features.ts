@@ -1,6 +1,7 @@
 import type { PrinterSendQueueItem } from "@print-partner/contracts";
 import { z } from "zod";
 import type { AppRepository } from "../db/repository.js";
+import { planFeatureSettingKey } from "../db/plan-feature-settings.js";
 import {
   desktopFeaturesEnabled,
   featureKeys,
@@ -35,10 +36,6 @@ type FarmSelection =
   | { kind: "disabled" }
   | { kind: "invalid_storage" };
 
-function planKey(id: number): string {
-  return `feature_toggles:plan:${id}`;
-}
-
 function view(profileId: number, user: FeatureChoices, plan: FeatureChoices): PlanFeatureView {
   return {
     profile_id: profileId,
@@ -54,7 +51,7 @@ export function readPlanFeatures(repo: AppRepository, params: unknown): PlanFeat
   const { id } = parsed.data;
   if (!repo.getOwnedProfileIdentity(id)) return { kind: "not_found" };
   const user = parseFeatureLayer(repo.getSettingSnapshot("feature_toggles"));
-  const plan = parseFeatureLayer(repo.getSettingSnapshot(planKey(id)));
+  const plan = parseFeatureLayer(repo.getSettingSnapshot(planFeatureSettingKey(id)));
   if (!user || !plan) return { kind: "invalid_storage" };
   return { kind: "ready", view: view(id, user.choices, plan.choices) };
 }
@@ -68,7 +65,7 @@ export function patchPlanFeatures(repo: AppRepository, params: unknown, body: un
   for (let attempt = 0; attempt < 5; attempt += 1) {
     if (!repo.getOwnedProfileIdentity(id)) return { kind: "not_found" };
     const user = parseFeatureLayer(repo.getSettingSnapshot("feature_toggles"));
-    const snapshot = repo.getSettingSnapshot(planKey(id));
+    const snapshot = repo.getSettingSnapshot(planFeatureSettingKey(id));
     const plan = parseFeatureLayer(snapshot);
     if (!user || !plan) return { kind: "invalid_storage" };
     const raw = { ...plan.raw };
@@ -84,7 +81,7 @@ export function patchPlanFeatures(repo: AppRepository, params: unknown, body: un
         choices[key] = value;
       }
     }
-    if (repo.compareAndSetSetting({ key: planKey(id), expected: snapshot, value: JSON.stringify(raw) })) {
+    if (repo.compareAndSetOwnedPlanFeatures({ profileId: id, expected: snapshot, value: JSON.stringify(raw) })) {
       return { kind: "ready", view: view(id, user.choices, choices) };
     }
   }
@@ -100,6 +97,13 @@ export function selectFarmSuggestionItems(repo: AppRepository): FarmSelection {
   const userEnabled = resolveFeature("farm", user.choices).enabled;
   const queued = listActivePrinterSendQueue(repo).filter((item) => item.state === "queued");
   const enabledPlans = new Map<number, boolean>();
+  const profileIds = [...new Set(queued.flatMap((item) => item.profile_id != null
+    && profileIdSchema.safeParse(item.profile_id).success ? [item.profile_id] : []))];
+  for (const { profileId, snapshot } of repo.getOwnedPlanFeatureSnapshots(profileIds)) {
+    const plan = parseFeatureLayer(snapshot);
+    if (!plan) return { kind: "invalid_storage" };
+    enabledPlans.set(profileId, resolveFeature("farm", user.choices, plan.choices).enabled);
+  }
   const items: PrinterSendQueueItem[] = [];
   for (const item of queued) {
     if (item.profile_id == null) {
@@ -107,15 +111,6 @@ export function selectFarmSuggestionItems(repo: AppRepository): FarmSelection {
       continue;
     }
     const id = item.profile_id;
-    if (!enabledPlans.has(id)) {
-      if (!profileIdSchema.safeParse(id).success || !repo.getOwnedProfileIdentity(id)) {
-        enabledPlans.set(id, false);
-      } else {
-        const plan = parseFeatureLayer(repo.getSettingSnapshot(planKey(id)));
-        if (!plan) return { kind: "invalid_storage" };
-        enabledPlans.set(id, resolveFeature("farm", user.choices, plan.choices).enabled);
-      }
-    }
     if (enabledPlans.get(id)) items.push(item);
   }
   return userEnabled || items.length > 0 ? { kind: "allowed", items } : { kind: "disabled" };
