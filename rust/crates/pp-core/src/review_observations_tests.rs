@@ -490,7 +490,10 @@ fn review_regression_colorless_provider_uses_neutral_swatch() {
     let lookup = SnapshotFilamentLookup {
         integration_id: "local".into(),
         spools: vec![],
-        filaments: parse_filaments(&json!([{"id":2,"name":"Natural","color_hex":" "}])),
+        filaments: parse_filaments(&json!([
+            {"id":2,"name":"Natural","color_hex":" "},
+            {"id":3,"name":"Short","color_hex":"#abc"}
+        ])),
     };
     assert_eq!(
         lookup
@@ -500,6 +503,15 @@ fn review_regression_colorless_provider_uses_neutral_swatch() {
             .hex
             .as_deref(),
         Some("#888888")
+    );
+    assert_eq!(
+        lookup
+            .for_part(Some("spoolman:local:filament:3"), None)
+            .unwrap()
+            .unwrap()
+            .hex
+            .as_deref(),
+        Some("#abc")
     );
 }
 
@@ -634,4 +646,18 @@ fn review_reads_accepted_unix_colon_names() {
     .unwrap();
     *f.artifact_mut().1 = "parts/body:v2.stl".into();
     assert!(!f.observe().media_by_part_id[&9].artifact_missing);
+}
+
+#[test]
+fn review_cancelled_empty_snapshot_is_an_error() {
+    let mut f = Fixture::new();
+    f.snapshot.provenance = Provenance::Legacy;
+    f.snapshot.parts.clear();
+    assert_eq!(
+        f.observer
+            .review_observations(&f.snapshot, &AtomicBool::new(true))
+            .unwrap_err()
+            .to_string(),
+        "Review observation cancelled"
+    );
 }

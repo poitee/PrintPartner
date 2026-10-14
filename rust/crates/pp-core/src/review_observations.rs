@@ -238,6 +238,7 @@ impl SnapshotReviewObserver {
                 },
             );
         }
+        budget.check()?;
         Ok(ReviewObservations {
             available_input_roots,
             media_by_part_id,
@@ -732,7 +733,9 @@ fn parse_filaments(value: &Value) -> HashMap<i64, ProviderFilament> {
             };
             let hex = text(object.get("color_hex"), 20).and_then(|value| {
                 let value = value.trim().trim_start_matches('#');
-                valid_hex(value).then(|| format!("#{}", value.to_ascii_lowercase()))
+                (matches!(value.len(), 3 | 4 | 6 | 8)
+                    && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
+                .then(|| format!("#{}", value.to_ascii_lowercase()))
             });
             Some((
                 id,
