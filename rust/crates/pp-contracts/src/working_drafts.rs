@@ -79,7 +79,7 @@ impl Default for RecomputeOptions {
 #[serde(deny_unknown_fields)]
 pub struct ExpectedDraft {
     pub snapshot_digest: crate::autosave::Digest,
-    pub lifecycle_version: u32,
+    pub lifecycle_version: WireInteger<0, 2_147_483_647>,
     pub base: crate::autosave::PlanDraftBasis,
 }
 
@@ -172,13 +172,72 @@ pub enum SourceState {
     Abandoned,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "RebaseRequestWire")]
 pub struct RebaseRequest {
-    pub source_draft_id: PositiveId,
+    source_draft_id: PositiveId,
+    expected_source_state: SourceState,
+    expected_source_lifecycle_version: WireInteger<0, 2_147_483_647>,
+    expected_source_snapshot_digest: crate::autosave::Digest,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RebaseRequestWire {
+    source_draft_id: PositiveId,
     #[serde(default)]
-    pub expected_source_state: SourceState,
-    pub expected_source_lifecycle_version: u32,
-    pub expected_source_snapshot_digest: crate::autosave::Digest,
+    expected_source_state: SourceState,
+    expected_source_lifecycle_version: WireInteger<0, 2_147_483_647>,
+    expected_source_snapshot_digest: crate::autosave::Digest,
+}
+
+impl RebaseRequest {
+    pub fn new(
+        source_draft_id: PositiveId,
+        expected_source_state: SourceState,
+        expected_source_lifecycle_version: WireInteger<0, 2_147_483_647>,
+        expected_source_snapshot_digest: crate::autosave::Digest,
+    ) -> Result<Self, &'static str> {
+        if matches!(expected_source_state, SourceState::Open)
+            && expected_source_lifecycle_version.get() == 2_147_483_647
+        {
+            return Err("open source lifecycle version must reserve an increment");
+        }
+        Ok(Self {
+            source_draft_id,
+            expected_source_state,
+            expected_source_lifecycle_version,
+            expected_source_snapshot_digest,
+        })
+    }
+
+    pub fn source_draft_id(&self) -> PositiveId {
+        self.source_draft_id
+    }
+
+    pub fn expected_source_state(&self) -> SourceState {
+        self.expected_source_state
+    }
+
+    pub fn expected_source_lifecycle_version(&self) -> WireInteger<0, 2_147_483_647> {
+        self.expected_source_lifecycle_version
+    }
+
+    pub fn expected_source_snapshot_digest(&self) -> &crate::autosave::Digest {
+        &self.expected_source_snapshot_digest
+    }
+}
+
+impl TryFrom<RebaseRequestWire> for RebaseRequest {
+    type Error = &'static str;
+
+    fn try_from(value: RebaseRequestWire) -> Result<Self, Self::Error> {
+        Self::new(
+            value.source_draft_id,
+            value.expected_source_state,
+            value.expected_source_lifecycle_version,
+            value.expected_source_snapshot_digest,
+        )
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

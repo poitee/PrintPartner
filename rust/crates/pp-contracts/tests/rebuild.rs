@@ -95,7 +95,7 @@ fn draft_requests_reject_authority_fields_and_preserve_source_state_default() {
     assert!(serde_json::from_value::<Request>(json!({"kind":"list","tenant_id":1})).is_err());
     let parsed: RebaseRequest = serde_json::from_value(json!({"source_draft_id":1,"expected_source_lifecycle_version":0,"expected_source_snapshot_digest":"a".repeat(64)})).unwrap();
     assert!(matches!(
-        parsed.expected_source_state,
+        parsed.expected_source_state(),
         SourceState::Abandoned
     ));
     assert_eq!(
@@ -174,4 +174,39 @@ fn publication_preserves_transaction_unavailable_outcome() {
     let value = json!({"kind":"transaction_unavailable"});
     let parsed: pp_contracts::publication::Outcome = serde_json::from_value(value.clone()).unwrap();
     assert_eq!(serde_json::to_value(parsed).unwrap(), value);
+}
+
+#[test]
+fn rebase_versions_follow_source_state_and_domain_bounds() {
+    for state in ["open", "abandoned"] {
+        for version in [
+            0u64,
+            2_147_483_646,
+            2_147_483_647,
+            2_147_483_648,
+            u32::MAX as u64,
+        ] {
+            let value = json!({"source_draft_id":1,"expected_source_state":state,"expected_source_lifecycle_version":version,"expected_source_snapshot_digest":"a".repeat(64)});
+            let valid = version <= 2_147_483_647 && (state != "open" || version < 2_147_483_647);
+            let parsed = serde_json::from_value::<RebaseRequest>(value.clone());
+            assert_eq!(parsed.is_ok(), valid, "{state} {version}");
+            let nested =
+                json!({"kind":"rebase","idempotency_key":"rebase-1","request":value.clone()});
+            assert_eq!(serde_json::from_value::<Request>(nested).is_ok(), valid);
+            if let Ok(parsed) = parsed {
+                assert_eq!(serde_json::to_value(parsed).unwrap(), value);
+            }
+        }
+    }
+    let default_state = json!({"source_draft_id":1,"expected_source_lifecycle_version":2_147_483_647u64,"expected_source_snapshot_digest":"a".repeat(64)});
+    assert!(serde_json::from_value::<RebaseRequest>(default_state).is_ok());
+}
+
+#[test]
+fn expected_draft_lifecycle_version_is_domain_bounded() {
+    use pp_contracts::working_drafts::ExpectedDraft;
+    let mut value = json!({"snapshot_digest":"a".repeat(64),"lifecycle_version":2_147_483_647u64,"base":{"revision_id":null,"plan_version":0}});
+    assert!(serde_json::from_value::<ExpectedDraft>(value.clone()).is_ok());
+    value["lifecycle_version"] = json!(2_147_483_648u64);
+    assert!(serde_json::from_value::<ExpectedDraft>(value).is_err());
 }
