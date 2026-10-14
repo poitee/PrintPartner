@@ -21,16 +21,7 @@ fn bounded_auth_workers_and_cancelled_queue_do_not_write() {
         },
     )
     .unwrap();
-    let client = owner
-        .rebuild_auth_with_policy(
-            AuthPolicy {
-                registration: RegistrationPolicy::Open,
-                session_tenant: SessionTenantPolicy::AccountTenant,
-                first_user: FirstUserTenant::NewUser,
-            },
-            AuthLifetimes::default(),
-        )
-        .unwrap();
+    let client = open_client(&owner);
     let storage = owner.client();
     let raw = Connection::open(directory.join("print-partner.db")).unwrap();
     raw.execute_batch("BEGIN IMMEDIATE").unwrap();
@@ -125,16 +116,7 @@ fn verified_short_legacy_password_logs_in_without_rehashing() {
         hex::encode(rand::random::<[u8; 16]>())
     ));
     let (owner, _) = WriterOwner::open(&directory, Limits::default()).unwrap();
-    let client = owner
-        .rebuild_auth_with_policy(
-            AuthPolicy {
-                registration: RegistrationPolicy::Open,
-                session_tenant: SessionTenantPolicy::AccountTenant,
-                first_user: FirstUserTenant::NewUser,
-            },
-            AuthLifetimes::default(),
-        )
-        .unwrap();
+    let client = open_client(&owner);
     run(
         &client,
         Request::Register {
@@ -156,16 +138,7 @@ fn verified_short_legacy_password_logs_in_without_rehashing() {
     drop(db);
 
     let (owner, _) = WriterOwner::open(&directory, Limits::default()).unwrap();
-    let client = owner
-        .rebuild_auth_with_policy(
-            AuthPolicy {
-                registration: RegistrationPolicy::Open,
-                session_tenant: SessionTenantPolicy::AccountTenant,
-                first_user: FirstUserTenant::NewUser,
-            },
-            AuthLifetimes::default(),
-        )
-        .unwrap();
+    let client = open_client(&owner);
     assert!(
         run(
             &client,
@@ -214,16 +187,7 @@ fn cheap_auth_progresses_while_two_valid_logins_are_in_kdf() {
         hex::encode(rand::random::<[u8; 16]>())
     ));
     let (owner, _) = WriterOwner::open(&directory, Limits::default()).unwrap();
-    let client = owner
-        .rebuild_auth_with_policy(
-            AuthPolicy {
-                registration: RegistrationPolicy::Open,
-                session_tenant: SessionTenantPolicy::AccountTenant,
-                first_user: FirstUserTenant::NewUser,
-            },
-            AuthLifetimes::default(),
-        )
-        .unwrap();
+    let client = open_client(&owner);
     let Outcome::Session { token, .. } = run(
         &client,
         Request::Register {
@@ -319,16 +283,7 @@ fn kdf_completion_after_owner_close_returns_stopped() {
         hex::encode(rand::random::<[u8; 16]>())
     ));
     let (owner, _) = WriterOwner::open(&directory, Limits::default()).unwrap();
-    let client = owner
-        .rebuild_auth_with_policy(
-            AuthPolicy {
-                registration: RegistrationPolicy::Open,
-                session_tenant: SessionTenantPolicy::AccountTenant,
-                first_user: FirstUserTenant::NewUser,
-            },
-            AuthLifetimes::default(),
-        )
-        .unwrap();
+    let client = open_client(&owner);
     run(
         &client,
         Request::Register {
@@ -374,16 +329,7 @@ fn ticket_t_17_transaction_cas_rejects_verified_login_after_public_reset() {
         hex::encode(rand::random::<[u8; 16]>())
     ));
     let (owner, _) = WriterOwner::open(&directory, Limits::default()).unwrap();
-    let client = owner
-        .rebuild_auth_with_policy(
-            AuthPolicy {
-                registration: RegistrationPolicy::Open,
-                session_tenant: SessionTenantPolicy::AccountTenant,
-                first_user: FirstUserTenant::NewUser,
-            },
-            AuthLifetimes::default(),
-        )
-        .unwrap();
+    let client = open_client(&owner);
     let Outcome::Session {
         user,
         token: old_session,
@@ -417,16 +363,7 @@ fn ticket_t_17_transaction_cas_rejects_verified_login_after_public_reset() {
         .unwrap();
     drop(db);
     let (owner, _) = WriterOwner::open(&directory, Limits::default()).unwrap();
-    let client = owner
-        .rebuild_auth_with_policy(
-            AuthPolicy {
-                registration: RegistrationPolicy::Open,
-                session_tenant: SessionTenantPolicy::AccountTenant,
-                first_user: FirstUserTenant::NewUser,
-            },
-            AuthLifetimes::default(),
-        )
-        .unwrap();
+    let client = open_client(&owner);
     let credential = Credential {
         user,
         hash: Some(legacy_hash),
@@ -452,11 +389,14 @@ fn ticket_t_17_transaction_cas_rejects_verified_login_after_public_reset() {
         panic!("reset session expected")
     };
     let old = client
-        .submit_verified_login(credential, replacement)
+        .submit_verified_login(credential, replacement, old_password)
         .unwrap()
         .recv()
         .unwrap();
-    assert_eq!(old.err().unwrap().to_string(), "Credential changed");
+    assert!(matches!(
+        old.err().unwrap().downcast_ref::<AuthFailure>(),
+        Some(AuthFailure::InvalidCredentials)
+    ));
     assert!(matches!(
         run(&client, Request::ResolveSession { token: old_session }).unwrap(),
         Outcome::User(None)
@@ -632,6 +572,172 @@ fn lifetimes_apply_only_to_the_opted_in_client() {
         panic!("key expected")
     };
     assert!(info.expires_at.is_none());
+    drop(db);
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+fn open_client(owner: &WriterOwner) -> RebuildAuthClient {
+    owner
+        .rebuild_auth_with_policy(
+            AuthPolicy {
+                registration: RegistrationPolicy::Open,
+                session_tenant: SessionTenantPolicy::AccountTenant,
+                first_user: FirstUserTenant::NewUser,
+            },
+            AuthLifetimes::default(),
+        )
+        .unwrap()
+}
+
+#[test]
+fn ordinary_write_capacity_is_available_while_auth_waits() {
+    let _serial = RUNTIME_TEST
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let root = std::env::temp_dir().join(format!(
+        "pp-auth-capacity-{}",
+        hex::encode(rand::random::<[u8; 16]>())
+    ));
+    let (owner, _) = WriterOwner::open(
+        &root,
+        Limits {
+            queued_writes: 1,
+            readers: 1,
+        },
+    )
+    .unwrap();
+    let storage = owner.client();
+    let client = open_client(&owner);
+    let db = Connection::open(root.join("print-partner.db")).unwrap();
+    db.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let write = |key: &str| {
+        storage.submit(
+            SettingCommand::Set(Setting {
+                tenant: "default".into(),
+                key: key.into(),
+                value: "saved".into(),
+            }),
+            &AtomicBool::new(false),
+            Duration::ZERO,
+        )
+    };
+    let blocking = write("blocking").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !storage.shared.queue.lock().unwrap().pending.is_empty() {
+        assert!(Instant::now() < deadline);
+        thread::yield_now();
+    }
+    let first = client
+        .submit(
+            Request::Status,
+            Arc::new(AtomicBool::new(false)),
+            Duration::ZERO,
+        )
+        .unwrap();
+    let second = client
+        .submit(
+            Request::Status,
+            Arc::new(AtomicBool::new(false)),
+            Duration::ZERO,
+        )
+        .unwrap();
+    let admitted = write("ordinary");
+    let excess = write("excess");
+    db.execute_batch("ROLLBACK").unwrap();
+    assert!(
+        excess.is_err(),
+        "normal writes must retain their own capacity limit"
+    );
+    for reply in [
+        blocking,
+        admitted.expect("auth must not consume ordinary capacity"),
+    ] {
+        assert!(reply.recv_timeout(Duration::from_secs(5)).unwrap().unwrap());
+    }
+    for reply in [first, second] {
+        assert!(matches!(
+            reply.recv_timeout(Duration::from_secs(5)).unwrap().unwrap(),
+            Outcome::Status(_)
+        ));
+    }
+    assert_eq!(
+        storage
+            .reader(Duration::from_secs(5))
+            .unwrap()
+            .get_setting("default", "ordinary", None)
+            .unwrap()
+            .as_deref(),
+        Some("saved")
+    );
+    drop(db);
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn concurrent_legacy_upgrade_reverifies_without_replacing_the_winning_hash() {
+    let _serial = RUNTIME_TEST
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let root = std::env::temp_dir().join(format!(
+        "pp-auth-upgrade-{}",
+        hex::encode(rand::random::<[u8; 16]>())
+    ));
+    let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+    run(
+        &open_client(&owner),
+        Request::Register {
+            email: "upgrade@example.com".into(),
+            display_name: "Upgrade".into(),
+            password: Secret::new("initial-password".into()),
+        },
+    )
+    .unwrap();
+    owner.shutdown().unwrap();
+    let mut db = Connection::open(root.join("print-partner.db")).unwrap();
+    db.execute(
+        "UPDATE users SET password_hash=?1",
+        [include_str!("../../../tests/node-scrypt.txt").trim()],
+    )
+    .unwrap();
+    let tx = db.transaction().unwrap();
+    let first = by_email(&tx, "upgrade@example.com").unwrap().unwrap();
+    let second = by_email(&tx, "upgrade@example.com").unwrap().unwrap();
+    tx.commit().unwrap();
+    let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+    let client = open_client(&owner);
+    let password = || Secret::new("legacy-🖨️-password".into());
+    let hash = crypto::hash(&password()).unwrap();
+    let first = client
+        .submit_verified_login(first, hash.clone(), password())
+        .unwrap()
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap()
+        .unwrap();
+    let second = client
+        .submit_verified_login(second, crypto::hash(&password()).unwrap(), password())
+        .unwrap()
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap()
+        .unwrap();
+    for outcome in [first, second] {
+        let Outcome::Session { token, .. } = outcome else {
+            panic!("session expected")
+        };
+        assert!(matches!(
+            run(&client, Request::ResolveSession { token }).unwrap(),
+            Outcome::User(Some(_))
+        ));
+    }
+    let stored: String = db
+        .query_row("SELECT password_hash FROM users", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(stored, hash);
+    let sessions: i64 = db
+        .query_row("SELECT count(*) FROM sessions", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(sessions, 3);
     drop(db);
     owner.shutdown().unwrap();
     std::fs::remove_dir_all(root).unwrap();

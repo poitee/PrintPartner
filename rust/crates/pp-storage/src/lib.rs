@@ -103,17 +103,16 @@ enum Envelope {
         policy: auth::AuthPolicy,
         reply: mpsc::Sender<Result<auth::Reply>>,
     },
-    #[cfg(feature = "desktop_rebuild")]
-    AuthReady {
-        ready: VecDeque<auth::rebuild::WriterWork>,
-        next: QueueClass,
-    },
     WriterControl {
         control: WriterControl,
         reply: mpsc::Sender<Result<u32>>,
     },
 }
 struct Queue {
+    #[cfg(feature = "desktop_rebuild")]
+    auth_ready: VecDeque<auth::rebuild::WriterWork>,
+    #[cfg(feature = "desktop_rebuild")]
+    next: QueueClass,
     closed: bool,
     pending: VecDeque<Envelope>,
 }
@@ -225,7 +224,7 @@ impl SettingsClient {
             auth::rebuild::finish_stopped(work);
             return;
         }
-        push_auth_ready(&mut queue.pending, work);
+        queue.auth_ready.push_back(work);
         self.shared.changed.notify_all();
     }
 
@@ -419,6 +418,10 @@ impl WriterOwner {
         });
         let shared = Arc::new(Shared {
             queue: Mutex::new(Queue {
+                #[cfg(feature = "desktop_rebuild")]
+                auth_ready: VecDeque::new(),
+                #[cfg(feature = "desktop_rebuild")]
+                next: QueueClass::Normal,
                 closed: false,
                 pending: VecDeque::new(),
             }),
@@ -451,14 +454,19 @@ impl WriterOwner {
                 let scheduled = {
                     let mut queue = worker.queue.lock().expect("Writer admission poisoned");
                     loop {
-                        if let Some(scheduled) = schedule(&mut queue.pending, Instant::now()) {
+                        if let Some(scheduled) = schedule(&mut queue, Instant::now()) {
                             worker.changed.notify_all();
                             break Some(scheduled);
                         }
-                        if queue.closed && queue.pending.is_empty() {
+                        if queue.closed && queue.pending.is_empty() && queue.auth_ready.is_empty() {
                             break None;
                         }
-                        if let Some(retry) = earliest_auth_retry(&queue.pending) {
+                        if let Some(retry) = queue
+                            .auth_ready
+                            .iter()
+                            .filter_map(|work| work.retry_at())
+                            .min()
+                        {
                             let wait = retry.saturating_duration_since(Instant::now());
                             queue = worker
                                 .changed
@@ -483,7 +491,7 @@ impl WriterOwner {
                     Scheduled::Auth(work) => {
                         if let Some(retry) = auth::rebuild::advance(&mut connection, work) {
                             let mut queue = worker.queue.lock().expect("Writer admission poisoned");
-                            push_auth_ready(&mut queue.pending, retry);
+                            queue.auth_ready.push_back(retry);
                             worker.changed.notify_all();
                         }
                         continue;
@@ -525,8 +533,6 @@ impl WriterOwner {
                     } => {
                         let _ = reply.send(auth::execute(&mut connection, command, policy));
                     }
-                    #[cfg(feature = "desktop_rebuild")]
-                    Envelope::AuthReady { .. } => unreachable!(),
                     Envelope::WriterControl { control, reply } => {
                         let _ = reply.send(writer_control(&connection, control));
                     }

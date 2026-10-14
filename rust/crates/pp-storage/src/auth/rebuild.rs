@@ -218,7 +218,10 @@ enum Continuation {
         email: String,
         display_name: String,
     },
-    Login(Credential),
+    Login {
+        credential: Credential,
+        retried: bool,
+    },
     ChangePassword {
         session: String,
         credential: Credential,
@@ -229,7 +232,10 @@ enum Continuation {
 }
 enum KdfOutcome {
     Hash(String),
-    LoginVerified(Option<String>),
+    LoginVerified {
+        replacement: Option<String>,
+        password: Secret,
+    },
     ChangeVerified(String),
 }
 struct KdfJob {
@@ -340,7 +346,10 @@ fn run_kdf(job: KdfJob) {
                     } else {
                         None
                     };
-                    Ok(KdfOutcome::LoginVerified(replacement))
+                    Ok(KdfOutcome::LoginVerified {
+                        replacement,
+                        password,
+                    })
                 }
                 KdfTask::ChangePassword {
                     current,
@@ -417,6 +426,7 @@ impl RebuildAuthClient {
         &self,
         credential: Credential,
         replacement: String,
+        password: Secret,
     ) -> Result<AuthReply> {
         let cancelled = Arc::new(AtomicBool::new(false));
         let lease = self.runtime.acquire(&cancelled, Duration::from_secs(5))?;
@@ -433,8 +443,14 @@ impl RebuildAuthClient {
         };
         self.storage.enqueue_auth(WriterWork::resume(
             flow,
-            Continuation::Login(credential),
-            Ok(KdfOutcome::LoginVerified(Some(replacement))),
+            Continuation::Login {
+                credential,
+                retried: false,
+            },
+            Ok(KdfOutcome::LoginVerified {
+                replacement: Some(replacement),
+                password,
+            }),
         ));
         Ok(receiver)
     }
@@ -495,8 +511,22 @@ pub(crate) fn advance(connection: &mut Connection, work: WriterWork) -> Option<W
             let result = result.and_then(|result| {
                 resume(connection, policy, flow.lifetimes, continuation, result)
             });
-            flow.finish(result);
-            None
+            match result {
+                Ok(Prepared::Complete(outcome)) => {
+                    flow.finish(Ok(outcome));
+                    None
+                }
+                Ok(Prepared::Kdf(task, continuation)) => submit_kdf(KdfJob {
+                    flow,
+                    task,
+                    continuation,
+                    writer_ready_since: Instant::now(),
+                }),
+                Err(error) => {
+                    flow.finish(Err(error));
+                    None
+                }
+            }
         }
     }
 }
@@ -571,7 +601,10 @@ fn prepare(connection: &mut Connection, flow: &AuthFlow, request: Request) -> Re
                 .ok_or_else(|| anyhow!(AuthFailure::InvalidCredentials))?;
             Ok(Prepared::Kdf(
                 KdfTask::Login { password, stored },
-                Continuation::Login(credential),
+                Continuation::Login {
+                    credential,
+                    retried: false,
+                },
             ))
         }
         Request::ResolveSession { token } => execute_outcome(
@@ -767,7 +800,7 @@ fn resume(
     lifetimes: AuthLifetimes,
     continuation: Continuation,
     result: KdfOutcome,
-) -> Result<Outcome> {
+) -> Result<Prepared> {
     let command = match (continuation, result) {
         (
             Continuation::Register {
@@ -781,11 +814,61 @@ fn resume(
             hash,
             first_user: policy.first_user,
         },
-        (Continuation::Login(credential), KdfOutcome::LoginVerified(replacement)) => {
-            Command::Login {
+        (
+            Continuation::Login {
                 credential,
+                retried,
+            },
+            KdfOutcome::LoginVerified {
                 replacement,
+                password,
+            },
+        ) => {
+            let user_id = credential.user.user_id.clone();
+            let email = credential
+                .user
+                .email
+                .clone()
+                .ok_or(AuthFailure::InvalidCredentials)?;
+            let result = execute_outcome(
+                connection,
+                Command::Login {
+                    credential,
+                    replacement,
+                },
+                policy,
+                lifetimes,
+            );
+            if !retried
+                && result.as_ref().is_err_and(|error| {
+                    matches!(
+                        error.downcast_ref::<AuthFailure>(),
+                        Some(AuthFailure::CredentialChanged)
+                    )
+                })
+            {
+                let credential = execute_credential(
+                    connection,
+                    Command::CredentialByEmail(email),
+                    policy,
+                    lifetimes,
+                )?
+                .filter(|current| current.user.user_id == user_id)
+                .ok_or(AuthFailure::InvalidCredentials)?;
+                let stored = credential
+                    .hash
+                    .as_deref()
+                    .and_then(crypto::inspect)
+                    .ok_or(AuthFailure::InvalidCredentials)?;
+                return Ok(Prepared::Kdf(
+                    KdfTask::Login { password, stored },
+                    Continuation::Login {
+                        credential,
+                        retried: true,
+                    },
+                ));
             }
+            return result;
         }
         (
             Continuation::ChangePassword {
@@ -811,7 +894,7 @@ fn resume(
         },
         policy,
     )? {
-        Reply::Outcome(outcome) => Ok(outcome),
+        Reply::Outcome(outcome) => Ok(Prepared::Complete(outcome)),
         Reply::Credential(_) => bail!("Unexpected authentication reply"),
     }
 }

@@ -136,8 +136,10 @@ setting before selecting it.
 The rebuild client admits at most 34 flows and sends only password hashing and
 verification to two KDF workers. SQL stages run through the storage writer;
 status, session resolution, logout and key operations can progress while both KDF
-workers are occupied. Ready auth work alternates with ordinary writer work, and
-full KDF queues retry without blocking that writer. Shutdown rejects late KDF
+workers are occupied. Ready auth work has a separate queue and alternates with ordinary writer work,
+so it cannot consume ordinary write capacity. Full KDF queues retry without
+blocking that writer. A login that loses a credential comparison retries once
+by reloading the same user and re-verifying the supplied password outside the writer. Shutdown rejects late KDF
 results. Credential compare-and-swap checks remain in the shared SQL executor.
 `AuthLifetimes::shorter` supports shorter sessions and optional key expiry.
 
