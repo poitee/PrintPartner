@@ -1,0 +1,4 @@
+ts	phase	decision	why	evidence	result
+2026-10-14T12:03:23Z	frame	Choose native acceptance over owner mapping	Owner mapping depends on active D slices; native boundary is already implemented	Linear GRE-353 and rust/crates/pp-desktop/src/main.rs	design open
+2026-10-14T12:16:05Z	design	Use explicit assertion with independent literal test fixture	Grok Build found shared production and fixture keys could hide omission	/persist/home/.local/state/pstack-t3/gre353-next/design-judge.md	chosen
+2026-10-14T12:16:05Z	verification	Validate a fresh direct native launch using the actual validator function	SDK isolation masks system libraries and sanitized Node cannot start; direct DBus/Xvfb launch passes	/persist/home/.local/state/pstack-t3/gre353-next/direct-native.stdout.log	wrapper limitation explicit

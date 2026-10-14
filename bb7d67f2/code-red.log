@@ -1,0 +1,11 @@
+Traceback (most recent call last):
+  File "/persist/worktrees/t3/PrintPartner/owner-gre353-next-202610140800-a1c4/rust/scripts/native-process-probe.py", line 73, in <module>
+    self_test()
+    ~~~~~~~~~^^
+  File "/persist/worktrees/t3/PrintPartner/owner-gre353-next-202610140800-a1c4/rust/scripts/native-process-probe.py", line 58, in self_test
+    raise AssertionError('Invalid native process evidence was accepted')
+AssertionError: Invalid native process evidence was accepted
+
+Command: python3 /persist/home/pstack-t3/skills/landing/scripts/land.py slot -- python3 rust/scripts/native-process-probe.py --self-test
+Exit code: 1, expected before validator change.
+The first accepted invalid control was close_hid=1. The rejection runner raised AssertionError.

@@ -1,0 +1,7 @@
+PASS: native-process-probe self-tests (valid receipt and 64 rejected failures)
+
+Self-test command: python3 /persist/home/pstack-t3/skills/landing/scripts/land.py slot -- python3 rust/scripts/native-process-probe.py --self-test
+Self-test exit code: 0.
+Compile command: PYTHONPYCACHEPREFIX=/persist/home/.local/state/pstack-t3/gre353-next/pycache python3 /persist/home/pstack-t3/skills/landing/scripts/land.py slot -- python3 -m py_compile rust/scripts/native-process-probe.py
+Compile exit code: 0, no output.
+git diff --check exit code: 0, no output.

@@ -1,0 +1,27 @@
+{
+  "result": "PASS",
+  "proof_class": "native_linux_unsigned_process_direct_launch",
+  "source_head": "bb7d67f2c98fb0cb7ac2e2cae0f3e84a435b553a",
+  "validator_sha256": "d0cbb18686ac3f7988b3fe6e887e2b94fdd1931640f65556870579421816c0a2",
+  "binary_sha256": "e66918c57ef2046e421db624122c311c934ffed6ffb5c7c0a14c49f3588991f6",
+  "manifest_sha256": "f83c5f37c4593bde29e8d562f9210f773c7e2f33b8dc7064089d6a4a76bab2ba",
+  "stage_commit": "bb7d67f2c98fb0cb7ac2e2cae0f3e84a435b553a",
+  "exit_code": 0,
+  "shutdown": {
+    "proof_class": "headless_unsigned",
+    "compat_reaped": true,
+    "storage_released": true,
+    "gateway_stopped": true,
+    "marker_removed": true,
+    "runtime_removed": true,
+    "errors": []
+  },
+  "native_window": {
+    "close_hid": true,
+    "show_visible": true
+  },
+  "owner_marker_absent": true,
+  "rendered_ui": false,
+  "macos": false,
+  "sdk_isolation_wrapper": false
+}
