@@ -25,13 +25,19 @@ impl Drop for StopProcess {
     }
 }
 
+// macOS clocks tick in microseconds, so parallel tests can read the same time.
 fn temp_dir(name: &str) -> PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let path = std::env::temp_dir().join(format!("pp-t7-{name}-{}-{nanos}", std::process::id()));
-    std::fs::create_dir_all(&path).unwrap();
+    let serial = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!(
+        "pp-t7-{name}-{}-{nanos}-{serial}",
+        std::process::id()
+    ));
+    std::fs::create_dir(&path).unwrap();
     path
 }
 
