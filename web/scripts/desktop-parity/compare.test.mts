@@ -211,6 +211,22 @@ test("publication route with identical before and after states fails parity agai
     /route_cases\.bound-http-final-inclusion-and-quantity: one-publication/,
   );
 });
+test("publication route whose after state still has a plate head fails parity against itself", () => {
+  const corrupt = changed((capture) => {
+    const route = named(capture, "route_cases", "bound-http-final-inclusion-and-quantity");
+    const headed = named(capture, "setup_operations", "initial-accepted-plate").state;
+    assert(typeof headed === "string" && headed !== route.before && headed !== route.after);
+    const heads = object(object(object(capture.states)[headed]).database).accepted_plate_heads;
+    const afterHeads = object(object(object(capture.states)[String(route.after)]).database).accepted_plate_heads;
+    assert(Array.isArray(heads) && heads.length > 0);
+    assert(Array.isArray(afterHeads) && afterHeads.length === 0);
+    route.after = headed;
+  });
+  assert.throws(
+    () => compare(corrupt, structuredClone(corrupt)),
+    /route_cases\.bound-http-final-inclusion-and-quantity: current-plate-head-invalidated/,
+  );
+});
 test("file digest drift fails parity against itself", () => {
   const corrupt = changed((capture) => {
     const states = object(capture.states);
