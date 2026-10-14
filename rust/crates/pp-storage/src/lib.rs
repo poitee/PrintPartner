@@ -309,6 +309,28 @@ impl Drop for ReaderCheckout {
 }
 impl WriterOwner {
     pub fn open(directory: &Path, limits: Limits) -> Result<(Self, SchemaReady)> {
+        Self::open_with_effect_policy(directory, limits, jobs::EffectAdmissionPolicy::Legacy)
+    }
+
+    /// Enforces feature choices for new Spoolman deductions on every worker.
+    /// Call this constructor again on reopen to retain admission enforcement.
+    #[cfg(feature = "desktop_rebuild")]
+    pub fn open_with_job_feature_admission(
+        directory: &Path,
+        limits: Limits,
+    ) -> Result<(Self, SchemaReady)> {
+        Self::open_with_effect_policy(
+            directory,
+            limits,
+            jobs::EffectAdmissionPolicy::EnforceFeatures,
+        )
+    }
+
+    fn open_with_effect_policy(
+        directory: &Path,
+        limits: Limits,
+        effect_policy: jobs::EffectAdmissionPolicy,
+    ) -> Result<(Self, SchemaReady)> {
         let now = time::OffsetDateTime::now_utc();
         let timestamp = format!(
             "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
@@ -320,13 +342,27 @@ impl WriterOwner {
             now.second(),
             now.millisecond()
         );
-        Self::open_at(directory, limits, &timestamp)
+        Self::open_at_with_effect_policy(directory, limits, &timestamp, effect_policy)
     }
 
     pub fn open_at(
         directory: &Path,
         limits: Limits,
         seed_timestamp: &str,
+    ) -> Result<(Self, SchemaReady)> {
+        Self::open_at_with_effect_policy(
+            directory,
+            limits,
+            seed_timestamp,
+            jobs::EffectAdmissionPolicy::Legacy,
+        )
+    }
+
+    fn open_at_with_effect_policy(
+        directory: &Path,
+        limits: Limits,
+        seed_timestamp: &str,
+        effect_policy: jobs::EffectAdmissionPolicy,
     ) -> Result<(Self, SchemaReady)> {
         ensure!(
             limits.queued_writes > 0 && limits.readers > 0,
@@ -412,7 +448,7 @@ impl WriterOwner {
                         let _ = reply.send(result);
                     }
                     Envelope::Jobs { command, reply } => {
-                        let _ = reply.send(jobs::execute(&mut connection, command));
+                        let _ = reply.send(jobs::execute(&mut connection, command, effect_policy));
                     }
                     Envelope::Setting { work, reply } => {
                         let _ = reply.send(execute(&mut connection, work));
