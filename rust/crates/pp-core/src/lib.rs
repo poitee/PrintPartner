@@ -5,7 +5,7 @@ use pp_storage::lease::StorageLease;
 use serde::Serialize;
 use std::{
     fs::{File, OpenOptions},
-    io::Write,
+    io::{Read, Write},
     net::{Ipv4Addr, SocketAddrV4},
     os::unix::fs::OpenOptionsExt,
     path::PathBuf,
@@ -18,6 +18,9 @@ mod rebuild;
 
 #[cfg(feature = "desktop_rebuild")]
 pub mod profile_interpreter;
+
+#[cfg(test)]
+mod origin_tests;
 
 pub use rebuild::DesktopRebuild;
 
@@ -40,8 +43,22 @@ pub use pp_gateway::LaunchTarget as DesktopLaunchTarget;
 
 async fn bind_origin(owner: &StorageLease) -> Result<TcpListener> {
     let path = owner.data_dir().join("desktop.toml");
-    let port = if path.exists() {
-        let config = std::fs::read_to_string(&path)?;
+    let config = match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(&path)
+    {
+        Ok(file) => {
+            anyhow::ensure!(file.metadata()?.is_file(), "Invalid desktop.toml");
+            let mut config = String::new();
+            file.take(4097).read_to_string(&mut config)?;
+            anyhow::ensure!(config.len() <= 4096, "Invalid desktop.toml");
+            Some(config)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error).context("Desktop configuration unavailable"),
+    };
+    let port = if let Some(config) = config {
         let value = config
             .trim()
             .strip_prefix("port = ")
@@ -56,21 +73,32 @@ async fn bind_origin(owner: &StorageLease) -> Result<TcpListener> {
         .await
         .context("Persisted desktop origin is unavailable")?;
     if port == 0 {
-        let temporary = owner.data_dir().join(format!(
-            "desktop-{}.toml.new",
-            hex::encode(rand::random::<[u8; 8]>())
-        ));
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&temporary)?;
-        writeln!(file, "port = {}", listener.local_addr()?.port())?;
-        file.sync_all()?;
-        std::fs::rename(temporary, path)?;
-        File::open(owner.data_dir())?.sync_all()?;
+        persist_initial_origin(owner, listener.local_addr()?.port())?;
     }
     Ok(listener)
+}
+
+fn persist_initial_origin(owner: &StorageLease, port: u16) -> Result<()> {
+    let temporary = owner.data_dir().join(format!(
+        "desktop-{}.toml.new",
+        hex::encode(rand::random::<[u8; 8]>())
+    ));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&temporary)?;
+    let result = (|| -> Result<()> {
+        writeln!(file, "port = {port}")?;
+        file.sync_all()?;
+        std::fs::hard_link(&temporary, owner.data_dir().join("desktop.toml"))?;
+        Ok(())
+    })();
+    let cleanup = std::fs::remove_file(&temporary);
+    result?;
+    cleanup?;
+    File::open(owner.data_dir())?.sync_all()?;
+    Ok(())
 }
 
 pub struct CoreHandle {

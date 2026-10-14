@@ -24,6 +24,7 @@ use std::{
 use tokio::{net::TcpListener, task::JoinHandle};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
+mod assets;
 pub mod ownership;
 
 pub const MUTATION_DRAIN: Duration = Duration::from_secs(5);
@@ -387,7 +388,15 @@ fn digest(value: &str) -> [u8; 32] {
     Sha256::digest(value.as_bytes()).into()
 }
 fn error(status: StatusCode, detail: &'static str) -> Response<Body> {
-    (status, axum::Json(serde_json::json!({"detail":detail}))).into_response()
+    (
+        status,
+        [
+            ("cache-control", "no-store"),
+            ("referrer-policy", "no-referrer"),
+        ],
+        axum::Json(serde_json::json!({"detail":detail})),
+    )
+        .into_response()
 }
 
 fn node_unavailable() -> Response<Body> {
@@ -498,7 +507,10 @@ async fn handle(
     State(state): State<Arc<GatewayState>>,
     mut request: Request<Body>,
 ) -> Response<Body> {
-    if header(&request, "host") != Some(state.host.as_str()) {
+    let mut hosts = request.headers().get_all("host").iter();
+    if hosts.next().map(HeaderValue::as_bytes) != Some(state.host.as_bytes())
+        || hosts.next().is_some()
+    {
         return error(StatusCode::BAD_REQUEST, "Invalid Host");
     }
     let target = match target::CanonicalTarget::parse(request.uri()) {
@@ -507,11 +519,13 @@ async fn handle(
     };
     *request.uri_mut() = target.uri;
     let path = target.path;
-    let origin = header(&request, "origin");
+    let mut origins = request.headers().get_all("origin").iter();
+    let origin = origins.next();
     let upgrade = header(&request, "upgrade").is_some();
     let unsafe_method = !matches!(request.method().as_str(), "GET" | "HEAD" | "OPTIONS");
-    if origin.is_some_and(|value| value != state.origin)
-        || ((unsafe_method || upgrade) && origin != Some(state.origin.as_str()))
+    if origins.next().is_some()
+        || origin.is_some_and(|value| value.as_bytes() != state.origin.as_bytes())
+        || ((unsafe_method || upgrade) && origin.is_none())
     {
         return error(StatusCode::FORBIDDEN, "Invalid Origin");
     }
@@ -584,7 +598,7 @@ async fn handle(
             "MCP is disabled in this foundation; API-key authorization is required before enabling it",
         );
     }
-    let document = request.method() == "GET"
+    let document = matches!(request.method().as_str(), "GET" | "HEAD")
         && (header(&request, "sec-fetch-mode") == Some("navigate")
             || header(&request, "accept").is_some_and(|v| v.contains("text/html")));
     let spa = is_spa_client_path(&path);
@@ -601,37 +615,16 @@ async fn handle(
         } else {
             path.trim_start_matches('/')
         };
-        let file = state.assets.join(relative);
-        let canonical = match tokio::fs::canonicalize(file).await {
-            Ok(file) if file.starts_with(&state.assets) => file,
-            _ => return error(StatusCode::NOT_FOUND, "Asset not found"),
-        };
-        return match tokio::fs::read(&canonical).await {
-            Ok(bytes) => Response::builder()
-                .header(
-                    "content-type",
-                    match canonical.extension().and_then(|e| e.to_str()) {
-                        Some("js") => "text/javascript",
-                        Some("css") => "text/css",
-                        Some("html") => "text/html; charset=utf-8",
-                        Some("svg") => "image/svg+xml",
-                        Some("json") => "application/manifest+json",
-                        Some("png") => "image/png",
-                        _ => "application/octet-stream",
-                    },
-                )
-                .header("cache-control", "no-store")
-                .header("referrer-policy", "no-referrer")
-                .header("x-content-type-options", "nosniff")
-                .header(
-                    "content-security-policy",
-                    "frame-src 'none'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
-                )
-                .body(Body::from(bytes))
-                .expect("Asset response"),
-            Err(_) => error(StatusCode::NOT_FOUND, "Asset not found"),
-        };
+        let response = assets::serve(&state.assets, relative, request.method()).await;
+        return response.map(|body| {
+            Body::new(TrackedBody {
+                body,
+                _admission: admission,
+                cancelled: Box::pin(state.cancelled.clone().cancelled_owned()),
+            })
+        });
     }
+
     if let Some(denied) = state
         .denied
         .iter()
@@ -654,9 +647,7 @@ async fn handle(
     let same_origin_browser_get = request.method() == "GET"
         && origin.is_none()
         && header(&request, "sec-fetch-site") == Some("same-origin");
-    if operation.effect != EffectClass::Observation
-        && origin != Some(state.origin.as_str())
-        && !same_origin_browser_get
+    if operation.effect != EffectClass::Observation && origin.is_none() && !same_origin_browser_get
     {
         return error(
             StatusCode::FORBIDDEN,
@@ -1750,3 +1741,6 @@ mod tests {
         requested.wait().await;
     }
 }
+
+#[cfg(test)]
+mod ticket_t_11;
