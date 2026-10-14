@@ -1,4 +1,4 @@
-use crate::autosave::{ApplyPlanDraftReceipt, Digest, DraftState, PlanDraftBasis, WireInteger};
+use crate::autosave::{ApplyPlanDraftReceipt, Digest, PlanDraftBasis, WireInteger};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,6 +30,13 @@ pub struct ExecutionConflict {
     pub kind: String,
     pub state: String,
 }
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClosedDraftState {
+    Abandoned,
+    Consumed,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Outcome {
@@ -45,7 +52,7 @@ pub enum Outcome {
     NotFound,
     BuildArchived,
     NotOpen {
-        state: DraftState,
+        state: ClosedDraftState,
     },
     DraftChanged,
     AcceptedBaselineRequired,

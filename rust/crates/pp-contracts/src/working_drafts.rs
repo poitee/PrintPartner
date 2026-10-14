@@ -280,7 +280,7 @@ impl TryFrom<String> for IdempotencyKey {
     type Error = &'static str;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        let value = value.trim().to_owned();
+        let value = crate::build_identity::trim_js(&value).to_owned();
         if !(1..=160).contains(&value.encode_utf16().count()) {
             return Err("idempotency key must contain 1 to 160 characters");
         }
@@ -302,7 +302,7 @@ impl TryFrom<String> for Role {
     type Error = &'static str;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        if value.trim().is_empty() || value.encode_utf16().count() > 200 {
+        if crate::build_identity::trim_js(&value).is_empty() || value.encode_utf16().count() > 200 {
             return Err("role must be nonblank and at most 200 characters");
         }
         Ok(Self(value))

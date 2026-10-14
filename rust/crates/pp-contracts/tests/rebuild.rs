@@ -291,3 +291,52 @@ fn workspace_failures_preserve_missing_workspace_and_merge_conflicts() {
     let parsed: Outcome = serde_json::from_value(value.clone()).unwrap();
     assert_eq!(serde_json::to_value(parsed).unwrap(), value);
 }
+
+#[test]
+fn request_text_matches_ecmascript_trim() {
+    use pp_contracts::working_drafts::{IdempotencyKey, Role};
+    for character in ['\u{feff}', '\u{a0}', '\u{2000}', '\u{2028}', '\u{2029}'] {
+        assert!(IdempotencyKey::try_from(character.to_string()).is_err());
+        assert_eq!(
+            IdempotencyKey::try_from(format!("{character}key{character}"))
+                .unwrap()
+                .as_str(),
+            "key"
+        );
+        assert!(Role::try_from(character.to_string()).is_err());
+        assert!(BuildName::parse(character.to_string()).is_err());
+    }
+    for character in ['\u{85}', '\u{180e}', '\u{200b}'] {
+        let value = format!("{character}key{character}");
+        assert_eq!(
+            IdempotencyKey::try_from(value.clone()).unwrap().as_str(),
+            value
+        );
+    }
+}
+
+#[test]
+fn not_open_apply_outcomes_require_a_closed_state() {
+    use pp_contracts::publication::Outcome;
+    assert!(serde_json::from_value::<Outcome>(json!({"kind":"not_open","state":"open"})).is_err());
+    for state in ["abandoned", "consumed"] {
+        let value = json!({"kind":"not_open","state":state});
+        let parsed: Outcome = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap(), value);
+    }
+}
+
+#[test]
+fn untracked_freshness_never_emits_an_empty_reason_list() {
+    use pp_contracts::build_identity::{FreshnessReasons, PlanFreshness, PlanUntrackedReason};
+    assert!(FreshnessReasons::<PlanUntrackedReason>::try_from(vec![]).is_err());
+    let value = PlanFreshness::Untracked {
+        accepted_input_set_id: None,
+        accepted_at: None,
+        reasons: FreshnessReasons::new(PlanUntrackedReason::NoAcceptedInputs, vec![]),
+    };
+    assert_eq!(
+        serde_json::to_value(value).unwrap()["reasons"],
+        json!([{"kind":"no_accepted_inputs"}])
+    );
+}

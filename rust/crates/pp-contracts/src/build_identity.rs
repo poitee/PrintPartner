@@ -6,7 +6,7 @@ pub struct BuildName(String);
 
 impl BuildName {
     pub fn parse(value: String) -> Result<Self, &'static str> {
-        let value = value.trim().to_owned();
+        let value = trim_js(&value).to_owned();
         if value.is_empty() {
             return Err("Profile name is required");
         }
@@ -88,13 +88,13 @@ pub enum PlanFreshness {
     Stale {
         accepted_input_set_id: i64,
         accepted_at: String,
-        reasons: Vec<PlanStaleReason>,
+        reasons: FreshnessReasons<PlanStaleReason>,
         untracked_sources: Vec<PlanUntrackedReason>,
     },
     Untracked {
         accepted_input_set_id: Option<i64>,
         accepted_at: Option<String>,
-        reasons: Vec<PlanUntrackedReason>,
+        reasons: FreshnessReasons<PlanUntrackedReason>,
     },
 }
 
@@ -136,4 +136,47 @@ pub struct ProfileLayer {
     pub layer_type: String,
     pub project_id: Option<i64>,
     pub project_name: Option<String>,
+}
+
+pub(crate) fn trim_js(value: &str) -> &str {
+    value.trim_matches(|character| {
+        matches!(character,
+            '\u{0009}'..='\u{000d}' | '\u{0020}' | '\u{00a0}' | '\u{1680}' |
+            '\u{2000}'..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}' |
+            '\u{205f}' | '\u{3000}' | '\u{feff}'
+        )
+    })
+}
+
+#[derive(Debug, Clone)]
+pub struct FreshnessReasons<T> {
+    first: T,
+    rest: Vec<T>,
+}
+
+impl<T> FreshnessReasons<T> {
+    pub fn new(first: T, rest: Vec<T>) -> Self {
+        Self { first, rest }
+    }
+}
+
+impl<T> TryFrom<Vec<T>> for FreshnessReasons<T> {
+    type Error = &'static str;
+
+    fn try_from(reasons: Vec<T>) -> Result<Self, Self::Error> {
+        let mut reasons = reasons.into_iter();
+        let first = reasons.next().ok_or("freshness requires a reason")?;
+        Ok(Self::new(first, reasons.collect()))
+    }
+}
+
+impl<T: Serialize> Serialize for FreshnessReasons<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeSeq;
+        let mut sequence = serializer.serialize_seq(Some(1 + self.rest.len()))?;
+        for reason in std::iter::once(&self.first).chain(&self.rest) {
+            sequence.serialize_element(reason)?;
+        }
+        sequence.end()
+    }
 }
