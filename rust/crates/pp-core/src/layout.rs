@@ -10,11 +10,14 @@ const APP_ID: &str = "com.poitee.printpartner";
 pub enum Platform {
     MacOs,
     Linux,
+    Windows,
 }
 
 #[derive(Debug, Default)]
 pub struct LayoutEnvironment {
     pub portable_root: Option<PathBuf>,
+    pub appdata: Option<PathBuf>,
+    pub local_appdata: Option<PathBuf>,
     pub xdg_data_home: Option<PathBuf>,
     pub xdg_config_home: Option<PathBuf>,
     pub xdg_state_home: Option<PathBuf>,
@@ -30,6 +33,8 @@ impl LayoutEnvironment {
     fn from_lookup(mut lookup: impl FnMut(&str) -> Option<OsString>) -> Self {
         Self {
             portable_root: lookup("PP_PORTABLE_DIR").map(PathBuf::from),
+            appdata: lookup("APPDATA").map(PathBuf::from),
+            local_appdata: lookup("LOCALAPPDATA").map(PathBuf::from),
             xdg_data_home: lookup("XDG_DATA_HOME").map(PathBuf::from),
             xdg_config_home: lookup("XDG_CONFIG_HOME").map(PathBuf::from),
             xdg_state_home: lookup("XDG_STATE_HOME").map(PathBuf::from),
@@ -52,8 +57,9 @@ impl DirectoryLayout {
     /// retains ~/.print-partner and `app_data` holds auxiliary state.
     /// Portable mode places both `store` and `app_data` in <root>/data.
     /// The existing desktop.toml remains in `store`, not `config`.
-    /// Portable mode ignores home and XDG values. Empty XDG values use defaults;
-    /// other selected roots must be absolute and contain no parent traversal.
+    /// Portable mode ignores home and platform environment roots.
+    /// Empty platform values use defaults; selected roots must be absolute
+    /// and contain no parent traversal.
     pub fn resolve(
         platform: Platform,
         home: &Path,
@@ -71,6 +77,25 @@ impl DirectoryLayout {
         }
         validate_root(home, "home")?;
         match platform {
+            Platform::Windows => {
+                let local = environment_root(
+                    &environment.local_appdata,
+                    home,
+                    "AppData/Local",
+                    "LOCALAPPDATA",
+                )?
+                .join(APP_ID);
+                let roaming =
+                    environment_root(&environment.appdata, home, "AppData/Roaming", "APPDATA")?
+                        .join(APP_ID);
+                Ok(Self {
+                    store: home.join(".print-partner"),
+                    app_data: roaming.clone(),
+                    config: roaming,
+                    logs: local.join("logs"),
+                    cache: local,
+                })
+            }
             Platform::MacOs => {
                 let library = home.join("Library");
                 let support = library.join("Application Support").join(APP_ID);
@@ -84,21 +109,21 @@ impl DirectoryLayout {
             }
             Platform::Linux => Ok(Self {
                 store: home.join(".print-partner"),
-                app_data: xdg_root(
+                app_data: environment_root(
                     &environment.xdg_data_home,
                     home,
                     ".local/share",
                     "XDG_DATA_HOME",
                 )?
                 .join(APP_ID),
-                config: xdg_root(
+                config: environment_root(
                     &environment.xdg_config_home,
                     home,
                     ".config",
                     "XDG_CONFIG_HOME",
                 )?
                 .join(APP_ID),
-                logs: xdg_root(
+                logs: environment_root(
                     &environment.xdg_state_home,
                     home,
                     ".local/state",
@@ -106,7 +131,7 @@ impl DirectoryLayout {
                 )?
                 .join(APP_ID)
                 .join("logs"),
-                cache: xdg_root(
+                cache: environment_root(
                     &environment.xdg_cache_home,
                     home,
                     ".cache",
@@ -126,7 +151,12 @@ fn validate_root(path: &Path, name: &str) -> Result<()> {
     Ok(())
 }
 
-fn xdg_root(value: &Option<PathBuf>, home: &Path, default: &str, name: &str) -> Result<PathBuf> {
+fn environment_root(
+    value: &Option<PathBuf>,
+    home: &Path,
+    default: &str,
+    name: &str,
+) -> Result<PathBuf> {
     match value {
         Some(path) if !path.as_os_str().is_empty() => {
             validate_root(path, name)?;
@@ -139,6 +169,186 @@ fn xdg_root(value: &Option<PathBuf>, home: &Path, default: &str, name: &str) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ticket_t_12_windows_layout_defaults_preserve_legacy_store() {
+        let layout = DirectoryLayout::resolve(
+            Platform::Windows,
+            Path::new("/Users/owner"),
+            &LayoutEnvironment::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            layout,
+            DirectoryLayout {
+                store: "/Users/owner/.print-partner".into(),
+                app_data: "/Users/owner/AppData/Roaming/com.poitee.printpartner".into(),
+                config: "/Users/owner/AppData/Roaming/com.poitee.printpartner".into(),
+                logs: "/Users/owner/AppData/Local/com.poitee.printpartner/logs".into(),
+                cache: "/Users/owner/AppData/Local/com.poitee.printpartner".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn ticket_t_12_windows_layout_honors_roaming_and_local_roots() {
+        let environment = LayoutEnvironment {
+            appdata: Some("/roaming".into()),
+            local_appdata: Some("/local".into()),
+            xdg_data_home: Some("ignored-relative".into()),
+            ..Default::default()
+        };
+        let layout =
+            DirectoryLayout::resolve(Platform::Windows, Path::new("/Users/owner"), &environment)
+                .unwrap();
+        assert_eq!(
+            layout,
+            DirectoryLayout {
+                store: "/Users/owner/.print-partner".into(),
+                app_data: "/roaming/com.poitee.printpartner".into(),
+                config: "/roaming/com.poitee.printpartner".into(),
+                logs: "/local/com.poitee.printpartner/logs".into(),
+                cache: "/local/com.poitee.printpartner".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn ticket_t_12_windows_layout_empty_values_use_defaults() {
+        let environment = LayoutEnvironment {
+            appdata: Some(PathBuf::new()),
+            local_appdata: Some(PathBuf::new()),
+            ..Default::default()
+        };
+        let layout =
+            DirectoryLayout::resolve(Platform::Windows, Path::new("/Users/owner"), &environment)
+                .unwrap();
+        assert_eq!(
+            layout.config,
+            Path::new("/Users/owner/AppData/Roaming/com.poitee.printpartner")
+        );
+        assert_eq!(
+            layout.app_data,
+            Path::new("/Users/owner/AppData/Roaming/com.poitee.printpartner")
+        );
+        assert_eq!(
+            layout.cache,
+            Path::new("/Users/owner/AppData/Local/com.poitee.printpartner")
+        );
+        assert_eq!(
+            layout.logs,
+            Path::new("/Users/owner/AppData/Local/com.poitee.printpartner/logs")
+        );
+    }
+
+    #[test]
+    fn ticket_t_12_windows_layout_rejects_invalid_selected_roots() {
+        for invalid in ["relative", "/safe/../other"] {
+            for (environment, message) in [
+                (
+                    LayoutEnvironment {
+                        appdata: Some(invalid.into()),
+                        ..Default::default()
+                    },
+                    "Invalid APPDATA directory",
+                ),
+                (
+                    LayoutEnvironment {
+                        local_appdata: Some(invalid.into()),
+                        ..Default::default()
+                    },
+                    "Invalid LOCALAPPDATA directory",
+                ),
+            ] {
+                assert_eq!(
+                    DirectoryLayout::resolve(
+                        Platform::Windows,
+                        Path::new("/Users/owner"),
+                        &environment
+                    )
+                    .unwrap_err()
+                    .to_string(),
+                    message
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ticket_t_12_windows_environment_snapshot_uses_named_variables() {
+        let environment = LayoutEnvironment::from_lookup(|name| match name {
+            "APPDATA" => Some("/roaming".into()),
+            "LOCALAPPDATA" => Some("/local".into()),
+            _ => None,
+        });
+        assert_eq!(environment.appdata.as_deref(), Some(Path::new("/roaming")));
+        assert_eq!(
+            environment.local_appdata.as_deref(),
+            Some(Path::new("/local"))
+        );
+        let layout =
+            DirectoryLayout::resolve(Platform::Windows, Path::new("/Users/owner"), &environment)
+                .unwrap();
+        assert_eq!(layout.config, Path::new("/roaming/com.poitee.printpartner"));
+        assert_eq!(
+            layout.logs,
+            Path::new("/local/com.poitee.printpartner/logs")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ticket_t_12_windows_layout_preserves_non_unicode_roots() {
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+        let environment = LayoutEnvironment {
+            appdata: Some(OsString::from_vec(b"/roaming/\xff".to_vec()).into()),
+            local_appdata: Some(OsString::from_vec(b"/local/\xfe".to_vec()).into()),
+            ..Default::default()
+        };
+        let layout =
+            DirectoryLayout::resolve(Platform::Windows, Path::new("/Users/owner"), &environment)
+                .unwrap();
+        assert_eq!(
+            layout.config.as_os_str().as_bytes(),
+            b"/roaming/\xff/com.poitee.printpartner"
+        );
+        assert_eq!(
+            layout.logs.as_os_str().as_bytes(),
+            b"/local/\xfe/com.poitee.printpartner/logs"
+        );
+    }
+
+    #[test]
+    fn ticket_t_12_windows_layout_falls_back_for_each_missing_root() {
+        let environment = LayoutEnvironment {
+            appdata: Some("/roaming".into()),
+            ..Default::default()
+        };
+        let layout =
+            DirectoryLayout::resolve(Platform::Windows, Path::new("/Users/owner"), &environment)
+                .unwrap();
+        assert_eq!(layout.config, Path::new("/roaming/com.poitee.printpartner"));
+        assert_eq!(
+            layout.cache,
+            Path::new("/Users/owner/AppData/Local/com.poitee.printpartner")
+        );
+        let environment = LayoutEnvironment {
+            local_appdata: Some("/local".into()),
+            ..Default::default()
+        };
+        let layout =
+            DirectoryLayout::resolve(Platform::Windows, Path::new("/Users/owner"), &environment)
+                .unwrap();
+        assert_eq!(
+            layout.config,
+            Path::new("/Users/owner/AppData/Roaming/com.poitee.printpartner")
+        );
+        assert_eq!(layout.cache, Path::new("/local/com.poitee.printpartner"));
+        assert_eq!(
+            layout.app_data,
+            Path::new("/Users/owner/AppData/Roaming/com.poitee.printpartner")
+        );
+    }
 
     #[test]
     fn ticket_t_12_macos_layout_uses_bundle_identity() {
@@ -183,6 +393,8 @@ mod tests {
     #[test]
     fn ticket_t_12_linux_layout_honors_each_xdg_override() {
         let environment = LayoutEnvironment {
+            appdata: Some("ignored-relative".into()),
+            local_appdata: Some("ignored-relative".into()),
             xdg_data_home: Some("/data".into()),
             xdg_config_home: Some("/config".into()),
             xdg_state_home: Some("/state".into()),
@@ -209,9 +421,11 @@ mod tests {
         let environment = LayoutEnvironment {
             portable_root: Some("/portable/Print Partner".into()),
             xdg_data_home: Some("ignored-relative".into()),
+            appdata: Some("ignored-relative".into()),
+            local_appdata: Some("ignored-relative".into()),
             ..Default::default()
         };
-        for platform in [Platform::MacOs, Platform::Linux] {
+        for platform in [Platform::MacOs, Platform::Linux, Platform::Windows] {
             let layout = DirectoryLayout::resolve(platform, Path::new(""), &environment).unwrap();
             assert_eq!(
                 layout,

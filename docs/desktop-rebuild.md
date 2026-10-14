@@ -88,11 +88,15 @@ macOS auxiliary app data and config use `~/Library/Application Support/com.poite
 
 Linux auxiliary app data uses the `XDG_DATA_HOME`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, and `XDG_CACHE_HOME` roots. Missing or empty values default to `~/.local/share`, `~/.config`, `~/.local/state`, and `~/.cache`. Each path appends `com.poitee.printpartner`; logs also append `logs` under the state directory. A nonempty relative XDG value returns an error rather than choosing a directory relative to the process working directory.
 
-`LayoutEnvironment::from_env` reads those variables and `PP_PORTABLE_DIR`. A supplied portable root takes precedence on both platforms and appends `data`, `config`, `logs`, and `cache`. An empty portable root returns an error. Selected roots and the home path must be absolute and contain no parent traversal. The resolver preserves non-Unicode paths and does not canonicalize paths or follow links.
+`LayoutEnvironment::from_env` reads those variables, `APPDATA`, `LOCALAPPDATA`, and `PP_PORTABLE_DIR`. A supplied portable root takes precedence on every platform and appends `data`, `config`, `logs`, and `cache`. An empty portable root returns an error. Selected roots and the home path must be absolute and contain no parent traversal. The resolver preserves non-Unicode paths and does not canonicalize paths or follow links.
 
-Windows mapping, launcher integration with a legacy-store preservation, directory permission checks, origin recovery, portable settings transfer, and installed artifact receipts remain open. The resolver does not enable any user-visible behavior, so no runtime opt-in is read here. Future launcher integration must check the stored runtime gate.
+Launcher integration with legacy-store preservation, directory permission checks, origin recovery, portable settings transfer, and installed artifact receipts remain open. The resolver does not enable any user-visible behavior, so no runtime opt-in is read here. Future launcher integration must check the stored runtime gate.
 
-Portable path tests run on Linux, including the macOS mapping:
+Windows auxiliary app data and config use `<APPDATA>/com.poitee.printpartner`. Cache uses `<LOCALAPPDATA>/com.poitee.printpartner`; logs append `logs` to that local directory. Missing or empty variables fall back independently to `~/AppData/Roaming` and `~/AppData/Local`. Nonempty relative or parent-traversing values return a named error. The legacy store remains `~/.print-partner`. Windows ignores XDG values; macOS and Linux ignore Windows values.
+
+These are pure path mappings using the host's `Path` semantics. The Linux tests supply absolute Linux paths to exercise the Windows mapping policy. They do not parse Windows drive or UNC paths on Linux, resolve Windows Known Folders, or establish a Windows build or launcher receipt. Rust entry points still contain Unix-specific APIs.
+
+Portable path tests run on Linux, including the macOS and Windows mappings:
 
 ```sh
 cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-core --lib --features desktop_rebuild --no-tests=fail -E 'test(layout::tests::ticket_t_12)'
