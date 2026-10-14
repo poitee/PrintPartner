@@ -1,8 +1,9 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { IntegrationType } from "@print-partner/contracts";
 import type { IntegrationPort } from "../integrations/store.js";
 import type { AppRepository } from "../db/repository.js";
 import { sendProblem } from "../lib/api-error.js";
+import { readFeatureAccess } from "../lib/feature-access.js";
 import { getIntegrationAdapter } from "../integrations/registry.js";
 import { registerSpoolmanProxyRoutes } from "./spoolman-proxy.js";
 import { clearFleetIntegrationBinds } from "../services/printer-fleet.js";
@@ -23,6 +24,20 @@ export async function registerIntegrationRoutes(
   app: FastifyInstance,
   deps: RouteDeps,
 ): Promise<void> {
+  const requireInspectionAccess = async (request: FastifyRequest, reply: FastifyReply) => {
+    const id = (request.params as { id: string }).id;
+    const integration = deps.integrations.get(id);
+    if (!integration) return sendProblem(reply, 404, "Not Found", "Integration not found");
+    if (integration.type !== "bambu") return;
+    const access = readFeatureAccess(() => deps.repo, "bambu");
+    if (access.kind !== "allowed") {
+      const status = access.kind === "disabled" ? 403 : 500;
+      return reply.status(status).send({
+        status, title: access.kind === "disabled" ? "Forbidden" : "Internal Server Error",
+        detail: access.error, code: access.code,
+      });
+    }
+  };
   app.get("/integrations", async () => ({
     integrations: deps.integrations.list(),
   }));
@@ -69,7 +84,7 @@ export async function registerIntegrationRoutes(
 
   app.post(
     "/integrations/:id/test",
-    { config: { rateLimit: { max: 5, timeWindow: "1 minute" } } },
+    { preHandler: requireInspectionAccess, config: { rateLimit: { max: 5, timeWindow: "1 minute" } } },
     async (request, reply) => {
       const id = (request.params as { id: string }).id;
       const result = await deps.integrations.test(id);
@@ -80,7 +95,7 @@ export async function registerIntegrationRoutes(
     },
   );
 
-  app.get("/integrations/:id/devices", async (request, reply) => {
+  app.get("/integrations/:id/devices", { preHandler: requireInspectionAccess }, async (request, reply) => {
     const id = (request.params as { id: string }).id;
     if (!deps.integrations.get(id)) {
       return sendProblem(reply, 404, "Not Found", "Integration not found");
@@ -92,6 +107,7 @@ export async function registerIntegrationRoutes(
   app.get(
     "/integrations/:id/status",
     {
+      preHandler: requireInspectionAccess,
       config: {
         rateLimit: {
           max: 30,
