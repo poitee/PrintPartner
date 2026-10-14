@@ -74,7 +74,10 @@ impl AllowedOrigin {
         Ok(Self(url))
     }
     pub fn admits(&self, url: &Url) -> bool {
-        url.origin() == self.0.origin() && url.username().is_empty() && url.password().is_none()
+        url.scheme() == "http"
+            && url.origin() == self.0.origin()
+            && url.username().is_empty()
+            && url.password().is_none()
     }
 }
 
@@ -371,6 +374,25 @@ mod tests {
     }
 
     #[test]
+    fn ticket_t_68_rejects_same_origin_blob_documents() {
+        let policy = AllowedOrigin::parse("http://127.0.0.1:46687").unwrap();
+        assert!(policy.admits(&Url::parse("http://127.0.0.1:46687/plans?x=1#part").unwrap()));
+        let url =
+            Url::parse("blob:http://127.0.0.1:46687/00000000-0000-4000-8000-000000000001").unwrap();
+        assert!(!policy.admits(&url), "{url}");
+    }
+
+    #[test]
+    fn ticket_t_68_rejects_nested_same_origin_blob_documents() {
+        let policy = AllowedOrigin::parse("http://127.0.0.1:46687").unwrap();
+        assert!(policy.admits(&Url::parse("http://127.0.0.1:46687/plans?x=1#part").unwrap()));
+        let url =
+            Url::parse("blob:blob:http://127.0.0.1:46687/00000000-0000-4000-8000-000000000001")
+                .unwrap();
+        assert!(!policy.admits(&url), "{url}");
+    }
+
+    #[test]
     fn admits_only_the_exact_loopback_origin() {
         let policy = AllowedOrigin::parse("http://127.0.0.1:46687").unwrap();
         for url in [
@@ -384,9 +406,13 @@ mod tests {
             "http://localhost:46687/",
             "https://127.0.0.1:46687/",
             "http://owner@127.0.0.1:46687/",
+            "http://:secret@127.0.0.1:46687/",
             "http://127.0.0.1.evil:46687/",
             "file:///tmp/index.html",
             "data:text/html,hello",
+            "about:blank",
+            "javascript:void(0)",
+            "ws://127.0.0.1:46687/",
         ] {
             assert!(!policy.admits(&Url::parse(url).unwrap()), "{url}");
         }

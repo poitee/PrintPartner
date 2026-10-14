@@ -113,6 +113,103 @@ def wait_for(check, label, seconds=45):
     raise AssertionError(f"Timed out: {label}; last result={last!r}")
 
 
+def verify_navigation(execute, screenshot, output):
+    token = os.urandom(16).hex()
+    source = execute('return {origin: location.origin, href: location.href};')
+    assert source['href'] == source['origin'] + '/builds', 'Expected authenticated builds document'
+    proof = {'source_url': source['href'], 'sample_count': 0}
+
+    def save():
+        (output / 'navigation.json').write_text(json.dumps(proof, indent=2) + '\n')
+
+    created = execute(r"""
+const [token, done] = arguments;
+window.__navigationDocumentToken = token;
+sessionStorage.removeItem('pp-native-blob-executed');
+const html = `<body data-native-blob-probe="${token}">native blob probe
+<script>window.__nativeBlobExecuted = '${token}';
+try { sessionStorage.setItem('pp-native-blob-executed', '${token}'); } catch (error) {}<\/script>`;
+const blob = new Blob([html], {type: 'text/html'});
+window.__navigationBlobUrl = URL.createObjectURL(blob);
+fetch(window.__navigationBlobUrl).then(response => response.text()).then(text => done({
+  blob_url: window.__navigationBlobUrl, blob_created: true, blob_type: blob.type,
+  blob_origin_matches: new URL(window.__navigationBlobUrl).origin === location.origin,
+  blob_bytes_match: text === html,
+})).catch(error => done({error: String(error)}));
+""", token, asynchronous=True)
+    proof.update(created)
+    save()
+    assert created['blob_created'] and created['blob_type'] == 'text/html', proof
+    assert created['blob_origin_matches'] and created['blob_bytes_match'], proof
+    proof['attempt_scheduled'] = execute(r"""
+const token = arguments[0];
+setTimeout(() => {
+  window.__navigationAttempted = token;
+  location.assign(window.__navigationBlobUrl);
+}, 50);
+return true;
+""", token)
+    save()
+    assert proof['attempt_scheduled'], proof
+
+    def observe():
+        observed = execute(r"""
+const token = arguments[0];
+let stored = null;
+try { stored = sessionStorage.getItem('pp-native-blob-executed'); } catch (error) {}
+return {final_href: location.href,
+  attempt_observed: window.__navigationAttempted === token,
+  document_preserved: window.__navigationDocumentToken === token,
+  root_present: !!document.querySelector('#root'),
+  blob_document_seen: !!document.querySelector('[data-native-blob-probe]'),
+  blob_script_executed: window.__nativeBlobExecuted === token || stored === token};
+""", token)
+        proof.update(observed)
+        proof['sample_count'] += 1
+        save()
+        assert observed['final_href'] == source['href'], proof
+        assert observed['document_preserved'] and observed['root_present'], proof
+        assert not observed['blob_document_seen'] and not observed['blob_script_executed'], proof
+        return observed['attempt_observed']
+
+    wait_for(observe, 'blob navigation attempt marker', 5)
+    started = time.monotonic()
+    while time.monotonic() - started < 3:
+        assert observe(), proof
+        time.sleep(0.1)
+    assert observe(), proof
+    proof['observation_seconds'] = time.monotonic() - started
+    (output / 'navigation-denied.png').write_bytes(base64.b64decode(screenshot()))
+    execute('URL.revokeObjectURL(window.__navigationBlobUrl); delete window.__navigationBlobUrl;')
+    control = source['origin'] + '/builds?navigation_control=' + token
+    proof['http_control_url'] = control
+    proof['http_control_scheduled'] = execute(r"""
+const url = arguments[0];
+setTimeout(() => location.assign(url), 50);
+return true;
+""", control)
+    save()
+    assert proof['http_control_scheduled'], proof
+
+    def control_loaded():
+        observed = execute(r"""
+const [url, token] = arguments;
+return {http_control_loaded: location.href === url && document.readyState === 'complete'
+  && !!document.querySelector('#root') && window.__navigationDocumentToken !== token,
+  http_control_blob_script_executed: sessionStorage.getItem('pp-native-blob-executed') === token};
+""", control, token)
+        proof.update(observed)
+        save()
+        assert not observed['http_control_blob_script_executed'], proof
+        return observed['http_control_loaded']
+
+    wait_for(control_loaded, 'same-origin HTTP document transition')
+    execute("sessionStorage.removeItem('pp-native-blob-executed');")
+    proof['result'] = 'PASS'
+    save()
+    return proof
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', type=Path, default=ROOT / 'rust/target/debug/pp-desktop')
@@ -173,6 +270,8 @@ def main():
                 session = result['sessionId']
                 wait_for(lambda: execute("return location.pathname === '/builds' && !!document.querySelector('#root');"),
                          'authenticated native launch')
+                navigation = verify_navigation(execute,
+                    lambda: command(f'/session/{session}/screenshot'), output)
                 fixture = (ROOT / 'rust/tests/fixtures/part.stl').read_bytes()
                 filename = 'webkit-known-mesh.stl'
                 encoded = base64.b64encode(fixture).decode()
@@ -203,6 +302,7 @@ def main():
                 assert 1000 < pixels['visible_pixels'] < pixels['width'] * pixels['height'] * 0.8, pixels
                 assert pixels['center_visible_pixels'] > 1000 and pixels['unique_colors'] > 1, pixels
                 receipt = {'result': 'PASS', 'proof_class': 'native_linux_webkitgtk_webgl',
+                    'navigation': navigation,
                     'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
                     'capabilities': result['capabilities'], 'fixture_sha256': hashlib.sha256(fixture).hexdigest(),
                     **seeded, **pixels}
