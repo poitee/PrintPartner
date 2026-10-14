@@ -1647,3 +1647,216 @@ async fn ticket_t_3_drain_shutdown_cancels_backpressured_startup_setup() {
     assert_eq!(recorded_pids(&scratch.pidfile()), vec![pid]);
     println!("startup setup cancelled; spawns=1; probes=0; live_groups=0; status=stopped");
 }
+
+const STARTUP_OWNER_ROOT: &str = "PP_COMPAT_STARTUP_DEATH_ROOT";
+
+fn startup_process_state(pid: u32) -> Option<char> {
+    #[cfg(target_os = "linux")]
+    {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        stat[stat.rfind(')')? + 1..]
+            .split_whitespace()
+            .next()?
+            .chars()
+            .next()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let output = std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output()
+            .unwrap();
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .trim()
+            .chars()
+            .next()
+    }
+}
+
+fn startup_process_live(pid: u32) -> bool {
+    super::drain::process_alive(pid) && !matches!(startup_process_state(pid), Some('Z' | 'X'))
+}
+
+fn startup_wait(limit: Duration, message: &str, mut ready: impl FnMut() -> bool) {
+    let started = std::time::Instant::now();
+    while !ready() {
+        assert!(started.elapsed() < limit, "{message}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+struct StartupDeathFixture {
+    owner: std::process::Child,
+    peer: Option<std::process::Child>,
+    scratch: Scratch,
+}
+
+impl Drop for StartupDeathFixture {
+    fn drop(&mut self) {
+        unsafe { libc::kill(-(self.owner.id() as i32), libc::SIGKILL) };
+        let _ = self.owner.kill();
+        for pid in recorded_pids(&self.scratch.pidfile()) {
+            unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
+        }
+        if let Some(peer) = &mut self.peer {
+            let _ = peer.kill();
+            let _ = peer.wait();
+        }
+        let _ = self.owner.wait();
+    }
+}
+
+#[tokio::test]
+async fn startup_owner_death_fixture() {
+    let Some(root) = std::env::var_os(STARTUP_OWNER_ROOT) else {
+        return;
+    };
+    let scratch = Scratch { root: root.into() };
+    let node_fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/startup-no-stdin.cjs");
+    let quote = |path: &Path| format!("'{}'", path.to_str().unwrap().replace('\'', "'\"'\"'"));
+    let script = Box::leak(
+        format!(
+            "exec /usr/bin/node {} {}",
+            quote(&node_fixture),
+            quote(&scratch.root.join("node-execed"))
+        )
+        .into_boxed_str(),
+    );
+    let supervisor = super::Supervisor::launch_shell(
+        super::ShellSpec {
+            script,
+            lease: "x".repeat(1024 * 1024),
+            ..shell_spec(&scratch)
+        },
+        super::SupervisorConfig::default(),
+    )
+    .unwrap();
+    let started = std::time::Instant::now();
+    while !scratch.root.join("node-execed").exists() {
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "Node never execed"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let pid: u32 = std::fs::read_to_string(scratch.root.join("node-execed"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(matches!(
+        *supervisor.handle.status.borrow(),
+        super::Status::Starting
+    ));
+    assert!(supervisor.handle.endpoint().is_none());
+    assert_eq!(*supervisor.health_probes_completed.borrow(), 0);
+    assert_eq!(recorded_pids(&scratch.pidfile()), vec![pid]);
+    assert_eq!(live_pids(&scratch.pidfile()), vec![pid]);
+    let ready = scratch.root.join("owner-ready");
+    let temporary = ready.with_extension("tmp");
+    std::fs::write(&temporary, pid.to_string()).unwrap();
+    std::fs::rename(temporary, ready).unwrap();
+    std::future::pending::<()>().await;
+    drop(supervisor);
+}
+
+#[test]
+fn ticket_t_3_drain_force_killed_owner_during_startup_kills_group() {
+    use std::os::unix::process::{CommandExt, ExitStatusExt};
+
+    for cycle in 0..2 {
+        let scratch = Scratch::new("startup-owner-death");
+        let owner = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "ticket_t_2::startup_owner_death_fixture",
+                "--nocapture",
+            ])
+            .env(STARTUP_OWNER_ROOT, &scratch.root)
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let mut fixture = StartupDeathFixture {
+            owner,
+            peer: None,
+            scratch,
+        };
+        let ready = fixture.scratch.root.join("owner-ready");
+        startup_wait(
+            Duration::from_secs(8),
+            "owner never acknowledged pending setup",
+            || {
+                assert!(
+                    fixture.owner.try_wait().unwrap().is_none(),
+                    "owner exited before startup acknowledgement"
+                );
+                ready.exists()
+            },
+        );
+        let pid: u32 = std::fs::read_to_string(ready).unwrap().parse().unwrap();
+        assert_eq!(recorded_pids(&fixture.scratch.pidfile()), vec![pid]);
+        assert!(startup_process_live(pid));
+        assert_eq!(unsafe { libc::getpgid(pid as i32) }, pid as i32);
+        #[cfg(target_os = "linux")]
+        {
+            let native_node = std::process::Command::new("/usr/bin/node")
+                .args(["-p", "process.execPath"])
+                .output()
+                .unwrap();
+            assert!(native_node.status.success());
+            let native_node = String::from_utf8(native_node.stdout).unwrap();
+            assert_eq!(
+                std::fs::canonicalize(format!("/proc/{pid}/exe")).unwrap(),
+                std::fs::canonicalize(native_node.trim()).unwrap(),
+            );
+        }
+        fixture.peer = Some(
+            std::process::Command::new("/bin/sleep")
+                .arg("600")
+                .process_group(pid as i32)
+                .spawn()
+                .unwrap(),
+        );
+        let peer_pid = fixture.peer.as_ref().unwrap().id();
+        assert_eq!(unsafe { libc::getpgid(peer_pid as i32) }, pid as i32);
+        assert!(startup_process_live(peer_pid));
+        assert!(fixture.peer.as_mut().unwrap().try_wait().unwrap().is_none());
+        assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGSTOP) }, 0);
+        startup_wait(
+            Duration::from_secs(5),
+            "Node did not enter stopped state",
+            || startup_process_state(pid) == Some('T'),
+        );
+        assert!(startup_process_live(peer_pid));
+        let killed = std::time::Instant::now();
+        assert_eq!(
+            unsafe { libc::kill(-(fixture.owner.id() as i32), libc::SIGKILL) },
+            0
+        );
+        let mut owner_exit = None;
+        startup_wait(
+            Duration::from_secs(5),
+            "startup group outlived force-killed owner",
+            || {
+                if owner_exit.is_none() {
+                    owner_exit = fixture.owner.try_wait().unwrap();
+                }
+                owner_exit.is_some()
+                    && !startup_process_live(pid)
+                    && !startup_process_live(peer_pid)
+            },
+        );
+        assert!(killed.elapsed() <= Duration::from_secs(5));
+        assert_eq!(owner_exit.unwrap().signal(), Some(libc::SIGKILL));
+        assert_eq!(
+            fixture.peer.as_mut().unwrap().wait().unwrap().signal(),
+            Some(libc::SIGKILL)
+        );
+        assert_eq!(recorded_pids(&fixture.scratch.pidfile()), vec![pid]);
+        println!(
+            "startup owner death cycle={cycle}; spawns=1; Node and peer dead; elapsed_ms={}",
+            killed.elapsed().as_millis()
+        );
+    }
+}
