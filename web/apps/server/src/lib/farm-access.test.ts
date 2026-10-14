@@ -9,6 +9,7 @@ import { invokeAssistantTool } from "../assistant/tools.js";
 import { loadConfig } from "../config.js";
 import { getDb, SqliteDatabase } from "../db/client.js";
 import { AppRepository } from "../db/repository.js";
+import { StatusExecution } from "../integrations/status-execution.js";
 import { createIntegrationPort } from "../integrations/store.js";
 import { getIntegrationAdapter } from "../integrations/registry.js";
 import { tenantStorage } from "../middleware/tenant-context.js";
@@ -34,6 +35,7 @@ describe("tenant-global farm access through live handlers", () => {
   let app: FastifyInstance;
   let jobs: InProcessJobRunner;
   let clients: Client[];
+  let statusExecution: StatusExecution;
   beforeEach(async () => {
     dataDir = mkdtempSync(join(tmpdir(), "pp-farm-access-"));
     vi.stubEnv("PRINT_PARTNER_DATA_DIR", dataDir);
@@ -41,13 +43,14 @@ describe("tenant-global farm access through live handlers", () => {
     vi.stubEnv("DEPLOY_MODE", "self-host");
     vi.stubEnv("PRINT_PARTNER_API_KEY", "farm-test-key");
     vi.stubEnv("PP_DESKTOP_REBUILD", "1");
+    statusExecution = new StatusExecution();
     sqlite = new SqliteDatabase(dataDir);
     sqlite.connect();
     repo = new AppRepository(getDb(sqlite), undefined, sqlite.reposDir);
     saveFleet(repo, []);
     jobs = new InProcessJobRunner({ getRepo: () => repo, reposDir: sqlite.reposDir,
       exportsDir: join(dataDir, "exports"), dataDir });
-    const integrations = createIntegrationPort({ repo, getAdapter: getIntegrationAdapter });
+    const integrations = createIntegrationPort({ repo, getAdapter: getIntegrationAdapter, statusExecution });
     app = Fastify();
     app.decorateRequest("tenantId", "default");
     app.addHook("onRequest", (request, _reply, done) => {
@@ -59,7 +62,7 @@ describe("tenant-global farm access through live handlers", () => {
     await app.register(async (routes) => registerPrinterSendQueueRoutes(routes, deps));
     await app.register(async (routes) => registerPrinterSendQueueRoutes(routes, deps), { prefix: "/api/v1" });
     await app.register(async (routes) => registerMcpHttpRoutes(routes, {
-      getRepo: () => repo, jobs, config: loadConfig(), validateApiKey: (key) => key === "farm-test-key",
+      getRepo: () => repo, jobs, statusExecution, config: loadConfig(), validateApiKey: (key) => key === "farm-test-key",
     }), { prefix: "/api/v1" });
     clients = [];
     await app.ready();
@@ -67,6 +70,7 @@ describe("tenant-global farm access through live handlers", () => {
   afterEach(async () => {
     for (const client of clients) await client.close();
     await app.close();
+    await statusExecution.stop();
     sqlite.close();
     rmSync(dataDir, { recursive: true, force: true });
     vi.restoreAllMocks();
@@ -74,7 +78,7 @@ describe("tenant-global farm access through live handlers", () => {
     vi.unstubAllEnvs();
   });
   async function mcp(getRepo = () => repo) {
-    const server = createProductMcpServer({ getRepo, jobs, config: loadConfig(), pending: new Map() });
+    const server = createProductMcpServer({ getRepo, jobs, statusExecution, config: loadConfig(), pending: new Map() });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "farm-test", version: "1" });
     clients.push(client);
@@ -187,7 +191,7 @@ describe("tenant-global farm access through live handlers", () => {
     expect(JSON.parse((await invokeAssistantTool("get_farm_status", {}, { repo })).content)).toMatchObject({ printer_count: 0 });
   });
   it("denied assistant calls skip fleet, host and Spoolman reads that enabled calls perform", async () => {
-    const integrations = createIntegrationPort({ repo, getAdapter: getIntegrationAdapter });
+    const integrations = createIntegrationPort({ repo, getAdapter: getIntegrationAdapter, statusExecution });
     const spoolman = integrations.create({ type: "spoolman", name: "Workshop",
       config: { base_url: "http://127.0.0.1:7912" } });
     saveFleet(repo, [{ id: "printer", name: "Printer", model: "Printer", bed_width_mm: 250,
