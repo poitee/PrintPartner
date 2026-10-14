@@ -13,6 +13,7 @@ impl Fixture {
     async fn start() -> Self {
         let root = std::env::temp_dir().join(format!("pp-t11-{}", rand::random::<u64>()));
         std::fs::create_dir_all(root.join("assets")).unwrap();
+        let root = root.canonicalize().unwrap();
         std::fs::write(root.join("index.html"), b"<html>desktop</html>").unwrap();
         std::fs::write(root.join("assets/app.js"), b"export default 1;").unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
