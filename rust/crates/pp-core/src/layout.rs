@@ -48,8 +48,9 @@ pub struct DirectoryLayout {
 }
 
 impl DirectoryLayout {
-    /// Resolve paths without filesystem access. `store` retains ~/.print-partner
-    /// outside portable mode; `app_data` is auxiliary state, not the database.
+    /// Resolve paths without filesystem access. Outside portable mode, `store`
+    /// retains ~/.print-partner and `app_data` holds auxiliary state.
+    /// Portable mode places both `store` and `app_data` in <root>/data.
     /// The existing desktop.toml remains in `store`, not `config`.
     /// Portable mode ignores home and XDG values. Empty XDG values use defaults;
     /// other selected roots must be absolute and contain no parent traversal.
