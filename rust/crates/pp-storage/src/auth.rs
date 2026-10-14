@@ -1,3 +1,7 @@
+#[cfg(feature = "desktop_rebuild")]
+pub(crate) mod authority;
+#[cfg(feature = "desktop_rebuild")]
+pub use authority::AuthorityFailure;
 mod crypto;
 mod keys;
 mod policy;
