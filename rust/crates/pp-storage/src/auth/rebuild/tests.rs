@@ -742,3 +742,48 @@ fn concurrent_legacy_upgrade_reverifies_without_replacing_the_winning_hash() {
     owner.shutdown().unwrap();
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn poisoned_writer_queue_stops_auth_without_panicking_or_hanging() {
+    let _serial = RUNTIME_TEST
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let directory = std::env::temp_dir().join(format!(
+        "pp-auth-poison-{}",
+        hex::encode(rand::random::<[u8; 16]>())
+    ));
+    let (owner, _) = WriterOwner::open(&directory, Limits::default()).unwrap();
+    let client = open_client(&owner);
+    let shared = owner.client().shared.clone();
+    let poison = shared.clone();
+    assert!(
+        thread::spawn(move || {
+            let _queue = poison.queue.lock().unwrap();
+            panic!("injected queue poison");
+        })
+        .join()
+        .is_err()
+    );
+    let reply = client
+        .submit(
+            Request::RequestReset {
+                email: "poison@example.com".into(),
+            },
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    let error = reply
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .err()
+        .unwrap();
+    assert!(matches!(
+        error.downcast_ref::<AuthFailure>(),
+        Some(AuthFailure::Stopped)
+    ));
+    assert!(shared.queue.lock().err().unwrap().get_ref().closed);
+    shared.queue.clear_poison();
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(directory).unwrap();
+}

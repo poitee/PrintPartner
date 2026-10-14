@@ -108,6 +108,19 @@ enum Envelope {
         reply: mpsc::Sender<Result<u32>>,
     },
 }
+#[cfg(feature = "desktop_rebuild")]
+fn stop_poisoned_queue(
+    error: std::sync::PoisonError<std::sync::MutexGuard<'_, Queue>>,
+) -> std::sync::MutexGuard<'_, Queue> {
+    let mut queue = error.into_inner();
+    queue.closed = true;
+    queue.pending.clear();
+    for work in queue.auth_ready.drain(..) {
+        auth::rebuild::finish_stopped(work);
+    }
+    queue
+}
+
 struct Queue {
     #[cfg(feature = "desktop_rebuild")]
     auth_ready: VecDeque<auth::rebuild::WriterWork>,
@@ -218,8 +231,9 @@ fn execute(connection: &mut Connection, work: Work) -> Result<bool> {
 impl SettingsClient {
     #[cfg(feature = "desktop_rebuild")]
     pub(crate) fn enqueue_auth(&self, work: auth::rebuild::WriterWork) {
-        let mut queue = self.shared.queue.lock().expect("Writer admission poisoned");
+        let mut queue = self.shared.queue.lock().unwrap_or_else(stop_poisoned_queue);
         if queue.closed {
+            self.shared.changed.notify_all();
             drop(queue);
             auth::rebuild::finish_stopped(work);
             return;
@@ -452,7 +466,7 @@ impl WriterOwner {
                 };
                 #[cfg(feature = "desktop_rebuild")]
                 let scheduled = {
-                    let mut queue = worker.queue.lock().expect("Writer admission poisoned");
+                    let mut queue = worker.queue.lock().unwrap_or_else(stop_poisoned_queue);
                     loop {
                         if let Some(scheduled) = schedule(&mut queue, Instant::now()) {
                             worker.changed.notify_all();
@@ -471,13 +485,17 @@ impl WriterOwner {
                             queue = worker
                                 .changed
                                 .wait_timeout(queue, wait)
-                                .expect("Writer admission poisoned")
-                                .0;
+                                .map(|(queue, _)| queue)
+                                .unwrap_or_else(|error| {
+                                    stop_poisoned_queue(std::sync::PoisonError::new(
+                                        error.into_inner().0,
+                                    ))
+                                });
                         } else {
                             queue = worker
                                 .changed
                                 .wait(queue)
-                                .expect("Writer admission poisoned");
+                                .unwrap_or_else(stop_poisoned_queue);
                         }
                     }
                 };
@@ -490,7 +508,7 @@ impl WriterOwner {
                     Scheduled::Normal(envelope) => envelope,
                     Scheduled::Auth(work) => {
                         if let Some(retry) = auth::rebuild::advance(&mut connection, work) {
-                            let mut queue = worker.queue.lock().expect("Writer admission poisoned");
+                            let mut queue = worker.queue.lock().unwrap_or_else(stop_poisoned_queue);
                             queue.auth_ready.push_back(retry);
                             worker.changed.notify_all();
                         }

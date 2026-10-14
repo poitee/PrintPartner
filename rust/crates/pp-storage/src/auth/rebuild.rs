@@ -114,11 +114,10 @@ struct AuthLease {
 }
 impl Drop for AuthLease {
     fn drop(&mut self) {
-        let mut admitted = self
-            .admission
-            .admitted
-            .lock()
-            .expect("Auth admission poisoned");
+        let Ok(mut admitted) = self.admission.admitted.lock() else {
+            self.admission.changed.notify_all();
+            return;
+        };
         *admitted -= 1;
         self.admission.changed.notify_one();
     }
@@ -262,7 +261,11 @@ impl AuthRuntime {
                     let receiver = receiver.clone();
                     thread::spawn(move || {
                         loop {
-                            let job = receiver.lock().expect("KDF pool poisoned").recv();
+                            let Ok(receiver) = receiver.lock() else {
+                                break;
+                            };
+                            let job = receiver.recv();
+                            drop(receiver);
                             let Ok(job) = job else {
                                 break;
                             };
