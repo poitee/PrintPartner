@@ -33,6 +33,154 @@ fn mode(path: &Path, mode: u32) {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
+fn ticket_t_12_lock_acl_write_elevation_is_refused() {
+    use std::os::unix::ffi::OsStrExt;
+    let copy = Copy::new();
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&copy.0)
+        .unwrap();
+    let lock = copy.0.join(".desktop.lock");
+    let database = copy.0.join("print-partner.db");
+    std::fs::write(&lock, b"existing lock").unwrap();
+    mode(&lock, 0o600);
+    std::fs::write(&database, b"must remain unopened").unwrap();
+    // Linux POSIX ACL xattr: grant a foreign named user write through the mask.
+    let mut acl = 2u32.to_le_bytes().to_vec();
+    let foreign_uid = if unsafe { libc::geteuid() } == 65534 {
+        65533
+    } else {
+        65534
+    };
+    for (tag, permissions, uid) in [
+        (1u16, 6u16, u32::MAX),
+        (2, 2, foreign_uid),
+        (4, 0, u32::MAX),
+        (16, 2, u32::MAX),
+        (32, 0, u32::MAX),
+    ] {
+        acl.extend(tag.to_le_bytes());
+        acl.extend(permissions.to_le_bytes());
+        acl.extend(uid.to_le_bytes());
+    }
+    let path = std::ffi::CString::new(lock.as_os_str().as_bytes()).unwrap();
+    assert_eq!(
+        unsafe {
+            libc::setxattr(
+                path.as_ptr(),
+                c"system.posix_acl_access".as_ptr(),
+                acl.as_ptr().cast(),
+                acl.len(),
+                0,
+            )
+        },
+        0,
+        "{}",
+        std::io::Error::last_os_error()
+    );
+    assert_eq!(std::fs::metadata(&lock).unwrap().mode() & 0o777, 0o620);
+    for error in [
+        StorageLease::acquire(&copy.0).err().unwrap(),
+        WriterOwner::open(&copy.0, Limits::default()).err().unwrap(),
+    ] {
+        assert_eq!(error.to_string(), "Unsafe data directory lock");
+    }
+    assert_eq!(std::fs::read(&lock).unwrap(), b"existing lock");
+    assert_eq!(std::fs::read(&database).unwrap(), b"must remain unopened");
+    assert_eq!(std::fs::read_dir(&copy.0).unwrap().count(), 2);
+    assert_eq!(
+        unsafe { libc::removexattr(path.as_ptr(), c"system.posix_acl_access".as_ptr()) },
+        0
+    );
+    mode(&lock, 0o600);
+    assert!(
+        StorageLease::acquire(&copy.0)
+            .unwrap()
+            .release()
+            .lock_released
+    );
+}
+
+#[test]
+fn ticket_t_12_hostile_lock_entries_refuse_before_preflight_or_cleanup() {
+    for kind in [
+        "symlink",
+        "dangling",
+        "hardlink",
+        "directory",
+        "fifo",
+        "group-write",
+    ] {
+        let copy = Copy::new();
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&copy.0)
+            .unwrap();
+        let database = copy.0.join("print-partner.db");
+        let config = copy.0.join("desktop.toml");
+        let marker = copy.0.join(".desktop-owner.json");
+        let target = copy.0.join("target");
+        let lock = copy.0.join(".desktop.lock");
+        std::fs::write(&database, b"invalid database: preflight must not run").unwrap();
+        std::fs::write(&config, b"port = 43123\n").unwrap();
+        std::fs::write(&marker, br#"{"pid":2147483647,"kind":"standalone"}"#).unwrap();
+        std::fs::write(&target, b"external lock target").unwrap();
+        mode(&target, 0o600);
+        match kind {
+            "symlink" => symlink(&target, &lock).unwrap(),
+            "dangling" => symlink(copy.0.join("absent"), &lock).unwrap(),
+            "hardlink" => std::fs::hard_link(&target, &lock).unwrap(),
+            "directory" => std::fs::create_dir(&lock).unwrap(),
+            "fifo" => {
+                use std::os::unix::ffi::OsStrExt;
+                let name = std::ffi::CString::new(lock.as_os_str().as_bytes()).unwrap();
+                assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+            }
+            "group-write" => {
+                std::fs::write(&lock, b"hostile lock").unwrap();
+                mode(&lock, 0o660);
+            }
+            _ => unreachable!(),
+        }
+        let before =
+            [&database, &config, &marker, &target].map(|path| std::fs::read(path).unwrap());
+        let lock_before = std::fs::symlink_metadata(&lock).unwrap();
+        for error in [
+            StorageLease::acquire(&copy.0).err().expect("lease refused"),
+            WriterOwner::open(&copy.0, Limits::default())
+                .err()
+                .expect("writer refused"),
+        ] {
+            assert_eq!(
+                error.to_string(),
+                "Unsafe data directory lock",
+                "{kind}: {error:#}"
+            );
+        }
+        assert_eq!(
+            [&database, &config, &marker, &target].map(|path| std::fs::read(path).unwrap()),
+            before
+        );
+        let lock_after = std::fs::symlink_metadata(&lock).unwrap();
+        assert_eq!(
+            (lock_before.dev(), lock_before.ino(), lock_before.mode()),
+            (lock_after.dev(), lock_after.ino(), lock_after.mode())
+        );
+        assert!(!copy.0.join(".desktop-lease").exists());
+        assert_eq!(std::fs::read_dir(&copy.0).unwrap().count(), 5);
+        std::fs::remove_file(&marker).unwrap();
+        if kind == "directory" {
+            std::fs::remove_dir(&lock).unwrap();
+        } else {
+            std::fs::remove_file(&lock).unwrap();
+        }
+        let lease = StorageLease::acquire(&copy.0).expect("repaired lock admitted");
+        assert!(lease.release().lock_released);
+    }
+}
+
+#[test]
 fn ticket_t_12_foreign_owned_directory_is_refused() {
     let root = Path::new("/");
     if std::fs::metadata(root).unwrap().uid() == unsafe { libc::geteuid() } {

@@ -381,6 +381,44 @@ async fn authenticated_logout_requests_complete_shutdown() {
 }
 
 #[tokio::test]
+async fn ticket_t_12_hostile_lock_is_refused_before_supervised_node_startup() {
+    use std::os::unix::fs::symlink;
+    let data = temporary("hostile-lock");
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&data)
+        .unwrap();
+    let database = data.join("print-partner.db");
+    let config = data.join("desktop.toml");
+    let marker = data.join(".desktop-owner.json");
+    std::fs::write(&database, b"must remain unopened").unwrap();
+    std::fs::write(&config, b"port = 43123\n").unwrap();
+    std::fs::write(&marker, br#"{"pid":2147483647,"kind":"standalone"}"#).unwrap();
+    symlink(&database, data.join(".desktop.lock")).unwrap();
+    let before = [&database, &config, &marker].map(|path| std::fs::read(path).unwrap());
+    let error = CoreRuntime::start(launch(data.clone()))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(error.to_string(), "Unsafe data directory lock");
+    assert_eq!(
+        [&database, &config, &marker].map(|path| std::fs::read(path).unwrap()),
+        before
+    );
+    assert_eq!(
+        std::fs::read_link(data.join(".desktop.lock")).unwrap(),
+        database
+    );
+    assert_eq!(std::fs::read_dir(&data).unwrap().count(), 4);
+    assert!(!data.join(".desktop-lease").exists());
+    println!(
+        "{}",
+        serde_json::json!({"proof_class":"headless_unsigned", "case":"hostile_lock_refused", "error":error.to_string(), "database_unchanged":true, "config_unchanged":true, "stale_marker_unchanged":true, "ownership_cleanup_not_started":true, "supervised_child_not_started":true})
+    );
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+#[tokio::test]
 async fn ticket_t_12_unsafe_directory_is_refused_before_child_or_database_open() {
     use std::os::unix::fs::PermissionsExt;
     let data = temporary("unsafe-directory");
