@@ -42,6 +42,7 @@ MACOS_PR_PREFIXES = (
     "rust/scripts/desktop-bundle.sh", "rust/scripts/stage-desktop.py",
     "rust/scripts/assemble-macos-resources.py", "rust/scripts/check-macos-bundle.py",
     "rust/scripts/macos_addon_slices.py", "rust/scripts/build-desktop-manifest.py",
+    "rust/scripts/precompress-spa.py",
     "rust/scripts/native-sdk.sh", "rust/scripts/native-process-probe.py",
     "rust/scripts/workflow-smoke", ".github/workflows/desktop-native-macos.yml",
     "scripts/macos-bundle-path-filter.py", "scripts/test_macos_bundle_path_filter.py",

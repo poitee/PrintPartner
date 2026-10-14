@@ -69,7 +69,8 @@ class PathFilterTests(unittest.TestCase):
     def test_pr_macos_filter(self):
         triggers = ["rust/crates/pp-desktop/src/main.rs", "rust/crates/pp-desktop/tauri.conf.json",
                     "rust/crates/pp-compat/src/lib.rs", "rust/scripts/desktop-bundle.sh",
-                    "rust/scripts/check-macos-bundle.py", "rust/Cargo.lock", "web/package-lock.json",
+                    "rust/scripts/check-macos-bundle.py", "rust/scripts/precompress-spa.py",
+                    "rust/Cargo.lock", "web/package-lock.json",
                     "rust-toolchain.toml", ".github/workflows/desktop-native-macos.yml",
                     "scripts/macos-bundle-path-filter.py", "rust/crates/pp-storage/src/macos.rs"]
         for path in triggers:
