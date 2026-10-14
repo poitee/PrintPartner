@@ -3436,6 +3436,7 @@ version = "0.1.0"
 dependencies = [
  "caseless",
  "fs2",
+ "getrandom 0.3.4",
  "hex",
  "insta",
  "libc",

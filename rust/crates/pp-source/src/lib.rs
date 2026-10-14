@@ -1,10 +1,14 @@
 mod acl;
 pub mod archive;
 mod directory;
+#[cfg(feature = "desktop_rebuild")]
+pub mod local_selection;
 pub mod media;
 #[cfg(feature = "desktop_rebuild")]
 pub mod observation;
 mod path_policy;
+#[cfg(feature = "desktop_rebuild")]
+pub mod retained_capture;
 mod unicode16;
 
 #[cfg(all(test, target_os = "macos"))]
@@ -42,6 +46,10 @@ pub enum Error {
     UnsafePath,
     UnsafeAncestor,
     UnsafeAcl,
+    #[cfg(feature = "desktop_rebuild")]
+    Entropy,
+    #[cfg(feature = "desktop_rebuild")]
+    CaptureCollisionLimit,
     InvalidIdentity,
     DuplicatePath,
     Limit,
@@ -84,6 +92,10 @@ impl Error {
             Self::UnsafePath => "unsafe-path",
             Self::UnsafeAncestor => "unsafe-ancestor",
             Self::UnsafeAcl => "unsafe-acl",
+            #[cfg(feature = "desktop_rebuild")]
+            Self::Entropy => "entropy-unavailable",
+            #[cfg(feature = "desktop_rebuild")]
+            Self::CaptureCollisionLimit => "capture-collision-limit",
             Self::InvalidIdentity => "invalid-identity",
             Self::DuplicatePath => "duplicate-path",
             Self::Limit => "limit",

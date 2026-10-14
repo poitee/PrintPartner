@@ -1,5 +1,7 @@
 #![cfg(test)]
 
+use std::os::unix::fs::DirBuilderExt;
+
 use super::*;
 use crate::origin::persist_initial_origin;
 use std::net::Ipv4Addr;
@@ -12,7 +14,11 @@ impl Fixture {
     fn new() -> Self {
         let path =
             std::env::temp_dir().join(format!("pp-t12-{}", hex::encode(rand::random::<[u8; 8]>())));
-        std::fs::create_dir(&path).unwrap();
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&path)
+            .unwrap();
         Self(path)
     }
 

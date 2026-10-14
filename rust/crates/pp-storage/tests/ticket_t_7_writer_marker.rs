@@ -1,4 +1,5 @@
 use pp_storage::{Limits, WriterOwner, lease::StorageLease};
+use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
 
 #[path = "common/process.rs"]
@@ -14,7 +15,11 @@ impl Fixture {
             "pp-t7-marker-{}",
             hex::encode(rand::random::<[u8; 16]>())
         ));
-        std::fs::create_dir(&path).unwrap();
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&path)
+            .unwrap();
         Self(path)
     }
 

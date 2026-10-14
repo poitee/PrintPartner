@@ -1,6 +1,7 @@
 use super::*;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
+use std::os::unix::fs::DirBuilderExt;
 use std::process::Command;
 use std::sync::mpsc;
 
@@ -129,7 +130,11 @@ pub(super) fn directory(name: &str) -> PathBuf {
         "pp-storage-{name}-{}",
         hex::encode(rand::random::<[u8; 8]>())
     ));
-    std::fs::create_dir_all(&path).unwrap();
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&path)
+        .unwrap();
     path
 }
 fn fixture(name: &str) -> (PathBuf, WriterOwner, SettingsClient) {
@@ -1022,7 +1027,11 @@ fn tree_hashes(root: &Path) -> Vec<(String, String)> {
 }
 
 fn copy_db_files(from: &Path, to: &Path) {
-    std::fs::create_dir_all(to).unwrap();
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(to)
+        .unwrap();
     if !from.is_dir() {
         return;
     }
