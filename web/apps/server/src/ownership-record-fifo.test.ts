@@ -1,10 +1,10 @@
 import { spawn, spawnSync } from "node:child_process";
-import { lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parentReservedCopy, rustOwnedCopy } from "./db/rust-owned.js";
-import { acquireDataDirectory, installDesktopContext } from "./desktop-context.js";
+import { acquireDataDirectory, installDesktopContext, releaseOrphanedDesktopOwner } from "./desktop-context.js";
 import { acquireStorageLease } from "./storage-lease.js";
 
 const roots: string[] = [];
@@ -98,5 +98,16 @@ describe("FIFO ownership records", () => {
       key: "cd".repeat(32), lease: "ef".repeat(32), parent_pid: process.ppid, port: 1, child_process_identity: "child",
     };
     expect(() => admitWithinBound(marker, () => installDesktopContext(setup))).toThrow("Ownership record is not a regular file");
+  });
+
+  it("keeps the socket when the desktop owner marker is a FIFO during orphaned shutdown", () => {
+    const dir = dataDir();
+    const marker = join(dir, ".desktop-owner.json");
+    fifo(marker);
+    mkdirSync(join(dir, "run"));
+    const socket = join(dir, "run", "pp.sock");
+    writeFileSync(socket, "");
+    admitWithinBound(marker, () => releaseOrphanedDesktopOwner({ data_dir: dir, socket_path: socket, parent_pid: process.ppid }));
+    expect(existsSync(socket)).toBe(true);
   });
 });

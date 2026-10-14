@@ -1,6 +1,6 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
-import { closeSync, existsSync, fstatSync, mkdirSync, openSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { admitDesktopAccount, accountModeSchema, type DesktopAccount } from "./desktop-account.js";
@@ -58,6 +58,19 @@ export function installDesktopContext(input: unknown): void {
   presentDesktopChildCredential(parsed.child_process_identity);
   account = admitDesktopAccount(dataDir, "account_mode" in parsed ? parsed.account_mode.pin : { kind: "disabled" });
   context = parsed;
+}
+
+/** After the desktop parent died, removes its socket and owner marker if the marker still names it. */
+export function releaseOrphanedDesktopOwner(setup: { data_dir: string; socket_path: string; parent_pid: number }): void {
+  const marker = join(setup.data_dir, ".desktop-owner.json");
+  try {
+    const owner: unknown = JSON.parse(readOwnershipRecord(marker));
+    if (typeof owner === "object" && owner !== null && "pid" in owner && owner.pid === setup.parent_pid) {
+      rmSync(setup.socket_path, { force: true });
+      rmdirSync(dirname(setup.socket_path));
+      rmSync(marker);
+    }
+  } catch { /* Owner cleanup can race a normal Rust shutdown. */ }
 }
 
 function assertDataDirectoryAvailable(dataDir: string): void {
