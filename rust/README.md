@@ -55,6 +55,10 @@ The generated manifest measures Node, every frontend and backend build file, com
 
 Operation ownership is immutable per launch. The checked-in gateway manifest admits an initial subset of exact route patterns and explicitly marks Checkoff GET repair as a write. Node owns startup migrations, workers, receipts and file publication. Unregistered routes return JSON 404. MCP stays disabled until valid-key behavior is implemented and verified. Existing accounts require explicit owner mapping and are refused by the compatibility launcher.
 
+The gateway also streams staged SPA assets in chunks of at most 64 KiB. Asset bodies retain request admission until dropped and stop when the gateway cancels responses. GET and HEAD share content types and lengths, and other asset methods return 405. SPA navigation HEAD requests use the same deep-link allowlist as GET. Authentication, path containment and no-store caching still apply. This hardens the existing runtime without enabling `desktop_rebuild`; it does not embed or precompress the SPA.
+
+Run `cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-gateway -E 'test(ticket_t_11)'` after providing the measured bundle manifest described above. The tests include a slow TCP reader, another simultaneous request and bounded shutdown. They use a gateway with no published Node endpoint and do not prove native packaging or Rust job cutover.
+
 The gateway forwards bodies once and streams responses. An uncertain mutation response is never replayed by Rust. The workflow proof commits an autosave while its client leaves the response unread, kills only Node, and retries the same command/key after restart. It checks one new immutable Plan revision, Checkoff state and authenticated export bytes.
 
 Logs keep only approved event names, severity and timestamps. Raw Node output, URLs, error chains and payloads are discarded during projection. Files rotate at 10 MB or a day boundary, retaining seven files. This deliberately limits diagnostics until richer safe fields have their own tests.
