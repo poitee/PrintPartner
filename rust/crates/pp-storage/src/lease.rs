@@ -30,6 +30,7 @@ pub struct StorageLease {
 #[cfg(test)]
 thread_local! {
     static FAIL_MARKER_WRITE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static REMOVE_MARKER_BEFORE_READ: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 fn write_marker(file: &mut File, bytes: &[u8]) -> std::io::Result<()> {
@@ -69,7 +70,21 @@ fn read_prior_owner(marker_path: &Path) -> Result<Option<(serde_json::Value, u32
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error).context("storage_lease_marker_invalid"),
     }
-    let bytes = std::fs::read(marker_path).context("storage_lease_marker_invalid")?;
+    #[cfg(test)]
+    if REMOVE_MARKER_BEFORE_READ.with(std::cell::Cell::take) {
+        std::fs::remove_file(marker_path)?;
+    }
+    let bytes = match std::fs::read(marker_path) {
+        Ok(bytes) => bytes,
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound
+                && std::fs::symlink_metadata(marker_path)
+                    .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            return Ok(None);
+        }
+        Err(error) => return Err(error).context("storage_lease_marker_invalid"),
+    };
     let marker: serde_json::Value =
         serde_json::from_slice(&bytes).context("storage_lease_marker_invalid")?;
     let pid = marker["pid"]
@@ -306,6 +321,30 @@ mod tests {
         FileExt::unlock(&lock).unwrap();
         drop(guard::StorageLease::acquire(path).unwrap());
         std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn ticket_t_7_writer_desktop_marker_removed_during_inspection_allows_handoff() {
+        for writer in [false, true] {
+            let path = directory();
+            std::fs::write(
+                path.join(".desktop-owner.json"),
+                serde_json::json!({"pid": std::process::id(), "kind": "standalone"}).to_string(),
+            )
+            .unwrap();
+            REMOVE_MARKER_BEFORE_READ.with(|remove| remove.set(true));
+            if writer {
+                let (owner, _) = crate::WriterOwner::open(&path, crate::Limits::default()).unwrap();
+                assert!(path.join("print-partner.db").is_file());
+                owner.shutdown().unwrap();
+                assert!(!path.join(".desktop-owner.json").exists());
+                assert!(!path.join(".desktop-lease").exists());
+                std::fs::remove_dir_all(path).unwrap();
+            } else {
+                let owner = StorageLease::acquire(&path).unwrap();
+                assert_released(owner.release(), &path);
+            }
+        }
     }
 
     #[test]
