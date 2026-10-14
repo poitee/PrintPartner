@@ -773,7 +773,7 @@ fn read_model_primary_only_naming_override_stays_current() {
 }
 
 #[test]
-fn read_model_plan_configuration_freshness_does_not_make_sources_stale() {
+fn read_model_stale_freshness_marks_sources_stale() {
     use pp_storage::catalog::Request;
     let f = Fixture::new();
     f.owner
@@ -801,7 +801,8 @@ fn read_model_plan_configuration_freshness_does_not_make_sources_stale() {
             .any(|r| r["kind"] == "plan_configuration_changed")
     );
     let workspace = &context.workflow["workspace"];
-    assert_eq!(workspace["sources"]["kind"], "ready");
+    assert_eq!(workspace["sources"]["kind"], "stale");
     assert!(workspace["sources"]["attached_count"].as_u64().unwrap() > 0);
-    assert_eq!(workspace["stages"][0]["status"]["kind"], "complete");
+    assert!(workspace["sources"]["issue_count"].as_u64().unwrap() >= 1);
+    assert_eq!(workspace["stages"][0]["status"]["kind"], "stale");
 }

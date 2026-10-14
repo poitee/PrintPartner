@@ -609,6 +609,15 @@ pub(super) fn capture(
         .remove("profileId");
     let sources = if attached == 0 {
         Sources::Empty
+    } else if freshness["status"] == "stale" {
+        let reasons = freshness["reasons"].as_array().map_or(0, Vec::len);
+        let untracked = freshness["untracked_sources"]
+            .as_array()
+            .map_or(0, Vec::len);
+        Sources::Stale {
+            attached_count: attached,
+            issue_count: ((reasons + untracked) as u64).max(1),
+        }
     } else {
         Sources::Ready {
             attached_count: attached,
