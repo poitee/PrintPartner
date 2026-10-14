@@ -368,9 +368,10 @@ impl WriterOwner {
             limits.queued_writes > 0 && limits.readers > 0,
             "Storage limits must be positive"
         );
+        let directory = lease::prepare_directory(directory)?;
         let path = directory.join("print-partner.db");
         schema::preflight(&path, false)?;
-        let lease = lease::StorageLease::acquire(directory)?;
+        let lease = lease::StorageLease::acquire(&directory)?;
         let path = lease.data_dir().join("print-partner.db");
         let version = schema::preflight(&path, true)?;
         for name in ["repos", "sources", "exports", "thumbs", "covers"] {

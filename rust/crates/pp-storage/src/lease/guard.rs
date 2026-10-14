@@ -246,6 +246,8 @@ impl Drop for StorageLease {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "macos")]
+    use std::os::unix::fs::DirBuilderExt;
     #[test]
     fn child_recording_refuses_a_different_owner_without_modifying_its_marker() {
         let directory = std::env::temp_dir().join(format!(
@@ -289,7 +291,11 @@ mod tests {
             "pp-macos-lease-{}",
             hex::encode(rand::random::<[u8; 16]>())
         ));
-        std::fs::create_dir(&directory).unwrap();
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&directory)
+            .unwrap();
         let identity = super::process_identity(std::process::id()).unwrap();
         assert!(identity.starts_with("instance:"));
         assert_eq!(

@@ -7,7 +7,7 @@ use std::{
     collections::BTreeMap,
     fs::{File, OpenOptions},
     io::Write,
-    os::unix::fs::{OpenOptionsExt, PermissionsExt},
+    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
 };
@@ -26,6 +26,25 @@ pub struct StorageLease {
     runtime_dir: PathBuf,
     lease: String,
     release_allowed: bool,
+}
+
+/// Create private Unix store directories and admit existing owner-controlled stores.
+/// Existing modes and data-directory aliases are preserved. This does not validate
+/// ancestor permissions or ACLs, or protect against hostile path replacement.
+pub fn prepare_directory(path: &Path) -> Result<PathBuf> {
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(path)?;
+    let metadata = std::fs::metadata(path)?;
+    ensure!(metadata.is_dir(), "Data directory is not a directory");
+    ensure!(
+        metadata.uid() == unsafe { libc::geteuid() }
+            && metadata.mode() & 0o300 == 0o300
+            && metadata.mode() & 0o022 == 0,
+        "Unsafe data directory permissions"
+    );
+    Ok(path.canonicalize()?)
 }
 
 #[cfg(test)]
@@ -86,8 +105,7 @@ pub(crate) fn prior_owner_blocks_unowned(marker_path: &Path) -> bool {
 
 impl StorageLease {
     pub fn acquire(path: &Path) -> Result<Self> {
-        std::fs::create_dir_all(path)?;
-        let data_dir = path.canonicalize()?;
+        let data_dir = prepare_directory(path)?;
         let lock = OpenOptions::new()
             .read(true)
             .write(true)
@@ -287,7 +305,11 @@ mod tests {
             "pp-release-order-{}",
             hex::encode(rand::random::<[u8; 8]>())
         ));
-        std::fs::create_dir(&path).unwrap();
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&path)
+            .unwrap();
         path
     }
 

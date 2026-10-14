@@ -2,6 +2,7 @@ use pp_storage::{
     Limits, Setting, SettingCommand, SettingSnapshot, WriterOwner,
     lease::{StorageLease, record_child},
 };
+use std::os::unix::fs::DirBuilderExt;
 use std::{
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
@@ -37,7 +38,11 @@ fn temp_dir(name: &str) -> PathBuf {
         "pp-t7-{name}-{}-{nanos}-{serial}",
         std::process::id()
     ));
-    std::fs::create_dir(&path).unwrap();
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&path)
+        .unwrap();
     path
 }
 
