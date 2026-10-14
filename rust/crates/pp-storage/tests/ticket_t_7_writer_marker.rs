@@ -1,6 +1,9 @@
 use pp_storage::{Limits, WriterOwner, lease::StorageLease};
 use std::path::PathBuf;
 
+#[path = "common/process.rs"]
+mod child_process;
+
 struct Fixture(PathBuf);
 
 impl Fixture {
@@ -86,7 +89,7 @@ fn ticket_t_7_writer_marker_torn_lease_record_fails_closed() {
 
 #[test]
 fn ticket_t_7_writer_marker_incomplete_identity_cannot_prove_staleness() {
-    let mut child = std::process::Command::new("/bin/sh")
+    let mut child = child_process::command("/bin/sh")
         .args(["-c", "exit 0"])
         .spawn()
         .unwrap();
@@ -111,7 +114,7 @@ fn ticket_t_7_writer_marker_incomplete_identity_cannot_prove_staleness() {
 #[test]
 fn ticket_t_7_writer_marker_complete_stale_lease_recovers() {
     let fixture = Fixture::new();
-    let mut child = std::process::Command::new("/bin/sh")
+    let mut child = child_process::command("/bin/sh")
         .args(["-c", "exit 0"])
         .spawn()
         .unwrap();
