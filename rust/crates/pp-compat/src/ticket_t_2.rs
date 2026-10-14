@@ -854,9 +854,16 @@ impl HealthFixture {
                             assert_eq!(request.uri(), "/health");
                             use hmac::Mac;
                             let principal = request.headers()["x-pp-principal"].to_str().unwrap();
-                            let signature =
-                                hex::decode(request.headers()["x-pp-signature"].to_str().unwrap())
-                                    .unwrap();
+                            let signature = request.headers()["x-pp-signature"].to_str().unwrap();
+                            let lowercase_hex = |text: &str| {
+                                text.bytes()
+                                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+                            };
+                            assert!(!principal.is_empty() && principal.len() <= 4096);
+                            assert!(lowercase_hex(principal));
+                            assert_eq!(signature.len(), 64);
+                            assert!(lowercase_hex(signature));
+                            let signature = hex::decode(signature).unwrap();
                             let mut verifier =
                                 super::Hmac::<super::Sha256>::new_from_slice(&key).unwrap();
                             verifier.update(principal.as_bytes());
