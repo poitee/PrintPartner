@@ -1,0 +1,18 @@
+{
+  "criteria": 1.0,
+  "criteria_fraction": "5/5",
+  "visual": null,
+  "notes": "PASS at d7e67eaed9bc186ceeba3e54dfd3f61490912a40. Acceptance 5/5, CI 2/2, logs 2/2, scope 1/1. Independent landing-slot native verifier exited 0; positive and negative controls executed and frame_denial returned target_executed; strict and native denials matched the gateway frame-src policy with three seconds after the trusted enforcing event and no child GET, beacon, or authenticated message. Cleanup reaped the control driver and fixture threads. Receipt has no native teardown claim. Rustls pin 0.23.46 matches the crates.io checksum. No blocking findings.",
+  "head": "d7e67eaed9bc186ceeba3e54dfd3f61490912a40",
+  "exact_head": "d7e67eaed9bc186ceeba3e54dfd3f61490912a40",
+  "score": 10,
+  "verdict": "PASS",
+  "blocking_findings": [],
+  "items": {
+    "acceptance": 5,
+    "tests": 2,
+    "visual": null,
+    "logs": 2,
+    "scope": 1
+  }
+}
