@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import Database from "better-sqlite3";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -165,6 +166,28 @@ describe("a worker under its parent's reservation", () => {
     expect(foreign.stderr).toContain("The parent process does not hold this data directory");
   }, 30_000);
 
+  it("does not advance profile sequences on a current schema", async () => {
+    const dir = dataDir();
+    const db = new SqliteDatabase(dir);
+    db.connect();
+    const sequences = () => {
+      const raw = new Database(join(dir, "print-partner.db"), { readonly: true });
+      try {
+        return raw.prepare("SELECT name, seq FROM sqlite_sequence ORDER BY name").all();
+      } finally {
+        raw.close();
+      }
+    };
+    try {
+      const before = sequences();
+      const worker = bareConnect(dir, false, "parent", { ...process.env, ...storageWorkerEnv(dir) });
+      expect((await outcome(worker)).code).toBe(0);
+      expect(sequences()).toEqual(before);
+    } finally {
+      db.close();
+    }
+  }, 30_000);
+
   it("is refused without the parent's identity even though the parent holds the copy", async () => {
     const dir = dataDir();
     const db = new SqliteDatabase(dir);
@@ -197,5 +220,26 @@ describe("a close whose release fails", () => {
     db.close();
     expect(existsSync(join(dir, ".desktop-lease"))).toBe(false);
     expect(existsSync(join(dir, ".desktop-owner.json"))).toBe(false);
+  });
+
+  it.skipIf(process.getuid?.() === 0)("after the lease is detached does not let a later connection reuse it", () => {
+    const dir = dataDir();
+    const first = new SqliteDatabase(dir);
+    first.connect();
+    chmodSync(join(dir, ".desktop-lease"), 0o500);
+    expect(() => first.close()).toThrow();
+    const detached = readdirSync(dir).filter((name) => name.startsWith(".desktop-lease-release-"));
+    expect(detached).toHaveLength(1);
+    chmodSync(join(dir, detached[0]!), 0o700);
+    expect(existsSync(join(dir, ".desktop-lease"))).toBe(false);
+
+    const second = new SqliteDatabase(dir);
+    second.connect();
+    expect(existsSync(join(dir, ".desktop-lease"))).toBe(true);
+    first.close();
+    expect(JSON.parse(readFileSync(join(dir, ".desktop-owner.json"), "utf8")).pid).toBe(process.pid);
+    expect(existsSync(join(dir, ".desktop-lease"))).toBe(true);
+    second.close();
+    expect(readdirSync(dir).filter((name) => name.startsWith(".desktop-"))).toEqual([]);
   });
 });

@@ -121,14 +121,11 @@ export function verifyDesktopPrincipal(
 type HeldDataDirectory = { refs: number; identity: string; release: () => void };
 const heldDataDirectories = new Map<string, HeldDataDirectory>();
 
-function heldRelease(canonical: string, held: HeldDataDirectory): () => void {
+function heldRelease(held: HeldDataDirectory): () => void {
   let released = false;
   return () => {
     if (released) return;
-    if (held.refs === 1) {
-      held.release();
-      heldDataDirectories.delete(canonical);
-    }
+    if (held.refs === 1) held.release();
     held.refs--;
     released = true;
   };
@@ -143,7 +140,7 @@ export function retainDataDirectory(dataDir: string): () => void {
     const held = heldDataDirectories.get(canonical);
     if (held) {
       held.refs++;
-      return heldRelease(canonical, held);
+      return heldRelease(held);
     }
   }
   return acquireDataDirectory(dataDir);
@@ -175,11 +172,18 @@ export function acquireDataDirectory(dataDir: string): () => void {
     lease.release();
     throw error;
   }
+  let markerRemoved = false;
   const held: HeldDataDirectory = { refs: 1, identity: lease.identity, release: () => {
     // Preserve ownership if marker cleanup fails, so callers can retry safely.
-    rmSync(marker);
+    if (!markerRemoved) {
+      rmSync(marker);
+      markerRemoved = true;
+    }
+    // Once the marker is gone this entry no longer stands for a reservation, even
+    // if detaching the lease fails. A later connection then has to acquire again.
+    if (heldDataDirectories.get(canonical) === held) heldDataDirectories.delete(canonical);
     lease.release();
   } };
   heldDataDirectories.set(canonical, held);
-  return heldRelease(canonical, held);
+  return heldRelease(held);
 }

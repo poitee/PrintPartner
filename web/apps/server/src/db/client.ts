@@ -15,6 +15,7 @@ export type DrizzleDb = BetterSQLite3Database<typeof schema>;
 
 // "own" reserves the copy for this process. "parent" is for a worker spawned by
 // the process that already reserved it, such as a multi-process contention test.
+// The worker holds no lease of its own, so it must close before its parent releases.
 export type DataDirectoryLease = "own" | "parent";
 
 export class SqliteDatabase {
@@ -47,7 +48,9 @@ export class SqliteDatabase {
       if (!parentReservedCopy(this.dataDir)) {
         throw new Error("The parent process does not hold this data directory; Node will not migrate or write");
       }
-      ownership = "absent";
+      // Seed like a recorded child, so a worker on a current schema does not
+      // advance sqlite_sequence just by connecting.
+      ownership = "child";
     } else {
       const copy = rustOwnedCopy(this.dataDir);
       if (copy.kind === "foreign") {
