@@ -14,7 +14,7 @@ As of 2026-10-13, main contains 14 workspace crates. `pp-storage` landed through
 | `pp-api-types` | Wire DTOs, constructors, validation, and parsers (autosave and related). Built on `pp-domain`. |
 | `pp-contracts` | Compatibility facade: re-exports the contract surface used by parity binaries and external consumers; owns parity tooling. |
 | `pp-net` | Checked outbound connection helpers (gateway target canonicalization today). |
-| `pp-drivers` | Reserved for printer and provider adapters that use `pp-net`. Stub on main (move deferred until the rebuild slices land). |
+| `pp-drivers` | Printer and provider adapters that use `pp-net` (Moonraker status today). Further printer/provider moves wait for the rebuild slices. |
 | `pp-services` | Native Orca/Bambu slicer discovery. Broader use cases on domain ports remain planned; the crate has no workspace dependency. |
 | `pp-storage` | SQLite owner, migrations, bounded settings writer, read-only pool, storage lease, and safe backups. Node still owns application SQL operations. |
 | `pp-source` | Immutable local Source snapshot materialization and bounded ZIP extraction (filesystem bytes and manifest). Does not own SQL, catalog activation, or HTTP routes. |
@@ -27,7 +27,7 @@ As of 2026-10-13, main contains 14 workspace crates. `pp-storage` landed through
 
 ## Crates planned with the desktop rebuild
 
-`pp-api` and `pp-storage` are already on main; the rebuild slices (D6 to D22) extend it with authentication and domain operations. These planned changes retain the open questions below.
+`pp-api` and `pp-storage` are already on main. The rebuild slices extend `pp-storage` (D6 to D22) and `pp-api` (D23 to D25) with authentication and domain operations. These planned changes retain the open questions below.
 
 | Crate | Role |
 | --- | --- |
@@ -43,7 +43,8 @@ Copied from `ALLOWED` in `rust/scripts/check-boundaries.py` on `main`. A missing
 | `pp-source` | *(none)* |
 | `pp-core` | `pp-gateway`, `pp-compat`, `pp-storage` |
 | `pp-storage` | *(none)* |
-| `pp-gateway` | `pp-compat`, `pp-net` |
+| `pp-api` | `pp-storage` |
+| `pp-gateway` | `pp-compat`, `pp-drivers`, `pp-net` |
 | `pp-compat` | *(none)* |
 | `pp-server` | `pp-core` |
 | `pp-contracts` | `pp-api-types` |
@@ -51,18 +52,20 @@ Copied from `ALLOWED` in `rust/scripts/check-boundaries.py` on `main`. A missing
 | `pp-domain` | *(none)* |
 | `pp-api-types` | `pp-domain` |
 | `pp-net` | *(none)* |
-| `pp-drivers` | *(none)* |
+| `pp-drivers` | `pp-net`, `pp-api-types` |
 | `pp-services` | *(none)* |
 
 Graph form of the non-empty current edges:
 
 ```text
 pp-contracts → pp-api-types → pp-domain
-pp-gateway → pp-compat, pp-net
+pp-api → pp-storage
+pp-gateway → pp-compat, pp-drivers, pp-net
+pp-drivers → pp-net, pp-api-types
 pp-core → pp-gateway, pp-compat, pp-storage
 pp-desktop → pp-core
 pp-server → pp-core
-pp-source, pp-storage, pp-drivers, pp-services → (no pp-* deps)
+pp-source, pp-storage, pp-services → (no pp-* deps)
 ```
 
 ## Planned edges after the desktop rebuild
@@ -72,11 +75,11 @@ Marked **planned**. Taken from the reference branch’s (`desktop/source-sync-lo
 | Crate | Planned allowed `pp-*` deps |
 | --- | --- |
 | `pp-storage` | `pp-contracts` **(planned dependency on the existing crate)** |
-| `pp-api` | `pp-contracts`, `pp-storage` **(planned; new crate)** |
+| `pp-api` | `pp-storage` *(current)*, plus `pp-contracts` **(planned addition)** |
 | `pp-core` | `pp-gateway`, `pp-compat`, `pp-storage`, plus `pp-api` and `pp-source` **(planned additions)** |
-| `pp-drivers` | `pp-net` **(planned; printers/providers move)** |
+| `pp-drivers` | `pp-net`, `pp-api-types` *(current; more printer/provider code moves in later)* |
 | `pp-services` | `pp-domain` **(planned; use cases on domain ports only)** |
-| `pp-gateway` | `pp-compat`, `pp-net` *(unchanged)* |
+| `pp-gateway` | `pp-compat`, `pp-drivers`, `pp-net` *(unchanged)* |
 | `pp-compat` | *(none)* *(unchanged)* |
 | `pp-server` | `pp-core` *(unchanged)* |
 | `pp-desktop` | `pp-core` *(unchanged)* |
@@ -90,9 +93,8 @@ Planned additions in graph form:
 
 ```text
 pp-storage → pp-contracts                    (planned)
-pp-api → pp-contracts, pp-storage            (planned)
+pp-api → pp-contracts                        (planned addition)
 pp-core → pp-api, pp-source                  (planned additions)
-pp-drivers → pp-net                          (planned)
 pp-services → pp-domain                      (planned)
 ```
 
@@ -112,5 +114,5 @@ python3 rust/scripts/check-boundaries.py --self-test
 ```
 
 ```json
-{"packages": 13, "allowed_edges": true, "intentional_violation_rejected": true}
+{"packages": 14, "allowed_edges": true, "intentional_violation_rejected": true}
 ```

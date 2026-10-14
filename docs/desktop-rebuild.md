@@ -27,7 +27,7 @@ Core tests isolate environment changes in child processes. They cover absent, di
 
 ## Slice plan
 
-The rebuild ships as small PRs to `main`, each under about 1.5k lines and checkable on its own. Every slice compiles behind the `desktop_rebuild` Cargo feature, and anything user-visible also checks the runtime setting. The default build stays unchanged. The old desktop stack (#135 to #168, `desktop/rust-core`, and the reference branch `desktop/source-sync-local-current-20261008`) is reference only. It is not merged, and it is not closed or deleted until the slices cover it.
+The rebuild ships as small PRs to `main`, each under about 1.5k lines and checkable on its own. Every code slice compiles behind the `desktop_rebuild` Cargo feature, and anything user-visible also checks the runtime setting (D31 and D32 are exceptions; see below). The default build stays unchanged. The old desktop stack (#135 to #168, `desktop/rust-core`, and the reference branch `desktop/source-sync-local-current-20261008`) is reference only. It is not merged, and it is not closed or deleted until the slices cover it.
 
 Each slice is done when:
 
