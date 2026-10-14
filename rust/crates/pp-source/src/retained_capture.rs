@@ -576,7 +576,8 @@ impl RetainedCaptureVault {
                     self.trace.before_deleting_remove(&slot)?;
                     slot.remove_owned_empty_directory(DELETING, &deleting)?;
                     self.trace.before_slot_remove(&slot)?;
-                    self.parent.remove_empty_directory(id.as_str())?;
+                    self.parent
+                        .remove_owned_empty_directory(id.as_str(), &slot)?;
                     self.trace.before("parent_sync")?;
                     self.parent.sync()?;
                     removed += 1;
@@ -630,7 +631,7 @@ fn cleanup_generated_slot(
         _ => return Err(Error::CorruptSnapshot),
     }
     trace.before_slot_remove(slot)?;
-    parent.remove_empty_directory(id.as_str())?;
+    parent.remove_owned_empty_directory(id.as_str(), slot)?;
     *phase = None;
     trace.before("parent_sync")?;
     parent.sync()
@@ -779,7 +780,7 @@ impl CaptureCandidate {
             trace.before("tree_remove")?;
             slot.remove_owned_empty_directory(DELETING, &candidate)?;
             trace.before_slot_remove(&slot)?;
-            parent.remove_empty_directory(id.as_str())?;
+            parent.remove_owned_empty_directory(id.as_str(), &slot)?;
             trace.before("parent_sync")?;
             parent.sync()
         })();
@@ -957,7 +958,8 @@ impl FrozenCapture {
         self.slot
             .remove_owned_empty_directory(DELETING, &self.frozen)?;
         self.trace.before_slot_remove(&self.slot)?;
-        self.parent.remove_empty_directory(self.id.as_str())?;
+        self.parent
+            .remove_owned_empty_directory(self.id.as_str(), &self.slot)?;
         self.trace.before("parent_sync")?;
         self.parent.sync()
     }
