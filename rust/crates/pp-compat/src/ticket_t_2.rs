@@ -1142,8 +1142,10 @@ async fn ticket_t_3_drain_repeated_eof_interrupts_mutation_without_resend() {
         assert!(!upload.is_finished());
         supervisor.disarm_restarts();
         let started = tokio::time::Instant::now();
-        assert_eq!(shutdown(supervisor).await, super::CompatExit::Graceful);
-        assert!(started.elapsed() < Duration::from_secs(5));
+        let exit = shutdown(supervisor).await;
+        let shutdown_elapsed = started.elapsed();
+        assert_eq!(exit, super::CompatExit::Graceful);
+        assert!(shutdown_elapsed < Duration::from_secs(5));
         let error = tokio::time::timeout(Duration::from_secs(1), upload)
             .await
             .unwrap()
@@ -1173,7 +1175,7 @@ async fn ticket_t_3_drain_repeated_eof_interrupts_mutation_without_resend() {
             serde_json::json!({
                 "case": "repeated_eof_upload", "cycle": cycle, "pid": pid,
                 "compat_exit": "graceful", "old_group_absent": true,
-            "shutdown_ms": started.elapsed().as_millis(),
+                "shutdown_ms": shutdown_elapsed.as_millis(),
                 "connection_tasks": 0, "mutation_error": error.to_string(),
                 "stale_endpoint_error": refused.to_string(), "events": expected,
             })
