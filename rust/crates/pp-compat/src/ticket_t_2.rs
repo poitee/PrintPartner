@@ -106,6 +106,7 @@ fn shell_spec(scratch: &Scratch) -> super::ShellSpec {
         data_dir: scratch.root.join("data"),
         runtime_dir: scratch.root.join("runtime"),
         pidfile: scratch.pidfile(),
+        lease: "test".into(),
         port: 0,
     }
 }
@@ -1613,4 +1614,36 @@ async fn ticket_t_2_hung_readiness_is_cut_off_at_remaining_budget() {
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn ticket_t_2_slow_readiness_cannot_publish_after_remaining_budget() {
     readiness_remaining_budget(false).await;
+}
+
+#[tokio::test]
+async fn ticket_t_3_drain_shutdown_cancels_backpressured_startup_setup() {
+    let scratch = Scratch::new("blocked-startup-setup");
+    let supervisor = super::Supervisor::launch_shell(
+        super::ShellSpec {
+            script: "exec /usr/bin/node -e 'setInterval(() => {}, 1e9)'",
+            lease: "x".repeat(1024 * 1024),
+            ..shell_spec(&scratch)
+        },
+        super::SupervisorConfig::default(),
+    )
+    .unwrap();
+    wait_live(&scratch.pidfile(), 1).await;
+    let handle = supervisor.handle.clone();
+    let probes = supervisor.health_probes_completed.clone();
+    assert!(matches!(*handle.status.borrow(), super::Status::Starting));
+    assert_eq!(*probes.borrow(), 0);
+    let pid = recorded_pids(&scratch.pidfile())[0];
+    assert_eq!(live_pids(&scratch.pidfile()), vec![pid]);
+    let result = tokio::time::timeout(Duration::from_secs(5), supervisor.shutdown())
+        .await
+        .expect("shutdown remained blocked writing startup setup")
+        .expect("supervisor shutdown");
+    assert_eq!(result, super::CompatExit::Graceful);
+    assert!(matches!(*handle.status.borrow(), super::Status::Stopped));
+    assert!(handle.endpoint().is_none());
+    assert_eq!(*probes.borrow(), 0);
+    assert!(super::drain::process_group_absent(pid));
+    assert_eq!(recorded_pids(&scratch.pidfile()), vec![pid]);
+    println!("startup setup cancelled; spawns=1; probes=0; live_groups=0; status=stopped");
 }

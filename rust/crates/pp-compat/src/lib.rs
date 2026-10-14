@@ -398,8 +398,30 @@ fn classify_stop_outcome(
     Ok(intent)
 }
 
+enum SetupWrite {
+    Sent,
+    Cancelled,
+}
+
+async fn write_setup_or_cancel(
+    stdin: &mut ChildStdin,
+    setup: serde_json::Value,
+    cancelled: &CancellationToken,
+) -> std::io::Result<SetupWrite> {
+    let bytes = format!("{setup}\n");
+    tokio::select! {
+        biased;
+        _ = cancelled.cancelled() => Ok(SetupWrite::Cancelled),
+        result = stdin.write_all(bytes.as_bytes()) => result.map(|()| SetupWrite::Sent),
+    }
+}
+
 impl Process {
-    async fn spawn(spec: &SpawnSpec, capture: &logs::Logs) -> Result<Self> {
+    async fn spawn(
+        spec: &SpawnSpec,
+        capture: &logs::Logs,
+        cancelled: &CancellationToken,
+    ) -> Result<Self> {
         release::verify_backend(&spec.bundle)?;
         let package_root = release::package_root(&spec.bundle)?;
         let preload = spec
@@ -481,8 +503,7 @@ impl Process {
             "generation":endpoint.generation, "key":hex::encode(key), "lease":spec.lease, "parent_pid":std::process::id(),
             "port":spec.port, "child_process_identity":child_identity });
         spec.account_pin.apply(&mut setup);
-        if stdin
-            .write_all(format!("{setup}\n").as_bytes())
+        if write_setup_or_cancel(&mut stdin, setup, cancelled)
             .await
             .is_err()
         {
@@ -510,7 +531,11 @@ impl Process {
     }
 
     #[cfg(test)]
-    async fn spawn_shell(spec: &ShellSpec, capture: &logs::Logs) -> Result<Self> {
+    async fn spawn_shell(
+        spec: &ShellSpec,
+        capture: &logs::Logs,
+        cancelled: &CancellationToken,
+    ) -> Result<Self> {
         let generation = hex::encode(rand::random::<[u8; 16]>());
         let key = rand::random::<[u8; 32]>();
         let socket = spec.runtime_dir.join(format!("{}.sock", &generation[..12]));
@@ -547,12 +572,11 @@ impl Process {
             "socket_path": endpoint.socket,
             "generation": endpoint.generation,
             "key": hex::encode(key),
-            "lease": "test",
+            "lease": spec.lease,
             "parent_pid": std::process::id(),
             "port": spec.port
         });
-        if stdin
-            .write_all(format!("{setup}\n").as_bytes())
+        if write_setup_or_cancel(&mut stdin, setup, cancelled)
             .await
             .is_err()
         {
@@ -759,6 +783,7 @@ pub(crate) struct ShellSpec {
     pub data_dir: PathBuf,
     pub runtime_dir: PathBuf,
     pub pidfile: PathBuf,
+    pub lease: String,
     pub port: u16,
 }
 
@@ -780,11 +805,15 @@ impl Launch {
     }
 }
 
-async fn obtain(source: &Launch, logs: &logs::Logs) -> Result<Process> {
+async fn obtain(
+    source: &Launch,
+    logs: &logs::Logs,
+    cancelled: &CancellationToken,
+) -> Result<Process> {
     match source {
-        Launch::Release(spec) => Process::spawn(spec, logs).await,
+        Launch::Release(spec) => Process::spawn(spec, logs, cancelled).await,
         #[cfg(test)]
-        Launch::Shell(spec) => Process::spawn_shell(spec, logs).await,
+        Launch::Shell(spec) => Process::spawn_shell(spec, logs, cancelled).await,
     }
 }
 
@@ -861,7 +890,7 @@ impl Supervisor {
                 // first request. Starting closes admission before draining it.
                 while recovery.try_recv().is_ok() {}
                 logs.event(logs::Event::Starting, 30);
-                let process = obtain(&source, &logs).await;
+                let process = obtain(&source, &logs, &cancelled).await;
                 let mut failure = logs::FailureReason::SpawnFailed;
                 let mut termination = None;
                 if let Ok(mut process) = process {
