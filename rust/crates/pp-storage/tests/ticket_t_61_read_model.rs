@@ -685,6 +685,94 @@ fn read_model_folder_rule_without_functional_class_matches_catalog_digest() {
 }
 
 #[test]
+fn read_model_primary_only_naming_override_stays_current() {
+    use pp_storage::catalog::{NamingCommand, NamingProfile, Outcome, Request, RoleId};
+    let f = Fixture::new();
+    let catalog = f.owner.as_ref().unwrap().local_source_catalog();
+    let mut profile = NamingProfile::default();
+    profile.roles.retain(|role| role.id == RoleId::Primary);
+    catalog
+        .execute(Request::SaveNaming {
+            id: 1,
+            settings: NamingCommand::Override { profile },
+        })
+        .unwrap();
+    let db = f.raw();
+    let set: i64 = db
+        .query_row(
+            "SELECT input_set_id FROM plan_accepted_input_sets WHERE profile_id=1 AND tenant_id='default'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let sources = db
+        .prepare(
+            "SELECT source_id FROM plan_revision_inputs WHERE input_set_id=?1 ORDER BY source_id",
+        )
+        .unwrap()
+        .query_map([set], |r| r.get::<_, i64>(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    drop(db);
+    let naming = sources
+        .into_iter()
+        .map(|id| {
+            let Outcome::Data(value) = catalog.execute(Request::GetNaming { id }).unwrap() else {
+                panic!("naming")
+            };
+            if id == 1 {
+                assert_eq!(value["effective"]["roles"].as_array().unwrap().len(), 1);
+            }
+            (id, value["effective_digest"].as_str().unwrap().to_owned())
+        })
+        .collect::<Vec<_>>();
+    let mut db = f.raw();
+    let tx = db.transaction().unwrap();
+    for (source, digest) in naming {
+        assert_eq!(
+            tx.execute(
+                "UPDATE plan_revision_inputs SET effective_naming_digest=?1 WHERE input_set_id=?2 AND source_id=?3",
+                params![digest, set, source],
+            )
+            .unwrap(),
+            1
+        );
+    }
+    let inputs = tx
+        .prepare("SELECT source_id,source_layer,layer_order,tracking_kind,source_revision_id,manifest_digest,effective_naming_digest FROM plan_revision_inputs WHERE input_set_id=?1 ORDER BY source_id")
+        .unwrap()
+        .query_map([set], |r| {
+            Ok(json!({
+                "source_id": r.get::<_, i64>(0)?,
+                "source_layer": r.get::<_, String>(1)?,
+                "layer_order": r.get::<_, i64>(2)?,
+                "tracking_kind": r.get::<_, String>(3)?,
+                "source_revision_id": r.get::<_, Option<i64>>(4)?,
+                "manifest_digest": r.get::<_, Option<String>>(5)?,
+                "effective_naming_digest": r.get::<_, String>(6)?,
+            }))
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    let canonical = json!({"version": 2, "inputs": inputs}).to_string();
+    tx.execute(
+        "UPDATE plan_revision_input_sets SET input_set_digest=?1 WHERE id=?2",
+        params![hex::encode(Sha256::digest(canonical.as_bytes())), set],
+    )
+    .unwrap();
+    tx.commit().unwrap();
+    drop(db);
+    let read = f.read();
+    let context = read.builds[0].context.as_ref().unwrap();
+    assert_eq!(
+        context.profile_summary["summary"]["header"]["freshness"]["status"],
+        "current"
+    );
+}
+
+#[test]
 fn read_model_plan_configuration_freshness_does_not_make_sources_stale() {
     use pp_storage::catalog::Request;
     let f = Fixture::new();

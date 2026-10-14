@@ -137,33 +137,39 @@ fn naming_digest(global: &Naming, metadata: Option<&str>) -> Result<String> {
         .unwrap_or(Value::Null);
     let mut value = serde_json::to_value(global)?;
     if metadata["naming"]["use_defaults"] == false {
-        let over = &metadata["naming"]["override"];
-        if let Some(roles) = over["roles"].as_array() {
-            let target = value["roles"]
-                .as_array_mut()
-                .ok_or_else(|| anyhow::Error::msg("Naming roles are missing"))?;
-            for r in roles {
-                if let Some(existing) = target.iter_mut().find(|e| e["id"] == r["id"]) {
-                    for k in ["label", "markers"] {
-                        if !r[k].is_null() {
-                            existing[k] = r[k].clone();
+        let over = metadata["naming"]["override"].clone();
+        // A complete valid profile replaces the global rules. Sparse overrides
+        // still merge, matching catalog get() and Node resolveNamingProfile.
+        if naming(over.clone()).is_ok() {
+            value = over;
+        } else {
+            if let Some(roles) = over["roles"].as_array() {
+                let target = value["roles"]
+                    .as_array_mut()
+                    .ok_or_else(|| anyhow::Error::msg("Naming roles are missing"))?;
+                for r in roles {
+                    if let Some(existing) = target.iter_mut().find(|e| e["id"] == r["id"]) {
+                        for k in ["label", "markers"] {
+                            if !r[k].is_null() {
+                                existing[k] = r[k].clone();
+                            }
                         }
+                    } else {
+                        target.push(json!({"id":r["id"],"label":r.get("label").unwrap_or(&r["id"]),"markers":r.get("markers").cloned().unwrap_or(json!([]))}));
                     }
-                } else {
-                    target.push(json!({"id":r["id"],"label":r.get("label").unwrap_or(&r["id"]),"markers":r.get("markers").cloned().unwrap_or(json!([]))}));
                 }
             }
-        }
-        for k in ["quantity", "slug"] {
-            if let Some(fields) = over[k].as_object() {
-                for (name, v) in fields {
-                    value[k][name] = v.clone();
+            for k in ["quantity", "slug"] {
+                if let Some(fields) = over[k].as_object() {
+                    for (name, v) in fields {
+                        value[k][name] = v.clone();
+                    }
                 }
             }
-        }
-        for k in ["folder_rules", "export_role_order"] {
-            if !over[k].is_null() {
-                value[k] = over[k].clone();
+            for k in ["folder_rules", "export_role_order"] {
+                if !over[k].is_null() {
+                    value[k] = over[k].clone();
+                }
             }
         }
     }
