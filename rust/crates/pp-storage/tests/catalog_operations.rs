@@ -1456,3 +1456,572 @@ fn gre600_r1_category_validation_is_typed_and_rolls_back() {
     assert_eq!(value(&client, Request::GetCategories {}), settings);
     owner.shutdown().unwrap();
 }
+
+#[cfg(not(feature = "desktop_rebuild"))]
+#[test]
+fn gre601_preview_requires_rebuild_feature() {
+    let error = serde_json::from_value::<Request>(json!({
+        "operation":"preview_naming", "relative_path":"gear.stl"
+    }))
+    .err()
+    .unwrap();
+    assert!(
+        error
+            .to_string()
+            .contains("unknown variant `preview_naming`")
+    );
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn preview(client: &SourceCatalogClient, path: &str, profile: Value) -> Value {
+    value(
+        client,
+        serde_json::from_value::<Request>(json!({
+            "operation":"preview_naming", "relative_path":path, "profile":profile
+        }))
+        .unwrap(),
+    )
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[test]
+fn gre601_preview_default_behavior_is_read_only() {
+    let fixture = Fixture::new();
+    let owner = fixture.open();
+    let client = owner.local_source_catalog();
+    let before = rows(&fixture.0);
+    let bytes = database_bytes(&fixture.0);
+    for (path, expected) in [
+        (
+            "folder\\[a]gear x3.STL",
+            json!({"role":"accent", "quantity":3.0, "part_slug":"gear", "filename":"[a]gear x3.STL"}),
+        ),
+        (
+            "[c]/[o]gear.stl",
+            json!({"role":"clear", "quantity":1.0, "part_slug":"gear", "filename":"[o]gear.stl"}),
+        ),
+        (
+            "plain.obj",
+            json!({"role":"primary", "quantity":1.0, "part_slug":"plain.obj", "filename":"plain.obj"}),
+        ),
+        (
+            "[a].stl",
+            json!({"role":"accent", "quantity":1.0, "part_slug":"[a]", "filename":"[a].stl"}),
+        ),
+        (
+            "folder/",
+            json!({"role":"primary", "quantity":1.0, "part_slug":"", "filename":""}),
+        ),
+    ] {
+        assert_eq!(preview(&client, path, Value::Null), expected, "{path}");
+    }
+    assert_eq!(rows(&fixture.0), before);
+    assert_eq!(database_bytes(&fixture.0), bytes);
+    owner.shutdown().unwrap();
+    let owner = fixture.open();
+    assert_eq!(rows(&fixture.0), before);
+    assert_eq!(
+        preview(&owner.local_source_catalog(), "gear.stl", json!({})),
+        json!({
+            "role":"primary", "quantity":1.0, "part_slug":"gear", "filename":"gear.stl"
+        })
+    );
+    assert_eq!(rows(&fixture.0), before);
+    owner.shutdown().unwrap();
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[test]
+fn gre601_preview_merges_roles_and_preserves_reference_ordering() {
+    let fixture = Fixture::new();
+    let owner = fixture.open();
+    let client = owner.local_source_catalog();
+    let before = rows(&fixture.0);
+    for (path, profile, role, slug) in [
+        (
+            "[a]gear.stl",
+            json!({"folder_rules":[{"path_contains":" GEAR ","role_id":"opaque","functional_class":null},{"path_contains":"gear","role_id":"clear"}]}),
+            "opaque",
+            "gear",
+        ),
+        (
+            "AA.stl",
+            json!({"roles":[{"id":"accent","markers":["A"]},{"id":"clear","markers":["AA"]}]}),
+            "clear",
+            "A",
+        ),
+        (
+            "tag.stl",
+            json!({"roles":[{"id":"primary","markers":["tag"]},{"id":"accent","markers":["tag"]}]}),
+            "primary",
+            "tag",
+        ),
+        (
+            "😀ab.stl",
+            json!({"roles":[{"id":"accent","markers":["😀"]},{"id":"clear","markers":["ab"]}]}),
+            "accent",
+            "😀ab",
+        ),
+        (
+            "ab😀x.stl",
+            json!({"roles":[{"id":"accent","markers":["ab"]},{"id":"clear","markers":["😀x"]}]} ),
+            "clear",
+            "ab😀x",
+        ),
+        (
+            "[gear.stl",
+            json!({"roles":[{"id":"accent","markers":["["," ",""]}]}),
+            "accent",
+            "gear",
+        ),
+        (
+            "😀gear.stl",
+            json!({"roles":[{"id":"accent","markers":["😀"]}]}),
+            "accent",
+            "gear",
+        ),
+        (
+            "ab😀gear.stl",
+            json!({"roles":[{"id":"accent","markers":["ab"]}]}),
+            "accent",
+            "😀gear",
+        ),
+        ("[o]/[a]gear.stl", json!({}), "opaque", "gear"),
+        ("[a][a]gear.stl", json!({}), "accent", "[a]gear"),
+        ("[a][c]gear.stl", json!({}), "accent", "gear"),
+        ("[c][a]gear.stl", json!({}), "accent", "[a]gear"),
+        (
+            "[A]gear.stl",
+            json!({"roles":[{"id":"accent","label":" Renamed "}]}),
+            "accent",
+            "gear",
+        ),
+        (
+            "[a]gear x2.stl",
+            json!({"slug":{"strip_markers":false,"strip_quantity":false}}),
+            "accent",
+            "[a]gear x2",
+        ),
+        (
+            "[a]gear x2.stl",
+            json!({"slug":{"strip_markers":false}}),
+            "accent",
+            "[a]gear",
+        ),
+        (
+            "[a]gear x2.stl",
+            json!({"roles":[{"id":"accent","markers":[]}],"slug":{"strip_quantity":false}}),
+            "primary",
+            "[a]gear x2",
+        ),
+        (
+            "gear.stl",
+            json!({"folder_rules":[],"export_role_order":["opaque","clear","accent","primary"]}),
+            "primary",
+            "gear",
+        ),
+    ] {
+        let filename = path.rsplit('/').next().unwrap();
+        let quantity = if path.contains(" x2") { 2.0 } else { 1.0 };
+        assert_eq!(
+            preview(&client, path, profile),
+            json!({
+                "role":role,"quantity":quantity,"part_slug":slug,"filename":filename
+            }),
+            "{path}"
+        );
+    }
+    assert_eq!(rows(&fixture.0), before);
+    owner.shutdown().unwrap();
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[test]
+fn gre601_preview_quantity_uses_numeric_prefix_clamping_and_null() {
+    let fixture = Fixture::new();
+    let owner = fixture.open();
+    let client = owner.local_source_catalog();
+    for (path, regex, default, quantity, slug) in [
+        (
+            "gear x0.stl".to_owned(),
+            r"[ _]x([0-9]+)\.stl$",
+            1,
+            json!(1.0),
+            "gear",
+        ),
+        (
+            "gear x-9.stl".to_owned(),
+            r"x(-?[0-9]+)\.stl$",
+            1,
+            json!(1.0),
+            "gear x-9",
+        ),
+        (
+            "gear x+12tail.stl".to_owned(),
+            r"x(.+)\.stl$",
+            1,
+            json!(12.0),
+            "gear x+12tail",
+        ),
+        (
+            "gear x  7tail.stl".to_owned(),
+            r"x(.+)\.stl$",
+            1,
+            json!(7.0),
+            "gear x  7tail",
+        ),
+        (
+            "gear xabc.stl".to_owned(),
+            r"x(.+)\.stl$",
+            1,
+            Value::Null,
+            "gear xabc",
+        ),
+        (
+            "gear x.stl".to_owned(),
+            r"x([0-9]*)\.stl$",
+            6,
+            json!(6.0),
+            "gear x",
+        ),
+        (
+            "gear.stl".to_owned(),
+            r"x([0-9]+)\.stl$",
+            9,
+            json!(9.0),
+            "gear",
+        ),
+        (
+            "gear x2.STL".to_owned(),
+            r"x([0-9]+)\.stl$",
+            1,
+            json!(2.0),
+            "gear ",
+        ),
+        (
+            format!("gear x{}.stl", "9".repeat(400)),
+            r"x([0-9]+)\.stl$",
+            1,
+            Value::Null,
+            "gear ",
+        ),
+        (
+            "gear x9007199254740993.stl".to_owned(),
+            r"x([0-9]+)\.stl$",
+            1,
+            json!(9007199254740992.0),
+            "gear ",
+        ),
+    ] {
+        assert_eq!(
+            preview(
+                &client,
+                &path,
+                json!({"quantity":{"regex":regex,"default":default}})
+            ),
+            json!({
+                "role":"primary","quantity":quantity,"part_slug":slug,"filename":path
+            }),
+            "{path}"
+        );
+    }
+    owner.shutdown().unwrap();
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[test]
+fn gre601_preview_rejects_invalid_typed_overrides_without_writes() {
+    use pp_storage::catalog::CatalogFailure;
+    let fixture = Fixture::new();
+    let owner = fixture.open();
+    let client = owner.local_source_catalog();
+    let before = rows(&fixture.0);
+    let bytes = database_bytes(&fixture.0);
+    for profile in [
+        json!({"roles":null}),
+        json!({"quantity":null}),
+        json!({"slug":null}),
+        json!({"folder_rules":null}),
+        json!({"export_role_order":null}),
+        json!({"roles":[{"id":"accent","label":null}]}),
+        json!({"roles":[{"id":"accent","markers":null}]}),
+        json!({"quantity":{"regex":null}}),
+        json!({"quantity":{"default":null}}),
+        json!({"slug":{"strip_markers":null}}),
+        json!({"slug":{"strip_quantity":null}}),
+        json!({"extra":true}),
+        json!({"quantity":{"extra":true}}),
+        json!({"slug":{"extra":true}}),
+        json!({"roles":[{"id":"accent","extra":true}]}),
+        json!({"roles":[{"id":"invalid"}]}),
+        json!({"quantity":{"default":-1}}),
+        json!({"quantity":{"default":1.5}}),
+        json!({"folder_rules":[{"path_contains":"x","role_id":"accent","extra":true}]}),
+    ] {
+        assert!(
+            serde_json::from_value::<Request>(json!({
+                "operation":"preview_naming","relative_path":"gear.stl","profile":profile
+            }))
+            .is_err(),
+            "{profile}"
+        );
+    }
+    for (profile, message) in [
+        (json!({"roles":[]}), "Empty roles override"),
+        (
+            json!({"roles":[{"id":"accent"},{"id":"accent"}]}),
+            "Duplicate role override",
+        ),
+        (
+            json!({"roles":[{"id":"primary","label":" "}]}),
+            "Blank naming label",
+        ),
+        (
+            json!({"quantity":{"default":0}}),
+            "Invalid quantity default",
+        ),
+        (
+            json!({"quantity":{"default":9007199254740992_u64}}),
+            "Invalid quantity default",
+        ),
+        (
+            json!({"quantity":{"regex":"["}}),
+            "Invalid quantity regex structure",
+        ),
+        (
+            json!({"quantity":{"regex":"(x)[z-a]"}}),
+            "Invalid quantity regex",
+        ),
+        (
+            json!({"quantity":{"regex":"x"}}),
+            "Quantity regex must have one capture group",
+        ),
+        (
+            json!({"quantity":{"regex":"(x)(y)"}}),
+            "Quantity regex must have one capture group",
+        ),
+        (
+            json!({"folder_rules":[{"path_contains":" ","role_id":"clear"}]}),
+            "Blank folder rule",
+        ),
+        (json!({"export_role_order":[]}), "Invalid export role order"),
+        (
+            json!({"export_role_order":["primary","accent","clear","clear"]}),
+            "Duplicate export role",
+        ),
+    ] {
+        let error = client
+            .execute(rebuild_request(json!({
+                "operation":"preview_naming","relative_path":"gear.stl","profile":profile
+            })))
+            .unwrap_err();
+        assert!(
+            matches!(error.downcast_ref::<CatalogFailure>(), Some(CatalogFailure::Input(detail)) if detail == message),
+            "{profile}: {error:?}"
+        );
+    }
+    assert_eq!(
+        preview(&client, "gear.stl", json!({"quantity":{},"slug":{}})),
+        json!({
+            "role":"primary","quantity":1.0,"part_slug":"gear","filename":"gear.stl"
+        })
+    );
+    assert_eq!(rows(&fixture.0), before);
+    assert_eq!(database_bytes(&fixture.0), bytes);
+    owner.shutdown().unwrap();
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[test]
+fn gre601_preview_uses_persisted_tenant_defaults_and_existing_authority() {
+    use pp_storage::auth::{AuthPolicy, RegistrationPolicy, SessionTenantPolicy};
+    let fixture = Fixture::new();
+    let owner = fixture.open();
+    let (tenant, token) = actor(&owner, "preview@example.test");
+    let policy = AuthPolicy {
+        registration: RegistrationPolicy::Open,
+        session_tenant: SessionTenantPolicy::AccountTenant,
+        first_user: FirstUserTenant::NewUser,
+    };
+    let client = owner
+        .catalog_access(policy)
+        .unwrap()
+        .session(Secret::new(token.clone()));
+    let local = owner.local_source_catalog();
+    let id = create(&client, "Naming source");
+    let mut profile = NamingProfile::default();
+    profile.quantity.default = 7;
+    profile.roles[1].markers = vec!["tag".into()];
+    value(
+        &client,
+        Request::SaveGlobalNaming {
+            profile: profile.clone(),
+        },
+    );
+    profile.quantity.default = 19;
+    value(
+        &local,
+        Request::SaveGlobalNaming {
+            profile: profile.clone(),
+        },
+    );
+    profile.quantity.default = 99;
+    value(
+        &client,
+        Request::SaveNaming {
+            id,
+            settings: NamingCommand::Override { profile },
+        },
+    );
+    let before = rows(&fixture.0);
+    let bytes = database_bytes(&fixture.0);
+    let tenant_expected =
+        json!({"role":"accent","quantity":7.0,"part_slug":"gear","filename":"taggear.stl"});
+    assert_eq!(
+        preview(&client, "taggear.stl", Value::Null),
+        tenant_expected
+    );
+    assert_eq!(
+        value(
+            &client,
+            rebuild_request(json!({
+                "operation":"preview_naming","relative_path":"taggear.stl"
+            }))
+        ),
+        tenant_expected
+    );
+    assert_eq!(
+        preview(&client, "taggear.stl", json!({"quantity":{"default":3}})),
+        json!({
+            "role":"accent","quantity":3.0,"part_slug":"gear","filename":"taggear.stl"
+        })
+    );
+    assert_eq!(
+        preview(&local, "taggear.stl", json!({})),
+        json!({
+            "role":"accent","quantity":19.0,"part_slug":"gear","filename":"taggear.stl"
+        })
+    );
+    let denied = owner
+        .catalog_access(policy)
+        .unwrap()
+        .session(Secret::new("invalid-session".into()));
+    let error = denied
+        .execute(rebuild_request(json!({
+            "operation":"preview_naming","relative_path":"gear.stl"
+        })))
+        .unwrap_err();
+    assert_eq!(error.to_string(), "Authentication required");
+    assert_eq!(rows(&fixture.0), before);
+    assert_eq!(database_bytes(&fixture.0), bytes);
+    let auth = owner.auth(FirstUserTenant::NewUser);
+    let AuthOutcome::KeyCreated { key, .. } = auth
+        .submit(
+            AuthRequest::CreateKey {
+                session: Secret::new(token.clone()),
+            },
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(5),
+        )
+        .unwrap()
+        .recv()
+        .unwrap()
+        .unwrap()
+    else {
+        panic!("key")
+    };
+    let foreign = owner
+        .catalog_key_access(policy, "default".into())
+        .unwrap()
+        .key(key);
+    let before = rows(&fixture.0);
+    let bytes = database_bytes(&fixture.0);
+    assert_eq!(
+        foreign
+            .execute(rebuild_request(json!({
+                "operation":"preview_naming","relative_path":"gear.stl"
+            })))
+            .unwrap_err()
+            .to_string(),
+        "Authentication required"
+    );
+    assert_eq!(rows(&fixture.0), before);
+    assert_eq!(database_bytes(&fixture.0), bytes);
+    owner.shutdown().unwrap();
+    let owner = fixture.open();
+    let client = owner
+        .catalog_access(policy)
+        .unwrap()
+        .session(Secret::new(token));
+    assert_eq!(preview(&client, "taggear.stl", json!({})), tenant_expected);
+    assert_eq!(rows(&fixture.0), before);
+    assert_eq!(
+        value(&client, Request::GetNaming { id })["effective"]["quantity"]["default"],
+        99
+    );
+    let db = fixture.sql();
+    assert_eq!(
+        db.query_row(
+            "SELECT value FROM app_settings WHERE tenant_id=?1 AND key='stl_naming_defaults'",
+            [&tenant],
+            |row| row.get::<_, String>(0)
+        )
+        .unwrap()
+        .parse::<Value>()
+        .unwrap()["quantity"]["default"],
+        7
+    );
+    drop(db);
+    owner.shutdown().unwrap();
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[test]
+fn gre601_preview_adds_missing_roles_and_falls_back_from_invalid_stored_defaults() {
+    let fixture = Fixture::new();
+    let owner = fixture.open();
+    let client = owner.local_source_catalog();
+    let mut profile = NamingProfile::default();
+    profile.roles.truncate(1);
+    profile.quantity.default = 4;
+    value(&client, Request::SaveGlobalNaming { profile });
+    owner.shutdown().unwrap();
+    let owner = fixture.open();
+    let client = owner.local_source_catalog();
+    let before = rows(&fixture.0);
+    let bytes = database_bytes(&fixture.0);
+    assert_eq!(
+        preview(
+            &client,
+            "taggear.stl",
+            json!({"roles":[{"id":"accent","markers":["tag"]}]})
+        ),
+        json!({
+            "role":"accent","quantity":4.0,"part_slug":"gear","filename":"taggear.stl"
+        })
+    );
+    assert_eq!(
+        preview(&client, "taggear.stl", json!({})),
+        json!({
+            "role":"primary","quantity":4.0,"part_slug":"taggear","filename":"taggear.stl"
+        })
+    );
+    assert_eq!(rows(&fixture.0), before);
+    assert_eq!(database_bytes(&fixture.0), bytes);
+    owner.shutdown().unwrap();
+    let db = fixture.sql();
+    db.execute("UPDATE app_settings SET value='{}' WHERE tenant_id='default' AND key='stl_naming_defaults'", []).unwrap();
+    drop(db);
+    let owner = fixture.open();
+    let before = rows(&fixture.0);
+    let bytes = database_bytes(&fixture.0);
+    assert_eq!(
+        preview(&owner.local_source_catalog(), "[a]gear x2.stl", json!({})),
+        json!({
+            "role":"accent","quantity":2.0,"part_slug":"gear","filename":"[a]gear x2.stl"
+        })
+    );
+    assert_eq!(rows(&fixture.0), before);
+    assert_eq!(database_bytes(&fixture.0), bytes);
+    owner.shutdown().unwrap();
+}

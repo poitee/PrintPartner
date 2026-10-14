@@ -377,3 +377,10 @@ pub(super) fn save(
     save_metadata(tx, tenant, id, m)?;
     get(tx, tenant, id)
 }
+
+#[cfg(feature = "desktop_rebuild")]
+mod preview;
+#[cfg(feature = "desktop_rebuild")]
+pub(super) use preview::preview;
+#[cfg(feature = "desktop_rebuild")]
+pub use preview::{NamingOverride, NamingPreview, QuantityOverride, RoleOverride, SlugOverride};

@@ -158,6 +158,24 @@ No runtime, HTTP or UI caller selects these operations. Future user-visible call
 must compile behind `desktop_rebuild` and check the stored `PP_DESKTOP_REBUILD`
 setting for exactly `1` or `true` before using them.
 
+### D8 naming preview
+
+GRE-601 adds `PreviewNaming` behind `pp-storage/desktop_rebuild`. The request
+accepts a relative path and an optional typed partial profile. Missing override
+fields inherit tenant global defaults. Explicit null fields and unknown fields
+are rejected. Preview uses the existing catalog authentication policy and writer
+transaction without saving naming settings or accessing files.
+
+Folder rules take priority over markers. Markers use descending UTF-16 length
+within each path segment. Slug stripping follows configured marker order and
+restores the original name if stripping empties it. Quantity captures retain the
+reference's numeric-prefix parsing, minimum of one, and nullable nonfinite result.
+The default build excludes this request and retains existing naming behavior.
+
+The rebuild CI gate runs the feature-on catalog suite. This storage unit adds no
+runtime, HTTP or UI caller. Future user-visible callers must also check
+`PP_DESKTOP_REBUILD`. Tests for later source-work and capture APIs remain deferred.
+
 ### D6 auth scheduling
 
 GRE-605 adds `WriterOwner::rebuild_auth_with_policy(policy, lifetimes)` behind
