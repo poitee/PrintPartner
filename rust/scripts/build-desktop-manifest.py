@@ -100,7 +100,7 @@ version = json.loads((web / 'package.json').read_text())['version']
 if desktop['version'] != version:
     raise ValueError('Frontend version mismatch')
 subprocess.run([sys.executable, str(pathlib.Path(__file__).with_name('precompress-spa.py')),
-                str(frontend)], check=True, stdout=subprocess.DEVNULL)
+                str(frontend), '--boundary', str(web)], check=True, stdout=subprocess.DEVNULL)
 backend = inventory(web / 'apps/server/dist/current')
 if 'desktop-resolution.js' not in backend:
     raise ValueError('Measured desktop resolution preload missing')

@@ -1,6 +1,6 @@
 use std::{
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::Command,
     sync::atomic::{AtomicUsize, Ordering},
 };
@@ -28,12 +28,24 @@ impl Assets {
     }
 
     fn run(&self, validate: bool) -> std::process::Output {
+        self.run_root(&self.0, validate, None)
+    }
+
+    fn run_root(
+        &self,
+        root: &Path,
+        validate: bool,
+        boundary: Option<&Path>,
+    ) -> std::process::Output {
         let script =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts/precompress-spa.py");
         let mut command = Command::new("python3");
-        command.arg(script).arg(&self.0);
+        command.arg(script).arg(root);
         if validate {
             command.arg("--validate");
+        }
+        if let Some(boundary) = boundary {
+            command.arg("--boundary").arg(boundary);
         }
         command.output().unwrap()
     }
@@ -108,6 +120,65 @@ fn ticket_t_11_packaging_changed_identity_is_rejected() {
         !output.status.success(),
         "Preparation must refuse a stale variant"
     );
+}
+
+#[test]
+fn ticket_t_11_packaging_replaces_foreign_gzip_with_canonical_bytes() {
+    let assets = Assets::new();
+    assets.prepare();
+    let expected = fs::read(assets.0.join("assets/app.js.gz")).unwrap();
+    let output = Command::new("python3")
+        .arg("-c")
+        .arg("import gzip,pathlib,sys;p=pathlib.Path(sys.argv[1]);p.with_name(p.name+'.gz').write_bytes(gzip.compress(p.read_bytes(),compresslevel=1,mtime=123))")
+        .arg(assets.0.join("assets/app.js"))
+        .output().unwrap();
+    assert!(output.status.success());
+    assets.prepare();
+    assert_eq!(
+        fs::read(assets.0.join("assets/app.js.gz")).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn ticket_t_11_packaging_changes_select_macos_checks() {
+    let selector = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../scripts/macos-bundle-path-filter.py");
+    let output = Command::new("python3").arg("-c")
+        .arg("import runpy,sys;print(runpy.run_path(sys.argv[1])['is_macos_pr_input']('rust/scripts/precompress-spa.py'))")
+        .arg(selector).output().unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"True\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn ticket_t_11_packaging_symlinked_root_cannot_write_outside() {
+    let assets = Assets::new();
+    let outside = Assets::new();
+    let alias = assets.0.join("linked");
+    std::os::unix::fs::symlink(&outside.0, &alias).unwrap();
+    let output = assets.run_root(&alias, false, None);
+    assert!(
+        !output.status.success(),
+        "Must reject root alias before writing gzip"
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("SPA asset symlink: linked"));
+    assert!(!outside.0.join("index.html.gz").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn ticket_t_11_packaging_rejects_ancestor_links_below_trusted_boundary() {
+    let assets = Assets::new();
+    let outside = Assets::new();
+    fs::write(outside.0.join("assets/index.html"), "<html>outside</html>").unwrap();
+    let alias = assets.0.join("linked");
+    std::os::unix::fs::symlink(&outside.0, &alias).unwrap();
+    let output = assets.run_root(&alias.join("assets"), false, Some(&assets.0));
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("SPA asset symlink: linked"));
+    assert!(!outside.0.join("assets/index.html.gz").exists());
 }
 
 #[test]
