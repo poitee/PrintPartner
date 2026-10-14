@@ -484,7 +484,8 @@ fn artifact_missing(
     if relative.is_empty()
         || relative.len() > 4096
         || Path::new(relative).is_absolute()
-        || relative.contains(['\\', '\0', ':'])
+        || relative.contains(['\\', '\0'])
+        || matches!(relative.as_bytes(), [drive, b':', ..] if drive.is_ascii_alphabetic())
         || relative
             .split('/')
             .any(|part| part.is_empty() || matches!(part, "." | ".."))

@@ -622,3 +622,16 @@ fn review_preserves_unicode16_persisted_path_identity() {
         assert!(f.observe().media_by_part_id[&9].artifact_missing);
     }
 }
+
+#[test]
+fn review_reads_accepted_unix_colon_names() {
+    let mut f = Fixture::new();
+    fs::create_dir(f.source().join("parts")).unwrap();
+    fs::rename(
+        f.source().join("part.stl"),
+        f.source().join("parts/body:v2.stl"),
+    )
+    .unwrap();
+    *f.artifact_mut().1 = "parts/body:v2.stl".into();
+    assert!(!f.observe().media_by_part_id[&9].artifact_missing);
+}
