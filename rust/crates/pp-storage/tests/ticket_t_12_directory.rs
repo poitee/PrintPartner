@@ -513,6 +513,62 @@ fn ticket_t_12_relative_ancestor_subprocess() {
 }
 
 #[test]
+fn ticket_t_12_empty_path_leaves_working_directory_unchanged() {
+    let copy = Copy::new();
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&copy.0)
+        .unwrap();
+    std::fs::write(copy.0.join("existing-file"), b"unchanged").unwrap();
+    let status = child_process::command(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "ticket_t_12_empty_path_subprocess",
+            "--nocapture",
+        ])
+        .env("PP_T12_EMPTY_PATH_PROBE", "1")
+        .current_dir(&copy.0)
+        .status()
+        .unwrap();
+    assert_eq!(entries(&copy.0), ["existing-file"]);
+    assert_eq!(
+        std::fs::read(copy.0.join("existing-file")).unwrap(),
+        b"unchanged"
+    );
+    assert!(status.success());
+}
+
+#[test]
+fn ticket_t_12_empty_path_subprocess() {
+    if std::env::var_os("PP_T12_EMPTY_PATH_PROBE").is_none() {
+        return;
+    }
+    let input = Path::new("");
+    for error in [
+        pp_storage::lease::prepare_directory(input).err(),
+        StorageLease::acquire(input).err(),
+        WriterOwner::open(input, Limits::default()).err(),
+    ] {
+        assert_eq!(
+            error.expect("empty path refused").to_string(),
+            "Data directory path is empty"
+        );
+        assert_eq!(entries(Path::new(".")), ["existing-file"]);
+        assert_eq!(std::fs::read("existing-file").unwrap(), b"unchanged");
+    }
+    assert_eq!(
+        pp_storage::lease::prepare_directory(Path::new(".")).unwrap(),
+        std::env::current_dir().unwrap()
+    );
+    let relative = pp_storage::lease::prepare_directory(Path::new("relative-store")).unwrap();
+    assert_eq!(
+        relative,
+        std::env::current_dir().unwrap().join("relative-store")
+    );
+    std::fs::remove_dir(relative).unwrap();
+}
+
+#[test]
 fn ticket_t_12_ancestor_lookup_errors_are_not_treated_as_missing() {
     let (copy, _parent, data) = ancestor_fixture();
     let looping = copy.0.join("loop");

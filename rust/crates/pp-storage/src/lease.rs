@@ -33,6 +33,7 @@ pub struct StorageLease {
 /// effective-user owned and deny group/other write unless sticky. These are path
 /// snapshots, not confinement. ACL policy and path replacement remain separate concerns.
 pub fn prepare_directory(path: &Path) -> Result<PathBuf> {
+    ensure!(!path.as_os_str().is_empty(), "Data directory path is empty");
     let path = if path.is_absolute() {
         path.to_path_buf()
     } else {
