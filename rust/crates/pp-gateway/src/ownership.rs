@@ -11,6 +11,7 @@
 //! bundled manifest again in memory. The Node process admits that file before
 //! HTTP handlers, MCP `start_sync`, job execution, and watcher timers.
 
+pub mod cutover;
 pub mod live_formats;
 pub mod manifest;
 pub mod resources;
@@ -812,10 +813,11 @@ fn parse_receipt(
     Ok(receipt)
 }
 
-fn read_existing_receipt(
-    receipt_path: &Path,
-    admitted: &AdmittedOperation,
-) -> Result<Option<AdmissionReceipt>, AdmissionError> {
+const LEASE_FILE_LIMIT: u64 = 64 * 1024;
+
+/// Opens a lease-directory file without following a final symlink or blocking
+/// on a FIFO. A missing file is `None`.
+fn open_lease_file(path: &Path) -> std::io::Result<Option<fs::File>> {
     let mut options = fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -825,33 +827,53 @@ fn read_existing_receipt(
         use std::os::windows::fs::OpenOptionsExt;
         options.custom_flags(0x00200000); // FILE_FLAG_OPEN_REPARSE_POINT
     }
-    let file = match options.open(receipt_path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(AdmissionError::Malformed(format!(
-                "admission receipt is not a regular file or cannot be opened: {error}"
-            )));
-        }
-    };
-    read_opened_receipt(file, admitted).map(Some)
+    match options.open(path) {
+        Ok(file) => Ok(Some(file)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// Reads an opened lease-directory file. Anything but a regular file of at
+/// most [`LEASE_FILE_LIMIT`] bytes is an error.
+fn read_lease_file(file: fs::File) -> std::io::Result<String> {
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "is not a regular file",
+        ));
+    }
+    let mut text = String::new();
+    file.take(LEASE_FILE_LIMIT + 1).read_to_string(&mut text)?;
+    if text.len() as u64 > LEASE_FILE_LIMIT {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("exceeds {LEASE_FILE_LIMIT} bytes"),
+        ));
+    }
+    Ok(text)
+}
+
+fn read_existing_receipt(
+    receipt_path: &Path,
+    admitted: &AdmittedOperation,
+) -> Result<Option<AdmissionReceipt>, AdmissionError> {
+    match open_lease_file(receipt_path) {
+        Ok(Some(file)) => read_opened_receipt(file, admitted).map(Some),
+        Ok(None) => Ok(None),
+        Err(error) => Err(AdmissionError::Malformed(format!(
+            "admission receipt is not a regular file or cannot be opened: {error}"
+        ))),
+    }
 }
 
 fn read_opened_receipt(
-    mut file: fs::File,
+    file: fs::File,
     admitted: &AdmittedOperation,
 ) -> Result<AdmissionReceipt, AdmissionError> {
-    let metadata = file
-        .metadata()
-        .map_err(|error| AdmissionError::Malformed(error.to_string()))?;
-    if !metadata.is_file() || metadata.file_type().is_symlink() {
-        return Err(AdmissionError::Malformed(
-            "admission receipt is not a regular file".into(),
-        ));
-    }
-    let mut existing = String::new();
-    file.read_to_string(&mut existing)
-        .map_err(|error| AdmissionError::Malformed(error.to_string()))?;
+    let existing = read_lease_file(file)
+        .map_err(|error| AdmissionError::Malformed(format!("admission receipt {error}")))?;
     let receipt = parse_receipt(&existing, admitted)?;
     if receipt.manifest_sha256 != admitted.manifest_sha256 {
         return Err(AdmissionError::RestartManifestChanged);
