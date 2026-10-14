@@ -1,4 +1,5 @@
 use super::*;
+use std::os::unix::fs::DirBuilderExt;
 use std::{
     os::unix::fs::{PermissionsExt, symlink},
     path::PathBuf,
@@ -11,7 +12,11 @@ impl Fixture {
             "pp-prefs-{}",
             hex::encode(rand::random::<[u8; 8]>())
         ));
-        std::fs::create_dir(&path).unwrap();
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&path)
+            .unwrap();
         Self(path)
     }
 }

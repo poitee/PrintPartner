@@ -5,6 +5,7 @@ use axum::{
 use http_body_util::BodyExt;
 use hyper_util::rt::TokioIo;
 use pp_core::{CoreRuntime, CoreStatus, DesktopLaunch, SupervisorConfig, VerifiedBundle};
+use std::os::unix::fs::DirBuilderExt;
 use std::{
     path::{Path, PathBuf},
     time::Duration,
@@ -380,9 +381,48 @@ async fn authenticated_logout_requests_complete_shutdown() {
 }
 
 #[tokio::test]
+async fn ticket_t_12_unsafe_directory_is_refused_before_child_or_database_open() {
+    use std::os::unix::fs::PermissionsExt;
+    let data = temporary("unsafe-directory");
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&data)
+        .unwrap();
+    let database = data.join("print-partner.db");
+    let copied = b"copied database must remain unopened";
+    std::fs::write(&database, copied).unwrap();
+    std::fs::write(data.join("desktop.toml"), b"port = 43123\n").unwrap();
+    for permissions in [0o775, 0o300] {
+        std::fs::set_permissions(&data, std::fs::Permissions::from_mode(permissions)).unwrap();
+        let error = CoreRuntime::start(launch(data.clone()))
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.to_string(), "Unsafe data directory permissions");
+        std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(std::fs::read(&database).unwrap(), copied);
+        assert_eq!(
+            std::fs::read(data.join("desktop.toml")).unwrap(),
+            b"port = 43123\n"
+        );
+        assert_eq!(std::fs::read_dir(&data).unwrap().count(), 2);
+        println!(
+            "{}",
+            serde_json::json!({"proof_class":"headless_unsigned", "case":"unsafe_directory_refused", "permissions":permissions, "error":error.to_string(), "database_unchanged":true, "origin_unchanged":true, "ownership_artifacts_absent":true})
+        );
+    }
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+#[tokio::test]
 async fn ticket_t_12_unsafe_config_is_refused_before_any_database_open() {
     let data = temporary("unsafe-origin-config");
-    std::fs::create_dir(&data).unwrap();
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&data)
+        .unwrap();
     let database = data.join("print-partner.db");
     let copied = b"copied database must remain unopened";
     std::fs::write(&database, copied).unwrap();
@@ -410,7 +450,11 @@ async fn occupied_saved_port_recovers_before_child_start() {
         "pp-bind-m0-{}",
         hex::encode(rand::random::<[u8; 8]>())
     ));
-    std::fs::create_dir(&data).unwrap();
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&data)
+        .unwrap();
     let occupied = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     std::fs::write(
         data.join("desktop.toml"),
@@ -662,7 +706,11 @@ async fn source_sync_receipt_is_admitted_before_desktop_effects() {
     ];
     for (name, body) in cases {
         let data = root.join(name);
-        std::fs::create_dir_all(&data).unwrap();
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&data)
+            .unwrap();
         let receipt = data.join("source-sync-admission.json");
         std::fs::write(&receipt, body).unwrap();
         let error = CoreRuntime::start(launch(data.clone()))
@@ -1007,7 +1055,11 @@ fn drop_after_caller_runtime_teardown_reaps_writer_and_descendant() {
 #[tokio::test]
 async fn crash_left_marker_allows_later_start() {
     let data = temporary("stale-owner");
-    std::fs::create_dir_all(&data).unwrap();
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&data)
+        .unwrap();
     let mut child = std::process::Command::new("/bin/sh")
         .args(["-c", "exit 0"])
         .spawn()
@@ -1031,7 +1083,11 @@ async fn crash_left_marker_allows_later_start() {
 #[tokio::test]
 async fn live_marker_owner_still_blocks_start() {
     let data = temporary("live-marker-owner");
-    std::fs::create_dir_all(&data).unwrap();
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&data)
+        .unwrap();
     let marker = data.join(".desktop-owner.json");
     let contents = serde_json::json!({"pid": std::process::id(), "kind": "standalone"}).to_string();
     std::fs::write(&marker, &contents).unwrap();
@@ -1073,7 +1129,11 @@ async fn compatibility_cleanup_failure_reports_failed_instead_of_ready() {
 #[tokio::test]
 async fn stale_owner_recovery_admits_only_one_concurrent_start() {
     let data = temporary("stale-owner-race");
-    std::fs::create_dir_all(&data).unwrap();
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&data)
+        .unwrap();
     let mut child = std::process::Command::new("/bin/sh")
         .args(["-c", "exit 0"])
         .spawn()
@@ -1100,7 +1160,11 @@ async fn stale_owner_recovery_admits_only_one_concurrent_start() {
 #[tokio::test]
 async fn reused_pid_with_different_identity_recovers_marker_and_lease() {
     let data = temporary("reused-pid");
-    std::fs::create_dir_all(data.join(".desktop-lease")).unwrap();
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(data.join(".desktop-lease"))
+        .unwrap();
     let owner = serde_json::json!({"pid": std::process::id(), "kind": "standalone", "process_identity": "prior-boot:prior-start", "instance": "ab".repeat(16)});
     std::fs::write(data.join(".desktop-owner.json"), owner.to_string()).unwrap();
     std::fs::write(data.join(".desktop-lease/owner.json"), owner.to_string()).unwrap();
@@ -1364,7 +1428,11 @@ fn core_death_terminates_stopped_node_and_allows_recovery() {
 #[tokio::test]
 async fn dead_core_marker_without_child_info_allows_start() {
     let data = temporary("missing-child-info");
-    std::fs::create_dir_all(&data).unwrap();
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&data)
+        .unwrap();
     let mut dead = std::process::Command::new("/bin/sh")
         .args(["-c", "exit 0"])
         .spawn()
@@ -1393,7 +1461,11 @@ async fn dead_core_marker_without_child_info_allows_start() {
 #[tokio::test]
 async fn dead_core_marker_with_partial_or_invalid_child_info_refuses_start() {
     let data = temporary("invalid-child-info");
-    std::fs::create_dir_all(&data).unwrap();
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&data)
+        .unwrap();
     let mut dead = std::process::Command::new("/bin/sh")
         .args(["-c", "exit 0"])
         .spawn()
@@ -1424,7 +1496,11 @@ async fn dead_core_marker_with_partial_or_invalid_child_info_refuses_start() {
 #[tokio::test]
 async fn childless_core_marker_without_known_protocol_refuses_start() {
     let data = temporary("legacy-childless");
-    std::fs::create_dir_all(&data).unwrap();
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&data)
+        .unwrap();
     let mut dead = std::process::Command::new("/bin/sh")
         .args(["-c", "exit 0"])
         .spawn()
@@ -1455,7 +1531,11 @@ async fn childless_core_marker_without_known_protocol_refuses_start() {
 #[tokio::test]
 async fn desktop_marker_with_both_processes_dead_allows_start() {
     let data = temporary("both-processes-dead");
-    std::fs::create_dir_all(&data).unwrap();
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&data)
+        .unwrap();
     let mut dead = std::process::Command::new("/bin/sh")
         .args(["-c", "exit 0"])
         .spawn()
