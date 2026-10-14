@@ -87,6 +87,7 @@ fn bundled_rollback_refuses_every_reviewed_operation_on_the_newer_schema() {
         ("mcp.start_sync", "source.sync"),
         ("tool.read_source_file", "tool.read_source_file"),
         ("tool.search_source_files", "tool.search_source_files"),
+        ("tool.preview_source_naming", "tool.preview_source_naming"),
         ("tool.list_sources", "tool.list_sources"),
         ("tool.list_source_categories", "tool.list_source_categories"),
     ] {
@@ -136,6 +137,10 @@ fn rollback_admits_only_when_node_reads_every_written_format() {
             Table(SourceDocs),
             Table(AppSettings)
         ]))
+    );
+    assert_eq!(
+        index.admit_rollback("tool.preview_source_naming"),
+        Ok(&BTreeSet::from([Table(Projects), Table(AppSettings)]))
     );
     let no_writer = index.admit_rollback("job.sync").unwrap_err();
     assert_eq!(

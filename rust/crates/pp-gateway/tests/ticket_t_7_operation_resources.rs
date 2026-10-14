@@ -50,6 +50,10 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
             File(FileFamily::SourceWorkspace),
         ]))
     );
+    assert_eq!(
+        index.resources_for("tool.preview_source_naming"),
+        Ok(&BTreeSet::from([Table(Projects), Table(AppSettings)]))
+    );
     let sync: ResourceSet = BTreeSet::from([
         Table(Projects),
         Table(SourceRevisions),
@@ -99,6 +103,7 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.list_sources",
         "tool.list_source_categories",
         "tool.search_source_files",
+        "tool.preview_source_naming",
     ]);
     let resolved: BTreeSet<_> = index
         .claims()
@@ -126,13 +131,21 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
 
 #[test]
 fn each_reviewed_resource_is_required_exactly_once() {
-    for entry in 1..=4 {
+    for entry in 1..manifest()["resources"]["reviewed"]
+        .as_array()
+        .unwrap()
+        .len()
+    {
         let original = manifest();
         let id = original["resources"]["reviewed"][entry]["operation"]
             .as_str()
             .unwrap();
         let expected = || AdmissionError::ResourceSetMismatch { id: id.into() };
-        for resource in 0..3 {
+        for resource in 0..original["resources"]["reviewed"][entry]["resources"]
+            .as_array()
+            .unwrap()
+            .len()
+        {
             let mut value = original.clone();
             value["resources"]["reviewed"][entry]["resources"]
                 .as_array_mut()
@@ -166,7 +179,11 @@ fn each_reviewed_resource_is_required_exactly_once() {
 
 #[test]
 fn reviewed_states_cannot_disappear_downgrade_or_repeat() {
-    for entry in 0..=4 {
+    for entry in 0..manifest()["resources"]["reviewed"]
+        .as_array()
+        .unwrap()
+        .len()
+    {
         let mut value = manifest();
         let removed = value["resources"]["reviewed"]
             .as_array_mut()
@@ -346,6 +363,7 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
         "tool.list_sources",
         "tool.list_source_categories",
         "tool.search_source_files",
+        "tool.preview_source_naming",
     ] {
         for participants in [vec![id], vec![]] {
             let mut value = manifest();
@@ -374,6 +392,8 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
 #[test]
 fn reviewed_participants_cannot_swap_operations() {
     for (first, second) in [
+        ("tool.preview_source_naming", "tool.list_sources"),
+        ("tool.search_source_files", "tool.preview_source_naming"),
         ("tool.read_source_file", "tool.list_sources"),
         ("tool.read_source_file", "tool.list_source_categories"),
         ("tool.list_sources", "tool.list_source_categories"),
@@ -415,4 +435,43 @@ fn unresolved_participants_can_share_a_regrouped_operation() {
             })
         );
     }
+}
+
+#[test]
+fn ticket_t_7_ownership_preview_naming_owner_and_unknown_resource_fail_closed() {
+    let id = "tool.preview_source_naming";
+    for owner in ["rust", "python"] {
+        let mut value = manifest();
+        regroup(&mut value, id, &[id]);
+        value["operations"]
+            .as_array_mut()
+            .unwrap()
+            .last_mut()
+            .unwrap()["owner"] = json!(owner);
+        let expected = if owner == "rust" {
+            AdmissionError::UnsupportedRustOwner {
+                participant: id.into(),
+            }
+        } else {
+            AdmissionError::UnknownOwner {
+                value: owner.into(),
+            }
+        };
+        assert_eq!(admit(&value).unwrap_err(), expected);
+    }
+    let mut value = manifest();
+    let entry = value["resources"]["reviewed"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|entry| entry["operation"] == id)
+        .unwrap();
+    entry["resources"][0] = json!({"kind":"table", "name":"unreviewed_naming"});
+    let AdmissionError::Malformed(detail) = admit(&value).unwrap_err() else {
+        panic!("unknown naming table was admitted");
+    };
+    assert!(
+        detail.contains("unknown variant `unreviewed_naming`"),
+        "{detail}"
+    );
 }
