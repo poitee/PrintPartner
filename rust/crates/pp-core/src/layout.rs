@@ -231,6 +231,14 @@ mod tests {
             layout.app_data,
             Path::new("/Users/owner/AppData/Roaming/com.poitee.printpartner")
         );
+        assert_eq!(
+            layout.cache,
+            Path::new("/Users/owner/AppData/Local/com.poitee.printpartner")
+        );
+        assert_eq!(
+            layout.logs,
+            Path::new("/Users/owner/AppData/Local/com.poitee.printpartner/logs")
+        );
     }
 
     #[test]
