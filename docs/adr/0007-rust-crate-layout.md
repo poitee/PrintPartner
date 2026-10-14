@@ -1,12 +1,12 @@
 # Record the Rust crate layout and dependency edges
 
-Status: accepted record of the `rust/crates` layout on `main` and the planned edges when the desktop chain ([GitHub #171](https://github.com/poitee/PrintPartner/issues/171)) lands. This ADR does not change `ALLOWED` in `rust/scripts/check-boundaries.py` or any crate dependency.
+Status: accepted record of the `rust/crates` layout on `main` and the planned edges as the desktop rebuild slices land on main ([GRE-595](../desktop-rebuild.md#slice-plan); the old desktop chain and #171 will not land). This ADR does not change `ALLOWED` in `rust/scripts/check-boundaries.py` or any crate dependency.
 
 Print Partner's Rust workspace under `rust/crates` is the protected runtime foundation and the home for the D7 crate split. Enforcement today is the explicit `ALLOWED` map in `rust/scripts/check-boundaries.py`, checked with `cargo metadata --no-deps`. Edges listed as **current** are copied from that map. Edges listed as **planned** cover the addition of `pp-api`, extensions to `pp-storage`, printer/provider adapters in the reserved `pp-drivers` crate, and broader use cases extending `pp-services` beyond its existing Orca/Bambu discovery. Planned edges are documentation only until a later change updates `ALLOWED`.
 
 ## Crates on main
 
-As of 2026-10-12, main contains 13 workspace crates. `pp-storage` landed through PR #128.
+As of 2026-10-13, main contains 14 workspace crates. `pp-storage` landed through PR #128 and `pp-api` (auth only) through PR #130.
 
 | Crate | Role |
 | --- | --- |
@@ -14,19 +14,20 @@ As of 2026-10-12, main contains 13 workspace crates. `pp-storage` landed through
 | `pp-api-types` | Wire DTOs, constructors, validation, and parsers (autosave and related). Built on `pp-domain`. |
 | `pp-contracts` | Compatibility facade: re-exports the contract surface used by parity binaries and external consumers; owns parity tooling. |
 | `pp-net` | Checked outbound connection helpers (gateway target canonicalization today). |
-| `pp-drivers` | Reserved for printer and provider adapters that use `pp-net`. Stub on main (`Move deferred until after #171`). |
+| `pp-drivers` | Printer and provider adapters that use `pp-net` (Moonraker status today). Further printer/provider moves wait for the rebuild slices. |
 | `pp-services` | Native Orca/Bambu slicer discovery. Broader use cases on domain ports remain planned; the crate has no workspace dependency. |
 | `pp-storage` | SQLite owner, migrations, bounded settings writer, read-only pool, storage lease, and safe backups. Node still owns application SQL operations. |
 | `pp-source` | Immutable local Source snapshot materialization and bounded ZIP extraction (filesystem bytes and manifest). Does not own SQL, catalog activation, or HTTP routes. |
+| `pp-api` | Rust HTTP API surface. On main it holds the auth module only and may depend on `pp-storage`. The rebuild slices D23 to D25 add auth HTTP, drafts HTTP, and builds/jobs HTTP behind `desktop_rebuild`. |
 | `pp-gateway` | Loopback listeners, session/bootstrap policy, route ownership, and proxy to the Node compatibility child. |
 | `pp-compat` | Temporary Node process supervisor, release measurement, and private Unix-socket proxy. |
 | `pp-core` | Composition root: storage lease, gateway and supervisor lifetimes, desktop launch wiring. |
 | `pp-desktop` | Tauri window, tray, and native OS shell around `pp-core`. |
 | `pp-server` | Headless launcher binary around `pp-core`. |
 
-## Crates planned with #171
+## Crates planned with the desktop rebuild
 
-`pp-api` is not a workspace member on main yet. `pp-storage` is already on main; the desktop chain extends it with authentication and domain operations. These planned changes retain the open questions below.
+`pp-api` and `pp-storage` are already on main. The rebuild slices extend `pp-storage` (D6 to D22) and `pp-api` (D23 to D25) with authentication and domain operations. These planned changes retain the open questions below.
 
 | Crate | Role |
 | --- | --- |
@@ -42,7 +43,8 @@ Copied from `ALLOWED` in `rust/scripts/check-boundaries.py` on `main`. A missing
 | `pp-source` | *(none)* |
 | `pp-core` | `pp-gateway`, `pp-compat`, `pp-storage` |
 | `pp-storage` | *(none)* |
-| `pp-gateway` | `pp-compat`, `pp-net` |
+| `pp-api` | `pp-storage` |
+| `pp-gateway` | `pp-compat`, `pp-drivers`, `pp-net` |
 | `pp-compat` | *(none)* |
 | `pp-server` | `pp-core` |
 | `pp-contracts` | `pp-api-types` |
@@ -50,32 +52,34 @@ Copied from `ALLOWED` in `rust/scripts/check-boundaries.py` on `main`. A missing
 | `pp-domain` | *(none)* |
 | `pp-api-types` | `pp-domain` |
 | `pp-net` | *(none)* |
-| `pp-drivers` | *(none)* |
+| `pp-drivers` | `pp-net`, `pp-api-types` |
 | `pp-services` | *(none)* |
 
 Graph form of the non-empty current edges:
 
 ```text
 pp-contracts → pp-api-types → pp-domain
-pp-gateway → pp-compat, pp-net
+pp-api → pp-storage
+pp-gateway → pp-compat, pp-drivers, pp-net
+pp-drivers → pp-net, pp-api-types
 pp-core → pp-gateway, pp-compat, pp-storage
 pp-desktop → pp-core
 pp-server → pp-core
-pp-source, pp-storage, pp-drivers, pp-services → (no pp-* deps)
+pp-source, pp-storage, pp-services → (no pp-* deps)
 ```
 
-## Planned edges after #171
+## Planned edges after the desktop rebuild
 
-Marked **planned**. Taken from the desktop chain’s `ALLOWED` for `pp-storage` / `pp-api` / `pp-source` wiring, plus the design-doc moves into `pp-drivers` and `pp-services`. Current edges that remain unchanged are restated for a full picture. This is not an `ALLOWED` edit.
+Marked **planned**. Taken from the reference branch’s (`desktop/source-sync-local-current-20261008`) `ALLOWED` for `pp-storage` / `pp-api` / `pp-source` wiring, plus the design-doc moves into `pp-drivers` and `pp-services`. Current edges that remain unchanged are restated for a full picture. This is not an `ALLOWED` edit.
 
 | Crate | Planned allowed `pp-*` deps |
 | --- | --- |
 | `pp-storage` | `pp-contracts` **(planned dependency on the existing crate)** |
-| `pp-api` | `pp-contracts`, `pp-storage` **(planned; new crate)** |
+| `pp-api` | `pp-storage` *(current)*, plus `pp-contracts` **(planned addition)** |
 | `pp-core` | `pp-gateway`, `pp-compat`, `pp-storage`, plus `pp-api` and `pp-source` **(planned additions)** |
-| `pp-drivers` | `pp-net` **(planned; printers/providers move)** |
+| `pp-drivers` | `pp-net`, `pp-api-types` *(current; more printer/provider code moves in later)* |
 | `pp-services` | `pp-domain` **(planned; use cases on domain ports only)** |
-| `pp-gateway` | `pp-compat`, `pp-net` *(unchanged)* |
+| `pp-gateway` | `pp-compat`, `pp-drivers`, `pp-net` *(unchanged)* |
 | `pp-compat` | *(none)* *(unchanged)* |
 | `pp-server` | `pp-core` *(unchanged)* |
 | `pp-desktop` | `pp-core` *(unchanged)* |
@@ -89,9 +93,8 @@ Planned additions in graph form:
 
 ```text
 pp-storage → pp-contracts                    (planned)
-pp-api → pp-contracts, pp-storage            (planned)
+pp-api → pp-contracts                        (planned addition)
 pp-core → pp-api, pp-source                  (planned additions)
-pp-drivers → pp-net                          (planned)
 pp-services → pp-domain                      (planned)
 ```
 
@@ -101,7 +104,7 @@ pp-services → pp-domain                      (planned)
 
 These are recorded, not decided.
 
-1. **`pp-contracts` vs `pp-api-types`.** Main keeps a facade (`pp-contracts` → `pp-api-types` → `pp-domain`). The desktop chain treats `pp-contracts` as the DTO crate with no `pp-api-types` member. Decide whether both names stay (facade + types), whether one is renamed away, and which name `pp-storage` / `pp-api` should depend on when the chain lands.
+1. **`pp-contracts` vs `pp-api-types`.** Main keeps a facade (`pp-contracts` → `pp-api-types` → `pp-domain`). The reference branch treats `pp-contracts` as the DTO crate with no `pp-api-types` member. Decide whether both names stay (facade + types), whether one is renamed away, and which name `pp-storage` / `pp-api` should depend on when the rebuild slices land (D6, D23).
 2. **Where `pp-source` belongs.** `pp-source` is already a leaf workspace crate on main (filesystem snapshot materialization). Confirm it remains a first-class crate in the D7 layout versus folding snapshot ownership into `pp-services` or `pp-storage`, and confirm the planned `pp-core` → `pp-source` edge when composition lands.
 
 ## Evidence
@@ -111,5 +114,5 @@ python3 rust/scripts/check-boundaries.py --self-test
 ```
 
 ```json
-{"packages": 13, "allowed_edges": true, "intentional_violation_rejected": true}
+{"packages": 14, "allowed_edges": true, "intentional_violation_rejected": true}
 ```
