@@ -124,6 +124,29 @@ cargo test --locked --manifest-path rust/Cargo.toml -p pp-source --features desk
 
 D5 retained capture and D28 ZIP acquisition label policy remain separate slices. The second D3 PR for source acquisition and uploads remains deferred. Local selection is outside this audit. This audit introduces no user-visible path and needs no runtime gate. Future rebuild callers must compile behind `desktop_rebuild` and check `PP_DESKTOP_REBUILD` for exactly `1` or `true`.
 
+### D7 catalog core
+
+GRE-600 adds explicit catalog requests behind `desktop_rebuild` to the existing
+`SourceCatalogClient`, writer queue and transaction-owned catalog state.
+`CreateCatalogSource` and `UpdateCatalogSource` normalize GitHub locations;
+creation requires model URLs for Printables, MakerWorld and Thangs.
+Legacy `Create` and `Update` retain their existing behavior in both builds.
+`SourceActivity` reads tenant-scoped events with a limit between 1 and 100.
+Category requests return typed categories and trees, and numeric category updates
+retain each finite selector's success or failure after deduplication.
+`catalog_access` and `catalog_key_access` bind an explicit authentication policy.
+
+With the feature enabled, import-rule bodies have an 8 MiB limit; other requests
+retain the 1 MiB limit. The default build retains its 1 MiB limit for all requests.
+The existing schema, JSON validation, writer deadlines, work leases and protected
+delete audit commits remain unchanged. Naming additions and broad catalog tests
+belong to D8. Sync configuration versions, reservation proofs and upload guards
+remain deferred to the slices that introduce their consumers.
+
+No runtime, HTTP or UI caller selects these operations. Future user-visible callers
+must compile behind `desktop_rebuild` and check the stored `PP_DESKTOP_REBUILD`
+setting for exactly `1` or `true` before using them.
+
 ### D6 auth scheduling
 
 GRE-605 adds `WriterOwner::rebuild_auth_with_policy(policy, lifetimes)` behind

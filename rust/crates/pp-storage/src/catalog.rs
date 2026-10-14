@@ -1,3 +1,17 @@
+#[cfg(feature = "desktop_rebuild")]
+mod activity;
+#[cfg(feature = "desktop_rebuild")]
+mod location;
+#[cfg(feature = "desktop_rebuild")]
+mod rebuild;
+#[cfg(feature = "desktop_rebuild")]
+pub use activity::SourceActivityEvent;
+#[cfg(feature = "desktop_rebuild")]
+pub use rebuild::{
+    BulkCategoryResult, CatalogAccess, CatalogFailure, CatalogKeyAccess, CategoryNode,
+    CategorySettings, IMPORT_RULE_BODY_LIMIT, NumericCategoryCommand,
+};
+
 mod categories;
 mod json;
 mod naming;
@@ -66,6 +80,31 @@ fn nullable<'de, D: serde::Deserializer<'de>>(
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
     List {},
+    #[cfg(feature = "desktop_rebuild")]
+    SourceActivity {
+        limit: u8,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    GetCategoriesWithTree {},
+    #[cfg(feature = "desktop_rebuild")]
+    SaveCategoriesWithTree {
+        categories: Vec<String>,
+        replacements: HashMap<String, Option<String>>,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    CreateCatalogSource {
+        source: CreateSource,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    UpdateCatalogSource {
+        id: i64,
+        patch: SourcePatch,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    ApplyNumericCategory {
+        command: NumericCategoryCommand,
+    },
+
     Get {
         id: i64,
     },
@@ -148,6 +187,12 @@ pub enum Deletion {
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
 pub enum Outcome {
+    #[cfg(feature = "desktop_rebuild")]
+    Activity(Vec<SourceActivityEvent>),
+    #[cfg(feature = "desktop_rebuild")]
+    Categories(CategorySettings),
+    #[cfg(feature = "desktop_rebuild")]
+    BulkCategory(BulkCategoryResult),
     Source(Option<Box<SourceSummary>>),
     Sources(Vec<SourceSummary>),
     Deletion(Deletion),
@@ -288,6 +333,9 @@ impl SourceCatalogClient {
         cancelled: &AtomicBool,
         wait: Duration,
     ) -> Result<CatalogReply> {
+        #[cfg(feature = "desktop_rebuild")]
+        rebuild::request_size(&request)?;
+        #[cfg(not(feature = "desktop_rebuild"))]
         ensure!(
             serde_json::to_vec(&request)?.len() <= 1024 * 1024,
             "Catalog request too large"
@@ -637,6 +685,13 @@ fn normalize_rule(s: &str) -> String {
 }
 fn run(tx: &Transaction<'_>, state: &State, tenant: &str, request: Request) -> Result<Outcome> {
     Ok(match request {
+        #[cfg(feature = "desktop_rebuild")]
+        request @ (Request::SourceActivity { .. }
+        | Request::GetCategoriesWithTree {}
+        | Request::SaveCategoriesWithTree { .. }
+        | Request::CreateCatalogSource { .. }
+        | Request::UpdateCatalogSource { .. }
+        | Request::ApplyNumericCategory { .. }) => rebuild::run(tx, state, tenant, request)?,
         Request::List {} => Outcome::Sources(list(tx, tenant)?),
         Request::Get { id } => Outcome::Source(get(tx, tenant, id)?.map(Box::new)),
         Request::Create { source: s } => {
