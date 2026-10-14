@@ -116,6 +116,74 @@ def wait_for(check, label, seconds=45):
     raise AssertionError(f"Timed out: {label}; last result={last!r}")
 
 
+def verify_native_permissions(execute, screenshot, output):
+    # Registered core commands must reach ACL rejection. Missing plugins are
+    # recorded separately; their absence is not a core permission denial.
+    commands = [
+        ('plugin:app|exit', {'code': 0}, 'core:app:allow-exit'),
+        ('plugin:window|close', {'label': 'main'}, 'core:window:allow-close'),
+        ('plugin:window|destroy', {'label': 'main'}, 'core:window:allow-destroy'),
+        ('plugin:webview|create_webview_window', {'options': {
+            'label': 'permission-probe', 'url': 'https://example.com/'}},
+         'core:webview:allow-create-webview-window'),
+        ('plugin:fs|read_file', {'path': '/permission-probe'}, None),
+        ('plugin:shell|execute', {'program': 'permission-probe', 'args': []}, None),
+    ]
+    proof = {'result': 'FAIL', 'commands': []}
+
+    def save():
+        (output / 'native-permissions.json').write_text(json.dumps(proof, indent=2) + '\n')
+
+    token = os.urandom(16).hex()
+    parent = execute(r'''
+const token = arguments[0];
+if (!window.__TAURI_INTERNALS__ || typeof window.__TAURI_INTERNALS__.invoke !== 'function')
+  throw Error('native_invoke_missing');
+window.__permissionProbe = {document, root: document.querySelector('#root'), href: location.href, token};
+return {origin: location.origin, global_api_absent: window.__TAURI__ === undefined,
+  labels: window.__TAURI_INTERNALS__.metadata};
+''', token)
+    proof['parent'] = parent
+    save()
+    assert parent['global_api_absent'] is True, parent
+    assert parent['labels']['currentWindow']['label'] == 'main', parent
+    assert parent['labels']['currentWebview']['label'] == 'main', parent
+    for command, payload, permission in commands:
+        observed = execute(r'''
+const [command, payload, done] = arguments;
+let settled = false;
+const timer = setTimeout(() => {if (!settled) {settled = true; done({status:'timeout'});}}, 5000);
+window.__TAURI_INTERNALS__.invoke(command, payload).then(() => {
+  if (!settled) {settled = true; clearTimeout(timer); done({status:'resolved'});}
+}, error => {
+  if (!settled) {settled = true; clearTimeout(timer); done({status:'rejected', rejection_message:String(error)});}
+});
+''', command, payload, asynchronous=True)
+        proof['commands'].append({'command': command, 'expected_permission': permission, **observed})
+        save()
+        assert observed['status'] == 'rejected', observed
+        pretty = command.removeprefix('plugin:').replace('|', '.')
+        assert observed['rejection_message'].startswith(pretty + ' not allowed.'), observed
+        if permission:
+            assert 'Permissions associated with this command:' in observed['rejection_message'], observed
+            assert permission in observed['rejection_message'], observed
+            assert 'not found' not in observed['rejection_message'], observed
+        else:
+            assert observed['rejection_message'] == pretty + ' not allowed. Plugin not found', observed
+    proof['after'] = execute(r'''
+const state = window.__permissionProbe;
+return {document_preserved: state.document === document, root_preserved: state.root === document.querySelector('#root'),
+  url_preserved: state.href === location.href, token_preserved: state.token === arguments[0]};
+''', token)
+    save()
+    assert all(value is True for value in proof['after'].values()), proof
+    (output / 'native-permissions-denied.png').write_bytes(base64.b64decode(screenshot()))
+    execute('delete window.__permissionProbe;')
+    proof['result'] = 'PASS'
+    save()
+    return proof
+
+
 def verify_navigation(execute, screenshot, output):
     token = os.urandom(16).hex()
     source = execute('return {origin: location.origin, href: location.href};')
@@ -568,6 +636,8 @@ def main():
                 session = result['sessionId']
                 wait_for(lambda: execute("return location.pathname === '/builds' && !!document.querySelector('#root');"),
                          'authenticated native launch')
+                permissions = verify_native_permissions(execute,
+                    lambda: command(f'/session/{session}/screenshot'), output)
                 navigation = verify_navigation(execute,
                     lambda: command(f'/session/{session}/screenshot'), output)
                 frames = verify_remote_frames(execute,
@@ -603,7 +673,7 @@ def main():
                 assert 1000 < pixels['visible_pixels'] < pixels['width'] * pixels['height'] * 0.8, pixels
                 assert pixels['center_visible_pixels'] > 1000 and pixels['unique_colors'] > 1, pixels
                 receipt = {'result': 'PASS', 'proof_class': 'native_linux_webkitgtk_webgl',
-                    'navigation': navigation, 'remote_frames': frames,
+                    'native_permissions': permissions, 'navigation': navigation, 'remote_frames': frames,
                     'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
                     'capabilities': result['capabilities'], 'fixture_sha256': hashlib.sha256(fixture).hexdigest(),
                     **seeded, **pixels}
