@@ -83,6 +83,11 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - name: Install
         run: npm ci
+      - name: Check CI installer tool pins
+        working-directory: .
+        run: |
+          node --test scripts/check-ci-tool-pins.test.mjs
+          node scripts/check-ci-tool-pins.mjs
       - name: Check workaround ratchet
         run: node ../scripts/workaround-ratchet.mjs && node --test ../scripts/workaround-ratchet.test.mjs
       - name: Check MCP tool inventory golden
