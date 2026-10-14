@@ -1,0 +1,5 @@
+   Compiling pp-compat v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre353-next-202610140800-a1c4/rust/crates/pp-compat)
+   Compiling pp-desktop v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre353-next-202610140800-a1c4/rust/crates/pp-desktop)
+   Compiling pp-gateway v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre353-next-202610140800-a1c4/rust/crates/pp-gateway)
+   Compiling pp-core v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre353-next-202610140800-a1c4/rust/crates/pp-core)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 28.77s
