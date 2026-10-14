@@ -11,6 +11,9 @@ use std::{
     time::Duration,
 };
 
+#[path = "runtime_m0/drain.rs"]
+mod drain;
+
 fn launch(data: PathBuf) -> DesktopLaunch {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../..")

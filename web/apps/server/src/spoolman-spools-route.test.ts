@@ -12,11 +12,15 @@ import { spoolmanAdapter } from "./integrations/adapters/spoolman.js";
 describe("GET /api/v1/integrations/:id/spoolman/spools", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
     delete process.env.PRINT_PARTNER_DATA_DIR;
     delete process.env.PRINT_PARTNER_API_KEY;
   });
 
-  it("returns spools for a Spoolman integration", async () => {
+  it.each([undefined, "1", "true"])("returns spools after admission with rebuild flag %j", async (flag) => {
+    if (flag === undefined) delete process.env.PP_DESKTOP_REBUILD;
+    else vi.stubEnv("PP_DESKTOP_REBUILD", flag);
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string | URL) => {
@@ -60,6 +64,16 @@ describe("GET /api/v1/integrations/:id/spoolman/spools", () => {
     });
 
     const app = await buildApp(config, ports);
+
+    if (flag !== undefined) {
+      for (const resource of ["spools", "filaments"]) {
+        const denied = await app.inject(`/api/v1/integrations/${created.id}/spoolman/${resource}`);
+        expect(denied.statusCode).toBe(403);
+        expect(denied.json()).toEqual({ status: 403, title: "Forbidden",
+          detail: "Feature spoolman is disabled.", code: "FEATURE_DISABLED" });
+      }
+      ports.repository.setSetting("feature_toggles", '{"spoolman":true}');
+    }
 
     const res = await app.inject({
       method: "GET",

@@ -1,7 +1,6 @@
 mod guard;
 use anyhow::{Context, Result, ensure};
 use fs2::FileExt;
-pub(crate) use guard::ensure_stale_owner;
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
@@ -50,6 +49,7 @@ pub fn prepare_directory(path: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 thread_local! {
     static FAIL_MARKER_WRITE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static REMOVE_MARKER_BEFORE_READ: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 fn write_marker(file: &mut File, bytes: &[u8]) -> std::io::Result<()> {
@@ -83,24 +83,41 @@ fn prior_writer_is_stale(marker: &serde_json::Value, pid: u32) -> bool {
             || guard::child_is_stale(marker))
 }
 
-/// Inspect marker liveness without changing storage before schema validation.
-/// Acquisition checks the marker again while holding both ownership guards.
-pub(crate) fn prior_owner_blocks_unowned(marker_path: &Path) -> bool {
+fn read_prior_owner(marker_path: &Path) -> Result<Option<(serde_json::Value, u32)>> {
+    match std::fs::symlink_metadata(marker_path) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).context("storage_lease_marker_invalid"),
+    }
+    #[cfg(test)]
+    if REMOVE_MARKER_BEFORE_READ.with(std::cell::Cell::take) {
+        std::fs::remove_file(marker_path)?;
+    }
     let bytes = match std::fs::read(marker_path) {
         Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
-        Err(_) => return true,
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound
+                && std::fs::symlink_metadata(marker_path)
+                    .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            return Ok(None);
+        }
+        Err(error) => return Err(error).context("storage_lease_marker_invalid"),
     };
-    let Ok(marker) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
-        return true;
-    };
-    let Some(pid) = marker["pid"]
+    let marker: serde_json::Value =
+        serde_json::from_slice(&bytes).context("storage_lease_marker_invalid")?;
+    let pid = marker["pid"]
         .as_u64()
         .filter(|pid| *pid > 0 && *pid <= i32::MAX as u64)
-    else {
-        return true;
-    };
-    !prior_writer_is_stale(&marker, pid as u32)
+        .context("storage_lease_marker_invalid")? as u32;
+    Ok(Some((marker, pid)))
+}
+
+/// Inspect marker liveness without changing storage before schema validation.
+/// Acquisition checks the marker again while holding both ownership guards.
+pub(crate) fn prior_owner_blocks_unowned(marker_path: &Path) -> Result<bool> {
+    Ok(read_prior_owner(marker_path)?
+        .is_some_and(|(marker, pid)| !prior_writer_is_stale(&marker, pid)))
 }
 
 impl StorageLease {
@@ -115,13 +132,16 @@ impl StorageLease {
             .open(data_dir.join(".desktop.lock"))?;
         lock.try_lock_exclusive()
             .context("Data directory already owned")?;
-        let lease_guard = guard::StorageLease::acquire(&data_dir)?;
         let marker_path = data_dir.join(".desktop-owner.json");
-        if marker_path.exists() {
-            let marker: serde_json::Value = serde_json::from_slice(&std::fs::read(&marker_path)?)?;
+        read_prior_owner(&marker_path)?;
+        let lease_guard = guard::StorageLease::acquire(&data_dir)?;
+        if let Some((marker, pid)) = read_prior_owner(&marker_path)? {
             // The OS lock serializes inspection and replacement with every cooperating writer.
             // A free lock alone is insufficient for older standalone writers using only markers.
-            ensure_stale_owner(&marker)?;
+            ensure!(
+                prior_writer_is_stale(&marker, pid),
+                "A prior writer may still be alive"
+            );
             std::fs::rename(
                 &marker_path,
                 data_dir.join(".desktop-lease/previous-marker.json"),
@@ -323,6 +343,30 @@ mod tests {
         FileExt::unlock(&lock).unwrap();
         drop(guard::StorageLease::acquire(path).unwrap());
         std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn ticket_t_7_writer_desktop_marker_removed_during_inspection_allows_handoff() {
+        for writer in [false, true] {
+            let path = directory();
+            std::fs::write(
+                path.join(".desktop-owner.json"),
+                serde_json::json!({"pid": std::process::id(), "kind": "standalone"}).to_string(),
+            )
+            .unwrap();
+            REMOVE_MARKER_BEFORE_READ.with(|remove| remove.set(true));
+            if writer {
+                let (owner, _) = crate::WriterOwner::open(&path, crate::Limits::default()).unwrap();
+                assert!(path.join("print-partner.db").is_file());
+                owner.shutdown().unwrap();
+                assert!(!path.join(".desktop-owner.json").exists());
+                assert!(!path.join(".desktop-lease").exists());
+                std::fs::remove_dir_all(path).unwrap();
+            } else {
+                let owner = StorageLease::acquire(&path).unwrap();
+                assert_released(owner.release(), &path);
+            }
+        }
     }
 
     #[test]

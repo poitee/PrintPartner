@@ -59,6 +59,7 @@ pub fn startup_diagnostic(error: &anyhow::Error) -> String {
             "Native tray initialization failed" => Some("tray_initialization"),
             "Desktop shutdown incomplete" => Some("shutdown_incomplete"),
             "Data directory already owned" => Some("data_directory_owned"),
+            "storage_lease_marker_invalid" => Some("storage_lease_marker_invalid"),
             "Persisted desktop origin is unavailable" => Some("persisted_origin_unavailable"),
             "Release artifact missing" | "Release root missing" => Some("release_missing"),
             "Release artifact content mismatch" | "Node executable content mismatch" => {
@@ -570,6 +571,28 @@ mod tests {
             assert!(startup_diagnostic(&anyhow::anyhow!(cause)).ends_with(code));
         }
     }
+    #[test]
+    fn startup_diagnostics_classify_invalid_storage_markers_without_private_causes() {
+        let secret = "private/path?bootstrap=secret-token";
+        let error = anyhow::anyhow!(secret)
+            .context("storage_lease_marker_invalid")
+            .context("Desktop core startup failed");
+        assert_eq!(
+            startup_diagnostic(&error),
+            "desktop_startup_failed: core_startup -> storage_lease_marker_invalid"
+        );
+        assert!(!startup_diagnostic(&error).contains(secret));
+        let error = anyhow::Error::from(std::io::Error::from_raw_os_error(13))
+            .context(secret)
+            .context("storage_lease_marker_invalid")
+            .context("Desktop core startup failed");
+        assert_eq!(
+            startup_diagnostic(&error),
+            "desktop_startup_failed: core_startup -> storage_lease_marker_invalid -> os_error=13"
+        );
+        assert!(!startup_diagnostic(&error).contains(secret));
+    }
+
     #[test]
     fn generated_authority_denies_native_commands_for_every_origin() {
         let mut context: tauri::Context<tauri::Wry> = tauri::generate_context!();

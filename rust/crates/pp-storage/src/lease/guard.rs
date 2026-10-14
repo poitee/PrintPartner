@@ -90,23 +90,6 @@ fn publish_child_marker(directory: &Path, path: &Path, marker: &serde_json::Valu
     result
 }
 
-pub(crate) fn ensure_stale_owner(marker: &serde_json::Value) -> Result<()> {
-    let pid = marker["pid"]
-        .as_u64()
-        .filter(|pid| *pid > 0 && *pid <= i32::MAX as u64)
-        .context("Invalid prior writer PID")? as u32;
-    anyhow::ensure!(
-        owner_is_stale(pid, marker["process_identity"].as_str())
-            && (marker["kind"] == "standalone"
-                || (marker["storage_protocol_version"].as_u64() == Some(1)
-                    && marker.get("child_pid").is_none()
-                    && marker.get("child_process_identity").is_none())
-                || child_is_stale(marker)),
-        "A prior writer may still be alive"
-    );
-    Ok(())
-}
-
 pub(crate) fn child_is_stale(marker: &serde_json::Value) -> bool {
     let Some(pid) = marker["child_pid"]
         .as_u64()
