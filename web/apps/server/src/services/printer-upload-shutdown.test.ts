@@ -18,7 +18,7 @@ import {
   interruptPrinterUploadsOnShutdown,
   resetPrinterUploadHaltForTests,
 } from "./printer-send-queue.js";
-import { enqueuePrinterSend, getPrinterSendQueueItem } from "./printer-send-queue-store.js";
+import { enqueuePrinterSend, getPrinterSendQueueItem, updatePrinterSendQueueItem } from "./printer-send-queue-store.js";
 
 const cleanup: Array<() => Promise<void>> = [];
 
@@ -179,8 +179,9 @@ describe("printer upload interrupted by shutdown", () => {
     expect(getPrinterSendQueueItem(f.repo, item.id)?.state).toBe("done");
   });
 
-  it("does not record a direct printer upload as success when shutdown interrupts it", async () => {
-    const f = await fixture();
+  it.each(["unscoped", "mapped", "unavailable"])("retains a direct upload after %s shutdown", async (mode) => {
+    const tenant = mode === "unscoped" ? "default" : "shop-a";
+    const f = await fixture(tenant);
     const artifactDir = join(f.exportsDir, "printer-uploads", "direct");
     mkdirSync(artifactDir, { recursive: true });
     const artifactPath = join(artifactDir, "plate.gcode");
@@ -197,21 +198,31 @@ describe("printer upload interrupted by shutdown", () => {
       artifact_path: artifactPath,
       filename: "plate.gcode",
       start: true,
-    }, "default");
+    }, tenant);
     await vi.waitFor(() => expect(f.upload).toHaveBeenCalledOnce());
+    const foreign = tenantStorage.run("shop-b", () => {
+      const item = enqueuePrinterSend(f.repo, { filename: "foreign.gcode", artifact_path: artifactPath, printer_id: "foreign", start: true });
+      if (!item) throw new Error("Foreign queue fixture missing");
+      return updatePrinterSendQueueItem(f.repo, item.id, { state: "sending" });
+    });
+    if (!foreign) throw new Error("Foreign queue fixture missing");
 
-    interruptPrinterUploadsOnShutdown({ repository: f.repo });
+    if (mode === "unscoped") interruptPrinterUploadsOnShutdown({ repository: f.repo });
+    else interruptPrinterUploadsOnShutdown(mode === "unavailable" ? {} : { repository: f.repo }, tenant);
     finishUpload({ ok: true, started: true, remote_path: "plate.gcode" });
-    const terminal = await f.jobs.waitForTerminal(jobId, 3000, "default");
+    const terminal = await f.jobs.waitForTerminal(jobId, 3000, tenant);
 
     expect(terminal.status).toBe("error");
     expect(terminal.error).toBe(INTERRUPTED_PRINTER_SEND_ERROR);
     expect(existsSync(artifactPath)).toBe(true);
     expect(readFileSync(artifactPath, "utf8")).toBe(f.artifact);
     expect(f.upload).toHaveBeenCalledTimes(1);
+    expect(tenantStorage.run("shop-b", () => getPrinterSendQueueItem(f.repo, foreign.id))).toEqual(
+      mode === "unscoped" ? expect.objectContaining({ state: "error", error: INTERRUPTED_PRINTER_SEND_ERROR }) : foreign,
+    );
   });
 
-  it("interrupts an in-flight send owned by a tenant other than default", async () => {
+  it.each(["unscoped", "scoped"])("interrupts an in-flight tenant send during %s shutdown", async (mode) => {
     const f = await fixture("shop-b");
     const item = f.enqueue("inflight", true);
     let finishUpload: (result: { ok: true; started: true; remote_path: string }) => void = () => {
@@ -226,7 +237,7 @@ describe("printer upload interrupted by shutdown", () => {
     if ("error" in dispatched) throw new Error(dispatched.error);
     await vi.waitFor(() => expect(f.upload).toHaveBeenCalledOnce());
 
-    const interrupted = interruptPrinterUploadsOnShutdown({ repository: f.repo });
+    const interrupted = interruptPrinterUploadsOnShutdown({ repository: f.repo }, mode === "scoped" ? "shop-b" : undefined);
     expect(interrupted.map((row) => row.id)).toEqual([item.id]);
     finishUpload({ ok: true, started: true, remote_path: "plate.gcode" });
     const terminal = await f.jobs.waitForTerminal(dispatched.job_id, 3000, "shop-b");

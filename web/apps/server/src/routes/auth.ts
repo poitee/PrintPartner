@@ -1,4 +1,4 @@
-import { desktopContext, desktopPrincipal } from "../desktop-context.js";
+import { desktopContext, desktopPrincipal, mappedDesktopTenant } from "../desktop-context.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { randomBytes } from "node:crypto";
 import type { ServerConfig } from "../config.js";
@@ -162,6 +162,8 @@ export function registerAuthRoutes(
     }
     return { user: toPublicUser(request.sessionUser), multi_user: config.multiUser };
   });
+
+  if (mappedDesktopTenant()) return;
 
   app.post("/auth/logout", async (request, reply) => {
     const cookie = request.cookies?.pp_session;

@@ -5,6 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+default = []
+desktop_rebuild = []
+
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
