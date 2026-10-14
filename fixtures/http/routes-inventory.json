@@ -1260,6 +1260,27 @@
     },
     {
       "method": "GET",
+      "path": "/api/v1/plans/:id/features",
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false,
+      "authRequired": true
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/plans/:id/features",
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false,
+      "authRequired": true
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/plans/:id/features",
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false,
+      "authRequired": true
+    },
+    {
+      "method": "GET",
       "path": "/api/v1/plans/:id/kit-manifest",
       "owner": "web/apps/server/src/routes/plans.ts",
       "websocket": false,
@@ -3155,6 +3176,27 @@
     },
     {
       "method": "GET",
+      "path": "/api/v2/plans/:id/features",
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false,
+      "authRequired": true
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v2/plans/:id/features",
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false,
+      "authRequired": true
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v2/plans/:id/features",
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false,
+      "authRequired": true
+    },
+    {
+      "method": "GET",
       "path": "/api/v2/plans/:id/kit-manifest",
       "owner": "web/apps/server/src/routes/plans.ts",
       "websocket": false,
@@ -4732,6 +4774,27 @@
     {
       "method": "POST",
       "path": "/plans/:id/duplicate",
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false,
+      "authRequired": true
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/features",
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false,
+      "authRequired": true
+    },
+    {
+      "method": "HEAD",
+      "path": "/plans/:id/features",
+      "owner": "web/apps/server/src/routes/plans.ts",
+      "websocket": false,
+      "authRequired": true
+    },
+    {
+      "method": "PATCH",
+      "path": "/plans/:id/features",
       "owner": "web/apps/server/src/routes/plans.ts",
       "websocket": false,
       "authRequired": true
