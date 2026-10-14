@@ -31,7 +31,8 @@ pub struct StorageLease {
 /// Existing modes and data-directory aliases are preserved. Existing lock entries
 /// must be owner-controlled regular files with one link. Ancestors must be root or
 /// effective-user owned and deny group/other write unless sticky. These are path
-/// snapshots, not confinement. ACL policy and path replacement remain separate concerns.
+/// snapshots, not confinement. A held descriptor checks leaf identity through
+/// canonicalization. ACL policy and later path replacement remain separate concerns.
 pub fn prepare_directory(path: &Path) -> Result<PathBuf> {
     ensure!(!path.as_os_str().is_empty(), "Data directory path is empty");
     let path = if path.is_absolute() {
@@ -44,7 +45,20 @@ pub fn prepare_directory(path: &Path) -> Result<PathBuf> {
         .recursive(true)
         .mode(0o700)
         .create(&path)?;
-    let metadata = std::fs::metadata(&path)?;
+    let opened = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NONBLOCK)
+        .open(&path)
+        .map_err(|error| match error.raw_os_error() {
+            Some(libc::EACCES | libc::EPERM) => {
+                anyhow::Error::new(error).context("Unsafe data directory permissions")
+            }
+            Some(libc::ENOTDIR) => {
+                anyhow::Error::new(error).context("Data directory is not a directory")
+            }
+            _ => error.into(),
+        })?;
+    let metadata = opened.metadata()?;
     ensure!(metadata.is_dir(), "Data directory is not a directory");
     ensure!(
         metadata.uid() == unsafe { libc::geteuid() }
@@ -52,7 +66,20 @@ pub fn prepare_directory(path: &Path) -> Result<PathBuf> {
             && metadata.mode() & 0o022 == 0,
         "Unsafe data directory permissions"
     );
+    #[cfg(test)]
+    tests::replace_directory_before_canonicalization(&path)?;
     let directory = path.canonicalize()?;
+    let named = std::fs::symlink_metadata(&directory)?;
+    ensure!(
+        named.is_dir() && metadata.dev() == named.dev() && metadata.ino() == named.ino(),
+        "Data directory was replaced"
+    );
+    ensure!(
+        named.uid() == unsafe { libc::geteuid() }
+            && named.mode() & 0o700 == 0o700
+            && named.mode() & 0o022 == 0,
+        "Unsafe data directory permissions"
+    );
     validate_resolved_ancestors(&directory, false)?;
     match std::fs::symlink_metadata(directory.join(".desktop.lock")) {
         Ok(metadata) => validate_lock_metadata(&metadata)?,
@@ -133,6 +160,7 @@ thread_local! {
     static FAIL_MARKER_WRITE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static REMOVE_MARKER_BEFORE_READ: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static REPLACE_LOCK_BEFORE_VALIDATION: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+    static REPLACE_DIRECTORY_BEFORE_CANONICALIZATION: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
 }
 
 fn unlock_os_lock(file: &File) -> std::io::Result<()> {
@@ -445,6 +473,104 @@ impl Drop for StorageLease {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    pub(super) fn replace_directory_before_canonicalization(path: &Path) -> Result<()> {
+        match REPLACE_DIRECTORY_BEFORE_CANONICALIZATION.take() {
+            0 => {}
+            1 => {
+                std::fs::rename(path, path.with_extension("retired"))?;
+                std::fs::DirBuilder::new().mode(0o700).create(path)?;
+            }
+            2 => {
+                let retired = path.with_extension("retired");
+                std::fs::rename(path, &retired)?;
+                let replacement = path.with_extension("replacement");
+                std::fs::DirBuilder::new()
+                    .mode(0o700)
+                    .create(&replacement)?;
+                std::os::unix::fs::symlink(replacement, path)?;
+            }
+            3 => std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o777))?,
+            _ => unreachable!(),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn ticket_t_12_directory_replacement_during_admission_is_refused() {
+        for replacement in [1, 2] {
+            let path = directory();
+            let retired = path.with_extension("retired");
+            let marker = br#"{"pid":2147483647,"kind":"standalone"}"#;
+            std::fs::write(path.join(".desktop-owner.json"), marker).unwrap();
+            std::fs::write(path.join("print-partner.db"), b"never open").unwrap();
+            std::fs::write(path.join("desktop.toml"), b"port = 45678\n").unwrap();
+            REPLACE_DIRECTORY_BEFORE_CANONICALIZATION.set(replacement);
+            let result = StorageLease::acquire(&path);
+            assert!(
+                result.is_err(),
+                "replacement {replacement} acquired ownership of an unchecked directory"
+            );
+            assert_eq!(
+                result.err().unwrap().to_string(),
+                "Data directory was replaced"
+            );
+            assert_eq!(
+                std::fs::read(retired.join(".desktop-owner.json")).unwrap(),
+                marker
+            );
+            assert_eq!(
+                std::fs::read(retired.join("print-partner.db")).unwrap(),
+                b"never open"
+            );
+            assert_eq!(
+                std::fs::read(retired.join("desktop.toml")).unwrap(),
+                b"port = 45678\n"
+            );
+            assert_eq!(std::fs::read_dir(&retired).unwrap().count(), 3);
+            assert_eq!(std::fs::read_dir(&path).unwrap().count(), 0);
+            std::fs::remove_dir_all(retired).unwrap();
+            if replacement == 2 {
+                std::fs::remove_file(&path).unwrap();
+                std::fs::remove_dir_all(path.with_extension("replacement")).unwrap();
+            } else {
+                std::fs::remove_dir_all(path).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn ticket_t_12_directory_permission_change_during_admission_is_refused() {
+        let path = directory();
+        REPLACE_DIRECTORY_BEFORE_CANONICALIZATION.set(3);
+        let result = prepare_directory(&path);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::remove_dir(&path).unwrap();
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Unsafe data directory permissions"
+        );
+    }
+
+    #[test]
+    fn ticket_t_12_replaced_directory_refuses_before_writer_database_preflight() {
+        let path = directory();
+        let retired = path.with_extension("retired");
+        std::fs::write(path.join("print-partner.db"), b"never open").unwrap();
+        REPLACE_DIRECTORY_BEFORE_CANONICALIZATION.set(1);
+        let result = crate::WriterOwner::open(&path, crate::Limits::default());
+        assert_eq!(
+            result.err().unwrap().to_string(),
+            "Data directory was replaced"
+        );
+        assert_eq!(
+            std::fs::read(retired.join("print-partner.db")).unwrap(),
+            b"never open"
+        );
+        assert_eq!(std::fs::read_dir(&path).unwrap().count(), 0);
+        std::fs::remove_dir_all(retired).unwrap();
+        std::fs::remove_dir(path).unwrap();
+    }
 
     fn directory() -> PathBuf {
         let path = std::env::temp_dir().join(format!(
