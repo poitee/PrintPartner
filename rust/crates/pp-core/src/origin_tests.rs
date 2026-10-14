@@ -1,3 +1,5 @@
+#![cfg(test)]
+
 use super::*;
 use std::{os::unix::fs::symlink, path::Path};
 
@@ -67,6 +69,14 @@ async fn ticket_t_12_oversized_config_is_refused_and_preserved() {
 #[tokio::test]
 async fn ticket_t_12_missing_config_persists_private_port_and_reuses_it() {
     use std::os::unix::fs::PermissionsExt;
+    if std::env::var_os("PP_T12_ORIGIN_CHILD").is_none() {
+        run_child(
+            "origin_tests::ticket_t_12_missing_config_persists_private_port_and_reuses_it",
+            "PP_T12_ORIGIN_CHILD",
+            std::ffi::OsStr::new("1"),
+        );
+        return;
+    }
     let fixture = Fixture::new();
     let owner = StorageLease::acquire(&fixture.0).unwrap();
     let listener = bind_origin(&owner).await.unwrap();
@@ -176,25 +186,29 @@ fn ticket_t_12_fifo_config_does_not_block_startup() {
     let fixture = Fixture::new();
     let path = std::ffi::CString::new(fixture.config().as_os_str().as_encoded_bytes()).unwrap();
     assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+    run_child(
+        "origin_tests::ticket_t_12_fifo_config_does_not_block_startup",
+        "PP_T12_FIFO_CHILD",
+        fixture.0.as_os_str(),
+    );
+}
+
+fn run_child(test: &str, environment: &str, value: &std::ffi::OsStr) {
     let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "origin_tests::ticket_t_12_fifo_config_does_not_block_startup",
-            "--nocapture",
-        ])
-        .env("PP_T12_FIFO_CHILD", &fixture.0)
+        .args(["--exact", test, "--nocapture"])
+        .env(environment, value)
         .spawn()
         .unwrap();
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
     loop {
         if let Some(status) = child.try_wait().unwrap() {
-            assert!(status.success(), "FIFO child failed");
+            assert!(status.success(), "{test} child failed");
             break;
         }
         if std::time::Instant::now() >= deadline {
             child.kill().unwrap();
             child.wait().unwrap();
-            panic!("FIFO config blocked startup");
+            panic!("{test} child exceeded its startup deadline");
         }
         std::thread::sleep(Duration::from_millis(10));
     }
