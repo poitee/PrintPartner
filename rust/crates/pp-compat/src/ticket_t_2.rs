@@ -811,3 +811,220 @@ async fn ticket_t_2_shell_crashes_expire_outside_default_guard_window() {
     shutdown_guard_shell(supervisor, &scratch).await;
     assert!(live_pids(&scratch.pidfile()).is_empty());
 }
+
+struct HealthFixture {
+    health: std::sync::Arc<std::sync::Mutex<serde_json::Value>>,
+    probes: std::sync::Arc<std::sync::Mutex<Vec<tokio::time::Instant>>>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl HealthFixture {
+    async fn attach(scratch: &Scratch) -> Self {
+        let socket_file = scratch.root.join("data/socket");
+        pump_until(|| std::fs::read_to_string(&socket_file).is_ok_and(|path| !path.is_empty()))
+            .await;
+        let socket = std::fs::read_to_string(socket_file).unwrap();
+        // Let the initial missing-socket probe finish before binding the fixture.
+        pump_for(Duration::from_millis(20)).await;
+        let listener = tokio::net::UnixListener::bind(socket.trim()).unwrap();
+        let health = std::sync::Arc::new(std::sync::Mutex::new(serde_json::json!({
+            "ok": false,
+            "version": "ticket-t-2-unreleased",
+            "release": {"commit": "ticket-t-2-unreleased"}
+        })));
+        let probes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let response = health.clone();
+        let received = probes.clone();
+        let task = tokio::spawn(async move {
+            loop {
+                let (stream, _) = listener.accept().await.unwrap();
+                let response = response.clone();
+                let received = received.clone();
+                // Each health request owns a fresh IPC connection. Finish it before
+                // accepting another so fixture tasks cannot survive teardown.
+                hyper::server::conn::http1::Builder::new()
+                    .serve_connection(
+                        hyper_util::rt::TokioIo::new(stream),
+                        hyper::service::service_fn(move |request| {
+                            assert_eq!(request.method(), "GET");
+                            assert_eq!(request.uri(), "/health");
+                            assert!(request.headers().contains_key("x-pp-signature"));
+                            received.lock().unwrap().push(tokio::time::Instant::now());
+                            let body = response.lock().unwrap().to_string();
+                            async move {
+                                Ok::<_, std::convert::Infallible>(axum::http::Response::new(
+                                    axum::body::Body::from(body),
+                                ))
+                            }
+                        }),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        Self {
+            health,
+            probes,
+            task,
+        }
+    }
+
+    fn count(&self) -> usize {
+        self.probes.lock().unwrap().len()
+    }
+
+    async fn tick(&self, duration: Duration, expected: usize) {
+        tokio::time::advance(duration).await;
+        let wall = std::time::Instant::now();
+        while self.count() < expected {
+            assert!(
+                wall.elapsed() < Duration::from_secs(8),
+                "expected {expected} health probes, got {} after {duration:?}",
+                self.count()
+            );
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(self.count(), expected);
+        // Keep policy time frozen while real IPC and the supervisor settle.
+        pump_for(Duration::from_millis(20)).await;
+    }
+}
+
+impl Drop for HealthFixture {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+async fn pump_until(predicate: impl Fn() -> bool) {
+    let wall = std::time::Instant::now();
+    while !predicate() {
+        assert!(
+            wall.elapsed() < Duration::from_secs(8),
+            "IPC fixture stalled"
+        );
+        tokio::task::yield_now().await;
+    }
+}
+
+async fn pump_for(duration: Duration) {
+    let wall = std::time::Instant::now();
+    while wall.elapsed() < duration {
+        tokio::task::yield_now().await;
+    }
+}
+
+async fn health_supervisor(scratch: &Scratch) -> (super::Supervisor, HealthFixture) {
+    let mut spec = shell_spec(scratch);
+    spec.script = r#"read line || exit 1; data=${line#*'"data_dir":"'}; data=${data%%'"'*}; socket=${line#*'"socket_path":"'}; socket=${socket%%'"'*}; printf '%s' "$socket" > "$data/socket"; while read line; do :; done"#;
+    let supervisor =
+        super::Supervisor::launch_shell(spec, super::SupervisorConfig::default()).unwrap();
+    let fixture = HealthFixture::attach(scratch).await;
+    fixture.tick(Duration::from_millis(250), 1).await;
+    (supervisor, fixture)
+}
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn ticket_t_2_health_cadence_requires_ok_and_bundled_release() {
+    let scratch = Scratch::new("health-cadence");
+    let (supervisor, fixture) = health_supervisor(&scratch).await;
+    assert!(supervisor.handle.endpoint().is_none());
+    for health in [
+        serde_json::json!({"ok":true,"version":"wrong","release":{"commit":"ticket-t-2-unreleased"}}),
+        serde_json::json!({"ok":true,"version":"ticket-t-2-unreleased","release":{"commit":"wrong"}}),
+    ] {
+        *fixture.health.lock().unwrap() = health;
+        let count = fixture.count();
+        tokio::time::advance(Duration::from_millis(249)).await;
+        pump_for(Duration::from_millis(20)).await;
+        assert_eq!(fixture.count(), count, "startup polled before 250 ms");
+        fixture.tick(Duration::from_millis(1), count + 1).await;
+        assert!(matches!(
+            *supervisor.handle.status.borrow(),
+            super::Status::Starting
+        ));
+        assert!(
+            supervisor.handle.endpoint().is_none(),
+            "mismatch published an endpoint"
+        );
+    }
+    *fixture.health.lock().unwrap() = serde_json::json!({
+        "ok":true,"version":"ticket-t-2-unreleased","release":{"commit":"ticket-t-2-unreleased"}
+    });
+    fixture.tick(Duration::from_millis(250), 4).await;
+    pump_until(|| {
+        matches!(
+            *supervisor.handle.status.borrow(),
+            super::Status::Ready { .. }
+        )
+    })
+    .await;
+    assert!(supervisor.handle.endpoint().is_some());
+    for expected in 5..=6 {
+        tokio::time::advance(Duration::from_millis(9999)).await;
+        pump_for(Duration::from_millis(20)).await;
+        assert_eq!(fixture.count(), expected - 1, "liveness polled before 10 s");
+        fixture.tick(Duration::from_millis(1), expected).await;
+        assert!(matches!(
+            *supervisor.handle.status.borrow(),
+            super::Status::Ready { .. }
+        ));
+    }
+    let times = fixture.probes.lock().unwrap().clone();
+    let gaps: Vec<_> = times.windows(2).map(|pair| pair[1] - pair[0]).collect();
+    assert_eq!(
+        gaps,
+        vec![
+            Duration::from_millis(250),
+            Duration::from_millis(250),
+            Duration::from_millis(250),
+            Duration::from_secs(10),
+            Duration::from_secs(10)
+        ]
+    );
+    tokio::time::resume();
+    assert_eq!(shutdown(supervisor).await, super::CompatExit::Graceful);
+    assert_eq!(recorded_pids(&scratch.pidfile()).len(), 1);
+    assert!(live_pids(&scratch.pidfile()).is_empty());
+}
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn ticket_t_2_unhealthy_startup_stops_polling_at_thirty_seconds() {
+    let scratch = Scratch::new("health-budget");
+    let started = tokio::time::Instant::now();
+    let (supervisor, fixture) = health_supervisor(&scratch).await;
+    for expected in 2..=119 {
+        fixture.tick(Duration::from_millis(250), expected).await;
+        assert!(supervisor.handle.endpoint().is_none());
+        assert!(matches!(
+            *supervisor.handle.status.borrow(),
+            super::Status::Starting
+        ));
+    }
+    assert_eq!(started.elapsed(), Duration::from_millis(29750));
+    tokio::time::advance(Duration::from_millis(249)).await;
+    pump_for(Duration::from_millis(20)).await;
+    assert!(matches!(
+        *supervisor.handle.status.borrow(),
+        super::Status::Starting
+    ));
+    tokio::time::advance(Duration::from_millis(1)).await;
+    pump_until(|| matches!(*supervisor.handle.status.borrow(), super::Status::Stopping)).await;
+    assert_eq!(started.elapsed(), Duration::from_secs(30));
+    assert_eq!(fixture.count(), 119, "health polled beyond startup budget");
+    tokio::time::resume();
+    let mut status = supervisor.handle.status.clone();
+    wait_status(&mut status, |state| {
+        matches!(state, super::Status::Backoff { .. })
+    })
+    .await;
+    supervisor.disarm_restarts();
+    shutdown(supervisor).await;
+    assert!(live_pids(&scratch.pidfile()).is_empty());
+    assert_eq!(recorded_pids(&scratch.pidfile()).len(), 1);
+    assert!(
+        diagnostic_rows(&scratch)
+            .iter()
+            .any(|row| row["reason"] == "readiness_timeout")
+    );
+}
