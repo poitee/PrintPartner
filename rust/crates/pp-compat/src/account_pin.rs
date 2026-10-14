@@ -16,7 +16,7 @@ pub enum DesktopAccountPin {
 
 impl DesktopAccountPin {
     pub fn capture(data_dir: &Path, enabled: bool) -> Result<Self> {
-        if !enabled {
+        if !cfg!(feature = "desktop_rebuild") || !enabled {
             return Ok(Self::Disabled);
         }
         let file = match OpenOptions::new()
@@ -45,6 +45,9 @@ impl DesktopAccountPin {
     }
 
     pub(crate) fn apply(&self, setup: &mut serde_json::Value) {
+        if !cfg!(feature = "desktop_rebuild") {
+            return;
+        }
         let pin = match self {
             Self::Disabled => return,
             Self::Missing => serde_json::json!({"kind":"missing"}),
@@ -59,10 +62,9 @@ impl DesktopAccountPin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{
-        fs,
-        os::unix::fs::{PermissionsExt, symlink},
-    };
+    #[cfg(feature = "desktop_rebuild")]
+    use std::os::unix::fs::PermissionsExt;
+    use std::{fs, os::unix::fs::symlink};
 
     struct Fixture(std::path::PathBuf);
     impl Fixture {
@@ -72,6 +74,7 @@ mod tests {
             fs::create_dir(&path).unwrap();
             Self(path)
         }
+        #[cfg(feature = "desktop_rebuild")]
         fn write(&self, bytes: &[u8]) {
             let path = self.0.join("desktop-account.json");
             fs::write(&path, bytes).unwrap();
@@ -94,9 +97,31 @@ mod tests {
         let bytes = setup.to_string();
         pin.apply(&mut setup);
         assert_eq!(setup.to_string(), bytes);
+        #[cfg(feature = "desktop_rebuild")]
         assert!(DesktopAccountPin::capture(&fixture.0, true).is_err());
     }
 
+    #[cfg(not(feature = "desktop_rebuild"))]
+    #[test]
+    fn compile_gate_off_does_not_read_or_enable_mapping() {
+        let fixture = Fixture::new();
+        symlink("absent", fixture.0.join("desktop-account.json")).unwrap();
+        assert_eq!(
+            DesktopAccountPin::capture(&fixture.0, true).unwrap(),
+            DesktopAccountPin::Disabled
+        );
+        let mut setup = serde_json::json!({"version":1});
+        let bytes = setup.to_string();
+        for pin in [
+            DesktopAccountPin::Missing,
+            DesktopAccountPin::Present { sha256: [0; 32] },
+        ] {
+            pin.apply(&mut setup);
+            assert_eq!(setup.to_string(), bytes);
+        }
+    }
+
+    #[cfg(feature = "desktop_rebuild")]
     #[test]
     fn missing_and_present_pins_remain_immutable() {
         let fixture = Fixture::new();
@@ -128,6 +153,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "desktop_rebuild")]
     #[test]
     fn unsafe_files_fail_without_blocking() {
         let fixture = Fixture::new();

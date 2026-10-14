@@ -88,7 +88,6 @@ fn release_spec(scratch: &Scratch) -> super::SpawnSpec {
         .open(scratch.root.join("lease"))
         .unwrap();
     super::SpawnSpec {
-        #[cfg(feature = "desktop_rebuild")]
         account_pin: super::DesktopAccountPin::Disabled,
         bundle: bundle(scratch),
         data_dir: scratch.root.join("data"),
