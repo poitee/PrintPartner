@@ -399,7 +399,6 @@ impl CoreRuntime {
                 {
                     let (mut shutdown, cutover) = self.finish_shutdown().await;
                     let cutover = cutover.unwrap_or_else(|| {
-                        // The owner may have renamed the record before losing completion.
                         let unproved = CutoverReceipt::CommitUnproved {
                             operation: operation.to_owned(),
                         };

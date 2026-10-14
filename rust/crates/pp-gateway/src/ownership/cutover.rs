@@ -330,8 +330,6 @@ impl CutoverPlan {
         }
         match compat {
             None => return CutoverReceipt::CompatNotReaped { operation },
-            // Killed Node work is interrupted business work. Rust must not own
-            // the operation on top of a half-finished Node mutation.
             Some(CompatExit::Forced) => return CutoverReceipt::CompatForceKilled { operation },
             Some(CompatExit::Graceful) => {}
         }

@@ -815,8 +815,6 @@ fn parse_receipt(
 
 const LEASE_FILE_LIMIT: u64 = 64 * 1024;
 
-/// Opens a lease-directory file without following a final symlink or blocking
-/// on a FIFO. A missing file is `None`.
 fn open_lease_file(path: &Path) -> std::io::Result<Option<fs::File>> {
     let mut options = fs::OpenOptions::new();
     options.read(true);
@@ -834,8 +832,6 @@ fn open_lease_file(path: &Path) -> std::io::Result<Option<fs::File>> {
     }
 }
 
-/// Reads an opened lease-directory file. Anything but a regular file of at
-/// most [`LEASE_FILE_LIMIT`] bytes is an error.
 fn read_lease_file(file: fs::File) -> std::io::Result<String> {
     let metadata = file.metadata()?;
     if !metadata.is_file() || metadata.file_type().is_symlink() {

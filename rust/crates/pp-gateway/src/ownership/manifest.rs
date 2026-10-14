@@ -185,7 +185,7 @@ pub fn admit_manifest_documents(
     operations: &str,
     source_sync: &str,
 ) -> Result<OwnershipIndex, AdmissionError> {
-    let digest = documents_digest(&[
+    let digest = length_prefixed_documents_digest(&[
         ("ownership-manifest.json", manifest),
         ("operations.json", operations),
         ("source-sync-ownership.json", source_sync),
@@ -314,8 +314,7 @@ pub fn admit_manifest_documents(
     })
 }
 
-/// Length prefixes keep a byte moved between documents from hashing the same.
-fn documents_digest(documents: &[(&str, &str)]) -> String {
+fn length_prefixed_documents_digest(documents: &[(&str, &str)]) -> String {
     let mut hasher = Sha256::new();
     for (name, text) in documents {
         for part in [name, text] {
