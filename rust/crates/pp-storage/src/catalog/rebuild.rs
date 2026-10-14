@@ -52,31 +52,10 @@ impl CatalogKeyAccess {
         }
     }
 }
-#[derive(Clone, Copy, Debug, Serialize)]
-struct FiniteNumber(f64);
-impl FiniteNumber {
-    fn new(value: f64) -> std::result::Result<Self, CatalogFailure> {
-        value
-            .is_finite()
-            .then_some(Self(value))
-            .ok_or_else(|| CatalogFailure::Input("Invalid Source lookup".into()))
-    }
-    fn value(self) -> f64 {
-        self.0
-    }
-}
-impl<'de> Deserialize<'de> for FiniteNumber {
-    fn deserialize<D: serde::Deserializer<'de>>(
-        deserializer: D,
-    ) -> std::result::Result<Self, D::Error> {
-        let value = f64::deserialize(deserializer)?;
-        Self::new(value).map_err(serde::de::Error::custom)
-    }
-}
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct NumericCategoryCommand {
-    selectors: Vec<FiniteNumber>,
+    selectors: Vec<serde_json::Number>,
     category: Option<String>,
 }
 impl NumericCategoryCommand {
@@ -87,7 +66,17 @@ impl NumericCategoryCommand {
         Ok(Self {
             selectors: selectors
                 .into_iter()
-                .map(FiniteNumber::new)
+                .map(|value| {
+                    if !value.is_finite() {
+                        return Err(CatalogFailure::Input("Invalid Source lookup".into()));
+                    }
+                    if value.fract() == 0.0 && value.abs() <= 9_007_199_254_740_991.0 {
+                        Ok(serde_json::Number::from(value as i64))
+                    } else {
+                        serde_json::Number::from_f64(value)
+                            .ok_or_else(|| CatalogFailure::Input("Invalid Source lookup".into()))
+                    }
+                })
                 .collect::<std::result::Result<_, _>>()?,
             category,
         })
@@ -102,7 +91,7 @@ pub struct BulkCategoryResult {
 }
 #[derive(Debug, Serialize)]
 struct BulkCategoryItem {
-    source_id: FiniteNumber,
+    source_id: serde_json::Number,
     ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     detail: Option<String>,
@@ -121,7 +110,7 @@ pub struct CategoryNode {
     pub children: Vec<CategoryNode>,
 }
 impl CategorySettings {
-    fn new(categories: Vec<String>) -> Self {
+    pub(super) fn new(categories: Vec<String>) -> Self {
         let tree = nodes(&categories, None);
         Self { categories, tree }
     }
@@ -130,21 +119,19 @@ pub const IMPORT_RULE_BODY_LIMIT: usize = 8 * 1024 * 1024;
 fn apply_category(
     tx: &Transaction<'_>,
     tenant: &str,
-    selected: Vec<(Option<i64>, FiniteNumber)>,
+    selected: Vec<(Option<i64>, serde_json::Number)>,
     category: Option<String>,
 ) -> Result<BulkCategoryResult> {
     let mut results = Vec::new();
     let mut updated = Vec::new();
     for (id, source_id) in selected {
-        let exists = match id {
-            Some(id) => get(tx, tenant, id)?.is_some(),
-            None => false,
-        };
-        if exists {
+        if let Some(id) = id
+            && get(tx, tenant, id)?.is_some()
+        {
             updated.push(patch(
                 tx,
                 tenant,
-                id.expect("existing Source"),
+                id,
                 SourcePatch {
                     metadata: Some(Map::from_iter([(
                         "category".into(),
@@ -187,82 +174,72 @@ pub(super) fn request_size(request: &Request) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn run(
+pub(super) fn create(
     tx: &Transaction<'_>,
-    state: &State,
     tenant: &str,
-    request: Request,
-) -> Result<Outcome> {
-    let outcome = match request {
-        Request::SourceActivity { limit } => Outcome::Activity(activity::list(tx, tenant, limit)?),
-        Request::GetCategoriesWithTree {} => {
-            Outcome::Categories(CategorySettings::new(categories::load(tx, tenant)?))
+    mut source: CreateSource,
+) -> Result<CreateSource> {
+    location::create(&mut source)?;
+    let name = trim(&source.name);
+    ensure!(
+        !name.is_empty(),
+        CatalogFailure::Input("Source name is required".into())
+    );
+    let duplicate: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM projects WHERE tenant_id=?1 AND name=?2)",
+        params![tenant, name],
+        |r| r.get(0),
+    )?;
+    ensure!(!duplicate, CatalogFailure::DuplicateName(name.into()));
+    Ok(source)
+}
+pub(super) fn update(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    id: i64,
+    mut patch: SourcePatch,
+) -> Result<SourcePatch> {
+    let existing = get(tx, tenant, id)?.ok_or(CatalogFailure::NotFound)?;
+    if let Some(name) = &patch.name {
+        let name = trim(name);
+        ensure!(
+            !name.is_empty(),
+            CatalogFailure::Input("Source name is required".into())
+        );
+        ensure!(
+            name == existing.name || !name_referenced(tx, tenant, &existing.name)?,
+            CatalogFailure::Referenced
+        );
+        let duplicate: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM projects WHERE tenant_id=?1 AND name=?2 AND id<>?3)",
+            params![tenant, name, id],
+            |r| r.get(0),
+        )?;
+        ensure!(!duplicate, CatalogFailure::DuplicateName(name.into()));
+    }
+    location::update(&existing, &mut patch)?;
+    Ok(patch)
+}
+pub(super) fn apply_numeric_category(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    command: NumericCategoryCommand,
+) -> Result<BulkCategoryResult> {
+    ensure!(
+        !command.selectors.is_empty(),
+        CatalogFailure::Input("source_ids must be a non-empty array".into())
+    );
+    let mut seen = Vec::new();
+    let mut selected = Vec::new();
+    for number in command.selectors {
+        if seen.contains(&number) {
+            continue;
         }
-        Request::SaveCategoriesWithTree {
-            categories,
-            replacements,
-        } => {
-            let paths = categories::save(tx, tenant, categories, replacements)?;
-            Outcome::Categories(CategorySettings::new(paths))
-        }
-        Request::CreateCatalogSource { mut source } => {
-            location::create(&mut source)?;
-            let name = trim(&source.name);
-            ensure!(
-                !name.is_empty(),
-                CatalogFailure::Input("Source name is required".into())
-            );
-            let duplicate: bool = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM projects WHERE tenant_id=?1 AND name=?2)",
-                params![tenant, name],
-                |r| r.get(0),
-            )?;
-            ensure!(!duplicate, CatalogFailure::DuplicateName(name.into()));
-            super::run(tx, state, tenant, Request::Create { source })?
-        }
-        Request::UpdateCatalogSource { id, mut patch } => {
-            let existing = get(tx, tenant, id)?.ok_or(CatalogFailure::NotFound)?;
-            if let Some(name) = &patch.name {
-                let name = trim(name);
-                ensure!(
-                    !name.is_empty(),
-                    CatalogFailure::Input("Source name is required".into())
-                );
-                ensure!(
-                    name == existing.name || !name_referenced(tx, tenant, &existing.name)?,
-                    CatalogFailure::Referenced
-                );
-                let duplicate: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM projects WHERE tenant_id=?1 AND name=?2 AND id<>?3)", params![tenant, name, id], |r| r.get(0))?;
-                ensure!(!duplicate, CatalogFailure::DuplicateName(name.into()));
-            }
-            location::update(&existing, &mut patch);
-            super::run(tx, state, tenant, Request::Update { id, patch })?
-        }
-        Request::ApplyNumericCategory { command } => {
-            ensure!(
-                !command.selectors.is_empty(),
-                CatalogFailure::Input("source_ids must be a non-empty array".into())
-            );
-            let mut seen = Vec::new();
-            let mut selected = Vec::new();
-            for number in command.selectors {
-                let n = number.value();
-                if seen.contains(&n) {
-                    continue;
-                }
-                seen.push(n);
-                let id = if n.fract() == 0.0 && n >= i64::MIN as f64 && n < -(i64::MIN as f64) {
-                    Some(n as i64)
-                } else {
-                    None
-                };
-                selected.push((id, number));
-            }
-            Outcome::BulkCategory(apply_category(tx, tenant, selected, command.category)?)
-        }
-        _ => unreachable!("rebuild catalog request"),
-    };
-    Ok(outcome)
+        let id = number.as_i64();
+        seen.push(number.clone());
+        selected.push((id, number));
+    }
+    apply_category(tx, tenant, selected, command.category)
 }
 
 fn nodes(paths: &[String], parent: Option<&str>) -> Vec<CategoryNode> {
@@ -313,7 +290,9 @@ mod tests {
     #[test]
     fn numeric_selectors_reject_nonfinite_deserialization() {
         for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-            assert!(FiniteNumber::deserialize(F64Deserializer::<ValueError>::new(value)).is_err());
+            assert!(
+                serde_json::Number::deserialize(F64Deserializer::<ValueError>::new(value)).is_err()
+            );
         }
     }
 }

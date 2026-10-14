@@ -1296,3 +1296,163 @@ fn gre600_policy_access_and_numeric_mutations_reject_foreign_sources() {
     assert_eq!(value(&keyed, Request::List {}).as_array().unwrap().len(), 1);
     owner.shutdown().unwrap();
 }
+
+#[cfg(feature = "desktop_rebuild")]
+#[test]
+fn gre600_r1_unsafe_locations_are_typed_and_atomic() {
+    use pp_storage::catalog::CatalogFailure;
+    let fixture = Fixture::new();
+    let owner = fixture.open();
+    let client = owner.local_source_catalog();
+    let id = value(
+        &client,
+        Request::Create {
+            source: CreateSource {
+                name: "Unchanged".into(),
+                ..Default::default()
+            },
+        },
+    )["id"]
+        .as_i64()
+        .unwrap();
+    let before = rows(&fixture.0);
+    for url in [
+        "https://github.com/Owner/Repo%23evil",
+        "https://github.com/Owner/Repo%3Fevil",
+        "https://github.com/foo%2Fbar/baz",
+        "https://github.com/%2E%2E/evil",
+        "https://github.com/Owner/%2E",
+        "git@github.com:../evil",
+        "git@github.com:Owner/Repo?evil",
+        "git@github.com:Owner/Repo#evil",
+        "git@github.com:Owner/..git",
+    ] {
+        for request in [
+            json!({"operation":"create_catalog_source","source":{"name":"Unsafe","url":url}}),
+            json!({"operation":"update_catalog_source","id":id,"patch":{"url":url}}),
+        ] {
+            let error = client.execute(rebuild_request(request)).unwrap_err();
+            assert!(
+                matches!(
+                    error.downcast_ref::<CatalogFailure>(),
+                    Some(CatalogFailure::Input(_))
+                ),
+                "{url}: {error}"
+            );
+            assert_eq!(rows(&fixture.0), before);
+        }
+    }
+    let valid = value(
+        &client,
+        rebuild_request(
+            json!({"operation":"update_catalog_source","id":id,"patch":{"url":"https://github.com/%4Fwner/Repo.git/tree/topic"}}),
+        ),
+    );
+    assert_eq!(valid["url"], "https://github.com/Owner/Repo");
+    assert_eq!(valid["branch"], "topic");
+    owner.shutdown().unwrap();
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[test]
+fn gre600_r1_numeric_ids_and_activity_remain_exact() {
+    use pp_storage::catalog::NumericCategoryCommand;
+    let fixture = Fixture::new();
+    let owner = fixture.open();
+    let client = owner.local_source_catalog();
+    let low = 9_007_199_254_740_992_i64;
+    let high = low + 1;
+    let adjacent = create(&client, "Adjacent");
+    let exact = create(&client, "Exact");
+    let db = fixture.sql();
+    for (old, id) in [(adjacent, low), (exact, high)] {
+        db.execute(
+            "UPDATE projects SET id=?1 WHERE id=?2",
+            rusqlite::params![id, old],
+        )
+        .unwrap();
+    }
+    db.execute("INSERT INTO app_events(tenant_id,at,kind,payload_json) VALUES('default','then','source.updated',?1)", [format!("{{\"source_id\":{high}}}")]).unwrap();
+    drop(db);
+    let result = value(
+        &client,
+        rebuild_request(
+            json!({"operation":"apply_numeric_category","command":{"selectors":[high,1.5,high as f64],"category":"Exact"}}),
+        ),
+    );
+    assert_eq!(result["succeeded"], 1);
+    assert_eq!(result["failed"], 2);
+    assert_eq!(result["results"][0]["source_id"].as_i64(), Some(high));
+    assert_eq!(result["updated"][0]["id"].as_i64(), Some(high));
+    assert_ne!(
+        value(&client, Request::Get { id: low })["category"],
+        "Exact"
+    );
+    let before = rows(&fixture.0);
+    if let Ok(command) =
+        NumericCategoryCommand::from_finite_numbers([high as f64], Some("Wrong".into()))
+    {
+        assert_eq!(
+            value(&client, Request::ApplyNumericCategory { command })["succeeded"],
+            0
+        );
+    }
+    assert_eq!(rows(&fixture.0), before);
+    let events = value(
+        &client,
+        rebuild_request(json!({"operation":"source_activity","limit":10})),
+    );
+    assert_eq!(events[0]["source_id"].as_i64(), Some(high));
+    let float = value(
+        &client,
+        Request::ApplyNumericCategory {
+            command: NumericCategoryCommand::from_finite_numbers([1.5], None).unwrap(),
+        },
+    );
+    assert_eq!(float["results"][0]["source_id"], json!(1.5));
+    owner.shutdown().unwrap();
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[test]
+fn gre600_r1_category_validation_is_typed_and_rolls_back() {
+    use pp_storage::catalog::CatalogFailure;
+    let fixture = Fixture::new();
+    let owner = fixture.open();
+    let client = owner.local_source_catalog();
+    create(&client, "Preserved");
+    let before = rows(&fixture.0);
+    let settings = value(&client, Request::GetCategories {});
+    for (categories, replacements) in [
+        (json!([""]), json!({})),
+        (json!([]), json!({})),
+        (json!(["Other"]), json!({"Unknown":null})),
+        (json!(["Other"]), json!({"Mods":"Missing"})),
+        (json!(["Mods/Child"]), json!({"Mods":"Mods/Child"})),
+        (json!(["Mods"]), json!({"Mods":"Mods"})),
+    ] {
+        for operation in ["save_categories", "save_categories_with_tree"] {
+            let error = client.execute(rebuild_request(json!({"operation":operation,"categories":categories,"replacements":replacements}))).unwrap_err();
+            assert!(
+                matches!(
+                    error.downcast_ref::<CatalogFailure>(),
+                    Some(CatalogFailure::Input(_))
+                ),
+                "{error}"
+            );
+            assert_eq!(rows(&fixture.0), before);
+            assert_eq!(value(&client, Request::GetCategories {}), settings);
+        }
+    }
+    fixture.sql().execute_batch("CREATE TRIGGER reject_categories BEFORE INSERT ON app_settings WHEN NEW.key='source_categories' BEGIN SELECT RAISE(ABORT,'category storage failure'); END;").unwrap();
+    let error = client
+        .execute(rebuild_request(
+            json!({"operation":"save_categories_with_tree","categories":["New"],"replacements":{}}),
+        ))
+        .unwrap_err();
+    assert!(error.downcast_ref::<rusqlite::Error>().is_some());
+    assert!(error.downcast_ref::<CatalogFailure>().is_none());
+    assert_eq!(rows(&fixture.0), before);
+    assert_eq!(value(&client, Request::GetCategories {}), settings);
+    owner.shutdown().unwrap();
+}

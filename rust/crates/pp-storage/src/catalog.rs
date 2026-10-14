@@ -686,41 +686,41 @@ fn normalize_rule(s: &str) -> String {
 fn run(tx: &Transaction<'_>, state: &State, tenant: &str, request: Request) -> Result<Outcome> {
     Ok(match request {
         #[cfg(feature = "desktop_rebuild")]
-        request @ (Request::SourceActivity { .. }
-        | Request::GetCategoriesWithTree {}
-        | Request::SaveCategoriesWithTree { .. }
-        | Request::CreateCatalogSource { .. }
-        | Request::UpdateCatalogSource { .. }
-        | Request::ApplyNumericCategory { .. }) => rebuild::run(tx, state, tenant, request)?,
+        Request::SourceActivity { limit } => Outcome::Activity(activity::list(tx, tenant, limit)?),
+        #[cfg(feature = "desktop_rebuild")]
+        Request::GetCategoriesWithTree {} => {
+            Outcome::Categories(CategorySettings::new(categories::load(tx, tenant)?))
+        }
+        #[cfg(feature = "desktop_rebuild")]
+        Request::SaveCategoriesWithTree {
+            categories,
+            replacements,
+        } => Outcome::Categories(CategorySettings::new(categories::save(
+            tx,
+            tenant,
+            categories,
+            replacements,
+        )?)),
+        #[cfg(feature = "desktop_rebuild")]
+        Request::CreateCatalogSource { source } => {
+            let source = rebuild::create(tx, tenant, source)?;
+            Outcome::Source(Some(Box::new(create_source(tx, state, tenant, source)?)))
+        }
+        #[cfg(feature = "desktop_rebuild")]
+        Request::UpdateCatalogSource { id, patch: p } => {
+            let p = rebuild::update(tx, tenant, id, p)?;
+            Outcome::Source(Some(Box::new(patch(tx, tenant, id, p)?)))
+        }
+        #[cfg(feature = "desktop_rebuild")]
+        Request::ApplyNumericCategory { command } => {
+            Outcome::BulkCategory(rebuild::apply_numeric_category(tx, tenant, command)?)
+        }
         Request::List {} => Outcome::Sources(list(tx, tenant)?),
         Request::Get { id } => Outcome::Source(get(tx, tenant, id)?.map(Box::new)),
         Request::Create { source: s } => {
-            let name = trim(&s.name);
-            ensure!(!name.is_empty(), "Source name is required");
-            let exists: bool = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM projects WHERE tenant_id=?1 AND name=?2)",
-                params![tenant, name],
-                |r| r.get(0),
-            )?;
-            ensure!(!exists, "Source already exists: {name}");
-            let kind = s.source_kind.unwrap_or("github".into()).to_lowercase();
-            let source_type = s.source_type.unwrap_or(
-                if matches!(kind.as_str(), "github" | "git") {
-                    "git"
-                } else {
-                    "local"
-                }
-                .into(),
-            );
-            tx.execute("INSERT INTO projects(tenant_id,name,url,branch,tag,source_kind,source_type,role,metadata_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![tenant,name,s.url.unwrap_or_default(),s.branch.unwrap_or("main".into()),s.tag.as_deref().map(trim).filter(|s|!s.is_empty()),kind,source_type,s.role.unwrap_or("unassigned".into()),s.metadata.map(|m|json::metadata(&m)).transpose()?])?;
-            let id = tx.last_insert_rowid();
-            let path = state.directory.join("repos").join(id.to_string());
-            tx.execute(
-                "UPDATE projects SET local_path=?1 WHERE tenant_id=?2 AND id=?3",
-                params![path.to_string_lossy(), tenant, id],
-            )?;
-            Outcome::Source(Some(Box::new(require(tx, tenant, id)?)))
+            Outcome::Source(Some(Box::new(create_source(tx, state, tenant, s)?)))
         }
+
         Request::Update { id, patch: p } => {
             Outcome::Source(Some(Box::new(patch(tx, tenant, id, p)?)))
         }
@@ -822,6 +822,39 @@ fn run(tx: &Transaction<'_>, state: &State, tenant: &str, request: Request) -> R
         }
     })
 }
+fn create_source(
+    tx: &Transaction<'_>,
+    state: &State,
+    tenant: &str,
+    s: CreateSource,
+) -> Result<SourceSummary> {
+    let name = trim(&s.name);
+    ensure!(!name.is_empty(), "Source name is required");
+    let exists: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM projects WHERE tenant_id=?1 AND name=?2)",
+        params![tenant, name],
+        |r| r.get(0),
+    )?;
+    ensure!(!exists, "Source already exists: {name}");
+    let kind = s.source_kind.unwrap_or("github".into()).to_lowercase();
+    let source_type = s.source_type.unwrap_or(
+        if matches!(kind.as_str(), "github" | "git") {
+            "git"
+        } else {
+            "local"
+        }
+        .into(),
+    );
+    tx.execute("INSERT INTO projects(tenant_id,name,url,branch,tag,source_kind,source_type,role,metadata_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![tenant,name,s.url.unwrap_or_default(),s.branch.unwrap_or("main".into()),s.tag.as_deref().map(trim).filter(|s|!s.is_empty()),kind,source_type,s.role.unwrap_or("unassigned".into()),s.metadata.map(|m|json::metadata(&m)).transpose()?])?;
+    let id = tx.last_insert_rowid();
+    let path = state.directory.join("repos").join(id.to_string());
+    tx.execute(
+        "UPDATE projects SET local_path=?1 WHERE tenant_id=?2 AND id=?3",
+        params![path.to_string_lossy(), tenant, id],
+    )?;
+    require(tx, tenant, id)
+}
+
 fn set_setting(tx: &Transaction<'_>, tenant: &str, key: &str, value: String) -> Result<()> {
     tx.execute("INSERT INTO app_settings(tenant_id,key,value) VALUES(?1,?2,?3) ON CONFLICT(tenant_id,key) DO UPDATE SET value=excluded.value",params![tenant,key,value])?;
     Ok(())

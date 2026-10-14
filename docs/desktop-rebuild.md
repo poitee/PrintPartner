@@ -134,6 +134,13 @@ Legacy `Create` and `Update` retain their existing behavior in both builds.
 `SourceActivity` reads tenant-scoped events with a limit between 1 and 100.
 Category requests return typed categories and trees, and numeric category updates
 retain each finite selector's success or failure after deduplication.
+JSON numeric selectors and activity IDs retain their exact JSON numbers. Only
+integer selectors represent mutable IDs. Native finite floats normalize to integer
+selectors only within the JavaScript safe integer range; other floats retain their
+failure echoes. GitHub owner and repository segments reject delimiters and dot
+segments before normalization. Category validation returns typed input errors with
+the feature enabled and retains legacy error messages with it disabled. These are
+intentional safety corrections to the D7 reference. Storage errors stay distinct.
 `catalog_access` and `catalog_key_access` bind an explicit authentication policy.
 
 With the feature enabled, import-rule bodies have an 8 MiB limit; other requests

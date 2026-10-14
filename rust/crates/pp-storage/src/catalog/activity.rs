@@ -29,9 +29,7 @@ pub(super) fn list(
                 id: row.get(0)?,
                 at: row.get(1)?,
                 kind: row.get(2)?,
-                source_id: payload["source_id"]
-                    .as_f64()
-                    .and_then(serde_json::Number::from_f64),
+                source_id: payload["source_id"].as_number().cloned(),
                 source_name: payload["source_name"].as_str().unwrap_or("Source").into(),
                 detail: payload["error"].as_str().map(str::to_owned),
             })
