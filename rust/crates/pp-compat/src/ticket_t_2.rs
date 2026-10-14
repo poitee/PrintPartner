@@ -1261,6 +1261,194 @@ async fn ticket_t_2_process_exit_obeys_every_backoff_deadline_and_cap() {
     assert!(live_pids(&scratch.pidfile()).is_empty());
 }
 
+async fn healthy_generation(
+    supervisor: &super::Supervisor,
+    scratch: &Scratch,
+    fixture: &HealthFixture,
+) -> String {
+    *fixture.health.lock().unwrap() = serde_json::json!({
+        "ok":true,"version":"ticket-t-2-unreleased","release":{"commit":"ticket-t-2-unreleased"}
+    });
+    let completed = *supervisor.health_probes_completed.borrow();
+    tokio::time::advance(Duration::from_millis(250)).await;
+    pump_until(|| *supervisor.health_probes_completed.borrow() == completed + 1).await;
+    assert!(supervisor.handle.endpoint().is_some());
+    match &*supervisor.handle.status.borrow() {
+        super::Status::Ready { generation, pid } => {
+            assert_eq!(live_pids(&scratch.pidfile()), vec![*pid]);
+            generation.clone()
+        }
+        state => panic!("authenticated health did not publish Ready: {state:?}"),
+    }
+}
+
+async fn lose_health(supervisor: &super::Supervisor, scratch: &Scratch, fixture: &HealthFixture) {
+    let count = recorded_pids(&scratch.pidfile()).len();
+    let pid = recorded_pids(&scratch.pidfile())[count - 1];
+    *fixture.health.lock().unwrap() = serde_json::json!({"ok":false});
+    for failure in 1..=3 {
+        let received = fixture.count();
+        let completed = *supervisor.health_probes_completed.borrow();
+        tokio::time::advance(Duration::from_millis(9999)).await;
+        pump_for(Duration::from_millis(20)).await;
+        assert_eq!(fixture.count(), received, "liveness polled before 10 s");
+        tokio::time::advance(Duration::from_millis(1)).await;
+        pump_until(|| *supervisor.health_probes_completed.borrow() == completed + 1).await;
+        assert_eq!(fixture.count(), received + 1);
+        assert_eq!(recorded_pids(&scratch.pidfile()).len(), count);
+        if failure < 3 {
+            assert!(matches!(
+                *supervisor.handle.status.borrow(),
+                super::Status::Ready { pid: actual, .. } if actual == pid
+            ));
+            assert!(supervisor.handle.endpoint().is_some());
+            assert_eq!(live_pids(&scratch.pidfile()), vec![pid]);
+        }
+    }
+    let times = fixture.probes.lock().unwrap().clone();
+    for pair in times[times.len() - 4..].windows(2) {
+        assert_eq!(pair[1] - pair[0], Duration::from_secs(10));
+    }
+    assert!(supervisor.handle.endpoint().is_none());
+    let wall = std::time::Instant::now();
+    let started = tokio::time::Instant::now();
+    let mut cleanup_ticks = 0;
+    let mut next_tick = wall;
+    while !matches!(
+        *supervisor.handle.status.borrow(),
+        super::Status::Backoff { .. }
+    ) {
+        assert!(
+            wall.elapsed() < Duration::from_secs(8),
+            "health cleanup stalled"
+        );
+        if cleanup_ticks < 2
+            && std::time::Instant::now() >= next_tick
+            && super::drain::process_group_absent(pid)
+        {
+            tokio::time::advance(Duration::from_millis(10)).await;
+            cleanup_ticks += 1;
+            next_tick = std::time::Instant::now() + Duration::from_secs(1);
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(started.elapsed() <= Duration::from_millis(20));
+    assert!(super::drain::process_group_absent(pid));
+    assert!(live_pids(&scratch.pidfile()).is_empty());
+    let rows = diagnostic_rows(scratch);
+    let failures: Vec<_> = rows
+        .iter()
+        .filter(|row| row["event"] == "compat_failure")
+        .collect();
+    assert_eq!(failures.len(), count);
+    assert!(failures.iter().all(|row| row["reason"] == "health_lost"));
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row["event"] == "compat_reaped")
+            .count(),
+        count
+    );
+}
+
+enum HealthBackoffEnd {
+    Restart,
+    Shutdown,
+    Disarm,
+}
+
+async fn health_backoff_deadlines(end: HealthBackoffEnd) {
+    let scratch = Scratch::new("health-backoff");
+    let (supervisor, mut fixture) = health_supervisor(&scratch).await;
+    let mut generation = healthy_generation(&supervisor, &scratch, &fixture).await;
+    for (attempt, millis) in [500, 1000, 2000, 4000, 8000, 30_000, 30_000]
+        .into_iter()
+        .enumerate()
+    {
+        let count = attempt + 1;
+        lose_health(&supervisor, &scratch, &fixture).await;
+        assert!(matches!(
+            *supervisor.handle.status.borrow(),
+            super::Status::Backoff { attempt: actual } if actual == attempt
+        ));
+        let started = tokio::time::Instant::now();
+        tokio::time::advance(Duration::from_millis(millis - 1)).await;
+        pump_for(Duration::from_millis(20)).await;
+        assert_eq!(recorded_pids(&scratch.pidfile()).len(), count);
+        assert!(live_pids(&scratch.pidfile()).is_empty());
+        assert!(matches!(
+            *supervisor.handle.status.borrow(),
+            super::Status::Backoff { attempt: actual } if actual == attempt
+        ));
+        if attempt == 6 {
+            match end {
+                HealthBackoffEnd::Restart => {}
+                HealthBackoffEnd::Shutdown | HealthBackoffEnd::Disarm => {
+                    if matches!(end, HealthBackoffEnd::Disarm) {
+                        supervisor.disarm_restarts();
+                        pump_until(|| {
+                            matches!(*supervisor.handle.status.borrow(), super::Status::Stopped)
+                        })
+                        .await;
+                    }
+                    assert_eq!(shutdown(supervisor).await, super::CompatExit::Interrupted);
+                    tokio::time::advance(Duration::from_secs(300)).await;
+                    pump_for(Duration::from_millis(20)).await;
+                    assert_eq!(recorded_pids(&scratch.pidfile()).len(), count);
+                    assert!(
+                        recorded_pids(&scratch.pidfile())
+                            .into_iter()
+                            .all(super::drain::process_group_absent)
+                    );
+                    return;
+                }
+            }
+        }
+        let completed = *supervisor.health_probes_completed.borrow();
+        drop(fixture);
+        tokio::time::advance(Duration::from_millis(1)).await;
+        wait_live(&scratch.pidfile(), count + 1).await;
+        assert_eq!(started.elapsed(), Duration::from_millis(millis));
+        assert_eq!(recorded_pids(&scratch.pidfile()).len(), count + 1);
+        pump_until(|| {
+            std::fs::read(scratch.root.join("data/setup"))
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+                .is_some_and(|setup| setup["generation"] != generation)
+        })
+        .await;
+        pump_until(|| *supervisor.health_probes_completed.borrow() == completed + 1).await;
+        fixture = HealthFixture::attach(&scratch, supervisor.health_probes_completed.clone()).await;
+        let next = healthy_generation(&supervisor, &scratch, &fixture).await;
+        assert_eq!(recorded_pids(&scratch.pidfile()).len(), count + 1);
+        assert_ne!(next, generation);
+        generation = next;
+    }
+    shutdown_guard_shell(supervisor, &scratch).await;
+    tokio::time::advance(Duration::from_secs(300)).await;
+    pump_for(Duration::from_millis(20)).await;
+    assert_eq!(recorded_pids(&scratch.pidfile()).len(), 8);
+    assert!(
+        recorded_pids(&scratch.pidfile())
+            .into_iter()
+            .all(super::drain::process_group_absent)
+    );
+}
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn ticket_t_2_health_loss_obeys_every_backoff_deadline_and_cap() {
+    health_backoff_deadlines(HealthBackoffEnd::Restart).await;
+}
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn ticket_t_2_health_loss_shutdown_cancels_late_capped_restart() {
+    health_backoff_deadlines(HealthBackoffEnd::Shutdown).await;
+}
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn ticket_t_2_health_loss_disarm_cancels_late_capped_restart() {
+    health_backoff_deadlines(HealthBackoffEnd::Disarm).await;
+}
+
 async fn readiness_remaining_budget(hung: bool) {
     let scratch = Scratch::new("hung-readiness");
     let started = tokio::time::Instant::now();
