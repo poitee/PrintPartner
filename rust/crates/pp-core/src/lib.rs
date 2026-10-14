@@ -32,6 +32,7 @@ pub struct DesktopLaunch {
 }
 
 pub use pp_compat::SupervisorConfig;
+pub use pp_compat::recent_diagnostics;
 pub use pp_compat::{Bundle as VerifiedBundle, Status as CoreStatus};
 pub use pp_gateway::LaunchTarget as DesktopLaunchTarget;
 
