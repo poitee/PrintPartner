@@ -12,6 +12,7 @@
 //! HTTP handlers, MCP `start_sync`, job execution, and watcher timers.
 
 pub mod manifest;
+pub mod resources;
 
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -108,6 +109,9 @@ pub enum AdmissionError {
     ResourceSetMismatch {
         id: String,
     },
+    UnresolvedResources {
+        operation: String,
+    },
     UnknownLiveFormat {
         value: String,
     },
@@ -144,6 +148,9 @@ pub enum AdmissionError {
 impl std::fmt::Display for AdmissionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::UnresolvedResources { operation } => {
+                write!(formatter, "unresolved resources for {operation}")
+            }
             Self::Malformed(detail) => write!(formatter, "malformed ownership manifest: {detail}"),
             Self::UnknownOwner { value } => {
                 write!(formatter, "unknown owner {value}")
