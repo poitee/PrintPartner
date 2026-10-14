@@ -76,6 +76,9 @@ jobs:
       - name: Check GitHub Actions are SHA-pinned
         working-directory: .
         run: bash scripts/check-github-actions-pinned.sh
+      - name: Test Linear PR status sync
+        working-directory: .
+        run: python3 -B -m unittest discover -s scripts/linear -p 'test_*.py' -v
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"

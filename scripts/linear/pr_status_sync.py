@@ -41,7 +41,7 @@ def gql(query, variables=None):
     with urllib.request.urlopen(req, timeout=30) as r:
         out = json.load(r)
     if out.get("errors"):
-        raise RuntimeError(f"linear error: {out['errors'][0].get('message')}")
+        raise RuntimeError("Linear API returned GraphQL errors")
     return out["data"]
 
 
@@ -59,24 +59,37 @@ def state_id(name):
 
 
 def issue(ident):
-    try:
-        d = gql('query($id:String!){issue(id:$id){id identifier state{name type} updatedAt}}', {"id": ident})
-        return d["issue"]
-    except Exception:
-        return None
+    d = gql('query($id:String!){issue(id:$id){id identifier state{name type} updatedAt}}', {"id": ident})
+    return d["issue"]
 
 
 def move(iss, target, comment):
     cur = iss["state"]["name"]
     if cur == target or iss["state"]["type"] in TERMINAL:
         return False
-    print(f"{iss['identifier']}: {cur} -> {target} | {comment}")
     if DRY:
+        print(f"{iss['identifier']}: {cur} -> {target} | {comment}")
         return True
-    gql('mutation($id:String!,$s:String!){issueUpdate(id:$id,input:{stateId:$s}){success}}',
+    # Record the event before changing state, so a failed comment remains retryable.
+    body = f"[pr-status-sync] {comment}"
+    cursor = None
+    while True:
+        d = gql('query($id:String!,$after:String){issue(id:$id){comments(first:100,after:$after){nodes{body} pageInfo{hasNextPage endCursor}}}}',
+                {"id": iss["id"], "after": cursor})["issue"]["comments"]
+        if any(c["body"] == body for c in d["nodes"]):
+            break
+        if not d["pageInfo"]["hasNextPage"]:
+            created = gql('mutation($id:String!,$b:String!){commentCreate(input:{issueId:$id,body:$b}){success}}',
+                          {"id": iss["id"], "b": body})
+            if not created["commentCreate"]["success"]:
+                raise RuntimeError("Linear commentCreate failed")
+            break
+        cursor = d["pageInfo"]["endCursor"]
+    updated = gql('mutation($id:String!,$s:String!){issueUpdate(id:$id,input:{stateId:$s}){success}}',
         {"id": iss["id"], "s": state_id(target)})
-    gql('mutation($id:String!,$b:String!){commentCreate(input:{issueId:$id,body:$b}){success}}',
-        {"id": iss["id"], "b": f"[pr-status-sync] {comment}"})
+    if not updated["issueUpdate"]["success"]:
+        raise RuntimeError("Linear issueUpdate failed")
+    print(f"{iss['identifier']}: {cur} -> {target} | {comment}")
     return True
 
 
@@ -94,12 +107,28 @@ def refs(pr):
 
 
 FIELDS = "number,state,title,body,headRefName,mergedAt,closedAt,updatedAt"
-_open = None
+_prs = None
+def all_prs():
+    global _prs
+    if _prs is None:
+        owner, name = REPO.split("/", 1)
+        pages = gh("api", "graphql", "--paginate", "--slurp", "-f", "query=" + '''
+          query($owner:String!, $name:String!, $endCursor:String) {
+            repository(owner:$owner, name:$name) {
+              pullRequests(first:100, after:$endCursor, orderBy:{field:UPDATED_AT,direction:DESC}) {
+                nodes { number state title body headRefName mergedAt closedAt updatedAt
+                  commits(last:1) { nodes { commit { committedDate } } }
+                }
+                pageInfo { hasNextPage endCursor }
+              }
+            }
+          }''', "-f", f"owner={owner}", "-f", f"name={name}")
+        _prs = [pr for page in pages for pr in page["data"]["repository"]["pullRequests"]["nodes"]]
+    return _prs
+
+
 def open_prs():
-    global _open
-    if _open is None:
-        _open = gh("pr", "list", "-R", REPO, "--state", "open", "--limit", "200", "--json", FIELDS)
-    return _open
+    return [pr for pr in all_prs() if pr["state"] == "OPEN"]
 
 
 def other_open(ident, exclude):
@@ -128,20 +157,28 @@ def apply_pr(pr):
 
 def reconcile(hours):
     since = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=hours)
-    prs = gh("pr", "list", "-R", REPO, "--state", "all", "--limit", "200", "--json", FIELDS)
+    prs = all_prs()
     recent = [p for p in prs if dt.datetime.fromisoformat(p["updatedAt"].replace("Z", "+00:00")) >= since]
     for p in sorted(recent, key=lambda p: p["updatedAt"]):  # oldest first, newest wins
         apply_pr(p)
     # stall sweep
     last = {}
     for p in prs:
-        t = p.get("mergedAt") or p.get("closedAt") or p["updatedAt"]
+        t = max([p["updatedAt"]] + [node["commit"]["committedDate"]
+                for node in p.get("commits", {}).get("nodes", [])])
         for ident in refs(p)[1]:
             last[ident] = max(last.get(ident, ""), t)
-    d = gql('query($k:String!){issues(first:250,filter:{team:{key:{eq:$k}},state:{name:{in:["In Progress","In Review"]}}}){nodes{id identifier updatedAt state{name type}}}}', {"k": TEAM})
+    issues = []
+    cursor = None
+    while True:
+        d = gql('query($k:String!,$after:String){issues(first:250,after:$after,filter:{team:{key:{eq:$k}},state:{name:{in:["In Progress","In Review"]}}}){nodes{id identifier updatedAt state{name type}} pageInfo{hasNextPage endCursor}}}', {"k": TEAM, "after": cursor})
+        issues.extend(d["issues"]["nodes"])
+        if not d["issues"]["pageInfo"]["hasNextPage"]:
+            break
+        cursor = d["issues"]["pageInfo"]["endCursor"]
     cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=STALE_HOURS)
     ts = lambda v: dt.datetime.fromisoformat(v.replace("Z", "+00:00"))
-    for iss in d["issues"]["nodes"]:
+    for iss in issues:
         ident = iss["identifier"]
         if other_open(ident, -1):
             continue
