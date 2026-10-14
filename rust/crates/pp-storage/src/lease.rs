@@ -136,6 +136,26 @@ fn prior_writer_is_stale(marker: &serde_json::Value, pid: u32) -> bool {
             || guard::child_is_stale(marker))
 }
 
+/// Read an ownership record without blocking on a FIFO or device the name may reach.
+/// Non-regular entries keep their OS error so diagnostics stay stable.
+fn read_record(path: &Path) -> std::io::Result<Vec<u8>> {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(std::io::Error::from_raw_os_error(if metadata.is_dir() {
+            libc::EISDIR
+        } else {
+            libc::EINVAL
+        }));
+    }
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut file, &mut bytes)?;
+    Ok(bytes)
+}
+
 fn read_prior_owner(marker_path: &Path) -> Result<Option<(serde_json::Value, u32)>> {
     match std::fs::symlink_metadata(marker_path) {
         Ok(_) => {}
@@ -146,7 +166,7 @@ fn read_prior_owner(marker_path: &Path) -> Result<Option<(serde_json::Value, u32
     if REMOVE_MARKER_BEFORE_READ.with(std::cell::Cell::take) {
         std::fs::remove_file(marker_path)?;
     }
-    let bytes = match std::fs::read(marker_path) {
+    let bytes = match read_record(marker_path) {
         Ok(bytes) => bytes,
         Err(error)
             if error.kind() == std::io::ErrorKind::NotFound
