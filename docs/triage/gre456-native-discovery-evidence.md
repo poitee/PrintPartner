@@ -49,3 +49,35 @@ python3 rust/scripts/check-ast-grep.py
 ```
 
 The Rust lint ratchet remained at 47 `no-unwrap-expect` hits and 8 `runtime-process-command` hits. No baseline changed.
+
+## Metadata containment follow-up
+
+On 2026-10-14, the regression fixture reproduced the reported bug on main `0538015b3b159f0e1e68d86f9ce35c429ebb7ec6`. The production library was unchanged. `Contents/Info.plist` pointed to a valid plist outside `OrcaSlicer.app`, still inside Applications with the sibling name `OrcaSlicer.app-external.plist`. Discovery returned `Installed` with `external-version` instead of `InvalidBundle` with `Metadata`.
+
+```sh
+cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-services --no-tests=fail -E 'test(ticket_t_44_discovery_metadata_symlink_cannot_escape_bundle)'
+```
+
+```text
+Summary: 1 test run: 0 passed, 1 failed, 15 skipped
+exit 100
+```
+
+The reader now canonicalizes `Contents/Info.plist`, requires a regular file within the canonical bundle, and parses that canonical path. An escaped, missing, unresolved, or non-regular metadata path reports `InvalidBundle` with `Metadata`. A contained metadata symlink remains supported. Existing bundle precedence and fallback remain available. This is a directory-fixture check, not protection against concurrent replacement of bundle files by another process.
+
+The new fixtures cover an outside metadata symlink, a contained metadata symlink, and a metadata directory. The crate-level discovery filter returned 18 passed, 0 skipped, exit 0. No application was launched.
+
+The library-only follow-up adds no route, worker, startup hook, or ownership entry. GRE-456 remains In Progress for its remaining criteria. GRE-380 remains blocked on installed-Mac evidence, and cutover stays with GRE-593 and the desktop rebuild slices.
+
+After `npm --prefix web ci`, the desktop web build, and manifest generation from the documented prerequisites, the exact workspace acceptance command passed.
+
+```sh
+cargo nextest run --locked --manifest-path rust/Cargo.toml --no-tests=fail -E 'test(ticket_t_44_discovery)'
+```
+
+```text
+Summary: 18 tests run: 18 passed, 546 skipped
+exit 0
+```
+
+`cargo fmt --manifest-path rust/Cargo.toml --all --check`, pp-services Clippy with `-D warnings`, crate-boundary self-tests, and the unchanged Rust lint ratchet also passed. The ratchet retained 47 `no-unwrap-expect` hits and 8 `runtime-process-command` hits.

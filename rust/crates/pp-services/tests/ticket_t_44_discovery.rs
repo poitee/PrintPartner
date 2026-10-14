@@ -311,3 +311,81 @@ fn ticket_t_44_discovery_bundle_symlink_cannot_escape_applications_root() {
         }
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn ticket_t_44_discovery_metadata_symlink_cannot_escape_bundle() {
+    use pp_services::native_slicers::BundleProblem;
+    use std::os::unix::fs::symlink;
+    let temp = tempfile::tempdir().unwrap();
+    let roots = roots(&temp);
+    bundle(
+        &roots.system_applications,
+        "OrcaSlicer.app",
+        "OrcaSlicer",
+        "external-version",
+    );
+    let app = roots.system_applications.join("OrcaSlicer.app");
+    let metadata = app.join("Contents/Info.plist");
+    let outside = roots
+        .system_applications
+        .join("OrcaSlicer.app-external.plist");
+    fs::rename(&metadata, &outside).unwrap();
+    symlink(outside, metadata).unwrap();
+    assert_eq!(
+        discover_macos(SlicerKind::Orca, &roots).unwrap(),
+        NativeDiscovery::InvalidBundle {
+            path: app,
+            reason: BundleProblem::Metadata
+        }
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn ticket_t_44_discovery_contained_metadata_symlink_is_supported() {
+    use std::os::unix::fs::symlink;
+    let temp = tempfile::tempdir().unwrap();
+    let roots = roots(&temp);
+    bundle(
+        &roots.system_applications,
+        "BambuStudio.app",
+        "BambuStudio",
+        "2.3.1",
+    );
+    let app = roots.system_applications.join("BambuStudio.app");
+    let metadata = app.join("Contents/Info.plist");
+    let target = app.join("Contents/Version.plist");
+    fs::rename(&metadata, &target).unwrap();
+    symlink("Version.plist", metadata).unwrap();
+    let NativeDiscovery::Installed(found) = discover_macos(SlicerKind::Bambu, &roots).unwrap()
+    else {
+        panic!("expected contained metadata")
+    };
+    assert_eq!(found.version, "2.3.1");
+    assert_eq!(found.executable, app.join("Contents/MacOS/BambuStudio"));
+}
+
+#[test]
+fn ticket_t_44_discovery_metadata_directory_is_invalid() {
+    use pp_services::native_slicers::BundleProblem;
+    let temp = tempfile::tempdir().unwrap();
+    let roots = roots(&temp);
+    bundle(
+        &roots.system_applications,
+        "OrcaSlicer.app",
+        "OrcaSlicer",
+        "2.3.1",
+    );
+    let app = roots.system_applications.join("OrcaSlicer.app");
+    let metadata = app.join("Contents/Info.plist");
+    fs::remove_file(&metadata).unwrap();
+    fs::create_dir(&metadata).unwrap();
+    assert_eq!(
+        discover_macos(SlicerKind::Orca, &roots).unwrap(),
+        NativeDiscovery::InvalidBundle {
+            path: app,
+            reason: BundleProblem::Metadata
+        }
+    );
+}
