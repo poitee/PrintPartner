@@ -1,0 +1,6 @@
+# Accepted design
+Use design-minibrowser.md with every graft from design-judge.md. One source file, rust/tests/webkit_stl_smoke.py. No runtime, UI, workflow, or dependency changes. The shared observation and pure denial predicate are the data shape. Distinct random tokens isolate each attempt. Retained stdlib HTTP listeners and a separate MiniBrowser session provide executable controls using the same linked WebKitGTK as native.
+
+MiniBrowser allowed and denied real HTTP iframe prototypes passed. The later native prototype also passed and recorded a trusted enforcing event for the full gateway policy. See native-frame-prototype/frames.json and native-frame-prototype.log. These are feasibility evidence; neither prototype is final acceptance. Implement the judge requirements including exact target_executed rejection of a completed live relaxed observation, full-policy matching, exact parent identity, bounded three-second observation, authenticated child messages and script beacon, and owned cleanup.
+
+Proof scope is unsigned Linux WebKitGTK. macOS, signed release acceptance, native actions, and tenant owner mapping remain outstanding. The MiniBrowser counterfactual does not claim the Wry callback admits remote frames.

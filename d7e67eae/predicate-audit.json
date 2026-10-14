@@ -1,0 +1,32 @@
+{
+  "result": "PASS",
+  "rejected_mutations": 24,
+  "cases": [
+    "attempt_intact",
+    "parent_preserved",
+    "message",
+    "beacon_count",
+    "document_get_count",
+    "events",
+    "isTrusted=False",
+    "isTrusted=1",
+    "isTrusted=None",
+    "effectiveDirective='script-src'",
+    "effectiveDirective=''",
+    "effectiveDirective=None",
+    "disposition='report'",
+    "disposition=''",
+    "disposition=None",
+    "blockedURI='http://127.0.0.1:1'",
+    "blockedURI='https://example.com'",
+    "blockedURI=''",
+    "documentURI='http://127.0.0.1:1/builds'",
+    "documentURI='http://127.0.0.1:35833/builds?navigation_control=6e0f9895ec91cddde9687b44d8dc8b5c&other=1'",
+    "documentURI=''",
+    "originalPolicy=\"frame-src 'none'\"",
+    "originalPolicy=\"frame-src *; object-src 'none'; base-uri 'self'; frame-ancestors 'none'\"",
+    "originalPolicy=''"
+  ],
+  "policy_whitespace_and_document_fragment": "accepted",
+  "live_negative_reason": "target_executed"
+}

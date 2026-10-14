@@ -1,0 +1,13 @@
+{
+  "version": "cargo-deny 0.20.2",
+  "command": "cargo deny --all-features check (cwd rust)",
+  "result": "advisories ok, bans ok, licenses ok, sources ok",
+  "fixed_rustls": "0.23.46",
+  "advisories": [
+    "RUSTSEC-2026-0346",
+    "RUSTSEC-2026-0347",
+    "RUSTSEC-2026-0348",
+    "RUSTSEC-2026-0349"
+  ],
+  "policy_changed": false
+}

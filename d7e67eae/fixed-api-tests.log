@@ -1,0 +1,43 @@
+   Compiling tokio v1.53.1
+   Compiling futures-util v0.3.34
+   Compiling rustls v0.23.46
+   Compiling serde_json v1.0.145
+   Compiling bitflags v2.13.2
+   Compiling time v0.3.55
+   Compiling rusqlite v0.40.2
+   Compiling email_address v0.2.9
+   Compiling pp-storage v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre353-next-202610140800-a1c4/rust/crates/pp-storage)
+   Compiling rustls-platform-verifier v0.7.1
+   Compiling hyper v1.7.0
+   Compiling tokio-rustls v0.26.6
+   Compiling tower v0.5.3
+   Compiling tokio-util v0.7.16
+   Compiling tower-http v0.6.11
+   Compiling tokio-tungstenite v0.29.0
+   Compiling hyper-util v0.1.17
+   Compiling lettre v0.11.23
+   Compiling hyper-rustls v0.27.10
+   Compiling axum v0.8.9
+   Compiling reqwest v0.13.5
+   Compiling pp-api v0.1.0 (/persist/worktrees/t3/PrintPartner/owner-gre353-next-202610140800-a1c4/rust/crates/pp-api)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 35.49s
+     Running unittests src/lib.rs (/persist/home/.local/state/pstack-t3/gre353-next/target/debug/deps/pp_api-c968c73df5dd32b3)
+
+running 14 tests
+test auth::http::tests::health_keeps_policy_rejections_degraded_and_runtime_failures_fatal ... ok
+test auth::mail::tests::failure_counter_is_shared_and_disabled_mail_does_not_count ... ok
+test auth::mail::tests::smtp_delivers_real_envelope_subject_link_and_reports_uncertain_send ... ok
+test auth::mail::tests::smtp_rustls_encrypts_data_and_rejects_untrusted_certificate ... ok
+test auth::provider::tests::manufactured_expired_cross_browser_cross_provider_states_never_exchange ... ok
+test auth::provider::tests::github_pkce_verified_email_skip_enrichment_and_one_use_state ... ok
+test auth::provider::tests::linked_account_sessions_remember_their_sign_in_provider ... ok
+test auth::mail::tests::smtp_without_canonical_origin_does_not_mint_or_send_even_in_dev ... ok
+test auth::provider::tests::github_unverified_email_is_ignored_and_open_verified_email_links ... ok
+test auth::provider::tests::discord_form_and_trusted_verified_email_only ... ok
+test auth::provider::tests::closed_and_single_account_provider_rules_are_transactional ... ok
+test auth::provider::tests::rejected_provider_responses_do_not_mutate_and_state_stays_consumed ... ok
+test auth::mail::tests::accepted_reset_delivery_drains_after_http_shutdown ... ok
+test auth::mail::tests::smtp_http_failure_keeps_committed_token_without_enumeration_or_retry ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.25s
+
