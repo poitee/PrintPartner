@@ -391,7 +391,7 @@ impl CoreRuntime {
         mut self,
         operation: &str,
         parity: &str,
-    ) -> Result<(ShutdownReceipt, CutoverReceipt), (Box<Self>, CutoverRefusal)> {
+    ) -> Result<(ShutdownReceipt, CutoverReceipt), Box<(Self, CutoverRefusal)>> {
         let planned = cutover::plan(self.ownership.as_deref(), &self.owners, operation, parity);
         let refusal = match planned {
             Err(refusal) => refusal,
@@ -429,7 +429,7 @@ impl CoreRuntime {
         {
             self.evidence_unsaved = true;
         }
-        Err((Box::new(self), refusal))
+        Err(Box::new((self, refusal)))
     }
 
     async fn finish_shutdown(&mut self) -> (ShutdownReceipt, Option<CutoverReceipt>) {

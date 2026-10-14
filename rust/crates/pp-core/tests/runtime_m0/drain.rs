@@ -143,7 +143,7 @@ async fn tracked_timeout(data: PathBuf, cutover: bool) {
             let (receipt, cutover) = runtime
                 .shutdown_with_cutover(OPERATION, &parity())
                 .await
-                .unwrap_or_else(|(_, e)| panic!("{e:?}"));
+                .unwrap_or_else(|error| panic!("{:?}", error.1));
             assert_eq!(
                 serde_json::to_value(&cutover).unwrap(),
                 json!({"outcome":"drain_timed_out", "operation":OPERATION, "tracked_idle":false, "gateway_idle":true})
@@ -275,7 +275,7 @@ async fn ticket_t_3_drain_runtime_flag_off_refusal_keeps_running() {
     };
     let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
     let child = pid(&runtime);
-    let (runtime, refusal) = runtime
+    let (runtime, refusal) = *runtime
         .shutdown_with_cutover("http:GET /filaments/catalog current", "{}")
         .await
         .expect_err("flag-off refusal");
@@ -335,7 +335,7 @@ async fn ticket_t_3_drain_runtime_cutover_recovers_every_alias() {
     let (shutdown, cutover) = runtime
         .shutdown_with_cutover(OPERATION, &parity())
         .await
-        .unwrap_or_else(|(_, e)| panic!("{e:?}"));
+        .unwrap_or_else(|error| panic!("{:?}", error.1));
     assert_clean(&shutdown, child);
     assert!(matches!(
         cutover,
@@ -387,7 +387,7 @@ async fn ticket_t_3_drain_runtime_cutover_recovers_every_alias() {
             .0,
             StatusCode::OK
         );
-        let (runtime, refusal) = runtime
+        let (runtime, refusal) = *runtime
             .shutdown_with_cutover(OPERATION, &parity())
             .await
             .expect_err("already owned");
@@ -430,7 +430,7 @@ async fn ticket_t_3_drain_runtime_forced_compat_refuses_cutover() {
     let (shutdown, cutover) = runtime
         .shutdown_with_cutover(OPERATION, &parity())
         .await
-        .unwrap_or_else(|(_, e)| panic!("{e:?}"));
+        .unwrap_or_else(|error| panic!("{:?}", error.1));
     let elapsed = started.elapsed();
     assert!(
         elapsed >= pp_core::SIGTERM_GRACE && elapsed < Duration::from_secs(18),
