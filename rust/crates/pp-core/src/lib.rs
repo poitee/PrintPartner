@@ -1,9 +1,15 @@
 use anyhow::{Context, Result, bail};
 use pp_compat::{Bundle, CompatHandle, SpawnSpec, Supervisor};
+use pp_gateway::ownership::{
+    cutover::{
+        self, CutoverPlan, CutoverReceipt, CutoverRefusal, DrainEvidence, Evidence, OperationOwners,
+    },
+    manifest::{OwnershipIndex, admit_bundled_manifest},
+};
 use pp_gateway::{Gateway, LaunchTarget};
 use pp_storage::lease::StorageLease;
 use serde::Serialize;
-use std::{path::PathBuf, time::Duration};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 mod drain;
 mod origin;
 mod preferences;
@@ -97,8 +103,12 @@ impl CoreHandle {
 
 pub struct CoreRuntime {
     desktop_rebuild: DesktopRebuild,
-    stop: Option<tokio::sync::oneshot::Sender<()>>,
-    completion: Option<tokio::sync::oneshot::Receiver<ShutdownReceipt>>,
+    stop: Option<tokio::sync::oneshot::Sender<Option<CutoverPlan>>>,
+    completion: Option<tokio::sync::oneshot::Receiver<(ShutdownReceipt, Option<CutoverReceipt>)>>,
+    ownership: Option<Arc<OwnershipIndex>>,
+    owners: OperationOwners,
+    data_dir: PathBuf,
+    evidence_unsaved: bool,
     worker: Option<std::thread::JoinHandle<()>>,
     origin: String,
     origin_change: Option<OriginChange>,
@@ -107,6 +117,7 @@ pub struct CoreRuntime {
     shutdown_requested: pp_gateway::ShutdownRequested,
 }
 struct Resources {
+    owners: OperationOwners,
     origin_change: Option<OriginChange>,
     gateway: Gateway,
     supervisor: Supervisor,
@@ -148,6 +159,7 @@ impl ShutdownReceipt {
 async fn start_resources(
     input: DesktopLaunch,
     compat_config: SupervisorConfig,
+    ownership: Option<&OwnershipIndex>,
 ) -> Result<Resources> {
     let assets = input
         .assets
@@ -165,6 +177,11 @@ async fn start_resources(
         );
     }
     let mut owner = StorageLease::acquire(&input.data_dir)?;
+    let (owners, boot) = cutover::recover(owner.data_dir(), ownership)
+        .map_err(|error| anyhow::anyhow!("Operation cutover recovery failed: {error:?}"))?;
+    if !boot.evidence_saved {
+        eprintln!("cutover_evidence_unsaved");
+    }
     pp_gateway::ownership::boot_bundled_source_sync(owner.data_dir())
         .map_err(|error| anyhow::anyhow!("Source Sync ownership admission failed: {error}"))?;
     let (listener, origin_change) = bind_origin(&owner).await?;
@@ -206,7 +223,7 @@ async fn start_resources(
         }
         bail!("Compatibility readiness/release verification failed");
     }
-    let gateway = match Gateway::start(listener, assets, supervisor.handle.clone()) {
+    let gateway = match Gateway::start(listener, assets, supervisor.handle.clone(), &owners) {
         Ok(gateway) => gateway,
         Err(error) => {
             if supervisor.shutdown().await.is_ok() {
@@ -218,6 +235,7 @@ async fn start_resources(
         }
     };
     Ok(Resources {
+        owners,
         origin_change,
         gateway,
         supervisor,
@@ -237,13 +255,15 @@ impl CoreRuntime {
         compat_config: SupervisorConfig,
     ) -> Result<Self> {
         let desktop_rebuild = DesktopRebuild::from_env();
-        if desktop_rebuild.enabled() {
-            pp_gateway::ownership::manifest::admit_bundled_manifest().map_err(|error| {
-                anyhow::anyhow!("Operation ownership admission failed: {error}")
-            })?;
-        }
+        let ownership = desktop_rebuild
+            .enabled()
+            .then(admit_bundled_manifest)
+            .transpose()
+            .map_err(|error| anyhow::anyhow!("Operation ownership admission failed: {error}"))?
+            .map(Arc::new);
+        let worker_ownership = ownership.clone();
         let (started, startup) = tokio::sync::oneshot::channel();
-        let (stop, stopped) = tokio::sync::oneshot::channel();
+        let (stop, mut stopped) = tokio::sync::oneshot::channel();
         let (completed, completion) = tokio::sync::oneshot::channel();
         let worker = std::thread::Builder::new()
             .name("pp-core-owner".into())
@@ -259,7 +279,7 @@ impl CoreRuntime {
                     }
                 };
                 runtime.block_on(async move {
-                    let mut resources = match start_resources(input, compat_config).await {
+                    let mut resources = match start_resources(input, compat_config, worker_ownership.as_deref()).await {
                         Ok(resources) => resources,
                         Err(error) => {
                             let _ = started.send(Err(error));
@@ -281,16 +301,23 @@ impl CoreRuntime {
                             launch,
                             requested_by_adapter,
                             resources.origin_change.clone(),
+                            resources.owners.clone(),
+                            resources.owner.data_dir().to_owned(),
                         )
                     });
+                    let mut plan = None;
                     if started.send(public).is_ok() {
                         let gateway_stopped = requested_by_gateway.wait();
-                        tokio::pin!(stopped, gateway_stopped);
+                        tokio::pin!(gateway_stopped);
                         loop {
                             tokio::select! {
                                 biased;
-                                _ = &mut stopped => break,
-                                _ = &mut gateway_stopped => break,
+                                received = &mut stopped => { plan = received.ok().flatten(); break; },
+                                _ = &mut gateway_stopped => {
+                                    stopped.close();
+                                    plan = stopped.try_recv().ok().flatten();
+                                    break;
+                                },
                                 command = commands.recv() => match command {
                                     Some(command) => command.execute(&resources.owner),
                                     None => break,
@@ -299,15 +326,19 @@ impl CoreRuntime {
                         }
                     }
                     preferences::settle(&mut commands, &resources.owner).await;
-                    let receipt = stop_resources(resources).await;
+                    let receipt = stop_resources(resources, plan).await;
                     let _ = completed.send(receipt);
                 });
             })
             .context("Core owner thread unavailable")?;
-        let (origin, handle, launch, shutdown_requested, origin_change) =
+        let (origin, handle, launch, shutdown_requested, origin_change, owners, data_dir) =
             startup.await.context("Core owner startup failed")??;
         Ok(Self {
             desktop_rebuild,
+            ownership,
+            owners,
+            data_dir,
+            evidence_unsaved: false,
             stop: Some(stop),
             completion: Some(completion),
             worker: Some(worker),
@@ -343,12 +374,64 @@ impl CoreRuntime {
     }
     pub async fn shutdown(mut self) -> ShutdownReceipt {
         if let Some(stop) = self.stop.take() {
-            let _ = stop.send(());
+            let _ = stop.send(None);
         }
-        let mut receipt = match self.completion.take().expect("Completion consumed").await {
-            Ok(receipt) => receipt,
-            Err(_) => ShutdownReceipt::failed("core_owner_failed"),
+        self.finish_shutdown().await.0
+    }
+
+    #[allow(
+        clippy::result_large_err,
+        reason = "Refusal returns the running runtime to its owner"
+    )]
+    pub async fn shutdown_with_cutover(
+        mut self,
+        operation: &str,
+        parity: &str,
+    ) -> Result<(ShutdownReceipt, CutoverReceipt), (Self, CutoverRefusal)> {
+        let planned = cutover::plan(self.ownership.as_deref(), &self.owners, operation, parity);
+        let refusal = match planned {
+            Err(refusal) => refusal,
+            Ok(plan) => {
+                if self
+                    .stop
+                    .take()
+                    .is_some_and(|stop| stop.send(Some(plan)).is_ok())
+                {
+                    let (shutdown, cutover) = self.finish_shutdown().await;
+                    return Ok((
+                        shutdown,
+                        cutover.unwrap_or_else(|| CutoverReceipt::CommitFailed {
+                            operation: operation.to_owned(),
+                            detail: "core owner failed before reporting cutover".into(),
+                        }),
+                    ));
+                }
+                CutoverRefusal::ShutdownInProgress
+            }
         };
+        if cutover::append_evidence(
+            &self.data_dir,
+            &Evidence::Refused {
+                operation,
+                refusal: &refusal,
+            },
+        )
+        .is_err()
+        {
+            self.evidence_unsaved = true;
+        }
+        Err((self, refusal))
+    }
+
+    async fn finish_shutdown(&mut self) -> (ShutdownReceipt, Option<CutoverReceipt>) {
+        let (mut receipt, cutover) =
+            match self.completion.take().expect("Completion consumed").await {
+                Ok(receipt) => receipt,
+                Err(_) => (ShutdownReceipt::failed("core_owner_failed"), None),
+            };
+        if self.evidence_unsaved {
+            receipt.errors.push("cutover_evidence_unsaved");
+        }
         if let Some(worker) = self.worker.take()
             && !matches!(
                 tokio::task::spawn_blocking(move || worker.join()).await,
@@ -357,12 +440,15 @@ impl CoreRuntime {
         {
             receipt.errors.push("core_owner_join_failed");
         }
-        receipt
+        (receipt, cutover)
     }
 }
 
-async fn stop_resources(resources: Resources) -> ShutdownReceipt {
-    let _ = drain::reject_and_wait(
+async fn stop_resources(
+    resources: Resources,
+    plan: Option<CutoverPlan>,
+) -> (ShutdownReceipt, Option<CutoverReceipt>) {
+    let (tracked_idle, gateway_idle) = drain::reject_and_wait(
         MUTATION_DRAIN,
         &resources.gate,
         || resources.gateway.begin_drain(),
@@ -371,7 +457,8 @@ async fn stop_resources(resources: Resources) -> ShutdownReceipt {
     )
     .await;
     resources.gateway.finish_drain();
-    let compat_reaped = resources.supervisor.shutdown().await.is_ok();
+    let compat = resources.supervisor.shutdown().await.ok();
+    let compat_reaped = compat.is_some();
     let gateway_stopped = resources.gateway.stop().await.is_ok();
     let mut receipt = ShutdownReceipt {
         proof_class: "headless_unsigned",
@@ -382,13 +469,29 @@ async fn stop_resources(resources: Resources) -> ShutdownReceipt {
         runtime_removed: false,
         errors: Vec::new(),
     };
+    let cutover = plan.map(|plan| {
+        plan.commit(
+            resources.owner.data_dir(),
+            DrainEvidence {
+                tracked_idle,
+                gateway_idle,
+                compat,
+            },
+        )
+    });
+    if let Some(cutover) = &cutover
+        && cutover::append_evidence(resources.owner.data_dir(), &Evidence::Cutover(cutover))
+            .is_err()
+    {
+        receipt.errors.push("cutover_evidence_unsaved");
+    }
     if !gateway_stopped {
         receipt.errors.push("gateway_join_failed");
     }
     if !compat_reaped {
         receipt.errors.push("compat_cleanup_unproved");
         resources.owner.retain_until_process_exit();
-        return receipt;
+        return (receipt, cutover);
     }
     let released = resources.owner.release();
     receipt.marker_removed = released.marker_removed;
@@ -407,13 +510,13 @@ async fn stop_resources(resources: Resources) -> ShutdownReceipt {
     }
     receipt.storage_released =
         released.marker_removed && released.runtime_removed && released.lock_released;
-    receipt
+    (receipt, cutover)
 }
 
 impl Drop for CoreRuntime {
     fn drop(&mut self) {
         if let Some(stop) = self.stop.take() {
-            let _ = stop.send(());
+            let _ = stop.send(None);
         }
     }
 }
