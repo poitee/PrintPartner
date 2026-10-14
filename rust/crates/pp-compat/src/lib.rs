@@ -1,5 +1,6 @@
 pub mod drain;
 mod logs;
+pub use logs::recent_diagnostics;
 mod parent_death;
 use parent_death::{ParentDeathGuard, configure_child};
 mod release;
@@ -813,9 +814,12 @@ impl Supervisor {
                     break;
                 }
                 states.send_replace(Status::Starting);
-                logs.event("compat_starting", 30);
+                logs.event(logs::Event::Starting, 30);
                 let process = obtain(&source, &logs).await;
+                let mut failure = logs::FailureReason::SpawnFailed;
+                let mut termination = None;
                 if let Ok(mut process) = process {
+                    failure = logs::FailureReason::ReadinessTimeout;
                     let mut ready = false;
                     let mut observed_exit = None;
                     if !restarts_blocked(&cancelled, &disarmed) {
@@ -859,7 +863,8 @@ impl Supervisor {
                         }
                     }
                     if ready && !restarts_blocked(&cancelled, &disarmed) {
-                        logs.event("compat_ready", 30);
+                        logs.event(logs::Event::Ready, 30);
+                        failure = logs::FailureReason::HealthLost;
                         let pid = process.child.id().unwrap_or_default();
                         endpoints.send_replace(Some(process.endpoint.clone()));
                         states.send_replace(Status::Ready {
@@ -890,17 +895,31 @@ impl Supervisor {
                     }
                     endpoints.send_replace(None);
                     states.send_replace(Status::Stopping);
+                    if let Some(status) = observed_exit {
+                        failure = logs::FailureReason::ChildExit;
+                        termination = status
+                            .code()
+                            .map(logs::Termination::ExitCode)
+                            .or_else(|| status.signal().map(logs::Termination::Signal));
+                    }
                     let stop_intent = match process
                         .stop(observed_exit, &cancelled, config.eof_watchdog)
                         .await
                     {
                         Ok(intent) => intent,
                         Err(error) => {
+                            logs.event(
+                                logs::Event::Failure {
+                                    reason: logs::FailureReason::CleanupFailed,
+                                    termination,
+                                },
+                                50,
+                            );
                             states.send_replace(Status::Failed);
                             return Err(error);
                         }
                     };
-                    logs.event("compat_reaped", 30);
+                    logs.event(logs::Event::Reaped, 30);
                     if stop_intent == StopIntent::PlannedShutdown {
                         break;
                     }
@@ -910,6 +929,13 @@ impl Supervisor {
                 if restarts_blocked(&cancelled, &disarmed) {
                     break;
                 }
+                logs.event(
+                    logs::Event::Failure {
+                        reason: failure,
+                        termination,
+                    },
+                    50,
+                );
                 let now = tokio::time::Instant::now();
                 crashes.push_back(now);
                 while crashes
@@ -919,7 +945,7 @@ impl Supervisor {
                     crashes.pop_front();
                 }
                 if crashes.len() >= 5 {
-                    logs.event("compat_crash_guard", 50);
+                    logs.event(logs::Event::CrashGuard, 50);
                     states.send_replace(Status::Guarded);
                     tokio::select! {
                         biased;

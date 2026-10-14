@@ -17,6 +17,9 @@ mod drain;
 mod rebuild;
 
 #[cfg(feature = "desktop_rebuild")]
+pub mod layout;
+
+#[cfg(feature = "desktop_rebuild")]
 pub mod profile_interpreter;
 
 #[cfg(test)]
@@ -38,6 +41,7 @@ pub struct DesktopLaunch {
 }
 
 pub use pp_compat::SupervisorConfig;
+pub use pp_compat::recent_diagnostics;
 pub use pp_compat::{Bundle as VerifiedBundle, Status as CoreStatus};
 pub use pp_gateway::LaunchTarget as DesktopLaunchTarget;
 

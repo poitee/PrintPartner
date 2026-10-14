@@ -7,9 +7,10 @@ license.workspace = true
 
 [features]
 default = []
-desktop_rebuild = ["serde_json/raw_value"]
+desktop_rebuild = ["serde_json/raw_value", "dep:pp-domain", "pp-domain/desktop_rebuild"]
 
 [dependencies]
+pp-domain = { path = "../pp-domain", optional = true }
 anyhow.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
