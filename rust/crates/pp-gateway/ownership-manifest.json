@@ -373,6 +373,15 @@
             "name": "plan_snapshots"
           }
         ]
+      },
+      {
+        "operation": "tool.ui_focus_stl_search",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "build_profiles"
+          }
+        ]
       }
     ],
     "unresolved": [
@@ -798,7 +807,6 @@
       "tool.start_sync",
       "tool.suggest_source_contributions",
       "tool.ui_focus_kit_option",
-      "tool.ui_focus_stl_search",
       "tool.ui_navigate",
       "tool.ui_open_docs",
       "tool.ui_open_source",
