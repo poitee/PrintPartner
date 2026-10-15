@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -284,5 +284,69 @@ describe("release after the lease is removed externally", () => {
     release();
     expect(readFileSync(join(dir, ".desktop-owner.json"), "utf8")).toBe(foreign);
     rmSync(join(dir, ".desktop-owner.json"));
+  });
+
+  it("acquireDataDirectory leaves the marker of a later reservation in the same process in place", () => {
+    const dir = dataDir();
+    const first = acquireDataDirectory(dir);
+    rmSync(join(dir, ".desktop-lease"), { recursive: true });
+    rmSync(join(dir, ".desktop-owner.json"));
+    const second = acquireDataDirectory(dir);
+    releases.push(second);
+    const before = inventory(dir);
+    first();
+    expect(inventory(dir)).toEqual(before);
+    expect(() => acquireDataDirectory(dir)).toThrow("already owned");
+  });
+
+  it.each([
+    { record: "lease owner", path: (dir: string) => join(dir, ".desktop-lease", "owner.json") },
+    { record: "owner marker", path: (dir: string) => join(dir, ".desktop-owner.json") },
+  ])("acquireDataDirectory keeps release retryable while its $record is unreadable", ({ path }) => {
+    const dir = dataDir();
+    const release = acquireDataDirectory(dir);
+    chmodSync(path(dir), 0o000);
+    expect(release).toThrow(/EACCES/);
+    chmodSync(path(dir), 0o600);
+    release();
+    expect(readdirSync(dir)).toEqual([]);
+    releases.push(acquireDataDirectory(dir));
+  });
+
+  it.each([
+    { record: "lease", path: ".desktop-lease" },
+    { record: "owner marker", path: ".desktop-owner.json" },
+  ])("hands back a $record republished between the ownership check and the detach", ({ path }) => {
+    const dir = dataDir();
+    const foreign = JSON.stringify({ pid: process.pid, kind: "standalone", process_identity: "another-writer", instance });
+    const child = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
+      import fs from "node:fs";
+      import { syncBuiltinESMExports } from "node:module";
+      import { acquireDataDirectory } from ${JSON.stringify(new URL("./desktop-context.ts", import.meta.url).href)};
+      const target = ${JSON.stringify(join(dir, path))};
+      const rename = fs.renameSync;
+      let injected = false;
+      fs.renameSync = function(from, to) {
+        if (!injected && from === target) {
+          injected = true;
+          fs.rmSync(target, { recursive: true });
+          if (${JSON.stringify(path)} === ".desktop-lease") {
+            fs.mkdirSync(target);
+            fs.writeFileSync(target + "/owner.json", ${JSON.stringify(foreign)});
+          } else {
+            fs.writeFileSync(target, ${JSON.stringify(foreign)});
+          }
+        }
+        return rename.call(this, from, to);
+      };
+      syncBuiltinESMExports();
+      acquireDataDirectory(${JSON.stringify(dir)})();
+      console.log(JSON.stringify({ injected }));
+    `], { encoding: "utf8" });
+    expect(child.status, child.stderr).toBe(0);
+    expect(JSON.parse(child.stdout)).toEqual({ injected: true });
+    const record = path === ".desktop-lease" ? join(dir, path, "owner.json") : join(dir, path);
+    expect(readFileSync(record, "utf8")).toBe(foreign);
+    expect(readdirSync(dir).filter((name) => name.includes("-release-"))).toEqual([]);
   });
 });

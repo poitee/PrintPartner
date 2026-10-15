@@ -1,11 +1,11 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
-import { closeSync, existsSync, fstatSync, mkdirSync, openSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, linkSync, mkdirSync, openSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { admitDesktopAccount, accountModeSchema, type DesktopAccount } from "./desktop-account.js";
 import { presentDesktopChildCredential } from "./desktop-child-credential.js";
-import { acquireStorageLease, ownerIsStale, readOwnershipRecord, storageParentIdentityEnv } from "./storage-lease.js";
+import { acquireStorageLease, ownerIsStale, readOwnershipRecord, recordNamesInstance, storageParentIdentityEnv } from "./storage-lease.js";
 import type { SessionUser } from "./routes/auth-types.js";
 
 const baseSetupSchema = z.strictObject({
@@ -184,15 +184,6 @@ export function storageWorkerEnv(dataDir: string): Record<string, string> {
   return { [storageParentIdentityEnv]: held.identity };
 }
 
-/** A marker removed, rewritten or made unreadable by someone else is no longer ours to remove. */
-function recordsStandaloneOwner(marker: string, identity: string): boolean {
-  let recorded: unknown;
-  try { recorded = JSON.parse(readOwnershipRecord(marker)); }
-  catch { return false; }
-  return typeof recorded === "object" && recorded !== null && "pid" in recorded && "process_identity" in recorded &&
-    recorded.pid === process.pid && recorded.process_identity === identity;
-}
-
 export function acquireDataDirectory(dataDir: string): () => void {
   if (context) {
     if (realpathSync(dataDir) !== context.data_dir) throw new Error("Desktop storage lease rejected");
@@ -205,18 +196,27 @@ export function acquireDataDirectory(dataDir: string): () => void {
   try {
     assertDataDirectoryAvailable(canonical);
     const fd = openSync(marker, "wx", 0o600);
-    try { writeFileSync(fd, JSON.stringify({ pid: process.pid, kind: "standalone", process_identity: lease.identity })); }
+    // The instance tells this reservation's marker apart from another one in the same process.
+    try { writeFileSync(fd, JSON.stringify({ pid: process.pid, kind: "standalone", process_identity: lease.identity, instance: lease.instance })); }
     catch (error) { rmSync(marker); throw error; }
     finally { closeSync(fd); }
   } catch (error) {
     lease.release();
     throw error;
   }
+  const detachedMarker = join(canonical, `.desktop-owner-release-${lease.instance}.json`);
   let markerRemoved = false;
   const held: HeldDataDirectory = { refs: 1, identity: lease.identity, release: () => {
     // Preserve ownership if marker cleanup fails, so callers can retry safely.
     if (!markerRemoved) {
-      if (recordsStandaloneOwner(marker, lease.identity)) rmSync(marker);
+      // A marker removed or rewritten by someone else is no longer ours to remove.
+      if (recordNamesInstance(marker, lease.instance)) {
+        try { renameSync(marker, detachedMarker); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+        // The check and the rename cannot be one step, so hand back a marker rewritten in between.
+        if (existsSync(detachedMarker) && !recordNamesInstance(detachedMarker, lease.instance)) linkSync(detachedMarker, marker);
+        rmSync(detachedMarker, { force: true });
+      }
       markerRemoved = true;
     }
     // Once the marker is gone this entry no longer stands for a reservation, even
