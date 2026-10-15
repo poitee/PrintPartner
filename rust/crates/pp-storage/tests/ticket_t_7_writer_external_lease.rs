@@ -122,8 +122,15 @@ impl Owner {
     }
 
     fn next_line(&self) -> Result<String, RecvTimeoutError> {
-        self.lines
-            .recv_timeout(self.deadline.saturating_duration_since(Instant::now()))
+        let now = Instant::now();
+        if now >= self.deadline {
+            return Err(RecvTimeoutError::Timeout);
+        }
+        let line = self.lines.recv_timeout(self.deadline.duration_since(now));
+        if Instant::now() >= self.deadline {
+            return Err(RecvTimeoutError::Timeout);
+        }
+        line
     }
 
     /// libtest prints `test <name> ... ` without a newline before the body runs.
