@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 import { z } from "zod";
-import { getTableColumns } from "drizzle-orm";
+import { getTableColumns, inArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as schema from "./db/schema.js";
 import {
@@ -24,7 +24,8 @@ export function validateOwnershipHistory(database: Database.Database): void {
   const db = drizzle(database);
   for (const row of db.select({ bytes: acceptedPlanStoredTextBytes(true, [schema.buildProfiles.tenantId,
     schema.buildProfiles.name, schema.buildProfiles.orderNumber, schema.buildProfiles.specialRequest,
-    schema.buildProfiles.archivedAt]) }).from(schema.buildProfiles).all()) {
+    schema.buildProfiles.archivedAt]) }).from(schema.buildProfiles)
+    .where(inArray(schema.buildProfiles.id, db.select({ profileId: schema.planRevisions.profileId }).from(schema.planRevisions))).all()) {
     validateAcceptedPlanStoredTextBytes(row.bytes, "pointer", "Accepted Plan Build text is corrupt");
   }
   for (const table of [schema.sourceRevisions, schema.planRevisionInputSets, schema.planRevisionInputs,

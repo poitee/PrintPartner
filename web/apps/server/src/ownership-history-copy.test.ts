@@ -428,6 +428,32 @@ it.each([
   finally { store.close(); }
 });
 
+it.each(["inspect", "apply"].flatMap(mode => ["default", "account-b"].map(owner => ({ mode, owner }))))(
+  "$mode preserves an unaccepted $owner Build with a large supported special request", async ({ mode, owner }) => {
+    const paths = fixture();
+    edit(paths.sourceDir, db => { db.prepare("INSERT INTO build_profiles (id,tenant_id,name) VALUES (9,?,'Unaccepted Plan')").run(owner); });
+    const input = manifest(paths.sourceDir);
+    const specialRequest = "x".repeat(MAX_ACCEPTED_OPERATIONAL_ROW_TEXT_BYTES + 1);
+    const store = new SqliteDatabase(paths.sourceDir); store.connect();
+    try { new AppRepository(getDb(store), owner, store.reposDir).updateProfileSpecialRequest(9, specialRequest); }
+    finally { store.close(); }
+    edit(paths.sourceDir, db => { db.pragma("journal_mode = DELETE"); input.source_digest = hash(db.serialize()); });
+    const before = files(paths.sourceDir);
+    if (mode === "inspect") {
+      expect(inspectOwnershipCopy(paths).source_digest).toBe(input.source_digest);
+    } else {
+      await executeOwnershipCopy({ ...paths, manifest: input });
+      const copy = new Database(join(paths.destinationDir, "print-partner.db"), { readonly: true });
+      try {
+        expect(copy.prepare("SELECT tenant_id,special_request,accepted_plan_version,accepted_plan_revision_id FROM build_profiles WHERE id=9").get()).toEqual({
+          tenant_id: owner === "default" ? "account-a" : owner, special_request: specialRequest, accepted_plan_version: 0, accepted_plan_revision_id: null,
+        });
+      } finally { copy.close(); }
+    }
+    expect(files(paths.sourceDir)).toEqual(before);
+  },
+);
+
 it.each(ownershipHistoryTables)("requires an explicit owner for every %s history row", async table => {
   const paths = fixture(); const input = manifest(paths.sourceDir);
   const selected = input.claims.findIndex(claim => claim.table === table);
