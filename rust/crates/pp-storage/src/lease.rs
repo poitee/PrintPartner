@@ -55,7 +55,16 @@ pub(crate) struct AdmittedDirectory {
     directory: Directory,
 }
 
+enum DirectoryCreation {
+    Allowed,
+    Forbidden,
+}
+
 pub(crate) fn admit_directory(path: &Path) -> Result<AdmittedDirectory> {
+    admit_directory_with(path, DirectoryCreation::Allowed)
+}
+
+fn admit_directory_with(path: &Path, creation: DirectoryCreation) -> Result<AdmittedDirectory> {
     ensure!(!path.as_os_str().is_empty(), "Data directory path is empty");
     let path = if path.is_absolute() {
         path.to_path_buf()
@@ -63,10 +72,12 @@ pub(crate) fn admit_directory(path: &Path) -> Result<AdmittedDirectory> {
         std::env::current_dir()?.join(path)
     };
     validate_input_ancestors(&path)?;
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&path)?;
+    if matches!(creation, DirectoryCreation::Allowed) {
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&path)?;
+    }
     let opened = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_DIRECTORY | libc::O_NONBLOCK)
@@ -299,7 +310,7 @@ fn write_marker(file: &mut File, bytes: &[u8]) -> std::io::Result<()> {
 
 /// Record the supervised child in the owner marker before setup opens storage.
 pub fn record_child(directory: &Path, pid: u32) -> Result<()> {
-    let admitted = admit_directory(directory)?;
+    let admitted = admit_directory_with(directory, DirectoryCreation::Forbidden)?;
     guard::record_child(&admitted, pid, None)?;
     admitted.validate_identity()
 }
