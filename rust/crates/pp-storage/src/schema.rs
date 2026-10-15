@@ -3,6 +3,7 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, ty
 use serde::Deserialize;
 use std::{
     fs::File,
+    io::Read,
     os::unix::fs::DirBuilderExt,
     path::{Path, PathBuf},
     time::Duration,
@@ -47,6 +48,7 @@ thread_local! {
 pub(crate) fn preflight(
     path: &Path,
     owned: bool,
+    open_file: impl Fn(&str) -> std::io::Result<File>,
     validate_directory: impl Fn() -> Result<()>,
 ) -> Result<u64> {
     #[cfg(test)]
@@ -64,7 +66,11 @@ pub(crate) fn preflight(
         Ok(())
     };
     check_owner()?;
-    let metadata = std::fs::metadata(path);
+    #[cfg(test)]
+    capture_tests::transient_swap(path, 0, false)?;
+    let metadata = open_file("print-partner.db").and_then(|file| file.metadata());
+    #[cfg(test)]
+    capture_tests::transient_swap(path, 0, true)?;
     #[cfg(test)]
     capture_tests::capture_checkpoint(path, 0)?;
     validate_directory()?;
@@ -79,9 +85,23 @@ pub(crate) fn preflight(
         ["", "-wal", "-journal"]
             .into_iter()
             .map(|suffix| {
-                let file = path.with_file_name(format!("print-partner.db{suffix}"));
+                let name = format!("print-partner.db{suffix}");
                 validate_directory()?;
-                let read = std::fs::read(file);
+                #[cfg(test)]
+                let checkpoint = match suffix {
+                    "" => 1,
+                    "-wal" => 2,
+                    _ => 3,
+                };
+                #[cfg(test)]
+                capture_tests::transient_swap(path, checkpoint, false)?;
+                let read = open_file(&name).and_then(|mut file| {
+                    let mut bytes = Vec::new();
+                    file.read_to_end(&mut bytes)?;
+                    Ok(bytes)
+                });
+                #[cfg(test)]
+                capture_tests::transient_swap(path, checkpoint, true)?;
                 #[cfg(test)]
                 capture_tests::capture_checkpoint(
                     path,
@@ -648,7 +668,197 @@ mod capture_tests {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 
     thread_local! {
+        static TRANSIENT_SWAP: std::cell::Cell<Option<(u8, bool)>> = const { std::cell::Cell::new(None) };
         static REPLACE_DURING_CAPTURE: std::cell::Cell<Option<(u8, u8)>> = const { std::cell::Cell::new(None) };
+    }
+
+    pub(super) fn transient_swap(database: &Path, checkpoint: u8, restore: bool) -> Result<()> {
+        if TRANSIENT_SWAP.get() != Some((checkpoint, restore)) {
+            return Ok(());
+        }
+        let path = database.parent().unwrap();
+        let retired = path.with_extension("retired");
+        let replacement = path.with_extension("replacement");
+        if restore {
+            std::fs::remove_file(path)?;
+            std::fs::rename(retired, path)?;
+            TRANSIENT_SWAP.set(None);
+        } else {
+            std::fs::rename(path, retired)?;
+            std::os::unix::fs::symlink(replacement, path)?;
+            TRANSIENT_SWAP.set(Some((checkpoint, true)));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn ticket_t_12_preflight_descriptor_ignores_transient_metadata_swap() {
+        assert_transient_swap_ignored(0);
+    }
+
+    #[test]
+    fn ticket_t_12_preflight_descriptor_ignores_transient_database_swap() {
+        assert_transient_swap_ignored(1);
+    }
+
+    #[test]
+    fn ticket_t_12_preflight_descriptor_ignores_transient_wal_swap() {
+        assert_transient_swap_ignored(2);
+    }
+
+    #[test]
+    fn ticket_t_12_preflight_descriptor_ignores_transient_journal_swap() {
+        assert_transient_swap_ignored(3);
+    }
+
+    fn assert_transient_swap_ignored(checkpoint: u8) {
+        let path = std::env::temp_dir().join(format!(
+            "pp-descriptor-{}",
+            hex::encode(rand::random::<[u8; 8]>())
+        ));
+        let admitted = crate::lease::admit_directory(&path).unwrap();
+        let conn = Connection::open(path.join("print-partner.db")).unwrap();
+        conn.execute_batch("CREATE TABLE capture_fixture(value TEXT);")
+            .unwrap();
+        drop(conn);
+        for name in ["print-partner.db-wal", "print-partner.db-journal"] {
+            std::fs::write(path.join(name), b"").unwrap();
+        }
+        let before = std::fs::read(path.join("print-partner.db")).unwrap();
+        let replacement = path.with_extension("replacement");
+        std::fs::create_dir(&replacement).unwrap();
+        let decoy = match checkpoint {
+            0 => b"".as_slice(),
+            1 => b"outside admitted store",
+            _ => &before,
+        };
+        std::fs::write(replacement.join("print-partner.db"), decoy).unwrap();
+        if checkpoint >= 2 {
+            let name = if checkpoint == 2 {
+                "print-partner.db-wal"
+            } else {
+                "print-partner.db-journal"
+            };
+            std::fs::create_dir(replacement.join(name)).unwrap();
+        }
+        PREFLIGHT_COPIES.set(0);
+        TRANSIENT_SWAP.set(Some((checkpoint, false)));
+        let result = admitted.preflight();
+        TRANSIENT_SWAP.set(None);
+        let copies = PREFLIGHT_COPIES.get();
+        assert_eq!(
+            std::fs::read(path.join("print-partner.db")).unwrap(),
+            before
+        );
+        assert_eq!(
+            std::fs::read(replacement.join("print-partner.db")).unwrap(),
+            decoy
+        );
+        std::fs::remove_dir_all(&path).unwrap();
+        std::fs::remove_dir_all(replacement).unwrap();
+        assert!(result.is_ok(), "checkpoint {checkpoint}: {result:?}");
+        assert_eq!(
+            copies, 1,
+            "checkpoint {checkpoint} read replacement metadata"
+        );
+    }
+
+    #[test]
+    fn ticket_t_12_preflight_descriptor_refuses_symlink_members() {
+        for name in [
+            "print-partner.db",
+            "print-partner.db-wal",
+            "print-partner.db-journal",
+        ] {
+            let path = std::env::temp_dir().join(format!(
+                "pp-descriptor-link-{}",
+                hex::encode(rand::random::<[u8; 8]>())
+            ));
+            let admitted = crate::lease::admit_directory(&path).unwrap();
+            let conn = Connection::open(path.join("print-partner.db")).unwrap();
+            conn.execute_batch("CREATE TABLE capture_fixture(value TEXT);")
+                .unwrap();
+            drop(conn);
+            let external = path.with_extension("external");
+            if name == "print-partner.db" {
+                std::fs::rename(path.join(name), &external).unwrap();
+            } else {
+                std::fs::write(&external, b"").unwrap();
+            }
+            let before = std::fs::read(&external).unwrap();
+            std::os::unix::fs::symlink(&external, path.join(name)).unwrap();
+            PREFLIGHT_COPIES.set(0);
+            let result = admitted.preflight();
+            let copies = PREFLIGHT_COPIES.get();
+            assert_eq!(std::fs::read(&external).unwrap(), before);
+            std::fs::remove_dir_all(path).unwrap();
+            std::fs::remove_file(external).unwrap();
+            assert!(result.is_err(), "preflight followed {name}");
+            assert_eq!(copies, 0, "preflight copied symlink member {name}");
+        }
+    }
+
+    #[test]
+    fn ticket_t_12_preflight_descriptor_refuses_special_members_without_blocking() {
+        use std::os::unix::fs::OpenOptionsExt;
+        for name in [
+            "print-partner.db",
+            "print-partner.db-wal",
+            "print-partner.db-journal",
+        ] {
+            for kind in ["dangling", "directory", "fifo"] {
+                let path = std::env::temp_dir().join(format!(
+                    "pp-descriptor-special-{}",
+                    hex::encode(rand::random::<[u8; 8]>())
+                ));
+                let admitted = crate::lease::admit_directory(&path).unwrap();
+                let conn = Connection::open(path.join("print-partner.db")).unwrap();
+                conn.execute_batch("CREATE TABLE capture_fixture(value TEXT);")
+                    .unwrap();
+                drop(conn);
+                let member = path.join(name);
+                if name == "print-partner.db" {
+                    std::fs::remove_file(&member).unwrap();
+                }
+                match kind {
+                    "dangling" => std::os::unix::fs::symlink(path.join("absent"), &member).unwrap(),
+                    "directory" => std::fs::create_dir(&member).unwrap(),
+                    _ => {
+                        use std::os::unix::ffi::OsStrExt;
+                        let member = std::ffi::CString::new(member.as_os_str().as_bytes()).unwrap();
+                        assert_eq!(unsafe { libc::mkfifo(member.as_ptr(), 0o600) }, 0);
+                    }
+                }
+                let (tx, rx) = std::sync::mpsc::channel();
+                let worker = std::thread::spawn(move || {
+                    PREFLIGHT_COPIES.set(0);
+                    let result = admitted.preflight().map_err(|error| error.to_string());
+                    tx.send((result, PREFLIGHT_COPIES.get())).unwrap();
+                });
+                let result = rx.recv_timeout(Duration::from_secs(2));
+                if result.is_err() && kind == "fifo" {
+                    drop(
+                        std::fs::OpenOptions::new()
+                            .write(true)
+                            .custom_flags(libc::O_NONBLOCK)
+                            .open(&member)
+                            .unwrap(),
+                    );
+                }
+                worker.join().unwrap();
+                let metadata = std::fs::symlink_metadata(&member).unwrap();
+                std::fs::remove_dir_all(path).unwrap();
+                let (result, copies) = result.expect("preflight blocked on special member");
+                assert!(result.is_err(), "preflight accepted {kind} at {name}");
+                assert_eq!(copies, 0);
+                use std::os::unix::fs::FileTypeExt;
+                assert!(match kind {
+                    "dangling" => metadata.file_type().is_symlink(),
+                    "directory" => metadata.is_dir(),
+                    _ => metadata.file_type().is_fifo(),
+                });
+            }
+        }
     }
 
     pub(super) fn capture_checkpoint(database: &Path, checkpoint: u8) -> Result<()> {
