@@ -18,6 +18,8 @@ pub mod native_secrets;
 pub mod profiles;
 pub mod read_model;
 mod schema;
+#[cfg(feature = "desktop_rebuild")]
+pub mod working_drafts;
 mod writer_admission;
 
 use anyhow::{Result, anyhow, ensure};

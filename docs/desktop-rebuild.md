@@ -96,6 +96,38 @@ Gap slices added in triage on 2026-10-13 cover commits that are not in the refer
 
 Turning `desktop_rebuild` on by default is a separate decision for the maintainer after D26 and D32.
 
+### D12 observation core pull-forward
+
+GRE-607 starts with `pp-storage::working_drafts::observation`, compiled only with
+`desktop_rebuild`. This unit ports the read contracts, cancellation, preparation
+limits, and cumulative budgets from the reference branch. It adds no executor,
+adapter, routes, storage writes, or runtime wiring. Default builds do not expose
+the module. Future user-visible callers must also check `PP_DESKTOP_REBUILD`.
+
+`PreparationBudget::new` is public and returns `ReadResult`, validating limits
+before accepting charges. Parser accounting methods are public so adapters and
+future parsers can share the same budget. Byte counters saturate or use checked
+addition, so oversized charges return `LimitExceeded` instead of overflowing.
+Callers must propagate failures and discard the budget after a refusal. Raw
+document reads and parser expansion retain separate total-byte caps.
+Depth checks precede node and visit charges, matching entry accounting.
+
+Read requests retain storage-private fields. External adapters can inspect them
+but cannot create grants. This unit does not itself admit or perform any reads.
+
+The working-draft executor still needs D11's `required_units`. GRE-604 D10b also
+needs the builder manifest helpers, which depend on the YAML parser. The remaining
+D12 units are YAML, builder manifest helpers, the executor after D11, and
+preparation. Those stay open on GRE-607. This first unit alone does not unblock
+all of D10b.
+
+Run its boundary and accounting proofs with:
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test working_draft_observation
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --doc
+```
+
 ### D4 media reconciliation
 
 GRE-599 reconciles media already shipped in #131. The `pp-source` media library, the `pp-source-media` CLI, and all unconditional #131 exports remain available in the default build. This slice adds a historical audit and documentation. It adds no feature behavior, host, runtime API, or dependency.
