@@ -1,0 +1,13 @@
+{
+  "score": 9.65,
+  "items": {
+    "criteria": 2.85,
+    "tests": 2,
+    "visual": 1.8,
+    "logs": 2,
+    "scope": 1
+  },
+  "gate": "pass",
+  "head": "7cd010c0a4e18d7f7d386406ca3ed48f1e9fff68",
+  "merge": true
+}
