@@ -31,6 +31,9 @@ console.log(JSON.stringify({ path: '.github/workflows/desktop-contracts.yml', st
   symlinkSync(join(root, 'web/node_modules'), join(directory, 'web/node_modules'));
   writeFileSync(join(directory, contracts), original);
   writeFileSync(join(directory, '.github/workflows/web-ci.yml'), YAML.stringify(webCI));
+  for (const name of ['integration-smoke', 'pr-evidence']) {
+    copyFileSync(join(root, `.github/workflows/${name}.yml`), join(directory, `.github/workflows/${name}.yml`));
+  }
   const git = (...args) => {
     const result = spawnSync('git', args, { cwd: directory, encoding: 'utf8' });
     assert.equal(result.status, 0, result.stderr);
@@ -311,3 +314,52 @@ test('event tree rejects gitlink at required Web CI path', t => {
   assert.equal(result.status, 1, result.stdout + result.stderr);
   assert.match(result.stderr, /INVALID_EVENT_WEB_CI/);
 });
+
+for (const [name, job, diagnostic] of [
+  ['integration-smoke', 'postgres', 'UNPINNED_INTEGRATION_NODE'],
+  ['pr-evidence', 'lint-pr-body', 'UNPINNED_EVIDENCE_NODE'],
+]) {
+  test(`event tree rejects floating ${name} despite repaired checkout`, t => {
+    const path = `.github/workflows/${name}.yml`;
+    const f = fixture(t, directory => {
+      const workflow = YAML.parse(readFileSync(join(directory, path), 'utf8'));
+      workflow.jobs[job].steps.find(step => step.uses?.startsWith('actions/setup-node@')).with['node-version'] = '22';
+      writeFileSync(join(directory, path), YAML.stringify(workflow));
+    });
+    copyFileSync(join(root, path), join(f.directory, path));
+    const result = f.run();
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stderr, new RegExp(diagnostic));
+  });
+  for (const variant of ['duplicate', 'symlink', 'gitlink']) {
+    test(`event tree rejects ${name} ${variant}`, t => {
+      const f = fixture(t, directory => {
+        const path = join(directory, `.github/workflows/${name}.yml`);
+        if (variant === 'duplicate') copyFileSync(path, join(directory, `.github/workflows/${name}.yaml`));
+        else if (variant === 'symlink') {
+          renameSync(path, `${path}.source`);
+          symlinkSync(`${name}.yml.source`, path);
+        }
+      });
+      if (variant === 'gitlink') {
+        f.git('update-index', '--cacheinfo', `160000,${f.sha},.github/workflows/${name}.yml`);
+        f.commit();
+      }
+      const result = f.run(variant === 'gitlink' ? f.git('rev-parse', 'HEAD') : f.sha);
+      assert.equal(result.status, 1, result.stdout);
+      assert.match(result.stderr, /INVALID_NODE_WORKFLOW/);
+    });
+  }
+  for (const replacement of [null, `${name}.yaml`, `${name}.YML`, `${name}-renamed.yml`]) {
+    test(`event tree rejects ${name} identity ${replacement}`, t => {
+      const f = fixture(t, directory => {
+        const original = join(directory, `.github/workflows/${name}.yml`);
+        if (replacement) renameSync(original, join(directory, '.github/workflows', replacement));
+        else rmSync(original);
+      });
+      const result = f.run();
+      assert.equal(result.status, 1, result.stdout);
+      assert.match(result.stderr, /INVALID_NODE_WORKFLOW/);
+    });
+  }
+}
