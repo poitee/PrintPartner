@@ -8,11 +8,11 @@ import { queryKeys } from "./keys";
 import { invalidateProfiles } from "./profiles";
 import { invalidateRoleFilaments } from "./roleFilaments";
 
-type ReviewMutationContext = {
+type ReviewMutationContext<T> = {
   profileId: number | null;
   includeExcluded: boolean;
   key?: ReturnType<typeof queryKeys.planReview>;
-  previous?: PlanReview;
+  previous?: T;
 };
 
 export function usePlanReviewQuery(
@@ -87,15 +87,20 @@ export function usePatchPartProgressMutation(
       completed: boolean;
       optimisticReview?: PlanReview;
     }) => patchPartProgress(partId, unitIndex, completed),
-    onMutate: async ({ partId, unitIndex, completed, optimisticReview }): Promise<ReviewMutationContext> => {
+    onMutate: async ({ partId, unitIndex, completed, optimisticReview }): Promise<ReviewMutationContext<Parameters<typeof mergeProgressIntoReview>[2]>> => {
       const context = { profileId, includeExcluded };
       if (profileId == null || !optimisticReview) return context;
       const key = queryKeys.planReview(profileId, includeExcluded);
       await qc.cancelQueries({ queryKey: key });
-      const previous = qc.getQueryData<PlanReview>(key);
-      const part = optimisticReview.part_groups
+      const current = qc.getQueryData<PlanReview>(key);
+      if (!current) return context;
+      const part = current.part_groups
         .flatMap((g) => g.parts)
         .find((p) => p.id === partId);
+      const previous = part && {
+        printed_count: part.printed_count, print_units: part.print_units,
+        assembled_units: part.assembled_units, missing: part.missing,
+      };
       if (part) {
         const optimisticUnits = [...part.print_units];
         while (optimisticUnits.length < part.quantity_effective) optimisticUnits.push(false);
@@ -107,7 +112,7 @@ export function usePatchPartProgressMutation(
         const optimisticPrinted = optimisticUnits.filter(Boolean).length;
         qc.setQueryData(
           key,
-          mergeProgressIntoReview(optimisticReview, partId, {
+          mergeProgressIntoReview(current, partId, {
             printed_count: optimisticPrinted,
             print_units: optimisticUnits,
             assembled_units: completed ? part.assembled_units : part.assembled_units?.map(
@@ -119,11 +124,12 @@ export function usePatchPartProgressMutation(
       }
       return { ...context, previous, key };
     },
-    onError: (_err, _vars, ctx) => {
+    onError: (_err, { partId }, ctx) => {
       if (!ctx?.key) return;
       const rollback = rollbackOptimisticCache(ctx.previous);
       if (rollback.kind === "restore") {
-        qc.setQueryData(ctx.key, rollback.previous);
+        qc.setQueryData<PlanReview>(ctx.key, (current) => current &&
+          mergeProgressIntoReview(current, partId, rollback.previous));
       } else {
         qc.removeQueries({ queryKey: ctx.key, exact: true });
       }
@@ -173,15 +179,17 @@ export function usePatchPartAssembledMutation(
       assembled: boolean;
       optimisticReview?: PlanReview;
     }) => patchPartAssembled(partId, unitIndex, assembled),
-    onMutate: async ({ partId, unitIndex, assembled, optimisticReview }): Promise<ReviewMutationContext> => {
+    onMutate: async ({ partId, unitIndex, assembled, optimisticReview }): Promise<ReviewMutationContext<Parameters<typeof mergeAssembledIntoReview>[2]>> => {
       const context = { profileId, includeExcluded };
       if (profileId == null || !optimisticReview) return context;
       const key = queryKeys.planReview(profileId, includeExcluded);
       await qc.cancelQueries({ queryKey: key });
-      const previous = qc.getQueryData<PlanReview>(key);
-      const part = optimisticReview.part_groups
+      const current = qc.getQueryData<PlanReview>(key);
+      if (!current) return context;
+      const part = current.part_groups
         .flatMap((g) => g.parts)
         .find((p) => p.id === partId);
+      const previous = part && { assembled_units: part.assembled_units ?? [] };
       if (part) {
         const qty = Math.max(1, part.quantity_effective);
         const optimisticUnits = [...(part.assembled_units ?? [])];
@@ -189,18 +197,19 @@ export function usePatchPartAssembledMutation(
         if (unitIndex < optimisticUnits.length) optimisticUnits[unitIndex] = assembled;
         qc.setQueryData(
           key,
-          mergeAssembledIntoReview(optimisticReview, partId, {
+          mergeAssembledIntoReview(current, partId, {
             assembled_units: optimisticUnits,
           }),
         );
       }
       return { ...context, previous, key };
     },
-    onError: (_err, _vars, ctx) => {
+    onError: (_err, { partId }, ctx) => {
       if (!ctx?.key) return;
       const rollback = rollbackOptimisticCache(ctx.previous);
       if (rollback.kind === "restore") {
-        qc.setQueryData(ctx.key, rollback.previous);
+        qc.setQueryData<PlanReview>(ctx.key, (current) => current &&
+          mergeAssembledIntoReview(current, partId, rollback.previous));
       } else {
         qc.removeQueries({ queryKey: ctx.key, exact: true });
       }

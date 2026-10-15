@@ -231,3 +231,65 @@ describe("Plan mutation Build ownership", () => {
     expect(queryClient.getQueryState(queryKeys.planReview(2, false))?.isInvalidated).toBe(false);
   });
 });
+
+
+describe("Plan mutation field ownership and rollback isolation", () => {
+  it.each((["progress", "assembly"] as const).flatMap((kind) =>
+    (["removed", "masked", "stale", "cancel", "absent"] as const).map((transition) => ({ kind, transition })),
+  ))("preserves inventory through $kind rollback with $transition cache", async ({ kind, transition }) => {
+    const enriched = structuredClone(review);
+    Object.assign(enriched.part_groups[0]!.parts[0]!, {
+      filament_color_id: "spoolman:inventory:filament:7", filament_display: "Old inventory",
+      filament_hex: "#123456", spoolman_spool_id: "99", spool_badge: "400g left", assembled_units: [],
+    });
+    const masked = structuredClone(enriched);
+    Object.assign(masked.part_groups[0]!.parts[0]!, {
+      filament_display: "", filament_hex: null, spool_badge: null, spoolman_spool_id: "100",
+    });
+    const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    const key = queryKeys.planReview(1, false);
+    if (transition !== "absent") queryClient.setQueryData(key, transition === "stale" ? masked : enriched);
+    if (transition === "cancel") {
+      const cancel = queryClient.cancelQueries.bind(queryClient);
+      vi.spyOn(queryClient, "cancelQueries").mockImplementation(async (filters) => {
+        await cancel(filters);
+        queryClient.setQueryData(key, masked);
+      });
+    }
+    let rejectSave: (error: Error) => void = () => {};
+    const pending = new Promise<never>((_resolve, reject) => { rejectSave = reject; });
+    const api = kind === "progress" ? vi.mocked(patchPartProgress) : vi.mocked(patchPartAssembled);
+    api.mockClear();
+    api.mockReturnValueOnce(pending);
+    const hook = renderHook(() => {
+      const progress = usePatchPartProgressMutation(1, false);
+      const assembly = usePatchPartAssembledMutation(1, false);
+      return kind === "progress" ? progress : assembly;
+    }, { wrapper: wrapper(queryClient) });
+    act(() => hook.result.current.mutate({ partId: 42, unitIndex: 0, completed: true,
+      assembled: true, optimisticReview: enriched }));
+    await waitFor(() => expect(api).toHaveBeenCalledTimes(1));
+    if (transition === "masked") queryClient.setQueryData(key, masked);
+    if (transition === "removed") queryClient.removeQueries({ queryKey: key, exact: true });
+    if (transition === "removed" || transition === "absent") {
+      expect(queryClient.getQueryData(key)).toBeUndefined();
+    } else {
+      const part = queryClient.getQueryData<PlanReview>(key)!.part_groups[0]!.parts[0]!;
+      expect(part).toMatchObject({ filament_display: "", filament_hex: null,
+        spool_badge: null, spoolman_spool_id: "100" });
+    }
+    act(() => rejectSave(new Error("Save failed")));
+    await waitFor(() => expect(hook.result.current.isError).toBe(true));
+    if (transition === "removed" || transition === "absent") {
+      expect(queryClient.getQueryData(key)).toBeUndefined();
+    } else {
+      expect(queryClient.getQueryData<PlanReview>(key)?.part_groups[0]?.parts[0]).toMatchObject({
+        filament_display: "", filament_hex: null, spool_badge: null, spoolman_spool_id: "100",
+        print_units: [false], printed_count: 0, assembled_units: [], missing: true,
+      });
+    }
+    hook.unmount();
+    queryClient.clear();
+    vi.restoreAllMocks();
+  });
+});

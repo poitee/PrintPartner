@@ -10,7 +10,7 @@ Run from `web/` with Node 22:
 
 ```sh
 npm exec -w @print-partner/server -- vitest run src/routes/spoolman-workflow-access.test.ts src/routes/spoolman-feature-access.test.ts src/routes/filament-catalog-feature-access.test.ts src/services/filament-resolve.test.ts src/services/spoolman-deduct.test.ts src/lib/farm-access.test.ts src/db/plan-save.test.ts src/routes/plan-drafts-routes.test.ts
-npm exec -w @print-partner/web -- vitest run src/hooks/useSpoolmanWorkflowAccess.test.tsx src/components/RoleFilamentPicker.features.test.tsx src/hooks/useSpoolmanEnabled.test.ts src/lib/colorPresets.test.ts src/api/endpoints/filaments.test.ts src/components/review/ReviewPartsSheet.accessibility.test.tsx src/components/review/ReviewPartsSheet.remove.test.tsx
+npm exec -w @print-partner/web -- vitest run src/queries/planReview.test.tsx src/hooks/useSpoolmanWorkflowAccess.test.tsx src/components/RoleFilamentPicker.features.test.tsx src/hooks/useSpoolmanEnabled.test.ts src/lib/colorPresets.test.ts src/api/endpoints/filaments.test.ts src/components/review/ReviewPartsSheet.accessibility.test.tsx src/components/review/ReviewPartsSheet.remove.test.tsx
 npm run build
 ```
 
@@ -20,9 +20,10 @@ Mounted-query tests exercise Review, role and catalog caches together across off
 
 ![Default-off controls retain saved references](gre498-spoolman-workflows/default-off.png)
 ![Plan-on/account-off exposes stock](gre498-spoolman-workflows/plan-on-account-off.png)
-![Custom color remains usable while off](gre498-spoolman-workflows/custom-color-off.png)
 ![An already-open dialog drops live observations after revocation](gre498-spoolman-workflows/retained-dialog-off.png)
 
 All 22 CI checks settled successfully at `a406a80a`, including runtime after an earlier unchanged Rust supervisor timeout. Opus could not score: “Claude API rate limit reached. Try again later.” The authorized gpt-6-astra fallback scored that head 7.8/10 and requested dialog/mutation fixes. Those require a fresh exact-head gate. The diff exceeded the original 1.5k-line target; redundant hook tests were removed in favor of combined behavioral coverage. Broader Orders and farm visibility remain follow-up GRE-498 work.
 
 Round-one fixes bind all role-response publication to the captured action scope/generation, sanitize ordinary results without clearing saved references, and refresh discarded optional results. Dialogs resolve live observations from the scoped catalog and retain entered custom hex separately. All seven web suites passed 54 tests; the final dialog/mutation suite passed 11 tests with restoration held pending until fresh data. The retained-dialog screenshot uses the fixture Plan toggle through DOM dispatch while the modal stays open. Fresh exact-head CI and scoring remain required.
+
+Round two scored `7375a3be` 7.9/10 after Opus returned the same rate-limit message. A delayed checkoff rollback could restore a whole enriched Review. Progress and assembly mutations now read the current cache after cancellation and roll back only their own fields; an absent cache stays absent. Ten matrix cases cover stale inputs, cancellation, replacement and removal for both mutations. The historical custom-color screenshot was removed because its label predates dialog masking. The size target remains unmet; no waiver or merge is implied.
