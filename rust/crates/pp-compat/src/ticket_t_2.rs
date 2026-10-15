@@ -290,14 +290,25 @@ async fn ticket_t_2_shutdown_cancels_pending_restart() {
 async fn ticket_t_2_repeated_start_stop_no_duplicate_child() {
     let scratch = Scratch::new("restart");
     let wall = std::time::Instant::now();
+    let startup_ack_count = || {
+        diagnostic_rows(&scratch)
+            .iter()
+            .filter(|row| row["event"] == "compat_output")
+            .count()
+    };
     tokio::time::resume();
     for nth in 1..=3 {
         let supervisor = super::Supervisor::launch_shell(
-            shell_spec(&scratch),
+            super::ShellSpec {
+                script: "read line || exit 1; printf 'started\\n'; while read line; do :; done",
+                ..shell_spec(&scratch)
+            },
             super::SupervisorConfig::default(),
         )
         .unwrap();
         wait_live(&scratch.pidfile(), nth).await;
+        pump_until(|| startup_ack_count() == nth).await;
+        assert_eq!(startup_ack_count(), nth);
         assert_eq!(
             live_pids(&scratch.pidfile()).len(),
             1,
@@ -316,6 +327,7 @@ async fn ticket_t_2_repeated_start_stop_no_duplicate_child() {
         "repeated start/stop spawned a duplicate child: {:?}",
         recorded_pids(&scratch.pidfile())
     );
+    assert_eq!(startup_ack_count(), 3);
     let rows = diagnostic_rows(&scratch);
     assert_eq!(
         rows.iter()

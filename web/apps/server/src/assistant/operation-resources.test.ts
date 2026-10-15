@@ -10,6 +10,8 @@ import { SqliteDatabase } from "../db/client.js";
 import { AppRepository } from "../db/repository.js";
 import * as schema from "../db/schema.js";
 import { tenantStorage } from "../middleware/tenant-context.js";
+import { ISOLATED_SOURCE_FILESYSTEM } from "../services/source-filesystem-policy.js";
+import { digestEffectiveNaming } from "../services/plan-freshness.js";
 import { WORKFLOW_GUIDE } from "../routes/workflow-guide.js";
 import { invokeAssistantTool } from "./tools.js";
 
@@ -49,7 +51,7 @@ const TABLES = ["table:app_settings", "table:projects", "table:source_docs"];
 const FILE_RESOURCES = ["file:source-workspace", "table:projects", "table:source_docs"];
 const manifest = z.object({ resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.get_plan_decisions"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.get_plan_decisions", "tool.list_plans"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -505,4 +507,162 @@ it("traces get_plan_decisions plan lookup, limits, fallback and tenant isolation
   const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.get_plan_decisions");
   if (!entry || entry.operation === "source.sync") throw new Error("Missing plan decisions declaration");
   expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual([...union].sort());
+});
+
+
+it("traces list_plans headers, part counts, freshness and tenant isolation against its exact union", async () => {
+  const tables = ["table:app_settings", "table:build_profiles", "table:parts", "table:plan_accepted_input_sets", "table:plan_revision_input_sets", "table:plan_revision_inputs", "table:profile_layers", "table:projects", "table:source_revisions"];
+  const union = new Set<string>();
+  async function trace(input: Record<string, unknown>, expected: string[], tenantId = "default") {
+    statements = [];
+    observer.state.files = [];
+    observer.state.active = true;
+    let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+    try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("list_plans", input, { repo })); }
+    finally { observer.state.active = false; }
+    const observed = [...new Set(statements.flatMap((sql) => resourcesForPlanSelect(sql, tenantId)))].sort();
+    expect(observed).toEqual(expected);
+    expect(observer.state.files).toEqual([]);
+    for (const sql of statements) expect(() => resourcesForPlanSelect(sql, tenantId === "default" ? "other" : "default")).toThrow("Unsupported SQL:");
+    for (const resource of observed) union.add(resource);
+    return z.object({ plans: z.array(z.object({ id: z.number(), name: z.string(), part_count: z.number(), build_stale: z.boolean() }).strict()) }).strict().parse(JSON.parse(output.content));
+  }
+  const emptyTables = ["table:app_settings", "table:build_profiles", "table:parts"];
+  expect(await trace({}, emptyTables)).toEqual({ plans: [] });
+  const alpha = repo.createProfile("Alpha");
+  const zeta = repo.createProfile("Zeta", sourceId);
+  sqlite.prepare("UPDATE build_profiles SET archived_at = ? WHERE id = ?").run("2026-01-01", zeta.id);
+  sqlite.prepare("INSERT INTO parts (tenant_id, profile_id, match_key, relative_path, filename, quantity_effective, included) VALUES (?, ?, ?, ?, ?, ?, ?)").run("default", zeta.id, "part.stl", "part.stl", "part.stl", 7, 0);
+  const partialTables = ["table:app_settings", "table:build_profiles", "table:parts", "table:plan_accepted_input_sets", "table:profile_layers", "table:projects"];
+  const rows = { plans: [{ id: alpha.id, name: "Alpha", part_count: 0, build_stale: false }, { id: zeta.id, name: "Zeta", part_count: 1, build_stale: false }] };
+  for (const input of [{}, { plan_id: -1, source_id: "invalid", limit: 0, archived: false }]) {
+    expect(await trace(input, partialTables)).toEqual(rows);
+  }
+  const revision = repo.recordSourceRevision({ sourceId, upstreamRevisionKey: "a", manifestDigest: "a".repeat(64), snapshotLocator: `${sourceId}/revisions/a`, syncedAt: "2026-01-01", completeness: "complete" });
+  sqlite.prepare("UPDATE projects SET current_source_revision_id = ? WHERE id = ?").run(revision.id, sourceId);
+  const inputSet = sqlite.prepare("INSERT INTO plan_revision_input_sets (tenant_id, profile_id, input_set_digest, expected_input_count, format_version, recorded_at, published_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run("default", zeta.id, "fixture", 0, 2, "2026-01-01", "2026-01-01");
+  sqlite.prepare("INSERT INTO plan_accepted_input_sets (tenant_id, profile_id, input_set_id, accepted_at) VALUES (?, ?, ?, ?)").run("default", zeta.id, Number(inputSet.lastInsertRowid), "2026-01-01");
+  expect(await trace({}, tables)).toEqual({ plans: [{ id: alpha.id, name: "Alpha", part_count: 0, build_stale: false }, { id: zeta.id, name: "Zeta", part_count: 1, build_stale: true }] });
+  sqlite.prepare("INSERT INTO plan_revision_inputs (tenant_id, input_set_id, source_id, source_layer, layer_order, tracking_kind, source_revision_id, manifest_digest, effective_naming_digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run("default", Number(inputSet.lastInsertRowid), sourceId, "base:Fixture", 0, "revision", revision.id, "a".repeat(64), digestEffectiveNaming(repo.getGlobalNaming()));
+  sqlite.prepare("UPDATE plan_revision_input_sets SET expected_input_count = 1 WHERE id = ?").run(Number(inputSet.lastInsertRowid));
+  sqlite.prepare("UPDATE build_profiles SET last_recomputed_at = ?, config_modified_at = ? WHERE id = ?").run("2026-01-02", "2026-01-01", zeta.id);
+  expect(await trace({}, tables)).toEqual(rows);
+  sqlite.prepare("UPDATE build_profiles SET config_modified_at = ? WHERE id = ?").run("2026-01-03", zeta.id);
+  expect(await trace({}, tables)).toEqual({ plans: [{ id: alpha.id, name: "Alpha", part_count: 0, build_stale: false }, { id: zeta.id, name: "Zeta", part_count: 1, build_stale: true }] });
+  expect(await trace({}, emptyTables, "other")).toEqual({ plans: [] });
+  const other = tenantStorage.run("other", () => repo.createProfile("Other"));
+  expect(await trace({ plan_id: zeta.id }, ["table:app_settings", "table:build_profiles", "table:parts", "table:plan_accepted_input_sets", "table:profile_layers"], "other")).toEqual({ plans: [{ id: other.id, name: "Other", part_count: 0, build_stale: false }] });
+  expect([...union].sort()).toEqual(tables);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.list_plans");
+  if (!entry || entry.operation === "source.sync") throw new Error("Missing list plans declaration");
+  expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(["file:source-workspace", ...tables]);
+});
+
+it("traces list_plans isolated workspace probes and refusals against its operation-wide union", async () => {
+  const repos = join(dataDir, "repos");
+  const workspace = join(repos, String(sourceId));
+  const revisionRoot = join(workspace, "revisions", "a");
+  fs.mkdirSync(revisionRoot, { recursive: true });
+  const escape = join(workspace, "escape");
+  fs.symlinkSync(userRoot, escape, "dir");
+  const isolatedRepo = new AppRepository(drizzle(sqlite, { schema }), undefined, repos, schema, { sourceFilesystemPolicy: ISOLATED_SOURCE_FILESYSTEM });
+  const plan = repo.createProfile("Isolated", sourceId);
+  const revision = repo.recordSourceRevision({ sourceId, upstreamRevisionKey: "a", manifestDigest: "a".repeat(64), snapshotLocator: `${sourceId}/revisions/a`, syncedAt: "2026-01-01", completeness: "complete" });
+  sqlite.prepare("UPDATE projects SET current_source_revision_id = ? WHERE id = ?").run(revision.id, sourceId);
+  const inputSet = sqlite.prepare("INSERT INTO plan_revision_input_sets (tenant_id, profile_id, input_set_digest, expected_input_count, format_version, recorded_at, published_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run("default", plan.id, "fixture", 0, 2, "2026-01-01", "2026-01-01");
+  sqlite.prepare("INSERT INTO plan_accepted_input_sets (tenant_id, profile_id, input_set_id, accepted_at) VALUES (?, ?, ?, ?)").run("default", plan.id, Number(inputSet.lastInsertRowid), "2026-01-01");
+  const tables = ["table:app_settings", "table:build_profiles", "table:parts", "table:plan_accepted_input_sets", "table:plan_revision_input_sets", "table:plan_revision_inputs", "table:profile_layers", "table:projects", "table:source_revisions"];
+  const union = new Set<string>();
+  async function trace(path: string | null, calls: [string, string][], revisionCalls = revisionProbes, refused = false) {
+    sqlite.prepare("UPDATE projects SET local_path = ? WHERE id = ?").run(path, sourceId);
+    statements = [];
+    observer.state.files = [];
+    observer.state.active = true;
+    let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+    try { output = await tenantStorage.run("default", () => invokeAssistantTool("list_plans", {}, { repo: isolatedRepo })); }
+    finally { observer.state.active = false; }
+    expect(JSON.parse(output.content)).toEqual(refused
+      ? { error: "Active Source revision has an unsafe snapshot locator" }
+      : { plans: [{ id: plan.id, name: "Isolated", part_count: 0, build_stale: true }] });
+    expect(observer.state.files.map(({ api, args }) => [api, ...args])).toEqual([...calls, ...revisionCalls]);
+    const observed = [...new Set(statements.flatMap((sql) => resourcesForPlanSelect(sql, "default")))].sort();
+    expect(observed).toEqual(tables);
+    for (const sql of statements) expect(() => resourcesForPlanSelect(sql, "other")).toThrow("Unsupported SQL:");
+    for (const resource of observed) union.add(resource);
+    for (const resource of fileResources([repos], true)) union.add(resource);
+  }
+  const prefix: [string, string][] = [["realpathSync", repos], ["lstatSync", workspace], ["realpathSync", workspace]];
+  const revisionProbes: [string, string][] = [...prefix, ["realpathSync", revisionRoot], ["statSync", revisionRoot]];
+  await trace(revisionRoot, revisionProbes);
+  await trace(workspace, [...prefix, ["realpathSync", workspace], ["statSync", workspace]]);
+  await trace(join(workspace, "missing"), [...prefix, ["realpathSync", join(workspace, "missing")]]);
+  await trace(escape, [...prefix, ["realpathSync", escape]]);
+  await trace(userRoot, [["realpathSync", repos]]);
+  await trace(null, []);
+  fs.rmSync(revisionRoot, { recursive: true });
+  fs.symlinkSync(userRoot, revisionRoot, "dir");
+  await trace(workspace, [...prefix, ["realpathSync", workspace], ["statSync", workspace]], [...prefix, ["realpathSync", revisionRoot]], true);
+  fs.rmSync(revisionRoot);
+  fs.mkdirSync(revisionRoot);
+  fs.rmSync(workspace, { recursive: true });
+  fs.symlinkSync(userRoot, workspace, "dir");
+  await trace(workspace, [["realpathSync", repos], ["lstatSync", workspace]], [["realpathSync", repos], ["lstatSync", workspace]], true);
+  fs.rmSync(workspace);
+  await trace(workspace, [["realpathSync", repos], ["lstatSync", workspace]], [["realpathSync", repos], ["lstatSync", workspace]], true);
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  let other: Awaited<ReturnType<typeof invokeAssistantTool>>;
+  try { other = await tenantStorage.run("other", () => invokeAssistantTool("list_plans", {}, { repo: isolatedRepo })); }
+  finally { observer.state.active = false; }
+  expect(JSON.parse(other.content)).toEqual({ plans: [] });
+  expect([...new Set(statements.flatMap((sql) => resourcesForPlanSelect(sql, "other")))].sort()).toEqual(["table:app_settings", "table:build_profiles", "table:parts"]);
+  expect(observer.state.files).toEqual([]);
+  expect([...union].sort()).toEqual(["file:source-workspace", ...tables]);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.list_plans");
+  if (!entry || entry.operation === "source.sync") throw new Error("Missing list plans declaration");
+  expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(["file:source-workspace", ...tables]);
+});
+
+function resourcesForPlanSelect(statement: unknown, tenantId: string): string[] {
+  const sql = z.string().parse(statement);
+  const activeTenant = `'${tenantId.replaceAll("'", "''")}'`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const columns = '"[a-z_]+"(?:, "[a-z_]+")*';
+  const ids = '-?(?:0|[1-9][0-9]*)(?:\\.0)?(?:, -?(?:0|[1-9][0-9]*)(?:\\.0)?)*';
+  const profileColumns = ["id", "tenant_id", "name", "order_number", "special_request", "config_modified_at", "last_recomputed_at", "archived_at", "last_used_at", "accepted_plan_revision_id", "accepted_plan_version"].map((column) => `"build_profiles"."${column}"`).join(", ");
+  const header = `select ${profileColumns}, count("parts"."id") from "build_profiles" left join "parts" on "parts"."profile_id" = "build_profiles"."id" where "build_profiles"."tenant_id" = '${tenantId.replaceAll("'", "''")}' group by "build_profiles"."id" order by "build_profiles"."name" asc`;
+  if (sql === header) return ["table:build_profiles", "table:parts"];
+  for (const [table, key, suffix] of [
+    ["profile_layers", "profile_id", ' order by "profile_layers"."layer_order" asc'],
+    ["projects", "id", ""],
+    ["source_revisions", "id", ""],
+    ["plan_accepted_input_sets", "profile_id", ""],
+    ["plan_revision_input_sets", "id", ""],
+    ["plan_revision_inputs", "input_set_id", ""],
+  ]) {
+    const published = table === "plan_revision_input_sets" ? ` and "${table}"\\."published_at" is not null` : "";
+    const pattern = new RegExp(`^select ${columns} from "${table}" where \\("${table}"\\."tenant_id" = ${activeTenant} and "${table}"\\."${key}" in \\(${ids}\\)${published}\\)${suffix}$`);
+    if (pattern.test(sql)) return [`table:${table}`];
+  }
+  return [tableForObservedSelect(sql, tenantId)];
+}
+
+
+it("rejects an undeclared real read after list_plans returns", async () => {
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+  try {
+    output = await invokeAssistantTool("list_plans", {}, { repo });
+    repo.listSources();
+  } finally { observer.state.active = false; }
+  expect(JSON.parse(output.content)).toEqual({ plans: [] });
+  const observed = [...new Set(statements.flatMap((sql) => resourcesForPlanSelect(sql, "default")))].sort();
+  expect(observed).toEqual(["table:app_settings", "table:build_profiles", "table:parts", "table:projects", "table:source_docs"]);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.list_plans");
+  if (!entry || entry.operation === "source.sync") throw new Error("Missing list plans declaration");
+  const declared = entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort();
+  expect(observed.filter((resource) => !declared.includes(resource))).toEqual(["table:source_docs"]);
+  expect(observer.state.files).toEqual([]);
 });

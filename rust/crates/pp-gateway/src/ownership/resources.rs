@@ -14,6 +14,11 @@ pub enum TableId {
     AppEvents,
     BuildProfiles,
     PlanDecisions,
+    Parts,
+    ProfileLayers,
+    PlanAcceptedInputSets,
+    PlanRevisionInputSets,
+    PlanRevisionInputs,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -65,6 +70,8 @@ enum ReviewedEntry {
     SearchSourceFiles { resources: Vec<ResourceId> },
     #[serde(rename = "tool.preview_source_naming")]
     PreviewSourceNaming { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.list_plans")]
+    ListPlans { resources: Vec<ResourceId> },
     #[serde(rename = "tool.list_sources")]
     ListSources { resources: Vec<ResourceId> },
     #[serde(rename = "tool.list_source_categories")]
@@ -83,7 +90,11 @@ impl ReviewedEntry {
         source_sync: &AdmittedOperation,
     ) -> Result<(&'static str, ResourceSet), AdmissionError> {
         use ResourceId::{File, Table};
-        use TableId::{AppSettings, BuildProfiles, PlanDecisions, Projects, SourceDocs};
+        use TableId::{
+            AppSettings, BuildProfiles, Parts, PlanAcceptedInputSets, PlanDecisions,
+            PlanRevisionInputSets, PlanRevisionInputs, ProfileLayers, Projects, SourceDocs,
+            SourceRevisions,
+        };
         let (id, resources, expected) = match self {
             Self::SourceSync {
                 import: SourceSyncImport::Admitted,
@@ -132,6 +143,22 @@ impl ReviewedEntry {
                 "tool.preview_source_naming",
                 resources,
                 BTreeSet::from([Table(Projects), Table(AppSettings)]),
+            ),
+            Self::ListPlans { resources } => (
+                "tool.list_plans",
+                resources,
+                BTreeSet::from([
+                    Table(BuildProfiles),
+                    Table(Parts),
+                    Table(ProfileLayers),
+                    Table(Projects),
+                    Table(SourceRevisions),
+                    Table(AppSettings),
+                    Table(PlanAcceptedInputSets),
+                    Table(PlanRevisionInputSets),
+                    Table(PlanRevisionInputs),
+                    File(FileFamily::SourceWorkspace),
+                ]),
             ),
             Self::ListSources { resources } => (
                 "tool.list_sources",
@@ -194,6 +221,7 @@ impl Declarations {
             "tool.read_source_file",
             "tool.search_source_files",
             "tool.preview_source_naming",
+            "tool.list_plans",
             "tool.list_sources",
             "tool.list_source_categories",
         ] {

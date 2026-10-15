@@ -302,6 +302,51 @@
             "name": "plan_decisions"
           }
         ]
+      },
+      {
+        "operation": "tool.list_plans",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "build_profiles"
+          },
+          {
+            "kind": "table",
+            "name": "parts"
+          },
+          {
+            "kind": "table",
+            "name": "profile_layers"
+          },
+          {
+            "kind": "table",
+            "name": "projects"
+          },
+          {
+            "kind": "table",
+            "name": "source_revisions"
+          },
+          {
+            "kind": "table",
+            "name": "app_settings"
+          },
+          {
+            "kind": "table",
+            "name": "plan_accepted_input_sets"
+          },
+          {
+            "kind": "table",
+            "name": "plan_revision_input_sets"
+          },
+          {
+            "kind": "table",
+            "name": "plan_revision_inputs"
+          },
+          {
+            "kind": "file",
+            "name": "source-workspace"
+          }
+        ]
       }
     ],
     "unresolved": [
@@ -696,7 +741,6 @@
       "tool.list_build_differences",
       "tool.list_example_builds",
       "tool.list_plan_snapshots",
-      "tool.list_plans",
       "tool.propose_add_build_checklist_items",
       "tool.propose_add_custom_filament",
       "tool.propose_add_source",
