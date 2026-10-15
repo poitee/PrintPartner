@@ -180,6 +180,36 @@ The rebuild CI gate runs the feature-on catalog suite. This storage unit adds no
 runtime, HTTP or UI caller. Future user-visible callers must also check
 `PP_DESKTOP_REBUILD`. Tests for later source-work and capture APIs remain deferred.
 
+### D8 naming error classification
+
+GRE-601 classifies naming failures behind `pp-storage/desktop_rebuild` using
+existing catalog requests. Invalid profiles submitted to `SaveNaming` or
+`SaveGlobalNaming` return `CatalogFailure::Input` with the existing validation
+message. `GetNaming` and `SaveNaming` return `CatalogFailure::NotFound` for
+missing or foreign-tenant sources. Authentication still runs before source
+lookup and profile validation.
+
+`GetNaming` classifies errors projecting a stored override as
+`CatalogFailure::InvalidStoredNaming`, retaining the original error as its cause.
+Source lookup and global-setting reads happen outside that classification, so
+SQL failures retain their original type. Invalid global settings still fall back
+to defaults without repairing storage. `SaveNaming::UseDefaults` can replace a
+corrupt source override while preserving unrelated metadata.
+
+The catalog tests exercise validation, missing sources, corrupt stored overrides,
+SQL abort rollback, normalization, digest equivalence, global fallback, tenant
+isolation and persistence after restart. Default-build error text and naming
+behavior stay unchanged. This unit adds no user-visible caller. Future callers
+must also check `PP_DESKTOP_REBUILD`.
+
+The remaining reference `catalog/tests.rs` cases need APIs absent from main:
+issued-token retirement and incarnation proofs, repeated local-scan completion,
+captured-claim activation, orphan-source-work reaping, and pending/resolved lease
+release across expiry and cancellation. Those tests depend on the matching
+source-work state and job capture/settlement APIs. Port them with those owners
+when the APIs land; do not emulate them in D8 or start GRE-602/D9 here. GRE-601
+remains In Progress until its final slice.
+
 ### D6 auth scheduling
 
 GRE-605 adds `WriterOwner::rebuild_auth_with_policy(policy, lifetimes)` behind

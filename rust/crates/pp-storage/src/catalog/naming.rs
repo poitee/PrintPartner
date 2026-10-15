@@ -100,6 +100,15 @@ impl Default for NamingProfile {
     }
 }
 impl NamingProfile {
+    pub(super) fn validate_input(self) -> Result<Self> {
+        let validated = self.validate();
+        #[cfg(feature = "desktop_rebuild")]
+        let validated = validated.map_err(|error| {
+            let detail = error.to_string();
+            error.context(CatalogFailure::Input(detail))
+        });
+        validated
+    }
     pub(super) fn validate(mut self) -> Result<Self> {
         ensure!(
             !self.roles.is_empty() && self.roles.iter().any(|r| r.id == RoleId::Primary),
@@ -240,9 +249,23 @@ fn response(profile: NamingProfile, use_defaults: bool, override_value: Value) -
     )
 }
 pub(super) fn get(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<Value> {
-    let source = require(tx, tenant, id)?;
+    let source = require_source(tx, tenant, id)?;
     let m = source.metadata.unwrap_or_default();
     let global = global(tx, tenant)?;
+    let projected = project(m, global);
+    #[cfg(feature = "desktop_rebuild")]
+    let projected = projected.map_err(|error| error.context(CatalogFailure::InvalidStoredNaming));
+    projected
+}
+fn require_source(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<SourceSummary> {
+    #[cfg(feature = "desktop_rebuild")]
+    {
+        super::get(tx, tenant, id)?.ok_or_else(|| CatalogFailure::NotFound.into())
+    }
+    #[cfg(not(feature = "desktop_rebuild"))]
+    require(tx, tenant, id)
+}
+fn project(m: Map<String, Value>, global: NamingProfile) -> Result<Value> {
     let Some(naming) = m.get("naming") else {
         return response(global, true, json!({}));
     };
@@ -366,11 +389,11 @@ pub(super) fn save(
     id: i64,
     command: NamingCommand,
 ) -> Result<Value> {
-    let mut m = require(tx, tenant, id)?.metadata.unwrap_or_default();
+    let mut m = require_source(tx, tenant, id)?.metadata.unwrap_or_default();
     let naming = match command {
         NamingCommand::UseDefaults => json!({"use_defaults":true,"override":{}}),
         NamingCommand::Override { profile } => {
-            json!({"use_defaults":false,"override":profile.validate()?})
+            json!({"use_defaults":false,"override":profile.validate_input()?})
         }
     };
     m.insert("naming".into(), naming);

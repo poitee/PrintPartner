@@ -5,6 +5,7 @@ pub enum CatalogFailure {
     Input(String),
     DuplicateName(String),
     NotFound,
+    InvalidStoredNaming,
     Referenced,
     TooLarge,
 }
@@ -14,6 +15,7 @@ impl std::fmt::Display for CatalogFailure {
             Self::Input(detail) => detail,
             Self::DuplicateName(name) => return write!(f, "Source already exists: {name}"),
             Self::NotFound => "Source not found",
+            Self::InvalidStoredNaming => "Stored Source naming settings are invalid",
             Self::Referenced => "Source historical name is referenced and cannot be changed",
             Self::TooLarge => "Catalog request too large",
         })
