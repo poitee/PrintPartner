@@ -582,7 +582,7 @@ async fn ticket_t_3_drain_legal_summary_alias_parity() {
         )
         .await;
         assert_eq!(status, *expected_status, "Rust candidate {method} {path}");
-        for header in ["content-type", "content-length"] {
+        for header in ["content-type", "content-length", "cache-control"] {
             assert_eq!(
                 headers.get(header),
                 expected_headers.get(header),
@@ -642,7 +642,7 @@ async fn ticket_t_3_drain_legal_summary_alias_parity() {
             let (status, headers, body) =
                 response.expect("Rust alias must not wait for stopped Node");
             assert_eq!(status, *expected_status, "Rust alias {method} {path}");
-            for header in ["content-type", "content-length"] {
+            for header in ["content-type", "content-length", "cache-control"] {
                 assert_eq!(
                     headers.get(header),
                     expected_headers.get(header),

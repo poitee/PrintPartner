@@ -715,6 +715,9 @@ async fn handle(
             response
                 .headers_mut()
                 .insert("content-length", HeaderValue::from(document.len()));
+            response
+                .headers_mut()
+                .insert("cache-control", HeaderValue::from_static("no-store"));
             return response;
         }
         let mut response = (
