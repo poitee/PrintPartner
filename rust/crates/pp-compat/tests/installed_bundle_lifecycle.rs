@@ -228,6 +228,7 @@ async fn installed_bundle_start_health_shutdown() -> Result<()> {
         runtime_dir: ownership.runtime_dir.clone(),
         lease: ownership.lease.clone(),
         lease_file: ownership.lock.try_clone()?,
+        gateway_rate_limit: false,
         record_child: TestOwnership::record_child,
         port,
     })?;
