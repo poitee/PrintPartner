@@ -684,6 +684,7 @@ mod tests {
         REPLACE_DIRECTORY_BEFORE_WRITER_PREFLIGHT.set(replacement);
         let result = crate::WriterOwner::open(&path, crate::Limits::default());
         let error = result.err().map(|error| error.to_string());
+        assert_eq!(crate::schema::PREFLIGHT_CALLS.get(), 0);
         let preserved = if replacement >= 3 {
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
             path.clone()
@@ -716,7 +717,9 @@ mod tests {
         for replacement in [1, 2, 3] {
             let path = directory();
             let admitted = admit_directory(&path).unwrap();
+            crate::schema::PREFLIGHT_CALLS.set(0);
             admitted.preflight().unwrap();
+            assert_eq!(crate::schema::PREFLIGHT_CALLS.get(), 1);
             REPLACE_DIRECTORY_BEFORE_WRITER_PREFLIGHT.set(replacement);
             replace_directory_before_writer_preflight(&path).unwrap();
             let result = StorageLease::acquire_admitted(admitted);
