@@ -159,9 +159,10 @@ function exportInventory(source: string, db: Database.Database): OwnershipExport
 function relocatedLocalPath(row: Row, source: string, destination: string): string {
   const path = z.string().parse(row.local_path);
   const root = join(source, "repos", String(row.id));
-  if (path !== root && !path.startsWith(`${root}${sep}`)) throw new Error("Unsafe Source local_path");
-  safeRelative(relative(join(source, "repos"), path));
-  return join(destination, relative(source, path));
+  const candidate = resolve(path);
+  if (!isAbsolute(path) || (candidate !== root && !candidate.startsWith(`${root}${sep}`))) throw new Error("Unsafe Source local_path");
+  safeRelative(relative(root, candidate));
+  return join(destination, relative(source, candidate));
 }
 function validateSnapshotPaths(source: string, db: Database.Database, checkLocalPaths = true): void {
   for (const project of rows(db, "projects")) {
@@ -180,17 +181,19 @@ function validateSnapshotPaths(source: string, db: Database.Database, checkLocal
     checkTree(cursor);
   }
   const driver = drizzle(db, { schema });
+  const sets = driver.select().from(schema.planRevisionInputSets).all();
+  const revisions = driver.select().from(schema.planRevisions).all();
   for (const profile of driver.select().from(schema.buildProfiles).all()) {
     if (profile.acceptedPlanRevisionId == null) continue;
     const accepted = readAcceptedPlanOperationalSnapshotInternal({ db: driver, schema, tenantId: profile.tenantId,
       profileId: profile.id, reposDir: join(source, "repos"), sqlite: true,
       resolveSourceSnapshotPath: (sourceId, locator) => locator.startsWith(`${sourceId}/revisions/`) ? join(source, "repos", locator) : null });
-    if (accepted.kind !== "ready") throw new Error("Unsafe accepted Plan operational state");
+    const revision = revisions.find(revision => revision.id === profile.acceptedPlanRevisionId);
+    const format1 = sets.some(set => set.id === revision?.inputSetId && set.formatVersion === 1);
+    if (accepted.kind !== "ready" && !(accepted.kind === "uninitialized" && format1)) throw new Error("Unsafe accepted Plan operational state");
   }
   const inputs = driver.select().from(schema.planRevisionInputs).all();
-  const sets = driver.select().from(schema.planRevisionInputSets).all();
   const sourceRevisions = driver.select().from(schema.sourceRevisions).all();
-  const revisions = driver.select().from(schema.planRevisions).all();
   for (const part of driver.select().from(schema.planRevisionParts).all()) {
     const revision = revisions.find(revision => revision.id === part.revisionId);
     const set = sets.find(set => set.id === revision?.inputSetId);

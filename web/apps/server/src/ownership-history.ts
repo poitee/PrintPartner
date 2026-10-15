@@ -74,13 +74,18 @@ export function validateOwnershipHistory(database: Database.Database): void {
     if (revision.parentRevisionId != null && !revisions.some(parent => parent.id === revision.parentRevisionId && parent.revisionNumber < revision.revisionNumber)) fail("revision lineage");
     if (revision.provenanceKind === "tracked" && !sets.some(set => set.id === revision.inputSetId && set.profileId === revision.profileId && set.tenantId === revision.tenantId)) fail("revision input Plan");
     const requiredSet = unitSets.find(set => set.revisionId === revision.id);
-    if (!requiredSet) fail("missing Required-unit map");
-    validateAcceptedPlanRequiredUnitRows({ tenantId: revision.tenantId, profileId: revision.profileId, revisionId: revision.id,
-      requiredSet: requiredSet ?? fail("missing Required-unit map"),
-      parts: revisionParts.map(part => ({ revisionPartId: part.id, included: part.included, quantityEffective: part.quantityEffective })),
-      mappings: mappings.filter(mapping => mapping.revisionId === revision.id),
-      units: units.filter(unit => unit.profileId === revision.profileId), creationRevisions: revisions,
-      createdHere: units.filter(unit => unit.createdInRevisionId === revision.id) });
+    const revisionMappings = mappings.filter(mapping => mapping.revisionId === revision.id);
+    const createdHere = units.filter(unit => unit.createdInRevisionId === revision.id);
+    if (!requiredSet) {
+      if (profiles.some(profile => profile.acceptedPlanRevisionId === revision.id) || revisionMappings.length || createdHere.length) fail("missing or partial Required-unit map");
+    } else {
+      validateAcceptedPlanRequiredUnitRows({ tenantId: revision.tenantId, profileId: revision.profileId, revisionId: revision.id,
+        requiredSet,
+        parts: revisionParts.map(part => ({ revisionPartId: part.id, included: part.included, quantityEffective: part.quantityEffective })),
+        mappings: revisionMappings,
+        units: units.filter(unit => unit.profileId === revision.profileId), creationRevisions: revisions,
+        createdHere });
+    }
     for (const part of revisionParts) {
       if (part.relativePath && !isSafeRelativePath(part.relativePath)) fail("Part path");
       if (part.filename && (!isSafeRelativePath(part.filename) || part.filename.includes("/"))) fail("Part filename");

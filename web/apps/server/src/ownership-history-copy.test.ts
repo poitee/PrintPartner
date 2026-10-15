@@ -6,6 +6,7 @@ import Database from "better-sqlite3";
 import Fastify from "fastify";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as schema from "./db/schema.js";
+import { schemaMigrations } from "./db/migrations-sqlite.js";
 import { digestPlanRevisionParts } from "./services/plan-publication.js";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { z } from "zod";
@@ -13,6 +14,7 @@ import { SqliteDatabase, getDb } from "./db/client.js";
 import { AppRepository } from "./db/repository.js";
 import { backfillAcceptedPlanRevisions } from "./db/accepted-plan-revisions.js";
 import { backfillCurrentRequiredUnitSets } from "./db/required-units.js";
+import { digestFormat1Inputs } from "./db/accepted-plan-operational-model.js";
 import { digestRequiredUnitMap } from "./services/required-units.js";
 import { captureAcceptedOperationalExport } from "./services/accepted-operational-export.js";
 import { materializeAcceptedChecklistHtml } from "./services/export-html.js";
@@ -307,4 +309,69 @@ it("copies actual checklist and kit publications without changing their bytes", 
   const copied = input.exports.map(artifact => join(tenantExportDirectory(join(paths.destinationDir, "exports"), "account-a"), artifact.path.split("/").slice(1).join("/")));
   expect(copied.map(path => hash(readFileSync(path))).sort()).toEqual(before.sort());
   expect(loadKitBundleBytes(copied.find(path => path.endsWith(".zip"))!)).toEqual(data);
+});
+
+it.each(["inspect", "apply"])("%s refuses normalized cross-Source local paths", async mode => {
+  const paths = fixture(); const input = manifest(paths.sourceDir);
+  edit(paths.sourceDir, db => {
+    db.prepare("UPDATE projects SET local_path=? WHERE id=1").run(`${paths.sourceDir}/repos/1/../2/revisions/commit-2`);
+    input.source_digest = hash(db.serialize());
+  });
+  if (mode === "inspect") expect(() => inspectOwnershipCopy(paths)).toThrow("Unsafe Source local_path");
+  else await refused(paths, input);
+});
+it("copies valid format-1 accepted history while retaining its uninitialized operational state", async () => {
+  const paths = fixture();
+  edit(paths.sourceDir, db => {
+    for (const id of [1, 2]) {
+      const manifestDigest = hash(`manifest-${id}-2`);
+      db.prepare("UPDATE plan_revision_inputs SET source_layer=?,effective_naming_digest=NULL WHERE id=?").run(`legacy:${id}`, id);
+      db.prepare("UPDATE plan_revision_input_sets SET format_version=1,input_set_digest=? WHERE id=?")
+        .run(digestFormat1Inputs([{ sourceRevisionId: id * 10 + 2, manifestDigest }]), id);
+    }
+  });
+  const input = manifest(paths.sourceDir); const before = files(paths.sourceDir);
+  await executeOwnershipCopy({ ...paths, manifest: input }); expect(files(paths.sourceDir)).toEqual(before);
+  const store = new SqliteDatabase(paths.destinationDir); store.connect();
+  try {
+    const repo = new AppRepository(getDb(store), "account-a", store.reposDir);
+    expect(repo.getAcceptedPlanRevisionInputSet(1)?.format_version).toBe(1);
+    expect(repo.readAcceptedPlanOperationalSnapshot(1).kind).toBe("uninitialized");
+    expect(repo.getAcceptedPlanRevision(2)).toBeNull();
+  } finally { store.close(); }
+});
+it.each(["absent", "partial-mapping", "orphan-unit"])("copies retained pre-map history only when its map state is %s", async state => {
+  const paths = fixture(); const originalInput = manifest(paths.sourceDir);
+  edit(paths.sourceDir, raw => {
+    const db = drizzle(raw);
+    const revision = db.select().from(schema.planRevisions).all().find(row => row.id === 1)!;
+    const part = db.select().from(schema.planRevisionParts).all().find(row => row.revisionId === 1)!;
+    raw.exec("DROP TRIGGER trg_plan_revisions_immutable_update");
+    raw.exec("UPDATE plan_revisions SET revision_number=2 WHERE id=1");
+    db.insert(schema.planRevisions).values({ ...revision, id: 3 }).run();
+    db.insert(schema.planRevisionParts).values({ ...part, id: 3, revisionId: 3 }).run();
+    raw.exec("UPDATE plan_revisions SET parent_revision_id=3 WHERE id=1");
+    raw.exec(schemaMigrations.find(sql => sql.startsWith("CREATE TRIGGER IF NOT EXISTS trg_plan_revisions_immutable_update\n"))!);
+    if (state === "partial-mapping") {
+      const mapping = db.select().from(schema.planRevisionRequiredUnits).all().find(row => row.revisionId === 1)!;
+      db.insert(schema.planRevisionRequiredUnits).values({ ...mapping, revisionId: 3, revisionPartId: 3 }).run();
+    }
+    if (state === "orphan-unit") db.insert(schema.requiredUnits).values({ token: "ppu_" + "f".repeat(32), objectName: "old__ppu_" + "f".repeat(32),
+      tenantId: "default", profileId: 1, createdInRevisionId: 3, createdAt: now }).run();
+  });
+  if (state !== "absent") {
+    expect(() => inspectOwnershipCopy(paths)).toThrow("missing or partial Required-unit map");
+    edit(paths.sourceDir, db => { originalInput.source_digest = hash(db.serialize()); });
+    await refused(paths, originalInput); return;
+  }
+  const input = manifest(paths.sourceDir); const before = files(paths.sourceDir);
+  await executeOwnershipCopy({ ...paths, manifest: input }); expect(files(paths.sourceDir)).toEqual(before);
+  const store = new SqliteDatabase(paths.destinationDir); store.connect();
+  try {
+    expect(new AppRepository(getDb(store), "account-a", store.reposDir).readAcceptedPlanOperationalSnapshot(1).kind).toBe("ready");
+    const copy = new Database(join(paths.destinationDir, "print-partner.db"), { readonly: true });
+    try { expect(copy.prepare("SELECT tenant_id FROM plan_revisions WHERE id=3").get()).toEqual({ tenant_id: "account-a" });
+      expect(copy.prepare("SELECT * FROM plan_revision_required_unit_sets WHERE revision_id=3").all()).toEqual([]);
+    } finally { copy.close(); }
+  } finally { store.close(); }
 });
