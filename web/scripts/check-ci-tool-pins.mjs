@@ -37,6 +37,12 @@ function checkUses(step, file, path, seen) {
     report(file, `${path}.uses`, 'INVALID_USES', 'uses must be a nonempty literal string');
     return;
   }
+  const pinned = step.uses.startsWith('docker://')
+    ? /^docker:\/\/[^@\s]+@sha256:[0-9a-fA-F]{64}$/.test(step.uses)
+    : /^[^@\s]+@[0-9a-fA-F]{40}$/.test(step.uses);
+  if (!step.uses.startsWith('./') && !pinned) {
+    report(file, `${path}.uses`, 'UNPINNED_ACTION', `${JSON.stringify(step.uses)}; expected a 40-character commit SHA or Docker sha256 digest`);
+  }
   const action = step.uses.split('@')[0].trim().toLowerCase();
   if (action !== 'taiki-e/install-action' && !action.startsWith('taiki-e/install-action/')) return;
   if (seen.has(step)) return;

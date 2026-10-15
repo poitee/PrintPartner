@@ -7,6 +7,7 @@ import process from 'node:process';
 import { fileURLToPath, URL } from 'node:url';
 import test from 'node:test';
 
+const wrapper = fileURLToPath(new URL('../../scripts/check-github-actions-pinned.sh', import.meta.url));
 const cli = fileURLToPath(new URL('./check-ci-tool-pins.mjs', import.meta.url));
 const action = 'taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe';
 const workflow = step => `jobs:\n  probe:\n    steps:\n${step}\n`;
@@ -29,8 +30,8 @@ for (const [name, source, declarations, tools] of [
   ['folded whitespace list', installer('>\n            nextest@0.9.148\n            sccache@0.18.0'), 1, 2],
   ['CRLF and no trailing newline', installer("'nextest@0.9.148' # exact release").trimEnd().replaceAll('\n', '\r\n'), 1, 1],
   ['complete steps anchor', `jobs:\n  first:\n    steps: &steps\n      - uses: ${action}\n        with: &inputs\n          tool: &tool nextest@0.9.148\n  second:\n    steps: *steps\n  third:\n    steps:\n      - uses: ${action}\n        with: *inputs\n      - uses: ${action}\n        with: {tool: *tool}\n`, 3, 3],
-  ['unrelated tool inputs and shell text', workflow(`      - uses: other/action@v1\n        with: {tool: nextest}\n      - run: |\n          echo 'uses: ${action}'\n          echo 'tool: nextest'`), 0, 0],
-  ['reusable workflow job', 'jobs: {probe: {uses: owner/repo/.github/workflows/reuse.yml@main}}', 0, 0],
+  ['unrelated tool inputs and shell text', workflow(`      - uses: other/action@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n        with: {tool: nextest}\n      - run: |\n          echo 'uses: ${action}'\n          echo 'tool: nextest'`), 0, 0],
+  ['reusable workflow job', 'jobs: {probe: {uses: owner/repo/.github/workflows/reuse.yml@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}}', 0, 0],
 ]) {
   test(name, t => {
     const result = run(t, source);
@@ -67,11 +68,11 @@ for (const [name, source, diagnostic, path = 'jobs.probe.steps[0].with.tool'] of
   ['anchored floating inputs', `inputs: &inputs {tool: nextest}\njobs: {probe: {steps: [{uses: '${action}', with: *inputs}]}}`, 'UNPINNED_TOOL'],
   ['anchored floating steps', `jobs: {probe: {steps: &steps [{uses: '${action}', with: {tool: nextest}}]}, second: {steps: *steps}}`, 'UNPINNED_TOOL'],
   ['anchored floating scalar', `tool: &tool sccache\njobs: {probe: {steps: [{uses: '${action}', with: {tool: *tool}}]}}`, 'UNPINNED_TOOL'],
-  ['adjacent unrelated tool', workflow(`      - uses: ${action}\n      - uses: other/action@v1\n        with: {tool: nextest@0.9.148}`), 'INVALID_TOOL'],
+  ['adjacent unrelated tool', workflow(`      - uses: ${action}\n      - uses: other/action@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n        with: {tool: nextest@0.9.148}`), 'INVALID_TOOL'],
   ['sub-action', workflow(`      - uses: taiki-e/install-action/nextest@v2`), 'INVALID_INSTALLER', 'jobs.probe.steps[0].uses'],
   ['missing installer ref', workflow('      - uses: taiki-e/install-action'), 'INVALID_INSTALLER', 'jobs.probe.steps[0].uses'],
   ['duplicate tool key', installer('nextest@0.9.148\n          tool: nextest'), 'INVALID_YAML', '$'],
-  ['duplicate uses key', workflow(`      - uses: ${action}\n        uses: other/action@v1`), 'INVALID_YAML', '$'],
+  ['duplicate uses key', workflow(`      - uses: ${action}\n        uses: other/action@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`), 'INVALID_YAML', '$'],
   ['duplicate with key', workflow(`      - uses: ${action}\n        with: {tool: nextest}\n        with: {tool: nextest@0.9.148}`), 'INVALID_YAML', '$'],
   ['duplicate steps key', 'jobs: {probe: {steps: [], steps: []}}', 'INVALID_YAML', '$'],
   ['duplicate jobs key', 'jobs: {}\njobs: {}', 'INVALID_YAML', '$'],
@@ -140,3 +141,68 @@ test('mixed list reports only the floating token', t => {
   assert.equal(result.stdout, summary(1, 1, 1));
   assert.equal(result.stderr, `${result.file} jobs.probe.steps[0].with.tool: UNPINNED_TOOL: "sccache"; expected name@major.minor.patch\n`);
 });
+
+const checkout = 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1';
+
+for (const [name, source] of [
+  ['quoted uses key', workflow(`      - "uses": actions/checkout@v7`)],
+  ['flow step', 'jobs: {probe: {steps: [{uses: actions/checkout@v7}]}}'],
+  ['anchored step', 'step: &checkout {uses: actions/checkout@v7}\njobs: {probe: {steps: [*checkout]}}'],
+  ['anchored scalar', 'ref: &ref actions/checkout@v7\njobs: {probe: {steps: [{uses: *ref}]}}'],
+  ['anchored steps', 'jobs: {probe: {steps: &steps [{uses: actions/checkout@v7}]}, second: {steps: *steps}}'],
+  ['reusable workflow', 'jobs: {probe: {uses: owner/repo/.github/workflows/ci.yml@main}}'],
+  ['sub-action tag', workflow('      - uses: owner/repo/path@v1')],
+  ['short SHA', workflow('      - uses: actions/checkout@3d3c42e')],
+  ['missing ref', workflow('      - uses: actions/checkout')],
+  ['extra ref separator', workflow(`      - uses: owner/repo@tag@${'a'.repeat(40)}`)],
+  ['ref suffix', workflow(`      - uses: ${checkout}suffix`)],
+  ['image tag', workflow('      - uses: docker://alpine:3.22')],
+  ['Docker Git-style SHA', workflow(`      - uses: docker://alpine@${'a'.repeat(40)}`)],
+  ['short Docker digest', workflow(`      - uses: docker://alpine@sha256:${'a'.repeat(63)}`)],
+  ['nonhex Docker digest', workflow(`      - uses: docker://alpine@sha256:${'g'.repeat(64)}`)],
+  ['long Docker digest', workflow(`      - uses: docker://alpine@sha256:${'a'.repeat(65)}`)],
+  ['missing Docker image', workflow(`      - uses: docker://@sha256:${'a'.repeat(64)}`)],
+  ['bare SHA', workflow(`      - uses: ${'a'.repeat(40)}`)],
+]) {
+  test(`reject unpinned action in ${name}`, t => {
+    const result = run(t, source);
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stderr, /UNPINNED_ACTION:/);
+    assert.match(result.stdout, / errors=[1-9]\d*\n$/);
+  });
+}
+
+for (const [name, source] of [
+  ['quoted uses key', workflow(`      - "uses": '${checkout}'`)],
+  ['flow step', `jobs: {probe: {steps: [{uses: '${checkout}'}]}}`],
+  ['anchored step', `step: &checkout {uses: '${checkout}'}\njobs: {probe: {steps: [*checkout]}}`],
+  ['reusable workflow', `jobs: {probe: {uses: owner/repo/.github/workflows/ci.yml@${'a'.repeat(40)}}}`],
+  ['sub-action SHA', workflow(`      - uses: owner/repo/path@${'A'.repeat(40)}`)],
+  ['Docker digest', workflow(`      - uses: docker://alpine@sha256:${'a'.repeat(64)}`)],
+  ['tagged image with digest', workflow(`      - uses: docker://ghcr.io/owner/image:tag@sha256:${'a'.repeat(64)}`)],
+  ['local action', workflow('      - uses: ./local/action')],
+  ['local reusable workflow', 'jobs: {probe: {uses: ./.github/workflows/ci.yml}}'],
+  ['shell example', workflow(`      - run: |\n          echo 'uses: actions/checkout@v7'`)],
+]) {
+  test(`accept immutable or local action in ${name}`, t => {
+    const result = run(t, source);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr, '');
+    assert.equal(result.stdout, summary(0, 0, 0));
+  });
+}
+
+for (const [name, source, status] of [
+  ['pinned action', workflow(`      - uses: '${checkout}'`), 0],
+  ['mutable action', workflow('      - "uses": actions/checkout@v7'), 1],
+  ['mutable tool', installer('nextest'), 1],
+]) {
+  test(`shell entrypoint preserves ${name} result from another directory`, t => {
+    const direct = run(t, source);
+    const wrapped = spawnSync('bash', [wrapper, direct.directory], { cwd: tmpdir(), encoding: 'utf8' });
+    assert.equal(wrapped.status, status, wrapped.stderr);
+    assert.equal(wrapped.status, direct.status);
+    assert.equal(wrapped.stdout, direct.stdout);
+    assert.equal(wrapped.stderr, direct.stderr);
+  });
+}
