@@ -467,6 +467,517 @@ fn decomposed_archive_names_reject_without_normalizing_published_paths() {
     assert!(!fixture.candidate().exists());
 }
 
+#[cfg(feature = "desktop_rebuild")]
+mod acquisition_labels {
+    use super::*;
+    use pp_source::archive::ArchiveLabelPolicy;
+    use sha2::{Digest, Sha256};
+    use unicode_normalization::UnicodeNormalization;
+
+    fn write_members(fixture: &Fixture, members: &[(&str, &[u8])]) {
+        let mut data = Vec::new();
+        let mut central = Vec::new();
+        for &(name, payload) in members {
+            let offset = data.len() as u32;
+            let crc = crc32(payload);
+            let size = payload.len() as u32;
+            let mut local = stored_local_header(crc, size, 0);
+            local.truncate(30);
+            local[6..8].copy_from_slice(&0x800u16.to_le_bytes());
+            local[26..28].copy_from_slice(&(name.len() as u16).to_le_bytes());
+            data.extend(local);
+            data.extend_from_slice(name.as_bytes());
+            data.extend_from_slice(payload);
+            let mut header = stored_central_header(crc, size, offset, &[]);
+            header.truncate(46);
+            header[8..10].copy_from_slice(&0x800u16.to_le_bytes());
+            header[28..30].copy_from_slice(&(name.len() as u16).to_le_bytes());
+            central.extend(header);
+            central.extend_from_slice(name.as_bytes());
+        }
+        let mut end = end_record(data.len(), central.len());
+        let count = (members.len() as u16).to_le_bytes();
+        end[8..10].copy_from_slice(&count);
+        end[10..12].copy_from_slice(&count);
+        data.extend(central);
+        data.extend(end);
+        let mut reader = open_unchecked(data.clone());
+        for (index, &(name, _)) in members.iter().enumerate() {
+            assert_eq!(reader.by_index(index).unwrap().name_raw(), name.as_bytes());
+        }
+        fs::write(fixture.0.join("input/upload.zip"), data).unwrap();
+    }
+
+    #[test]
+    fn explicit_strict_rejects_decomposed_labels_and_releases_stage() {
+        let fixture = Fixture::new();
+        write_members(&fixture, &[("cafe\u{301}.stl", b"x")]);
+        let mut source = fixture.tenant().source(42).unwrap();
+        assert!(matches!(
+            source.extract_zip_with_label_policy(
+                fixture.input(),
+                ArchiveLimits::default(),
+                ArchiveLabelPolicy::Strict,
+                &AtomicBool::new(false),
+            ),
+            Err(ArchiveError::UnsafeEntry)
+        ));
+        assert!(!fixture.candidate().exists());
+        write_members(&fixture, &[("café.stl", b"x")]);
+        source
+            .extract_zip_with_label_policy(
+                fixture.input(),
+                ArchiveLimits::default(),
+                ArchiveLabelPolicy::Strict,
+                &AtomicBool::new(false),
+            )
+            .unwrap()
+            .discard()
+            .unwrap();
+    }
+
+    #[test]
+    fn raw_long_labels_contract_to_valid_file_and_directory_paths() {
+        let raw_dir = vec!["e\u{301}".repeat(70); 20].join("/");
+        let normalized_dir = vec!["é".repeat(70); 20].join("/");
+        for (suffix, payload, raw_len, normalized_len) in [
+            ("", b"".as_slice(), 4220, 2819),
+            ("part.stl", b"x".as_slice(), 4228, 2828),
+        ] {
+            let raw = format!("{raw_dir}/{suffix}");
+            let expected = if suffix.is_empty() {
+                normalized_dir.clone()
+            } else {
+                format!("{normalized_dir}/{suffix}")
+            };
+            assert_eq!(raw.len(), raw_len);
+            assert_eq!(expected.len(), normalized_len);
+            let fixture = Fixture::new();
+            write_members(&fixture, &[(&raw, payload)]);
+            let mut source = fixture.tenant().source(42).unwrap();
+            assert!(matches!(
+                source.extract_zip(
+                    fixture.input(),
+                    ArchiveLimits::default(),
+                    &AtomicBool::new(false),
+                ),
+                Err(ArchiveError::UnsafeEntry)
+            ));
+            assert!(!fixture.candidate().exists());
+            assert!(matches!(
+                source.extract_zip_with_label_policy(
+                    fixture.input(),
+                    ArchiveLimits::default(),
+                    ArchiveLabelPolicy::Strict,
+                    &AtomicBool::new(false),
+                ),
+                Err(ArchiveError::UnsafeEntry)
+            ));
+            assert!(!fixture.candidate().exists());
+            let ready = source
+                .extract_zip_with_label_policy(
+                    fixture.input(),
+                    ArchiveLimits::default(),
+                    ArchiveLabelPolicy::NfcAtAcquisition,
+                    &AtomicBool::new(false),
+                )
+                .unwrap();
+            let destination = fixture.candidate().join("files").join(&expected);
+            if suffix.is_empty() {
+                assert!(
+                    ready
+                        .receipt()
+                        .directories
+                        .iter()
+                        .any(|path| path.as_str() == expected)
+                );
+                assert!(destination.is_dir());
+                assert!(ready.receipt().files.is_empty());
+            } else {
+                assert_eq!(ready.receipt().files.len(), 1);
+                assert_eq!(ready.receipt().files[0].path.as_str(), expected);
+                assert_eq!(fs::read(destination).unwrap(), b"x");
+            }
+            ready.discard().unwrap();
+            assert!(!fixture.candidate().exists());
+        }
+    }
+
+    #[test]
+    fn contracted_paths_still_reject_post_nfc_overflow_and_release_stage() {
+        let raw_dir = vec!["e\u{301}".repeat(70); 30].join("/");
+        for suffix in ["", "part.stl"] {
+            let raw = format!("{raw_dir}/{suffix}");
+            let label = raw.trim_end_matches('/');
+            assert!(label.nfc().collect::<String>().len() > 4096);
+            let fixture = Fixture::new();
+            write_members(&fixture, &[(&raw, b"")]);
+            assert!(matches!(
+                fixture
+                    .tenant()
+                    .source(42)
+                    .unwrap()
+                    .extract_zip_with_label_policy(
+                        fixture.input(),
+                        ArchiveLimits::default(),
+                        ArchiveLabelPolicy::NfcAtAcquisition,
+                        &AtomicBool::new(false),
+                    ),
+                Err(ArchiveError::UnsafeEntry)
+            ));
+            assert!(!fixture.candidate().exists());
+        }
+    }
+
+    #[test]
+    fn normalized_readiness_publishes_exact_payloads_and_preserves_original_zip() {
+        let fixture = Fixture::new();
+        write_members(
+            &fixture,
+            &[
+                ("cafe\u{301}/", b""),
+                ("cafe\u{301}/re\u{301}sume\u{301}/pie\u{300}ce.stl", b"x"),
+                ("café/résumé/autre.stl", b"x"),
+                ("cafe\u{301}/vide\u{301}/", b""),
+            ],
+        );
+        let path = fixture.0.join("input/upload.zip");
+        let mut original = fs::read(&path).unwrap();
+        set_archive_comment(&mut original, b"acquisition fixture note");
+        fs::write(&path, &original).unwrap();
+        let original_hash = hex::encode(Sha256::digest(&original));
+        let mut source = fixture.tenant().source(42).unwrap();
+        let ready = source
+            .extract_zip_with_label_policy(
+                fixture.input(),
+                ArchiveLimits::default(),
+                ArchiveLabelPolicy::NfcAtAcquisition,
+                &AtomicBool::new(false),
+            )
+            .unwrap();
+        let receipt = ready.receipt();
+        assert_eq!(receipt.archive_sha256, original_hash);
+        assert_eq!(receipt.compressed_bytes, original.len() as u64);
+        assert_eq!(receipt.inflated_bytes, 2);
+        assert_eq!(receipt.entry_count, 4);
+        assert_eq!(receipt.stl_count, 2);
+        assert_eq!(
+            receipt
+                .files
+                .iter()
+                .map(|f| f.path.as_str())
+                .collect::<Vec<_>>(),
+            ["café/résumé/autre.stl", "café/résumé/pièce.stl"]
+        );
+        assert_eq!(
+            receipt
+                .directories
+                .iter()
+                .map(SourcePath::as_str)
+                .collect::<Vec<_>>(),
+            ["café", "café/résumé", "café/vidé"]
+        );
+        for file in &receipt.files {
+            assert_eq!(file.size_bytes, 1);
+            assert_eq!(
+                file.sha256,
+                "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"
+            );
+            assert_eq!(
+                fs::read(fixture.candidate().join("files").join(file.path.as_str())).unwrap(),
+                b"x"
+            );
+        }
+        let snapshot = source
+            .materialize(
+                SnapshotRequest {
+                    upstream_revision_key: "normalized-acquisition".into(),
+                    files: receipt
+                        .files
+                        .iter()
+                        .map(|file| SelectedFile {
+                            path: file.path.clone(),
+                            kind: FileKind::Stl,
+                            size_hint_bytes: Some(file.size_bytes),
+                        })
+                        .collect(),
+                    selection: Selection {
+                        max_stl_files: 10,
+                        max_documentation_bytes: 1024,
+                        omitted_files: vec![],
+                    },
+                },
+                ready.files(),
+                ArtifactBudget::new(10000, 10000).unwrap(),
+            )
+            .unwrap();
+        ready.discard().unwrap();
+        assert!(!fixture.candidate().exists());
+        for name in ["café/résumé/autre.stl", "café/résumé/pièce.stl"] {
+            assert_eq!(
+                fs::read(
+                    fixture
+                        .0
+                        .join("repos")
+                        .join(&snapshot.snapshot_locator)
+                        .join(name)
+                )
+                .unwrap(),
+                b"x"
+            );
+        }
+        let after = fs::read(&path).unwrap();
+        assert_eq!(after, original);
+        assert_eq!(after.len(), original.len());
+        assert_eq!(hex::encode(Sha256::digest(&after)), original_hash);
+    }
+
+    #[test]
+    fn normalized_collisions_reject_in_both_orders_and_allow_retry() {
+        for pair in [
+            ["café.stl", "cafe\u{301}.stl"],
+            ["cafe\u{301}/Straße.stl", "café/STRASSE.stl"],
+            ["cafe\u{301}/a.stl", "CAFÉ/b.stl"],
+            ["cafe\u{301}", "café/part.stl"],
+            ["cafe\u{301}/", "café/"],
+            ["cafe\u{301}", "café/"],
+        ] {
+            for names in [pair, [pair[1], pair[0]]] {
+                let fixture = Fixture::new();
+                let members = names.map(|name| {
+                    (
+                        name,
+                        if name.ends_with('/') {
+                            &b""[..]
+                        } else {
+                            &b"x"[..]
+                        },
+                    )
+                });
+                write_members(&fixture, &members);
+                let mut source = fixture.tenant().source(42).unwrap();
+                assert!(
+                    matches!(
+                        source.extract_zip_with_label_policy(
+                            fixture.input(),
+                            ArchiveLimits::default(),
+                            ArchiveLabelPolicy::NfcAtAcquisition,
+                            &AtomicBool::new(false),
+                        ),
+                        Err(ArchiveError::DuplicateEntry)
+                    ),
+                    "{names:?}"
+                );
+                assert!(!fixture.candidate().exists());
+                write_members(&fixture, &[("cafe\u{301}.stl", b"x")]);
+                source
+                    .extract_zip_with_label_policy(
+                        fixture.input(),
+                        ArchiveLimits::default(),
+                        ArchiveLabelPolicy::NfcAtAcquisition,
+                        &AtomicBool::new(false),
+                    )
+                    .unwrap()
+                    .discard()
+                    .unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn normalization_does_not_make_unsafe_labels_safe() {
+        let expanded = format!("{}.stl", "\u{344}".repeat(1024));
+        assert!(expanded.len() <= 4096);
+        assert_eq!(expanded.nfc().collect::<String>().len(), 4100);
+        for name in [
+            "../cafe\u{301}.stl",
+            "/cafe\u{301}.stl",
+            "C:/cafe\u{301}.stl",
+            "cafe\u{301}\\part.stl",
+            "cafe\u{301}//part.stl",
+            "./cafe\u{301}.stl",
+            "cafe\u{301}/./part.stl",
+            "cafe\u{301}/../part.stl",
+            "cafe\u{301}/part\n.stl",
+            "cafe\u{301}/part\0.stl",
+            "/",
+            "cafe\u{301}//",
+            ".printpartner-source-snapshot.json/cafe\u{301}.stl",
+            expanded.as_str(),
+        ] {
+            let fixture = Fixture::new();
+            write_members(&fixture, &[(name, b"")]);
+            assert!(
+                matches!(
+                    fixture
+                        .tenant()
+                        .source(42)
+                        .unwrap()
+                        .extract_zip_with_label_policy(
+                            fixture.input(),
+                            ArchiveLimits::default(),
+                            ArchiveLabelPolicy::NfcAtAcquisition,
+                            &AtomicBool::new(false),
+                        ),
+                    Err(ArchiveError::UnsafeEntry)
+                ),
+                "{name:?}"
+            );
+            assert!(!fixture.candidate().exists());
+        }
+    }
+
+    #[test]
+    fn opt_in_extraction_preserves_limits_and_ratio_guard() {
+        let fixture = Fixture::new();
+        write_members(
+            &fixture,
+            &[("cafe\u{301}.stl", b"xy"), ("autre.stl", b"xy")],
+        );
+        let compressed = fs::metadata(fixture.0.join("input/upload.zip"))
+            .unwrap()
+            .len();
+        let mut source = fixture.tenant().source(42).unwrap();
+        for limits in [
+            ArchiveLimits {
+                max_compressed_bytes: compressed - 1,
+                ..ArchiveLimits::default()
+            },
+            ArchiveLimits {
+                max_inflated_bytes: 1,
+                ..ArchiveLimits::default()
+            },
+            ArchiveLimits {
+                max_inflated_bytes: 3,
+                ..ArchiveLimits::default()
+            },
+            ArchiveLimits {
+                max_entries: 1,
+                ..ArchiveLimits::default()
+            },
+        ] {
+            assert!(matches!(
+                source.extract_zip_with_label_policy(
+                    fixture.input(),
+                    limits,
+                    ArchiveLabelPolicy::NfcAtAcquisition,
+                    &AtomicBool::new(false),
+                ),
+                Err(ArchiveError::Limit)
+            ));
+            assert!(!fixture.candidate().exists());
+        }
+        deflated_zip(&fixture, &vec![0; 2 * 1024 * 1024]);
+        assert!(matches!(
+            source.extract_zip_with_label_policy(
+                fixture.input(),
+                ArchiveLimits::default(),
+                ArchiveLabelPolicy::NfcAtAcquisition,
+                &AtomicBool::new(false),
+            ),
+            Err(ArchiveError::CompressionRatio)
+        ));
+        assert!(!fixture.candidate().exists());
+    }
+
+    #[test]
+    fn opt_in_cancellation_cleans_stage_and_allows_retry() {
+        let fixture = Fixture::new();
+        fixture.zip(512);
+        let mut source = fixture.tenant().source(42).unwrap();
+        let cancel = Arc::new(AtomicBool::new(true));
+        assert!(matches!(
+            source.extract_zip_with_label_policy(
+                fixture.input(),
+                ArchiveLimits::default(),
+                ArchiveLabelPolicy::NfcAtAcquisition,
+                &cancel,
+            ),
+            Err(ArchiveError::Cancelled)
+        ));
+        assert!(!fixture.candidate().exists());
+        cancel.store(false, Ordering::Relaxed);
+        let signal = cancel.clone();
+        let path = fixture.candidate().join("archive.zip");
+        let input_len = fs::metadata(fixture.0.join("input/upload.zip"))
+            .unwrap()
+            .len();
+        let watcher = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while Instant::now() < deadline {
+                if fs::metadata(&path).is_ok_and(|m| m.len() > 0 && m.len() < input_len) {
+                    signal.store(true, Ordering::Relaxed);
+                    return true;
+                }
+                thread::sleep(Duration::from_micros(100));
+            }
+            signal.store(true, Ordering::Relaxed);
+            false
+        });
+        let result = source.extract_zip_with_label_policy(
+            fixture.input(),
+            ArchiveLimits::default(),
+            ArchiveLabelPolicy::NfcAtAcquisition,
+            &cancel,
+        );
+        assert!(watcher.join().unwrap());
+        assert!(matches!(result, Err(ArchiveError::Cancelled)));
+        assert!(!fixture.candidate().exists());
+        cancel.store(false, Ordering::Relaxed);
+        write_members(&fixture, &[("cafe\u{301}.stl", b"x")]);
+        source
+            .extract_zip_with_label_policy(
+                fixture.input(),
+                ArchiveLimits::default(),
+                ArchiveLabelPolicy::NfcAtAcquisition,
+                &cancel,
+            )
+            .unwrap()
+            .discard()
+            .unwrap();
+        assert!(!fixture.candidate().exists());
+    }
+
+    #[test]
+    fn canonically_equivalent_local_and_central_names_must_match_raw_bytes() {
+        let fixture = Fixture::new();
+        let central = "a\u{315}\u{300}.stl";
+        let local = "a\u{300}\u{315}.stl";
+        assert_eq!(central.len(), local.len());
+        assert_ne!(central.as_bytes(), local.as_bytes());
+        assert_eq!(
+            central.nfc().collect::<String>(),
+            local.nfc().collect::<String>()
+        );
+        write_members(&fixture, &[(central, b"x")]);
+        let mut source = fixture.tenant().source(42).unwrap();
+        source
+            .extract_zip_with_label_policy(
+                fixture.input(),
+                ArchiveLimits::default(),
+                ArchiveLabelPolicy::NfcAtAcquisition,
+                &AtomicBool::new(false),
+            )
+            .unwrap()
+            .discard()
+            .unwrap();
+        let path = fixture.0.join("input/upload.zip");
+        let mut data = fs::read(&path).unwrap();
+        data[30..30 + local.len()].copy_from_slice(local.as_bytes());
+        fs::write(path, data).unwrap();
+        assert!(matches!(
+            source.extract_zip_with_label_policy(
+                fixture.input(),
+                ArchiveLimits::default(),
+                ArchiveLabelPolicy::NfcAtAcquisition,
+                &AtomicBool::new(false),
+            ),
+            Err(ArchiveError::InvalidArchive)
+        ));
+        assert!(!fixture.candidate().exists());
+    }
+}
+
 fn local_request(key: &str) -> SnapshotRequest {
     SnapshotRequest {
         upstream_revision_key: key.into(),
