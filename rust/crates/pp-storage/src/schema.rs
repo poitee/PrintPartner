@@ -46,14 +46,13 @@ thread_local! {
 }
 
 pub(crate) fn preflight(
-    path: &Path,
+    #[cfg(test)] path: &Path,
     owned: bool,
     open_file: impl Fn(&str) -> std::io::Result<File>,
     validate_directory: impl Fn() -> Result<()>,
 ) -> Result<u64> {
     #[cfg(test)]
     PREFLIGHT_CALLS.update(|calls| calls + 1);
-    let marker = path.parent().unwrap().join(".desktop-owner.json");
     #[cfg(test)]
     let owner_checkpoint = std::cell::Cell::new(3);
     let check_owner = || -> Result<()> {
@@ -65,7 +64,7 @@ pub(crate) fn preflight(
         let blocked = if owned {
             Ok(false)
         } else {
-            crate::lease::prior_owner_blocks_unowned(&marker)
+            crate::lease::prior_owner_blocks_unowned(&open_file)
         };
         #[cfg(test)]
         capture_tests::transient_swap(path, owner_checkpoint.get(), true)?;
@@ -817,7 +816,10 @@ mod capture_tests {
     #[test]
     fn ticket_t_12_preflight_marker_ignores_transient_directory_swap() {
         for checkpoint in [4, 5] {
-            for live in [false, true] {
+            for live in [None, Some(false), Some(true)] {
+                if checkpoint == 5 && live == Some(true) {
+                    continue;
+                }
                 let path = std::env::temp_dir().join(format!(
                     "pp-marker-descriptor-{}",
                     hex::encode(rand::random::<[u8; 8]>())
@@ -839,10 +841,10 @@ mod capture_tests {
                     })
                     .to_string()
                 };
-                let original = marker(live);
-                let decoy = marker(!live);
-                if checkpoint == 4 || !live {
-                    std::fs::write(path.join(".desktop-owner.json"), &original).unwrap();
+                let original = live.map(marker);
+                let decoy = marker(!live.unwrap_or(false));
+                if let Some(original) = &original {
+                    std::fs::write(path.join(".desktop-owner.json"), original).unwrap();
                 }
                 std::fs::write(replacement.join(".desktop-owner.json"), &decoy).unwrap();
                 let before = std::fs::read(path.join("print-partner.db")).unwrap();
@@ -858,11 +860,15 @@ mod capture_tests {
                     std::fs::read_to_string(replacement.join(".desktop-owner.json")).unwrap(),
                     decoy
                 );
+                assert_eq!(
+                    std::fs::read_to_string(path.join(".desktop-owner.json")).ok(),
+                    original
+                );
                 assert!(!path.join(".desktop.lock").exists());
                 assert!(!path.join(".desktop-lease").exists());
                 std::fs::remove_dir_all(&path).unwrap();
                 std::fs::remove_dir_all(replacement).unwrap();
-                if live && checkpoint == 4 {
+                if live == Some(true) {
                     assert_eq!(
                         result.unwrap_err().to_string(),
                         "Data directory already owned"
@@ -870,10 +876,39 @@ mod capture_tests {
                 } else {
                     assert!(
                         result.is_ok(),
-                        "checkpoint {checkpoint}, live {live}: {result:?}"
+                        "checkpoint {checkpoint}, live {live:?}: {result:?}"
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn ticket_t_12_preflight_marker_refuses_symlink_to_regular_record() {
+        for live in [false, true] {
+            let path = std::env::temp_dir().join(format!(
+                "pp-marker-link-{}",
+                hex::encode(rand::random::<[u8; 8]>())
+            ));
+            let admitted = crate::lease::admit_directory(&path).unwrap();
+            let target = path.join("private-marker");
+            let bytes = serde_json::json!({
+                "pid": if live { std::process::id() } else { i32::MAX as u32 },
+                "kind": "standalone"
+            })
+            .to_string();
+            std::fs::write(&target, &bytes).unwrap();
+            let marker = path.join(".desktop-owner.json");
+            std::os::unix::fs::symlink("private-marker", &marker).unwrap();
+            let error = admitted.preflight().unwrap_err();
+            assert_eq!(error.to_string(), "storage_lease_marker_invalid");
+            assert_eq!(std::fs::read_to_string(&target).unwrap(), bytes);
+            assert_eq!(
+                std::fs::read_link(&marker).unwrap(),
+                Path::new("private-marker")
+            );
+            assert_eq!(std::fs::read_dir(&path).unwrap().count(), 2);
+            std::fs::remove_dir_all(path).unwrap();
         }
     }
 
