@@ -52,7 +52,7 @@ const TABLES = ["table:app_settings", "table:projects", "table:source_docs"];
 const FILE_RESOURCES = ["file:source-workspace", "table:projects", "table:source_docs"];
 const manifest = z.object({ resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -741,4 +741,62 @@ it("rejects observed reads against the empty get_job_status declaration", async 
   expect(entry).toEqual({ operation: "tool.get_job_status", resources: [] });
   expect(() => expect(statements).toEqual([])).toThrow();
   expect(() => expect(observer.state.files).toEqual([])).toThrow();
+});
+
+
+it("traces list_plan_snapshots identity, summaries and tenants against its literal union", async () => {
+  const plan = repo.createProfile("Snapshots");
+  const empty = repo.createProfile("Empty");
+  const foreign = tenantStorage.run("other", () => repo.createProfile("Foreign"));
+  const first = repo.createPlanSnapshot({ planId: plan.id, name: "Newer", source: "user", payload: { secret: "not returned" } });
+  const second = repo.createPlanSnapshot({ planId: plan.id, name: "Older", source: "user", payload: {} });
+  sqlite.prepare("UPDATE plan_snapshots SET created_at = ? WHERE id = ?").run("2026-01-02", first.id);
+  sqlite.prepare("UPDATE plan_snapshots SET created_at = ? WHERE id = ?").run("2026-01-01", second.id);
+  const other = tenantStorage.run("other", () => repo.createPlanSnapshot({ planId: foreign.id, name: "Other", source: "user", payload: {} }));
+  // A colliding profile ID proves the snapshot SELECT itself filters the tenant.
+  sqlite.prepare("INSERT INTO plan_snapshots (tenant_id, profile_id, name, created_at, source, payload_json) VALUES (?, ?, ?, ?, ?, ?)").run("other", plan.id, "Hidden", "2026-01-03", "user", "{}");
+  const identity = ["table:build_profiles"];
+  const tables = ["table:build_profiles", "table:plan_snapshots"];
+  const union = new Set<string>();
+  async function trace(input: Record<string, unknown>, expected: string[], tenantId = "default", activePlanId?: number) {
+    statements = [];
+    observer.state.files = [];
+    observer.state.active = true;
+    let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+    try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("list_plan_snapshots", input, { repo, activePlanId })); }
+    finally { observer.state.active = false; }
+    const observed = [...new Set(statements.map((statement) => {
+      const sql = z.string().parse(statement);
+      const escapedTenant = tenantId.replaceAll("'", "''");
+      const snapshot = /^select "id", "tenant_id", "profile_id", "name", "created_at", "source", "payload_json" from "plan_snapshots" where \("plan_snapshots"\."tenant_id" = '([^']*)' and "plan_snapshots"\."profile_id" = (-?[0-9]+(?:\.0)?)\) order by "plan_snapshots"\."created_at" asc$/;
+      const match = snapshot.exec(sql);
+      if (!match) return tableForObservedSelect(sql, tenantId);
+      expect(match[1]).toBe(escapedTenant);
+      return "table:plan_snapshots";
+    }))].sort();
+    expect(observed).toEqual(expected);
+    expect(observer.state.files).toEqual([]);
+    for (const resource of observed) union.add(resource);
+    return z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
+  }
+  const summaries = [
+    { id: second.id, plan_id: plan.id, name: "Older", created_at: "2026-01-01", source: "user" },
+    { id: first.id, plan_id: plan.id, name: "Newer", created_at: "2026-01-02", source: "user" },
+  ];
+  expect(await trace({}, [])).toEqual({ error: "plan_id required" });
+  expect(await trace({ plan_id: "invalid" }, [])).toEqual({ error: "plan_id required" });
+  expect(await trace({ plan_id: 999999 }, identity)).toEqual({ error: "plan_id required" });
+  expect(await trace({ plan_id: foreign.id }, identity)).toEqual({ error: "plan_id required" });
+  expect(await trace({ plan_id: plan.id }, tables)).toEqual({ plan_id: plan.id, snapshots: summaries });
+  expect(await trace({ plan_id: String(plan.id) }, tables, "default", empty.id)).toEqual({ plan_id: plan.id, snapshots: summaries });
+  expect(await trace({ plan_id: empty.id }, tables)).toEqual({ plan_id: empty.id, snapshots: [] });
+  expect(await trace({}, ["table:plan_snapshots"], "default", plan.id)).toEqual({ plan_id: plan.id, snapshots: summaries });
+  expect(await trace({ plan_id: foreign.id }, tables, "default", plan.id)).toEqual({ plan_id: plan.id, snapshots: summaries });
+  expect(await trace({}, ["table:plan_snapshots"], "default", foreign.id)).toEqual({ plan_id: foreign.id, snapshots: [] });
+  const { payload: _payload, ...otherSummary } = other;
+  expect(await trace({ plan_id: foreign.id }, tables, "other")).toEqual({ plan_id: foreign.id, snapshots: [otherSummary] });
+  expect(await trace({ plan_id: plan.id }, identity, "other")).toEqual({ error: "plan_id required" });
+  expect([...union].sort()).toEqual(tables);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.list_plan_snapshots");
+  expect(entry).toEqual({ operation: "tool.list_plan_snapshots", resources: [{ kind: "table", name: "build_profiles" }, { kind: "table", name: "plan_snapshots" }] });
 });

@@ -14,6 +14,7 @@ pub enum TableId {
     AppEvents,
     BuildProfiles,
     PlanDecisions,
+    PlanSnapshots,
     Parts,
     ProfileLayers,
     PlanAcceptedInputSets,
@@ -72,6 +73,8 @@ enum ReviewedEntry {
     SearchSourceFiles { resources: Vec<ResourceId> },
     #[serde(rename = "tool.preview_source_naming")]
     PreviewSourceNaming { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.list_plan_snapshots")]
+    ListPlanSnapshots { resources: Vec<ResourceId> },
     #[serde(rename = "tool.list_plans")]
     ListPlans { resources: Vec<ResourceId> },
     #[serde(rename = "tool.list_sources")]
@@ -94,8 +97,8 @@ impl ReviewedEntry {
         use ResourceId::{File, Table};
         use TableId::{
             AppSettings, BuildProfiles, Parts, PlanAcceptedInputSets, PlanDecisions,
-            PlanRevisionInputSets, PlanRevisionInputs, ProfileLayers, Projects, SourceDocs,
-            SourceRevisions,
+            PlanRevisionInputSets, PlanRevisionInputs, PlanSnapshots, ProfileLayers, Projects,
+            SourceDocs, SourceRevisions,
         };
         let (id, resources, expected) = match self {
             Self::SourceSync {
@@ -146,6 +149,11 @@ impl ReviewedEntry {
                 "tool.preview_source_naming",
                 resources,
                 BTreeSet::from([Table(Projects), Table(AppSettings)]),
+            ),
+            Self::ListPlanSnapshots { resources } => (
+                "tool.list_plan_snapshots",
+                resources,
+                BTreeSet::from([Table(BuildProfiles), Table(PlanSnapshots)]),
             ),
             Self::ListPlans { resources } => (
                 "tool.list_plans",
@@ -226,6 +234,7 @@ impl Declarations {
             "tool.search_source_files",
             "tool.preview_source_naming",
             "tool.list_plans",
+            "tool.list_plan_snapshots",
             "tool.list_sources",
             "tool.list_source_categories",
         ] {
