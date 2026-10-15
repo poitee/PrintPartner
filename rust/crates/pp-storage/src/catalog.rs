@@ -825,7 +825,7 @@ fn run(tx: &Transaction<'_>, state: &State, tenant: &str, request: Request) -> R
             Outcome::Data(serde_json::to_value(naming::global(tx, tenant)?)?)
         }
         Request::SaveGlobalNaming { profile } => {
-            let profile = profile.validate()?;
+            let profile = profile.validate_input()?;
             set_setting(
                 tx,
                 tenant,

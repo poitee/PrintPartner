@@ -2,7 +2,7 @@
 import console from 'node:console';
 import { readdirSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
@@ -31,11 +31,45 @@ const mapping = value => value !== null && typeof value === 'object'
   && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
 const literal = value => typeof value === 'string' && value.trim() !== '' && !value.includes('${{');
 
+function checkDesktopNode(workflow, file) {
+  const job = workflow.jobs.parity;
+  const matrix = job?.strategy?.matrix;
+  const path = 'jobs.parity.strategy.matrix';
+  if (!mapping(matrix) || Object.keys(matrix).length !== 1 || !Array.isArray(matrix.node)
+    || matrix.node.length === 0 || new Set(matrix.node).size !== matrix.node.length) {
+    report(file, path, 'INVALID_NODE_MATRIX', 'expected only a nonempty node sequence of distinct exact patch versions');
+  } else {
+    for (const [index, version] of matrix.node.entries()) {
+      if (typeof version !== 'string' || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) {
+        report(file, `${path}.node[${index}]`, 'UNPINNED_NODE', `${JSON.stringify(version)}; expected major.minor.patch string`);
+      }
+    }
+  }
+  const setups = Array.isArray(job?.steps) ? job.steps.filter(step => mapping(step)
+    && typeof step.uses === 'string' && step.uses.split('@')[0].toLowerCase() === 'actions/setup-node') : [];
+  if (setups.length !== 1) {
+    report(file, 'jobs.parity.steps', 'INVALID_NODE_SETUP', 'expected exactly one actions/setup-node step consuming matrix.node');
+    return;
+  }
+  const inputs = setups[0].with;
+  if (!mapping(inputs) || typeof inputs['node-version'] !== 'string'
+    || !/^\$\{\{\s*matrix\.node\s*\}\}$/.test(inputs['node-version'])
+    || Object.hasOwn(inputs, 'node-version-file')) {
+    report(file, 'jobs.parity.steps', 'INVALID_NODE_SETUP', 'setup-node must use node-version: ${{ matrix.node }} without node-version-file');
+  }
+}
+
 function checkUses(step, file, path, seen) {
   if (!Object.hasOwn(step, 'uses')) return;
   if (!literal(step.uses)) {
     report(file, `${path}.uses`, 'INVALID_USES', 'uses must be a nonempty literal string');
     return;
+  }
+  const pinned = step.uses.startsWith('docker://')
+    ? /^docker:\/\/[^@\s]+@sha256:[0-9a-fA-F]{64}$/.test(step.uses)
+    : /^[^@\s]+@[0-9a-fA-F]{40}$/.test(step.uses);
+  if (!step.uses.startsWith('./') && !pinned) {
+    report(file, `${path}.uses`, 'UNPINNED_ACTION', `${JSON.stringify(step.uses)}; expected a 40-character commit SHA or Docker sha256 digest`);
   }
   const action = step.uses.split('@')[0].trim().toLowerCase();
   if (action !== 'taiki-e/install-action' && !action.startsWith('taiki-e/install-action/')) return;
@@ -94,6 +128,7 @@ function checkWorkflow(file) {
     report(file, 'jobs', 'INVALID_SHAPE', 'workflow requires a nonempty jobs mapping');
     return;
   }
+  if (/^desktop-contracts\.ya?ml$/i.test(basename(file))) checkDesktopNode(workflow, file);
   const seen = new Set();
   for (const [name, job] of Object.entries(workflow.jobs)) {
     const path = `jobs.${name}`;

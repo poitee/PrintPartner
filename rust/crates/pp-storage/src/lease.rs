@@ -4,6 +4,7 @@ use fs2::FileExt;
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
+    ffi::CString,
     fs::{File, OpenOptions},
     io::Write,
     os::{
@@ -107,7 +108,12 @@ fn validate_directory_permissions(metadata: &std::fs::Metadata) -> Result<()> {
 impl AdmittedDirectory {
     pub(crate) fn preflight(&self) -> Result<()> {
         self.validate_identity()?;
-        crate::schema::preflight(&self.path.join("print-partner.db"), false)?;
+        crate::schema::preflight(
+            &self.path.join("print-partner.db"),
+            false,
+            |name| self.open_preflight_file(name),
+            || self.validate_identity(),
+        )?;
         Ok(())
     }
 
@@ -120,6 +126,29 @@ impl AdmittedDirectory {
         );
         validate_directory_permissions(&opened)?;
         validate_directory_permissions(&named)
+    }
+
+    fn open_preflight_file(&self, name: &str) -> std::io::Result<File> {
+        let name = CString::new(name)?;
+        let fd = unsafe {
+            libc::openat(
+                self.directory.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY
+                    | libc::O_CLOEXEC
+                    | libc::O_NOFOLLOW
+                    | libc::O_NONBLOCK
+                    | libc::O_NOCTTY,
+            )
+        };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let file = unsafe { File::from_raw_fd(fd) };
+        if !file.metadata()?.is_file() {
+            return Err(std::io::Error::from_raw_os_error(libc::EINVAL));
+        }
+        Ok(file)
     }
 
     fn open_lock(&self) -> Result<File> {

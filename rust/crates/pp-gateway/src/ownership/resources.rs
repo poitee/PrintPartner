@@ -75,6 +75,10 @@ enum ReviewedEntry {
     PreviewSourceNaming { resources: Vec<ResourceId> },
     #[serde(rename = "tool.list_plan_snapshots")]
     ListPlanSnapshots { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.ui_focus_stl_search")]
+    UiFocusStlSearch { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.ui_highlight_part")]
+    UiHighlightPart { resources: Vec<ResourceId> },
     #[serde(rename = "tool.list_plans")]
     ListPlans { resources: Vec<ResourceId> },
     #[serde(rename = "tool.list_sources")]
@@ -154,6 +158,16 @@ impl ReviewedEntry {
                 "tool.list_plan_snapshots",
                 resources,
                 BTreeSet::from([Table(BuildProfiles), Table(PlanSnapshots)]),
+            ),
+            Self::UiFocusStlSearch { resources } => (
+                "tool.ui_focus_stl_search",
+                resources,
+                BTreeSet::from([Table(BuildProfiles)]),
+            ),
+            Self::UiHighlightPart { resources } => (
+                "tool.ui_highlight_part",
+                resources,
+                BTreeSet::from([Table(BuildProfiles)]),
             ),
             Self::ListPlans { resources } => (
                 "tool.list_plans",
@@ -235,6 +249,8 @@ impl Declarations {
             "tool.preview_source_naming",
             "tool.list_plans",
             "tool.list_plan_snapshots",
+            "tool.ui_highlight_part",
+            "tool.ui_focus_stl_search",
             "tool.list_sources",
             "tool.list_source_categories",
         ] {

@@ -20,6 +20,8 @@ pub mod native_secrets;
 pub mod profiles;
 pub mod read_model;
 mod schema;
+#[cfg(feature = "desktop_rebuild")]
+pub mod working_drafts;
 mod writer_admission;
 
 use anyhow::{Result, anyhow, ensure};
@@ -437,7 +439,12 @@ impl WriterOwner {
         admitted.preflight()?;
         let lease = lease::StorageLease::acquire_admitted(admitted)?;
         let path = lease.data_dir().join("print-partner.db");
-        let version = schema::preflight(&path, true)?;
+        let version = schema::preflight(
+            &path,
+            true,
+            |name| std::fs::File::open(path.with_file_name(name)),
+            || Ok(()),
+        )?;
         for name in ["repos", "sources", "exports", "thumbs", "covers"] {
             std::fs::create_dir_all(lease.data_dir().join(name))?;
         }

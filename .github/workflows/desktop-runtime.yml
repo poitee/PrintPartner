@@ -104,6 +104,12 @@ jobs:
           cargo test --manifest-path rust/Cargo.toml --locked -p pp-storage 2>&1 | tee "$PP_EVIDENCE/pp-storage-tests.log"
           cargo test --manifest-path rust/Cargo.toml --locked -p pp-api --test auth_http 2>&1 | tee "$PP_EVIDENCE/pp-api-http.log"
           cargo clippy --manifest-path rust/Cargo.toml --locked -p pp-api -p pp-storage -p pp-core -p pp-compat -p pp-gateway -p pp-server --all-targets -- -D warnings 2>&1 | tee "$PP_EVIDENCE/backend-clippy.log"
+      - name: Prove measured compat repeated EOF cleanup
+        run: |
+          python3 rust/scripts/prove-measured-startup-death.py --scenario lifecycle --evidence "$PP_EVIDENCE/measured-lifecycle" 2>&1 | tee "$PP_EVIDENCE/measured-lifecycle-driver.log"
+      - name: Prove built backend repeated EOF cleanup
+        run: |
+          python3 rust/tests/built_backend_lifecycle.py --node /usr/bin/node --negative-control --evidence "$PP_EVIDENCE/built-backend-lifecycle" 2>&1 | tee "$PP_EVIDENCE/built-backend-lifecycle.log"
       - name: Require nonzero API and storage test evidence
         run: |
           for suite in pp-api-http pp-storage-tests; do

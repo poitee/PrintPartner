@@ -2106,3 +2106,489 @@ fn gre601_preview_adds_missing_roles_and_falls_back_from_invalid_stored_defaults
     assert_eq!(database_bytes(&fixture.0), bytes);
     owner.shutdown().unwrap();
 }
+
+#[test]
+fn gre601_naming_save_validation_is_classified_and_atomic() {
+    let fixture = Fixture::new();
+    let owner = fixture.open();
+    let client = owner.local_source_catalog();
+    let id = create(&client, "Naming validation");
+    let baseline = rows(&fixture.0);
+    let defaults = serde_json::to_value(NamingProfile::default()).unwrap();
+    let cases = [
+        ("roles", json!([]), "Naming requires primary role"),
+        (
+            "roles",
+            json!([{"id":"accent","label":"Accent","markers":[]}]),
+            "Naming requires primary role",
+        ),
+        (
+            "roles",
+            json!([
+                {"id":"primary","label":"First","markers":[]},
+                {"id":"primary","label":"Second","markers":[]}
+            ]),
+            "Duplicate naming role",
+        ),
+        (
+            "roles",
+            json!([{"id":"primary","label":" \t\n","markers":[]}]),
+            "Blank naming label",
+        ),
+        ("export_role_order", json!([]), "Invalid export role order"),
+        (
+            "export_role_order",
+            json!(["primary", "accent", "clear", "clear"]),
+            "Duplicate export role",
+        ),
+        (
+            "quantity",
+            json!({"regex":"(x)","default":0}),
+            "Invalid quantity default",
+        ),
+        (
+            "quantity",
+            json!({"regex":"(x)","default":9007199254740992_u64}),
+            "Invalid quantity default",
+        ),
+        (
+            "quantity",
+            json!({"regex":"[","default":1}),
+            "Invalid quantity regex structure",
+        ),
+        (
+            "quantity",
+            json!({"regex":"(x)[z-a]","default":1}),
+            "Invalid quantity regex",
+        ),
+        (
+            "quantity",
+            json!({"regex":"x","default":1}),
+            "Quantity regex must have one capture group",
+        ),
+        (
+            "quantity",
+            json!({"regex":"(x)(y)","default":1}),
+            "Quantity regex must have one capture group",
+        ),
+        (
+            "quantity",
+            json!({"regex":format!("({})", "x".repeat(4096)),"default":1}),
+            "Quantity regex too long",
+        ),
+        (
+            "quantity",
+            json!({"regex":format!("{}x{}", "(".repeat(17), ")".repeat(17)),"default":1}),
+            "Quantity regex exceeds group complexity limits",
+        ),
+        (
+            "folder_rules",
+            json!([{"path_contains":" \n","role_id":"accent"}]),
+            "Blank folder rule",
+        ),
+    ];
+    for (field, invalid, message) in cases {
+        let mut profile = defaults.clone();
+        profile[field] = invalid;
+        for source in [false, true] {
+            let profile = serde_json::from_value(profile.clone()).unwrap();
+            let request = if source {
+                Request::SaveNaming {
+                    id,
+                    settings: NamingCommand::Override { profile },
+                }
+            } else {
+                Request::SaveGlobalNaming { profile }
+            };
+            let error = client.execute(request).unwrap_err();
+            assert_eq!(error.to_string(), message, "{field}, source={source}");
+            #[cfg(feature = "desktop_rebuild")]
+            assert!(
+                matches!(
+                    error.downcast_ref::<pp_storage::catalog::CatalogFailure>(),
+                    Some(pp_storage::catalog::CatalogFailure::Input(detail)) if detail == message
+                ),
+                "{field}, source={source}: {error:?}"
+            );
+            assert_eq!(rows(&fixture.0), baseline, "{field}, source={source}");
+        }
+    }
+    drop(client);
+    owner.shutdown().unwrap();
+    let reopened = fixture.open();
+    assert_eq!(rows(&fixture.0), baseline);
+    reopened.shutdown().unwrap();
+}
+
+#[test]
+fn gre601_naming_missing_source_has_stable_classification() {
+    let fixture = Fixture::new();
+    let owner = fixture.open();
+    let client = owner.local_source_catalog();
+    let baseline = rows(&fixture.0);
+    for id in [0, -1, i64::MAX] {
+        for request in [
+            Request::GetNaming { id },
+            Request::SaveNaming {
+                id,
+                settings: NamingCommand::UseDefaults,
+            },
+            Request::SaveNaming {
+                id,
+                settings: NamingCommand::Override {
+                    profile: NamingProfile::default(),
+                },
+            },
+        ] {
+            let error = client.execute(request).unwrap_err();
+            assert_eq!(error.to_string(), "Source not found");
+            #[cfg(feature = "desktop_rebuild")]
+            assert!(matches!(
+                error.downcast_ref::<pp_storage::catalog::CatalogFailure>(),
+                Some(pp_storage::catalog::CatalogFailure::NotFound)
+            ));
+            assert_eq!(rows(&fixture.0), baseline);
+        }
+    }
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn gre601_naming_stored_override_errors_are_distinct_and_read_only() {
+    let fixture = Fixture::new();
+    let owner = fixture.open();
+    let client = owner.local_source_catalog();
+    let id = create(&client, "Stored naming");
+    let db = fixture.sql();
+    for invalid in [
+        json!(false),
+        json!({"unknown":true}),
+        json!({"roles":{}}),
+        json!({"roles":[]}),
+        json!({"roles":[{}]}),
+        json!({"roles":[{"id":"invalid"}]}),
+        json!({"roles":[{"id":"accent"},{"id":"accent"}]}),
+        json!({"roles":[{"id":"primary","label":" "}]}),
+        json!({"roles":[{"id":"primary","extra":true}]}),
+        json!({"quantity":null}),
+        json!({"quantity":{"default":0}}),
+        json!({"quantity":{"regex":"["}}),
+        json!({"slug":{"strip_markers":"true"}}),
+        json!({"folder_rules":[{"path_contains":" ","role_id":"clear"}]}),
+        json!({"export_role_order":[]}),
+    ] {
+        let metadata = json!({
+            "unrelated":{"keep":[1,2]},
+            "naming":{"use_defaults":false,"override":invalid}
+        });
+        db.execute(
+            "UPDATE projects SET metadata_json=?1 WHERE id=?2",
+            rusqlite::params![metadata.to_string(), id],
+        )
+        .unwrap();
+        let before = rows(&fixture.0);
+        let error = client.execute(Request::GetNaming { id }).unwrap_err();
+        #[cfg(feature = "desktop_rebuild")]
+        {
+            assert_eq!(
+                error.to_string(),
+                "Stored Source naming settings are invalid"
+            );
+            assert!(matches!(
+                error.downcast_ref::<pp_storage::catalog::CatalogFailure>(),
+                Some(pp_storage::catalog::CatalogFailure::InvalidStoredNaming)
+            ));
+            assert!(error.chain().count() > 1, "original cause is retained");
+        }
+        #[cfg(not(feature = "desktop_rebuild"))]
+        assert_ne!(
+            error.to_string(),
+            "Stored Source naming settings are invalid"
+        );
+        assert_eq!(rows(&fixture.0), before, "{invalid}");
+        let repaired = value(
+            &client,
+            Request::SaveNaming {
+                id,
+                settings: NamingCommand::UseDefaults,
+            },
+        );
+        assert_eq!(repaired["use_defaults"], true);
+        assert_eq!(repaired["override"], json!({}));
+        assert_eq!(
+            value(&client, Request::Get { id })["metadata"]["unrelated"],
+            json!({"keep":[1,2]})
+        );
+    }
+    drop(db);
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn gre601_naming_storage_aborts_keep_sql_errors_and_roll_back() {
+    let fixture = Fixture::new();
+    let owner = fixture.open();
+    let client = owner.local_source_catalog();
+    let id = create(&client, "Naming abort");
+    let db = fixture.sql();
+    db.execute_batch(
+        "CREATE TRIGGER reject_global_naming BEFORE INSERT ON app_settings
+         WHEN NEW.key='stl_naming_defaults'
+         BEGIN SELECT RAISE(ABORT,'global naming storage failure'); END;
+         CREATE TRIGGER reject_source_naming BEFORE UPDATE OF metadata_json ON projects
+         BEGIN SELECT RAISE(ABORT,'source naming storage failure'); END;",
+    )
+    .unwrap();
+    let baseline = rows(&fixture.0);
+    for (request, expected) in [
+        (
+            Request::SaveGlobalNaming {
+                profile: NamingProfile::default(),
+            },
+            "global naming storage failure",
+        ),
+        (
+            Request::SaveNaming {
+                id,
+                settings: NamingCommand::Override {
+                    profile: NamingProfile::default(),
+                },
+            },
+            "source naming storage failure",
+        ),
+        (
+            Request::SaveNaming {
+                id,
+                settings: NamingCommand::UseDefaults,
+            },
+            "source naming storage failure",
+        ),
+    ] {
+        let error = client.execute(request).unwrap_err();
+        assert_eq!(error.to_string(), expected);
+        assert!(error.downcast_ref::<rusqlite::Error>().is_some());
+        #[cfg(feature = "desktop_rebuild")]
+        assert!(
+            error
+                .downcast_ref::<pp_storage::catalog::CatalogFailure>()
+                .is_none()
+        );
+        assert_eq!(rows(&fixture.0), baseline);
+    }
+    db.execute_batch("DROP TRIGGER reject_global_naming; DROP TRIGGER reject_source_naming;")
+        .unwrap();
+    let saved = value(
+        &client,
+        Request::SaveNaming {
+            id,
+            settings: NamingCommand::Override {
+                profile: NamingProfile::default(),
+            },
+        },
+    );
+    assert_eq!(saved["use_defaults"], false);
+    drop(db);
+    owner.shutdown().unwrap();
+    let reopened = fixture.open();
+    assert_eq!(
+        value(&reopened.local_source_catalog(), Request::GetNaming { id }),
+        saved
+    );
+    reopened.shutdown().unwrap();
+}
+
+#[test]
+fn gre601_naming_projection_normalizes_partial_overrides_and_digest() {
+    let fixture = Fixture::new();
+    let owner = fixture.open();
+    let client = owner.local_source_catalog();
+    let id = create(&client, "Partial naming");
+    let mut global = NamingProfile::default();
+    global.quantity.default = 7;
+    global.roles[0].label = "  Main \u{feff}".into();
+    value(&client, Request::SaveGlobalNaming { profile: global });
+    let db = fixture.sql();
+    let partial = json!({
+        "roles":[{"id":"accent","label":" \u{a0}Highlight\u{feff}"}],
+        "quantity":{"regex":"  [ _]x([0-9]+)\\.stl$  "},
+        "slug":{"strip_markers":false},
+        "folder_rules":[{"path_contains":"  accents/ ","role_id":"accent"}]
+    });
+    db.execute(
+        "UPDATE projects SET metadata_json=?1 WHERE id=?2",
+        rusqlite::params![
+            json!({"naming":{"use_defaults":false,"override":partial}}).to_string(),
+            id
+        ],
+    )
+    .unwrap();
+    let before = rows(&fixture.0);
+    let projected = value(&client, Request::GetNaming { id });
+    assert_eq!(projected["use_defaults"], false);
+    assert_eq!(projected["effective"]["roles"][0]["label"], "Main");
+    assert_eq!(projected["effective"]["roles"][1]["label"], "Highlight");
+    assert_eq!(
+        projected["effective"]["roles"][1]["markers"],
+        json!(["[a]"])
+    );
+    assert_eq!(projected["effective"]["quantity"]["default"], 7);
+    assert_eq!(projected["effective"]["slug"]["strip_markers"], false);
+    assert_eq!(projected["effective"]["slug"]["strip_quantity"], true);
+    assert_eq!(
+        projected["override"],
+        json!({
+            "roles":[{"id":"accent","label":"Highlight"}],
+            "quantity":{"regex":"[ _]x([0-9]+)\\.stl$"},
+            "slug":{"strip_markers":false},
+            "folder_rules":[{"path_contains":"accents/","role_id":"accent"}]
+        })
+    );
+    assert_eq!(rows(&fixture.0), before);
+    let full = serde_json::from_value(projected["effective"].clone()).unwrap();
+    let saved = value(
+        &client,
+        Request::SaveNaming {
+            id,
+            settings: NamingCommand::Override { profile: full },
+        },
+    );
+    assert_eq!(saved["effective"], projected["effective"]);
+    assert_eq!(saved["effective_digest"], projected["effective_digest"]);
+    assert_eq!(saved["override"], saved["effective"]);
+    let mut global = NamingProfile::default();
+    global.quantity.default = 19;
+    value(&client, Request::SaveGlobalNaming { profile: global });
+    assert_eq!(value(&client, Request::GetNaming { id }), saved);
+    let reset = value(
+        &client,
+        Request::SaveNaming {
+            id,
+            settings: NamingCommand::UseDefaults,
+        },
+    );
+    assert_eq!(reset["use_defaults"], true);
+    assert_eq!(reset["effective"]["quantity"]["default"], 19);
+    assert_ne!(reset["effective_digest"], saved["effective_digest"]);
+    drop(db);
+    owner.shutdown().unwrap();
+    let reopened = fixture.open();
+    assert_eq!(
+        value(&reopened.local_source_catalog(), Request::GetNaming { id }),
+        reset
+    );
+    reopened.shutdown().unwrap();
+}
+
+#[test]
+fn gre601_naming_global_corruption_falls_back_without_repairing_storage() {
+    let fixture = Fixture::new();
+    let owner = fixture.open();
+    let client = owner.local_source_catalog();
+    let id = create(&client, "Default fallback");
+    let expected = value(&client, Request::GetNaming { id });
+    let db = fixture.sql();
+    for invalid in ["not json".to_owned(), "null".to_owned(), "{}".to_owned(), {
+        let mut invalid = serde_json::to_value(NamingProfile::default()).unwrap();
+        invalid["quantity"]["default"] = json!(0);
+        invalid.to_string()
+    }] {
+        db.execute(
+            "INSERT INTO app_settings(tenant_id,key,value) VALUES('default','stl_naming_defaults',?1)
+             ON CONFLICT(tenant_id,key) DO UPDATE SET value=excluded.value",
+            [invalid],
+        )
+        .unwrap();
+        let before = rows(&fixture.0);
+        assert_eq!(value(&client, Request::GetNaming { id }), expected);
+        assert_eq!(
+            value(&client, Request::GetGlobalNaming {}),
+            serde_json::to_value(NamingProfile::default()).unwrap()
+        );
+        assert_eq!(rows(&fixture.0), before);
+    }
+    drop(db);
+    owner.shutdown().unwrap();
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[test]
+fn gre601_naming_auth_precedes_input_and_foreign_sources_are_not_found() {
+    use pp_storage::catalog::CatalogFailure;
+    let fixture = Fixture::new();
+    let owner = fixture.open();
+    let local = owner.local_source_catalog();
+    let foreign_id = create(&local, "Private naming");
+    let (_, token) = actor(&owner, "naming-tenant@example.com");
+    let client = session(&owner, &token);
+    let id = create(&client, "Tenant naming");
+    let denied = session(&owner, "invalid-session");
+    let before = rows(&fixture.0);
+    for request in [
+        Request::GetNaming { id },
+        Request::SaveNaming {
+            id,
+            settings: NamingCommand::UseDefaults,
+        },
+        Request::SaveGlobalNaming {
+            profile: NamingProfile {
+                roles: vec![],
+                ..NamingProfile::default()
+            },
+        },
+    ] {
+        let error = denied.execute(request).unwrap_err();
+        assert_eq!(error.to_string(), "Authentication required");
+        assert!(error.downcast_ref::<CatalogFailure>().is_none());
+    }
+    for request in [
+        Request::GetNaming { id: foreign_id },
+        Request::SaveNaming {
+            id: foreign_id,
+            settings: NamingCommand::Override {
+                profile: NamingProfile {
+                    roles: vec![],
+                    ..NamingProfile::default()
+                },
+            },
+        },
+    ] {
+        let error = client.execute(request).unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<CatalogFailure>(),
+            Some(CatalogFailure::NotFound)
+        ));
+    }
+    assert_eq!(rows(&fixture.0), before);
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn gre601_naming_global_read_failure_is_not_stored_override_corruption() {
+    let fixture = Fixture::new();
+    let owner = fixture.open();
+    let client = owner.local_source_catalog();
+    let id = create(&client, "Naming read failure");
+    let db = fixture.sql();
+    db.execute_batch("ALTER TABLE app_settings RENAME TO unavailable_settings;")
+        .unwrap();
+    let before = rows(&fixture.0);
+    for request in [Request::GetNaming { id }, Request::GetGlobalNaming {}] {
+        let error = client.execute(request).unwrap_err();
+        assert!(error.downcast_ref::<rusqlite::Error>().is_some());
+        #[cfg(feature = "desktop_rebuild")]
+        assert!(
+            error
+                .downcast_ref::<pp_storage::catalog::CatalogFailure>()
+                .is_none()
+        );
+        assert_eq!(rows(&fixture.0), before);
+    }
+    db.execute_batch("ALTER TABLE unavailable_settings RENAME TO app_settings;")
+        .unwrap();
+    assert_eq!(
+        value(&client, Request::GetNaming { id })["use_defaults"],
+        true
+    );
+    drop(db);
+    owner.shutdown().unwrap();
+}

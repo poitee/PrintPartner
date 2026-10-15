@@ -175,6 +175,8 @@ jobs:
           cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test manifest_options_model -- --test-threads=2
           cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test build_graph_operations -- --test-threads=2
           cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib build_graph -- --test-threads=2
+          cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test working_draft_observation
+          cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --doc
           cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --lib --features desktop_rebuild
           cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --test profile_interpreter --features desktop_rebuild
           cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --test profile_interpreter_parity --features desktop_rebuild

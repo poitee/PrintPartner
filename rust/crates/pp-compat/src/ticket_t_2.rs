@@ -2139,3 +2139,183 @@ async fn ticket_t_3_drain_repeated_eof_joins_unread_response_body() {
         previous.push(pid);
     }
 }
+
+struct MeasuredLifecycleCycle {
+    scratch: Scratch,
+    pid: u32,
+    events: String,
+}
+
+impl MeasuredLifecycleCycle {
+    fn assert_stopped(&self) {
+        assert!(super::drain::process_group_absent(self.pid));
+        assert_eq!(
+            std::fs::read_to_string(self.scratch.root.join("data/lifecycle-events")).unwrap(),
+            self.events
+        );
+        assert_eq!(recorded_pids(&self.scratch.pidfile()), vec![self.pid]);
+    }
+
+    fn record_child(data: &Path, pid: u32) -> anyhow::Result<()> {
+        super::record_test_pid(&data.parent().unwrap().join("pids"), pid)?;
+        std::fs::write(
+            data.join(".desktop-owner.json"),
+            br#"{"child_process_identity":"gre448-lifecycle-fixture"}"#,
+        )?;
+        Ok(())
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires measured lifecycle assets; run prove-measured-startup-death.py --scenario lifecycle"]
+async fn ticket_t_3_drain_measured_release_repeated_eof_cleanup() {
+    use axum::{body::Body, http::Request};
+
+    let bundle = measured_startup_bundle();
+    super::release::verify_bundle(&bundle, &bundle.web_root.join("apps/web/dist")).unwrap();
+    assert_eq!(bundle.runtime_version, "0.0.0-gre448-simulator-web");
+    let mut completed: Vec<MeasuredLifecycleCycle> = Vec::new();
+    for cycle in 0..3 {
+        for previous in &completed {
+            previous.assert_stopped();
+        }
+        let scratch = Scratch::new("measured-lifecycle");
+        let events = scratch.root.join("data/lifecycle-events");
+        let supervisor = super::Supervisor::start(super::SpawnSpec {
+            bundle: bundle.clone(),
+            record_child: MeasuredLifecycleCycle::record_child,
+            ..release_spec(&scratch)
+        })
+        .unwrap();
+        let handle = supervisor.handle.clone();
+        let mut status = handle.status.clone();
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                if matches!(*status.borrow(), super::Status::Ready { .. }) {
+                    break;
+                }
+                status.changed().await.unwrap();
+            }
+        })
+        .await
+        .expect("measured lifecycle did not become ready");
+        let pid = match *status.borrow() {
+            super::Status::Ready { pid, .. } => pid,
+            _ => unreachable!(),
+        };
+        assert_eq!(recorded_pids(&scratch.pidfile()), vec![pid]);
+        assert_eq!(live_pids(&scratch.pidfile()), vec![pid]);
+        for previous in &completed {
+            previous.assert_stopped();
+        }
+        println!("measured lifecycle cycle={cycle}; node={pid};");
+        let mut observed = MeasuredLifecycleCycle {
+            scratch,
+            pid,
+            events: format!("SPAWN {pid}\n"),
+        };
+        assert_eq!(std::fs::read_to_string(&events).unwrap(), observed.events);
+        let endpoint = handle.endpoint().unwrap();
+        let response = tokio::time::timeout(
+            Duration::from_secs(3),
+            endpoint.forward(
+                Request::builder()
+                    .uri("/stream")
+                    .body(Body::empty())
+                    .unwrap(),
+            ),
+        )
+        .await
+        .expect("measured stream headers timed out")
+        .unwrap();
+        assert_eq!(response.status(), 200);
+        assert_eq!(
+            response.headers()["content-type"],
+            "application/octet-stream"
+        );
+        let held_body = response.into_body();
+        observed.events.push_str(&format!("GET /stream {pid}\n"));
+        let sending = endpoint.clone();
+        let upload = tokio::spawn(async move {
+            sending
+                .forward(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/upload")
+                        .body(Body::from(format!("payload-{cycle}")))
+                        .unwrap(),
+                )
+                .await
+        });
+        observed
+            .events
+            .push_str(&format!("POST /upload payload-{cycle} {pid}\n"));
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while std::fs::read_to_string(&events).unwrap() != observed.events {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("measured mutation not accepted exactly once");
+        assert!(!upload.is_finished());
+        assert!(endpoint.connections.tasks.len() >= 2);
+        supervisor.disarm_restarts();
+        let started = std::time::Instant::now();
+        let exit = tokio::time::timeout(Duration::from_secs(5), supervisor.shutdown())
+            .await
+            .expect("measured EOF shutdown timed out")
+            .expect("measured EOF owned connection cleanup failed");
+        assert_eq!(exit, super::CompatExit::Graceful);
+        let mutation_error = tokio::time::timeout(Duration::from_secs(1), upload)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(
+            mutation_error.to_string(),
+            "Compatibility dispatch outcome unknown"
+        );
+        assert!(endpoint.connections.tasks.is_empty());
+        assert!(handle.endpoint().is_none());
+        assert!(matches!(*handle.status.borrow(), super::Status::Stopped));
+        assert!(super::drain::process_group_absent(pid));
+        assert!(live_pids(&observed.scratch.pidfile()).is_empty());
+        let stale_error = endpoint
+            .forward(
+                Request::builder()
+                    .method("POST")
+                    .uri("/upload")
+                    .body(Body::from("must-not-resend"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            stale_error.to_string(),
+            "Compatibility generation is stopping"
+        );
+        observed
+            .events
+            .push_str(&format!("EOF {pid}\nEXIT {pid} 0\n"));
+        assert_eq!(std::fs::read_to_string(&events).unwrap(), observed.events);
+        assert_eq!(recorded_pids(&observed.scratch.pidfile()), vec![pid]);
+        println!(
+            "{}",
+            serde_json::json!({
+                "case": "measured_lifecycle", "cycle": cycle, "pid": pid,
+                "events": observed.events, "compat_exit": "graceful",
+                "connection_tasks": endpoint.connections.tasks.len(),
+                "mutation_error": mutation_error.to_string(),
+                "stale_endpoint_error": stale_error.to_string(),
+                "shutdown_ms": started.elapsed().as_millis(),
+                "previous_cycles": completed.iter().map(|record| record.pid).collect::<Vec<_>>(),
+            })
+        );
+        drop(held_body);
+        completed.push(observed);
+    }
+    for record in &completed {
+        record.assert_stopped();
+    }
+    assert_eq!(completed.len(), 3);
+}

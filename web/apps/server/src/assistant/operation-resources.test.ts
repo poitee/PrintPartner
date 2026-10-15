@@ -52,7 +52,7 @@ const TABLES = ["table:app_settings", "table:projects", "table:source_docs"];
 const FILE_RESOURCES = ["file:source-workspace", "table:projects", "table:source_docs"];
 const manifest = z.object({ resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.ui_highlight_part", "tool.ui_focus_stl_search"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -799,4 +799,135 @@ it("traces list_plan_snapshots identity, summaries and tenants against its liter
   expect([...union].sort()).toEqual(tables);
   const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.list_plan_snapshots");
   expect(entry).toEqual({ operation: "tool.list_plan_snapshots", resources: [{ kind: "table", name: "build_profiles" }, { kind: "table", name: "plan_snapshots" }] });
+});
+
+
+it("traces ui_highlight_part proposals, selectors and tenants against its literal union", async () => {
+  const plan = repo.createProfile("Highlight");
+  const fallback = repo.createProfile("Fallback");
+  const foreign = tenantStorage.run("other", () => repo.createProfile("Other"));
+  const tables = ["table:build_profiles"];
+  const union = new Set<string>();
+  async function trace(input: Record<string, unknown>, expected: string[], tenantId = "default", activePlanId?: number) {
+    statements = [];
+    observer.state.files = [];
+    observer.state.active = true;
+    let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+    try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("ui_highlight_part", input, { repo, activePlanId })); }
+    finally { observer.state.active = false; }
+    const observed = [...new Set(statements.map((sql) => tableForObservedSelect(sql, tenantId)))].sort();
+    expect(observed).toEqual(expected);
+    expect(observer.state.files).toEqual([]);
+    for (const resource of observed) union.add(resource);
+    const content = z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
+    if (content.status === "proposed") {
+      const action = z.object({ id: z.uuid() }).passthrough().parse(content.action);
+      expect(output.proposedAction).toEqual(action);
+      const { id: _id, ...proposal } = action;
+      return { ...content, action: proposal };
+    }
+    expect(output.proposedAction).toBeUndefined();
+    return content;
+  }
+  function proposal(planId: number, partId: number, surface = "review") {
+    return {
+      status: "proposed",
+      note: "Not applied yet — user must confirm via Apply in the UI.",
+      action: {
+        type: "ui_highlight_part", plan_id: planId, label: `Preview part #${partId}`,
+        summary: `Open ${surface} for plan #${planId} and preview part ${partId}.`,
+        params: { plan_id: planId, part_id: partId, surface },
+      },
+    };
+  }
+  expect(await trace({}, [])).toEqual({ error: "part_id required" });
+  expect(await trace({ plan_id: plan.id, part_id: "invalid" }, [])).toEqual({ error: "part_id required" });
+  expect(await trace({ part_id: 42 }, [])).toEqual({ error: "plan_id required" });
+  expect(await trace({ part_id: 42, plan_id: "invalid" }, [])).toEqual({ error: "plan_id required" });
+  expect(await trace({ part_id: 42, plan_id: 999999 }, tables)).toEqual({ error: "plan_id required" });
+  expect(await trace({ part_id: 42, plan_id: foreign.id }, tables)).toEqual({ error: "plan_id required" });
+  expect(await trace({ part_id: 42, plan_id: plan.id }, tables)).toEqual(proposal(plan.id, 42));
+  expect(await trace({ part_id: "43.9", plan_id: String(plan.id), surface: "checkoff" }, tables, "default", fallback.id)).toEqual(proposal(plan.id, 43, "checkoff"));
+  expect(await trace({ part_id: -1, plan_id: plan.id, surface: "unknown" }, tables)).toEqual(proposal(plan.id, -1));
+  expect(await trace({ part_id: 42 }, [], "default", fallback.id)).toEqual(proposal(fallback.id, 42));
+  expect(await trace({ part_id: 42, plan_id: "invalid" }, [], "default", fallback.id)).toEqual(proposal(fallback.id, 42));
+  expect(await trace({ part_id: 42, plan_id: foreign.id }, tables, "default", fallback.id)).toEqual(proposal(fallback.id, 42));
+  expect(await trace({ part_id: 42 }, [], "default", foreign.id)).toEqual(proposal(foreign.id, 42));
+  expect(await trace({ part_id: 42, plan_id: foreign.id }, tables, "other")).toEqual(proposal(foreign.id, 42));
+  expect(await trace({ part_id: 42, plan_id: plan.id }, tables, "other")).toEqual({ error: "plan_id required" });
+  sqlite.prepare("ALTER TABLE build_profiles RENAME TO unavailable_profiles").run();
+  try {
+    expect(await trace({ part_id: 42, plan_id: plan.id }, [])).toEqual({ error: "no such table: build_profiles" });
+  } finally {
+    sqlite.prepare("ALTER TABLE unavailable_profiles RENAME TO build_profiles").run();
+  }
+  expect([...union].sort()).toEqual(tables);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.ui_highlight_part");
+  expect(entry).toEqual({ operation: "tool.ui_highlight_part", resources: [{ kind: "table", name: "build_profiles" }] });
+});
+
+it("traces ui_focus_stl_search proposals, query normalization and tenants against its literal union", async () => {
+  const plan = repo.createProfile("Search");
+  const fallback = repo.createProfile("Fallback");
+  const foreign = tenantStorage.run("other", () => repo.createProfile("Other"));
+  const tables = ["table:build_profiles"];
+  const union = new Set<string>();
+  async function trace(input: Record<string, unknown>, expected: string[], tenantId = "default", activePlanId?: number) {
+    statements = [];
+    observer.state.files = [];
+    observer.state.active = true;
+    let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+    try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("ui_focus_stl_search", input, { repo, activePlanId })); }
+    finally { observer.state.active = false; }
+    const observed = [...new Set(statements.map((sql) => tableForObservedSelect(sql, tenantId)))].sort();
+    expect(observed).toEqual(expected);
+    expect(observer.state.files).toEqual([]);
+    for (const resource of observed) union.add(resource);
+    const content = z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
+    if (content.status === "proposed") {
+      const action = z.object({ id: z.uuid() }).passthrough().parse(content.action);
+      expect(output.proposedAction).toEqual(action);
+      const { id: _id, ...proposal } = action;
+      return { ...content, action: proposal };
+    }
+    expect(output.proposedAction).toBeUndefined();
+    return content;
+  }
+  function proposal(planId: number, query = "") {
+    return {
+      status: "proposed",
+      note: "Not applied yet — user must confirm via Apply in the UI.",
+      action: {
+        type: "ui_focus_stl_search", plan_id: planId,
+        label: query ? `STL search “${query}”` : "Focus STL search",
+        summary: query ? `Open Sources and search STLs for “${query}”.` : "Open Sources and focus the STL search field.",
+        params: query ? { query } : {},
+      },
+    };
+  }
+  expect(await trace({}, [])).toEqual(proposal(0));
+  for (const query of [null, 42, {}, [], "", "  \n "]) {
+    expect(await trace({ query }, [])).toEqual(proposal(0));
+  }
+  expect(await trace({ query: "  bracket\nplate  " }, [])).toEqual(proposal(0, "bracket\nplate"));
+  expect(await trace({ plan_id: "invalid", query: "bracket" }, [])).toEqual(proposal(0, "bracket"));
+  expect(await trace({ plan_id: 999999 }, tables)).toEqual(proposal(0));
+  expect(await trace({ plan_id: foreign.id }, tables)).toEqual(proposal(0));
+  expect(await trace({ plan_id: plan.id, query: " bolt " }, tables)).toEqual(proposal(plan.id, "bolt"));
+  expect(await trace({ plan_id: String(plan.id) }, tables, "default", fallback.id)).toEqual(proposal(plan.id));
+  expect(await trace({}, [], "default", fallback.id)).toEqual(proposal(fallback.id));
+  expect(await trace({ plan_id: "invalid" }, [], "default", fallback.id)).toEqual(proposal(fallback.id));
+  expect(await trace({ plan_id: foreign.id }, tables, "default", fallback.id)).toEqual(proposal(fallback.id));
+  expect(await trace({}, [], "default", foreign.id)).toEqual(proposal(foreign.id));
+  expect(await trace({ plan_id: foreign.id }, tables, "other")).toEqual(proposal(foreign.id));
+  expect(await trace({ plan_id: plan.id }, tables, "other")).toEqual(proposal(0));
+  sqlite.prepare("ALTER TABLE build_profiles RENAME TO unavailable_profiles").run();
+  try {
+    expect(await trace({ plan_id: plan.id }, [])).toEqual({ error: "no such table: build_profiles" });
+  } finally {
+    sqlite.prepare("ALTER TABLE unavailable_profiles RENAME TO build_profiles").run();
+  }
+  expect([...union].sort()).toEqual(tables);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.ui_focus_stl_search");
+  expect(entry).toEqual({ operation: "tool.ui_focus_stl_search", resources: [{ kind: "table", name: "build_profiles" }] });
 });

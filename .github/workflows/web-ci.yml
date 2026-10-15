@@ -86,7 +86,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - name: Install
         run: npm ci
-      - name: Check CI installer tool pins
+      - name: Check Action SHAs and CI installer tool pins
         working-directory: .
         run: |
           node --test web/scripts/check-ci-tool-pins.test.mjs

@@ -271,3 +271,168 @@ All three recorded PIDs were absent afterward. An independent byte comparison
 confirmed unchanged `lib.rs`, recorded in `source-restoration.log`. Full driver
 results are in `driver.log`, `baseline.log`, `negative.log`, and `restored.log`
 in that evidence directory. No Rust or stager changes were retained.
+
+## Measured release repeated start, stop, and EOF cleanup
+
+`ticket_t_3_drain_measured_release_repeated_eof_cleanup` runs three sequential
+supervisor cycles through measured `Process::spawn`. Each cycle owns its scratch
+directory and recorded process group. The completed cycle records retain their
+literal event logs. Before the next spawn and while its successor is ready, the
+test checks that every prior group is absent, its spawn count remains one, and
+its event log has not changed.
+
+Each cycle holds an unread 1 MiB response body and sends one POST. The fixture
+records the accepted payload but withholds its response. Shutdown must finish
+within five seconds with `Graceful`, zero connection tasks, an unpublished
+endpoint, `Stopped`, and an absent child group. The retained endpoint must reject
+a new POST with `Compatibility generation is stopping`. The interrupted POST
+must return `Compatibility dispatch outcome unknown`. The held response body
+stays alive until all cleanup assertions pass. The exact per-cycle log is:
+
+```text
+SPAWN <pid>
+GET /stream <pid>
+POST /upload payload-<cycle> <pid>
+EOF <pid>
+EXIT <pid> 0
+```
+
+The lifecycle entry needs a server and a flowing setup pipe. Extending the
+startup entry would defeat its unread-stdin invariant, so this slice adds one
+separate entry and reuses the existing native Node validation, measured package
+builder, preload, and proof driver. The entry ignores SIGTERM. A graceful exit
+therefore requires observed stdin EOF. The real release verifier measures the
+Node executable, preload, entry, frontend, metadata, contracts, domain, and
+simulator dependency inventory. No production guard, verification bypass, or
+control hook is added.
+
+Run the bounded proof from the repository root:
+
+```sh
+python3 rust/scripts/prove-measured-startup-death.py --scenario lifecycle --negative-control --evidence /tmp/gre448-lifecycle-proof2
+```
+
+The driver requires one executed acceptance test and all three cycle receipts.
+Its negative control temporarily removes `self.cancelled.cancel()` from
+`Connections::close`. The unread body must then fail owned connection cleanup
+with `Compatibility connection join timed out`. A `finally` block restores
+`lib.rs` byte-for-byte before a passing rerun. The driver records the restored
+source hash and checks that every PID reported by the failing test is dead.
+This establishes a coverage gap. Production cleanup already works.
+
+The test is explicitly ignored in ordinary unit selections because its embedded
+manifest must identify the lifecycle simulator, rather than the startup simulator
+or production backend. The driver selects this exact test with `--ignored` and
+rejects zero tests or missing cycle receipts. The desktop runtime workflow runs
+the driver as a required step after its built-backend unit and lint checks.
+It generates and validates the simulator assets in the retained evidence
+directory before running Cargo. This CI step exercises measured simulator
+assets, not the production backend's HTTP or persistence behavior.
+
+`environment.json` records both manifest and stage selectors. `commands.log`
+records the exact manifest and Cargo invocations. `asset-identity.json` records
+the manifest, native Node, entry, and preload hashes and the source commit.
+`baseline.log`, `negative.log`, `restored.log`, `negative-cleanup.json`, and
+`restored-lib-sha256.txt` retain the proof evidence. Startup remains the driver's
+default scenario.
+
+This is Linux headless simulator acceptance evidence for the measured spawn,
+transport, and cleanup path. It does not prove storage recovery, persisted job
+retry policy, production backend shutdown, worker fencing, full worker cutover,
+or Mac logout. GRE-448 remains open. The next release-level slice is to prove
+these lifecycle observations against the full built backend with its real
+storage ownership and interrupted request behavior.
+
+Initial local verification used native Node v24.21.0, ABI 137, Linux x64. The measured
+simulator manifest identifies source baseline
+`c65dee177c5b1e0c4754d474d5c6b7b9917997b7`. Its SHA-256 is
+`498537e8eec435a4f9bc4258ef3e43ab32edc307b72a490e6ca3cbed729096c7`.
+The entry SHA-256 is
+`be7e5e3f94825bff4fb6a46646ff2b5749ae442fb450ca10cc4e5cf86105f338`.
+The complete native Node and preload identities are in `asset-identity.json`.
+The final bounded proof in `/tmp/gre448-lifecycle-proof2` passed one baseline
+test with three cycles in 6.27s, failed the intentional negative test with
+exit 101 at the owned join timeout in 4.77s, and passed one restored test with
+three cycles in 5.93s. The negative PID was absent afterward. The independent
+source hash matches `restored-lib-sha256.txt`, and `lib.rs` has no final diff.
+These durations describe acceptance runs, not release performance.
+
+The unchanged default startup scenario also passed its two-cycle proof in
+`/tmp/gre448-lifecycle-startup-regression`. Five driver unit tests, Python
+compilation, the new Node fixture's syntax check, workspace format checking,
+and pp-compat Clippy with warnings denied passed. Supporting logs are
+`script-tests.log`, `fmt.log`, and `clippy.log` in the lifecycle evidence directory.
+
+The nonzero drain selection passed 21/21 with 72 skipped in 30.329s, using the
+startup simulator manifest for the existing measured startup case. Export both values from
+`/tmp/gre448-lifecycle-startup-regression/environment.json` before the Cargo
+commands below. The output is in `drain.log`. The new lifecycle case runs
+separately under its own measured manifest through the driver above.
+
+```sh
+cargo nextest run --locked --manifest-path rust/Cargo.toml --no-tests=fail -p pp-compat -E 'test(ticket_t_3_drain)' --success-output immediate
+cargo clippy --locked --manifest-path rust/Cargo.toml -p pp-compat --all-targets -- -D warnings
+cargo fmt --all --manifest-path rust/Cargo.toml --check
+python3 -m unittest discover -s rust/scripts -p test_prove_measured_startup_death.py -v
+node --check rust/crates/pp-compat/tests/fixtures/measured-lifecycle-entry.cjs
+```
+
+## Built backend repeated EOF cleanup
+
+`rust/tests/built_backend_lifecycle.py` runs the built
+`web/apps/server/dist/current/desktop.js` with its real dependency tree and native
+Node. It supplies the desktop ownership marker, inherited lock descriptor 198,
+and parent setup protocol. Signed Unix-socket `/health` requests require an
+available SQLite database and an authenticated desktop principal before each
+shutdown.
+
+Three sequential cycles reuse one data directory. Each cycle closes the setup
+pipe while the Python owner stays alive. A test-only preload records stdin EOF,
+received signals, and the application's process-group kill without replacing the
+server entry, routes, database, or shutdown implementation. The harness requires
+EOF before the application's kill, no SIGTERM, child exit, an absent process
+group, and a removed socket before the next start.
+Receipts identify the resolved Node version and ABI, built entry digest, server
+package version, health response, and prior child identities.
+
+Run after `npm --prefix web ci` and `npm --prefix web run build`:
+
+```sh
+python3 rust/tests/built_backend_lifecycle.py --node "$(command -v node)" --negative-control --evidence /tmp/gre448-built-backend
+```
+
+Each invocation prints and creates a unique `run-*` directory under the supplied
+evidence root. Repeating the command preserves all previous receipts.
+
+The negative control suppresses stdin EOF delivery in the test observer. It must
+fail the same bounded shutdown assertion after real health readiness. Failure
+cleanup kills and reaps the owned child. The driver then restores normal EOF
+delivery and requires three further cycles to pass. Production source and built
+assets stay unchanged during this control. Desktop runtime CI runs this command
+against its freshly built backend and uploads the receipts and logs.
+
+This is Linux headless evidence for the built backend's EOF path. It does not
+exercise the Rust supervisor's measured spawn path, interrupted printer uploads,
+full worker cutover, startup parent-death, or actual macOS logout. Those areas
+retain their separate evidence and remaining ticket gates.
+
+The owner independently ran the full command on 2026-10-15 with native Node
+v24.21.0, ABI 137, Linux x64. Three baseline and three restored cycles passed.
+The suppressed-EOF cycle failed with `backend did not stop after stdin EOF`;
+its guard recorded external cleanup and no remaining PID or group. All six
+positive guards recorded no external signal. All seven child PIDs were absent
+when checked after completion. The built entry digest stayed
+`0356744362f0fa28e5ad3ed516de7fc71aca167af7fa6428a4e6b87650541bc7`.
+Local receipts are in `/tmp/gre448-built-proof/owner-proof`. This negative control
+proves the test detects missing EOF delivery; it does not identify a new
+production defect. Python compile, Node syntax, native dispatcher rejection,
+comment review, and diff checks passed. The implementation child independently
+ran the same complete proof before the owner's rerun.
+
+Review found that reusing the documented evidence root raised `FileExistsError`
+after overwriting its artifact identity. The owner reproduced that failure, then
+ran the corrected command twice against the existing root. Both isolated runs
+passed three baseline cycles, the expected negative control, and three restored
+cycles. All 14 child PIDs were absent, and all 60 original evidence files stayed
+byte-for-byte unchanged. The isolated receipts are under
+`/tmp/gre448-built-proof/owner-proof/run-9dy9pxzk` and `run-7pjt7tgu`.

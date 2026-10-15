@@ -10,6 +10,12 @@ When `PP_DESKTOP_REBUILD` is exactly `1` or `true`, Node printer queue suggestio
 
 With these exact flag values, Bambu and Spoolman inspection at `GET /api/v1/integrations/:id/status`, `GET /api/v1/integrations/:id/devices`, and `POST /api/v1/integrations/:id/test` requires the current tenant's matching `bambu` or `spoolman` choice to be enabled. Default or explicit opt-out returns 403 `FEATURE_DISABLED`. Malformed stored choices return 500 `FEATURE_TOGGLES_INVALID`. Admission runs after authentication and before status execution or adapter calls, including cached status reads. These tenant-global routes ignore Plan overrides. Saved connector metadata and editing remain available. Other integration types and flag-off inspection retain their existing behavior.
 
+With these exact flag values, `POST /printer-send-queue` and its `/api/v1` alias check Bambu feature access when the linked host is Bambu. The selected owned Plan override takes precedence over the tenant's Bambu choice, then defaults to off. Admission follows Plan ownership and fleet-host resolution. Default or explicit off returns 403 `FEATURE_DISABLED`; corrupt tenant or selected Plan choices return 500 `FEATURE_TOGGLES_INVALID` before enqueue. Enabled Bambu retains the existing 400 unsupported-host response. This adds no Bambu transport or worker or suggestions enforcement. Moonraker, PrusaLink, and flag-off admission retain their existing behavior.
+
+Dispatch and drain at both aliases preflight Bambu access before live-job reconciliation, artifact checks, queue writes, status probes, or job starts. Admission uses each stored item's Plan, never a request-body Plan. Missing or unowned Plans fail closed. Drain preflights the selected queued batch, respecting its printer filter and eight-item cap, before dispatching any host. Both routes recheck admission after asynchronous live-job reconciliation so concurrent revocation or newly queued items cannot bypass the check. A refused request preserves the stored queue and staged files for an explicit retry. Enabled Bambu retains the existing unsupported-upload response. Non-Bambu hosts and flag-off behavior remain unchanged.
+
+Multipart staging still precedes queue admission. Every refusal removes the staged artifact, including feature denial and enqueue failure. Successful enqueue transfers artifact ownership to the queue. Cancellation removes that artifact through the existing cleanup path.
+
 Enabling one connector type does not admit the other. Non-Bambu and non-Spoolman inspection remains available without reading feature choices.
 
 With `desktop_rebuild`, Rust library callers can open storage with `WriterOwner::open_with_job_feature_admission(directory, limits)`. Every worker from that owner checks `Feature::Spoolman` before admitting a new `SpoolmanDeduction`. Ordinary `open` and `open_at` retain legacy behavior. Repeat the opted-in constructor on each reopen. Storage reads no runtime environment flag.
@@ -89,6 +95,38 @@ Gap slices added in triage on 2026-10-13 cover commits that are not in the refer
 | D32 | GRE-627 | Coverage audit mapping #133 and #135 patches to slices | none; runs early, re-checked before cutover |
 
 Turning `desktop_rebuild` on by default is a separate decision for the maintainer after D26 and D32.
+
+### D12 observation core pull-forward
+
+GRE-607 starts with `pp-storage::working_drafts::observation`, compiled only with
+`desktop_rebuild`. This unit ports the read contracts, cancellation, preparation
+limits, and cumulative budgets from the reference branch. It adds no executor,
+adapter, routes, storage writes, or runtime wiring. Default builds do not expose
+the module. Future user-visible callers must also check `PP_DESKTOP_REBUILD`.
+
+`PreparationBudget::new` is public and returns `ReadResult`, validating limits
+before accepting charges. Parser accounting methods are public so adapters and
+future parsers can share the same budget. Byte counters saturate or use checked
+addition, so oversized charges return `LimitExceeded` instead of overflowing.
+Callers must propagate failures and discard the budget after a refusal. Raw
+document reads and parser expansion retain separate total-byte caps.
+Depth checks precede node and visit charges, matching entry accounting.
+
+Read requests retain storage-private fields. External adapters can inspect them
+but cannot create grants. This unit does not itself admit or perform any reads.
+
+The working-draft executor still needs D11's `required_units`. GRE-604 D10b also
+needs the builder manifest helpers, which depend on the YAML parser. The remaining
+D12 units are YAML, builder manifest helpers, the executor after D11, and
+preparation. Those stay open on GRE-607. This first unit alone does not unblock
+all of D10b.
+
+Run its boundary and accounting proofs with:
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test working_draft_observation
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --doc
+```
 
 ### D4 media reconciliation
 
@@ -175,6 +213,36 @@ The default build excludes this request and retains existing naming behavior.
 The rebuild CI gate runs the feature-on catalog suite. This storage unit adds no
 runtime, HTTP or UI caller. Future user-visible callers must also check
 `PP_DESKTOP_REBUILD`. Tests for later source-work and capture APIs remain deferred.
+
+### D8 naming error classification
+
+GRE-601 classifies naming failures behind `pp-storage/desktop_rebuild` using
+existing catalog requests. Invalid profiles submitted to `SaveNaming` or
+`SaveGlobalNaming` return `CatalogFailure::Input` with the existing validation
+message. `GetNaming` and `SaveNaming` return `CatalogFailure::NotFound` for
+missing or foreign-tenant sources. Authentication still runs before source
+lookup and profile validation.
+
+`GetNaming` classifies errors projecting a stored override as
+`CatalogFailure::InvalidStoredNaming`, retaining the original error as its cause.
+Source lookup and global-setting reads happen outside that classification, so
+SQL failures retain their original type. Invalid global settings still fall back
+to defaults without repairing storage. `SaveNaming::UseDefaults` can replace a
+corrupt source override while preserving unrelated metadata.
+
+The catalog tests exercise validation, missing sources, corrupt stored overrides,
+SQL abort rollback, normalization, digest equivalence, global fallback, tenant
+isolation and persistence after restart. Default-build error text and naming
+behavior stay unchanged. This unit adds no user-visible caller. Future callers
+must also check `PP_DESKTOP_REBUILD`.
+
+The remaining reference `catalog/tests.rs` cases need APIs absent from main:
+issued-token retirement and incarnation proofs, repeated local-scan completion,
+captured-claim activation, orphan-source-work reaping, and pending/resolved lease
+release across expiry and cancellation. Those tests depend on the matching
+source-work state and job capture/settlement APIs. Port them with those owners
+when the APIs land; do not emulate them in D8 or start GRE-602/D9 here. GRE-601
+remains In Progress until its final slice.
 
 ### D6 auth scheduling
 
@@ -298,9 +366,9 @@ report `manifest_text` integrity failures for non-scalar metadata; lossless publ
 snapshot serialization remains deferred.
 
 Build creation, mutation, and deletion remain the next GRE-602 slice. This does
-not complete D9 or unblock D10b. The reference bounded YAML parser, group merging,
-hints, and STL inference depend on the absent `working_drafts::observation`
-infrastructure. That dependency remains a D10b prerequisite. The existing
+not complete D9 or unblock D10b. Main now contains the observation contracts and
+budgets. The bounded YAML parser, builder manifest helpers, group merging, hints,
+and STL inference remain prerequisites for D10b integration. The existing
 `manifest_options` JSON model stays in place for later integration.
 No runtime caller is added. Future user-visible callers must also check
 `PP_DESKTOP_REBUILD` for exactly `1` or `true`.
@@ -347,7 +415,7 @@ Select that account explicitly with this mapping, only when a matching `users.id
 
 A missing mapping still refuses populated account databases, including a claimed `default` account.
 Mapping another user ID onto the shared `default` tenant remains unsupported and fails before product database writes.
-Shared single-user-auth copies whose user IDs differ from `default` need a separate ownership migration.
+For supported legacy data in shared single-user-auth copies, use the [offline ownership copy](#copy-legacy-default-ownership-into-an-account-mapped-desktop) below.
 
 Core pins mapping presence and the SHA256 of its bytes under the storage lease for the full runtime lifetime.
 Every compatibility child checks the same pin before product startup.
@@ -367,3 +435,57 @@ Live external in-place database replacement is unsupported. Use the existing sto
 With both gates enabled, an empty copy without a mapping retains the synthetic desktop owner.
 An existing copy with users requires a valid mapping.
 With either gate disabled, existing users remain refused and the original synthetic setup protocol remains unchanged.
+
+## Copy legacy default ownership into an account-mapped desktop
+
+GRE-353 adds an offline copy command for legacy mutable Plans, accepted Plan/Source history, and supported exports. Stop the source server and desktop first. The command reserves the source with `acquireDataDirectory`, reads its current SQLite snapshot including committed WAL data, and leaves its product database and files unchanged. Ownership lease records can change during reservation and release.
+
+Run this command on Linux with Python 3 available. Publication uses libc `renameat2` with `RENAME_NOREPLACE`. The destination must be new, its parent must already exist, and it must not overlap the source. Existing files, directories, empty directories, and symlinks at the destination all cause refusal. The tool builds a private staging directory beside the destination and publishes the complete copy atomically. Caught errors remove staging and publish nothing. Abrupt termination can leave a private `.ownership-copy-*` directory. Power-loss durability is not guaranteed.
+
+From `web/apps/server`, inspect the stopped source with the exact runtime gate enabled:
+
+```sh
+PP_DESKTOP_REBUILD=1 npx tsx --conditions=development src/ownership-migration-cli.ts inspect /absolute/source > inventory.json
+```
+
+The inventory contains a deterministic full-database `source_digest`, table names, row identifiers, claim placeholders, and an `exports` list of artifact paths, SHA-256 digests, Plan IDs, and current tenant IDs. It contains no credentials, settings values, or document contents. Review every row identifier against your source data. Create a separate manifest with this shape:
+
+```json
+{
+  "version": 1,
+  "source_digest": "COPY_THE_64_CHARACTER_DIGEST_FROM_INVENTORY",
+  "selected_user_id": "account-a",
+  "claims": [
+    { "table": "build_profiles", "rowid": 1, "user_id": "account-a" },
+    { "table": "build_profiles", "rowid": 2, "user_id": "account-b" }
+  ],
+  "exports": [
+    {
+      "path": "tenant-default/profile-1-Plan/checklist/checklist-CONTENT_SHA256.html",
+      "sha256": "COPY_THE_ARTIFACT_DIGEST_FROM_INVENTORY",
+      "profile_id": 1,
+      "user_id": "account-a"
+    }
+  ]
+}
+```
+
+Include exactly one claim for every inventory row, including independent rows assigned to other users. Each owner and the selected user must already exist in `users` and must differ from `default`. The selected user identifies the desktop account to open. Claims can distribute unrelated Plans among multiple existing accounts. The tool does not infer ownership, clone shared dependencies, or change IDs. A Plan, its Source relationships, parts, and progress must have consistent owners. Conflicting assignments, dangling references, missing or extra claims, duplicate claims, and destination uniqueness collisions cause refusal. Machine and filament profile references from unchanged foreign assignment rows must also resolve to the same owner.
+
+Apply the reviewed manifest to a new destination:
+
+```sh
+PP_DESKTOP_REBUILD=1 npx tsx --conditions=development src/ownership-migration-cli.ts apply /absolute/source /absolute/new-desktop /absolute/manifest.json
+```
+
+The copy contains a private `desktop-account.json` v1 mapping with `user_id` and `tenant_id` equal to `selected_user_id`. Existing desktop admission rules still apply. Unclaimed rows retain their content and owners. Stored `projects.local_path` values under each Source's own repository tree are rebased to the destination, including foreign rows, so the copy never depends on the original directory. The global `default` `app_settings.schema_version` stays at `default`. The tool compares every staged table against the expected source rows before committing so trigger side effects cannot silently change unrelated data.
+
+The copy supports default rows in `build_profiles`, `projects`, `profile_layers`, `parts`, `print_progress`, `source_docs`, `source_notes`, `plan_decisions`, `printer_profiles`, `process_profiles`, and `filament_profiles`, plus `source_revisions`, `plan_revision_input_sets`, `plan_revision_inputs`, `plan_accepted_input_sets`, `plan_revisions`, `plan_revision_parts`, `required_units`, `plan_revision_required_units`, and `plan_revision_required_unit_sets`. Every default history row needs its own explicit claim. It discovers tenant tables from SQLite rather than assuming this list covers the schema. Any populated default tenant table outside that list causes refusal, except the global schema version. Bundled starter printer, process, and filament profiles are supported and require explicit claims. Their scalar fields and resolved configuration JSON retain their original bytes. Imported or externally backed profiles cause refusal when `source_path`, `raw_json`, `raw_ini`, or `compatible_printers` is nonempty. This is not a whole-application ownership migration. Do not remove product data merely to bypass refusal.
+
+The tool refuses default settings other than `schema_version`, drafts, accepted Plate state, printer queues, opaque project metadata and imported-path lists, nonempty decision parameters other than `{}`, and populated decision result JSON. It also refuses stored sessions, password reset tokens, and Plan share capabilities. Share bundles contain ownership references outside the supported row graph. No startup path or HTTP endpoint invokes it.
+
+Filesystem support covers regular files in `repos/<project id>` and `sources/<project id>` for known projects. Symlinks and special files cause refusal. A nonempty `projects.local_path` must be an absolute path inside `repos/<its project id>`; external paths are refused. Every Source revision must have a safe `<its project id>/revisions/...` locator and an existing regular snapshot tree. Relative part and document paths must contain no parent segments, empty segments, backslashes, or external locators. Unknown top-level artifacts and native storage cause refusal. Standard `uploads`, `upload-staging`, `staging`, `backups`, `thumbnails`, `previews`, `thumbs`, and `covers` directories are accepted only when empty. Exports support the existing `profile-<Plan id>-<slug>/checklist/checklist-<sha256>.html`, `profile-<Plan id>-<slug>/direct-3mf/direct-<16 hex digest>.3mf`, and `profile-<Plan id>-<slug>/kit/<slug>-<timestamp>-<sha256>.print-partner-kit.zip` layouts. Files can be directly under `exports` for legacy default data or under the existing tenant directory. Each file needs an `exports` manifest claim with its exact path, digest, Plan ID and named owner. The owner must agree with the Plan's explicit row claim or existing tenant; foreign exports cannot be reassigned. Omitting `exports` remains valid when no export files exist. Unmapped files, wrong scopes, unsupported layouts and target collisions fail closed. Default exports move into `tenantExportDirectory` for their mapped owner; foreign exports keep their tenant scope. There is no copied `tenant-default` fallback. The tool preserves bytes and validates content-addressed filenames, without rewriting embedded export content. Accepted STL/Plate trees, older export layouts and temporary publications remain unsupported. Ownership markers, leases, the desktop lock, and the source desktop mapping are excluded from the copy. Socket files outside those excluded ownership paths cause refusal.
+
+The staged copy suspends only six known immutable/invalidation triggers inside its transaction after checking their definitions against the current migrations. It restores them before validation and verifies that the complete schema matches the source. All historical revision and input digests, existing Required-unit maps and owner relationships are checked. Current revisions require complete Required-unit maps. Retained older revisions may lack maps only when no partial mapping or created-unit state exists. Current accepted Plans must pass the production operational reader and tracked Part byte verification in both source and stage. Valid format-1 input history retains its existing `uninitialized` operational result; it is not promoted to format 2. IDs, digests, tokens, actor identities and timestamps are preserved.
+
+The source digest is rechecked after reservation, after the SQLite backup and before publication. Product file hashes and export inventory are rechecked after copying. Any database change requires a new inventory and reviewed manifest. The command exits with status 1 on refusal and status 0 with a JSON receipt on success. Both inspect and apply require `PP_DESKTOP_REBUILD` to be exactly `1` or `true`.

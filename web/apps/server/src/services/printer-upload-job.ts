@@ -4,6 +4,8 @@ import { pipeline } from "node:stream/promises";
 import type { Readable } from "node:stream";
 import type { PrinterCheckoffUnit } from "@print-partner/contracts";
 import type { AppRepository } from "../db/repository.js";
+import { readFeatureAccess } from "../lib/feature-access.js";
+import { desktopFeaturesEnabled } from "../lib/feature-toggles.js";
 import { getIntegrationAdapter } from "../integrations/registry.js";
 import { getIntegrationConfig } from "../integrations/store.js";
 import { createPrinterCheckoffLink } from "./printer-checkoff-store.js";
@@ -102,6 +104,11 @@ async function runPrinterUploadJobInner(
   emit: PrinterUploadJobEmit,
   ownedAtStart: ReturnType<typeof queueSendRow>,
 ): Promise<Record<string, unknown>> {
+  if (desktopFeaturesEnabled() && ownedAtStart && (
+    ownedAtStart.printer_id !== input.printer_id || ownedAtStart.profile_id !== input.profile_id
+  )) {
+    throw new Error("Stored printer upload does not match its queue item");
+  }
   const fleet = loadFleet(repo);
   const machine = fleet.find((m) => m.id === input.printer_id);
   if (!machine) {
@@ -117,6 +124,19 @@ async function runPrinterUploadJobInner(
   const integration = getIntegrationConfig(repo, integrationId);
   if (!integration) {
     throw new Error("Linked printer host integration was not found");
+  }
+  if (integration.type === "bambu" && desktopFeaturesEnabled()) {
+    const profileId = input.profile_id;
+    if (profileId == null || !Number.isSafeInteger(profileId) || profileId <= 0) {
+      throw new Error("Pick a plan to bind this send (profile_id required)");
+    }
+    if (!repo.getOwnedProfileIdentity(profileId)) {
+      throw new Error("Profile not found");
+    }
+    const access = readFeatureAccess(() => repo, "bambu", profileId);
+    if (access.kind !== "allowed") {
+      throw new Error(`${access.code}: ${access.error}`);
+    }
   }
   if (integration.config.enabled === false) {
     throw new Error("Linked printer host is disabled");
