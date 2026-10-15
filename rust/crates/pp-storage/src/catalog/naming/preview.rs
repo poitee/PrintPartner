@@ -152,10 +152,7 @@ fn merge(mut base: NamingProfile, overrides: NamingOverride) -> Result<NamingPro
     if let Some(r) = overrides.export_role_order {
         base.export_role_order = r
     }
-    base.validate().map_err(|error| {
-        let detail = error.to_string();
-        error.context(CatalogFailure::Input(detail))
-    })
+    base.validate_input()
 }
 fn escape_regex(text: &str) -> String {
     let mut out = String::new();
