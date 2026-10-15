@@ -6,6 +6,7 @@ export type SegmentedOption<T extends string> = {
   label?: string;
   icon?: ReactNode;
   title?: string;
+  "aria-label"?: string;
 };
 
 type Props<T extends string> = {
@@ -14,6 +15,7 @@ type Props<T extends string> = {
   options: SegmentedOption<T>[];
   className?: string;
   "aria-label"?: string;
+  disabled?: boolean;
 };
 
 export function SegmentedControl<T extends string>({
@@ -22,6 +24,7 @@ export function SegmentedControl<T extends string>({
   options,
   className,
   "aria-label": ariaLabel,
+  disabled,
 }: Props<T>) {
   return (
     <div
@@ -39,13 +42,16 @@ export function SegmentedControl<T extends string>({
             key={opt.value}
             type="button"
             title={opt.title ?? opt.label}
+            aria-label={opt["aria-label"]}
             aria-pressed={active}
+            disabled={disabled}
             onClick={() => onValueChange(opt.value)}
             className={cn(
               "inline-flex min-h-8 min-w-8 flex-1 items-center justify-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors",
               active
                 ? "bg-card text-foreground shadow-sm"
                 : "text-muted-foreground hover:text-foreground",
+              disabled && "pointer-events-none opacity-50",
             )}
           >
             {opt.icon}

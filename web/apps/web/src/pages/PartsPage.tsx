@@ -12,6 +12,7 @@ import PlanFileSelection from "../components/review/PlanFileSelection";
 import PlanProgressChoices from "../components/review/PlanProgressChoices";
 import PendingPlanFiles from "../components/review/PendingPlanFiles";
 import ReviewPartsSheet, { type ReviewPartsSheetHandle } from "../components/review/ReviewPartsSheet";
+import PlanFeaturesCard from "../components/plan/PlanFeaturesCard";
 import { Button } from "../components/ui/button";
 import { fetchStlNaming } from "../api/endpoints/stlNaming";
 import { useProfileSelection } from "../context/ProfileContext";
@@ -89,6 +90,9 @@ export default function PartsPage() {
           )}
           <Button variant="secondary" disabled={saving} onClick={() => void preparePlan().catch(() => {})}>Retry save</Button>
         </div>
+      )}
+      {selectedProfileId != null && (
+        <PlanFeaturesCard key={selectedProfileId} profileId={selectedProfileId} disabled={disabled} />
       )}
       {draftWorkspace && <PlanProgressChoices key={`${draftWorkspace.profile_id}:${draftWorkspace.draft.snapshot_digest}`} workspace={draftWorkspace} />}
       {draftWorkspace && (mergeConflict || !review?.accepted_basis) ? (

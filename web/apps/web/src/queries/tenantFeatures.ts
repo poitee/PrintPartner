@@ -22,6 +22,7 @@ export function usePatchTenantFeaturesMutation() {
       patchTenantFeatures(patch),
     onSuccess: (updated) => {
       qc.setQueryData<FeatureSettings>(queryKeys.tenantFeatures, updated);
+      void qc.invalidateQueries({ queryKey: ["planFeatures"] });
     },
   });
 }
