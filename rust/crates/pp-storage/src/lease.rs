@@ -107,7 +107,9 @@ fn validate_directory_permissions(metadata: &std::fs::Metadata) -> Result<()> {
 impl AdmittedDirectory {
     pub(crate) fn preflight(&self) -> Result<()> {
         self.validate_identity()?;
-        crate::schema::preflight(&self.path.join("print-partner.db"), false)?;
+        crate::schema::preflight(&self.path.join("print-partner.db"), false, || {
+            self.validate_identity()
+        })?;
         Ok(())
     }
 
