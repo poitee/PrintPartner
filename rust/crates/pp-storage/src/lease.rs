@@ -646,6 +646,11 @@ mod tests {
         assert_acquisition_marker_ignores_swap(1);
     }
 
+    #[test]
+    fn ticket_t_12_acquisition_marker_final_read_ignores_directory_swap() {
+        assert_acquisition_marker_ignores_swap(2);
+    }
+
     fn assert_acquisition_marker_ignores_swap(checkpoint: u8) {
         let path = directory();
         let replacement = path.with_extension("replacement");
@@ -698,6 +703,29 @@ mod tests {
         assert!(!path.join(".desktop-lease").exists());
         std::fs::remove_dir_all(path).unwrap();
         std::fs::remove_dir_all(replacement).unwrap();
+    }
+
+    #[test]
+    fn ticket_t_12_release_preserves_live_replacement_after_persistent_swap() {
+        let path = directory();
+        let retired = path.with_extension("retired");
+        let owner = StorageLease::acquire(&path).unwrap();
+        let runtime = owner.runtime_dir().to_path_buf();
+        std::fs::rename(&path, &retired).unwrap();
+        std::fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
+        let live = serde_json::json!({"pid":std::process::id(),"kind":"standalone"}).to_string();
+        std::fs::write(path.join(".desktop-owner.json"), &live).unwrap();
+        std::fs::create_dir(path.join(".desktop-lease")).unwrap();
+        std::fs::write(path.join(".desktop-lease/owner.json"), b"live guard").unwrap();
+        let released = owner.release();
+        assert!(released.marker_removed && released.runtime_removed && released.lock_released);
+        assert_eq!(std::fs::read_to_string(path.join(".desktop-owner.json")).unwrap(), live);
+        assert_eq!(std::fs::read(path.join(".desktop-lease/owner.json")).unwrap(), b"live guard");
+        assert!(!retired.join(".desktop-owner.json").exists());
+        assert!(!retired.join(".desktop-lease").exists());
+        assert!(!runtime.exists());
+        std::fs::remove_dir_all(path).unwrap();
+        std::fs::remove_dir_all(retired).unwrap();
     }
 
     #[test]
@@ -780,6 +808,7 @@ mod tests {
             stale
         );
         assert_eq!(std::fs::read_dir(&path).unwrap().count(), 1);
+        assert!(!retired.join(".desktop-lease").exists(), "admitted guard stranded after persistent swap");
         std::fs::remove_dir_all(path).unwrap();
         std::fs::remove_dir_all(retired).unwrap();
     }
