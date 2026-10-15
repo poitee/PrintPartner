@@ -34,3 +34,7 @@ it("keeps a start failure recoverable and sends the same file on Retry", async (
   expect(startPrinterUpload).toHaveBeenNthCalledWith(2, expect.objectContaining({ file, profile_id: 7, printer_id: "printer-1", start: false }));
   await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
 });
+
+vi.mock("../../hooks/useBambuWorkflowAccess", () => ({
+  useBambuWorkflowAccess: () => ({ canHandoff: true, canPollStatus: true, beginHandoff: () => ({ isCurrent: () => true }) }),
+}));

@@ -155,3 +155,7 @@ it("ignores a late Bambu handoff response after switching Builds", async () => {
   expect(toast.message).not.toHaveBeenCalled();
   expect(open).not.toHaveBeenCalled();
 });
+
+vi.mock("../../hooks/useBambuWorkflowAccess", () => ({
+  useBambuWorkflowAccess: () => ({ canHandoff: true, canPollStatus: true, beginHandoff: () => ({ isCurrent: () => true }) }),
+}));

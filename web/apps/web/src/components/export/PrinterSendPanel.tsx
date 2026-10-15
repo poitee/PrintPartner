@@ -1,3 +1,4 @@
+import { useBambuWorkflowAccess } from "../../hooks/useBambuWorkflowAccess";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -76,6 +77,7 @@ export default function PrinterSendPanel({
   onSlicedFileChange,
   onFailure,
 }: Props) {
+  const bambuAccess = useBambuWorkflowAccess({ profileId, engineReady });
   const printerUploadJob = useJobRunner("printer-upload");
   const planBind = sendPlanBindCopy(planName ?? null);
 
@@ -88,7 +90,7 @@ export default function PrinterSendPanel({
     [printersQuery.data, integrationsQuery.data],
   );
   const linkedPrinters = fleet?.sendPrinters ?? NO_PRINTERS;
-  const bambuPrinters = fleet?.bambuPrinters ?? NO_PRINTERS;
+  const bambuPrinters = bambuAccess.canHandoff ? fleet?.bambuPrinters ?? NO_PRINTERS : NO_PRINTERS;
   const hostTypeByPrinterId: Record<string, LiveStripHostType> = fleet?.hostTypeByPrinterId ?? {};
   const printersLoading = printersQuery.isPending || integrationsQuery.isPending;
   const [selectedPrinterId, setSelectedPrinterId] = useState(
@@ -135,11 +137,11 @@ export default function PrinterSendPanel({
   const hasBambuLinked = bambuPrinters.length > 0;
   const busy = printerUploadJob.busy || bambuBusy || parseBusy;
   const statusIntegrationIds = useMemo(
-    () => [...linkedPrinters, ...bambuPrinters].flatMap((printer) => {
+    () => [...linkedPrinters, ...(bambuAccess.canPollStatus ? bambuPrinters : NO_PRINTERS)].flatMap((printer) => {
       const integrationId = printer.integration_id?.trim();
       return integrationId ? [integrationId] : [];
     }),
-    [bambuPrinters, linkedPrinters],
+    [bambuAccess.canPollStatus, bambuPrinters, linkedPrinters],
   );
   const { statusByIntegration: hostStatusByIntegration } = usePrinterStatuses(
     statusIntegrationIds,
@@ -357,6 +359,8 @@ export default function PrinterSendPanel({
   };
 
   const onBambuFileChosen = (fileList: FileList | null) => {
+    const attempt = bambuAccess.beginHandoff();
+    if (!attempt) return;
     const file = fileList?.[0];
     if (bambuFileInputRef.current) bambuFileInputRef.current.value = "";
     if (!file) return;
@@ -382,7 +386,7 @@ export default function PrinterSendPanel({
       let handoffUnits: typeof proposedUnits | undefined;
       try {
         const parsed = await parseSlicedObjectsFile(file);
-        if (gen !== parseGenRef.current) return;
+        if (gen !== parseGenRef.current || !attempt.isCurrent()) return;
         setObjectParse(parsed);
         const proposed = proposeCheckoffFromObjects(parsed.names, remainingParts);
         setObjectPropose(proposed);
@@ -390,11 +394,12 @@ export default function PrinterSendPanel({
           handoffUnits = proposed.units;
         }
       } catch {
-        if (gen !== parseGenRef.current) return;
+        if (gen !== parseGenRef.current || !attempt.isCurrent()) return;
         setObjectParse({ objects: [], names: [], format: "unknown", unlabeled: true });
         setObjectPropose({ units: [], matches: [], unmatchedNames: [] });
       }
 
+      if (!attempt.isCurrent()) return;
       setBambuBusy(true);
       try {
         const result = await startBambuConnectHandoff({
@@ -403,7 +408,7 @@ export default function PrinterSendPanel({
           profile_id: profileId,
           checkoff_units: handoffUnits,
         });
-        if (gen !== parseGenRef.current) return;
+        if (gen !== parseGenRef.current || !attempt.isCurrent()) return;
         if (result.launched) {
           toast.success(result.message, {
             description: result.checkoff_link_id
@@ -432,7 +437,7 @@ export default function PrinterSendPanel({
           }
         }
       } catch (e) {
-        if (gen !== parseGenRef.current) return;
+        if (gen !== parseGenRef.current || !attempt.isCurrent()) return;
         toast.error(e instanceof Error ? e.message : String(e));
       } finally {
         if (gen === parseGenRef.current) setBambuBusy(false);
@@ -624,7 +629,7 @@ export default function PrinterSendPanel({
               <Button size="sm" variant="outline" asChild className="w-fit">
                 <Link to={settingsPrintersRoute()}>Add printers in Settings</Link>
               </Button>
-              {!hasBambuLinked ? (
+              {bambuAccess.canHandoff && !hasBambuLinked ? (
                 <p className="text-micro leading-relaxed text-muted-foreground">
                   Bambu Connect is available after you link a Bambu host. It never starts a
                   print from here.
@@ -665,7 +670,7 @@ export default function PrinterSendPanel({
                 const label = printerSendStatusLabel(hostStatusByIntegration[integrationId]);
                 return (
                   <option key={p.id} value={p.id}>
-                    {printerLabel(p)} · {label}
+                    {printerLabel(p)}{bambuAccess.canPollStatus ? ` · ${label}` : ""}
                   </option>
                 );
               })}

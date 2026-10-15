@@ -15,6 +15,7 @@ export function usePlanFeaturesQuery(
     queryFn: () => fetchPlanFeatures(profileId),
     enabled,
     staleTime: 30_000,
+    notifyOnChangeProps: "all",
   });
 }
 
