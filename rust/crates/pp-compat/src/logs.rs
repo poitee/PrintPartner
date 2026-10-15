@@ -376,6 +376,65 @@ mod tests {
     }
 
     #[test]
+    fn ticket_t_2_unlinked_active_log_recovers_without_restart() {
+        for rotation in [None, Some(false), Some(true)] {
+            let scratch = Scratch::new();
+            let directory = scratch.0.join("logs");
+            let path = directory.join("desktop.jsonl");
+            let logs = Logs::open(directory).unwrap();
+            logs.event(Event::Starting, 30);
+            std::fs::remove_file(&path).unwrap();
+            if let Some(size) = rotation {
+                force_rotation(&logs, size);
+            }
+            logs.event(Event::Ready, 30);
+            let row: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            assert_eq!(row["event"], "compat_ready");
+            assert_eq!(mode(&path), 0o600);
+        }
+    }
+
+    #[test]
+    fn ticket_t_2_restrictive_archives_allow_startup_and_rotation() {
+        for permissions in [0o000, 0o200] {
+            for size in [false, true] {
+                let scratch = Scratch::new();
+                let directory = scratch.0.join("logs");
+                let path = directory.join("desktop.1.jsonl");
+                std::fs::write(&path, b"history\n").unwrap();
+                chmod(&path, permissions);
+                let logs = Logs::open(directory.clone()).unwrap();
+                logs.event(Event::Starting, 30);
+                force_rotation(&logs, size);
+                logs.event(Event::Ready, 30);
+                let archived = directory.join("desktop.2.jsonl");
+                assert_eq!(mode(&archived) & !0o600, 0);
+                chmod(&archived, 0o600);
+                assert_eq!(std::fs::read(&archived).unwrap(), b"history\n");
+                let row: serde_json::Value = serde_json::from_slice(
+                    &std::fs::read(directory.join("desktop.jsonl")).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(row["event"], "compat_ready");
+            }
+        }
+    }
+
+    #[test]
+    fn ticket_t_2_restrictive_hardlinked_archive_is_still_refused() {
+        let scratch = Scratch::new();
+        let target = scratch.0.join("outside");
+        std::fs::write(&target, b"history\n").unwrap();
+        chmod(&target, 0o000);
+        std::fs::hard_link(&target, scratch.0.join("logs/desktop.1.jsonl")).unwrap();
+        assert!(Logs::open(scratch.0.join("logs")).is_err());
+        assert_eq!(mode(&target), 0o000);
+        chmod(&target, 0o600);
+        assert_eq!(std::fs::read(target).unwrap(), b"history\n");
+    }
+
+    #[test]
     fn ticket_t_2_hardlink_active_startup_leaves_target_unchanged() {
         let scratch = Scratch::new();
         let target = scratch.0.join("outside");
