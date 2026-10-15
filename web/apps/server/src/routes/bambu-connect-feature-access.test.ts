@@ -113,7 +113,7 @@ describe("Bambu Connect download HTTP feature admission", () => {
       const body = staged.json();
       expect(body.filename).toBe("plate.gcode");
       expect(body.launched).toBe(false);
-      expect(body.download_path).toBe(`/bambu-connect/handoff/${body.handoff_id}/file`);
+      expect(body.download_path).toBe(`/bambu-connect/handoff/${body.handoff_id}/file?profile_id=${profileId}`);
       const dir = join(root, "exports", "tenant-default", "bambu-connect", body.handoff_id);
       expect(readFileSync(join(dir, "plate.gcode"))).toEqual(bytes);
       repo.setSetting("feature_toggles", '{"bambu":false}');
@@ -142,7 +142,16 @@ describe("Bambu Connect download HTTP feature admission", () => {
       expect(missing.json()).toEqual({ status: 404, title: "Not Found", detail: "Handoff not found" });
     });
   }
-  it("isolates tenants and ignores Plan overrides for tenant-wide file download admission", async () => {
+  it.each(prefixes)("%s downloads a Plan-only upload using the returned path", async (prefix) => {
+    repo.setSetting(`feature_toggles:plan:${profileId}`, '{"bambu":true}');
+    const staged = await request("POST", prefix);
+    expect(staged.statusCode).toBe(200);
+    const download = await app.inject({ method: "GET", url: `${prefix}${staged.json().download_path}` });
+    expect(download.statusCode).toBe(200);
+    expect(download.rawPayload).toEqual(bytes);
+    expect(existsSync(join(root, "exports", "tenant-default", "bambu-connect", staged.json().handoff_id))).toBe(false);
+  });
+  it("isolates tenants and keeps legacy artifacts under tenant policy", async () => {
     repo.setSetting(`feature_toggles:plan:${profileId}`, '{"bambu":true}');
     const dir = seed("other");
     seed();
@@ -161,19 +170,121 @@ describe("Bambu Connect download HTTP feature admission", () => {
     tenantStorage.run("other", () => repo.setSetting("feature_toggles", '{"bambu":true}'));
     const foreign = await app.inject({ method: "GET", url: staged.json().download_path, headers: { "x-test-tenant": "other" } });
     expect(foreign.statusCode).toBe(404);
-    expect(foreign.json()).toEqual({ status: 404, title: "Not Found", detail: "Handoff not found" });
+    expect(foreign.json()).toEqual({ status: 404, title: "Not Found", detail: "Profile not found" });
     const own = await app.inject({ method: "GET", url: staged.json().download_path });
-    expect(own.statusCode).toBe(200);
-    expect(own.rawPayload).toEqual(bytes);
+    expect(own.json()).toEqual(disabled);
+  });
+  it.each(prefixes)("%s enforces the persisted Plan after revoke, query swapping or stripping", async (prefix) => {
+    repo.setSetting(`feature_toggles:plan:${profileId}`, '{"bambu":true}');
+    const other = repo.createProfile("Other enabled Plan");
+    repo.setSetting(`feature_toggles:plan:${other.id}`, '{"bambu":true}');
+    const staged = (await request("POST", prefix)).json();
+    const path = `${prefix}${staged.download_path}`;
+    const stripped = path.split("?")[0];
+    const dir = join(root, "exports", "tenant-default", "bambu-connect", staged.handoff_id);
+    expect(readFileSync(join(dir, ".plan-id"), "utf8")).toBe(String(profileId));
+    repo.setSetting("feature_toggles", '{"bambu":true}');
+    repo.setSetting(`feature_toggles:plan:${profileId}`, '{"bambu":false}');
+    for (const url of [path, stripped, `${stripped}?profile_id=${other.id}`]) {
+      vi.clearAllMocks();
+      const denied = await app.inject({ method: "GET", url });
+      expect(denied.statusCode).toBe(403);
+      expect(retention.sweepExpiredTransferArtifacts).not.toHaveBeenCalled();
+      expect(readFileSync(join(dir, "plate.gcode"))).toEqual(bytes);
+    }
+    repo.setSetting(`feature_toggles:plan:${profileId}`, '{"bambu":true}');
+    expect((await app.inject({ method: "GET", url: `${stripped}?profile_id=${other.id}` })).statusCode).toBe(403);
+    const download = await app.inject({ method: "GET", url: path });
+    expect(download.rawPayload).toEqual(bytes);
+    expect(existsSync(dir)).toBe(false);
+  });
+  it("never uses an unrelated enabled Plan to admit a legacy artifact", async () => {
+    repo.setSetting(`feature_toggles:plan:${profileId}`, '{"bambu":true}');
+    const dir = seed("default", true);
+    const url = `/bambu-connect/handoff/${id}/file?profile_id=${profileId}`;
+    const response = await app.inject({ method: "GET", url });
+    expect(response.json()).toEqual(disabled);
+    expect(retention.sweepExpiredTransferArtifacts).not.toHaveBeenCalled();
+    expect(readFileSync(join(dir, "plate.gcode"))).toEqual(bytes);
+    repo.setSetting("feature_toggles", '{"bambu":true}');
+    expect((await app.inject({ method: "GET", url })).statusCode).toBe(404);
+    expect(existsSync(dir)).toBe(false);
+  });
+  it("checks query and stored Plan ownership before reading foreign settings", async () => {
+    repo.setSetting("feature_toggles", '{"bambu":true}');
+    const foreign = tenantStorage.run("other", () => repo.createProfile("Foreign"));
+    const reads = vi.spyOn(repo, "getSettingSnapshot");
+    const dir = seed();
+    expect((await app.inject({ method: "GET", url: `/bambu-connect/handoff/${id}/file?profile_id=${foreign.id}` })).statusCode).toBe(404);
+    expect(reads).not.toHaveBeenCalledWith(`feature_toggles:plan:${foreign.id}`);
+    noWork(dir);
+    writeFileSync(join(dir, ".plan-id"), String(foreign.id));
+    expect((await request("GET")).statusCode).toBe(404);
+    expect(reads).not.toHaveBeenCalledWith(`feature_toggles:plan:${foreign.id}`);
+    expect(retention.sweepExpiredTransferArtifacts).not.toHaveBeenCalled();
+    expect(readFileSync(join(dir, "plate.gcode"))).toEqual(bytes);
+  });
+  it("does not expose another tenant's bound artifact with an owned enabled Plan", async () => {
+    repo.setSetting(`feature_toggles:plan:${profileId}`, '{"bambu":true}');
+    const staged = (await request("POST")).json();
+    const other = tenantStorage.run("other", () => repo.createProfile("Other tenant"));
+    tenantStorage.run("other", () => repo.setSetting(`feature_toggles:plan:${other.id}`, '{"bambu":true}'));
+    const foreign = await app.inject({ method: "GET", url: staged.download_path.replace(`=${profileId}`, `=${other.id}`), headers: { "x-test-tenant": "other" } });
+    expect(foreign.json()).toEqual(disabled);
+    expect((await app.inject({ method: "GET", url: staged.download_path })).rawPayload).toEqual(bytes);
+  });
+  it.each(["", "{", "null", "0", "-1", "1.5", "01", "9007199254740992", "1\n"])("fails closed on malformed artifact binding %j", async (binding) => {
+    repo.setSetting("feature_toggles", '{"bambu":true}');
+    const dir = seed("default", true);
+    writeFileSync(join(dir, ".plan-id"), binding);
+    const response = await request("GET");
+    expect(response.statusCode).toBe(500);
+    expect(response.json().code).toBe("HANDOFF_BINDING_INVALID");
+    expect(retention.sweepExpiredTransferArtifacts).not.toHaveBeenCalled();
+    expect(readFileSync(join(dir, "plate.gcode"))).toEqual(bytes);
+  });
+  it.each(["feature_toggles", "plan"])("preserves expired bound artifacts on corrupt %s and expires them after re-enable", async (key) => {
+    repo.setSetting(`feature_toggles:plan:${profileId}`, '{"bambu":true}');
+    const staged = (await request("POST")).json();
+    const dir = join(root, "exports", "tenant-default", "bambu-connect", staged.handoff_id);
+    const old = new Date(Date.now() - retention.TRANSFER_ARTIFACT_TTL_MS - 1_000);
+    utimesSync(dir, old, old);
+    repo.setSetting(key === "plan" ? `feature_toggles:plan:${profileId}` : key, "broken");
+    vi.clearAllMocks();
+    for (const url of [staged.download_path, staged.download_path.split("?")[0]]) {
+      repo.setSetting("feature_toggles", key === "plan" ? '{"bambu":true}' : "broken");
+      const denied = await app.inject({ method: "GET", url });
+      expect(denied.json()).toEqual(invalid);
+      expect(retention.sweepExpiredTransferArtifacts).not.toHaveBeenCalled();
+      expect(readFileSync(join(dir, "plate.gcode"))).toEqual(bytes);
+    }
+    repo.setSetting("feature_toggles", "{}");
+    repo.setSetting(`feature_toggles:plan:${profileId}`, '{"bambu":false}');
+    expect((await app.inject({ method: "GET", url: staged.download_path })).json()).toEqual(disabled);
+    expect(existsSync(dir)).toBe(true);
+    repo.setSetting(`feature_toggles:plan:${profileId}`, '{"bambu":true}');
+    expect((await app.inject({ method: "GET", url: staged.download_path })).statusCode).toBe(404);
+    expect(existsSync(dir)).toBe(false);
+  });
+  it.each(["bad", "0", "1&profile_id=2"])("rejects malformed query Plan %s without artifact work", async (query) => {
+    repo.setSetting("feature_toggles", '{"bambu":true}');
+    const dir = seed();
+    expect((await app.inject({ method: "GET", url: `/bambu-connect/handoff/${id}/file?profile_id=${query}` })).statusCode).toBe(400);
+    noWork(dir);
   });
   it.each([undefined, "", "0", "false", "TRUE", "true ", "yes", "2"])("preserves legacy upload and download without feature reads for flag %j", async (flag) => {
     if (flag === undefined) delete process.env.PP_DESKTOP_REBUILD;
     else vi.stubEnv("PP_DESKTOP_REBUILD", flag);
     repo.setSetting("feature_toggles", "broken");
     const reads = vi.spyOn(repo, "getSettingSnapshot");
-    expect((await request("POST")).statusCode).toBe(200);
+    const staged = await request("POST");
+    expect(staged.statusCode).toBe(200);
+    expect(staged.json().download_path).toBe(`/bambu-connect/handoff/${staged.json().handoff_id}/file`);
+    const stagedDir = join(root, "exports", "tenant-default", "bambu-connect", staged.json().handoff_id);
+    expect(readdirSync(stagedDir)).toEqual(["plate.gcode"]);
     const dir = seed();
-    const response = await request("GET");
+    writeFileSync(join(dir, ".plan-id"), "broken");
+    const response = await app.inject({ method: "GET", url: `/bambu-connect/handoff/${id}/file?profile_id=bad` });
     expect(response.statusCode).toBe(200);
     expect(response.rawPayload).toEqual(bytes);
     expect(existsSync(dir)).toBe(false);
@@ -220,6 +331,13 @@ describe("Bambu Connect download HTTP feature admission", () => {
         expect(download.statusCode).toBe(200);
         expect(download.rawPayload).toEqual(bytes);
         ports.repository.setSetting("feature_toggles", '{"bambu":false}');
+        ports.repository.setSetting(`feature_toggles:plan:${plan.id}`, '{"bambu":true}');
+        const planOnly = await post();
+        expect(planOnly.statusCode).toBe(200);
+        const planDownload = await production.inject({ method: "GET", url: `${prefix}${planOnly.json().download_path}` });
+        expect(planDownload.statusCode).toBe(200);
+        expect(planDownload.rawPayload).toEqual(bytes);
+        ports.repository.setSetting(`feature_toggles:plan:${plan.id}`, "{}");
       }
     } finally { await production.close(); ports.db.close(); }
   });

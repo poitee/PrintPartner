@@ -225,9 +225,16 @@ describe("Bambu Connect upload HTTP feature admission", () => {
   });
   it("cleans up an admitted upload when launch fails", async () => {
     repo.setSetting("feature_toggles", '{"bambu":true}');
-    vi.mocked(bambu.tryLaunchBambuConnectUrl).mockRejectedValueOnce(new Error("Launch failed"));
+    let bindingAtLaunch: string | undefined;
+    vi.mocked(bambu.tryLaunchBambuConnectUrl).mockImplementationOnce(async () => {
+      const handoffs = join(root, "exports", "tenant-default", "bambu-connect");
+      const entries = readdirSync(handoffs);
+      bindingAtLaunch = readFileSync(join(handoffs, entries[0], ".plan-id"), "utf8");
+      throw new Error("Launch failed");
+    });
     const response = await request();
     expect(response.statusCode).toBe(500);
+    expect(bindingAtLaunch).toBe(String(profileId));
     expect(readdirSync(join(root, "exports", "tenant-default", "bambu-connect"))).toEqual([]);
     expect(repo.getSetting("printer.checkoff_links")).toBeNull();
   });
