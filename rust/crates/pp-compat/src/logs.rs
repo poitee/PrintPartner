@@ -188,6 +188,28 @@ fn secure_archives(directory: &File) -> std::io::Result<()> {
             if error.kind() == std::io::ErrorKind::NotFound {
                 continue;
             }
+            if error.kind() == std::io::ErrorKind::PermissionDenied {
+                let mut metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
+                if unsafe {
+                    libc::fstatat(
+                        directory.as_raw_fd(),
+                        name.as_ptr(),
+                        metadata.as_mut_ptr(),
+                        libc::AT_SYMLINK_NOFOLLOW,
+                    )
+                } != 0
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
+                let metadata = unsafe { metadata.assume_init() };
+                if metadata.st_mode & libc::S_IFMT == libc::S_IFREG
+                    && metadata.st_uid == unsafe { libc::geteuid() }
+                    && metadata.st_nlink == 1
+                    && metadata.st_mode & 0o7777 & !0o600 == 0
+                {
+                    continue;
+                }
+            }
             return Err(error);
         }
         let file = unsafe { File::from_raw_fd(fd) };
@@ -247,7 +269,25 @@ impl Logs {
             .unwrap_or_default()
             .as_secs();
         let Ok(mut log) = self.0.lock() else { return };
-        if secure_directory(&log.directory).is_err() || secure_log(&log.file).is_err() {
+        if secure_directory(&log.directory).is_err() {
+            return;
+        }
+        if log
+            .file
+            .metadata()
+            .is_ok_and(|metadata| metadata.nlink() == 0)
+        {
+            let Ok(file) = open_log(&log.directory) else {
+                return;
+            };
+            let Ok(metadata) = file.metadata() else {
+                return;
+            };
+            log.bytes = metadata.len();
+            log.day = now / 86400;
+            log.file = file;
+        }
+        if secure_log(&log.file).is_err() {
             return;
         }
         let Ok(mut row) = serde_json::to_string(&Record {
@@ -392,6 +432,33 @@ mod tests {
                 serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
             assert_eq!(row["event"], "compat_ready");
             assert_eq!(mode(&path), 0o600);
+        }
+    }
+
+    #[test]
+    fn ticket_t_2_unlinked_active_log_refuses_redirected_recovery() {
+        for hardlink in [false, true] {
+            let scratch = Scratch::new();
+            let directory = scratch.0.join("logs");
+            let path = directory.join("desktop.jsonl");
+            let logs = Logs::open(directory).unwrap();
+            std::fs::remove_file(&path).unwrap();
+            let target = scratch.0.join("outside");
+            std::fs::write(&target, b"private history\n").unwrap();
+            chmod(&target, 0o640);
+            if hardlink {
+                std::fs::hard_link(&target, &path).unwrap();
+            } else {
+                std::os::unix::fs::symlink(&target, &path).unwrap();
+            }
+            logs.event(Event::Ready, 30);
+            assert_eq!(std::fs::read(&target).unwrap(), b"private history\n");
+            assert_eq!(mode(&target), 0o640);
+            std::fs::remove_file(&path).unwrap();
+            logs.event(Event::Ready, 30);
+            let row: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+            assert_eq!(row["event"], "compat_ready");
         }
     }
 
