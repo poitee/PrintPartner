@@ -93,7 +93,7 @@ export function recordNamesInstance(path: string, instance: string): boolean {
   let recorded: unknown;
   try { recorded = JSON.parse(readOwnershipRecord(path)); }
   catch (error) {
-    if (isFsError(error, ["ENOENT", "ENOTDIR"]) || !(error instanceof Error && "code" in error)) return false;
+    if (isFsError(error, ["ENOENT", "ENOTDIR", "ENXIO", "ELOOP", "EISDIR", "ENODEV"]) || !(error instanceof Error && "code" in error)) return false;
     throw error;
   }
   return typeof recorded === "object" && recorded !== null && "instance" in recorded && recorded.instance === instance;
