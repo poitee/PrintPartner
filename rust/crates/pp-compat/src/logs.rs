@@ -5,7 +5,7 @@ use std::{
     io::{Read, Seek, SeekFrom, Write},
     os::{
         fd::{AsRawFd, FromRawFd},
-        unix::fs::OpenOptionsExt,
+        unix::fs::{MetadataExt, OpenOptionsExt},
     },
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -149,6 +149,53 @@ struct LogFile {
     bytes: u64,
 }
 
+fn set_mode(file: &File, mode: libc::mode_t) -> std::io::Result<()> {
+    if unsafe { libc::fchmod(file.as_raw_fd(), mode) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+fn secure_log(file: &File) -> std::io::Result<()> {
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.uid() != unsafe { libc::geteuid() } || metadata.nlink() != 1
+    {
+        return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
+    }
+    set_mode(file, 0o600)
+}
+
+fn secure_directory(directory: &File) -> std::io::Result<()> {
+    let metadata = directory.metadata()?;
+    if !metadata.is_dir() || metadata.uid() != unsafe { libc::geteuid() } {
+        return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
+    }
+    set_mode(directory, 0o700)
+}
+
+fn secure_archives(directory: &File) -> std::io::Result<()> {
+    for index in 1..=6 {
+        let name = CString::new(format!("desktop.{index}.jsonl"))?;
+        let fd = unsafe {
+            libc::openat(
+                directory.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK,
+            )
+        };
+        if fd < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::NotFound {
+                continue;
+            }
+            return Err(error);
+        }
+        let file = unsafe { File::from_raw_fd(fd) };
+        secure_log(&file)?;
+    }
+    Ok(())
+}
+
 fn open_log(directory: &File) -> std::io::Result<File> {
     let fd = unsafe {
         libc::openat(
@@ -167,9 +214,7 @@ fn open_log(directory: &File) -> std::io::Result<File> {
         return Err(std::io::Error::last_os_error());
     }
     let file = unsafe { File::from_raw_fd(fd) };
-    if !file.metadata()?.is_file() {
-        return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
-    }
+    secure_log(&file)?;
     Ok(file)
 }
 
@@ -180,6 +225,8 @@ impl Logs {
             .read(true)
             .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
             .open(directory)?;
+        secure_directory(&directory)?;
+        secure_archives(&directory)?;
         let file = open_log(&directory)?;
         let bytes = file.metadata()?.len();
         let day = SystemTime::now()
@@ -200,6 +247,9 @@ impl Logs {
             .unwrap_or_default()
             .as_secs();
         let Ok(mut log) = self.0.lock() else { return };
+        if secure_directory(&log.directory).is_err() || secure_log(&log.file).is_err() {
+            return;
+        }
         let Ok(mut row) = serde_json::to_string(&Record {
             time: now,
             event,
@@ -211,6 +261,7 @@ impl Logs {
         if log.day != now / 86400 || log.bytes + row.len() as u64 > 10 * 1024 * 1024 {
             let rotate = (|| -> std::io::Result<()> {
                 open_log(&log.directory)?;
+                secure_archives(&log.directory)?;
                 let directory = log.directory.as_raw_fd();
                 for index in (1..=6).rev() {
                     let source = CString::new(if index == 1 {
