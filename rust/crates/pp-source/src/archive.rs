@@ -911,7 +911,7 @@ fn inspect_index_with_label_policy(
             return Err(ArchiveError::Unsupported);
         }
         let name_length = u16_at(&header, 28)? as usize;
-        if name_length == 0 || name_length > 4097 {
+        if name_length == 0 || (label_policy == ArchiveLabelPolicy::Strict && name_length > 4097) {
             return Err(ArchiveError::UnsafeEntry);
         }
         let mut name = vec![0; name_length];
