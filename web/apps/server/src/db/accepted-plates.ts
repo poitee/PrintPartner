@@ -439,6 +439,12 @@ export function readAcceptedPlateRevisionLayoutInternal(
   if (plateRows.some((plate, index) => plate.ordinal !== index + 1)) {
     throw new AcceptedPlateIntegrityError("layout");
   }
+  const unitsByPlateId = new Map<string, typeof units>();
+  for (const unit of units) {
+    const plateUnits = unitsByPlateId.get(unit.plateId);
+    if (plateUnits) plateUnits.push(unit);
+    else unitsByPlateId.set(unit.plateId, [unit]);
+  }
   const stored: AcceptedPlateInput[] = plateRows.map((plate) => ({
     plateId: plate.plateId,
     printerId: plate.printerId,
@@ -448,18 +454,16 @@ export function readAcceptedPlateRevisionLayoutInternal(
     bedDepthUm: plate.bedDepthUm,
     bedHeightUm: plate.bedHeightUm,
     marginUm: plate.marginUm,
-    units: units
-      .filter((unit) => unit.plateId === plate.plateId)
-      .map((unit) => ({
-        token: unit.requiredUnitToken,
-        xUm: unit.xUm,
-        yUm: unit.yUm,
-        widthUm: unit.widthUm,
-        depthUm: unit.depthUm,
-        heightUm: unit.heightUm,
-        placement: unit.placement === "manual" || unit.placement === "unplaced" ? unit.placement : "auto",
-        pinned: unit.pinned === true,
-      })),
+    units: (unitsByPlateId.get(plate.plateId) ?? []).map((unit) => ({
+      token: unit.requiredUnitToken,
+      xUm: unit.xUm,
+      yUm: unit.yUm,
+      widthUm: unit.widthUm,
+      depthUm: unit.depthUm,
+      heightUm: unit.heightUm,
+      placement: unit.placement === "manual" || unit.placement === "unplaced" ? unit.placement : "auto",
+      pinned: unit.pinned === true,
+    })),
   }));
   const legacy = validatePlates(stored, expectedTokens, false, "overlap_only");
   if (legacy.kind !== "ready") throw new AcceptedPlateIntegrityError("layout");
