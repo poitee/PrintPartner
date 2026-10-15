@@ -1717,20 +1717,20 @@ fn ticket_t_7_ownership_ui_navigate_refuses_invalid_admission_before_effects() {
 
 #[test]
 fn ticket_t_7_ownership_ui_open_source_has_complete_node_owned_resources() {
-    assert_ui_open_complete_resources("tool.ui_open_source");
+    assert_workspace_tool_resources("tool.ui_open_source");
 }
 
 #[test]
 fn ticket_t_7_ownership_ui_open_docs_has_complete_node_owned_resources() {
-    assert_ui_open_complete_resources("tool.ui_open_docs");
+    assert_workspace_tool_resources("tool.ui_open_docs");
 }
 
-fn assert_ui_open_complete_resources(id: &str) {
+fn assert_workspace_tool_resources(id: &str) {
     use pp_gateway::ownership::{Owner, manifest::Disposition};
     let index = admit_bundled_manifest().unwrap();
     let resources = index
         .resources_for(id)
-        .expect("Open source proposal resources must be reviewed");
+        .expect("Workspace tool resources must be reviewed");
     let expected: ResourceSet = serde_json::from_value(if id == "tool.get_source_docs" {
         json!([
             {"kind": "table", "name": "projects"},
@@ -1840,15 +1840,15 @@ fn assert_ui_open_complete_resources(id: &str) {
 
 #[test]
 fn ticket_t_7_ownership_ui_open_source_refuses_invalid_admission_before_effects() {
-    assert_ui_open_invalid_admission("tool.ui_open_source");
+    assert_workspace_tool_invalid_admission("tool.ui_open_source");
 }
 
 #[test]
 fn ticket_t_7_ownership_ui_open_docs_refuses_invalid_admission_before_effects() {
-    assert_ui_open_invalid_admission("tool.ui_open_docs");
+    assert_workspace_tool_invalid_admission("tool.ui_open_docs");
 }
 
-fn assert_ui_open_invalid_admission(id: &str) {
+fn assert_workspace_tool_invalid_admission(id: &str) {
     let mut original = manifest();
     original["live_formats"]["sqlite-schema"]["rust_writes"] = json!(34);
     let mut baseline_effect = false;
@@ -1981,10 +1981,10 @@ fn assert_ui_open_invalid_admission(id: &str) {
 
 #[test]
 fn ticket_t_7_ownership_get_source_docs_has_complete_node_owned_resources() {
-    assert_ui_open_complete_resources("tool.get_source_docs");
+    assert_workspace_tool_resources("tool.get_source_docs");
 }
 
 #[test]
 fn ticket_t_7_ownership_get_source_docs_refuses_invalid_admission_before_effects() {
-    assert_ui_open_invalid_admission("tool.get_source_docs");
+    assert_workspace_tool_invalid_admission("tool.get_source_docs");
 }
