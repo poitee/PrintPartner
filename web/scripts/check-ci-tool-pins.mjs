@@ -8,8 +8,10 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-if (process.argv.length > 3) {
-  console.error('Usage: node web/scripts/check-ci-tool-pins.mjs [workflow-directory]');
+const eventMode = process.argv[2] === '--event-sha';
+const eventSha = process.argv[3];
+if (eventMode ? process.argv.length !== 4 : process.argv.length > 3) {
+  console.error('Usage: node web/scripts/check-ci-tool-pins.mjs [workflow-directory | --event-sha <commit-sha>]');
   process.exit(2);
 }
 let yaml;
@@ -17,7 +19,7 @@ try {
   const require = createRequire(join(root, 'web/package.json'));
   yaml = require('yaml');
 } catch {
-  console.error('MISSING_PARSER: run npm ci in web/ before checking CI tool pins');
+  console.error('MISSING_PARSER: run npm ci --ignore-scripts in web/ before checking CI tool pins');
   process.exit(2);
 }
 const desktopContracts = /^desktop-contracts\.ya?ml$/;
@@ -103,8 +105,8 @@ function checkUses(step, file, path, seen) {
   }
 }
 
-function checkWorkflow(file) {
-  const document = yaml.parseDocument(readFileSync(file, 'utf8'), { uniqueKeys: true, merge: false });
+function checkWorkflow(file, source = readFileSync(file, 'utf8')) {
+  const document = yaml.parseDocument(source, { uniqueKeys: true, merge: false });
   for (const error of [...document.errors, ...document.warnings]) {
     report(file, '$', 'INVALID_YAML', error.message);
   }
@@ -130,7 +132,10 @@ function checkWorkflow(file) {
     report(file, 'jobs', 'INVALID_SHAPE', 'workflow requires a nonempty jobs mapping');
     return;
   }
-  if (desktopContracts.test(basename(file))) checkDesktopNode(workflow, file);
+  if (desktopContracts.test(basename(file))) {
+    checkDesktopNode(workflow, file);
+    if (eventMode) checkDesktopExecution(workflow, file);
+  }
   const seen = new Set();
   for (const [name, job] of Object.entries(workflow.jobs)) {
     const path = `jobs.${name}`;
@@ -155,7 +160,76 @@ function checkWorkflow(file) {
   }
 }
 
-try {
+function checkDesktopExecution(workflow, file) {
+  const requiredPaths = [
+    'fixtures/http/routes-inventory.json', 'rust/**', 'rust-toolchain.toml',
+    'web/packages/contracts/**', 'web/packages/domain/**', 'web/apps/server/**',
+    'web/apps/web/src/api/planReview.ts', 'web/scripts/desktop-parity/**',
+    'web/scripts/desktop-contracts/**', 'web/scripts/rust-contracts/**',
+    'web/package*.json', 'docs/adr/0006-autosave-text-contract.md',
+    `.github/workflows/${basename(file)}`,
+  ];
+  for (const event of ['push', 'pull_request']) {
+    const trigger = workflow.on?.[event];
+    const allowed = event === 'push' ? ['branches', 'paths'] : ['paths'];
+    if (!mapping(trigger) || Object.keys(trigger).some(key => !allowed.includes(key))
+      || !Array.isArray(trigger.paths) || !requiredPaths.every(path => trigger.paths.includes(path))
+      || trigger.paths.some(path => typeof path !== 'string' || path.startsWith('!'))
+      || (event === 'push' && (!Array.isArray(trigger.branches) || !trigger.branches.includes('main')
+        || trigger.branches.some(branch => typeof branch !== 'string' || branch.startsWith('!'))))) {
+      report(file, `on.${event}`, 'INVALID_DESKTOP_TRIGGERS', 'required automatic trigger coverage must remain enabled');
+    }
+  }
+  const job = workflow.jobs.parity;
+  if (!mapping(job) || ['if', 'needs', 'continue-on-error'].some(key => Object.hasOwn(job, key))) {
+    report(file, 'jobs.parity', 'DISABLED_DESKTOP_JOB', 'parity must run unconditionally and propagate failure');
+    return;
+  }
+  for (const [index, step] of (Array.isArray(job.steps) ? job.steps : []).entries()) {
+    if (!mapping(step)) continue;
+    const retention = typeof step.uses === 'string' && step.uses.startsWith('actions/upload-artifact@')
+      && step.if === 'always()';
+    if (Object.hasOwn(step, 'continue-on-error') || (Object.hasOwn(step, 'if') && !retention)) {
+      report(file, `jobs.parity.steps[${index}]`, 'DISABLED_DESKTOP_STEP', 'verification steps must run unconditionally and propagate failure');
+    }
+  }
+  if (!job.steps?.some(step => typeof step?.run === 'string'
+    && step.run.includes('npm run contracts:verify') && step.run.includes('npm run test:desktop-parity'))) {
+    report(file, 'jobs.parity.steps', 'MISSING_DESKTOP_VERIFICATION', 'expected contracts verification and desktop parity commands');
+  }
+}
+
+function checkEventTree() {
+  if (!/^[0-9a-f]{40}$/.test(eventSha)) throw new Error('expected a full lowercase event commit SHA');
+  const git = args => execFileSync('git', ['--no-replace-objects', ...args], { cwd: root, encoding: 'utf8' });
+  if (git(['cat-file', '-t', eventSha]).trim() !== 'commit') throw new Error('event SHA must identify a commit');
+  const entries = git(['ls-tree', '-z', eventSha, '--', '.github/workflows/']).split('\0')
+    .filter(Boolean).map(entry => {
+      const [metadata, path] = entry.split('\t');
+      const [mode, type, oid] = metadata.split(' ');
+      return { mode, type, oid, path };
+    });
+  const contracts = entries.filter(entry => /^\.github\/workflows\/desktop-contracts\.ya?ml$/.test(entry.path));
+  if (contracts.length !== 1 || !/^100(?:644|755)$/.test(contracts[0].mode) || contracts[0].type !== 'blob') {
+    report(eventSha, '.github/workflows', 'INVALID_EVENT_DESKTOP_CONTRACTS', 'expected exactly one regular desktop contracts workflow in the event tree');
+    return;
+  }
+  for (const entry of entries.filter(entry => /\.ya?ml$/i.test(entry.path))) {
+    if (entry.type !== 'blob' || !/^100(?:644|755)$/.test(entry.mode)) {
+      report(entry.path, '$', 'INVALID_EVENT_WORKFLOW', 'workflow must be a regular file');
+      continue;
+    }
+    checkWorkflow(entry.path, git(['cat-file', 'blob', entry.oid]));
+  }
+}
+
+if (eventMode) {
+  try {
+    checkEventTree();
+  } catch (error) {
+    report(eventSha, '$', 'INVALID_EVENT_TREE', error.message);
+  }
+} else try {
   const entries = readdirSync(directory, { withFileTypes: true });
   const files = entries
     .filter(entry => /\.ya?ml$/i.test(entry.name))

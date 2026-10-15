@@ -285,7 +285,7 @@ test('extra arguments fail usage', t => {
   const result = run(t, installer('nextest'), ['extra']);
   assert.equal(result.status, 2);
   assert.equal(result.stdout, '');
-  assert.equal(result.stderr, 'Usage: node web/scripts/check-ci-tool-pins.mjs [workflow-directory]\n');
+  assert.equal(result.stderr, 'Usage: node web/scripts/check-ci-tool-pins.mjs [workflow-directory | --event-sha <commit-sha>]\n');
 });
 
 test('missing parser gives setup instruction', t => {
@@ -297,7 +297,7 @@ test('missing parser gives setup instruction', t => {
   const result = spawnSync(process.execPath, [isolated], { encoding: 'utf8', env: { ...process.env, NODE_PATH: '' } });
   assert.equal(result.status, 2);
   assert.equal(result.stdout, '');
-  assert.equal(result.stderr, 'MISSING_PARSER: run npm ci in web/ before checking CI tool pins\n');
+  assert.equal(result.stderr, 'MISSING_PARSER: run npm ci --ignore-scripts in web/ before checking CI tool pins\n');
 });
 
 test('mixed list reports only the floating token', t => {

@@ -84,12 +84,19 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - name: Install
-        run: npm ci
+      - name: Install without lifecycle scripts
+        run: npm ci --ignore-scripts
+      - name: Validate immutable event workflows before lifecycle scripts
+        working-directory: .
+        env:
+          EVENT_SHA: ${{ github.sha }}
+        run: node web/scripts/check-ci-tool-pins.mjs --event-sha "$EVENT_SHA"
+      - name: Run dependency lifecycle scripts
+        run: npm rebuild
       - name: Check Action SHAs and CI installer tool pins
         working-directory: .
         run: |
-          node --test web/scripts/check-ci-tool-pins.test.mjs
+          node --test web/scripts/check-ci-tool-pins.test.mjs web/scripts/check-ci-event-tree.test.mjs
           node web/scripts/check-ci-tool-pins.mjs
       - name: Check workaround ratchet
         run: node ../scripts/workaround-ratchet.mjs && node --test ../scripts/workaround-ratchet.test.mjs
@@ -126,8 +133,15 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - name: Install
-        run: npm ci
+      - name: Install without lifecycle scripts
+        run: npm ci --ignore-scripts
+      - name: Validate immutable event workflows before lifecycle scripts
+        working-directory: .
+        env:
+          EVENT_SHA: ${{ github.sha }}
+        run: node web/scripts/check-ci-tool-pins.mjs --event-sha "$EVENT_SHA"
+      - name: Run dependency lifecycle scripts
+        run: npm rebuild
       - name: Build, bundle, runtime and browser checks
         env:
           PLAYWRIGHT_CHROMIUM_EXECUTABLE: /usr/bin/google-chrome
