@@ -10,7 +10,7 @@ import { readSchemaVersion } from "./db/upgrade-guard.js";
 
 const supported = ["build_profiles", "projects", "profile_layers", "parts", "print_progress", "source_docs", "source_notes", "plan_decisions", "printer_profiles", "process_profiles", "filament_profiles"] as const;
 const ownerSchema = z.string().min(1).max(256).refine(value => value !== "default", "Owner must be an existing non-default user");
-export const ownershipManifestSchema = z.strictObject({
+const ownershipManifestSchema = z.strictObject({
   version: z.literal(1),
   source_digest: z.string().regex(/^[a-f0-9]{64}$/),
   selected_user_id: ownerSchema,
