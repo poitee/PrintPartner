@@ -1,21 +1,15 @@
 import { z } from "zod";
 import type { AppRepository } from "../db/repository.js";
+import {
+  featureChoicesSchema as choicesSchema,
+  effectiveFeaturesSchema as effectiveSchema,
+  featureKeys,
+  type FeatureChoices,
+  type FeatureKey,
+} from "@print-partner/contracts";
+export { featureKeys, featurePatchSchema } from "@print-partner/contracts";
+export type { FeatureChoices, FeatureKey } from "@print-partner/contracts";
 
-const featuresSchema = z.object({
-  farm: z.boolean(),
-  orders: z.boolean(),
-  bambu: z.boolean(),
-  spoolman: z.boolean(),
-});
-const effectiveSchema = z.record(featuresSchema.keyof(), z.object({
-  enabled: z.boolean(),
-  source: z.enum(["plan", "user", "default"]),
-}));
-const choicesSchema = featuresSchema.partial();
-export const featureKeys = featuresSchema.keyof().options;
-export const featurePatchSchema = z.partialRecord(featuresSchema.keyof(), z.boolean().nullable());
-export type FeatureChoices = z.infer<typeof choicesSchema>;
-export type FeatureKey = keyof FeatureChoices;
 type FeatureLayer = { readonly choices: FeatureChoices; readonly raw: Record<string, unknown> };
 const storedObjectSchema = z.custom<Record<string, unknown>>(
   (value) => typeof value === "object" && value !== null && !Array.isArray(value),
