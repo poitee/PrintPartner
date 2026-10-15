@@ -1,8 +1,9 @@
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::{
+    fs::File,
     io::Write,
-    os::unix::fs::{OpenOptionsExt, PermissionsExt},
+    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
 };
 
@@ -115,6 +116,7 @@ struct Owner {
 
 pub(crate) struct StorageLease {
     path: Option<PathBuf>,
+    directory: File,
     pub(crate) identity: String,
     detached: PathBuf,
 }
@@ -131,6 +133,10 @@ impl StorageLease {
         std::fs::create_dir(&candidate)?;
         let result = (|| {
             std::fs::set_permissions(&candidate, std::fs::Permissions::from_mode(0o700))?;
+            let directory_handle = std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+                .open(&candidate)?;
             let mut file = std::fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
@@ -148,6 +154,7 @@ impl StorageLease {
                             Ok(()) => {
                                 return Ok(Self {
                                     path: Some(lease),
+                                    directory: directory_handle,
                                     identity,
                                     detached: directory
                                         .join(format!(".desktop-lease-release-{}", owner.instance)),
@@ -210,10 +217,23 @@ impl StorageLease {
         result
     }
     pub(crate) fn detach(&mut self) -> Result<()> {
-        if let Some(path) = &self.path
-            && path != &self.detached
-        {
-            std::fs::rename(path, &self.detached)?;
+        let Some(path) = &self.path else {
+            return Ok(());
+        };
+        if self.directory.metadata()?.nlink() == 0 {
+            self.path = None;
+            return Ok(());
+        }
+        if path != &self.detached {
+            if let Err(error) = std::fs::rename(path, &self.detached) {
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && self.directory.metadata()?.nlink() == 0
+                {
+                    self.path = None;
+                    return Ok(());
+                }
+                return Err(error.into());
+            }
             self.path = Some(self.detached.clone());
         }
         Ok(())
@@ -238,6 +258,88 @@ impl Drop for StorageLease {
 mod tests {
     #[cfg(target_os = "macos")]
     use std::os::unix::fs::DirBuilderExt;
+
+    fn release_directory() -> std::path::PathBuf {
+        let directory = std::env::temp_dir().join(format!(
+            "pp-guard-release-{}",
+            hex::encode(rand::random::<[u8; 16]>())
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        directory
+    }
+
+    #[test]
+    fn externally_removed_shared_lease_release_preserves_successor() {
+        for replace in [true, false] {
+            let directory = release_directory();
+            let mut old = super::StorageLease::acquire(&directory).unwrap();
+            let shared = directory.join(".desktop-lease");
+            std::fs::remove_dir_all(&shared).unwrap();
+            let successor = replace.then(|| super::StorageLease::acquire(&directory).unwrap());
+            let bytes = replace.then(|| std::fs::read(shared.join("owner.json")).unwrap());
+
+            old.release().unwrap();
+            assert!(old.path.is_none());
+            old.release().unwrap();
+            drop(old);
+
+            if let Some(bytes) = bytes {
+                assert_eq!(std::fs::read(shared.join("owner.json")).unwrap(), bytes);
+            } else {
+                assert!(!shared.exists());
+            }
+            drop(successor);
+            std::fs::remove_dir_all(directory).unwrap();
+        }
+    }
+
+    #[test]
+    fn externally_removed_detached_lease_release_preserves_successor() {
+        let directory = release_directory();
+        let mut old = super::StorageLease::acquire(&directory).unwrap();
+        old.detach().unwrap();
+        std::fs::remove_dir_all(&old.detached).unwrap();
+        let successor = super::StorageLease::acquire(&directory).unwrap();
+        let marker = directory.join(".desktop-lease/owner.json");
+        let bytes = std::fs::read(&marker).unwrap();
+
+        old.detach().unwrap();
+        assert!(old.path.is_none());
+        old.release().unwrap();
+        old.release().unwrap();
+        drop(old);
+
+        assert_eq!(std::fs::read(marker).unwrap(), bytes);
+        drop(successor);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn externally_removed_name_with_renamed_original_retains_failure() {
+        let directory = release_directory();
+        let mut old = super::StorageLease::acquire(&directory).unwrap();
+        let shared = directory.join(".desktop-lease");
+        let hidden = directory.join("hidden-lease");
+        let bytes = std::fs::read(shared.join("owner.json")).unwrap();
+        std::fs::rename(&shared, &hidden).unwrap();
+
+        for _ in 0..2 {
+            let error = old.release().unwrap_err();
+            assert_eq!(
+                error.downcast_ref::<std::io::Error>().unwrap().kind(),
+                std::io::ErrorKind::NotFound
+            );
+            assert_eq!(old.path.as_ref(), Some(&shared));
+            assert_eq!(std::fs::read(hidden.join("owner.json")).unwrap(), bytes);
+            assert!(!old.detached.exists());
+        }
+
+        std::fs::rename(hidden, shared).unwrap();
+        old.release().unwrap();
+        drop(old);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     #[test]
     fn child_recording_refuses_a_different_owner_without_modifying_its_marker() {
         let directory = std::env::temp_dir().join(format!(
