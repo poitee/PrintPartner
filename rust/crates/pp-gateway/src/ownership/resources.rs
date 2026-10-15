@@ -78,6 +78,8 @@ enum ReviewedEntry {
     ListPlanSnapshots { resources: Vec<ResourceId> },
     #[serde(rename = "tool.ui_open_source")]
     UiOpenSource { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_source_inventory")]
+    GetSourceInventory { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_source_docs")]
     GetSourceDocs { resources: Vec<ResourceId> },
     #[serde(rename = "tool.ui_open_docs")]
@@ -180,6 +182,18 @@ impl ReviewedEntry {
             ),
             Self::GetSourceDocs { resources } => (
                 "tool.get_source_docs",
+                resources,
+                BTreeSet::from([
+                    Table(Projects),
+                    Table(SourceDocs),
+                    Table(SourceNotes),
+                    Table(SourceRevisions),
+                    Table(AppSettings),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
+            Self::GetSourceInventory { resources } => (
+                "tool.get_source_inventory",
                 resources,
                 BTreeSet::from([
                     Table(Projects),
@@ -303,6 +317,7 @@ impl Declarations {
             "tool.list_sources",
             "tool.list_source_categories",
             "tool.get_source_docs",
+            "tool.get_source_inventory",
         ] {
             if !states.contains_key(id) {
                 return Err(AdmissionError::Malformed(format!(
