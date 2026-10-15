@@ -1,0 +1,151 @@
+{
+  "status": "PREPARATION_CHECKS_ONLY",
+  "native_executed": false,
+  "actionlint_sha256": "c872d6db8c6bf83a8eaa704fc93999f027d55dffbc63b8a6abdccb47df5f4cd4",
+  "results": [
+    {
+      "python_ast": "validate-preparation.py",
+      "status": "valid"
+    },
+    {
+      "python_ast": "native-vnode-probe.py",
+      "status": "valid"
+    },
+    {
+      "python_ast": "research-original.py",
+      "status": "valid"
+    },
+    {
+      "argv": [
+        "/tmp/gre384-evidence/actionlint/actionlint",
+        "-version"
+      ],
+      "exit_code": 0,
+      "stdout": "1.7.12\ninstalled by downloading from release page\nbuilt with go1.26.1 compiler for linux/amd64\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "/tmp/gre384-evidence/actionlint/actionlint",
+        "/persist/worktrees/t3/PrintPartner/t3-3ee28880/.github/workflows/desktop-native-macos.yml"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "mutation_inventory": [
+        {
+          "line": 50,
+          "expression": "self.path(name).mkdir(mode=448)"
+        },
+        {
+          "line": 53,
+          "expression": "os.rename(self.path(source), self.path(target))"
+        },
+        {
+          "line": 56,
+          "expression": "os.rmdir(self.path(name))"
+        },
+        {
+          "line": 59,
+          "expression": "os.chmod(self.path(name), mode)"
+        },
+        {
+          "line": 62,
+          "expression": "self.path(name).open('x')"
+        },
+        {
+          "line": 63,
+          "expression": "stream.write(content)"
+        },
+        {
+          "line": 66,
+          "expression": "self.path(name).unlink()"
+        },
+        {
+          "line": 178,
+          "expression": "tree.mkdir(kind)"
+        },
+        {
+          "line": 179,
+          "expression": "tree.mkdir(kind + '/parent')"
+        },
+        {
+          "line": 181,
+          "expression": "tree.mkdir(prefix + 'lease')"
+        },
+        {
+          "line": 182,
+          "expression": "tree.mkdir(prefix + 'other')"
+        },
+        {
+          "line": 185,
+          "expression": "os.open(tree.path(prefix + 'lease'), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)"
+        },
+        {
+          "line": 201,
+          "expression": "tree.rename(kind + '/parent', kind + '/moved-parent')"
+        },
+        {
+          "line": 203,
+          "expression": "tree.chmod(kind + '/parent', args[1])"
+        },
+        {
+          "line": 208,
+          "expression": "tree.mkdir(name)"
+        },
+        {
+          "line": 209,
+          "expression": "tree.write(name + '/successor.txt', 'successor ' + kind + '\\n')"
+        },
+        {
+          "line": 243,
+          "expression": "tree.chmod(kind + '/parent', 448)"
+        },
+        {
+          "line": 292,
+          "expression": "tree.mkdir('CaseSensitivityControl')"
+        },
+        {
+          "line": 305,
+          "expression": "tree.write('metadata.json', json.dumps(result, indent=2) + '\\n')"
+        },
+        {
+          "line": 309,
+          "expression": "tree.write(kind + '.json', json.dumps(row, indent=2) + '\\n')"
+        },
+        {
+          "line": 310,
+          "expression": "tree.write('observations.json', json.dumps(result, indent=2) + '\\n')"
+        }
+      ],
+      "status": "requires_human_source_inspection"
+    },
+    {
+      "workflow_policy": "validated",
+      "manual_only": true,
+      "jobs": 1
+    },
+    {
+      "argv": [
+        "/usr/bin/python3",
+        "-B",
+        "/persist/worktrees/t3/PrintPartner/t3-3ee28880/diagnostics/gre401-unlink/native-vnode-probe.py",
+        "--root",
+        "/persist/worktrees/t3/PrintPartner/t3-3ee28880/diagnostics/gre401-unlink/must-not-create-native-root"
+      ],
+      "exit_code": 77,
+      "stdout": "{\"status\": \"UNEXECUTED_NATIVE_REQUIRED\", \"native_executed\": false, \"host\": \"Linux-7.0.0-38-generic-x86_64-with-glibc2.43\"}\n",
+      "stderr": ""
+    }
+  ],
+  "hashes": {
+    "diagnostics/gre401-unlink/native-vnode-probe.py": "89dba8396e1fb5a67334c819844633189f18a6b9b911be326e70d82eefc4e4b7",
+    ".github/workflows/desktop-native-macos.yml": "e0d05502ef4c2de76d87bea0bbee223c9eed8656f8ef6bd9f6c06845931c5741",
+    "diagnostics/gre401-unlink/research-original.py": "c70e0e6e56d12735dc8bfc5f398eb8ea2425eb3712e1a4a2599c30c23754e6af",
+    "diagnostics/gre401-unlink/provenance.json": "effaf88d33aac0a5b3627d021594d8598167d823772a7c7623dd97a26d0e46f4",
+    "diagnostics/gre401-unlink/research-to-experiment.patch": "7f2869eced208bdc7a4e98f6e2734a676f8c185a08cfa75d6d4982b03fdaf3a7",
+    "diagnostics/gre401-unlink/validate-preparation.py": "d432e978e865835593defcb034da7cb0bddcede6474d494797accba504def5e3"
+  }
+}

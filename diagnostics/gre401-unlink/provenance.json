@@ -1,0 +1,17 @@
+{
+  "original_directory": "/persist/tmp/gre401-unlink-1813",
+  "source_hashes": {
+    "gre401-unlink-investigation-1813.md": "47de36257ab2eccd6dae4787f25c0b055947fc640d4323a8bba61dd34adf65c8",
+    "gre401-unlink-investigation-1813.json": "4156d59f1f5b30b861b44bca8f9eacad7ccd8a2826af8cc46e897466698ccf2c",
+    "native-vnode-probe.py": "c70e0e6e56d12735dc8bfc5f398eb8ea2425eb3712e1a4a2599c30c23754e6af",
+    "probe-validation.json": "1e9b0b5988f827e043f3a1289ed3b5be8dfee0d638f183f22540cc3ecffa9ac1",
+    "source-manifest.json": "5fe9ea9cb4273eeb511f7b4107ed428ea111dbcbe58d3b37236b5ee799379d23"
+  },
+  "base": "798b89fe0628da6b6cbe10677cefb5ea33867d07",
+  "pr423_head_read_only": "2fb626064dc99c433e8f8050f8fb8959544c9e6e",
+  "original_copy": "research-original.py",
+  "diff": "research-to-experiment.patch",
+  "xnu_revision": "f6217f891ac0bb64f3d375211650a4c1ff8ca1ea",
+  "attr_layout_reference": "bsd/sys/attr.h lines 82-100; bsd/vfs/vfs_attrlist.c lines 2121-2126, 2662-2666",
+  "native_execution": false
+}
