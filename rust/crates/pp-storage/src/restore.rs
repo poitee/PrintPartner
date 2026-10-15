@@ -1,6 +1,7 @@
 use crate::lease::StorageLease;
 use anyhow::{Context, Result, bail, ensure};
 use flate2::read::MultiGzDecoder;
+use fs2::FileExt;
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -64,6 +65,7 @@ impl std::error::Error for RecoveryRequired {}
 
 pub struct PreparedRestore {
     ownership: StageOwnership,
+    _stage_lock: File,
     stage: PathBuf,
     data: PathBuf,
     metadata: RestoreMetadata,
@@ -155,10 +157,7 @@ fn private_file(path: &Path) -> Result<File> {
         .mode(0o600)
         .open(path)?)
 }
-fn safe_tree(path: &Path) -> Result<()> {
-    if !exists(path)? {
-        return Ok(());
-    }
+fn safe_node(path: &Path) -> Result<fs::Metadata> {
     let meta = fs::symlink_metadata(path)?;
     ensure!(
         meta.uid() == unsafe { libc::geteuid() } && meta.mode() & 0o022 == 0,
@@ -170,6 +169,13 @@ fn safe_tree(path: &Path) -> Result<()> {
         "Unsafe restore path: {}",
         path.display()
     );
+    Ok(meta)
+}
+fn safe_root(path: &Path) -> Result<()> {
+    if !exists(path)? {
+        return Ok(());
+    }
+    let meta = safe_node(path)?;
     if meta.is_file() {
         ensure!(
             meta.nlink() == 1,
@@ -177,7 +183,11 @@ fn safe_tree(path: &Path) -> Result<()> {
             path.display()
         );
     }
-    if meta.is_dir() {
+    Ok(())
+}
+fn safe_tree(path: &Path) -> Result<()> {
+    safe_root(path)?;
+    if exists(path)? && fs::symlink_metadata(path)?.is_dir() {
         for entry in fs::read_dir(path)? {
             safe_tree(&entry?.path())?;
         }
@@ -185,6 +195,7 @@ fn safe_tree(path: &Path) -> Result<()> {
     Ok(())
 }
 fn sync_tree(path: &Path) -> Result<()> {
+    safe_root(path)?;
     if fs::symlink_metadata(path)?.is_dir() {
         for entry in fs::read_dir(path)? {
             sync_tree(&entry?.path())?;
@@ -239,7 +250,10 @@ impl PreparedRestore {
             hex::encode(rand::random::<[u8; 16]>())
         ));
         private_dir(&stage)?;
+        let stage_lock = open_stage(&stage)?;
+        stage_lock.try_lock_exclusive()?;
         let mut prepared = Self {
+            _stage_lock: stage_lock,
             ownership: StageOwnership::Private,
             stage,
             data: data.to_owned(),
@@ -426,7 +440,7 @@ impl PreparedRestore {
             )
             .collect();
         for name in &prepared.replacements {
-            safe_tree(&data.join(name))?;
+            safe_root(&data.join(name))?;
         }
         sync_tree(&prepared.stage)?;
         sync(data)?;
@@ -448,7 +462,7 @@ impl PreparedRestore {
             .replacements
             .iter()
             .map(|name| {
-                safe_tree(&self.data.join(name))?;
+                safe_root(&self.data.join(name))?;
                 Ok(Replacement {
                     name: name.clone(),
                     previous: exists(&self.data.join(name))?,
@@ -467,11 +481,22 @@ impl PreparedRestore {
                 .to_owned(),
             entries,
         };
-        let mut file = private_file(&self.data.join(JOURNAL))?;
-        self.ownership = StageOwnership::Journaled;
+        let stage_meta = open_stage(&self.stage)?.metadata()?;
+        let locked_meta = self._stage_lock.metadata()?;
+        ensure!(
+            stage_meta.dev() == locked_meta.dev() && stage_meta.ino() == locked_meta.ino(),
+            "Restore stage was replaced"
+        );
+        safe_tree(&self.stage.join("new"))?;
+        let temporary = self.stage.join("journal.tmp");
+        let mut file = private_file(&temporary)?;
         file.write_all(&serde_json::to_vec(&journal)?)?;
         file.sync_all()?;
-        sync(&self.data)?;
+        sync(&self.stage)?;
+        fs::hard_link(&temporary, self.data.join(JOURNAL))?;
+        self.ownership = StageOwnership::Journaled;
+        sync(&self.data).context(RecoveryRequired)?;
+        remove(&temporary).context(RecoveryRequired)?;
         let installed = (|| -> Result<()> {
             for entry in &journal.entries {
                 if entry.previous {
@@ -505,8 +530,9 @@ impl PreparedRestore {
             .and_then(|file| Ok(file.sync_all()?))
             .context(RecoveryRequired)?;
         sync(&self.stage).context(RecoveryRequired)?;
-        let _ = recover_pending(owner);
-        Ok(())
+        recover_pending(owner)
+            .context("Committed restore cleanup failed")
+            .context(RecoveryRequired)
     }
 }
 impl Drop for PreparedRestore {
@@ -539,26 +565,52 @@ pub fn pending(owner: &StorageLease) -> Result<bool> {
     pending_directory(owner.data_dir())
 }
 
+fn stage_name(name: &str) -> bool {
+    name.strip_prefix(".offline-restore-")
+        .is_some_and(|suffix| suffix.len() == 32 && suffix.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+fn open_stage(path: &Path) -> Result<File> {
+    let meta = safe_node(path)?;
+    ensure!(
+        meta.is_dir() && meta.mode() & 0o077 == 0,
+        "Unsafe restore stage"
+    );
+    Ok(OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_NONBLOCK)
+        .open(path)?)
+}
+fn reclaim_abandoned(data: &Path) -> Result<()> {
+    for entry in fs::read_dir(data)? {
+        let entry = entry?;
+        if !entry.file_name().to_str().is_some_and(stage_name) {
+            continue;
+        }
+        let directory = open_stage(&entry.path())?;
+        match directory.try_lock_exclusive() {
+            Ok(()) => remove(&entry.path())?,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
 pub fn recover_pending(owner: &StorageLease) -> Result<()> {
     let data = owner.data_dir();
     let path = data.join(JOURNAL);
-    if !exists(&path)? {
-        return Ok(());
-    }
     crate::lease::prepare_directory(data)?;
-    safe_tree(&path)?;
+    if !exists(&path)? {
+        return reclaim_abandoned(data);
+    }
+    let journal_meta = safe_node(&path)?;
     ensure!(
-        fs::metadata(&path)?.len() <= 64 * 1024,
-        "Restore journal too large"
+        journal_meta.is_file() && journal_meta.nlink() <= 2 && journal_meta.len() <= 64 * 1024,
+        "Invalid restore journal file"
     );
     let journal: Journal = serde_json::from_slice(&fs::read(&path)?)?;
     ensure!(
-        journal.version == 1
-            && journal.stage.starts_with(".offline-restore-")
-            && journal.stage.len() == ".offline-restore-".len() + 32
-            && journal.stage[".offline-restore-".len()..]
-                .bytes()
-                .all(|b| b.is_ascii_hexdigit()),
+        journal.version == 1 && stage_name(&journal.stage),
         "Invalid restore journal stage"
     );
     let mut names = BTreeSet::new();
@@ -574,14 +626,51 @@ pub fn recover_pending(owner: &StorageLease) -> Result<()> {
                 && names.insert(entry.name.clone()),
             "Invalid restore journal replacement"
         );
-        safe_tree(&data.join(&entry.name))?;
+        safe_root(&data.join(&entry.name))?;
     }
     let stage = data.join(&journal.stage);
-    safe_tree(&stage)?;
-    ensure!(
-        stage.is_dir() && stage.join("old").is_dir() && stage.join("new").is_dir(),
-        "Restore recovery files missing"
-    );
+    let _directory = open_stage(&stage)?;
+    for entry in fs::read_dir(&stage)? {
+        ensure!(
+            entry?
+                .file_name()
+                .to_str()
+                .is_some_and(|name| matches!(name, "old" | "new" | "committed" | "journal.tmp")),
+            "Unexpected restore stage entry"
+        );
+    }
+    let temporary = stage.join("journal.tmp");
+    if exists(&temporary)? {
+        let temporary_meta = safe_node(&temporary)?;
+        ensure!(
+            temporary_meta.is_file()
+                && temporary_meta.dev() == journal_meta.dev()
+                && temporary_meta.ino() == journal_meta.ino(),
+            "Restore journal temporary file differs"
+        );
+        remove(&temporary)?;
+    }
+    safe_tree(&path)?;
+    for name in ["old", "new"] {
+        safe_root(&stage.join(name))?;
+        ensure!(
+            fs::symlink_metadata(stage.join(name))?.is_dir(),
+            "Restore recovery files missing"
+        );
+    }
+    safe_tree(&stage.join("new"))?;
+    safe_tree(&stage.join("committed"))?;
+    for entry in fs::read_dir(stage.join("old"))? {
+        let entry = entry?;
+        ensure!(
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| names.contains(name)),
+            "Unexpected retired restore root"
+        );
+        safe_root(&entry.path())?;
+    }
     if !exists(&stage.join("committed"))? {
         for entry in journal.entries.iter().rev() {
             let live = data.join(&entry.name);

@@ -344,7 +344,12 @@ fn ticket_t_2_offline_restore_journal_write_failure_leaves_store_retryable() {
             .env(CHILD, "1")
             .output()
             .unwrap();
-        assert!(output.status.success(), "{}", format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr)));
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
         return;
     }
     let f = Fixture::new();
@@ -352,20 +357,37 @@ fn ticket_t_2_offline_restore_journal_write_failure_leaves_store_retryable() {
     fs::write(owner.data_dir().join(DATABASE), b"original database").unwrap();
     let archive = f.archive(2, "database-only", &[]);
     let prepared = PreparedRestore::prepare(&owner, &archive).unwrap();
-    let mut original = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+    let mut original = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
     unsafe {
         assert_eq!(libc::getrlimit(libc::RLIMIT_FSIZE, &mut original), 0);
         libc::signal(libc::SIGXFSZ, libc::SIG_IGN);
-        let limit = libc::rlimit { rlim_cur: 1, rlim_max: original.rlim_max };
+        let limit = libc::rlimit {
+            rlim_cur: 1,
+            rlim_max: original.rlim_max,
+        };
         assert_eq!(libc::setrlimit(libc::RLIMIT_FSIZE, &limit), 0);
     }
     let result = prepared.activate(&owner);
-    unsafe { assert_eq!(libc::setrlimit(libc::RLIMIT_FSIZE, &original), 0); }
+    unsafe {
+        assert_eq!(libc::setrlimit(libc::RLIMIT_FSIZE, &original), 0);
+    }
     assert!(result.is_err());
-    assert!(!pending(&owner).unwrap(), "partial journal blocks every writer");
-    assert_eq!(fs::read(owner.data_dir().join(DATABASE)).unwrap(), b"original database");
+    assert!(
+        !pending(&owner).unwrap(),
+        "partial journal blocks every writer"
+    );
+    assert_eq!(
+        fs::read(owner.data_dir().join(DATABASE)).unwrap(),
+        b"original database"
+    );
     recover_pending(&owner).unwrap();
-    PreparedRestore::prepare(&owner, &archive).unwrap().activate(&owner).unwrap();
+    PreparedRestore::prepare(&owner, &archive)
+        .unwrap()
+        .activate(&owner)
+        .unwrap();
     assert_eq!(row(&owner), "backup row");
 }
 
@@ -382,19 +404,37 @@ fn ticket_t_2_offline_restore_reclaims_abandoned_private_stages_only() {
     private_dir(&target).unwrap();
     fs::write(target.join("sentinel"), b"preserved").unwrap();
     symlink(&target, abandoned.join("nested-link")).unwrap();
-    for name in [".offline-restore-short", ".offline-restore-gggggggggggggggggggggggggggggggg", ".offline-restore-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.extra"] {
+    for name in [
+        ".offline-restore-short",
+        ".offline-restore-gggggggggggggggggggggggggggggggg",
+        ".offline-restore-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.extra",
+    ] {
         private_dir(&data.join(name)).unwrap();
     }
     recover_pending(&owner).unwrap();
-    assert!(!abandoned.exists(), "abandoned extraction was not reclaimed");
+    assert!(
+        !abandoned.exists(),
+        "abandoned extraction was not reclaimed"
+    );
     assert_eq!(fs::read(target.join("sentinel")).unwrap(), b"preserved");
     assert!(data.join(".offline-restore-short").is_dir());
-    assert!(data.join(".offline-restore-gggggggggggggggggggggggggggggggg").is_dir());
-    assert!(data.join(".offline-restore-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.extra").is_dir());
+    assert!(
+        data.join(".offline-restore-gggggggggggggggggggggggggggggggg")
+            .is_dir()
+    );
+    assert!(
+        data.join(".offline-restore-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.extra")
+            .is_dir()
+    );
     let unsafe_path = data.join(format!(".offline-restore-{}", "b".repeat(32)));
     symlink(&target, &unsafe_path).unwrap();
     assert!(recover_pending(&owner).is_err());
-    assert!(fs::symlink_metadata(&unsafe_path).unwrap().file_type().is_symlink());
+    assert!(
+        fs::symlink_metadata(&unsafe_path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
     fs::remove_file(&unsafe_path).unwrap();
     private_dir(&unsafe_path).unwrap();
     fs::set_permissions(&unsafe_path, fs::Permissions::from_mode(0o777)).unwrap();
@@ -440,7 +480,12 @@ fn ticket_t_2_offline_restore_full_root_with_nested_link_installs_and_rolls_back
         if rollback {
             assert!(result.is_err());
             assert_eq!(fs::read(data.join("repos/old")).unwrap(), b"old repo");
-            assert!(fs::symlink_metadata(data.join("repos/link")).unwrap().file_type().is_symlink());
+            assert!(
+                fs::symlink_metadata(data.join("repos/link"))
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
             assert_eq!(fs::read(data.join(DATABASE)).unwrap(), b"original database");
         } else {
             result.unwrap();
@@ -448,7 +493,10 @@ fn ticket_t_2_offline_restore_full_root_with_nested_link_installs_and_rolls_back
             assert!(!data.join("repos/link").exists());
             assert_eq!(row(&owner), "backup row");
         }
-        assert_eq!(fs::read(target.join("sentinel")).unwrap(), b"external original");
+        assert_eq!(
+            fs::read(target.join("sentinel")).unwrap(),
+            b"external original"
+        );
         assert!(!pending(&owner).unwrap());
     }
 }
@@ -463,13 +511,15 @@ fn ticket_t_2_offline_restore_committed_cleanup_failure_requires_recovery() {
     let prepared = PreparedRestore::prepare(&owner, &archive).unwrap();
     let old = prepared.stage.join("old");
     let mut renames = 0;
-    let error = prepared.activate_with(&owner, || {
-        renames += 1;
-        if renames == 8 {
-            fs::set_permissions(&old, fs::Permissions::from_mode(0o000))?;
-        }
-        Ok(())
-    }).unwrap_err();
+    let error = prepared
+        .activate_with(&owner, || {
+            renames += 1;
+            if renames == 8 {
+                fs::set_permissions(&old, fs::Permissions::from_mode(0o000))?;
+            }
+            Ok(())
+        })
+        .unwrap_err();
     assert!(error.is::<RecoveryRequired>(), "{error:#}");
     assert_eq!(row(&owner), "backup row");
     assert!(pending(&owner).unwrap());
@@ -493,10 +543,15 @@ fn ticket_t_2_offline_restore_recovers_interrupted_journal_publication() {
     let journal = Journal {
         version: 1,
         stage: stage.file_name().unwrap().to_str().unwrap().to_owned(),
-        entries: vec![Replacement { name: DATABASE.to_owned(), previous: true, replacement: true }],
+        entries: vec![Replacement {
+            name: DATABASE.to_owned(),
+            previous: true,
+            replacement: true,
+        }],
     };
     let mut file = private_file(&stage.join("journal.tmp")).unwrap();
-    file.write_all(&serde_json::to_vec(&journal).unwrap()).unwrap();
+    file.write_all(&serde_json::to_vec(&journal).unwrap())
+        .unwrap();
     file.sync_all().unwrap();
     fs::hard_link(stage.join("journal.tmp"), data.join(JOURNAL)).unwrap();
     sync(data).unwrap();
@@ -514,5 +569,8 @@ fn ticket_t_2_offline_restore_publication_never_overwrites_pending_journal() {
     let prepared = PreparedRestore::prepare(&owner, &archive).unwrap();
     fs::write(owner.data_dir().join(JOURNAL), b"existing pending journal").unwrap();
     assert!(prepared.activate(&owner).is_err());
-    assert_eq!(fs::read(owner.data_dir().join(JOURNAL)).unwrap(), b"existing pending journal");
+    assert_eq!(
+        fs::read(owner.data_dir().join(JOURNAL)).unwrap(),
+        b"existing pending journal"
+    );
 }
