@@ -1,7 +1,7 @@
 use super::directory::Directory;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use std::{io::Write, os::unix::fs::OpenOptionsExt, path::Path};
+use std::io::Write;
 
 #[cfg(target_os = "linux")]
 pub(crate) fn process_identity(pid: u32) -> Result<String> {
@@ -48,15 +48,20 @@ pub(crate) fn owner_is_stale(pid: u32, identity: Option<&str>) -> bool {
 
 // On platforms without foreign-process identity lookup, use an instance token.
 // A live foreign PID cannot be declared stale from a token mismatch there.
-pub fn record_child(directory: &Path, pid: u32) -> Result<()> {
+pub(super) fn record_child(
+    admitted: &super::AdmittedDirectory,
+    pid: u32,
+    lease_hash: Option<&str>,
+) -> Result<()> {
+    #[cfg(test)]
+    let directory = &admitted.path;
     #[cfg(target_os = "linux")]
     let identity = process_identity(pid)?;
     #[cfg(not(target_os = "linux"))]
     let identity = format!("instance:{}", hex::encode(rand::random::<[u8; 16]>()));
-    let path = directory.join(".desktop-owner.json");
     #[cfg(test)]
     super::tests::marker_inspection_swap(directory, 7, false)?;
-    let bytes = std::fs::read(&path);
+    let bytes = admitted.directory.read_file(".desktop-owner.json");
     #[cfg(test)]
     super::tests::marker_inspection_swap(directory, 7, true)?;
     let mut marker: serde_json::Value = serde_json::from_slice(&bytes?)?;
@@ -64,23 +69,28 @@ pub fn record_child(directory: &Path, pid: u32) -> Result<()> {
         marker["pid"].as_u64() == Some(u64::from(std::process::id())),
         "Desktop owner marker belongs to another process"
     );
+    anyhow::ensure!(
+        lease_hash.is_none_or(|expected| marker["lease_hash"].as_str() == Some(expected)),
+        "Desktop owner marker belongs to another lease"
+    );
     marker["child_pid"] = pid.into();
     marker["child_process_identity"] = identity.into();
-    publish_child_marker(directory, &path, &marker)
+    publish_child_marker(admitted, &marker)
 }
 
-fn publish_child_marker(directory: &Path, path: &Path, marker: &serde_json::Value) -> Result<()> {
-    let temporary = directory.join(format!(
+fn publish_child_marker(
+    admitted: &super::AdmittedDirectory,
+    marker: &serde_json::Value,
+) -> Result<()> {
+    #[cfg(test)]
+    let directory = &admitted.path;
+    let temporary = format!(
         ".desktop-owner-{}.json.new",
         hex::encode(rand::random::<[u8; 16]>())
-    ));
+    );
     #[cfg(test)]
     super::tests::marker_inspection_swap(directory, 8, false)?;
-    let file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&temporary);
+    let file = admitted.directory.create_file(&temporary);
     #[cfg(test)]
     super::tests::marker_inspection_swap(directory, 8, true)?;
     let mut file = file?;
@@ -88,13 +98,16 @@ fn publish_child_marker(directory: &Path, path: &Path, marker: &serde_json::Valu
         super::write_marker(&mut file, &serde_json::to_vec(marker)?)?;
         #[cfg(test)]
         super::tests::marker_inspection_swap(directory, 9, false)?;
-        let renamed = std::fs::rename(&temporary, path);
+        let renamed =
+            admitted
+                .directory
+                .rename(&temporary, &admitted.directory, ".desktop-owner.json");
         #[cfg(test)]
         super::tests::marker_inspection_swap(directory, 9, true)?;
         renamed?;
         #[cfg(test)]
         super::tests::marker_inspection_swap(directory, 10, false)?;
-        let synced = std::fs::File::open(directory)?.sync_all();
+        let synced = admitted.directory.sync_all();
         #[cfg(test)]
         super::tests::marker_inspection_swap(directory, 10, true)?;
         synced?;
@@ -103,7 +116,7 @@ fn publish_child_marker(directory: &Path, path: &Path, marker: &serde_json::Valu
     if result.is_err() {
         #[cfg(test)]
         super::tests::marker_inspection_swap(directory, 11, false)?;
-        let _ = std::fs::remove_file(&temporary);
+        let _ = admitted.directory.remove_file(&temporary);
         #[cfg(test)]
         super::tests::marker_inspection_swap(directory, 11, true)?;
     }
@@ -276,7 +289,7 @@ mod tests {
         let path = directory.join(".desktop-owner.json");
         let marker = br#"{"pid":0,"lease_hash":"original"}"#;
         std::fs::write(&path, marker).unwrap();
-        let error = super::record_child(&directory, std::process::id()).unwrap_err();
+        let error = super::super::record_child(&directory, std::process::id()).unwrap_err();
         assert!(error.to_string().contains("another process"));
         assert_eq!(std::fs::read(&path).unwrap(), marker);
         assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
@@ -293,7 +306,8 @@ mod tests {
         let path = directory.join(".desktop-owner.json");
         std::fs::create_dir(&path).unwrap();
         std::fs::write(path.join("keep"), "original").unwrap();
-        assert!(super::publish_child_marker(&directory, &path, &serde_json::json!({})).is_err());
+        let admitted = super::super::admit_directory(&directory).unwrap();
+        assert!(super::publish_child_marker(&admitted, &serde_json::json!({})).is_err());
         assert_eq!(
             std::fs::read_to_string(path.join("keep")).unwrap(),
             "original"

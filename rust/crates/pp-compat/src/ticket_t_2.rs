@@ -95,7 +95,7 @@ fn release_spec(scratch: &Scratch) -> super::SpawnSpec {
         lease: "lease".into(),
         lease_file,
         port: 0,
-        record_child: ignore_child,
+        record_child: Box::new(ignore_child),
     }
 }
 
@@ -1861,7 +1861,7 @@ async fn measured_startup_owner_death_fixture() {
     }
     let spec = super::SpawnSpec {
         bundle,
-        record_child: measured_startup_record_child,
+        record_child: Box::new(measured_startup_record_child),
         lease: "x".repeat(1024 * 1024),
         ..release_spec(&scratch)
     };
@@ -2183,7 +2183,7 @@ async fn ticket_t_3_drain_measured_release_repeated_eof_cleanup() {
         let events = scratch.root.join("data/lifecycle-events");
         let supervisor = super::Supervisor::start(super::SpawnSpec {
             bundle: bundle.clone(),
-            record_child: MeasuredLifecycleCycle::record_child,
+            record_child: Box::new(MeasuredLifecycleCycle::record_child),
             ..release_spec(&scratch)
         })
         .unwrap();

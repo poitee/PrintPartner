@@ -46,6 +46,8 @@ pub struct Bundle {
     pub commit: String,
 }
 
+pub type RecordChild = Box<dyn Fn(&Path, u32) -> Result<()> + Send + Sync>;
+
 pub struct SpawnSpec {
     pub account_pin: DesktopAccountPin,
     pub bundle: Bundle,
@@ -54,7 +56,7 @@ pub struct SpawnSpec {
     pub lease: String,
     pub lease_file: std::fs::File,
     pub port: u16,
-    pub record_child: fn(&std::path::Path, u32) -> Result<()>,
+    pub record_child: RecordChild,
 }
 
 #[derive(Clone, Debug, Serialize)]

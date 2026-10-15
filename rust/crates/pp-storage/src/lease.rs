@@ -31,6 +31,12 @@ pub struct StorageLease {
     runtime_dir: PathBuf,
     lease: String,
     release_allowed: bool,
+    child_marker: Arc<Mutex<Option<OwnedChildMarker>>>,
+}
+
+struct OwnedChildMarker {
+    admitted: Arc<AdmittedDirectory>,
+    lease_hash: String,
 }
 
 /// Create private Unix store directories and admit existing owner-controlled stores.
@@ -293,7 +299,9 @@ fn write_marker(file: &mut File, bytes: &[u8]) -> std::io::Result<()> {
 
 /// Record the supervised child in the owner marker before setup opens storage.
 pub fn record_child(directory: &Path, pid: u32) -> Result<()> {
-    guard::record_child(directory, pid)
+    let admitted = admit_directory(directory)?;
+    guard::record_child(&admitted, pid, None)?;
+    admitted.validate_identity()
 }
 
 #[cfg(test)]
@@ -440,10 +448,16 @@ impl StorageLease {
             let _ = std::fs::remove_dir(&runtime_dir);
             return Err(error);
         }
+        let admitted = Arc::new(admitted);
+        let child_marker = Arc::new(Mutex::new(Some(OwnedChildMarker {
+            admitted: admitted.clone(),
+            lease_hash: hex::encode(Sha256::digest(lease.as_bytes())),
+        })));
         Ok(Self {
             lock: Some(lock),
             lease_guard: Some(lease_guard),
-            admitted: Arc::new(admitted),
+            admitted,
+            child_marker,
             runtime_dir,
             lease,
             release_allowed: true,
@@ -452,11 +466,22 @@ impl StorageLease {
     pub(crate) fn preflight(&self) -> Result<u64> {
         self.admitted.preflight_schema(true)
     }
-    pub fn record_child(directory: &Path, pid: u32) -> Result<()> {
-        guard::record_child(directory, pid)
-    }
+    /// Capture child recording for this lease. Release revokes all captured callbacks.
     pub fn child_recorder(&self) -> impl Fn(&Path, u32) -> Result<()> + Send + Sync + 'static {
-        guard::record_child
+        let child_marker = self.child_marker.clone();
+        move |directory, pid| {
+            let owner = child_marker
+                .lock()
+                .map_err(|_| anyhow::anyhow!("Child marker state poisoned"))?;
+            let owner = owner.as_ref().context("Desktop ownership was released")?;
+            ensure!(
+                directory == owner.admitted.path,
+                "Child marker directory differs from owner"
+            );
+            owner.admitted.validate_identity()?;
+            guard::record_child(&owner.admitted, pid, Some(&owner.lease_hash))?;
+            owner.admitted.validate_identity()
+        }
     }
     pub fn data_dir(&self) -> &Path {
         &self.admitted.path
@@ -525,6 +550,10 @@ impl StorageLease {
         Ok(Some(lease.finish_release()))
     }
     fn finish_release(&mut self) -> LeaseRelease {
+        self.child_marker
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
         let runtime_removed =
             !self.runtime_dir.exists() || std::fs::remove_dir(&self.runtime_dir).is_ok();
         let marker_removed = runtime_removed
@@ -557,6 +586,7 @@ impl StorageLease {
                 runtime_dir: self.runtime_dir.clone(),
                 lease: self.lease.clone(),
                 release_allowed: false,
+                child_marker: self.child_marker.clone(),
             };
             failed_releases()
                 .lock()
@@ -628,6 +658,82 @@ mod tests {
             MARKER_INSPECTION_SWAP.set(Some((checkpoint, true)));
         }
         Ok(())
+    }
+
+    #[test]
+    fn ticket_t_12_child_recorder_is_revoked_before_reacquisition() {
+        let path = directory();
+        let owner = StorageLease::acquire(&path).unwrap();
+        let record = owner.child_recorder();
+        record(&path, std::process::id()).unwrap();
+        let marker: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path.join(".desktop-owner.json")).unwrap())
+                .unwrap();
+        assert_eq!(marker["child_pid"], std::process::id());
+        assert!(
+            !marker["child_process_identity"]
+                .as_str()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(owner.release().lock_released);
+        let next = StorageLease::acquire(&path).unwrap();
+        let before = std::fs::read(path.join(".desktop-owner.json")).unwrap();
+        assert_eq!(
+            record(&path, std::process::id()).unwrap_err().to_string(),
+            "Desktop ownership was released"
+        );
+        assert_eq!(
+            std::fs::read(path.join(".desktop-owner.json")).unwrap(),
+            before
+        );
+        next.child_recorder()(&path, std::process::id()).unwrap();
+        assert!(next.release().lock_released);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn ticket_t_12_child_recorder_refuses_another_lease_marker() {
+        let path = directory();
+        let owner = StorageLease::acquire(&path).unwrap();
+        let mut marker: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path.join(".desktop-owner.json")).unwrap())
+                .unwrap();
+        marker["lease_hash"] = "another-lease".into();
+        let before = serde_json::to_vec(&marker).unwrap();
+        std::fs::write(path.join(".desktop-owner.json"), &before).unwrap();
+        assert_eq!(
+            owner.child_recorder()(&path, std::process::id())
+                .unwrap_err()
+                .to_string(),
+            "Desktop owner marker belongs to another lease"
+        );
+        assert_eq!(
+            std::fs::read(path.join(".desktop-owner.json")).unwrap(),
+            before
+        );
+        assert_eq!(std::fs::read_dir(&path).unwrap().count(), 3);
+        assert!(owner.release().lock_released);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn ticket_t_12_child_recorder_refuses_a_linked_marker() {
+        let path = directory();
+        let owner = StorageLease::acquire(&path).unwrap();
+        let marker = path.join(".desktop-owner.json");
+        let before = std::fs::read(&marker).unwrap();
+        std::fs::rename(&marker, path.join("private-marker")).unwrap();
+        std::os::unix::fs::symlink("private-marker", &marker).unwrap();
+        assert!(owner.child_recorder()(&path, std::process::id()).is_err());
+        assert_eq!(
+            std::fs::read_link(&marker).unwrap(),
+            Path::new("private-marker")
+        );
+        assert_eq!(std::fs::read(path.join("private-marker")).unwrap(), before);
+        assert_eq!(std::fs::read_dir(&path).unwrap().count(), 4);
+        assert!(owner.release().lock_released);
+        std::fs::remove_dir_all(path).unwrap();
     }
 
     #[test]
