@@ -143,6 +143,11 @@ pub enum Request {
         id: i64,
         settings: naming::NamingCommand,
     },
+    #[cfg(feature = "desktop_rebuild")]
+    PreviewNaming {
+        relative_path: String,
+        profile: Option<NamingOverride>,
+    },
     GetGlobalNaming {},
     SaveGlobalNaming {
         profile: naming::NamingProfile,
@@ -151,6 +156,8 @@ pub enum Request {
 pub use naming::{
     FolderRule, FunctionalClass, NamingCommand, NamingProfile, Quantity, Role, RoleId, Slug,
 };
+#[cfg(feature = "desktop_rebuild")]
+pub use naming::{NamingOverride, NamingPreview, QuantityOverride, RoleOverride, SlugOverride};
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct SourceSummary {
     pub id: i64,
@@ -187,6 +194,8 @@ pub enum Deletion {
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
 pub enum Outcome {
+    #[cfg(feature = "desktop_rebuild")]
+    Preview(NamingPreview),
     #[cfg(feature = "desktop_rebuild")]
     Activity(Vec<SourceActivityEvent>),
     #[cfg(feature = "desktop_rebuild")]
@@ -807,6 +816,11 @@ fn run(tx: &Transaction<'_>, state: &State, tenant: &str, request: Request) -> R
         Request::SaveNaming { id, settings } => {
             Outcome::Data(naming::save(tx, tenant, id, settings)?)
         }
+        #[cfg(feature = "desktop_rebuild")]
+        Request::PreviewNaming {
+            relative_path,
+            profile,
+        } => Outcome::Preview(naming::preview(tx, tenant, relative_path, profile)?),
         Request::GetGlobalNaming {} => {
             Outcome::Data(serde_json::to_value(naming::global(tx, tenant)?)?)
         }
