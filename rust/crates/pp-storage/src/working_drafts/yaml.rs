@@ -9,7 +9,8 @@
 use super::observation::{PreparationBudget, ReadFailure, ReadResult};
 use crate::manifest_text::JsText;
 use saphyr_parser::{Event, Parser, ScalarStyle, Tag};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::LazyLock;
 
 #[derive(Clone)]
 pub(super) enum Node {
@@ -28,6 +29,7 @@ pub(super) struct Document {
 struct Frame {
     id: usize,
     key: Option<usize>,
+    keys: HashSet<JsText>,
 }
 fn invalid<T>() -> ReadResult<T> {
     Err(ReadFailure::InvalidDocument)
@@ -73,9 +75,10 @@ fn float(s: &str) -> Option<f64> {
         ".nan" | ".NaN" | ".NAN" => return Some(f64::NAN),
         _ => {}
     }
-    let re =
-        regress::Regex::new(r"^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$").ok()?;
-    if re.find(s).is_some() {
+    static FLOAT: LazyLock<Option<regress::Regex>> = LazyLock::new(|| {
+        regress::Regex::new(r"^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$").ok()
+    });
+    if FLOAT.as_ref()?.find(s).is_some() {
         s.parse::<f64>().ok().filter(|n| n.is_finite())
     } else {
         None
@@ -584,9 +587,7 @@ impl Document {
             if anchor > 0 {
                 anchors.insert(anchor, id);
             }
-            let depth = stack.len();
             if let Some(frame) = stack.last_mut() {
-                budget.node(depth)?;
                 let frame_id = frame.id;
                 if matches!(doc.nodes[frame_id], Node::Sequence(_)) {
                     if let Node::Sequence(v) = &mut doc.nodes[frame_id] {
@@ -601,7 +602,7 @@ impl Document {
                         _ => return invalid(),
                     };
                     if let Node::Mapping(v) = &mut doc.nodes[frame_id] {
-                        if v.iter().any(|(k, _)| *k == key) {
+                        if !frame.keys.insert(key.clone()) {
                             return invalid();
                         }
                         v.push((key, id));
@@ -613,7 +614,11 @@ impl Document {
                 return invalid();
             }
             if start {
-                stack.push(Frame { id, key: None });
+                stack.push(Frame {
+                    id,
+                    key: None,
+                    keys: HashSet::new(),
+                });
             }
         }
         if !stack.is_empty() {
@@ -679,7 +684,7 @@ impl Document {
                 let mut out = Vec::new();
                 for (i, n) in v.iter().enumerate() {
                     if i > 0 {
-                        budget.expansion(1)?;
+                        budget.expansion(2)?;
                         out.push(u16::from(b','))
                     }
                     let s = self.stringify(*n, budget, depth + 1, true)?;
@@ -731,6 +736,119 @@ mod tests {
     fn units(document: &Document, key: &str, budget: &mut PreparationBudget<'_>) -> Vec<u16> {
         let id = document.get(document.root, key, budget).unwrap().unwrap();
         document.text(id, budget).unwrap().units().to_vec()
+    }
+
+    #[test]
+    fn yaml_counts_each_parsed_node_once() {
+        let cancel = AtomicBool::new(false);
+        let mut budget = PreparationBudget::new(
+            &cancel,
+            PreparationLimits {
+                nodes: 3,
+                ..PreparationLimits::default()
+            },
+        )
+        .unwrap();
+        let doc = Document::parse(b"[a, b]", &mut budget).unwrap();
+        assert_eq!(
+            doc.text(doc.root, &mut budget)
+                .unwrap()
+                .as_scalar()
+                .as_deref(),
+            Some("a,b")
+        );
+        let mut budget = PreparationBudget::new(
+            &cancel,
+            PreparationLimits {
+                nodes: 2,
+                ..PreparationLimits::default()
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            Document::parse(b"[a, b]", &mut budget),
+            Err(ReadFailure::LimitExceeded(
+                super::super::observation::Resource::Nodes
+            ))
+        ));
+    }
+
+    #[test]
+    fn yaml_array_separator_expansion_counts_utf16_bytes() {
+        let cancel = AtomicBool::new(false);
+        let mut parse_budget =
+            PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
+        let doc = Document::parse(b"[null, null, null, null]", &mut parse_budget).unwrap();
+        for (limit, succeeds) in [(6, true), (5, false)] {
+            let mut budget = PreparationBudget::new(
+                &cancel,
+                PreparationLimits {
+                    total_document_bytes: limit,
+                    ..PreparationLimits::default()
+                },
+            )
+            .unwrap();
+            let result = doc.text(doc.root, &mut budget);
+            if succeeds {
+                assert_eq!(result.unwrap().as_scalar().as_deref(), Some(",,,"));
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(ReadFailure::LimitExceeded(
+                        super::super::observation::Resource::DocumentBytes
+                    ))
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn yaml_large_mapping_keeps_keys_and_rejects_coerced_duplicates() {
+        let cancel = AtomicBool::new(false);
+        let source = (0..4096)
+            .map(|i| format!("key{i}: {i}\n"))
+            .collect::<String>();
+        let mut budget = PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
+        let doc = Document::parse(source.as_bytes(), &mut budget).unwrap();
+        let Node::Mapping(entries) = doc.node(doc.root, &mut budget).unwrap() else {
+            panic!("mapping");
+        };
+        assert_eq!(entries.len(), 4096);
+        assert_eq!(units(&doc, "key4095", &mut budget), [52, 48, 57, 53]);
+        for source in [
+            format!("{source}key0: duplicate\n"),
+            "true: one\n'true': two\n".into(),
+            "1: one\n'1': two\n".into(),
+        ] {
+            let mut budget = PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
+            assert!(matches!(
+                Document::parse(source.as_bytes(), &mut budget),
+                Err(ReadFailure::InvalidDocument)
+            ));
+        }
+    }
+
+    #[test]
+    fn yaml_signed_prefixes_and_empty_collection_tags_match_js_yaml() {
+        let cancel = AtomicBool::new(false);
+        let mut budget = PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
+        let doc = Document::parse(
+            b"hex: -0x10\noctal: +0o10\nmap: !!map \"\"\nseq: !!seq \"\"\n",
+            &mut budget,
+        )
+        .unwrap();
+        assert_eq!(
+            units(&doc, "hex", &mut budget),
+            "-0x10".encode_utf16().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            units(&doc, "octal", &mut budget),
+            "+0o10".encode_utf16().collect::<Vec<_>>()
+        );
+        let map = doc.get(doc.root, "map", &mut budget).unwrap().unwrap();
+        assert!(matches!(doc.node(map, &mut budget).unwrap(), Node::Mapping(v) if v.is_empty()));
+        let seq = doc.get(doc.root, "seq", &mut budget).unwrap().unwrap();
+        assert!(matches!(doc.node(seq, &mut budget).unwrap(), Node::Sequence(v) if v.is_empty()));
     }
 
     #[test]

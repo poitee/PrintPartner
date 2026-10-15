@@ -138,7 +138,9 @@ helpers use it. The optional `saphyr-parser` dependency (pinned `=0.1.0`, with
 it.
 
 `Document::parse` charges the shared `PreparationBudget` for nodes, depth,
-visits, and expansion, and checks cancellation. It accepts one document with
+visits, and expansion, and checks cancellation. Each parsed node is charged once,
+array separators count as two UTF-16 bytes, and each mapping tracks seen keys
+in a hash set. The float matcher is compiled once. It accepts one document with
 core-schema tags, `!`, anchors, and aliases. Duplicate keys, extra documents,
 other tags, and tag/value mismatches return `InvalidDocument`. Scalars keep
 JavaScript UTF-16 semantics: lone surrogate escapes such as `"\uD800"` survive
