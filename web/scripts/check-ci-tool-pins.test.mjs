@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, cpSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import process from 'node:process';
@@ -88,7 +88,7 @@ test('Node policy leaves unrelated workflows unchanged', t => {
   assert.equal(result.stdout, summary(0, 0, 0));
 });
 
-for (const filename of ['desktop-contracts.yaml', 'desktop-contracts.YML', 'DESKTOP-CONTRACTS.YAML']) {
+for (const filename of ['desktop-contracts.yaml']) {
   test(`reject floating Node pins after rename to ${filename}`, t => {
     const result = run(t, desktop({ node: ['22', '24'] }), [], filename);
     assert.equal(result.status, 1, result.stdout);
@@ -105,7 +105,7 @@ for (const filename of ['desktop-contracts.yaml', 'desktop-contracts.YML', 'DESK
   });
 }
 
-for (const replacement of [null, 'renamed-contracts.yml', 'desktop-contracts.yml.disabled']) {
+for (const replacement of [null, 'renamed-contracts.yml', 'desktop-contracts.yml.disabled', 'desktop-contracts.YML', 'DESKTOP-CONTRACTS.YAML']) {
   test(`reject repository workflows after desktop contracts ${replacement ?? 'removal'}`, t => {
     const directory = mkdtempSync(join(tmpdir(), 'ci-workflow-presence-'));
     t.after(() => rmSync(directory, { recursive: true, force: true }));
@@ -121,15 +121,30 @@ for (const replacement of [null, 'renamed-contracts.yml', 'desktop-contracts.yml
   });
 }
 
+test('reject symlink replacing desktop contracts', t => {
+  const directory = mkdtempSync(join(tmpdir(), 'ci-workflow-symlink-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const workflows = join(directory, 'workflows');
+  mkdirSync(workflows);
+  writeFileSync(join(workflows, 'unrelated.yml'), workflow('      - run: echo ok'));
+  writeFileSync(join(directory, 'contracts.yml'), desktop());
+  symlinkSync('../contracts.yml', join(workflows, 'desktop-contracts.yml'));
+  const result = spawnSync(process.execPath, [cli, workflows], { encoding: 'utf8' });
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 1, result.stdout);
+  assert.equal(result.stderr, `${workflows} $: MISSING_DESKTOP_CONTRACTS: expected one desktop-contracts.yml or desktop-contracts.yaml workflow\n`);
+  assert.equal(result.stdout, summary(0, 0, 1));
+});
+
 test('reject multiple desktop contracts filename variants', t => {
   const directory = mkdtempSync(join(tmpdir(), 'ci-workflow-duplicates-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   writeFileSync(join(directory, 'desktop-contracts.yml'), desktop());
-  writeFileSync(join(directory, 'DESKTOP-CONTRACTS.YAML'), desktop());
+  writeFileSync(join(directory, 'desktop-contracts.yaml'), desktop());
   const result = spawnSync(process.execPath, [cli, directory], { encoding: 'utf8' });
   assert.equal(result.error, undefined);
   assert.equal(result.status, 1, result.stdout);
-  assert.equal(result.stderr, `${directory} $: DUPLICATE_DESKTOP_CONTRACTS: expected one desktop contracts workflow; found DESKTOP-CONTRACTS.YAML, desktop-contracts.yml\n`);
+  assert.equal(result.stderr, `${directory} $: DUPLICATE_DESKTOP_CONTRACTS: expected one desktop contracts workflow; found desktop-contracts.yaml, desktop-contracts.yml\n`);
   assert.equal(result.stdout, summary(0, 0, 1));
 });
 

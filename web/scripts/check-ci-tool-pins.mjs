@@ -19,7 +19,7 @@ try {
   console.error('MISSING_PARSER: run npm ci in web/ before checking CI tool pins');
   process.exit(2);
 }
-const desktopContracts = /^desktop-contracts\.ya?ml$/i;
+const desktopContracts = /^desktop-contracts\.ya?ml$/;
 const directory = resolve(process.argv[2] ?? join(root, '.github/workflows'));
 let declarations = 0;
 let tools = 0;
@@ -155,11 +155,13 @@ function checkWorkflow(file) {
 }
 
 try {
-  const files = readdirSync(directory, { withFileTypes: true })
+  const entries = readdirSync(directory, { withFileTypes: true });
+  const files = entries
     .filter(entry => /\.ya?ml$/i.test(entry.name))
     .map(entry => join(directory, entry.name)).sort();
   if (files.length === 0) report(directory, '$', 'NO_WORKFLOWS', 'no .yml or .yaml workflow files found');
-  const contracts = files.filter(file => desktopContracts.test(basename(file)));
+  const contracts = entries.filter(entry => entry.isFile() && desktopContracts.test(entry.name))
+    .map(entry => entry.name).sort();
   if (contracts.length === 0) {
     report(directory, '$', 'MISSING_DESKTOP_CONTRACTS', 'expected one desktop-contracts.yml or desktop-contracts.yaml workflow');
   } else if (contracts.length > 1) {
