@@ -19,6 +19,7 @@ type Groups = Vec<(String, Group)>;
 use std::collections::{HashMap, HashSet};
 #[derive(Default)]
 struct Directory {
+    parent: usize,
     path: String,
     name: String,
     direct: usize,
@@ -32,10 +33,10 @@ struct Candidate {
     options: Vec<(usize, bool)>,
 }
 fn test(re: &str, s: &str) -> bool {
-    regress::Regex::with_flags(re, "i")
-        .unwrap()
-        .find(s)
-        .is_some()
+    match regress::Regex::with_flags(re, "i") {
+        Ok(regex) => regex.find(s).is_some(),
+        Err(error) => panic!("Invalid sibling inference regex {re}: {error}"),
+    }
 }
 fn slug(s: &str) -> String {
     let mut out = String::new();
@@ -128,6 +129,7 @@ fn infer_scalar(paths: &[String]) -> Groups {
             } else {
                 let i = dirs.len();
                 dirs.push(Directory {
+                    parent,
                     path: path.clone(),
                     name: segments[end - 1].into(),
                     ..Directory::default()
@@ -157,9 +159,7 @@ fn infer_scalar(paths: &[String]) -> Groups {
             continue;
         }
         let optional = test(r"^\(?optional\)?$|\(options?\)|^optional[_\s-]", &info.name);
-        let parent = *index
-            .get(info.path.rsplit_once('/').map(|p| p.0).unwrap_or(""))
-            .unwrap();
+        let parent = info.parent;
         if test(r"^(user[_\s-]?)?mods?$", &info.name) {
             push(
                 &mut candidates,
