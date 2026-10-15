@@ -1,8 +1,11 @@
 import type Database from "better-sqlite3";
 import { z } from "zod";
+import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as schema from "./db/schema.js";
 import {
+  acceptedPlanStoredTextBytes,
+  validateAcceptedPlanStoredTextBytes,
   validateAcceptedPlanInputHeaderRows,
   validateAcceptedPlanRevisionPartRows,
   validateAcceptedPlanRevisionRows,
@@ -18,6 +21,14 @@ export const ownershipHistoryTables = [
 
 export function validateOwnershipHistory(database: Database.Database): void {
   const db = drizzle(database);
+  for (const table of [schema.sourceRevisions, schema.planRevisionInputSets, schema.planRevisionInputs,
+    schema.planAcceptedInputSets, schema.planRevisions, schema.planRevisionParts, schema.requiredUnits,
+    schema.planRevisionRequiredUnits, schema.planRevisionRequiredUnitSets]) {
+    const columns = Object.values(getTableColumns(table)).filter(column => column.dataType === "string");
+    for (const row of db.select({ bytes: acceptedPlanStoredTextBytes(true, columns) }).from(table).all()) {
+      validateAcceptedPlanStoredTextBytes(row.bytes, "revision", "Accepted ownership history row text is corrupt");
+    }
+  }
   const sources = db.select().from(schema.projects).all();
   const sourceRevisions = db.select().from(schema.sourceRevisions).all();
   const profiles = db.select().from(schema.buildProfiles).all();

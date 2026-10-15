@@ -7,7 +7,7 @@ import Fastify from "fastify";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as schema from "./db/schema.js";
 import { schemaMigrations } from "./db/migrations-sqlite.js";
-import { digestPlanRevisionParts } from "./services/plan-publication.js";
+import { digestPlanRevisionParts, MAX_ACCEPTED_OPERATIONAL_ROW_TEXT_BYTES } from "./services/plan-publication.js";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { z } from "zod";
 import { SqliteDatabase, getDb } from "./db/client.js";
@@ -284,7 +284,7 @@ it.each(["inspect", "apply"].flatMap(mode => ["foreign-projection", "invalid-pro
   },
 );
 
-it.each(["inspect", "apply"].flatMap(mode => ["null-projection", "history-gap", "zero-inferred", "zero-override", "quantity-mismatch", "oversized", "boolean"].map(kind => ({ mode, kind }))))(
+it.each(["inspect", "apply"].flatMap(mode => ["null-projection", "history-gap", "zero-inferred", "zero-override", "quantity-mismatch", "oversized", "boolean", "oversized-text", "multibyte-text", "combined-text", "actor-text", "source-text"].map(kind => ({ mode, kind }))))(
   "$mode refuses $kind on the inferred immutable revision", async ({ mode, kind }) => {
     const paths = fixture();
     edit(paths.sourceDir, db => { db.exec("UPDATE parts SET notes='working edit' WHERE id=1"); });
@@ -299,15 +299,45 @@ it.each(["inspect", "apply"].flatMap(mode => ["null-projection", "history-gap", 
       if (kind === "quantity-mismatch") raw.exec("UPDATE plan_revision_parts SET quantity_inferred=2 WHERE revision_id=1");
       if (kind === "oversized") raw.exec("UPDATE plan_revision_parts SET quantity_inferred=10001 WHERE revision_id=1");
       if (kind === "boolean") raw.exec("UPDATE plan_revision_parts SET included=2 WHERE revision_id=1");
+      if (kind === "oversized-text") raw.prepare("UPDATE plan_revision_parts SET notes=? WHERE revision_id=1").run("x".repeat(MAX_ACCEPTED_OPERATIONAL_ROW_TEXT_BYTES + 1));
+      if (kind === "multibyte-text") raw.prepare("UPDATE plan_revision_parts SET notes=? WHERE revision_id=1").run("é".repeat(MAX_ACCEPTED_OPERATIONAL_ROW_TEXT_BYTES / 2 + 1));
+      if (kind === "combined-text") raw.prepare("UPDATE plan_revision_parts SET notes=?,github_blob_url=? WHERE revision_id=1").run("x".repeat(MAX_ACCEPTED_OPERATIONAL_ROW_TEXT_BYTES / 2), "y".repeat(MAX_ACCEPTED_OPERATIONAL_ROW_TEXT_BYTES / 2));
+      if (kind === "actor-text") raw.prepare("UPDATE plan_revisions SET accepted_by=? WHERE id=1").run("x".repeat(MAX_ACCEPTED_OPERATIONAL_ROW_TEXT_BYTES + 1));
+      if (kind === "source-text") raw.prepare("UPDATE source_revisions SET upstream_revision_key=? WHERE id=12").run("x".repeat(MAX_ACCEPTED_OPERATIONAL_ROW_TEXT_BYTES + 1));
       const parts = drizzle(raw).select().from(schema.planRevisionParts).all().filter(part => part.revisionId === 1);
       raw.prepare("UPDATE plan_revisions SET snapshot_digest=? WHERE id=1").run(digestPlanRevisionParts(parts));
       for (const trigger of triggers) raw.exec(trigger.sql);
       input.source_digest = hash(raw.serialize());
     });
-    if (mode === "inspect") expect(() => inspectOwnershipCopy(paths)).toThrow(/identity|booleans|history/i);
+    if (mode === "inspect") expect(() => inspectOwnershipCopy(paths)).toThrow(/identity|booleans|history|text/i);
     else await refused(paths, input);
   },
 );
+
+it.each(["mapped-limit", "mapped-overflow"])("enforces the dirty history row-text budget at $0", async kind => {
+  const paths = fixture();
+  edit(paths.sourceDir, db => { db.exec("UPDATE parts SET notes='working edit' WHERE id=1"); });
+  edit(paths.sourceDir, raw => {
+    const triggers = z.array(z.object({ name: z.string(), sql: z.string() })).parse(raw.prepare("SELECT name,sql FROM sqlite_schema WHERE name IN ('trg_plan_revision_parts_immutable_update','trg_plan_revisions_immutable_update')").all());
+    for (const trigger of triggers) raw.exec(`DROP TRIGGER "${trigger.name}"`);
+    const db = drizzle(raw);
+    const part = db.select().from(schema.planRevisionParts).all().find(part => part.revisionId === 1);
+    if (!part) throw new Error("Missing revision Part");
+    const bytes = Object.values(part).reduce<number>((total, value) => total + (typeof value === "string" ? Buffer.byteLength(value, "utf8") : 0), 0);
+    raw.prepare("UPDATE plan_revision_parts SET notes=? WHERE revision_id=1").run("x".repeat(MAX_ACCEPTED_OPERATIONAL_ROW_TEXT_BYTES - bytes - (kind === "mapped-limit" ? 2 : 0)));
+    raw.prepare("UPDATE plan_revisions SET snapshot_digest=? WHERE id=1").run(digestPlanRevisionParts(db.select().from(schema.planRevisionParts).all().filter(part => part.revisionId === 1)));
+    for (const trigger of triggers) raw.exec(trigger.sql);
+  });
+  const input = manifest(paths.sourceDir);
+  if (kind === "mapped-overflow") { await refused(paths, input); return; }
+  await executeOwnershipCopy({ ...paths, manifest: input });
+  const copy = new Database(join(paths.destinationDir, "print-partner.db"), { readonly: true });
+  try {
+    const part = drizzle(copy).select().from(schema.planRevisionParts).all().find(part => part.revisionId === 1);
+    if (!part) throw new Error("Missing copied revision Part");
+    expect(Object.values(part).reduce<number>((total, value) => total + (typeof value === "string" ? Buffer.byteLength(value, "utf8") : 0), 0)).toBe(MAX_ACCEPTED_OPERATIONAL_ROW_TEXT_BYTES);
+  } finally { copy.close(); }
+});
 
 it.each(ownershipHistoryTables)("requires an explicit owner for every %s history row", async table => {
   const paths = fixture(); const input = manifest(paths.sourceDir);
