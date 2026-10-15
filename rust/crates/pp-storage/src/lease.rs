@@ -160,6 +160,7 @@ thread_local! {
     static FAIL_MARKER_WRITE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static REMOVE_MARKER_BEFORE_READ: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static REPLACE_LOCK_BEFORE_VALIDATION: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+    static REPLACE_DIRECTORY_DURING_LOCK: std::cell::Cell<(u8, u8)> = const { std::cell::Cell::new((0, 0)) };
     static REPLACE_DIRECTORY_BEFORE_CANONICALIZATION: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
 }
 
@@ -262,6 +263,8 @@ pub(crate) fn prior_owner_blocks_unowned(marker_path: &Path) -> Result<bool> {
 impl StorageLease {
     pub fn acquire(path: &Path) -> Result<Self> {
         let data_dir = prepare_directory(path)?;
+        #[cfg(test)]
+        tests::replace_directory_during_lock(&data_dir, 1)?;
         let lock_path = data_dir.join(".desktop.lock");
         let lock = OpenOptions::new()
             .read(true)
@@ -272,8 +275,12 @@ impl StorageLease {
             .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
             .open(&lock_path)?;
         validate_lock_identity(&lock, &lock_path)?;
+        #[cfg(test)]
+        tests::replace_directory_during_lock(&data_dir, 2)?;
         lock.try_lock_exclusive()
             .context("Data directory already owned")?;
+        #[cfg(test)]
+        tests::replace_directory_during_lock(&data_dir, 3)?;
         validate_lock_identity(&lock, &lock_path)?;
         let marker_path = data_dir.join(".desktop-owner.json");
         read_prior_owner(&marker_path)?;
@@ -570,6 +577,81 @@ mod tests {
         assert_eq!(std::fs::read_dir(&path).unwrap().count(), 0);
         std::fs::remove_dir_all(retired).unwrap();
         std::fs::remove_dir(path).unwrap();
+    }
+
+    pub(super) fn replace_directory_during_lock(path: &Path, checkpoint: u8) -> Result<()> {
+        let (selected, replacement) = REPLACE_DIRECTORY_DURING_LOCK.get();
+        if selected == checkpoint {
+            REPLACE_DIRECTORY_DURING_LOCK.set((0, 0));
+            REPLACE_DIRECTORY_BEFORE_CANONICALIZATION.set(replacement);
+            replace_directory_before_canonicalization(path)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn ticket_t_12_directory_replacement_through_os_lock_is_refused() {
+        for checkpoint in [1, 2, 3] {
+            for replacement in [1, 2] {
+                let path = directory();
+                let retired = path.with_extension("retired");
+                let marker = br#"{"pid":2147483647,"kind":"standalone"}"#;
+                std::fs::write(path.join(".desktop-owner.json"), marker).unwrap();
+                std::fs::write(path.join("print-partner.db"), b"never open").unwrap();
+                std::fs::write(path.join("desktop.toml"), b"port = 45678\n").unwrap();
+                REPLACE_DIRECTORY_DURING_LOCK.set((checkpoint, replacement));
+                let result = StorageLease::acquire(&path);
+                assert_eq!(
+                    result.err().map(|error| error.to_string()),
+                    Some("Data directory was replaced".to_owned()),
+                    "checkpoint {checkpoint}, replacement {replacement}"
+                );
+                assert_eq!(
+                    std::fs::read(retired.join(".desktop-owner.json")).unwrap(),
+                    marker
+                );
+                assert_eq!(
+                    std::fs::read(retired.join("print-partner.db")).unwrap(),
+                    b"never open"
+                );
+                assert_eq!(
+                    std::fs::read(retired.join("desktop.toml")).unwrap(),
+                    b"port = 45678\n"
+                );
+                assert!(!retired.join(".desktop-lease").exists());
+                assert_eq!(std::fs::read_dir(&path).unwrap().count(), 0);
+                if retired.join(".desktop.lock").exists() {
+                    let lock = File::open(retired.join(".desktop.lock")).unwrap();
+                    lock.try_lock_exclusive().unwrap();
+                    FileExt::unlock(&lock).unwrap();
+                }
+                std::fs::remove_dir_all(retired).unwrap();
+                if replacement == 2 {
+                    std::fs::remove_file(&path).unwrap();
+                    std::fs::remove_dir_all(path.with_extension("replacement")).unwrap();
+                } else {
+                    std::fs::remove_dir(path).unwrap();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ticket_t_12_directory_permission_change_through_os_lock_is_refused() {
+        for checkpoint in [1, 2, 3] {
+            let path = directory();
+            REPLACE_DIRECTORY_DURING_LOCK.set((checkpoint, 3));
+            let result = StorageLease::acquire(&path);
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+            assert_eq!(
+                result.err().map(|error| error.to_string()),
+                Some("Unsafe data directory permissions".to_owned()),
+                "checkpoint {checkpoint}"
+            );
+            assert!(!path.join(".desktop-owner.json").exists());
+            assert!(!path.join(".desktop-lease").exists());
+            std::fs::remove_dir_all(path).unwrap();
+        }
     }
 
     fn directory() -> PathBuf {
