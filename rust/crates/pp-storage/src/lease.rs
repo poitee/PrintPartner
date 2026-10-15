@@ -743,6 +743,35 @@ mod tests {
         }
     }
 
+    #[test]
+    fn ticket_t_12_writer_preflight_rechecks_ancestor_permissions_before_lock() {
+        let parent = directory();
+        let path = parent.join("store");
+        let admitted = admit_directory(&path).unwrap();
+        let marker = br#"{"pid":2147483647,"kind":"standalone"}"#;
+        std::fs::write(path.join(".desktop-owner.json"), marker).unwrap();
+        std::fs::write(path.join("print-partner.db"), b"").unwrap();
+        std::fs::write(path.join("desktop.toml"), b"port = 45678\n").unwrap();
+        admitted.preflight().unwrap();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o777)).unwrap();
+        let error = StorageLease::acquire_admitted(admitted)
+            .err()
+            .map(|error| error.to_string());
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(error.as_deref(), Some("Unsafe data directory ancestor"));
+        assert_eq!(
+            std::fs::read(path.join(".desktop-owner.json")).unwrap(),
+            marker
+        );
+        assert_eq!(std::fs::read(path.join("print-partner.db")).unwrap(), b"");
+        assert_eq!(
+            std::fs::read(path.join("desktop.toml")).unwrap(),
+            b"port = 45678\n"
+        );
+        assert_eq!(std::fs::read_dir(&path).unwrap().count(), 3);
+        std::fs::remove_dir_all(parent).unwrap();
+    }
+
     pub(super) fn replace_directory_during_lock(path: &Path, checkpoint: u8) -> Result<()> {
         let (selected, replacement) = REPLACE_DIRECTORY_DURING_LOCK.get();
         if selected == checkpoint {
