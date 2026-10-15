@@ -2106,3 +2106,149 @@ fn gre601_preview_adds_missing_roles_and_falls_back_from_invalid_stored_defaults
     assert_eq!(database_bytes(&fixture.0), bytes);
     owner.shutdown().unwrap();
 }
+
+#[test]
+fn gre601_naming_save_validation_is_classified_and_atomic() {
+    let fixture = Fixture::new();
+    let owner = fixture.open();
+    let client = owner.local_source_catalog();
+    let id = create(&client, "Naming validation");
+    let baseline = rows(&fixture.0);
+    let defaults = serde_json::to_value(NamingProfile::default()).unwrap();
+    let cases = [
+        ("roles", json!([]), "Naming requires primary role"),
+        (
+            "roles",
+            json!([{"id":"accent","label":"Accent","markers":[]}]),
+            "Naming requires primary role",
+        ),
+        (
+            "roles",
+            json!([
+                {"id":"primary","label":"First","markers":[]},
+                {"id":"primary","label":"Second","markers":[]}
+            ]),
+            "Duplicate naming role",
+        ),
+        (
+            "roles",
+            json!([{"id":"primary","label":" \t\n","markers":[]}]),
+            "Blank naming label",
+        ),
+        ("export_role_order", json!([]), "Invalid export role order"),
+        (
+            "export_role_order",
+            json!(["primary", "accent", "clear", "clear"]),
+            "Duplicate export role",
+        ),
+        (
+            "quantity",
+            json!({"regex":"(x)","default":0}),
+            "Invalid quantity default",
+        ),
+        (
+            "quantity",
+            json!({"regex":"(x)","default":9007199254740992_u64}),
+            "Invalid quantity default",
+        ),
+        (
+            "quantity",
+            json!({"regex":"[","default":1}),
+            "Invalid quantity regex structure",
+        ),
+        (
+            "quantity",
+            json!({"regex":"(x)[z-a]","default":1}),
+            "Invalid quantity regex",
+        ),
+        (
+            "quantity",
+            json!({"regex":"x","default":1}),
+            "Quantity regex must have one capture group",
+        ),
+        (
+            "quantity",
+            json!({"regex":"(x)(y)","default":1}),
+            "Quantity regex must have one capture group",
+        ),
+        (
+            "quantity",
+            json!({"regex":format!("({})", "x".repeat(4096)),"default":1}),
+            "Quantity regex too long",
+        ),
+        (
+            "quantity",
+            json!({"regex":format!("{}x{}", "(".repeat(17), ")".repeat(17)),"default":1}),
+            "Quantity regex exceeds group complexity limits",
+        ),
+        (
+            "folder_rules",
+            json!([{"path_contains":" \n","role_id":"accent"}]),
+            "Blank folder rule",
+        ),
+    ];
+    for (field, invalid, message) in cases {
+        let mut profile = defaults.clone();
+        profile[field] = invalid;
+        for source in [false, true] {
+            let profile = serde_json::from_value(profile.clone()).unwrap();
+            let request = if source {
+                Request::SaveNaming {
+                    id,
+                    settings: NamingCommand::Override { profile },
+                }
+            } else {
+                Request::SaveGlobalNaming { profile }
+            };
+            let error = client.execute(request).unwrap_err();
+            assert_eq!(error.to_string(), message, "{field}, source={source}");
+            #[cfg(feature = "desktop_rebuild")]
+            assert!(
+                matches!(
+                    error.downcast_ref::<pp_storage::catalog::CatalogFailure>(),
+                    Some(pp_storage::catalog::CatalogFailure::Input(detail)) if detail == message
+                ),
+                "{field}, source={source}: {error:?}"
+            );
+            assert_eq!(rows(&fixture.0), baseline, "{field}, source={source}");
+        }
+    }
+    drop(client);
+    owner.shutdown().unwrap();
+    let reopened = fixture.open();
+    assert_eq!(rows(&fixture.0), baseline);
+    reopened.shutdown().unwrap();
+}
+
+#[test]
+fn gre601_naming_missing_source_has_stable_classification() {
+    let fixture = Fixture::new();
+    let owner = fixture.open();
+    let client = owner.local_source_catalog();
+    let baseline = rows(&fixture.0);
+    for id in [0, -1, i64::MAX] {
+        for request in [
+            Request::GetNaming { id },
+            Request::SaveNaming {
+                id,
+                settings: NamingCommand::UseDefaults,
+            },
+            Request::SaveNaming {
+                id,
+                settings: NamingCommand::Override {
+                    profile: NamingProfile::default(),
+                },
+            },
+        ] {
+            let error = client.execute(request).unwrap_err();
+            assert_eq!(error.to_string(), "Source not found");
+            #[cfg(feature = "desktop_rebuild")]
+            assert!(matches!(
+                error.downcast_ref::<pp_storage::catalog::CatalogFailure>(),
+                Some(pp_storage::catalog::CatalogFailure::NotFound)
+            ));
+            assert_eq!(rows(&fixture.0), baseline);
+        }
+    }
+    owner.shutdown().unwrap();
+}
