@@ -54,7 +54,7 @@ const TABLES = ["table:app_settings", "table:projects", "table:source_docs"];
 const FILE_RESOURCES = ["file:source-workspace", "table:projects", "table:source_docs"];
 const manifest = z.object({ resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.get_source_docs", "tool.get_source_inventory"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -1340,5 +1340,150 @@ it.each(["trusted", "isolated"])("traces get_source_inventory %s SQL and workspa
     { kind: "table", name: "projects" }, { kind: "table", name: "source_docs" },
     { kind: "table", name: "source_notes" }, { kind: "table", name: "source_revisions" },
     { kind: "table", name: "app_settings" }, { kind: "file", name: "source-workspace" },
+  ] });
+});
+
+it.each(["trusted", "isolated"])("traces compare_source_revisions %s SQL and snapshot paths", async (policy) => {
+  const repos = join(dataDir, "repos");
+  const workspace = join(repos, String(sourceId));
+  const a = join(workspace, "revisions", "a");
+  const b = join(workspace, "revisions", "b");
+  for (const dir of [a, b]) fs.mkdirSync(dir, { recursive: true });
+  repo.updateSource(sourceId, { local_path: workspace });
+  const db = drizzle(sqlite, { schema });
+  const comparisonRepo = policy === "isolated" ? new AppRepository(db, undefined, repos, schema, { sourceFilesystemPolicy: ISOLATED_SOURCE_FILESYSTEM }) : repo;
+  const revisionA = repo.recordSourceRevision({ sourceId, upstreamRevisionKey: "a", manifestDigest: "a".repeat(64), snapshotLocator: `${sourceId}/revisions/a`, syncedAt: "2026-01-01", completeness: "complete" });
+  const revisionB = repo.recordSourceRevision({ sourceId, upstreamRevisionKey: "b", manifestDigest: "b".repeat(64), snapshotLocator: `${sourceId}/revisions/b`, syncedAt: "2026-01-02", completeness: "complete" });
+  for (const [dir, files] of [[a, { "changed.txt": "old", "removed.txt": "removed", "old-name.txt": "renamed", "same.txt": "same" }], [b, { "changed.txt": "new", "added.txt": "added", "new-name.txt": "renamed", "same.txt": "same" }]] satisfies [string, Record<string, string>][]) {
+    for (const [name, content] of Object.entries(files)) fs.writeFileSync(join(dir, name), content);
+    fs.mkdirSync(join(dir, "nested"));
+    fs.writeFileSync(join(dir, "nested", "part.stl"), "solid identical");
+    for (const excluded of [".git", "node_modules", ".docs-text"]) {
+      fs.mkdirSync(join(dir, excluded));
+      fs.writeFileSync(join(dir, excluded, "hidden.txt"), dir);
+    }
+    fs.symlinkSync(join(dataDir, "outside.txt"), join(dir, "escape.txt"));
+    fs.symlinkSync(join(dir, "same.txt"), join(dir, "inside.txt"));
+    fs.symlinkSync(userRoot, join(dir, "linked-directory"));
+  }
+  const otherRevision = repo.recordSourceRevision({ sourceId: userId, upstreamRevisionKey: "other-source", manifestDigest: "c".repeat(64), snapshotLocator: `${userId}/revisions/c`, syncedAt: "2026-01-01", completeness: "complete" });
+  const foreign = tenantStorage.run("other", () => {
+    const source = repo.createSource({ name: "Foreign", source_kind: "local" });
+    const revision = repo.recordSourceRevision({ sourceId: source.id, upstreamRevisionKey: "foreign", manifestDigest: "d".repeat(64), snapshotLocator: `${source.id}/revisions/d`, syncedAt: "2026-01-01", completeness: "complete" });
+    return { source, revision };
+  });
+  const union = new Set<string>();
+  async function trace(input: Record<string, unknown>, tenantId = "default", allowedRoots = [workspace]) {
+    statements = [];
+    observer.state.files = [];
+    observer.state.active = true;
+    let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+    try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("compare_source_revisions", input, { repo: comparisonRepo })); }
+    finally { observer.state.active = false; }
+    const observed = new Set<string>();
+    for (const statement of statements) {
+      const sql = z.string().parse(statement);
+      const revisionSelect = new RegExp(`^select "[a-z_]+"(?:, "[a-z_]+")* from "source_revisions" where \\("source_revisions"\\."tenant_id" = '${tenantId}' and "source_revisions"\\."id" = -?[0-9]+(?:\\.0)?\\)$`);
+      observed.add(revisionSelect.test(sql) ? "table:source_revisions" : tableForObservedSelect(sql, tenantId));
+    }
+    for (const { api, args, result } of observer.state.files) {
+      expect(["realpathSync", "lstatSync", "statSync", "existsSync", "readdirSync", "readFileSync"], api).toContain(api);
+      const path = z.string().parse(args[0]);
+      expect(path === repos || allowedRoots.some((allowed) => under(allowed, path)), `${api} ${path}`).toBe(true);
+      if (api === "readdirSync") expect(args).toEqual([path, { withFileTypes: true }]);
+      if (api === "readFileSync") {
+        expect(args).toEqual([path]);
+        expect(allowedRoots.some((allowed) => under(allowed, path))).toBe(true);
+        expect(path).not.toMatch(/(?:escape|inside)\.txt|linked-directory|\/(?:\.git|node_modules|\.docs-text)\//);
+        expect(Buffer.isBuffer(result)).toBe(true);
+      }
+      observed.add("file:source-workspace");
+    }
+    for (const resource of observed) {
+      expect(["table:projects", "table:source_docs", "table:source_revisions", "file:source-workspace"]).toContain(resource);
+      union.add(resource);
+    }
+    expect(output.proposedAction).toBeUndefined();
+    return z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
+  }
+  const input = { source_id: sourceId, revision_a_id: revisionA.id, revision_b_id: revisionB.id };
+  for (const invalid of [{}, { ...input, source_id: "invalid" }, { ...input, revision_a_id: null }, { ...input, revision_b_id: "invalid" }]) {
+    expect(await trace(invalid)).toEqual({ error: "source_id and both revision ids are required" });
+    expect(statements).toEqual([]);
+    expect(observer.state.files).toEqual([]);
+  }
+  for (const invalid of [{ ...input, source_id: 999999 }, { ...input, revision_a_id: 999999 }, { ...input, revision_b_id: otherRevision.id }, { ...input, revision_a_id: foreign.revision.id }]) {
+    expect(await trace(invalid)).toEqual({ error: "Source revisions not found for Source" });
+    expect(observer.state.files.every(({ api }) => ["realpathSync", "lstatSync", "statSync"].includes(api))).toBe(true);
+  }
+  expect(await trace(input, "other")).toEqual({ error: "Source revisions not found for Source" });
+  expect(observer.state.files).toEqual([]);
+  const differences = [
+    { kind: "added", path_b: "added.txt" },
+    { kind: "changed", path_a: "changed.txt", path_b: "changed.txt" },
+    { kind: "renamed", path_a: "old-name.txt", path_b: "new-name.txt" },
+    { kind: "removed", path_a: "removed.txt" },
+  ];
+  for (const selectors of [input, { source_id: String(sourceId), revision_a_id: String(revisionA.id), revision_b_id: String(revisionB.id) }]) {
+    expect(await trace(selectors)).toEqual({ source: { id: sourceId, name: "Fixture" }, revision_a: revisionA, revision_b: revisionB, differences, counts: { added: 1, changed: 1, renamed: 1, removed: 1 } });
+    expect(observer.state.files.filter(({ api }) => api === "readFileSync")).toHaveLength(10);
+  }
+  expect((await trace({ ...input, revision_b_id: revisionA.id })).differences).toEqual([]);
+  const unavailable = { error: "Source revision snapshots are unavailable" };
+  for (const locator of ["", "../outside", "/tmp/outside", `${sourceId}\\revisions\\a`, `${sourceId}/./revisions/a`, `${sourceId}//revisions/a`, `${sourceId}/revisions/missing`]) {
+    sqlite.prepare("UPDATE source_revisions SET snapshot_locator = ? WHERE id = ?").run(locator, revisionA.id);
+    expect(await trace(input)).toEqual(unavailable);
+    expect(observer.state.files.some(({ api }) => ["readFileSync", "readdirSync"].includes(api))).toBe(false);
+  }
+  sqlite.prepare("UPDATE source_revisions SET snapshot_locator = ? WHERE id = ?").run(revisionA.snapshot_locator, revisionA.id);
+  fs.symlinkSync(userRoot, join(workspace, "escape-root"));
+  fs.writeFileSync(join(userRoot, "same.txt"), "same");
+  sqlite.prepare("UPDATE source_revisions SET snapshot_locator = ? WHERE id = ?").run(`${sourceId}/escape-root`, revisionA.id);
+  const escaped = await trace(input, "default", policy === "trusted" ? [workspace, userRoot] : [workspace]);
+  if (policy === "isolated") {
+    expect(escaped).toEqual(unavailable);
+    expect(observer.state.files.some(({ api }) => ["readFileSync", "readdirSync"].includes(api))).toBe(false);
+  } else {
+    expect(escaped.differences).toBeInstanceOf(Array);
+    expect(observer.state.files.some(({ api, args }) => api === "readFileSync" && args[0] === join(userRoot, "same.txt"))).toBe(true);
+  }
+  sqlite.prepare("UPDATE source_revisions SET snapshot_locator = ? WHERE id = ?").run(revisionA.snapshot_locator, revisionA.id);
+  const otherWorkspace = join(repos, String(userId));
+  fs.mkdirSync(otherWorkspace, { recursive: true });
+  fs.writeFileSync(join(otherWorkspace, "other.txt"), "other source snapshot");
+  sqlite.prepare("UPDATE source_revisions SET snapshot_locator = ? WHERE id = ?").run(String(userId), revisionB.id);
+  const crossSource = await trace(input, "default", policy === "trusted" ? [workspace, otherWorkspace] : [workspace]);
+  if (policy === "isolated") {
+    expect(crossSource).toEqual(unavailable);
+    expect(observer.state.files.some(({ api }) => ["readFileSync", "readdirSync"].includes(api))).toBe(false);
+  } else {
+    expect(crossSource.differences).toEqual([
+      { kind: "removed", path_a: "changed.txt" },
+      { kind: "removed", path_a: "nested/part.stl" },
+      { kind: "removed", path_a: "old-name.txt" },
+      { kind: "added", path_b: "other.txt" },
+      { kind: "removed", path_a: "removed.txt" },
+      { kind: "removed", path_a: "same.txt" },
+    ]);
+  }
+  sqlite.prepare("UPDATE source_revisions SET snapshot_locator = ? WHERE id = ?").run(`${sourceId}/revisions/a/same.txt`, revisionB.id);
+  const fileRoot = await trace(input);
+  if (policy === "isolated") {
+    expect(fileRoot).toEqual(unavailable);
+    expect(observer.state.files.some(({ api }) => ["readFileSync", "readdirSync"].includes(api))).toBe(false);
+  } else {
+    expect(fileRoot.differences).toEqual([
+      { kind: "removed", path_a: "changed.txt" },
+      { kind: "removed", path_a: "nested/part.stl" },
+      { kind: "removed", path_a: "old-name.txt" },
+      { kind: "removed", path_a: "removed.txt" },
+      { kind: "removed", path_a: "same.txt" },
+    ]);
+  }
+  expect([...union].sort()).toEqual(["file:source-workspace", "table:projects", "table:source_docs", "table:source_revisions"]);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.compare_source_revisions");
+  expect(entry, "Missing compare_source_revisions declaration").toEqual({ operation: "tool.compare_source_revisions", resources: [
+    { kind: "table", name: "projects" }, { kind: "table", name: "source_docs" },
+    { kind: "table", name: "source_revisions" }, { kind: "file", name: "source-workspace" },
   ] });
 });
