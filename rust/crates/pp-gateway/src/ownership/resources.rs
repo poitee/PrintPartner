@@ -62,6 +62,8 @@ enum ReviewedEntry {
     SourceSync { import: SourceSyncImport },
     #[serde(rename = "tool.get_workflow_help")]
     GetWorkflowHelp { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_job_status")]
+    GetJobStatus { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_decisions")]
     GetPlanDecisions { resources: Vec<ResourceId> },
     #[serde(rename = "tool.read_source_file")]
@@ -116,6 +118,7 @@ impl ReviewedEntry {
             Self::GetWorkflowHelp { resources } => {
                 ("tool.get_workflow_help", resources, BTreeSet::new())
             }
+            Self::GetJobStatus { resources } => ("tool.get_job_status", resources, BTreeSet::new()),
             Self::GetPlanDecisions { resources } => (
                 "tool.get_plan_decisions",
                 resources,
@@ -217,6 +220,7 @@ impl Declarations {
         for id in [
             "source.sync",
             "tool.get_workflow_help",
+            "tool.get_job_status",
             "tool.get_plan_decisions",
             "tool.read_source_file",
             "tool.search_source_files",

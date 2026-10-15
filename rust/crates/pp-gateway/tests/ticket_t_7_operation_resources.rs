@@ -234,6 +234,7 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
     let reviewed = BTreeSet::from([
         "source.sync",
         "tool.get_workflow_help",
+        "tool.get_job_status",
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.read_source_file",
@@ -503,6 +504,7 @@ fn regroup(value: &mut Value, operation: &str, participants: &[&str]) {
 fn reviewed_participants_cannot_move_to_unresolved_operations() {
     for id in [
         "tool.get_workflow_help",
+        "tool.get_job_status",
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.read_source_file",
@@ -539,6 +541,8 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
 fn reviewed_participants_cannot_swap_operations() {
     for (first, second) in [
         ("tool.get_workflow_help", "tool.get_plan_decisions"),
+        ("tool.get_workflow_help", "tool.get_job_status"),
+        ("tool.get_job_status", "tool.list_plans"),
         ("tool.get_workflow_help", "tool.list_plans"),
         ("tool.get_workflow_help", "tool.preview_source_naming"),
         ("tool.preview_source_naming", "tool.list_sources"),
@@ -804,4 +808,105 @@ fn ticket_t_7_ownership_list_plans_refuses_before_effects() {
         })
     );
     assert!(!marker);
+}
+
+#[test]
+fn ticket_t_7_ownership_job_status_has_reviewed_empty_node_resources() {
+    use pp_gateway::ownership::{Owner, manifest::Disposition};
+    let id = "tool.get_job_status";
+    let index = admit_bundled_manifest().unwrap();
+    assert_eq!(index.resources_for(id), Ok(&ResourceSet::new()));
+    assert_eq!(
+        index.lookup(id).unwrap().disposition,
+        Disposition::Owned(Owner::Node)
+    );
+    assert_eq!(index.admit_rollback(id), Ok(&ResourceSet::new()));
+}
+
+#[test]
+fn ticket_t_7_ownership_job_status_refuses_invalid_admission_before_effects() {
+    let id = "tool.get_job_status";
+    let original = manifest();
+    let entry = original["resources"]["reviewed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|entry| entry["operation"] == id)
+        .unwrap();
+    for edit in 0..9 {
+        let mut value = original.clone();
+        let expected = match edit {
+            0 | 1 => {
+                value["resources"]["reviewed"][entry]["resources"] = if edit == 0 {
+                    json!([{"kind":"table","name":"projects"}])
+                } else {
+                    json!([{"kind":"file","name":"source-workspace"}])
+                };
+                AdmissionError::ResourceSetMismatch { id: id.into() }
+            }
+            2 | 3 => {
+                value["resources"]["reviewed"]
+                    .as_array_mut()
+                    .unwrap()
+                    .remove(entry);
+                if edit == 3 {
+                    value["resources"]["unresolved"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(json!(id));
+                }
+                malformed("missing reviewed resources for tool.get_job_status")
+            }
+            4 => {
+                value["resources"]["reviewed"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(original["resources"]["reviewed"][entry].clone());
+                malformed("duplicate resource state for tool.get_job_status")
+            }
+            5 => {
+                value["resources"]["unresolved"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!(id));
+                malformed("duplicate resource state for tool.get_job_status")
+            }
+            6 | 7 => {
+                regroup(&mut value, id, &[id]);
+                value["operations"]
+                    .as_array_mut()
+                    .unwrap()
+                    .last_mut()
+                    .unwrap()["owner"] = json!(if edit == 6 { "rust" } else { "python" });
+                if edit == 6 {
+                    AdmissionError::UnsupportedRustOwner {
+                        participant: id.into(),
+                    }
+                } else {
+                    AdmissionError::UnknownOwner {
+                        value: "python".into(),
+                    }
+                }
+            }
+            8 => {
+                value["operations"].as_array_mut().unwrap().push(
+                    json!({"operation":"tool.conflict", "owner":"node", "participants":[id]}),
+                );
+                AdmissionError::ConflictingParticipant {
+                    operation: id.into(),
+                    left: "tool.conflict".into(),
+                    right: id.into(),
+                }
+            }
+            _ => unreachable!(),
+        };
+        let mut effect = false;
+        let result = admit(&value).and_then(|index| {
+            index.admit_rollback(id)?;
+            effect = true;
+            Ok(())
+        });
+        assert_eq!(result, Err(expected), "edit {edit}");
+        assert!(!effect, "edit {edit}");
+    }
 }

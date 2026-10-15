@@ -12,6 +12,7 @@ import * as schema from "../db/schema.js";
 import { tenantStorage } from "../middleware/tenant-context.js";
 import { ISOLATED_SOURCE_FILESYSTEM } from "../services/source-filesystem-policy.js";
 import { digestEffectiveNaming } from "../services/plan-freshness.js";
+import { createJobRunner } from "../services/job-runner.js";
 import { WORKFLOW_GUIDE } from "../routes/workflow-guide.js";
 import { invokeAssistantTool } from "./tools.js";
 
@@ -51,7 +52,7 @@ const TABLES = ["table:app_settings", "table:projects", "table:source_docs"];
 const FILE_RESOURCES = ["file:source-workspace", "table:projects", "table:source_docs"];
 const manifest = z.object({ resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.get_plan_decisions", "tool.list_plans"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -665,4 +666,79 @@ it("rejects an undeclared real read after list_plans returns", async () => {
   const declared = entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort();
   expect(observed.filter((resource) => !declared.includes(resource))).toEqual(["table:source_docs"]);
   expect(observer.state.files).toEqual([]);
+});
+
+
+it("traces get_job_status lookup, filters and tenants against its reviewed empty union", async () => {
+  vi.useFakeTimers({ toFake: ["setImmediate", "Date"] });
+  try {
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    const jobs = createJobRunner(() => repo, dataDir);
+    const first = await jobs.start("export-stl-pack", { profile_id: 7 }, "default");
+    vi.setSystemTime(new Date("2026-01-02T00:00:00Z"));
+    const second = await jobs.start("export-stl-pack", { profile_id: 8 }, "default");
+    const foreign = await jobs.start("export-stl-pack", { profile_id: 7 }, "other");
+    await jobs.cancel(second, "default");
+    const pending = (job_id: string) => ({ job_id, kind: "export-stl-pack", status: "pending", message: "Queued", progress: 0, result: null, error: null });
+    const cancelled = { ...pending(second), status: "cancelled", message: "Cancelled", finished_at: "2026-01-02T00:00:00.000Z" };
+    const listedFirst = { ...pending(first), updated_at: "2026-01-01T00:00:00.000Z" };
+    const listedSecond = { ...cancelled, updated_at: "2026-01-02T00:00:00.000Z" };
+    const listedForeign = { ...pending(foreign), updated_at: "2026-01-02T00:00:00.000Z" };
+    async function status(input: Record<string, unknown>, tenantId?: string, available = true) {
+      statements = [];
+      observer.state.files = [];
+      observer.state.active = true;
+      let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+      try { output = await tenantStorage.run(tenantId ?? "default", () => invokeAssistantTool("get_job_status", input, { repo, jobs: available ? jobs : undefined, tenantId })); }
+      finally { observer.state.active = false; }
+      expect(statements).toEqual([]);
+      expect(observer.state.files).toEqual([]);
+      return z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
+    }
+    expect(await status({}, undefined, false)).toEqual({ error: "Job status is unavailable in this context" });
+    expect(await status({ job_id: ` ${first} `, status: "cancelled", profile_id: 8 })).toEqual({ job: pending(first) });
+    expect(await status({ job_id: second })).toEqual({ job: cancelled });
+    expect(await status({ job_id: "missing" })).toEqual({ error: "Job not found" });
+    expect(await status({ job_id: foreign })).toEqual({ error: "Job not found" });
+    expect(await status({ job_id: first }, "other")).toEqual({ error: "Job not found" });
+    expect(await status({ job_id: foreign }, "other")).toEqual({ job: pending(foreign) });
+    expect(await status({})).toEqual({ jobs: [listedSecond, listedFirst] });
+    expect(await status({ job_id: "  ", status: "pending" })).toEqual({ jobs: [listedFirst] });
+    expect(await status({ job_id: 42, status: "cancelled" })).toEqual({ jobs: [listedSecond] });
+    expect(await status({ profile_id: "7" })).toEqual({ jobs: [listedFirst] });
+    expect(await status({ profile_id: 8 })).toEqual({ jobs: [listedSecond] });
+    expect(await status({ profile_id: 999 })).toEqual({ jobs: [] });
+    expect(await status({ since: "2026-01-02T00:00:00Z" })).toEqual({ jobs: [listedSecond] });
+    expect(await status({ since: "2027-01-01" })).toEqual({ jobs: [] });
+    expect(await status({ since: "invalid", profile_id: "invalid", status: 42 })).toEqual({ jobs: [listedSecond, listedFirst] });
+    expect(await status({ status: "unknown" })).toEqual({ jobs: [] });
+    expect(await status({ status: "pending", profile_id: 7, since: "2026-01-02" })).toEqual({ jobs: [] });
+    expect(await status({}, "other")).toEqual({ jobs: [listedForeign] });
+    expect(await status({}, "empty")).toEqual({ jobs: [] });
+    vi.setSystemTime(new Date("2026-01-04T00:00:00Z"));
+    expect(await status({ job_id: second })).toEqual({ error: "Job not found" });
+    expect(await status({})).toEqual({ jobs: [listedFirst] });
+    const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.get_job_status");
+    expect(entry).toEqual({ operation: "tool.get_job_status", resources: [] });
+  } finally {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  }
+});
+
+it("rejects observed reads against the empty get_job_status declaration", async () => {
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  try {
+    await invokeAssistantTool("get_job_status", {}, { repo });
+    repo.listSources();
+    fs.readFileSync(join(root, "README.md"), "utf8");
+  } finally { observer.state.active = false; }
+  expect([...new Set(statements.map((sql) => tableForObservedSelect(sql)))]).toEqual(["table:projects", "table:source_docs"]);
+  expect(observer.state.files.map(({ api }) => api)).toEqual(["readFileSync"]);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.get_job_status");
+  expect(entry).toEqual({ operation: "tool.get_job_status", resources: [] });
+  expect(() => expect(statements).toEqual([])).toThrow();
+  expect(() => expect(observer.state.files).toEqual([])).toThrow();
 });
