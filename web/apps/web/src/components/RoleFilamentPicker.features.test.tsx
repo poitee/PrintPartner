@@ -96,7 +96,7 @@ beforeEach(() => {
     if (path === "/filaments/catalog") {
       return json(planSpoolman ? mockCatalog : { ...mockCatalog, spoolman_colors: [], spoolman_status: "disabled", spoolman_error: "Feature spoolman is disabled." });
     }
-    if (path.includes("/plans/1/role-filaments")) {
+    if (path.includes("/role-filaments")) {
       return json({ roles: mockRoles });
     }
     if (path.includes("/spoolman/spools")) {
@@ -249,5 +249,50 @@ describe("RoleFilamentPicker and PartColorDialog plan-aware visibility", () => {
       expect(saveRoleFilamentSpy).not.toHaveBeenCalled();
       expect(applyRoleColorsSpy).not.toHaveBeenCalled();
     });
+  });
+
+  it("resets local busy state on profile change and ignores pending applyColorPreset completion", async () => {
+    planSpoolman = true;
+    const applyRoleColorsSpy = vi.spyOn(filamentsApi, "applyRoleColorsToParts");
+    let resolveApply: ((count: number) => void) | undefined;
+
+    vi.spyOn(colorPresets, "pickColorPresetFile").mockResolvedValue(
+      new File(["{}"], "preset.json", { type: "application/json" }),
+    );
+    vi.spyOn(colorPresets, "parseColorPreset").mockResolvedValue({
+      type: "print-partner-colors",
+      version: 1,
+      exported_at: "now",
+      roles: [{ role: "primary", filament_color_id: "c1", filament_custom_hex: null, spoolman_spool_id: null }],
+    });
+    vi.spyOn(colorPresets, "applyColorPreset").mockImplementation(
+      () => new Promise((resolve) => { resolveApply = resolve; }),
+    );
+
+    const { rerender } = render(
+      <QueryClientProvider client={client}>
+        <RoleFilamentPicker profileId={1} />
+      </QueryClientProvider>,
+    );
+
+    await screen.findByRole("button", { name: "Change Primary color" });
+    fireEvent.click(screen.getByRole("button", { name: "Import colors" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Importing…" })).toHaveProperty("disabled", true));
+
+    rerender(
+      <QueryClientProvider client={client}>
+        <RoleFilamentPicker profileId={2} />
+      </QueryClientProvider>,
+    );
+
+    const importBtn = await screen.findByRole("button", { name: "Import colors" });
+    expect(importBtn).toHaveProperty("disabled", false);
+
+    await act(async () => {
+      resolveApply?.(1);
+    });
+
+    expect(screen.getByRole("button", { name: "Import colors" })).toHaveProperty("disabled", false);
+    expect(applyRoleColorsSpy).not.toHaveBeenCalled();
   });
 });

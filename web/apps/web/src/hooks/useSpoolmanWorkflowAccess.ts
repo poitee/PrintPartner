@@ -5,6 +5,8 @@ import {
   type HealthResponse,
   type PlanFeatures,
 } from "@print-partner/contracts";
+import type { PlanReview } from "../api/endpoints/planManifests";
+import { maskSpoolmanReviewPart } from "../lib/reviewParts";
 import type { FilamentCatalog } from "../api/endpoints/filaments";
 import { useHealthQuery } from "../queries/health";
 import { queryKeys } from "../queries/keys";
@@ -54,15 +56,40 @@ export function useSpoolmanWorkflowAccess(profileId: number) {
   useLayoutEffect(() => {
     scope.current = { profileId };
     mounted.current = true;
-    if (!currentAccessAllowed()) {
+    let previousAllowed = currentAccessAllowed();
+    let clearing = false;
+    const reviews = { queryKey: ["planReview", profileId] };
+    const clearReviewInventory = () => {
+      clearing = true;
+      void client.cancelQueries(reviews, { revert: false });
+      client.setQueriesData<PlanReview>(reviews, (review) => review && ({
+        ...review, part_groups: review.part_groups.map((group) => ({
+          ...group, parts: group.parts.map(maskSpoolmanReviewPart),
+        })),
+      }));
+      clearing = false;
+    };
+    if (!previousAllowed) {
       purgeProfileSpools(client, profileId);
+      clearReviewInventory();
     }
-    const unsubscribe = client.getQueryCache().subscribe(() => {
-      if (!currentAccessAllowed()) {
+    const unsubscribe = client.getQueryCache().subscribe((event) => {
+      if (clearing) return;
+      const allowedNow = currentAccessAllowed();
+      const changed = allowedNow !== previousAllowed;
+      previousAllowed = allowedNow;
+      if (!allowedNow) {
         generation.current += 1;
         purgeProfileSpools(client, profileId);
+        if (changed || (event.type === "updated" && event.action.type === "success"
+          && event.query.queryKey[0] === "planReview" && event.query.queryKey[1] === profileId)) {
+          clearReviewInventory();
+        }
+      } else if (changed) {
+        void client.invalidateQueries(reviews);
       }
     });
+
     return () => {
       mounted.current = false;
       generation.current += 1;

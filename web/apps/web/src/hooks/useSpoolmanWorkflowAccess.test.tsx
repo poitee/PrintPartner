@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import type { PlanReview } from "../api/endpoints/planManifests";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   TENANT_FEATURE_TOGGLES_CAPABILITY,
@@ -11,6 +12,7 @@ import { queryKeys } from "../queries/keys";
 import { useSpoolmanWorkflowAccess } from "./useSpoolmanWorkflowAccess";
 import { useSpoolmanEnabled } from "./useSpoolmanEnabled";
 import { useSpoolmanSpoolsQuery } from "../queries/filaments";
+import { usePlanReviewQuery } from "../queries/planReview";
 
 let client: QueryClient;
 let capabilities: string[];
@@ -260,4 +262,58 @@ describe("useSpoolmanEnabled", () => {
     expect(result.current.catalog?.spoolman_colors).toEqual([]);
     expect(result.current.catalog?.colors.length).toBe(1);
   });
+});
+
+const enrichedReview: PlanReview = {
+  profile_id: 1, accepted_basis: null, plan_name: "Proof", layers: [], issues: [], has_blockers: false,
+  totals: { included_parts: 1, total_print_units: 1, by_role: {}, by_filament: {} },
+  part_groups: [{ folder: "parts", source_layer: null, parts: [{
+    id: 1, match_key: "a.stl", relative_path: "a.stl", filename: "a.stl", source_layer: null,
+    status: "ok", role: "primary", requirement: null, option_group_id: null, included: true,
+    filament_color_id: "spoolman:1:filament:2", spoolman_spool_id: "spoolman:1:spool:5",
+    quantity_auto: 1, quantity_override: null, quantity_effective: 1, printed_count: 0,
+    print_units: [false], missing: true, filament_display: "Blue", filament_hex: "#0000ff",
+    spool_badge: "450g left", spool_summary: [{ remaining_g: 450, spool_id: 5 }],
+  }] }],
+};
+
+it.each(["refresh", "error", "revoked response"])("keeps mounted Review stock cleared across off/on until fresh: %s", async (mode) => {
+  planSpoolman = true;
+  client.setDefaultOptions({ queries: { retry: false, staleTime: 30_000 } });
+  client.setQueryData(queryKeys.health, { ok: true, capabilities: [TENANT_FEATURE_TOGGLES_CAPABILITY] });
+  client.setQueryData(queryKeys.planFeatures(1), planFeaturesData(1, true));
+  for (const id of [1, 2]) for (const excluded of [false, true]) {
+    client.setQueryData(queryKeys.planReview(id, excluded), { ...enrichedReview, profile_id: id });
+  }
+  const pending: Array<(response: Response) => void> = [];
+  const originalFetch = globalThis.fetch;
+  vi.stubGlobal("fetch", vi.fn((input: string | URL | Request) => String(input).includes("/review")
+    ? new Promise<Response>((resolve) => pending.push(resolve)) : originalFetch(input)));
+  const { result } = renderHook(() => {
+    useSpoolmanWorkflowAccess(1);
+    useSpoolmanWorkflowAccess(1);
+    return usePlanReviewQuery(1);
+  }, { wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> });
+  expect(result.current.data?.part_groups[0]?.parts[0]?.spool_badge).toBe("450g left");
+  const toggle = (enabled: boolean) => client.setQueryData(queryKeys.planFeatures(1), planFeaturesData(1, enabled));
+  act(() => { toggle(false); toggle(true); });
+  await waitFor(() => expect(pending.length).toBeGreaterThan(0));
+  const part = () => result.current.data?.part_groups[0]?.parts[0];
+  expect(part()).toMatchObject({ spool_badge: null, filament_display: "", filament_color_id: "spoolman:1:filament:2" });
+  expect(client.getQueryData<PlanReview>(queryKeys.planReview(1, true))?.part_groups[0]?.parts[0]?.spool_badge).toBeNull();
+  expect(client.getQueryState(queryKeys.planReview(1, true))?.isInvalidated).toBe(true);
+  expect(client.getQueryData<PlanReview>(queryKeys.planReview(2))?.part_groups[0]?.parts[0]?.spool_badge).toBe("450g left");
+  const before = pending.length;
+  if (mode === "revoked response") {
+    act(() => { toggle(false); toggle(true); });
+    await waitFor(() => expect(pending.length).toBeGreaterThan(before));
+  }
+  const response = () => new Response(JSON.stringify(enrichedReview), { status: mode === "error" ? 500 : 200, headers: { "content-type": "application/json" } });
+  await act(async () => { for (const finish of pending.slice(0, -1)) finish(response()); });
+  expect(part()?.spool_badge).toBeNull();
+  pending.at(-1)?.(response());
+  if (mode === "error") {
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(part()?.spool_badge).toBeNull();
+  } else await waitFor(() => expect(part()?.spool_badge).toBe("450g left"));
 });

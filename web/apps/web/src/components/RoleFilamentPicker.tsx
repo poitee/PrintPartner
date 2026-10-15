@@ -387,7 +387,11 @@ function RoleColorRow({
   );
 }
 
-export default function RoleFilamentPicker({
+export default function RoleFilamentPicker(props: Props) {
+  return <RoleFilamentPickerInner key={props.profileId} {...props} />;
+}
+
+function RoleFilamentPickerInner({
   profileId,
   disabled,
   refreshKey = 0,

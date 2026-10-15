@@ -28,6 +28,7 @@ import {
 } from "../../lib/reviewPartsFilter";
 import {
   flattenReviewParts,
+  maskSpoolmanReviewPart,
   sourceLabelFromLayer,
   workingPlanReviewParts,
 } from "../../lib/reviewParts";
@@ -277,17 +278,6 @@ function ReviewSheetRow({
   );
 }
 
-function maskReviewPart(part: ReviewPart, spoolmanAllowed: boolean): ReviewPart {
-  if (spoolmanAllowed) return part;
-  const isSpoolmanFilament = Boolean(part.filament_color_id?.trim().startsWith("spoolman:"));
-  return {
-    ...part,
-    spool_badge: null,
-    spool_summary: undefined,
-    ...(isSpoolmanFilament ? { filament_display: "", filament_hex: null } : {}),
-  };
-}
-
 const NO_SPOOLS: SpoolmanSpoolRow[] = [];
 
 const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function ReviewPartsSheet(
@@ -377,7 +367,7 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
 
   const acceptedParts = useMemo(() => {
     const parts = flattenReviewParts(review.part_groups);
-    return spoolmanAccess.allowed ? parts : parts.map((part) => maskReviewPart(part, false));
+    return spoolmanAccess.allowed ? parts : parts.map(maskSpoolmanReviewPart);
   }, [review.part_groups, spoolmanAccess.allowed]);
   const acceptedPartById = useMemo(
     () => new Map(acceptedParts.map((part) => [part.id, part])),
