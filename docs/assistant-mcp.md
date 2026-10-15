@@ -58,7 +58,7 @@ Replace the URL and key with values for your host. Keep the key out of source co
 Print Partner production runs on apps VM 111 at `192.168.200.81:8080`. The server-side MCP route is `/api/v1/mcp`. The old `.80:8080` address is a temporary forwarder, not the production target. Mac Docker is not the live server.
 
 1. Open the saved `print-partner` connector in the client that owns it.
-2. Retarget its HTTPS proxy or authenticated tunnel to `192.168.200.81:8080`, preserving `/api/v1/mcp`.
+2. Retarget its protected connection to apps VM 111, preserving `/api/v1/mcp`. Terminate the HTTPS proxy or authenticated tunnel on VM 111 and forward to `127.0.0.1:8080`. If the proxy runs on another host, encrypt and authenticate its upstream connection to VM 111 with TLS or a tunnel. Do not forward credentials from a remote proxy to `http://192.168.200.81:8080`.
 3. Save the connector URL for that protected connection. Keep its existing API key unchanged. Do not send the key over raw LAN HTTP.
 4. Reconnect the client and run the read-only `list_sources` tool. Confirm a successful tool result, including an empty list if no sources exist.
 5. Record the target host, tool name, and outcome without the API key, authorization headers, or source data.
