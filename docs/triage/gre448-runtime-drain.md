@@ -635,3 +635,65 @@ PASS: built backend interrupted uploads retain unknown outcome without automatic
 All ten backend PIDs and groups were absent afterward. All five peer cleanup
 receipts passed. All 39,276 measured source, artifact, dependency, and link entries
 remained unchanged. The final run emitted no transport traceback.
+
+## Legal summary representation inventory
+
+`drain::ticket_t_3_drain_legal_summary_representation_parity` extends the CORS
+parity gate for GET and HEAD on `/legal/summary` and `/api/v1/legal/summary`.
+Its 768 cases cross both aliases, both methods, allowed or absent Origin,
+200 or 429, twelve Accept-Encoding values and four Accept values. The encoding
+inventory includes absent and empty headers, identity, identity excluded,
+Brotli, gzip, both configured encodings, weighted preferences, wildcard,
+unsupported deflate, and zero-quality exclusions. Accept includes absent,
+text/plain, application/json, and an excluded wildcard.
+
+The current 868-byte bundled summary and the rate-limit JSON are below Node's
+1024-byte compression threshold. Node returns the original representation for
+these requests, including those excluding every encoding or media type. Accept
+does not select another media type or produce 406. Both implementations must
+omit Content-Encoding and Vary: Accept-Encoding. Vary contains only Origin.
+This records existing compatibility behavior, including its permissive handling
+of exclusions. It does not establish general HTTP negotiation compliance.
+
+Every GET must match the complete expected bytes. HEAD must have an empty body
+and the full corresponding representation length. Successful responses retain
+text/plain; charset=utf-8. A 429 retains application/json; charset=utf-8 and the
+exact statusCode, error and message fields in their serialized order. Its retry
+message and Content-Length are checked against that response's own reset value,
+including singular seconds and the one-minute form. Retry-After must equal
+X-RateLimit-Reset within 1 through 60 seconds. Limit and remaining headers,
+no-store, and CORS metadata are also checked. Time-dependent headers and body
+lengths are validated locally before stable metadata is compared across runs.
+
+The gate captures Node fixtures, refuses a receipt with one failed fixture,
+checks an isolated Rust candidate, and commits the passing receipt only after
+comparison. Two restarts repeat the matrix with Node stopped and verify that
+the ownership record stays unchanged. Existing fleet CI selects this test through
+`test(ticket_t_3_drain)` with `desktop_rebuild` enabled.
+
+These fixtures prove identity representations for the current small documents.
+They do not prove Brotli or gzip output above the threshold, static asset
+negotiation, or a common desktop HTTP compression policy. A larger summary or a
+changed compression policy must pass this gate before cutover. Common HTTP
+policy and the GRE-343 asset negotiation work remain follow-ups. Default-off
+cutover flags remain unchanged. GRE-448 stays In Progress; remaining operation
+and worker acceptance and actual Mac logout remain open.
+
+Author: Codex gpt-6.1-sol through the Codex harness on fleet VM 133. The requested
+Claude Opus 5.5 design review through claudeAgent returned exactly
+`Claude API rate limit reached. Try again later.` The authorized gpt-6-astra
+fallback reviewed the design. Exact-head scoring and CI evidence belong to the
+PR's merge gate.
+
+Local verification on 2026-10-15 built this worktree's server and desktop frontend,
+generated its measured bundle manifest with native Node v24.21.0, then ran:
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --test runtime_m0 --features desktop_rebuild ticket_t_3_drain_legal_summary -- --nocapture
+```
+
+Result: 3 passed, 0 failed. The representation test reported 768 passed and zero
+failed for Node, the isolated Rust candidate, restart 1, and restart 2. Both
+restarts ran with Node stopped and left authority unchanged. The alias and
+flag-off tests also passed. Local logs are under
+`/persist/home/.local/state/pstack-t3/gre448-negotiation/` on fleet VM 133.
