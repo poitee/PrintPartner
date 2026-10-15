@@ -275,3 +275,78 @@ fn ppjs_metadata_is_lossless_and_projection_mismatch_is_integrity() {
         AcceptedProgress::Unavailable(AcceptedProgressUnavailable::Integrity)
     ));
 }
+
+#[test]
+fn review_malformed_manifest_is_typed_and_list_keeps_healthy_build() {
+    for field in ["requirement", "option_group_id"] {
+        let f = Fixture::new();
+        f.mutate(&format!("UPDATE plan_revision_parts SET {field}=x'50504a5301' WHERE id=2; INSERT INTO build_profiles(id,tenant_id,name) VALUES(20,'default','Healthy');"));
+        assert!(matches!(
+            f.read().accepted_progress,
+            AcceptedProgress::Unavailable(AcceptedProgressUnavailable::Integrity)
+        ));
+        let BuildOutcome::Listed { profiles } = f.run(BuildCommand::List).unwrap() else {
+            panic!("list")
+        };
+        assert_eq!(profiles.len(), 2);
+        assert!(matches!(
+            profiles
+                .iter()
+                .find(|p| p.id == 20)
+                .unwrap()
+                .accepted_progress,
+            AcceptedProgress::Empty
+        ));
+    }
+}
+
+#[test]
+fn review_list_caps_builds_before_loading_graphs() {
+    let f = Fixture::new();
+    f.mutate("WITH RECURSIVE n(id) AS (SELECT 2 UNION ALL SELECT id+1 FROM n WHERE id<64) INSERT INTO build_profiles(id,tenant_id,name) SELECT id,'default','Empty '||id FROM n;");
+    let BuildOutcome::Listed { profiles } = f.run(BuildCommand::List).unwrap() else {
+        panic!("list")
+    };
+    assert_eq!(profiles.len(), 64);
+    f.mutate("INSERT INTO build_profiles(id,tenant_id,name) VALUES(65,'default','Extra'); DROP TABLE plan_revision_parts;");
+    let error = f.run(BuildCommand::List).unwrap_err();
+    assert!(matches!(error.downcast_ref(), Some(Failure::TooManyBuilds)));
+}
+
+#[test]
+fn review_working_counts_non_scalar_metadata_edits() {
+    for field in ["requirement", "option_group_id"] {
+        let f = Fixture::new();
+        let c = f.raw();
+        let columns = c
+            .prepare("SELECT * FROM plan_revision_parts")
+            .unwrap()
+            .column_names()
+            .iter()
+            .filter(|s| !matches!(**s, "id" | "revision_id" | "projection_part_id"))
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        drop(c);
+        f.mutate(&format!("DELETE FROM plan_draft_parts; DELETE FROM plan_drafts; INSERT INTO plan_drafts(id,tenant_id,profile_id,base_revision_id,base_plan_version,state,digest_format,snapshot_digest,created_by,idempotency_key,created_at) SELECT 1,tenant_id,profile_id,id,1,'open','v1','digest','fixture','key','then' FROM plan_revisions LIMIT 1; INSERT INTO plan_draft_parts(draft_id,base_revision_part_id,{columns}) SELECT 1,id,{columns} FROM plan_revision_parts; UPDATE plan_revision_parts SET {field}=x'50504a530100000001d800' WHERE id=2; UPDATE plan_draft_parts SET {field}=x'50504a530100000001d801' WHERE base_revision_part_id=2;"));
+        let batch = f
+            .owner
+            .as_ref()
+            .unwrap()
+            .accepted_reads_with_policy(policy())
+            .unwrap()
+            .read(
+                credential(),
+                &[1],
+                &AtomicBool::new(false),
+                Duration::from_secs(2),
+            )
+            .unwrap();
+        let context = serde_json::to_value(batch.builds[0].context.as_ref().unwrap()).unwrap();
+        assert_eq!(
+            context["workflow"]["workspace"]["working_plan"]["change_count"],
+            serde_json::json!(1),
+            "{context}"
+        );
+    }
+}

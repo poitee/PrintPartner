@@ -15,16 +15,10 @@ pub(crate) fn build_summary(
     tenant: &str,
     profile: i64,
     repos: &std::path::Path,
+    budget: &mut Budget,
 ) -> Result<Option<crate::build_graph::ProfileSummary>> {
-    let mut budget = Budget::default();
-    let accepted = match read_with_purpose(
-        tx,
-        tenant,
-        profile,
-        repos,
-        &mut budget,
-        ReadPurpose::Summary,
-    ) {
+    let accepted = match read_with_purpose(tx, tenant, profile, repos, budget, ReadPurpose::Summary)
+    {
         Ok(read) => read,
         Err(error) => match error.downcast_ref::<Integrity>() {
             Some(error) => super::AcceptedRead::IntegrityFailure {
@@ -37,7 +31,7 @@ pub(crate) fn build_summary(
     if matches!(accepted, super::AcceptedRead::Missing) {
         return Ok(None);
     }
-    let facts = super::context::capture_build_summary(tx, tenant, profile, &accepted, &mut budget)?
+    let facts = super::context::capture_build_summary(tx, tenant, profile, &accepted, budget)?
         .ok_or_else(|| anyhow::anyhow!("Build context missing"))?;
     Ok(Some(crate::build_graph::projection::profile_summary(facts)))
 }
@@ -75,7 +69,7 @@ pub(super) fn check(ok: bool, code: &'static str, message: &str) -> Result<()> {
     }
 }
 #[derive(Default)]
-pub(super) struct Budget {
+pub(crate) struct Budget {
     rows: usize,
     bytes: usize,
 }
@@ -193,7 +187,7 @@ pub(super) struct Row(
     #[cfg(feature = "desktop_rebuild")] PartManifestMetadata,
 );
 impl Row {
-    fn same_field(&self, other: &Self, key: &str) -> bool {
+    pub(super) fn same_field(&self, other: &Self, key: &str) -> bool {
         #[cfg(feature = "desktop_rebuild")]
         match key {
             "requirement" => return self.2.requirement == other.2.requirement,
@@ -312,7 +306,10 @@ pub(super) fn rows(
                         "requirement" => {
                             manifest.requirement = read_manifest_text(r.get_ref(i)?)
                                 .map_err(|error| {
-                                    rusqlite::Error::ToSqlConversionFailure(error.into())
+                                    rusqlite::Error::ToSqlConversionFailure(Box::new(Integrity {
+                                        code: "manifest_text",
+                                        message: error.to_string(),
+                                    }))
                                 })?
                                 .map(ManifestText);
                             values.insert(
@@ -326,7 +323,10 @@ pub(super) fn rows(
                         "option_group_id" => {
                             manifest.option_group_id = read_manifest_text(r.get_ref(i)?)
                                 .map_err(|error| {
-                                    rusqlite::Error::ToSqlConversionFailure(error.into())
+                                    rusqlite::Error::ToSqlConversionFailure(Box::new(Integrity {
+                                        code: "manifest_text",
+                                        message: error.to_string(),
+                                    }))
                                 })?
                                 .map(OptionGroupId);
                             values.insert(
@@ -381,7 +381,14 @@ pub(super) fn rows(
                 manifest,
             ))
         })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|error| match error {
+            rusqlite::Error::ToSqlConversionFailure(inner) => match inner.downcast::<Integrity>() {
+                Ok(integrity) => anyhow!(*integrity),
+                Err(inner) => anyhow!(rusqlite::Error::ToSqlConversionFailure(inner)),
+            },
+            error => anyhow!(error),
+        })?;
     Ok(result)
 }
 pub(super) fn one(
@@ -590,7 +597,7 @@ fn canonical_part(r: &Row) -> Result<String> {
         );
     }
     let part = DraftPart::new(Value::Object(scalar), r.2.clone());
-    Ok(String::from_utf8(part.json_fields(&fields, false)).expect("canonical part JSON"))
+    String::from_utf8(part.json_fields(&fields, false)).map_err(Into::into)
 }
 enum ReadPurpose {
     Snapshot,

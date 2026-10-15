@@ -18,6 +18,7 @@ use std::{
 #[derive(Debug)]
 pub enum Failure {
     Cancelled,
+    TooManyBuilds,
     QueueFull,
     Stopped,
     OutcomeUnknown,
@@ -89,7 +90,7 @@ impl WriterOwner {
             repos: self
                 .lease
                 .as_ref()
-                .expect("live owner")
+                .ok_or_else(|| anyhow!("Storage owner is closed"))?
                 .data_dir()
                 .join("repos"),
         })
@@ -201,40 +202,43 @@ fn layers(tx: &Transaction<'_>, tenant: &str, build: i64) -> Result<Vec<ProfileL
         .map_err(Into::into)
 }
 
-fn summary(
-    tx: &Transaction<'_>,
-    tenant: &str,
-    build: i64,
-    repos: &std::path::Path,
-) -> Result<Option<ProfileSummary>> {
-    read_model::graph::build_summary(tx, tenant, build, repos)
-}
-
 fn read(
     tx: &Transaction<'_>,
     tenant: &str,
     command: &BuildCommand,
     repos: &std::path::Path,
+    cancelled: &AtomicBool,
 ) -> Result<BuildOutcome> {
+    let mut budget = read_model::graph::Budget::default();
     match command {
         BuildCommand::List => {
             let ids = {
-                let mut statement = tx
-                    .prepare("SELECT id FROM build_profiles WHERE tenant_id=?1 ORDER BY name,id")?;
+                let mut statement = tx.prepare(
+                    "SELECT id FROM build_profiles WHERE tenant_id=?1 ORDER BY name,id LIMIT 65",
+                )?;
                 let rows = statement.query_map([tenant], |row| row.get::<_, i64>(0))?;
                 rows.collect::<rusqlite::Result<Vec<_>>>()?
             };
+            ensure!(ids.len() <= 64, Failure::TooManyBuilds);
             let profiles = ids
                 .into_iter()
                 .map(|build| {
-                    summary(tx, tenant, build, repos)?
+                    ensure!(!cancelled.load(Ordering::Acquire), Failure::Cancelled);
+                    read_model::graph::build_summary(tx, tenant, build, repos, &mut budget)?
                         .ok_or_else(|| anyhow!("Listed Build missing"))
                 })
                 .collect::<Result<Vec<_>>>()?;
             Ok(BuildOutcome::Listed { profiles })
         }
         BuildCommand::Read { build } => {
-            let Some(profile) = summary(tx, tenant, build.get() as i64, repos)? else {
+            let Some(profile) = read_model::graph::build_summary(
+                tx,
+                tenant,
+                build.get() as i64,
+                repos,
+                &mut budget,
+            )?
+            else {
                 return Ok(BuildOutcome::MissingBuild);
             };
             Ok(BuildOutcome::Read { profile })
@@ -259,7 +263,13 @@ pub(super) fn execute(connection: &mut Connection, command: Command) -> Result<B
     );
     let tx = connection.transaction()?;
     let tenant = tenant(&tx, &command)?;
-    let outcome = read(&tx, &tenant, &command.command, &command.repos)?;
+    let outcome = read(
+        &tx,
+        &tenant,
+        &command.command,
+        &command.repos,
+        &command.cancelled,
+    )?;
     ensure!(
         !command.cancelled.load(Ordering::Acquire),
         Failure::Cancelled
