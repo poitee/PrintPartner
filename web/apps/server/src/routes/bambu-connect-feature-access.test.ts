@@ -148,10 +148,10 @@ describe("Bambu Connect download HTTP feature admission", () => {
     seed();
     expect((await request("GET")).json()).toEqual(disabled);
     repo.setSetting("feature_toggles", '{"bambu":true}');
-    repo.setSetting(`feature_toggles:plan:${profileId}`, '{"bambu":false}');
     tenantStorage.run("other", () => repo.setSetting("feature_toggles", '{"bambu":false}'));
     const staged = await request("POST");
     expect(staged.statusCode).toBe(200);
+    repo.setSetting(`feature_toggles:plan:${profileId}`, '{"bambu":false}');
     vi.clearAllMocks();
 
     expect((await request("GET", "", "other")).json()).toEqual(disabled);

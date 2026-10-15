@@ -14,6 +14,7 @@ import type { AppRepository } from "../db/repository.js";
 import { getIntegrationConfig } from "../integrations/store.js";
 import { sendProblem } from "../lib/api-error.js";
 import { readFeatureAccess } from "../lib/feature-access.js";
+import { desktopFeaturesEnabled } from "../lib/feature-toggles.js";
 import {
   bambuConnectDisplayName,
   buildBambuConnectUrl,
@@ -110,11 +111,15 @@ export async function registerBambuConnectRoutes(
       let profileId: number | undefined;
       let checkoffUnitsRaw: string | undefined;
       let retainHandoff = false;
-      const exportsDir = deps.jobs.getExportsDir(request.tenantId);
-      sweepExpiredTransferArtifacts(exportsDir, { kinds: ["bambu-connect"] });
+      const requireAdmission = desktopFeaturesEnabled();
+      let exportsDir: string | undefined;
+      if (!requireAdmission) {
+        exportsDir = deps.jobs.getExportsDir(request.tenantId);
+        sweepExpiredTransferArtifacts(exportsDir, { kinds: ["bambu-connect"] });
+      }
 
       const reject = (status: number, title: string, detail: string) => {
-        discardHandoff(exportsDir, handoffId);
+        if (exportsDir !== undefined) discardHandoff(exportsDir, handoffId);
         artifactPath = null;
         handoffId = "";
         return sendProblem(reply, status, title, detail);
@@ -139,7 +144,13 @@ export async function registerBambuConnectRoutes(
               else if (raw === "1" || raw === "true" || raw === "yes") launchField = true;
             }
             if (part.fieldname === "profile_id" || part.fieldname === "plan_id") {
+              if (requireAdmission && profileId != null) {
+                return reject(400, "Bad Request", "Only one profile_id or plan_id is allowed");
+              }
               const n = Number(value);
+              if (requireAdmission && (!Number.isSafeInteger(n) || n <= 0)) {
+                return reject(400, "Bad Request", "A valid profile_id or plan_id is required");
+              }
               if (Number.isInteger(n) && n > 0) profileId = n;
             }
             if (part.fieldname === "checkoff_units") {
@@ -160,6 +171,25 @@ export async function registerBambuConnectRoutes(
             part.file.resume();
             return reject(400, "Bad Request", "Only one file is allowed");
           }
+          if (requireAdmission) {
+            if (profileId != null && !deps.repo.getOwnedProfileIdentity(profileId)) {
+              part.file.resume();
+              return reject(404, "Not Found", "Profile not found");
+            }
+            const access = readFeatureAccess(() => deps.repo, "bambu", profileId);
+            if (access.kind !== "allowed") {
+              part.file.resume();
+              const status = access.kind === "disabled" ? 403 : 500;
+              return reply.status(status).send({
+                status, title: access.kind === "disabled" ? "Forbidden" : "Internal Server Error",
+                detail: access.error, code: access.code,
+              });
+            }
+            if (profileId == null) {
+              part.file.resume();
+              return reject(400, "Bad Request", "Pick a plan before the file (profile_id or plan_id required)");
+            }
+          }
           filename = (part.filename || "print.3mf").replace(/\\/g, "/");
           const candidate = sanitizeBambuConnectFilename(basename(filename));
           if (!isAllowedBambuConnectFilename(candidate)) {
@@ -169,6 +199,10 @@ export async function registerBambuConnectRoutes(
               "Bad Request",
               "Only .3mf / .gcode.3mf / .gcode / .gco files can be handed off to Bambu Connect",
             );
+          }
+          if (exportsDir === undefined) {
+            exportsDir = deps.jobs.getExportsDir(request.tenantId);
+            sweepExpiredTransferArtifacts(exportsDir, { kinds: ["bambu-connect"] });
           }
           handoffId = randomUUID();
           try {
@@ -296,7 +330,7 @@ export async function registerBambuConnectRoutes(
           message,
         };
       } finally {
-        if (!retainHandoff) discardHandoff(exportsDir, handoffId);
+        if (!retainHandoff && exportsDir !== undefined) discardHandoff(exportsDir, handoffId);
       }
     },
   );

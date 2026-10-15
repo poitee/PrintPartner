@@ -72,11 +72,11 @@ export async function startBambuConnectHandoff(options: {
   checkoff_units?: PrinterCheckoffUnit[];
 }): Promise<BambuConnectHandoffResult> {
   const form = new FormData();
-  form.append("file", options.file);
   if (options.printer_id) form.append("printer_id", options.printer_id);
   if (options.launch === false) form.append("launch", "0");
   else if (options.launch === true) form.append("launch", "1");
   appendCheckoffFields(form, options);
+  form.append("file", options.file);
   return engineFetchMultipart<BambuConnectHandoffResult>({
     path: "/bambu-connect/handoff",
     form,
