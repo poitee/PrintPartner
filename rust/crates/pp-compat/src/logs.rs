@@ -346,6 +346,42 @@ mod tests {
     }
 
     #[test]
+    fn ticket_t_2_log_open_rejects_symlinked_directory_without_writing_target() {
+        let scratch = Scratch::new();
+        let target = scratch.0.join("outside");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::remove_dir(scratch.0.join("logs")).unwrap();
+        std::os::unix::fs::symlink(&target, scratch.0.join("logs")).unwrap();
+        let result = Logs::open(scratch.0.join("logs"));
+        if let Ok(logs) = &result {
+            logs.event(Event::Ready, 30);
+        }
+        assert_eq!(std::fs::read_dir(target).unwrap().count(), 0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn ticket_t_2_log_rotation_stays_in_admitted_directory_after_symlink_swap() {
+        let scratch = Scratch::new();
+        let directory = scratch.0.join("logs");
+        let logs = Logs::open(directory.clone()).unwrap();
+        logs.event(Event::Starting, 30);
+        let admitted = scratch.0.join("admitted");
+        std::fs::rename(&directory, &admitted).unwrap();
+        let target = scratch.0.join("outside");
+        std::fs::create_dir(&target).unwrap();
+        std::os::unix::fs::symlink(&target, &directory).unwrap();
+        logs.0.lock().unwrap().day = 0;
+        logs.event(Event::Ready, 30);
+        assert_eq!(std::fs::read_dir(target).unwrap().count(), 0);
+        let row = |name: &str| -> serde_json::Value {
+            serde_json::from_slice(&std::fs::read(admitted.join(name)).unwrap()).unwrap()
+        };
+        assert_eq!(row("desktop.1.jsonl")["event"], "compat_starting");
+        assert_eq!(row("desktop.jsonl")["event"], "compat_ready");
+    }
+
+    #[test]
     fn ticket_t_2_log_rotation_rejects_dangling_symlink_replacement() {
         let scratch = Scratch::new();
         let path = scratch.0.join("logs/desktop.jsonl");
