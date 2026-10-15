@@ -753,11 +753,15 @@ export async function registerPlanRoutes(
       });
     }
     const savedDefaults = loadRoleFilamentDefaults(deps.repo, id);
-    const includedRoles = new Set(snapshot.snapshot.parts.filter((part) => part.included)
-      .map((part) => normalizePartRole(part.effectiveRole)));
+    const includedParts = snapshot.snapshot.parts.filter((part) => part.included);
+    const includedRoles = new Set(includedParts.map((part) => normalizePartRole(part.effectiveRole)));
     const rolesToApply = canonicalRoleOrder().filter((role) => includedRoles.has(role)
       && (savedDefaults[role]?.filament_color_id || savedDefaults[role]?.filament_custom_hex));
-    if (rolesToApply.some((role) => hasSpoolmanAssignment(savedDefaults[role] ?? {}))) {
+    if (rolesToApply.some((role) => includedParts.some((part) => normalizePartRole(part.effectiveRole) === role
+      && hasSpoolmanAssignment(savedDefaults[role] ?? {}, {
+        filament_color_id: part.filamentColorId,
+        spoolman_spool_id: part.spoolmanSpoolId,
+      })))) {
       const access = readSpoolmanAccess(deps.repo, id);
       if (access.kind !== "allowed") {
         const problem = spoolmanAccessProblem(access);

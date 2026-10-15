@@ -14,7 +14,7 @@ npm exec -w @print-partner/web -- vitest run src/hooks/useSpoolmanWorkflowAccess
 npm run build
 ```
 
-Coverage includes both inventory/assignment HTTP aliases, all account/Plan choices, ownership, corruption, tenant isolation, legacy behavior, MCP confirmation, farm unknown inventory, publication rollback, and deduction revocation before writes. Disabled reads preserve bundled/custom data and stored assignments. Plan-draft save has no `/api/v1` alias. Unused role defaults cannot block ordinary assignment.
+Coverage includes both inventory/assignment HTTP aliases, all account/Plan choices, ownership, corruption, tenant isolation, legacy behavior, MCP confirmation, farm unknown inventory, publication rollback, and deduction revocation before writes. Disabled reads preserve bundled/custom data and stored assignments. Plan-draft save has no `/api/v1` alias. Unused or unchanged optional defaults cannot block ordinary assignment. The unchanged-default regression failed with 403 on both aliases before comparing defaults with each included target. Changed filament and spool references remain denied.
 
 Mounted-query tests exercise Review, role and catalog caches together across off/on, failed refreshes, cancelled responses, and multiple consumers. Component tests cover Plan switches, imports, dialogs and ordinary colors. The isolated browser preserved 252 bundled colors while off, exposed stock with Plan-on/account-off, selected a 480 g proof spool, and retained clearing/custom colors after revocation. Its fixture Source has no Git revision; the unrelated sync failure is outside this proof.
 

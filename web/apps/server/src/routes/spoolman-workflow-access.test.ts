@@ -83,6 +83,25 @@ describe("Spoolman workflow admission", () => {
   }
 
   for (const prefix of ["", "/api/v1"]) {
+    it(`${prefix} permits unchanged optional defaults but rejects changed inventory references`, async () => {
+      planAccess(true);
+      expect((await app.inject({ method: "PATCH", url: `${prefix}/parts/${partId}`,
+        payload: { filament_color_id: color, spoolman_spool_id: spool } })).statusCode).toBe(200);
+      planAccess(false);
+      saveRoleFilamentDefault(repo, profileId, "primary", { filament_color_id: color, spoolman_spool_id: spool });
+      const apply = () => app.inject({ method: "POST", url: `${prefix}/plans/${profileId}/apply-role-colors`,
+        payload: { refresh_thumbnails: false } });
+      const unchanged = await apply();
+      expect(unchanged.statusCode, unchanged.body).toBe(200);
+      expect(repo.getPartRow(partId)).toMatchObject({ filamentColorId: color, spoolmanSpoolId: spool });
+      for (const changed of [{ filament_color_id: `${color}0`, spoolman_spool_id: spool },
+        { filament_color_id: color, spoolman_spool_id: `${spool}0` }]) {
+        saveRoleFilamentDefault(repo, profileId, "primary", changed);
+        expect((await apply()).statusCode).toBe(403);
+        expect(repo.getPartRow(partId)).toMatchObject({ filamentColorId: color, spoolmanSpoolId: spool });
+      }
+      expect(network).not.toHaveBeenCalled();
+    });
     it.each(["accent", "future-role", "excluded"])(`${prefix} ignores unused optional defaults for %s`, async (unused) => {
       planAccess(false);
       saveRoleFilamentDefault(repo, profileId, "primary", { filament_custom_hex: "#123456" });
