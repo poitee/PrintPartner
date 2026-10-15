@@ -41,12 +41,12 @@ pub fn prepare_directory(path: &Path) -> Result<PathBuf> {
     Ok(admit_directory(path)?.path)
 }
 
-struct AdmittedDirectory {
+pub(crate) struct AdmittedDirectory {
     path: PathBuf,
     directory: File,
 }
 
-fn admit_directory(path: &Path) -> Result<AdmittedDirectory> {
+pub(crate) fn admit_directory(path: &Path) -> Result<AdmittedDirectory> {
     ensure!(!path.as_os_str().is_empty(), "Data directory path is empty");
     let path = if path.is_absolute() {
         path.to_path_buf()
@@ -105,6 +105,12 @@ fn validate_directory_permissions(metadata: &std::fs::Metadata) -> Result<()> {
 }
 
 impl AdmittedDirectory {
+    pub(crate) fn preflight(&self) -> Result<()> {
+        self.validate_identity()?;
+        crate::schema::preflight(&self.path.join("print-partner.db"), false)?;
+        Ok(())
+    }
+
     fn validate_identity(&self) -> Result<()> {
         let opened = self.directory.metadata()?;
         let named = std::fs::symlink_metadata(&self.path).context("Data directory was replaced")?;
@@ -310,7 +316,10 @@ pub(crate) fn prior_owner_blocks_unowned(marker_path: &Path) -> Result<bool> {
 
 impl StorageLease {
     pub fn acquire(path: &Path) -> Result<Self> {
-        let admitted = admit_directory(path)?;
+        Self::acquire_admitted(admit_directory(path)?)
+    }
+
+    pub(crate) fn acquire_admitted(admitted: AdmittedDirectory) -> Result<Self> {
         let data_dir = &admitted.path;
         #[cfg(test)]
         tests::replace_directory_during_lock(data_dir, 1)?;
@@ -629,9 +638,14 @@ mod tests {
 
     pub(super) fn replace_directory_before_writer_preflight(path: &Path) -> Result<()> {
         let replacement = REPLACE_DIRECTORY_BEFORE_WRITER_PREFLIGHT.take();
-        if replacement != 0 {
-            REPLACE_DIRECTORY_BEFORE_CANONICALIZATION.set(replacement);
-            replace_directory_before_canonicalization(path)?;
+        match replacement {
+            0 => {}
+            4 => std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o770))?,
+            5 => std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o500))?,
+            _ => {
+                REPLACE_DIRECTORY_BEFORE_CANONICALIZATION.set(replacement);
+                replace_directory_before_canonicalization(path)?;
+            }
         }
         Ok(())
     }
@@ -645,7 +659,9 @@ mod tests {
 
     #[test]
     fn ticket_t_12_writer_preflight_rejects_changed_admitted_permissions() {
-        assert_writer_preflight_refuses(3, "Unsafe data directory permissions");
+        for replacement in [3, 4, 5] {
+            assert_writer_preflight_refuses(replacement, "Unsafe data directory permissions");
+        }
     }
 
     fn assert_writer_preflight_refuses(replacement: u8, expected: &str) {
@@ -667,7 +683,7 @@ mod tests {
         REPLACE_DIRECTORY_BEFORE_WRITER_PREFLIGHT.set(replacement);
         let result = crate::WriterOwner::open(&path, crate::Limits::default());
         let error = result.err().map(|error| error.to_string());
-        let preserved = if replacement == 3 {
+        let preserved = if replacement >= 3 {
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
             path.clone()
         } else {
@@ -677,7 +693,7 @@ mod tests {
             assert_eq!(std::fs::read(preserved.join(name)).unwrap(), bytes);
         }
         assert_eq!(std::fs::read_dir(&preserved).unwrap().count(), files.len());
-        if replacement != 3 {
+        if replacement < 3 {
             assert_eq!(std::fs::read_dir(&path).unwrap().count(), 0);
         }
         std::fs::remove_dir_all(preserved).unwrap();
@@ -692,6 +708,39 @@ mod tests {
             Some(expected),
             "replacement {replacement}"
         );
+    }
+
+    #[test]
+    fn ticket_t_12_writer_preflight_retains_admission_into_os_lock() {
+        for replacement in [1, 2, 3] {
+            let path = directory();
+            let admitted = admit_directory(&path).unwrap();
+            admitted.preflight().unwrap();
+            REPLACE_DIRECTORY_BEFORE_WRITER_PREFLIGHT.set(replacement);
+            replace_directory_before_writer_preflight(&path).unwrap();
+            let result = StorageLease::acquire_admitted(admitted);
+            let expected = if replacement == 3 {
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+                "Unsafe data directory permissions"
+            } else {
+                assert_eq!(
+                    std::fs::read_dir(path.with_extension("retired"))
+                        .unwrap()
+                        .count(),
+                    0
+                );
+                std::fs::remove_dir(path.with_extension("retired")).unwrap();
+                "Data directory was replaced"
+            };
+            assert_eq!(result.err().unwrap().to_string(), expected);
+            assert_eq!(std::fs::read_dir(&path).unwrap().count(), 0);
+            if replacement == 2 {
+                std::fs::remove_file(&path).unwrap();
+                std::fs::remove_dir(path.with_extension("replacement")).unwrap();
+            } else {
+                std::fs::remove_dir(path).unwrap();
+            }
+        }
     }
 
     pub(super) fn replace_directory_during_lock(path: &Path, checkpoint: u8) -> Result<()> {
