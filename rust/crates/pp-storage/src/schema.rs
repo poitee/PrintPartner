@@ -44,29 +44,44 @@ thread_local! {
     pub(crate) static PREFLIGHT_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-pub(crate) fn preflight(path: &Path, owned: bool) -> Result<u64> {
+pub(crate) fn preflight(
+    path: &Path,
+    owned: bool,
+    validate_directory: impl Fn() -> Result<()>,
+) -> Result<u64> {
     #[cfg(test)]
     PREFLIGHT_CALLS.update(|calls| calls + 1);
     let marker = path.parent().unwrap().join(".desktop-owner.json");
-    ensure!(
-        owned || !crate::lease::prior_owner_blocks_unowned(&marker)?,
-        "Data directory already owned"
-    );
+    let check_owner = || -> Result<()> {
+        validate_directory()?;
+        let blocked = if owned {
+            Ok(false)
+        } else {
+            crate::lease::prior_owner_blocks_unowned(&marker)
+        };
+        validate_directory()?;
+        ensure!(!blocked?, "Data directory already owned");
+        Ok(())
+    };
+    check_owner()?;
+    let metadata = std::fs::metadata(path);
     #[cfg(test)]
     capture_tests::capture_checkpoint(path, 0)?;
-    if !path.exists() || path.metadata()?.len() == 0 {
-        return Ok(0);
+    validate_directory()?;
+    match metadata {
+        Ok(metadata) if metadata.len() == 0 => return Ok(0),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        result => {
+            result?;
+        }
     }
     let capture = || -> Result<Vec<(String, Option<Vec<u8>>)>> {
         ["", "-wal", "-journal"]
             .into_iter()
             .map(|suffix| {
                 let file = path.with_file_name(format!("print-partner.db{suffix}"));
-                let bytes = match std::fs::read(file) {
-                    Ok(bytes) => Some(bytes),
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-                    Err(error) => return Err(error.into()),
-                };
+                validate_directory()?;
+                let read = std::fs::read(file);
                 #[cfg(test)]
                 capture_tests::capture_checkpoint(
                     path,
@@ -76,6 +91,12 @@ pub(crate) fn preflight(path: &Path, owned: bool) -> Result<u64> {
                         _ => 3,
                     },
                 )?;
+                validate_directory()?;
+                let bytes = match read {
+                    Ok(bytes) => Some(bytes),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                    Err(error) => return Err(error.into()),
+                };
                 Ok((suffix.to_owned(), bytes))
             })
             .collect()
@@ -83,6 +104,7 @@ pub(crate) fn preflight(path: &Path, owned: bool) -> Result<u64> {
     let source = capture()?;
     #[cfg(test)]
     capture_tests::capture_checkpoint(path, 4)?;
+    validate_directory()?;
     let copy = PreflightCopy(std::env::temp_dir().join(format!(
         "pp-preflight-{}",
         hex::encode(rand::random::<[u8; 16]>())
@@ -99,10 +121,7 @@ pub(crate) fn preflight(path: &Path, owned: bool) -> Result<u64> {
         source == capture()?,
         "Database changed during preflight capture"
     );
-    ensure!(
-        owned || !crate::lease::prior_owner_blocks_unowned(&marker)?,
-        "Data directory already owned"
-    );
+    check_owner()?;
     let conn = Connection::open(copy.0.join("print-partner.db"))?;
     let integrity: String = conn.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
     ensure!(
@@ -666,6 +685,29 @@ mod capture_tests {
             std::os::unix::fs::symlink(target, path)?;
         }
         Ok(())
+    }
+
+    #[test]
+    fn ticket_t_12_preflight_capture_admitted_store_creates_one_copy() {
+        let path = std::env::temp_dir().join(format!(
+            "pp-capture-safe-{}",
+            hex::encode(rand::random::<[u8; 8]>())
+        ));
+        let admitted = crate::lease::admit_directory(&path).unwrap();
+        let conn = Connection::open(path.join("print-partner.db")).unwrap();
+        conn.execute_batch("CREATE TABLE capture_fixture(value TEXT);")
+            .unwrap();
+        drop(conn);
+        let before = std::fs::read(path.join("print-partner.db")).unwrap();
+        PREFLIGHT_COPIES.set(0);
+        admitted.preflight().unwrap();
+        assert_eq!(PREFLIGHT_COPIES.get(), 1);
+        assert_eq!(
+            std::fs::read(path.join("print-partner.db")).unwrap(),
+            before
+        );
+        assert_eq!(std::fs::read_dir(&path).unwrap().count(), 1);
+        std::fs::remove_dir_all(path).unwrap();
     }
 
     #[test]

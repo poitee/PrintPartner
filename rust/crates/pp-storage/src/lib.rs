@@ -430,7 +430,7 @@ impl WriterOwner {
         admitted.preflight()?;
         let lease = lease::StorageLease::acquire_admitted(admitted)?;
         let path = lease.data_dir().join("print-partner.db");
-        let version = schema::preflight(&path, true)?;
+        let version = schema::preflight(&path, true, || Ok(()))?;
         for name in ["repos", "sources", "exports", "thumbs", "covers"] {
             std::fs::create_dir_all(lease.data_dir().join(name))?;
         }
