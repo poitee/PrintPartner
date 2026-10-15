@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -242,5 +242,240 @@ describe("lease observation races", () => {
     expect(readFileSync(join(dir, ".desktop-lease"), "utf8")).toBe("inserted evidence");
     expect(readdirSync(dir)).toEqual([".desktop-lease"]);
     expect(existsSync(join(dir, ".desktop-owner.json"))).toBe(false);
+  });
+});
+
+describe.each([undefined, "0", "true", "1"])("release recovery flag %s", (flag) => {
+  it("retries cleanup of an already detached lease", () => {
+    const dir = dataDir();
+    const child = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
+      import fs from "node:fs";
+      import { syncBuiltinESMExports } from "node:module";
+      import { acquireStorageLease } from ${JSON.stringify(new URL("./storage-lease.ts", import.meta.url).href)};
+      const flag = ${JSON.stringify(flag) ?? "undefined"};
+      if (flag === undefined) delete process.env.PP_STORAGE_RELEASE_RECOVERY;
+      else process.env.PP_STORAGE_RELEASE_RECOVERY = flag;
+      const lease = acquireStorageLease(${JSON.stringify(dir)});
+      const remove = fs.rmSync;
+      let failed = false;
+      fs.rmSync = function(path, ...args) {
+        if (!failed && String(path).includes(".desktop-lease-release-")) {
+          failed = true;
+          throw Object.assign(new Error("cleanup denied"), { code: "EACCES" });
+        }
+        return remove.call(this, path, ...args);
+      };
+      syncBuiltinESMExports();
+      let first = null;
+      try { lease.release(); } catch (error) { first = error.code; }
+      lease.release();
+      console.log(JSON.stringify({ first, entries: fs.readdirSync(${JSON.stringify(dir)}) }));
+    `], { encoding: "utf8" });
+    expect(child.status, child.stderr).toBe(0);
+    expect(JSON.parse(child.stdout)).toEqual({ first: "EACCES", entries: [] });
+  });
+
+  it.each([".desktop-lease-release-", ".desktop-owner-release-"])("only opts into detached checks for %s with 1", (prefix) => {
+    const dir = dataDir();
+    const child = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
+      import fs from "node:fs";
+      import { syncBuiltinESMExports } from "node:module";
+      import { acquireDataDirectory } from ${JSON.stringify(new URL("./desktop-context.ts", import.meta.url).href)};
+      const flag = ${JSON.stringify(flag) ?? "undefined"};
+      if (flag === undefined) delete process.env.PP_STORAGE_RELEASE_RECOVERY;
+      else process.env.PP_STORAGE_RELEASE_RECOVERY = flag;
+      const release = acquireDataDirectory(${JSON.stringify(dir)});
+      process.env.PP_STORAGE_RELEASE_RECOVERY = flag === "1" ? "0" : "1";
+      const open = fs.openSync;
+      let rechecked = false;
+      fs.openSync = function(path, ...args) {
+        if (String(path).includes(${JSON.stringify(prefix)})) {
+          rechecked = true;
+          throw Object.assign(new Error("detached record unavailable"), { code: "ENXIO" });
+        }
+        return open.call(this, path, ...args);
+      };
+      syncBuiltinESMExports();
+      let error = null;
+      try { release(); } catch (caught) { error = caught.code; }
+      fs.openSync = open;
+      syncBuiltinESMExports();
+      release();
+      const entries = fs.readdirSync(${JSON.stringify(dir)});
+      acquireDataDirectory(${JSON.stringify(dir)})();
+      console.log(JSON.stringify({ rechecked, error, entries }));
+    `], { encoding: "utf8" });
+    expect(child.status, child.stderr).toBe(0);
+    expect(JSON.parse(child.stdout)).toEqual({ rechecked: flag === "1", error: flag === "1" ? "ENXIO" : null, entries: [] });
+  });
+});
+
+describe("release after the lease is removed externally", () => {
+  it.each(acquisition)("$name treats a missing lease as released and admits the next writer", ({ acquire }) => {
+    const dir = dataDir();
+    const release = acquire(dir);
+    rmSync(join(dir, ".desktop-lease"), { recursive: true });
+    release();
+    expect(readdirSync(dir)).toEqual([]);
+    releases.push(acquire(dir));
+  });
+
+  it("leaves a lease another writer republished in place", () => {
+    const dir = dataDir();
+    const held = acquireStorageLease(dir);
+    rmSync(join(dir, ".desktop-lease"), { recursive: true });
+    const next = acquireStorageLease(dir);
+    releases.push(next.release);
+    const before = inventory(dir);
+    held.release();
+    expect(inventory(dir)).toEqual(before);
+    expect(() => acquireStorageLease(dir)).toThrow("already owned");
+  });
+
+  it("acquireDataDirectory treats a missing owner marker as released", () => {
+    const dir = dataDir();
+    const release = acquireDataDirectory(dir);
+    rmSync(join(dir, ".desktop-owner.json"));
+    release();
+    expect(readdirSync(dir)).toEqual([]);
+    releases.push(acquireDataDirectory(dir));
+  });
+
+  it("acquireDataDirectory leaves an owner marker another writer recorded in place", () => {
+    const dir = dataDir();
+    const release = acquireDataDirectory(dir);
+    const foreign = JSON.stringify({ pid: process.pid, kind: "standalone", process_identity: "another-writer" });
+    writeFileSync(join(dir, ".desktop-owner.json"), foreign);
+    release();
+    expect(readFileSync(join(dir, ".desktop-owner.json"), "utf8")).toBe(foreign);
+    rmSync(join(dir, ".desktop-owner.json"));
+  });
+
+  it("acquireDataDirectory leaves the marker of a later reservation in the same process in place", () => {
+    const dir = dataDir();
+    const first = acquireDataDirectory(dir);
+    rmSync(join(dir, ".desktop-lease"), { recursive: true });
+    rmSync(join(dir, ".desktop-owner.json"));
+    const second = acquireDataDirectory(dir);
+    releases.push(second);
+    const before = inventory(dir);
+    first();
+    expect(inventory(dir)).toEqual(before);
+    expect(() => acquireDataDirectory(dir)).toThrow("already owned");
+  });
+
+  it.each([
+    { record: "lease owner", path: (dir: string) => join(dir, ".desktop-lease", "owner.json") },
+    { record: "owner marker", path: (dir: string) => join(dir, ".desktop-owner.json") },
+  ])("acquireDataDirectory keeps release retryable while its $record is unreadable", { skip: process.getuid?.() === 0 }, ({ path }) => {
+    const dir = dataDir();
+    const release = acquireDataDirectory(dir);
+    chmodSync(path(dir), 0o000);
+    expect(release).toThrow(/EACCES/);
+    chmodSync(path(dir), 0o600);
+    release();
+    expect(readdirSync(dir)).toEqual([]);
+    releases.push(acquireDataDirectory(dir));
+  });
+
+  const foreign = JSON.stringify({ pid: process.pid, kind: "standalone", process_identity: "another-writer", instance });
+  it.each([
+    { record: "lease", path: ".desktop-lease",
+      republish: `fs.mkdirSync(target); fs.writeFileSync(target + "/owner.json", ${JSON.stringify(foreign)});`,
+      kept: (target: string) => readFileSync(join(target, "owner.json"), "utf8") === foreign },
+    { record: "owner marker", path: ".desktop-owner.json",
+      republish: `fs.writeFileSync(target, ${JSON.stringify(foreign)});`,
+      kept: (target: string) => readFileSync(target, "utf8") === foreign },
+    { record: "dangling symlink marker", path: ".desktop-owner.json",
+      republish: `fs.symlinkSync("missing-owner.json", target);`,
+      kept: (target: string) => readlinkSync(target) === "missing-owner.json" },
+    { record: "directory marker", path: ".desktop-owner.json",
+      republish: `fs.mkdirSync(target); fs.writeFileSync(target + "/evidence", "retain");`,
+      kept: (target: string) => readFileSync(join(target, "evidence"), "utf8") === "retain" },
+  ])("hands back a $record republished between the ownership check and the detach", ({ path, republish, kept }) => {
+    const dir = dataDir();
+    const child = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
+      import fs from "node:fs";
+      import { syncBuiltinESMExports } from "node:module";
+      import { acquireDataDirectory } from ${JSON.stringify(new URL("./desktop-context.ts", import.meta.url).href)};
+      const target = ${JSON.stringify(join(dir, path))};
+      const rename = fs.renameSync;
+      let injected = false;
+      fs.renameSync = function(from, to) {
+        if (!injected && from === target) {
+          injected = true;
+          fs.rmSync(target, { recursive: true });
+          ${republish}
+        }
+        return rename.call(this, from, to);
+      };
+      syncBuiltinESMExports();
+      acquireDataDirectory(${JSON.stringify(dir)})();
+      console.log(JSON.stringify({ injected }));
+    `], { encoding: "utf8", env: { ...process.env, PP_STORAGE_RELEASE_RECOVERY: "1" } });
+    expect(child.status, child.stderr).toBe(0);
+    expect(JSON.parse(child.stdout)).toEqual({ injected: true });
+    expect(kept(join(dir, path))).toBe(true);
+    expect(readdirSync(dir).filter((name) => name.includes("-release-"))).toEqual([]);
+  });
+
+  it.skipIf(process.getuid?.() === 0).each([
+    { record: "lease", path: ".desktop-lease", owner: "/owner.json" },
+    { record: "owner marker", path: ".desktop-owner.json", owner: "" },
+  ])("resumes from the detached $record when its check fails after the detach", ({ path, owner }) => {
+    const dir = dataDir();
+    const child = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
+      import fs from "node:fs";
+      import { syncBuiltinESMExports } from "node:module";
+      import { acquireDataDirectory } from ${JSON.stringify(new URL("./desktop-context.ts", import.meta.url).href)};
+      const target = ${JSON.stringify(join(dir, path))};
+      const rename = fs.renameSync;
+      let detached;
+      fs.renameSync = function(from, to) {
+        const result = rename.call(this, from, to);
+        if (!detached && from === target) { detached = to; fs.chmodSync(to + ${JSON.stringify(owner)}, 0o000); }
+        return result;
+      };
+      syncBuiltinESMExports();
+      const release = acquireDataDirectory(${JSON.stringify(dir)});
+      let first;
+      try { release(); first = "released"; } catch (error) { first = error.code; }
+      fs.chmodSync(detached + ${JSON.stringify(owner)}, 0o600);
+      release();
+      console.log(JSON.stringify({ first, entries: fs.readdirSync(${JSON.stringify(dir)}) }));
+    `], { encoding: "utf8", env: { ...process.env, PP_STORAGE_RELEASE_RECOVERY: "1" } });
+    expect(child.status, child.stderr).toBe(0);
+    expect(JSON.parse(child.stdout)).toEqual({ first: "EACCES", entries: [] });
+  });
+
+  it.each([
+    { record: "lease", path: ".desktop-lease" },
+    { record: "owner marker", path: ".desktop-owner.json" },
+  ])("completes when someone removes the detached $record before the hand-back", ({ path }) => {
+    const dir = dataDir();
+    const child = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
+      import fs from "node:fs";
+      import { syncBuiltinESMExports } from "node:module";
+      import { acquireDataDirectory } from ${JSON.stringify(new URL("./desktop-context.ts", import.meta.url).href)};
+      const target = ${JSON.stringify(join(dir, path))};
+      const rename = fs.renameSync;
+      let injected = false;
+      fs.renameSync = function(from, to) {
+        if (!injected && from === target) {
+          injected = true;
+          fs.rmSync(target, { recursive: true });
+          fs.writeFileSync(target, "foreign");
+          const result = rename.call(this, from, to);
+          fs.rmSync(to, { recursive: true });
+          return result;
+        }
+        return rename.call(this, from, to);
+      };
+      syncBuiltinESMExports();
+      acquireDataDirectory(${JSON.stringify(dir)})();
+      console.log(JSON.stringify({ injected, entries: fs.readdirSync(${JSON.stringify(dir)}) }));
+    `], { encoding: "utf8", env: { ...process.env, PP_STORAGE_RELEASE_RECOVERY: "1" } });
+    expect(child.status, child.stderr).toBe(0);
+    expect(JSON.parse(child.stdout)).toEqual({ injected: true, entries: [] });
   });
 });

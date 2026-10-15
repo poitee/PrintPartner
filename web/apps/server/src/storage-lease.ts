@@ -85,11 +85,26 @@ function observeLease(lease: string): LeaseObservation {
   return ownerIsStale(owner) ? { kind: "stale", owner } : { kind: "live" };
 }
 
+/**
+ * Reports whether an ownership record names this reservation. Absent, foreign or malformed
+ * records are not ours; other read failures throw so the caller can retry its release.
+ */
+export function recordNamesInstance(path: string, instance: string): boolean {
+  let recorded: unknown;
+  try { recorded = JSON.parse(readOwnershipRecord(path)); }
+  catch (error) {
+    if (isFsError(error, ["ENOENT", "ENOTDIR"]) || !(error instanceof Error && "code" in error)) return false;
+    throw error;
+  }
+  return typeof recorded === "object" && recorded !== null && "instance" in recorded && recorded.instance === instance;
+}
+
 function invalidLeaseError(cause: unknown): Error {
   return new Error("storage_lease_marker_invalid: Data directory lease is malformed or unreadable", { cause });
 }
 
-export function acquireStorageLease(directory: string): { identity: string; release: () => void } {
+export function acquireStorageLease(directory: string): { identity: string; instance: string; releaseRecoveryEnabled: boolean; release: () => void } {
+  const releaseRecoveryEnabled = process.env.PP_STORAGE_RELEASE_RECOVERY === "1";
   const identity = processIdentity(process.pid);
   const instance = randomBytes(16).toString("hex");
   const candidate = join(directory, `.desktop-lease-candidate-${instance}`);
@@ -112,12 +127,29 @@ export function acquireStorageLease(directory: string): { identity: string; rele
             }
             throw error;
           }
-          let heldPath = lease;
           const detached = join(directory, `.desktop-lease-release-${instance}`);
-          return { identity, release: () => {
-            // Detach the whole lease before cleanup so a contender never observes an empty lease.
-            if (heldPath === lease) { renameSync(lease, detached); heldPath = detached; }
-            rmSync(heldPath, { recursive: true });
+          let stage: "published" | "detached" | "cleanup" = "published";
+          return { identity, instance, releaseRecoveryEnabled, release: () => {
+            if (stage === "published") {
+              // A lease removed or republished by someone else is no longer ours to retire.
+              if (!recordNamesInstance(join(lease, "owner.json"), instance)) return;
+              // Detach the whole lease before cleanup so a contender never observes an empty lease.
+              try { renameSync(lease, detached); }
+              catch (error) { if (isFsError(error, ["ENOENT"])) return; throw error; }
+              stage = releaseRecoveryEnabled ? "detached" : "cleanup";
+            }
+            if (stage === "detached") {
+              // The check and the rename cannot be one step, so hand back a lease republished in between.
+              if (!recordNamesInstance(join(detached, "owner.json"), instance)) {
+                // A detached lease already removed by someone else leaves nothing to hand back.
+                try { renameSync(detached, lease); }
+                catch (error) { if (!isFsError(error, ["ENOENT"])) throw error; }
+                stage = "published";
+                return;
+              }
+              stage = "cleanup";
+            }
+            rmSync(detached, { recursive: true, force: true });
           } };
         }
         case "invalid":

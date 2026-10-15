@@ -38,7 +38,8 @@ describe("Rust-written storage markers", () => {
       try {
         expect(readFileSync(join(directory, ".desktop-lease/previous-marker.json"), "utf8")).toBe(marker);
         expect(JSON.parse(readFileSync(join(directory, ".desktop-owner.json"), "utf8")))
-          .toEqual({ pid: process.pid, kind: "standalone", process_identity: processIdentity(process.pid) });
+          .toEqual({ pid: process.pid, kind: "standalone", process_identity: processIdentity(process.pid),
+            instance: expect.stringMatching(/^[a-f0-9]{32}$/) });
         expect(() => acquireDataDirectory(directory)).toThrow("already owned");
       } finally { release(); }
     } finally { rmSync(directory, { recursive: true, force: true }); }
