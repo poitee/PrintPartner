@@ -1,8 +1,10 @@
 import type Database from "better-sqlite3";
+import { z } from "zod";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as schema from "./db/schema.js";
 import {
   validateAcceptedPlanInputHeaderRows,
+  validateAcceptedPlanRevisionPartRows,
   validateAcceptedPlanRevisionRows,
   validateAcceptedPlanRequiredUnitRows,
 } from "./db/accepted-plan-operational.js";
@@ -22,6 +24,8 @@ export function validateOwnershipHistory(database: Database.Database): void {
   const revisions = db.select().from(schema.planRevisions).all();
   const parts = db.select().from(schema.planRevisionParts).all();
   const projections = db.select().from(schema.parts).all();
+  const partBooleans = new Map(z.array(z.object({ id: z.number(), included: z.unknown(), geometrySame: z.unknown() }))
+    .parse(database.prepare("SELECT id,included,geometry_same AS geometrySame FROM plan_revision_parts").all()).map(row => [row.id, row]));
   const sets = db.select().from(schema.planRevisionInputSets).all();
   const inputs = db.select().from(schema.planRevisionInputs).all();
   const acceptedInputs = db.select().from(schema.planAcceptedInputSets).all();
@@ -84,7 +88,10 @@ export function validateOwnershipHistory(database: Database.Database): void {
       ? history.sort((left, right) => right.revisionNumber - left.revisionNumber)[0]
       : history.find(revision => revision.id === profile.acceptedPlanRevisionId && revision.tenantId === profile.tenantId))
       ?? fail("accepted Plan pointer");
-    if (profile.acceptedPlanRevisionId == null && profile.acceptedPlanVersion !== accepted.revisionNumber) fail("accepted Plan version disagrees with history");
+    if (profile.acceptedPlanRevisionId == null) {
+      if (profile.acceptedPlanVersion !== accepted.revisionNumber) fail("accepted Plan version disagrees with history");
+      if (history.length !== profile.acceptedPlanVersion || history.some((revision, index) => revision.revisionNumber !== profile.acceptedPlanVersion - index)) fail("incomplete accepted Plan history");
+    }
     acceptedPlans.set(profile.id, { kind: profile.acceptedPlanRevisionId == null ? "compatibility_dirty" : "ready", revision: accepted });
     validateAcceptedPlanInputHeaderRows({ tenantId: profile.tenantId, profileId: profile.id, revision: accepted,
       acceptedInput: acceptedInputs.find(input => input.profileId === profile.id),
@@ -92,6 +99,9 @@ export function validateOwnershipHistory(database: Database.Database): void {
   }
   for (const revision of revisions) {
     const revisionParts = parts.filter(part => part.revisionId === revision.id);
+    if (acceptedPlans.get(revision.profileId)?.revision.id === revision.id) {
+      validateAcceptedPlanRevisionPartRows({ revisionParts, revisionBooleans: partBooleans });
+    }
     validateAcceptedPlanRevisionRows({ tenantId: revision.tenantId, profileId: revision.profileId, revision,
       parent: revisions.find(parent => parent.id === revision.parentRevisionId) ?? null, revisionParts });
     if (revision.parentRevisionId != null && !revisions.some(parent => parent.id === revision.parentRevisionId && parent.revisionNumber < revision.revisionNumber)) fail("revision lineage");

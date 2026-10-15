@@ -279,7 +279,32 @@ it.each(["inspect", "apply"].flatMap(mode => ["foreign-projection", "invalid-pro
       input.source_digest = hash(db.serialize());
     });
     if (kind === "missing-ready-projection") input.claims = input.claims.filter(claim => !["parts", "print_progress"].includes(claim.table) || claim.rowid !== 1);
-    if (mode === "inspect") expect(() => inspectOwnershipCopy(paths)).toThrow("Part projection Plan");
+    if (mode === "inspect") expect(() => inspectOwnershipCopy(paths)).toThrow(kind === "invalid-projection" ? /identity/ : /Part projection Plan/);
+    else await refused(paths, input);
+  },
+);
+
+it.each(["inspect", "apply"].flatMap(mode => ["null-projection", "history-gap", "zero-inferred", "zero-override", "quantity-mismatch", "oversized", "boolean"].map(kind => ({ mode, kind }))))(
+  "$mode refuses $kind on the inferred immutable revision", async ({ mode, kind }) => {
+    const paths = fixture();
+    edit(paths.sourceDir, db => { db.exec("UPDATE parts SET notes='working edit' WHERE id=1"); });
+    const input = manifest(paths.sourceDir);
+    edit(paths.sourceDir, raw => {
+      const triggers = z.array(z.object({ name: z.string(), sql: z.string() })).parse(raw.prepare("SELECT name,sql FROM sqlite_schema WHERE name IN ('trg_plan_revision_parts_immutable_update','trg_plan_revisions_immutable_update')").all());
+      for (const trigger of triggers) raw.exec(`DROP TRIGGER "${trigger.name}"`);
+      if (kind === "null-projection") raw.exec("UPDATE plan_revision_parts SET projection_part_id=NULL WHERE revision_id=1");
+      if (kind === "history-gap") raw.exec("UPDATE plan_revisions SET revision_number=2 WHERE id=1; UPDATE build_profiles SET accepted_plan_version=2 WHERE id=1");
+      if (kind === "zero-inferred") raw.exec("UPDATE plan_revision_parts SET quantity_inferred=0 WHERE revision_id=1");
+      if (kind === "zero-override") raw.exec("UPDATE plan_revision_parts SET quantity_override=0 WHERE revision_id=1");
+      if (kind === "quantity-mismatch") raw.exec("UPDATE plan_revision_parts SET quantity_inferred=2 WHERE revision_id=1");
+      if (kind === "oversized") raw.exec("UPDATE plan_revision_parts SET quantity_inferred=10001 WHERE revision_id=1");
+      if (kind === "boolean") raw.exec("UPDATE plan_revision_parts SET included=2 WHERE revision_id=1");
+      const parts = drizzle(raw).select().from(schema.planRevisionParts).all().filter(part => part.revisionId === 1);
+      raw.prepare("UPDATE plan_revisions SET snapshot_digest=? WHERE id=1").run(digestPlanRevisionParts(parts));
+      for (const trigger of triggers) raw.exec(trigger.sql);
+      input.source_digest = hash(raw.serialize());
+    });
+    if (mode === "inspect") expect(() => inspectOwnershipCopy(paths)).toThrow(/identity|booleans|history/i);
     else await refused(paths, input);
   },
 );
@@ -368,7 +393,7 @@ it.each(["unknown-plan", "wrong-scope", "unknown-layout", "symlink", "collision"
   }
 });
 
-it.each([false, true])("validates retained parent Plan history, corrupt=%s", async corrupt => {
+it.each([{ corrupt: false, dirty: false }, { corrupt: true, dirty: false }, { corrupt: false, dirty: true }])("validates retained parent Plan history, corrupt=$corrupt dirty=$dirty", async ({ corrupt, dirty }) => {
   const paths = fixture();
   edit(paths.sourceDir, raw => {
     const db = drizzle(raw);
@@ -383,6 +408,7 @@ it.each([false, true])("validates retained parent Plan history, corrupt=%s", asy
     db.insert(schema.planRevisionRequiredUnitSets).values({ ...header, revisionId: 3,
       mappingDigest: digestRequiredUnitMap({ revisionId: 3, expectedUnitCount: 1, rows: [{ revisionPartId: 3, unitIndex: 0, token: unit.token, objectName: unit.objectName }] }) }).run();
     raw.exec("UPDATE build_profiles SET accepted_plan_revision_id=3,accepted_plan_version=2 WHERE id=1");
+    if (dirty) raw.exec("UPDATE parts SET notes='working edit after two revisions' WHERE id=1");
   });
   const input = manifest(paths.sourceDir);
   if (corrupt) {
