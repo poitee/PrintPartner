@@ -356,7 +356,10 @@ export async function registerBambuConnectRoutes(
         }
       }
     }
-    const access = readFeatureAccess(() => deps.repo, "bambu", queryPlanId);
+    const tenantAccess = readFeatureAccess(() => deps.repo, "bambu");
+    const access = tenantAccess.kind === "disabled" && queryPlanId !== undefined
+      ? readFeatureAccess(() => deps.repo, "bambu", queryPlanId)
+      : tenantAccess;
     if (access.kind !== "allowed") {
       const status = access.kind === "disabled" ? 403 : 500;
       return reply.status(status).send({

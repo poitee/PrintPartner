@@ -198,6 +198,15 @@ describe("Bambu Connect download HTTP feature admission", () => {
     expect(download.rawPayload).toEqual(bytes);
     expect(existsSync(dir)).toBe(false);
   });
+  it.each(['{"bambu":false}', "broken"])("downloads a legacy artifact under enabled tenant policy despite query Plan settings %j", async (stored) => {
+    repo.setSetting("feature_toggles", '{"bambu":true}');
+    repo.setSetting(`feature_toggles:plan:${profileId}`, stored);
+    const dir = seed();
+    const response = await app.inject({ method: "GET", url: `/bambu-connect/handoff/${id}/file?profile_id=${profileId}` });
+    expect(response.statusCode).toBe(200);
+    expect(response.rawPayload).toEqual(bytes);
+    expect(existsSync(dir)).toBe(false);
+  });
   it("never uses an unrelated enabled Plan to admit a legacy artifact", async () => {
     repo.setSetting(`feature_toggles:plan:${profileId}`, '{"bambu":true}');
     const dir = seed("default", true);
