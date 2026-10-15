@@ -455,6 +455,9 @@ impl StorageLease {
     pub fn record_child(directory: &Path, pid: u32) -> Result<()> {
         guard::record_child(directory, pid)
     }
+    pub fn child_recorder(&self) -> impl Fn(&Path, u32) -> Result<()> + Send + Sync + 'static {
+        guard::record_child
+    }
     pub fn data_dir(&self) -> &Path {
         &self.admitted.path
     }
@@ -625,6 +628,99 @@ mod tests {
             MARKER_INSPECTION_SWAP.set(Some((checkpoint, true)));
         }
         Ok(())
+    }
+
+    #[test]
+    fn ticket_t_12_child_marker_contains_transient_directory_swaps() {
+        assert_child_marker_contains_swaps(false);
+    }
+
+    #[test]
+    fn ticket_t_12_child_marker_contains_persistent_directory_swaps() {
+        assert_child_marker_contains_swaps(true);
+    }
+
+    fn assert_child_marker_contains_swaps(persistent: bool) {
+        for checkpoint in 7..=11 {
+            let path = directory();
+            let replacement = path.with_extension("replacement");
+            let retired = path.with_extension("retired");
+            let owner = StorageLease::acquire(&path).unwrap();
+            let record = owner.child_recorder();
+            let original = std::fs::read(path.join(".desktop-owner.json")).unwrap();
+            let mut other: serde_json::Value = serde_json::from_slice(&original).unwrap();
+            other["lease_hash"] = "replacement-owner".into();
+            let other = serde_json::to_vec(&other).unwrap();
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&replacement)
+                .unwrap();
+            std::fs::write(replacement.join(".desktop-owner.json"), &other).unwrap();
+            MARKER_INSPECTION_SWAP.set(Some((checkpoint, false)));
+            KEEP_MARKER_INSPECTION_SWAP.set(persistent);
+            FAIL_MARKER_WRITE.set(checkpoint == 11);
+            let result = record(&path, std::process::id());
+            FAIL_MARKER_WRITE.set(false);
+            assert_eq!(
+                MARKER_INSPECTION_SWAP.take(),
+                None,
+                "checkpoint {checkpoint}"
+            );
+            assert!(!KEEP_MARKER_INSPECTION_SWAP.take());
+            let untouched = if persistent { &path } else { &replacement };
+            let admitted = if persistent { &retired } else { &path };
+            assert_eq!(
+                std::fs::read(untouched.join(".desktop-owner.json")).unwrap(),
+                other,
+                "checkpoint {checkpoint} redirected a child marker update"
+            );
+            assert_eq!(
+                std::fs::read_dir(untouched).unwrap().count(),
+                1,
+                "checkpoint {checkpoint} left a temporary file in the replacement"
+            );
+            if persistent || checkpoint == 11 {
+                assert!(
+                    result.is_err(),
+                    "checkpoint {checkpoint} accepted a persistent swap or failed write"
+                );
+            } else {
+                result.unwrap();
+            }
+            let marker: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(admitted.join(".desktop-owner.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                marker["lease_hash"],
+                serde_json::from_slice::<serde_json::Value>(&original).unwrap()["lease_hash"],
+                "checkpoint {checkpoint} imported replacement ownership"
+            );
+            if checkpoint == 11 {
+                assert_eq!(
+                    std::fs::read(admitted.join(".desktop-owner.json")).unwrap(),
+                    original
+                );
+            } else {
+                assert_eq!(
+                    marker["child_pid"],
+                    std::process::id(),
+                    "checkpoint {checkpoint}"
+                );
+            }
+            assert!(
+                !std::fs::read_dir(admitted).unwrap().any(|entry| entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(".json.new")),
+                "checkpoint {checkpoint} stranded a temporary file"
+            );
+            let released = owner.release();
+            assert!(released.marker_removed && released.runtime_removed && released.lock_released);
+            std::fs::remove_dir_all(untouched).unwrap();
+            std::fs::remove_dir_all(admitted).unwrap();
+        }
     }
 
     #[test]

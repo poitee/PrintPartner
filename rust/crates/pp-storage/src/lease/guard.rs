@@ -54,7 +54,12 @@ pub fn record_child(directory: &Path, pid: u32) -> Result<()> {
     #[cfg(not(target_os = "linux"))]
     let identity = format!("instance:{}", hex::encode(rand::random::<[u8; 16]>()));
     let path = directory.join(".desktop-owner.json");
-    let mut marker: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+    #[cfg(test)]
+    super::tests::marker_inspection_swap(directory, 7, false)?;
+    let bytes = std::fs::read(&path);
+    #[cfg(test)]
+    super::tests::marker_inspection_swap(directory, 7, true)?;
+    let mut marker: serde_json::Value = serde_json::from_slice(&bytes?)?;
     anyhow::ensure!(
         marker["pid"].as_u64() == Some(u64::from(std::process::id())),
         "Desktop owner marker belongs to another process"
@@ -69,20 +74,38 @@ fn publish_child_marker(directory: &Path, path: &Path, marker: &serde_json::Valu
         ".desktop-owner-{}.json.new",
         hex::encode(rand::random::<[u8; 16]>())
     ));
-    let mut file = std::fs::OpenOptions::new()
+    #[cfg(test)]
+    super::tests::marker_inspection_swap(directory, 8, false)?;
+    let file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
-        .open(&temporary)?;
+        .open(&temporary);
+    #[cfg(test)]
+    super::tests::marker_inspection_swap(directory, 8, true)?;
+    let mut file = file?;
     let result = (|| {
-        file.write_all(&serde_json::to_vec(marker)?)?;
-        file.sync_all()?;
-        std::fs::rename(&temporary, path)?;
-        std::fs::File::open(directory)?.sync_all()?;
+        super::write_marker(&mut file, &serde_json::to_vec(marker)?)?;
+        #[cfg(test)]
+        super::tests::marker_inspection_swap(directory, 9, false)?;
+        let renamed = std::fs::rename(&temporary, path);
+        #[cfg(test)]
+        super::tests::marker_inspection_swap(directory, 9, true)?;
+        renamed?;
+        #[cfg(test)]
+        super::tests::marker_inspection_swap(directory, 10, false)?;
+        let synced = std::fs::File::open(directory)?.sync_all();
+        #[cfg(test)]
+        super::tests::marker_inspection_swap(directory, 10, true)?;
+        synced?;
         Ok(())
     })();
     if result.is_err() {
+        #[cfg(test)]
+        super::tests::marker_inspection_swap(directory, 11, false)?;
         let _ = std::fs::remove_file(&temporary);
+        #[cfg(test)]
+        super::tests::marker_inspection_swap(directory, 11, true)?;
     }
     result
 }
