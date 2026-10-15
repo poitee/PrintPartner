@@ -201,7 +201,7 @@ function ProductionWorkspace() {
     selectedProfileId,
     engineState === "ready",
   );
-  const sendFleetQuery = useProductionSendFleet(engineState === "ready");
+  const sendFleetQuery = useProductionSendFleet({ profileId: selectedProfileId, enabled: engineState === "ready" });
   const selectableUnits = useMemo(
     () => productionSelectableUnits(workspaceQuery.data ?? { kind: "empty_plan" }),
     [workspaceQuery.data],
