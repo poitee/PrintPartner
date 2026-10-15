@@ -4,9 +4,11 @@ import {
   createWriteStream,
   mkdirSync,
   readdirSync,
+  readFileSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
-import { basename, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
 import type { Readable } from "node:stream";
 import type { FastifyInstance } from "fastify";
@@ -14,6 +16,7 @@ import type { AppRepository } from "../db/repository.js";
 import { getIntegrationConfig } from "../integrations/store.js";
 import { sendProblem } from "../lib/api-error.js";
 import { readFeatureAccess } from "../lib/feature-access.js";
+import { desktopFeaturesEnabled } from "../lib/feature-toggles.js";
 import {
   bambuConnectDisplayName,
   buildBambuConnectUrl,
@@ -110,11 +113,15 @@ export async function registerBambuConnectRoutes(
       let profileId: number | undefined;
       let checkoffUnitsRaw: string | undefined;
       let retainHandoff = false;
-      const exportsDir = deps.jobs.getExportsDir(request.tenantId);
-      sweepExpiredTransferArtifacts(exportsDir, { kinds: ["bambu-connect"] });
+      const requireAdmission = desktopFeaturesEnabled();
+      let exportsDir: string | undefined;
+      if (!requireAdmission) {
+        exportsDir = deps.jobs.getExportsDir(request.tenantId);
+        sweepExpiredTransferArtifacts(exportsDir, { kinds: ["bambu-connect"] });
+      }
 
       const reject = (status: number, title: string, detail: string) => {
-        discardHandoff(exportsDir, handoffId);
+        if (exportsDir !== undefined) discardHandoff(exportsDir, handoffId);
         artifactPath = null;
         handoffId = "";
         return sendProblem(reply, status, title, detail);
@@ -139,7 +146,13 @@ export async function registerBambuConnectRoutes(
               else if (raw === "1" || raw === "true" || raw === "yes") launchField = true;
             }
             if (part.fieldname === "profile_id" || part.fieldname === "plan_id") {
+              if (requireAdmission && profileId != null) {
+                return reject(400, "Bad Request", "Only one profile_id or plan_id is allowed");
+              }
               const n = Number(value);
+              if (requireAdmission && (!Number.isSafeInteger(n) || n <= 0)) {
+                return reject(400, "Bad Request", "A valid profile_id or plan_id is required");
+              }
               if (Number.isInteger(n) && n > 0) profileId = n;
             }
             if (part.fieldname === "checkoff_units") {
@@ -160,6 +173,25 @@ export async function registerBambuConnectRoutes(
             part.file.resume();
             return reject(400, "Bad Request", "Only one file is allowed");
           }
+          if (requireAdmission) {
+            if (profileId != null && !deps.repo.getOwnedProfileIdentity(profileId)) {
+              part.file.resume();
+              return reject(404, "Not Found", "Profile not found");
+            }
+            const access = readFeatureAccess(() => deps.repo, "bambu", profileId);
+            if (access.kind !== "allowed") {
+              part.file.resume();
+              const status = access.kind === "disabled" ? 403 : 500;
+              return reply.status(status).send({
+                status, title: access.kind === "disabled" ? "Forbidden" : "Internal Server Error",
+                detail: access.error, code: access.code,
+              });
+            }
+            if (profileId == null) {
+              part.file.resume();
+              return reject(400, "Bad Request", "Pick a plan before the file (profile_id or plan_id required)");
+            }
+          }
           filename = (part.filename || "print.3mf").replace(/\\/g, "/");
           const candidate = sanitizeBambuConnectFilename(basename(filename));
           if (!isAllowedBambuConnectFilename(candidate)) {
@@ -169,6 +201,10 @@ export async function registerBambuConnectRoutes(
               "Bad Request",
               "Only .3mf / .gcode.3mf / .gcode / .gco files can be handed off to Bambu Connect",
             );
+          }
+          if (exportsDir === undefined) {
+            exportsDir = deps.jobs.getExportsDir(request.tenantId);
+            sweepExpiredTransferArtifacts(exportsDir, { kinds: ["bambu-connect"] });
           }
           handoffId = randomUUID();
           try {
@@ -245,6 +281,10 @@ export async function registerBambuConnectRoutes(
           hostName = integration.name;
         }
 
+        if (requireAdmission) {
+          writeFileSync(join(dirname(artifactPath), ".plan-id"), String(profileId), { flag: "wx" });
+        }
+
         const hostPath = resolveBambuConnectHostPath(artifactPath);
         const displayName = bambuConnectDisplayName(baseName);
         const connect_url = buildBambuConnectUrl(hostPath, displayName);
@@ -290,19 +330,36 @@ export async function registerBambuConnectRoutes(
           launched,
           launch_error,
           in_container: inContainer,
-          download_path: `/bambu-connect/handoff/${handoffId}/file`,
+          download_path: `/bambu-connect/handoff/${handoffId}/file${requireAdmission ? `?profile_id=${profileId}` : ""}`,
           checkoff_link_id,
           checkoff_units: checkoff_units.length || undefined,
           message,
         };
       } finally {
-        if (!retainHandoff) discardHandoff(exportsDir, handoffId);
+        if (!retainHandoff && exportsDir !== undefined) discardHandoff(exportsDir, handoffId);
       }
     },
   );
 
   app.get("/bambu-connect/handoff/:id/file", async (request, reply) => {
-    const access = readFeatureAccess(() => deps.repo, "bambu");
+    const gated = desktopFeaturesEnabled();
+    let queryPlanId: number | undefined;
+    if (gated) {
+      const values = new URL(request.url, "http://localhost").searchParams.getAll("profile_id");
+      if (values.length) {
+        queryPlanId = Number(values[0]);
+        if (values.length !== 1 || !Number.isSafeInteger(queryPlanId) || queryPlanId <= 0) {
+          return sendProblem(reply, 400, "Bad Request", "Invalid profile_id");
+        }
+        if (!deps.repo.getOwnedProfileIdentity(queryPlanId)) {
+          return sendProblem(reply, 404, "Not Found", "Profile not found");
+        }
+      }
+    }
+    const tenantAccess = readFeatureAccess(() => deps.repo, "bambu");
+    const access = tenantAccess.kind === "disabled" && queryPlanId !== undefined
+      ? readFeatureAccess(() => deps.repo, "bambu", queryPlanId)
+      : tenantAccess;
     if (access.kind !== "allowed") {
       const status = access.kind === "disabled" ? 403 : 500;
       return reply.status(status).send({
@@ -315,8 +372,38 @@ export async function registerBambuConnectRoutes(
       return sendProblem(reply, 400, "Bad Request", "Invalid handoff id");
     }
     const exportsDir = deps.jobs.getExportsDir(request.tenantId);
-    sweepExpiredTransferArtifacts(exportsDir, { kinds: ["bambu-connect"] });
     const dir = join(exportsDir, "bambu-connect", id);
+    if (gated) {
+      let boundPlanId: number | undefined;
+      try {
+        const binding = readFileSync(join(dir, ".plan-id"), "utf8");
+        boundPlanId = Number(binding);
+        if (!/^[1-9][0-9]*$/.test(binding) || !Number.isSafeInteger(boundPlanId)) {
+          throw new Error("Invalid Plan binding");
+        }
+      } catch (error) {
+        if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+          return reply.status(500).send({ status: 500, title: "Internal Server Error", detail: "Stored handoff Plan binding is invalid.", code: "HANDOFF_BINDING_INVALID" });
+        }
+      }
+      if (boundPlanId !== undefined) {
+        if (!deps.repo.getOwnedProfileIdentity(boundPlanId)) {
+          return sendProblem(reply, 404, "Not Found", "Profile not found");
+        }
+        if (queryPlanId !== undefined && queryPlanId !== boundPlanId) {
+          return sendProblem(reply, 403, "Forbidden", "Handoff belongs to another Plan");
+        }
+      }
+      const artifactAccess = readFeatureAccess(() => deps.repo, "bambu", boundPlanId);
+      if (artifactAccess.kind !== "allowed") {
+        const status = artifactAccess.kind === "disabled" ? 403 : 500;
+        return reply.status(status).send({
+          status, title: artifactAccess.kind === "disabled" ? "Forbidden" : "Internal Server Error",
+          detail: artifactAccess.error, code: artifactAccess.code,
+        });
+      }
+    }
+    sweepExpiredTransferArtifacts(exportsDir, { kinds: ["bambu-connect"] });
     let entries: string[];
     try {
       entries = readdirSync(dir);

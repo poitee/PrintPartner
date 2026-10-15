@@ -25,8 +25,9 @@ describe("production send endpoints", () => {
     expect(form.get("printer_id")).toBe("bambu");
     expect(form.get("launch")).toBe("0");
     expect(form.get("profile_id")).toBe("7");
-    expect(bambuConnectDownloadUrl("/download/file")).toContain(
-      "/download/file",
+    expect(Array.from(form.keys())).toEqual(["printer_id", "launch", "profile_id", "file"]);
+    expect(bambuConnectDownloadUrl("/bambu-connect/handoff/handoff/file?profile_id=7")).toContain(
+      "/bambu-connect/handoff/handoff/file?profile_id=7",
     );
   });
 
