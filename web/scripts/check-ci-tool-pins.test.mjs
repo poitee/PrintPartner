@@ -136,6 +136,37 @@ test('reject symlink replacing desktop contracts', t => {
   assert.equal(result.stdout, summary(0, 0, 1));
 });
 
+for (const tracked of [false, true, 'symlink']) {
+  test(`${tracked === true ? 'accept tracked' : `reject ${tracked === false ? 'untracked' : 'tracked symlink'}`} desktop contracts in default repository scan`, t => {
+    const directory = mkdtempSync(join(tmpdir(), 'ci-workflow-tracked-'));
+    t.after(() => rmSync(directory, { recursive: true, force: true }));
+    mkdirSync(join(directory, 'web/scripts'), { recursive: true });
+    mkdirSync(join(directory, '.github/workflows'), { recursive: true });
+    copyFileSync(cli, join(directory, 'web/scripts/check-ci-tool-pins.mjs'));
+    symlinkSync(fileURLToPath(new URL('../node_modules', import.meta.url)), join(directory, 'web/node_modules'));
+    const contracts = join(directory, '.github/workflows/desktop-contracts.yml');
+    if (tracked === 'symlink') symlinkSync('../../contracts.yml', contracts);
+    else writeFileSync(contracts, desktop());
+    for (const args of [
+      ['init', '-q'],
+      ['add', tracked ? '.github/workflows/desktop-contracts.yml' : 'web/scripts/check-ci-tool-pins.mjs'],
+      ['-c', 'user.name=CI test', '-c', 'user.email=ci@example.invalid', 'commit', '-qm', 'fixture'],
+    ]) {
+      const git = spawnSync('git', args, { cwd: directory, encoding: 'utf8' });
+      assert.equal(git.status, 0, git.stderr);
+    }
+    if (tracked === 'symlink') {
+      rmSync(contracts);
+      writeFileSync(contracts, desktop());
+    }
+    const result = spawnSync(process.execPath, [join(directory, 'web/scripts/check-ci-tool-pins.mjs')], { encoding: 'utf8' });
+    assert.equal(result.error, undefined);
+    assert.equal(result.status, tracked === true ? 0 : 1, result.stdout);
+    assert.equal(result.stderr, tracked === true ? '' : `${join(directory, '.github/workflows')} $: UNTRACKED_DESKTOP_CONTRACTS: expected exactly one regular desktop contracts workflow in HEAD\n`);
+    assert.equal(result.stdout, summary(0, 0, tracked === true ? 0 : 1));
+  });
+}
+
 test('reject multiple desktop contracts filename variants', t => {
   const directory = mkdtempSync(join(tmpdir(), 'ci-workflow-duplicates-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));

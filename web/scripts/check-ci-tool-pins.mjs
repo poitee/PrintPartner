@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import console from 'node:console';
+import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -166,6 +167,14 @@ try {
     report(directory, '$', 'MISSING_DESKTOP_CONTRACTS', 'expected one desktop-contracts.yml or desktop-contracts.yaml workflow');
   } else if (contracts.length > 1) {
     report(directory, '$', 'DUPLICATE_DESKTOP_CONTRACTS', 'expected one desktop contracts workflow; found ' + contracts.map(file => basename(file)).join(', '));
+  }
+  if (process.argv[2] === undefined) {
+    const tracked = execFileSync('git', ['ls-tree', '-z', 'HEAD', '--', '.github/workflows/'], { cwd: root, encoding: 'utf8' })
+      .split('\0').filter(entry => /^100(?:644|755) blob [0-9a-f]+\t\.github\/workflows\/desktop-contracts\.ya?ml$/.test(entry))
+      .map(entry => basename(entry.split('\t')[1]));
+    if (tracked.length !== 1 || contracts.length !== 1 || tracked[0] !== contracts[0]) {
+      report(directory, '$', 'UNTRACKED_DESKTOP_CONTRACTS', 'expected exactly one regular desktop contracts workflow in HEAD');
+    }
   }
   for (const file of files) {
     try {
