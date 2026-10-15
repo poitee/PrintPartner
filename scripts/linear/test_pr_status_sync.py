@@ -184,7 +184,38 @@ class SyncTest(unittest.TestCase):
         sync._prs = [recent_commit, pr(number=4, body="Refs GRE-4", age=72)]
         sync.reconcile(3)
         self.assertEqual([self.issues[f"GRE-{n}"]["state"]["name"] for n in range(1, 5)],
-                         ["Backlog", "In Progress", "In Progress", "In Progress"])
+                         ["Backlog", "In Progress", "In Progress", "In Review"])
+
+    def test_reconcile_includes_open_prs_older_than_replay_window(self):
+        self.issues["GRE-1"] = ticket(state="Todo")
+        sync._prs = [pr(age=96)]
+        sync.reconcile(3)
+        sync.reconcile(3)
+        self.assertEqual(self.issues["GRE-1"]["state"]["name"], "In Review")
+        self.assertEqual(len(self.comments), 1)
+
+    def test_edit_returns_removed_ticket_to_in_progress(self):
+        for field in ("title", "body"):
+            with self.subTest(field=field):
+                self.issues["GRE-1"] = ticket(state="In Review")
+                current = pr(body="Refs GRE-2")
+                self.issues["GRE-2"] = ticket(2)
+                sync.apply_event(current, {"action": "edited", "changes": {field: {"from": "Refs GRE-1"}}})
+                self.assertEqual(self.issues["GRE-1"]["state"]["name"], "In Progress")
+                self.assertEqual(self.issues["GRE-2"]["state"]["name"], "In Review")
+
+    def test_edit_preserves_ticket_with_another_open_pr_or_branch_reference(self):
+        self.issues["GRE-1"] = ticket(state="In Review")
+        sync._prs = [pr(number=2)]
+        event = {"action": "edited", "changes": {"body": {"from": "Refs GRE-1"}}}
+        sync.apply_event(pr(body=""), event)
+        self.assertEqual(self.issues["GRE-1"]["state"]["name"], "In Review")
+        sync._prs = []
+        current = pr(body="")
+        current["headRefName"] = "gre-1-work"
+        sync.apply_event(current, event)
+        self.assertEqual(self.issues["GRE-1"]["state"]["name"], "In Review")
+        self.assertEqual(self.comments, [])
 
     def test_stall_sweep_uses_latest_merge_close_or_update(self):
         for field in ("mergedAt", "closedAt", "updatedAt"):

@@ -158,13 +158,27 @@ def apply_pr(pr):
             move(iss, "In Progress", f"PR #{n} closed without merge; no other open PR.")
 
 
+def apply_event(pr, event):
+    if event.get("action") == "edited":
+        previous = dict(pr)
+        for field in ("title", "body"):
+            if field in event.get("changes", {}):
+                previous[field] = event["changes"][field]["from"]
+        removed = refs(previous)[1] - refs(pr)[1]
+        for ident in sorted(removed):
+            iss = issue(ident)
+            if iss and iss["state"]["name"] == "In Review" and not other_open(ident, pr["number"]):
+                move(iss, "In Progress", f"PR #{pr['number']} removed its reference; no other open PR.")
+    apply_pr(pr)
+
+
 def reconcile(hours):
     def ts(value):
         return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
 
     since = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=hours)
     prs = all_prs()
-    recent = [p for p in prs if ts(p["updatedAt"]) >= since]
+    recent = [p for p in prs if p["state"] == "OPEN" or ts(p["updatedAt"]) >= since]
     for p in sorted(recent, key=lambda p: ts(p["updatedAt"])):  # oldest first, newest wins
         apply_pr(p)
     # stall sweep
@@ -203,7 +217,11 @@ def main():
     a = ap.parse_args()
     DRY = a.dry_run
     if a.mode == "event":
-        apply_pr(gh("pr", "view", str(a.pr), "-R", REPO, "--json", FIELDS))
+        event = {}
+        if os.environ.get("GITHUB_EVENT_PATH"):
+            with open(os.environ["GITHUB_EVENT_PATH"]) as stream:
+                event = json.load(stream)
+        apply_event(gh("pr", "view", str(a.pr), "-R", REPO, "--json", FIELDS), event)
     else:
         reconcile(a.hours)
 
