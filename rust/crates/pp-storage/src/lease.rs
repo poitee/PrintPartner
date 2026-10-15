@@ -38,8 +38,8 @@ pub struct StorageLease {
 /// must be owner-controlled regular files with one link. Ancestors must be root or
 /// effective-user owned and deny group/other write unless sticky. These are path
 /// snapshots, not confinement. A held descriptor checks leaf identity through
-/// canonicalization. Lease acquisition retains it through OS locking. ACL policy
-/// and replacement after those checkpoints remain separate concerns.
+/// canonicalization. Lease acquisition retains it through marker mutation and
+/// ownership cleanup. SQLite initialization and ACL policy remain separate concerns.
 pub fn prepare_directory(path: &Path) -> Result<PathBuf> {
     Ok(admit_directory(path)?.path)
 }
@@ -312,8 +312,6 @@ fn prior_writer_is_stale(marker: &serde_json::Value, pid: u32) -> bool {
             || guard::child_is_stale(marker))
 }
 
-/// Read an ownership record without blocking on a FIFO or device the name may reach.
-/// Non-regular entries keep their OS error so diagnostics stay stable.
 fn read_prior_owner(
     open_file: impl Fn(&str) -> std::io::Result<File>,
 ) -> Result<Option<(serde_json::Value, u32)>> {
