@@ -596,3 +596,41 @@ for (const [filename, lane] of [['desktop-runtime.yml', 'source-artifacts'], ['d
     });
   }
 }
+
+for (const filename of ['desktop-runtime.yml', 'desktop-native-macos.yml']) {
+  const original = YAML.parse(readFileSync(fileURLToPath(new URL(`../../.github/workflows/${filename}`, import.meta.url)), 'utf8'));
+  const fixtureLane = filename === 'desktop-runtime.yml' ? 'runtime' : 'macos-storage-gate';
+  for (const [label, mutate, diagnostic] of [
+    ['unlisted Node job', data => { data.jobs.extra = { steps: [{ uses: setupNode, with: { 'node-version': '24' } }] }; }, 'UNEXPECTED_DESKTOP_NODE_SETUP'],
+    ['job failure override', data => { data.jobs[fixtureLane]['continue-on-error'] = true; }, 'INVALID_DESKTOP_NODE_SETUP'],
+    ...['npm ci', 'npx vite build', 'corepack pnpm install', 'yarn install', 'pnpm install', 'node install.mjs'].map(command => [
+      `fixture interval ${command}`, data => {
+        const steps = data.jobs[fixtureLane].steps;
+        const index = steps.findIndex(step => step.with?.['node-version'] === '24.21.0');
+        steps.splice(index, 0, { run: command });
+      }, 'EARLY_DESKTOP_NODE_COMMAND',
+    ]),
+  ]) {
+    test(`reject ${filename} ${label}`, t => {
+      const data = JSON.parse(JSON.stringify(original));
+      mutate(data);
+      const result = run(t, JSON.stringify(data), [], filename);
+      assert.equal(result.status, 1, result.stdout);
+      assert.match(result.stderr, new RegExp(`${diagnostic}:`));
+    });
+  }
+  if (filename !== 'desktop-native-macos.yml') continue;
+  for (const name of ['Build desktop assets and pp-server', 'Smoke pp-server on loopback']) {
+    for (const condition of [undefined, false, 'always()']) {
+      test(`reject unguarded server-smoke ${name} condition ${condition}`, t => {
+        const data = JSON.parse(JSON.stringify(original));
+        const step = data.jobs['server-smoke'].steps.find(step => step.name === name);
+        if (condition === undefined) delete step.if;
+        else step.if = condition;
+        const result = run(t, JSON.stringify(data), [], filename);
+        assert.equal(result.status, 1, result.stdout);
+        assert.match(result.stderr, /UNGUARDED_DESKTOP_NODE_COMMAND:/);
+      });
+    }
+  }
+}

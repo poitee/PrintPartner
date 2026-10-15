@@ -402,3 +402,30 @@ for (const [name, lane, code] of [
     assert.match(result.stderr, new RegExp(`MISSING_${code}_NODE_VERIFICATION`));
   });
 }
+
+for (const [label, name, mutate, diagnostic] of [
+  ['unlisted setup', 'desktop-runtime', workflow => {
+    workflow.jobs.extra = { steps: [{ uses: 'actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1', with: { 'node-version': '24' } }] };
+  }, 'UNEXPECTED_DESKTOP_NODE_SETUP'],
+  ['job failure override', 'desktop-runtime', workflow => { workflow.jobs.runtime['continue-on-error'] = true; }, 'INVALID_DESKTOP_NODE_SETUP'],
+  ['fixture dependency install', 'desktop-native-macos', workflow => {
+    const steps = workflow.jobs['macos-storage-gate'].steps;
+    steps.splice(steps.findIndex(step => step.with?.['node-version'] === '24.21.0'), 0, { run: 'npm ci' });
+  }, 'EARLY_DESKTOP_NODE_COMMAND'],
+  ['unguarded conditional build', 'desktop-native-macos', workflow => {
+    delete workflow.jobs['server-smoke'].steps.find(step => step.name === 'Build desktop assets and pp-server').if;
+  }, 'UNGUARDED_DESKTOP_NODE_COMMAND'],
+]) {
+  test(`event tree rejects ${label} despite repaired checkout`, t => {
+    const path = `.github/workflows/${name}.yml`;
+    const f = fixture(t, directory => {
+      const workflow = YAML.parse(readFileSync(join(directory, path), 'utf8'));
+      mutate(workflow);
+      writeFileSync(join(directory, path), YAML.stringify(workflow));
+    });
+    copyFileSync(join(root, path), join(f.directory, path));
+    const result = f.run();
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stderr, new RegExp(`${diagnostic}:`));
+  });
+}

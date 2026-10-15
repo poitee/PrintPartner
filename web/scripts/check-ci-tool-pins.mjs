@@ -129,13 +129,21 @@ function checkNodeLanes(workflow, file, names, code = 'WEB', condition, major = 
 
 function checkDesktopNodeSetups(workflow, file, lanes) {
   const expectedVersions = new Map();
+  const nodeCommand = /\b(?:node|npm|npx|corepack|yarn|pnpm)\b/;
+  for (const [name, job] of Object.entries(workflow.jobs)) {
+    if (!Object.hasOwn(lanes, name) && Array.isArray(job?.steps)
+      && job.steps.some(step => typeof step?.uses === 'string'
+        && step.uses.split('@')[0].toLowerCase() === 'actions/setup-node')) {
+      report(file, `jobs.${name}`, 'UNEXPECTED_DESKTOP_NODE_SETUP', 'Node setups must belong to a declared desktop lane');
+    }
+  }
   for (const [name, majors] of Object.entries(lanes)) {
     const path = `jobs.${name}.steps`;
     const steps = workflow.jobs[name]?.steps;
     const setups = Array.isArray(steps) ? steps.filter(step => mapping(step)
       && typeof step.uses === 'string' && step.uses.split('@')[0].toLowerCase() === 'actions/setup-node') : [];
-    if (setups.length !== majors.length) {
-      report(file, path, 'INVALID_DESKTOP_NODE_SETUP', `expected ${majors.length} setup-node steps`);
+    if (setups.length !== majors.length || Object.hasOwn(workflow.jobs[name] ?? {}, 'continue-on-error')) {
+      report(file, path, 'INVALID_DESKTOP_NODE_SETUP', `expected ${majors.length} setup-node steps without a job failure override`);
       continue;
     }
     for (const [index, setup] of setups.entries()) {
@@ -158,9 +166,22 @@ function checkDesktopNodeSetups(workflow, file, lanes) {
         || verification.if !== condition || Object.hasOwn(verification, 'continue-on-error')) {
         report(file, path, 'MISSING_DESKTOP_NODE_VERIFICATION', 'setup-node must be immediately followed by a matching runtime assertion with the same permitted condition');
       }
+      if (index > 0) {
+        const previous = setups[index - 1];
+        const fixtureVersion = previous.with?.['node-version'];
+        const fixtureRecord = `test "$(node --version)" = v${fixtureVersion}\necho "PP_SCHEMA_PARITY_NODE=$(node -p process.execPath)" >> "$GITHUB_ENV"\n`;
+        if (steps.slice(steps.indexOf(previous) + 2, steps.indexOf(setup)).some(step =>
+          typeof step?.run === 'string' && nodeCommand.test(step.run) && step.run !== fixtureRecord)) {
+          report(file, path, 'EARLY_DESKTOP_NODE_COMMAND', 'only fixture executable recording may use Node before the build runtime setup');
+        }
+      }
+      if (condition !== undefined && steps.slice(steps.indexOf(setup) + 2).some(step =>
+        typeof step?.run === 'string' && nodeCommand.test(step.run) && step.if !== condition)) {
+        report(file, path, 'UNGUARDED_DESKTOP_NODE_COMMAND', 'downstream Node commands must use the setup condition');
+      }
     }
     if (steps.slice(0, steps.indexOf(setups[0])).some(step => typeof step?.run === 'string'
-      && /\b(?:node|npm|npx|corepack|yarn|pnpm)\b/.test(step.run))) {
+      && nodeCommand.test(step.run))) {
       report(file, path, 'EARLY_DESKTOP_NODE_COMMAND', 'Node and dependency commands must follow setup-node and its runtime assertion');
     }
   }
