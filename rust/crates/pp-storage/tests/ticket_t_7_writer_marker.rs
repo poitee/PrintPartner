@@ -189,6 +189,8 @@ fn refuses_desktop_marker(fixture: &Fixture) {
                         .and_then(std::io::Error::raw_os_error),
                     Some(if before.is_dir() {
                         libc::EISDIR
+                    } else if writer {
+                        libc::ELOOP
                     } else {
                         libc::ENOENT
                     })
