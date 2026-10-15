@@ -47,6 +47,11 @@ export async function registerSpoolmanProxyRoutes(
     }
     try {
       const filaments = await listSpoolmanFilaments(item.config);
+      const access = readSpoolmanQueryAccess(deps.repo, request.query);
+      if (access.kind !== "allowed") {
+        const problem = spoolmanAccessProblem(access);
+        return reply.status(problem.status).send(problem);
+      }
       return {
         filaments: filaments.map((f) => spoolmanFilamentToCatalogColor(id, f)),
       };
@@ -71,6 +76,11 @@ export async function registerSpoolmanProxyRoutes(
     }
     try {
       const spools = await listSpoolmanSpools(item.config);
+      const access = readSpoolmanQueryAccess(deps.repo, request.query);
+      if (access.kind !== "allowed") {
+        const problem = spoolmanAccessProblem(access);
+        return reply.status(problem.status).send(problem);
+      }
       return {
         spools: spools.map((s) => ({
           id: s.id,

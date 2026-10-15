@@ -66,6 +66,17 @@ describe("Spoolman inventory feature admission", () => {
   for (const prefix of ["", "/api/v1"]) {
     for (const resource of ["filaments", "spools"]) {
       const path = (id: string) => `${prefix}/integrations/${id}/spoolman/${resource}`;
+      it.each(['{"spoolman":false}', '{"spoolman":"invalid"}'])(`${prefix} ${resource} withholds an in-flight response after Plan access changes to %s`, async (value) => {
+        const profileId = repo.createProfile("Revoked inventory").id;
+        repo.setSetting(`feature_toggles:plan:${profileId}`, '{"spoolman":true}');
+        network.mockImplementationOnce(async () => {
+          repo.setSetting(`feature_toggles:plan:${profileId}`, value);
+          return new Response("[]", { headers: { "content-type": "application/json" } });
+        });
+        const response = await app.inject(`${path(connectorId)}?profile_id=${profileId}`);
+        expect(response.json()).toEqual(value.includes("invalid") ? invalid : disabled);
+        expect(network).toHaveBeenCalledTimes(1);
+      });
       it(`${prefix || "root"} ${resource} denies new-user defaults and explicit off before connector lookup or network`, async () => {
         const lookup = vi.spyOn(integrations, "get");
         const reads = vi.spyOn(repo, "getSetting");

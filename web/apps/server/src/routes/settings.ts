@@ -473,6 +473,15 @@ export async function registerStubRoutes(app: FastifyInstance, deps: RouteDeps):
       }
     }
 
+    const currentAccess = readSpoolmanQueryAccess(deps.repo, request.query);
+    if (currentAccess.kind === "disabled") {
+      spoolman_colors = [];
+      spoolman_status = "disabled";
+      spoolman_error = currentAccess.error;
+    } else if (currentAccess.kind !== "allowed") {
+      const problem = spoolmanAccessProblem(currentAccess);
+      return reply.status(problem.status).send(problem);
+    }
     return {
       ...catalog,
       custom_colors: custom,

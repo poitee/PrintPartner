@@ -20,6 +20,8 @@ npm run build
 
 The independent runs passed 234 backend and 47 frontend tests. The production build, focused ESLint, dead-code check, and diff check passed. Tests cover both HTTP aliases, ownership, corruption, tenant isolation, all account/Plan combinations, legacy behavior, real MCP confirmation, cached access, and revocation across asynchronous work.
 
+PR review added post-fetch inventory admission and regression coverage for revocation/corruption during both HTTP aliases. All 144 tests in the catalog, proxy, and farm-access suites passed. The prior farm fixture now explicitly opts into Spoolman and verifies unknown inventory without that opt-in.
+
 The isolated live server preserved 252 bundled colors while off and denied spool reads with `FEATURE_DISABLED`. Plan-on/account-off and both-on returned inventory. Plan-off/account-on remained denied. The browser saved a Spoolman color and selected a 480 g proof spool. Switching off hid inventory choices, preserved the assignment, and kept custom colors and clearing available. The fixture Source has no Git revision; its unrelated sync failure is outside this proof.
 
 ![Default-off Plan controls retain saved references](gre498-spoolman-workflows/default-off.png)

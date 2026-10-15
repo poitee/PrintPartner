@@ -108,6 +108,22 @@ describe("filament catalog feature admission", () => {
 
   for (const prefix of ["", "/api/v1"]) {
     const url = `${prefix}/filaments/catalog`;
+    it.each(['{"spoolman":false}', '{"spoolman":"invalid"}'])(`${prefix} withholds an in-flight catalog after Plan access changes to %s`, async (value) => {
+      const profileId = repo.createProfile("Revoked catalog").id;
+      repo.setSetting(`feature_toggles:plan:${profileId}`, '{"spoolman":true}');
+      network.mockImplementationOnce(async () => {
+        repo.setSetting(`feature_toggles:plan:${profileId}`, value);
+        return new Response('[{"id":7,"name":"Secret stock"}]', { headers: { "content-type": "application/json" } });
+      });
+      const response = await app.inject(`${url}?profile_id=${profileId}`);
+      if (value.includes("invalid")) expect(response.json()).toEqual(invalid);
+      else {
+        expect(response.statusCode).toBe(200);
+        expect(response.json()).toMatchObject(disabled);
+        expectBaseAndCustom(response.json());
+      }
+      expect(network).toHaveBeenCalledTimes(1);
+    });
 
     it.each([undefined, "{}", '{"spoolman":false}'])(
       `${prefix || "root"} preserves base, custom and default for disabled choices %j without connector lookup`, async (value) => {
