@@ -10,6 +10,7 @@ pub enum TableId {
     Projects,
     SourceRevisions,
     SourceDocs,
+    SourceNotes,
     AppSettings,
     AppEvents,
     BuildProfiles,
@@ -77,6 +78,8 @@ enum ReviewedEntry {
     ListPlanSnapshots { resources: Vec<ResourceId> },
     #[serde(rename = "tool.ui_open_source")]
     UiOpenSource { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_source_docs")]
+    GetSourceDocs { resources: Vec<ResourceId> },
     #[serde(rename = "tool.ui_open_docs")]
     UiOpenDocs { resources: Vec<ResourceId> },
     #[serde(rename = "tool.ui_navigate")]
@@ -108,7 +111,7 @@ impl ReviewedEntry {
         use TableId::{
             AppSettings, BuildProfiles, Parts, PlanAcceptedInputSets, PlanDecisions,
             PlanRevisionInputSets, PlanRevisionInputs, PlanSnapshots, ProfileLayers, Projects,
-            SourceDocs, SourceRevisions,
+            SourceDocs, SourceNotes, SourceRevisions,
         };
         let (id, resources, expected) = match self {
             Self::SourceSync {
@@ -172,6 +175,18 @@ impl ReviewedEntry {
                     Table(BuildProfiles),
                     Table(Projects),
                     Table(SourceDocs),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
+            Self::GetSourceDocs { resources } => (
+                "tool.get_source_docs",
+                resources,
+                BTreeSet::from([
+                    Table(Projects),
+                    Table(SourceDocs),
+                    Table(SourceNotes),
+                    Table(SourceRevisions),
+                    Table(AppSettings),
                     File(FileFamily::SourceWorkspace),
                 ]),
             ),
@@ -287,6 +302,7 @@ impl Declarations {
             "tool.ui_open_docs",
             "tool.list_sources",
             "tool.list_source_categories",
+            "tool.get_source_docs",
         ] {
             if !states.contains_key(id) {
                 return Err(AdmissionError::Malformed(format!(

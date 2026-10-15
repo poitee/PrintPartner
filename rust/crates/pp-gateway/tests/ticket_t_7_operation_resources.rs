@@ -248,9 +248,10 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.list_source_categories",
         "tool.search_source_files",
         "tool.preview_source_naming",
+        "tool.get_source_docs",
     ]);
-    assert_eq!(reviewed.len(), 16);
-    assert_eq!(unresolved.len(), 425);
+    assert_eq!(reviewed.len(), 17);
+    assert_eq!(unresolved.len(), 424);
     let resolved: BTreeSet<_> = index
         .claims()
         .values()
@@ -465,8 +466,8 @@ fn unknown_resource_syntax_and_competing_import_fail_closed() {
         ),
         (
             "/resources/reviewed/1/operation",
-            json!("tool.get_source_docs"),
-            "unknown variant `tool.get_source_docs`",
+            json!("tool.get_source_inventory"),
+            "unknown variant `tool.get_source_inventory`",
         ),
         ("/resources/extra", json!(true), "unknown field `extra`"),
     ] {
@@ -486,9 +487,9 @@ fn mixed_dispositions_for_one_operation_are_rejected() {
     value["node_participants"]["tool"]
         .as_array_mut()
         .unwrap()
-        .retain(|id| id != "get_source_docs");
+        .retain(|id| id != "get_source_inventory");
     value["operations"].as_array_mut().unwrap().push(json!({
-        "operation":"gateway.owned", "owner":"node", "participants":["tool.get_source_docs"]
+        "operation":"gateway.owned", "owner":"node", "participants":["tool.get_source_inventory"]
     }));
     assert_eq!(
         admit(&value).unwrap_err(),
@@ -526,6 +527,7 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
         "tool.list_source_categories",
         "tool.search_source_files",
         "tool.preview_source_naming",
+        "tool.get_source_docs",
     ] {
         for participants in [vec![id], vec![]] {
             let mut value = manifest();
@@ -534,9 +536,9 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
                 .as_array_mut()
                 .unwrap()
                 .retain(|name| format!("tool.{}", name.as_str().unwrap()) != id);
-            regroup(&mut value, id, &["tool.get_source_docs"]);
+            regroup(&mut value, id, &["tool.get_source_inventory"]);
             let unresolved = value["resources"]["unresolved"].as_array_mut().unwrap();
-            unresolved.retain(|operation| operation != "tool.get_source_docs");
+            unresolved.retain(|operation| operation != "tool.get_source_inventory");
             if !participants.is_empty() {
                 unresolved.push(json!("tool.regrouped"));
             }
@@ -561,6 +563,7 @@ fn reviewed_participants_cannot_swap_operations() {
         ("tool.ui_focus_stl_search", "tool.ui_navigate"),
         ("tool.ui_navigate", "tool.ui_open_source"),
         ("tool.ui_open_source", "tool.ui_open_docs"),
+        ("tool.ui_open_docs", "tool.get_source_docs"),
         ("tool.get_workflow_help", "tool.get_job_status"),
         ("tool.get_job_status", "tool.list_plans"),
         ("tool.get_workflow_help", "tool.list_plans"),
@@ -593,13 +596,13 @@ fn unresolved_participants_can_share_a_regrouped_operation() {
     regroup(
         &mut value,
         "tool.source_queries",
-        &["tool.get_source_docs", "tool.get_source_inventory"],
+        &["tool.get_source_inventory", "tool.get_build_workflow"],
     );
     let unresolved = value["resources"]["unresolved"].as_array_mut().unwrap();
-    unresolved.retain(|id| id != "tool.get_source_docs" && id != "tool.get_source_inventory");
+    unresolved.retain(|id| id != "tool.get_source_inventory" && id != "tool.get_build_workflow");
     unresolved.push(json!("tool.source_queries"));
     let index = admit(&value).unwrap();
-    for id in ["tool.get_source_docs", "tool.get_source_inventory"] {
+    for id in ["tool.get_source_inventory", "tool.get_build_workflow"] {
         assert_eq!(index.lookup(id).unwrap().operation, "tool.source_queries");
         assert_eq!(
             index.resources_for(id),
@@ -1658,9 +1661,9 @@ fn ticket_t_7_ownership_ui_navigate_refuses_invalid_admission_before_effects() {
             }
             13 => {
                 regroup(&mut value, "tool.regrouped", &[id]);
-                regroup(&mut value, id, &["tool.get_source_docs"]);
+                regroup(&mut value, id, &["tool.get_source_inventory"]);
                 let unresolved = value["resources"]["unresolved"].as_array_mut().unwrap();
-                unresolved.retain(|operation| operation != "tool.get_source_docs");
+                unresolved.retain(|operation| operation != "tool.get_source_inventory");
                 unresolved.push(json!("tool.regrouped"));
                 malformed(
                     "reviewed participant tool.ui_navigate must belong to operation tool.ui_navigate",
@@ -1695,12 +1698,23 @@ fn assert_ui_open_complete_resources(id: &str) {
     let resources = index
         .resources_for(id)
         .expect("Open source proposal resources must be reviewed");
-    let expected: ResourceSet = serde_json::from_value(json!([
-        {"kind": "table", "name": "build_profiles"},
-        {"kind": "table", "name": "projects"},
-        {"kind": "table", "name": "source_docs"},
-        {"kind": "file", "name": "source-workspace"}
-    ]))
+    let expected: ResourceSet = serde_json::from_value(if id == "tool.get_source_docs" {
+        json!([
+            {"kind": "table", "name": "projects"},
+            {"kind": "table", "name": "source_docs"},
+            {"kind": "table", "name": "source_notes"},
+            {"kind": "table", "name": "source_revisions"},
+            {"kind": "table", "name": "app_settings"},
+            {"kind": "file", "name": "source-workspace"}
+        ])
+    } else {
+        json!([
+            {"kind": "table", "name": "build_profiles"},
+            {"kind": "table", "name": "projects"},
+            {"kind": "table", "name": "source_docs"},
+            {"kind": "file", "name": "source-workspace"}
+        ])
+    })
     .unwrap();
     assert_eq!(resources, &expected);
     assert_eq!(
@@ -1765,9 +1779,9 @@ fn assert_ui_open_complete_resources(id: &str) {
         assert!(!effect);
     }
     assert_eq!(
-        index.resources_for("tool.get_source_docs"),
+        index.resources_for("tool.get_source_inventory"),
         Err(AdmissionError::UnresolvedResources {
-            operation: "tool.get_source_docs".into(),
+            operation: "tool.get_source_inventory".into(),
         })
     );
     for owner in ["rust", "python"] {
@@ -1911,9 +1925,9 @@ fn assert_ui_open_invalid_admission(id: &str) {
             }
             13 => {
                 regroup(&mut value, "tool.regrouped", &[id]);
-                regroup(&mut value, id, &["tool.get_source_docs"]);
+                regroup(&mut value, id, &["tool.get_source_inventory"]);
                 let unresolved = value["resources"]["unresolved"].as_array_mut().unwrap();
-                unresolved.retain(|operation| operation != "tool.get_source_docs");
+                unresolved.retain(|operation| operation != "tool.get_source_inventory");
                 unresolved.push(json!("tool.regrouped"));
                 malformed(&format!(
                     "reviewed participant {id} must belong to operation {id}"
@@ -1930,4 +1944,14 @@ fn assert_ui_open_invalid_admission(id: &str) {
         assert_eq!(result, Err(expected), "edit {edit}");
         assert!(!effect, "edit {edit}");
     }
+}
+
+#[test]
+fn ticket_t_7_ownership_get_source_docs_has_complete_node_owned_resources() {
+    assert_ui_open_complete_resources("tool.get_source_docs");
+}
+
+#[test]
+fn ticket_t_7_ownership_get_source_docs_refuses_invalid_admission_before_effects() {
+    assert_ui_open_invalid_admission("tool.get_source_docs");
 }
