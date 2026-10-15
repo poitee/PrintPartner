@@ -1,0 +1,13 @@
+
+> @print-partner/web@0.1.0 test
+> vitest run src/pages/SettingsPage.features.test.tsx src/components/settings/TenantFeaturesSettingsCard.test.tsx src/components/settings/ExternalToolsSettingsCard.test.tsx src/api/endpoints/settings.test.ts --maxWorkers=2
+
+
+ RUN  v4.1.11 /persist/worktrees/t3/PrintPartner/gre-498-202610150450-s4t7/web/apps/web
+
+
+ Test Files  4 passed (4)
+      Tests  15 passed (15)
+   Start at  09:09:50
+   Duration  9.16s (transform 1.44s, setup 0ms, import 5.82s, tests 4.14s, environment 3.93s)
+

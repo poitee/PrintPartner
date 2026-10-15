@@ -1,0 +1,605 @@
+
+> @print-partner/web@0.1.0 test
+> vitest run src/pages/SettingsPage.features.test.tsx
+
+
+ RUN  v4.1.11 /persist/worktrees/t3/PrintPartner/gre-498-202610150450-s4t7/web/apps/web
+
+stderr | src/pages/SettingsPage.features.test.tsx > SettingsPage tenant feature toggles gate and controls > renders feature toggles controls when TENANT_FEATURE_TOGGLES_CAPABILITY is present
+Switch is changing from controlled to uncontrolled. Components should not switch from controlled to uncontrolled (or vice versa). Decide between using a controlled or uncontrolled value for the lifetime of the component.
+
+stderr | src/pages/SettingsPage.features.test.tsx > SettingsPage tenant feature toggles gate and controls > handles functional PATCH toggling and displays saved state
+Switch is changing from controlled to uncontrolled. Components should not switch from controlled to uncontrolled (or vice versa). Decide between using a controlled or uncontrolled value for the lifetime of the component.
+
+ ❯ src/pages/SettingsPage.features.test.tsx (3 tests | 2 failed) 3140ms
+     ✓ omits feature toggles controls when TENANT_FEATURE_TOGGLES_CAPABILITY is absent  715ms
+     × renders feature toggles controls when TENANT_FEATURE_TOGGLES_CAPABILITY is present 1224ms
+     × handles functional PATCH toggling and displays saved state 1194ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/pages/SettingsPage.features.test.tsx > SettingsPage tenant feature toggles gate and controls > renders feature toggles controls when TENANT_FEATURE_TOGGLES_CAPABILITY is present
+TestingLibraryElementError: Unable to find an element with the text: Feature toggles. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"stack-page mx-auto w-full max-w-6xl space-y-6"[39m
+    [36m>[39m
+      [36m<header[39m
+        [33mclass[39m=[32m"relative flex flex-col gap-3 pb-4 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between pt-1"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"min-w-0 flex-1"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-start gap-3"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33maria-hidden[39m=[32m"true"[39m
+              [33mclass[39m=[32m"desk-well h-10 w-10 shrink-0"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mclass[39m=[32m"lucide lucide-settings h-5 w-5"[39m
+                [33mfill[39m=[32m"none"[39m
+                [33mheight[39m=[32m"24"[39m
+                [33mstroke[39m=[32m"currentColor"[39m
+                [33mstroke-linecap[39m=[32m"round"[39m
+                [33mstroke-linejoin[39m=[32m"round"[39m
+                [33mstroke-width[39m=[32m"2"[39m
+                [33mviewBox[39m=[32m"0 0 24 24"[39m
+                [33mwidth[39m=[32m"24"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"[39m
+                [36m/>[39m
+                [36m<circle[39m
+                  [33mcx[39m=[32m"12"[39m
+                  [33mcy[39m=[32m"12"[39m
+                  [33mr[39m=[32m"3"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</span>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"min-w-0 flex-1"[39m
+            [36m>[39m
+              [36m<h1[39m
+                [33mclass[39m=[32m"text-page"[39m
+              [36m>[39m
+                [0mSettings[0m
+              [36m</h1>[39m
+              [36m<p[39m
+                [33mclass[39m=[32m"mt-1 text-body text-muted-foreground"[39m
+              [36m>[39m
+                [0mPrinters, library, appearance, and account.[0m
+              [36m</p>[39m
+            [36m</div>[39m
+          [36m</div>[39m
+        [36m</div>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center sm:gap-2"[39m
+          [36m>[39m
+            [36m<button[39m
+              [33mclass[39m=[32m"inline-flex select-none items-center justify-center gap-2 font-medium transition-[color,background-color,box-shadow,border-color] disabled:pointer-events-none disabled:opacity-50 active:scale-[0.98] border border-border-strong bg-secondary text-secondary-foreground shadow-sm hover:border-primary/40 hover:bg-accent hover:text-accent-foreground h-8 min-w-8 rounded-md px-3 text-xs min-h-10 w-full sm:w-auto"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mclass[39m=[32m"lucide lucide-heart h-4 w-4"[39m
+                [33mfill[39m=[32m"none"[39m
+                [33mheight[39m=[32m"24"[39m
+                [33mstroke[39m=[32m"currentColor"[39m
+                [33mstroke-linecap[39m=[32m"round"[39m
+                [33mstroke-linejoin[39m=[32m"round"[39m
+                [33mstroke-width[39m=[32m"2"[39m
+                [33mviewBox[39m=[32m"0 0 24 24"[39m
+                [33mwidth[39m=[32m"24"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+              [0mSponsor[0m
+            [36m</button>[39m
+          [36m</div>[39m
+        [36m</div>[39m
+      [36m</header>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"gap-8 lg:grid lg:grid-cols-[190px_minmax(0,1fr)] lg:items-start"[39m
+      [36m>[39m
+        [36m<nav[39m
+          [33maria-label[39m=[32m"Settings sections"[39m
+          [33mclass[39m=[32m"desk-nameplate mb-4 flex flex-wrap gap-1.5 p-2 lg:sticky lg:top-4 lg:mb-0 lg:flex-col lg:gap-0.5"[39m
+        [36m>[39m
+          [36m<a[39m
+            [33mclass[39m=[32m"rounded-md px-2.5 py-1.5 text-sm transition-colors text-muted-foreground hover:bg-accent/70 hover:text-foreground"[39m
+            [33mhref[39m=[32m"#features"[39m
+          [36m>[39m
+            [0mOptional Features[0m
+          [36m</a>[39m
+          [36m<a[39m
+            [33mclass[39m=[32m"rounded-md px-2.5 py-1.5 text-sm transition-colors text-muted-foreground hover:bg-accent/70 hover:text-foreground"[39m
+            [33mhref[39m=[32m"#printers"[39m
+          [36m>[39m
+            [0mPrinters[0m
+          [36m</a>[39m
+          [36m<a[39m
+            [33mclass[39m=[32m"rounded-md px-2.5 py-1.5 text-sm transition-colors text-muted-foreground hover:bg-accent/70 hover:text-foreground"[39m
+            [33mhref[39m=[32m"#slicers"[39m
+          [36m>[39m
+            [0mSlicers[0m
+          [36m</a>[39m
+          [36m<a[39m
+            [33mclass[39m=[32m"rounded-md px-2.5 py-1.5 text-sm transition-colors text-muted-foreground hover:bg-accent/70 hover:text-foreground"[39m
+            [33mhref[39m=[32m"#library"[39m
+          [36m>[39m
+            [0mLibrary[0m
+          [36m</a>[39m
+          [36m<a[39m
+            [33mclass[39m=[32m"rounded-md px-2.5 py-1.5 text-sm transition-colors text-muted-foreground hover:bg-accent/70 hover:text-foreground"[39m
+            [33mhref[39m=[32m"#build-tracking"[39m
+          [36m>[39m
+            [0mBuild Tracking[0m
+          [36m</a>[39m
+          [36m<a[39m
+            [33mclass[39m=[32m"rounded-md px-2.5 py-1.5 text-sm transition-colors text-muted-foreground hover:bg-accent/70 hover:text-foreground"[39m
+            [33mhref[39m=[32m"#appearance"[39m
+          [36m>[39m
+            [0mAppearance[0m
+          [36m</a>[39m
+          [36m<a[39m
+            [33mclass[39m=[32m"rounded-md px-2.5 py-1.5 text-sm transition-colors text-muted-foreground hover:b...
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"stack-page mx-auto w-full max-w-6xl space-y-6"[39m
+    [36m>[39m
+      [36m<header[39m
+        [33mclass[39m=[32m"relative flex flex-col gap-3 pb-4 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between pt-1"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"min-w-0 flex-1"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-start gap-3"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33maria-hidden[39m=[32m"true"[39m
+              [33mclass[39m=[32m"desk-well h-10 w-10 shrink-0"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mclass[39m=[32m"lucide lucide-settings h-5 w-5"[39m
+                [33mfill[39m=[32m"none"[39m
+                [33mheight[39m=[32m"24"[39m
+                [33mstroke[39m=[32m"currentColor"[39m
+                [33mstroke-linecap[39m=[32m"round"[39m
+                [33mstroke-linejoin[39m=[32m"round"[39m
+                [33mstroke-width[39m=[32m"2"[39m
+                [33mviewBox[39m=[32m"0 0 24 24"[39m
+                [33mwidth[39m=[32m"24"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"[39m
+                [36m/>[39m
+                [36m<circle[39m
+                  [33mcx[39m=[32m"12"[39m
+                  [33mcy[39m=[32m"12"[39m
+                  [33mr[39m=[32m"3"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</span>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"min-w-0 flex-1"[39m
+            [36m>[39m
+              [36m<h1[39m
+                [33mclass[39m=[32m"text-page"[39m
+              [36m>[39m
+                [0mSettings[0m
+              [36m</h1>[39m
+              [36m<p[39m
+                [33mclass[39m=[32m"mt-1 text-body text-muted-foreground"[39m
+              [36m>[39m
+                [0mPrinters, library, appearance, and account.[0m
+              [36m</p>[39m
+            [36m</div>[39m
+          [36m</div>[39m
+        [36m</div>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center sm:gap-2"[39m
+          [36m>[39m
+            [36m<button[39m
+              [33mclass[39m=[32m"inline-flex select-none items-center justify-center gap-2 font-medium transition-[color,background-color,box-shadow,border-color] disabled:pointer-events-none disabled:opacity-50 active:scale-[0.98] border border-border-strong bg-secondary text-secondary-foreground shadow-sm hover:border-primary/40 hover:bg-accent hover:text-accent-foreground h-8 min-w-8 rounded-md px-3 text-xs min-h-10 w-full sm:w-auto"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mclass[39m=[32m"lucide lucide-heart h-4 w-4"[39m
+                [33mfill[39m=[32m"none"[39m
+                [33mheight[39m=[32m"24"[39m
+                [33mstroke[39m=[32m"currentColor"[39m
+                [33mstroke-linecap[39m=[32m"round"[39m
+                [33mstroke-linejoin[39m=[32m"round"[39m
+                [33mstroke-width[39m=[32m"2"[39m
+                [33mviewBox[39m=[32m"0 0 24 24"[39m
+                [33mwidth[39m=[32m"24"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+              [0mSponsor[0m
+            [36m</button>[39m
+          [36m</div>[39m
+        [36m</div>[39m
+      [36m</header>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"gap-8 lg:grid lg:grid-cols-[190px_minmax(0,1fr)] lg:items-start"[39m
+      [36m>[39m
+        [36m<nav[39m
+          [33maria-label[39m=[32m"Settings sections"[39m
+          [33mclass[39m=[32m"desk-nameplate mb-4 flex flex-wrap gap-1.5 p-2 lg:sticky lg:top-4 lg:mb-0 lg:flex-col lg:gap-0.5"[39m
+        [36m>[39m
+          [36m<a[39m
+            [33mclass[39m=[32m"rounded-md px-2.5 py-1.5 text-sm transition-colors text-muted-foreground hover:bg-accent/70 hover:text-foreground"[39m
+            [33mhref[39m=[32m"#features"[39m
+          [36m>[39m
+            [0mOptional Features[0m
+          [36m</a>[39m
+          [36m<a[39m
+            [33mclass[39m=[32m"rounded-md px-2.5 py-1.5 text-sm transition-colors text-muted-foreground hover:bg-accent/70 hover:text-foreground"[39m
+            [33mhref[39m=[32m"#printers"[39m
+          [36m>[39m
+            [0mPrinters[0m
+          [36m</a>[39m
+          [36m<a[39m
+            [33mclass[39m=[32m"rounded-md px-2.5 py-1.5 text-sm transition-colors text-muted-foreground hover:bg-accent/70 hover:text-foreground"[39m
+            [33mhref[39m=[32m"#slicers"[39m
+          [36m>[39m
+            [0mSlicers[0m
+          [36m</a>[39m
+          [36m<a[39m
+            [33mclass[39m=[32m"rounded-md px-2.5 py-1.5 text-sm transition-colors text-muted-foreground hover:bg-accent/70 hover:text-foreground"[39m
+            [33mhref[39m=[32m"#library"[39m
+          [36m>[39m
+            [0mLibrary[0m
+          [36m</a>[39m
+          [36m<a[39m
+            [33mclass[39m=[32m"rounded-md px-2.5 py-1.5 text-sm transition-colors text-muted-foreground hover:bg-accent/70 hover:text-foreground"[39m
+            [33mhref[39m=[32m"#build-tracking"[39m
+          [36m>[39m
+            [0mBuild Tracking[0m
+          [36m</a>[39m
+          [36m<a[39m
+            [33mclass[39m=[32m"rounded-md px-2.5 py-1.5 text-sm transition-colors text-muted-foreground hover:bg-accent/70 hover:text-foreground"[39m
+            [33mhref[39m=[32m"#appearance"[39m
+          [36m>[39m
+            [0mAppearance[0m
+          [36m</a>[39m
+          [36m<a[39m
+            [33mclass[39m=[32m"rounded-md px-2.5 py-1.5 text-sm transition-colors text-muted-foreground hover:b...
+ ❯ waitForWrapper ../../node_modules/@testing-library/dom/dist/wait-for.js:163:27
+ ❯ ../../node_modules/@testing-library/dom/dist/query-helpers.js:86:33
+ ❯ src/pages/SettingsPage.features.test.tsx:228:25
+    226|
+    227|     // In baseline SettingsPage, this will fail because the card has n…
+    228|     expect(await screen.findByText("Feature toggles")).toBeTruthy();
+       |                         ^
+    229|     expect(screen.getByLabelText(/Print farm/i)).toBeTruthy();
+    230|     expect(screen.getByLabelText(/Orders/i)).toBeTruthy();
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  src/pages/SettingsPage.features.test.tsx > SettingsPage tenant feature toggles gate and controls > handles functional PATCH toggling and displays saved state
+TestingLibraryElementError: Unable to find a label with the text of: /Print farm/i
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"stack-page mx-auto w-full max-w-6xl space-y-6"[39m
+    [36m>[39m
+      [36m<header[39m
+        [33mclass[39m=[32m"relative flex flex-col gap-3 pb-4 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between pt-1"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"min-w-0 flex-1"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-start gap-3"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33maria-hidden[39m=[32m"true"[39m
+              [33mclass[39m=[32m"desk-well h-10 w-10 shrink-0"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mclass[39m=[32m"lucide lucide-settings h-5 w-5"[39m
+                [33mfill[39m=[32m"none"[39m
+                [33mheight[39m=[32m"24"[39m
+                [33mstroke[39m=[32m"currentColor"[39m
+                [33mstroke-linecap[39m=[32m"round"[39m
+                [33mstroke-linejoin[39m=[32m"round"[39m
+                [33mstroke-width[39m=[32m"2"[39m
+                [33mviewBox[39m=[32m"0 0 24 24"[39m
+                [33mwidth[39m=[32m"24"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"[39m
+                [36m/>[39m
+                [36m<circle[39m
+                  [33mcx[39m=[32m"12"[39m
+                  [33mcy[39m=[32m"12"[39m
+                  [33mr[39m=[32m"3"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</span>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"min-w-0 flex-1"[39m
+            [36m>[39m
+              [36m<h1[39m
+                [33mclass[39m=[32m"text-page"[39m
+              [36m>[39m
+                [0mSettings[0m
+              [36m</h1>[39m
+              [36m<p[39m
+                [33mclass[39m=[32m"mt-1 text-body text-muted-foreground"[39m
+              [36m>[39m
+                [0mPrinters, library, appearance, and account.[0m
+              [36m</p>[39m
+            [36m</div>[39m
+          [36m</div>[39m
+        [36m</div>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center sm:gap-2"[39m
+          [36m>[39m
+            [36m<button[39m
+              [33mclass[39m=[32m"inline-flex select-none items-center justify-center gap-2 font-medium transition-[color,background-color,box-shadow,border-color] disabled:pointer-events-none disabled:opacity-50 active:scale-[0.98] border border-border-strong bg-secondary text-secondary-foreground shadow-sm hover:border-primary/40 hover:bg-accent hover:text-accent-foreground h-8 min-w-8 rounded-md px-3 text-xs min-h-10 w-full sm:w-auto"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mclass[39m=[32m"lucide lucide-heart h-4 w-4"[39m
+                [33mfill[39m=[32m"none"[39m
+                [33mheight[39m=[32m"24"[39m
+                [33mstroke[39m=[32m"currentColor"[39m
+                [33mstroke-linecap[39m=[32m"round"[39m
+                [33mstroke-linejoin[39m=[32m"round"[39m
+                [33mstroke-width[39m=[32m"2"[39m
+                [33mviewBox[39m=[32m"0 0 24 24"[39m
+                [33mwidth[39m=[32m"24"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+              [0mSponsor[0m
+            [36m</button>[39m
+          [36m</div>[39m
+        [36m</div>[39m
+      [36m</header>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"gap-8 lg:grid lg:grid-cols-[190px_minmax(0,1fr)] lg:items-start"[39m
+      [36m>[39m
+        [36m<nav[39m
+          [33maria-label[39m=[32m"Settings sections"[39m
+          [33mclass[39m=[32m"desk-nameplate mb-4 flex flex-wrap gap-1.5 p-2 lg:sticky lg:top-4 lg:mb-0 lg:flex-col lg:gap-0.5"[39m
+        [36m>[39m
+          [36m<a[39m
+            [33mclass[39m=[32m"rounded-md px-2.5 py-1.5 text-sm transition-colors text-muted-foreground hover:bg-accent/70 hover:text-foreground"[39m
+            [33mhref[39m=[32m"#features"[39m
+          [36m>[39m
+            [0mOptional Features[0m
+          [36m</a>[39m
+          [36m<a[39m
+            [33mclass[39m=[32m"rounded-md px-2.5 py-1.5 text-sm transition-colors text-muted-foreground hover:bg-accent/70 hover:text-foreground"[39m
+            [33mhref[39m=[32m"#printers"[39m
+          [36m>[39m
+            [0mPrinters[0m
+          [36m</a>[39m
+          [36m<a[39m
+            [33mclass[39m=[32m"rounded-md px-2.5 py-1.5 text-sm transition-colors text-muted-foreground hover:bg-accent/70 hover:text-foreground"[39m
+            [33mhref[39m=[32m"#slicers"[39m
+          [36m>[39m
+            [0mSlicers[0m
+          [36m</a>[39m
+          [36m<a[39m
+            [33mclass[39m=[32m"rounded-md px-2.5 py-1.5 text-sm transition-colors text-muted-foreground hover:bg-accent/70 hover:text-foreground"[39m
+            [33mhref[39m=[32m"#library"[39m
+          [36m>[39m
+            [0mLibrary[0m
+          [36m</a>[39m
+          [36m<a[39m
+            [33mclass[39m=[32m"rounded-md px-2.5 py-1.5 text-sm transition-colors text-muted-foreground hover:bg-accent/70 hover:text-foreground"[39m
+            [33mhref[39m=[32m"#build-tracking"[39m
+          [36m>[39m
+            [0mBuild Tracking[0m
+          [36m</a>[39m
+          [36m<a[39m
+            [33mclass[39m=[32m"rounded-md px-2.5 py-1.5 text-sm transition-colors text-muted-foreground hover:bg-accent/70 hover:text-foreground"[39m
+            [33mhref[39m=[32m"#appearance"[39m
+          [36m>[39m
+            [0mAppearance[0m
+          [36m</a>[39m
+          [36m<a[39m
+            [33mclass[39m=[32m"rounded-md px-2.5 py-1.5 text-sm transition-colors text-muted-foreground hover:b...
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"stack-page mx-auto w-full max-w-6xl space-y-6"[39m
+    [36m>[39m
+      [36m<header[39m
+        [33mclass[39m=[32m"relative flex flex-col gap-3 pb-4 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between pt-1"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"min-w-0 flex-1"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-start gap-3"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33maria-hidden[39m=[32m"true"[39m
+              [33mclass[39m=[32m"desk-well h-10 w-10 shrink-0"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mclass[39m=[32m"lucide lucide-settings h-5 w-5"[39m
+                [33mfill[39m=[32m"none"[39m
+                [33mheight[39m=[32m"24"[39m
+                [33mstroke[39m=[32m"currentColor"[39m
+                [33mstroke-linecap[39m=[32m"round"[39m
+                [33mstroke-linejoin[39m=[32m"round"[39m
+                [33mstroke-width[39m=[32m"2"[39m
+                [33mviewBox[39m=[32m"0 0 24 24"[39m
+                [33mwidth[39m=[32m"24"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"[39m
+                [36m/>[39m
+                [36m<circle[39m
+                  [33mcx[39m=[32m"12"[39m
+                  [33mcy[39m=[32m"12"[39m
+                  [33mr[39m=[32m"3"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</span>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"min-w-0 flex-1"[39m
+            [36m>[39m
+              [36m<h1[39m
+                [33mclass[39m=[32m"text-page"[39m
+              [36m>[39m
+                [0mSettings[0m
+              [36m</h1>[39m
+              [36m<p[39m
+                [33mclass[39m=[32m"mt-1 text-body text-muted-foreground"[39m
+              [36m>[39m
+                [0mPrinters, library, appearance, and account.[0m
+              [36m</p>[39m
+            [36m</div>[39m
+          [36m</div>[39m
+        [36m</div>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center sm:gap-2"[39m
+          [36m>[39m
+            [36m<button[39m
+              [33mclass[39m=[32m"inline-flex select-none items-center justify-center gap-2 font-medium transition-[color,background-color,box-shadow,border-color] disabled:pointer-events-none disabled:opacity-50 active:scale-[0.98] border border-border-strong bg-secondary text-secondary-foreground shadow-sm hover:border-primary/40 hover:bg-accent hover:text-accent-foreground h-8 min-w-8 rounded-md px-3 text-xs min-h-10 w-full sm:w-auto"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mclass[39m=[32m"lucide lucide-heart h-4 w-4"[39m
+                [33mfill[39m=[32m"none"[39m
+                [33mheight[39m=[32m"24"[39m
+                [33mstroke[39m=[32m"currentColor"[39m
+                [33mstroke-linecap[39m=[32m"round"[39m
+                [33mstroke-linejoin[39m=[32m"round"[39m
+                [33mstroke-width[39m=[32m"2"[39m
+                [33mviewBox[39m=[32m"0 0 24 24"[39m
+                [33mwidth[39m=[32m"24"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+              [0mSponsor[0m
+            [36m</button>[39m
+          [36m</div>[39m
+        [36m</div>[39m
+      [36m</header>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"gap-8 lg:grid lg:grid-cols-[190px_minmax(0,1fr)] lg:items-start"[39m
+      [36m>[39m
+        [36m<nav[39m
+          [33maria-label[39m=[32m"Settings sections"[39m
+          [33mclass[39m=[32m"desk-nameplate mb-4 flex flex-wrap gap-1.5 p-2 lg:sticky lg:top-4 lg:mb-0 lg:flex-col lg:gap-0.5"[39m
+        [36m>[39m
+          [36m<a[39m
+            [33mclass[39m=[32m"rounded-md px-2.5 py-1.5 text-sm transition-colors text-muted-foreground hover:bg-accent/70 hover:text-foreground"[39m
+            [33mhref[39m=[32m"#features"[39m
+          [36m>[39m
+            [0mOptional Features[0m
+          [36m</a>[39m
+          [36m<a[39m
+            [33mclass[39m=[32m"rounded-md px-2.5 py-1.5 text-sm transition-colors text-muted-foreground hover:bg-accent/70 hover:text-foreground"[39m
+            [33mhref[39m=[32m"#printers"[39m
+          [36m>[39m
+            [0mPrinters[0m
+          [36m</a>[39m
+          [36m<a[39m
+            [33mclass[39m=[32m"rounded-md px-2.5 py-1.5 text-sm transition-colors text-muted-foreground hover:bg-accent/70 hover:text-foreground"[39m
+            [33mhref[39m=[32m"#slicers"[39m
+          [36m>[39m
+            [0mSlicers[0m
+          [36m</a>[39m
+          [36m<a[39m
+            [33mclass[39m=[32m"rounded-md px-2.5 py-1.5 text-sm transition-colors text-muted-foreground hover:bg-accent/70 hover:text-foreground"[39m
+            [33mhref[39m=[32m"#library"[39m
+          [36m>[39m
+            [0mLibrary[0m
+          [36m</a>[39m
+          [36m<a[39m
+            [33mclass[39m=[32m"rounded-md px-2.5 py-1.5 text-sm transition-colors text-muted-foreground hover:bg-accent/70 hover:text-foreground"[39m
+            [33mhref[39m=[32m"#build-tracking"[39m
+          [36m>[39m
+            [0mBuild Tracking[0m
+          [36m</a>[39m
+          [36m<a[39m
+            [33mclass[39m=[32m"rounded-md px-2.5 py-1.5 text-sm transition-colors text-muted-foreground hover:bg-accent/70 hover:text-foreground"[39m
+            [33mhref[39m=[32m"#appearance"[39m
+          [36m>[39m
+            [0mAppearance[0m
+          [36m</a>[39m
+          [36m<a[39m
+            [33mclass[39m=[32m"rounded-md px-2.5 py-1.5 text-sm transition-colors text-muted-foreground hover:b...
+ ❯ waitForWrapper ../../node_modules/@testing-library/dom/dist/wait-for.js:163:27
+ ❯ ../../node_modules/@testing-library/dom/dist/query-helpers.js:86:33
+ ❯ src/pages/SettingsPage.features.test.tsx:239:37
+    237|     renderSettingsPage();
+    238|
+    239|     const farmSwitch = await screen.findByLabelText(/Print farm/i);
+       |                                     ^
+    240|     expect(farmSwitch.getAttribute("aria-checked")).toBe("false");
+    241|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  2 failed | 1 passed (3)
+   Start at  09:02:28
+   Duration  8.01s (transform 1.06s, setup 0ms, import 2.55s, tests 3.14s, environment 1.84s)
+
+npm error Lifecycle script `test` failed with error:
+npm error code 1
+npm error path /persist/worktrees/t3/PrintPartner/gre-498-202610150450-s4t7/web/apps/web
+npm error workspace @print-partner/web@0.1.0
+npm error location /persist/worktrees/t3/PrintPartner/gre-498-202610150450-s4t7/web/apps/web
+npm error command failed
+npm error command sh -c vitest run src/pages/SettingsPage.features.test.tsx
