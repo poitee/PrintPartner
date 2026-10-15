@@ -13,6 +13,7 @@ import type { FastifyInstance } from "fastify";
 import type { AppRepository } from "../db/repository.js";
 import { getIntegrationConfig } from "../integrations/store.js";
 import { sendProblem } from "../lib/api-error.js";
+import { readFeatureAccess } from "../lib/feature-access.js";
 import {
   bambuConnectDisplayName,
   buildBambuConnectUrl,
@@ -301,6 +302,14 @@ export async function registerBambuConnectRoutes(
   );
 
   app.get("/bambu-connect/handoff/:id/file", async (request, reply) => {
+    const access = readFeatureAccess(() => deps.repo, "bambu");
+    if (access.kind !== "allowed") {
+      const status = access.kind === "disabled" ? 403 : 500;
+      return reply.status(status).send({
+        status, title: access.kind === "disabled" ? "Forbidden" : "Internal Server Error",
+        detail: access.error, code: access.code,
+      });
+    }
     const id = String((request.params as { id: string }).id ?? "").trim();
     if (!id || !/^[0-9a-f-]{36}$/i.test(id)) {
       return sendProblem(reply, 400, "Bad Request", "Invalid handoff id");
