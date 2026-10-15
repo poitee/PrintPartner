@@ -6,6 +6,8 @@ The `desktop_rebuild` Cargo feature is available on `pp-core`, `pp-contracts`, `
 
 GRE-498 adds the `pp-domain::features` registry and `pp-storage::features` tenant and Plan overrides behind `desktop_rebuild`. The storage client requires an explicit `AuthPolicy`. User choices are account preferences under the current one-account-per-tenant model. `SingleAccountDefault` maps sessions to the `default` tenant.
 
+With `PP_DESKTOP_REBUILD` exactly `1` or `true`, health advertises `tenant_feature_toggles` and Settings shows tenant controls for farm, orders, Bambu, and Spoolman. All four default to off. Authenticated `GET` and `PATCH /settings/features` use the existing tenant `feature_toggles` setting at the root and `/api/v1`. Boolean patches save tenant choices. A `null` patch clears a choice to its default. Writes preserve unknown stored values and retry concurrent changes. Corrupt choices fail closed. Plan overrides retain precedence. With the flag off, the capability and controls are absent and these endpoints return 404 before reading or writing feature choices. Plan override controls remain a separate slice.
+
 When `PP_DESKTOP_REBUILD` is exactly `1` or `true`, Node printer queue suggestions honor each queued item's Plan overrides. Plan choices override user choices, then default to false. Profileless items inherit user choices. The global `get_farm_status` operation through MCP and the assistant stays user-scoped. Authenticated `GET` and `PATCH /plans/:id/features` are available at the root, `/api/v1`, and `/api/v2` only with these exact flag values. A patch value of `null` clears the Plan override and restores inheritance. Optional modules gain Node admission guards in separate slices.
 
 With these exact flag values, Bambu and Spoolman inspection at `GET /api/v1/integrations/:id/status`, `GET /api/v1/integrations/:id/devices`, and `POST /api/v1/integrations/:id/test` requires the current tenant's matching `bambu` or `spoolman` choice to be enabled. Default or explicit opt-out returns 403 `FEATURE_DISABLED`. Malformed stored choices return 500 `FEATURE_TOGGLES_INVALID`. Admission runs after authentication and before status execution or adapter calls, including cached status reads. These tenant-global routes ignore Plan overrides. Saved connector metadata and editing remain available. Other integration types and flag-off inspection retain their existing behavior.
@@ -356,7 +358,7 @@ policy, and revalidation rejects changed policy or revoked credentials. Physical
 owner admission checks the storage identity. These internal APIs compile behind
 the feature; D15/D16 will wire them into jobs. The current job engine is unchanged.
 
-## D9 build graph read receipt
+## D9 build graph receipt
 
 GRE-602 adds the read-only first half of `pp_storage::build_graph` behind
 `desktop_rebuild`. Authenticated `List`, `Read`, and `ListLayers` commands run
@@ -371,9 +373,27 @@ Summaries validate PPJS metadata losslessly. Existing scalar snapshot projection
 report `manifest_text` integrity failures for non-scalar metadata; lossless public
 snapshot serialization remains deferred.
 
-Build creation, mutation, and deletion remain the next GRE-602 slice. This does
-not complete D9 or unblock D10b. Main now contains the observation contracts and
-budgets. The bounded YAML parser, builder manifest helpers, group merging, hints,
+GRE-602 also adds `Create`, `Touch`, `SetBase`, `AttachAddon`,
+`ReplaceAttachment`, `Detach`, and `Delete` through the same authenticated queue.
+Mutations use deadline-aware writer admission and immediate transactions. Typed outcomes distinguish missing builds,
+sources, and layers from duplicate names and attachments. Names reuse the gated
+`pp-domain::build_identity::BuildName`, also reexported by `pp-contracts`
+through `pp-api-types`; IDs use `pp_domain::PositiveId`.
+Create and Touch return boxed summaries. Attachment changes mark
+`config_modified_at`, and returned layers retain the 1,024-layer cap. Delete
+removes tenant-scoped production, filament, and plan feature settings and defers foreign keys
+so accepted graph references can cascade together. Errors, cancellation, and
+budget exhaustion roll back the transaction.
+
+With `desktop_rebuild`, graph reads report `Failure::BudgetExhausted` separately
+from stored integrity failures. `BudgetResource` identifies the shared
+200,000-row or 64 MiB batch budget, or the 1,000,000 Plate overlap comparison cap.
+The 64 KiB stored-row text cap remains an integrity check. Accepted reads also
+propagate resource exhaustion instead of embedding it in context errors. The
+feature-off reader retains its existing error classification.
+
+This does not complete D9 or unblock D10b. Main now contains the observation
+contracts and budgets. The bounded YAML parser, builder manifest helpers, group merging, hints,
 and STL inference remain prerequisites for D10b integration. The existing
 `manifest_options` JSON model stays in place for later integration.
 No runtime caller is added. Future user-visible callers must also check
@@ -492,6 +512,6 @@ The tool refuses default settings other than `schema_version`, drafts, accepted 
 
 Filesystem support covers regular files in `repos/<project id>` and `sources/<project id>` for known projects. Symlinks and special files cause refusal. A nonempty `projects.local_path` must be an absolute path inside `repos/<its project id>`; external paths are refused. Every Source revision must have a safe `<its project id>/revisions/...` locator and an existing regular snapshot tree. Relative part and document paths must contain no parent segments, empty segments, backslashes, or external locators. Unknown top-level artifacts and native storage cause refusal. Standard `uploads`, `upload-staging`, `staging`, `backups`, `thumbnails`, `previews`, `thumbs`, and `covers` directories are accepted only when empty. Exports support the existing `profile-<Plan id>-<slug>/checklist/checklist-<sha256>.html`, `profile-<Plan id>-<slug>/direct-3mf/direct-<16 hex digest>.3mf`, and `profile-<Plan id>-<slug>/kit/<slug>-<timestamp>-<sha256>.print-partner-kit.zip` layouts. Files can be directly under `exports` for legacy default data or under the existing tenant directory. Each file needs an `exports` manifest claim with its exact path, digest, Plan ID and named owner. The owner must agree with the Plan's explicit row claim or existing tenant; foreign exports cannot be reassigned. Omitting `exports` remains valid when no export files exist. Unmapped files, wrong scopes, unsupported layouts and target collisions fail closed. Default exports move into `tenantExportDirectory` for their mapped owner; foreign exports keep their tenant scope. There is no copied `tenant-default` fallback. The tool preserves bytes and validates content-addressed filenames, without rewriting embedded export content. Accepted STL/Plate trees, older export layouts and temporary publications remain unsupported. Ownership markers, leases, the desktop lock, and the source desktop mapping are excluded from the copy. Socket files outside those excluded ownership paths cause refusal.
 
-The staged copy suspends only six known immutable/invalidation triggers inside its transaction after checking their definitions against the current migrations. It restores them before validation and verifies that the complete schema matches the source. All historical revision and input digests, existing Required-unit maps and owner relationships are checked. Current revisions require complete Required-unit maps. Retained older revisions may lack maps only when no partial mapping or created-unit state exists. Current accepted Plans must pass the production operational reader and tracked Part byte verification in both source and stage. Valid format-1 input history retains its existing `uninitialized` operational result; it is not promoted to format 2. IDs, digests, tokens, actor identities and timestamps are preserved.
+The staged copy suspends only six known immutable/invalidation triggers inside its transaction after checking their definitions against the current migrations. It restores them before validation and verifies that the complete schema matches the source. All historical revision and input digests, existing Required-unit maps and owner relationships are checked. Every supported history row must fit the production operational limit of 64 KiB across its stored text columns, measured as UTF-8 bytes in SQLite. Builds with accepted history also receive the operational text budget check for their tenant ID, name, order number, special request and archive timestamp. Ordinary mutable Builds without accepted history retain their existing supported text values. These limits are checked again after owner reassignment in staging. Current revisions require complete Required-unit maps. Retained older revisions may lack maps only when no partial mapping or created-unit state exists. Current accepted Plans must pass the production operational reader and tracked Part byte verification in both source and stage. Valid format-1 input history retains its existing `uninitialized` operational result; it is not promoted to format 2. Plans whose working Part edits or deletions cleared the accepted revision pointer are also supported when their positive Plan version and validated history remain. The retained revision numbers must form the complete sequence from 1 through the Plan version, with each revision after the first pointing to its immediate predecessor and retaining tracked publication provenance with format-2 inputs. The inferred current revision must have a complete Required-unit map, positive unique projection IDs, valid stored Part booleans and consistent quantities between 1 and 10,000. Retained progress at inferred-current Part/unit coordinates must pass the production raw-boolean and assembly/completion checks. Other historical unit coordinates retain their existing ignored status. Historical projection IDs may refer to deleted working Parts for these dirty Plans; any surviving projection must still belong to the same Plan and owner. Their retained accepted-input pointer must match the latest historical revision, including its acceptance timestamp; legacy revisions must have no input pointer. The copy preserves their null pointer, working edits and `compatibility_dirty` operational result across restart. It does not select a historical revision or repair acceptance. A zero version with history or a positive version without history causes refusal. IDs, digests, tokens, actor identities and timestamps are preserved.
 
 The source digest is rechecked after reservation, after the SQLite backup and before publication. Product file hashes and export inventory are rechecked after copying. Any database change requires a new inventory and reviewed manifest. The command exits with status 1 on refusal and status 0 with a JSON receipt on success. Both inspect and apply require `PP_DESKTOP_REBUILD` to be exactly `1` or `true`.

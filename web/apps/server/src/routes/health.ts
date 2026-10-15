@@ -5,6 +5,7 @@ import {
   GITHUB_OAUTH_CAPABILITY,
   HOSTED_PLANNING_CAPABILITY,
   INVITE_BOARD_CAPABILITY,
+  TENANT_FEATURE_TOGGLES_CAPABILITY,
 } from "@print-partner/contracts";
 import type { ServerConfig } from "../config.js";
 import type { AppPorts } from "../ports/index.js";
@@ -14,6 +15,7 @@ import { deploymentCapability } from "../lib/deployment-capability.js";
 import { hostedPlanningPolicy } from "../lib/hosted-planning.js";
 import { getVersionInfo, getBuildSemver } from "../lib/version.js";
 import type { AuthStore } from "../services/auth-store.js";
+import { desktopFeaturesEnabled } from "../lib/feature-toggles.js";
 
 export async function registerHealthRoutes(
   app: FastifyInstance,
@@ -98,5 +100,6 @@ function healthCapabilities(config: ServerConfig, mapped: boolean): string[] {
     ...(config.discordOAuthConfigured && !mapped ? [DISCORD_OAUTH_CAPABILITY] : []),
     ...(config.googleClientId ? ["google_drive_manifest"] : []),
     "logging",
+    ...(desktopFeaturesEnabled() ? [TENANT_FEATURE_TOGGLES_CAPABILITY] : []),
   ];
 }

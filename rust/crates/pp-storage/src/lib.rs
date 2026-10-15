@@ -566,7 +566,7 @@ impl WriterOwner {
                     }
                     #[cfg(feature = "desktop_rebuild")]
                     Envelope::BuildGraph { command, reply } => {
-                        reply.send(build_graph::execute(&mut connection, command));
+                        reply.send(build_graph::execute(&mut connection, command, admission));
                     }
                     Envelope::Read { command, reply } => {
                         let _ = reply.send(read_model::execute(&mut connection, command));

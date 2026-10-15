@@ -1270,6 +1270,12 @@ fn validate_current_plates(
             .len()
             .saturating_mul(footprints.len().saturating_sub(1))
             / 2;
+        #[cfg(feature = "desktop_rebuild")]
+        super::graph::budget_check(
+            pair_checks <= 1_000_000,
+            crate::build_graph::BudgetResource::PlateOverlapChecks,
+        )?;
+        #[cfg(not(feature = "desktop_rebuild"))]
         check(
             pair_checks <= 1_000_000,
             "artifact_linkage",
@@ -1325,4 +1331,86 @@ fn validate_current_plates(
         "Accepted Plate layout digest is corrupt",
     )?;
     Ok(())
+}
+
+#[cfg(all(test, feature = "desktop_rebuild"))]
+mod tests {
+    use super::*;
+    use crate::build_graph::{BudgetResource, Failure};
+
+    #[test]
+    fn plate_overlap_budget_is_distinct_from_integrity() {
+        let root = std::env::temp_dir().join(format!("pp-plate-budget-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(root.join("repos/1/revisions/accepted")).unwrap();
+        let database = root.join("fixture.db");
+        std::fs::write(
+            &database,
+            include_bytes!("../../tests/fixtures/accepted-plate-node.db"),
+        )
+        .unwrap();
+        let mut connection = rusqlite::Connection::open(database).unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", false)
+            .unwrap();
+        let tx = connection.transaction().unwrap();
+        let AcceptedRead::Ready { mut snapshot } = super::super::graph::read(
+            &tx,
+            "default",
+            1,
+            &root.join("repos"),
+            &mut Budget::default(),
+        )
+        .unwrap() else {
+            panic!("accepted fixture")
+        };
+        let triggers = tx
+            .prepare("SELECT name FROM sqlite_master WHERE type='trigger'")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        for trigger in triggers {
+            tx.execute_batch(&format!("DROP TRIGGER \"{trigger}\";"))
+                .unwrap();
+        }
+        let part = snapshot.parts.iter_mut().find(|p| p.included).unwrap();
+        let template = part.units[0].clone();
+        part.units = (0..1415)
+            .map(|index| {
+                let mut unit = template.clone();
+                unit.token = format!("budget-unit-{index}");
+                unit
+            })
+            .collect();
+        tx.execute_batch("DELETE FROM accepted_plate_units; UPDATE accepted_plate_revisions SET expected_unit_count=1415;").unwrap();
+        for unit in &part.units {
+            tx.execute("INSERT INTO accepted_plate_units(tenant_id,revision_id,plate_id,required_unit_token,x_um,y_um,width_um,depth_um,height_um) VALUES('default',1,'fixture-plate',?1,5000,5000,50000,40000,30000)", [&unit.token]).unwrap();
+        }
+        let revision = one(
+            &tx,
+            "accepted_plate_revisions",
+            "id=1",
+            &[],
+            "artifact_linkage",
+            &mut Budget::default(),
+        )
+        .unwrap()
+        .unwrap();
+        let error =
+            validate_current_plates(&tx, "default", &revision, &snapshot, &mut Budget::default())
+                .unwrap_err();
+        assert!(
+            matches!(
+                error.downcast_ref(),
+                Some(Failure::BudgetExhausted {
+                    resource: BudgetResource::PlateOverlapChecks
+                })
+            ),
+            "{error:?}"
+        );
+        drop(tx);
+        drop(connection);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

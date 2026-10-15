@@ -1,7 +1,14 @@
 import type Database from "better-sqlite3";
+import { z } from "zod";
+import { getTableColumns, inArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as schema from "./db/schema.js";
 import {
+  acceptedPlanStoredTextBytes,
+  validateAcceptedPlanStoredTextBytes,
+  validateAcceptedPlanInputHeaderRows,
+  validateAcceptedPlanProgressRows,
+  validateAcceptedPlanRevisionPartRows,
   validateAcceptedPlanRevisionRows,
   validateAcceptedPlanRequiredUnitRows,
 } from "./db/accepted-plan-operational.js";
@@ -15,12 +22,30 @@ export const ownershipHistoryTables = [
 
 export function validateOwnershipHistory(database: Database.Database): void {
   const db = drizzle(database);
+  for (const row of db.select({ bytes: acceptedPlanStoredTextBytes(true, [schema.buildProfiles.tenantId,
+    schema.buildProfiles.name, schema.buildProfiles.orderNumber, schema.buildProfiles.specialRequest,
+    schema.buildProfiles.archivedAt]) }).from(schema.buildProfiles)
+    .where(inArray(schema.buildProfiles.id, db.select({ profileId: schema.planRevisions.profileId }).from(schema.planRevisions))).all()) {
+    validateAcceptedPlanStoredTextBytes(row.bytes, "pointer", "Accepted Plan Build text is corrupt");
+  }
+  for (const table of [schema.sourceRevisions, schema.planRevisionInputSets, schema.planRevisionInputs,
+    schema.planAcceptedInputSets, schema.planRevisions, schema.planRevisionParts, schema.requiredUnits,
+    schema.planRevisionRequiredUnits, schema.planRevisionRequiredUnitSets]) {
+    const columns = Object.values(getTableColumns(table)).filter(column => column.dataType === "string");
+    for (const row of db.select({ bytes: acceptedPlanStoredTextBytes(true, columns) }).from(table).all()) {
+      validateAcceptedPlanStoredTextBytes(row.bytes, "revision", "Accepted ownership history row text is corrupt");
+    }
+  }
   const sources = db.select().from(schema.projects).all();
   const sourceRevisions = db.select().from(schema.sourceRevisions).all();
   const profiles = db.select().from(schema.buildProfiles).all();
   const revisions = db.select().from(schema.planRevisions).all();
   const parts = db.select().from(schema.planRevisionParts).all();
   const projections = db.select().from(schema.parts).all();
+  const progress = z.array(z.object({ id: z.number(), tenantId: z.string(), partId: z.number(), unitIndex: z.number(), completed: z.unknown(), assembled: z.unknown() }))
+    .parse(database.prepare("SELECT id,tenant_id AS tenantId,part_id AS partId,unit_index AS unitIndex,completed,assembled FROM print_progress").all());
+  const partBooleans = new Map(z.array(z.object({ id: z.number(), included: z.unknown(), geometrySame: z.unknown() }))
+    .parse(database.prepare("SELECT id,included,geometry_same AS geometrySame FROM plan_revision_parts").all()).map(row => [row.id, row]));
   const sets = db.select().from(schema.planRevisionInputSets).all();
   const inputs = db.select().from(schema.planRevisionInputs).all();
   const acceptedInputs = db.select().from(schema.planAcceptedInputSets).all();
@@ -71,8 +96,38 @@ export function validateOwnershipHistory(database: Database.Database): void {
   for (const accepted of acceptedInputs) {
     if (!sets.some(set => set.id === accepted.inputSetId && set.profileId === accepted.profileId && set.tenantId === accepted.tenantId)) fail("accepted input pointer");
   }
+  const acceptedPlans = new Map<number, { kind: "compatibility_dirty" | "ready"; revision: (typeof revisions)[number] }>();
+  for (const profile of profiles) {
+    const history = revisions.filter(revision => revision.profileId === profile.id);
+    if (!Number.isSafeInteger(profile.acceptedPlanVersion) || profile.acceptedPlanVersion < 0) fail("accepted Plan version");
+    if (profile.acceptedPlanRevisionId == null) {
+      if ((profile.acceptedPlanVersion === 0) !== (history.length === 0)) fail("missing accepted Plan pointer");
+      if (profile.acceptedPlanVersion === 0) continue;
+    } else if (profile.acceptedPlanVersion === 0) fail("accepted Plan pointer");
+    const accepted = (profile.acceptedPlanRevisionId == null
+      ? history.sort((left, right) => right.revisionNumber - left.revisionNumber)[0]
+      : history.find(revision => revision.id === profile.acceptedPlanRevisionId && revision.tenantId === profile.tenantId))
+      ?? fail("accepted Plan pointer");
+    if (profile.acceptedPlanRevisionId == null) {
+      if (profile.acceptedPlanVersion !== accepted.revisionNumber) fail("accepted Plan version disagrees with history");
+      if (history.length !== profile.acceptedPlanVersion || history.some((revision, index) => revision.revisionNumber !== profile.acceptedPlanVersion - index)) fail("incomplete accepted Plan history");
+      if (history.some((revision, index) => revision.parentRevisionId !== (history[index + 1]?.id ?? null))) fail("revision lineage");
+      if (history.some(revision => revision.revisionNumber > 1 && (revision.provenanceKind !== "tracked"
+        || sets.find(set => set.id === revision.inputSetId)?.formatVersion !== 2))) fail("post-initial revision provenance or publication format");
+    }
+    acceptedPlans.set(profile.id, { kind: profile.acceptedPlanRevisionId == null ? "compatibility_dirty" : "ready", revision: accepted });
+    validateAcceptedPlanInputHeaderRows({ tenantId: profile.tenantId, profileId: profile.id, revision: accepted,
+      acceptedInput: acceptedInputs.find(input => input.profileId === profile.id),
+      inputSet: sets.find(set => set.id === accepted.inputSetId) });
+  }
   for (const revision of revisions) {
     const revisionParts = parts.filter(part => part.revisionId === revision.id);
+    if (acceptedPlans.get(revision.profileId)?.revision.id === revision.id) {
+      validateAcceptedPlanRevisionPartRows({ revisionParts, revisionBooleans: partBooleans });
+      validateAcceptedPlanProgressRows({ tenantId: revision.tenantId,
+        parts: revisionParts.map(part => ({ projectionPartId: part.projectionPartId ?? fail("Part projection Plan"), quantityEffective: part.quantityEffective })),
+        rows: progress });
+    }
     validateAcceptedPlanRevisionRows({ tenantId: revision.tenantId, profileId: revision.profileId, revision,
       parent: revisions.find(parent => parent.id === revision.parentRevisionId) ?? null, revisionParts });
     if (revision.parentRevisionId != null && !revisions.some(parent => parent.id === revision.parentRevisionId && parent.revisionNumber < revision.revisionNumber)) fail("revision lineage");
@@ -81,7 +136,7 @@ export function validateOwnershipHistory(database: Database.Database): void {
     const revisionMappings = mappings.filter(mapping => mapping.revisionId === revision.id);
     const createdHere = units.filter(unit => unit.createdInRevisionId === revision.id);
     if (!requiredSet) {
-      if (profiles.some(profile => profile.acceptedPlanRevisionId === revision.id) || revisionMappings.length || createdHere.length) fail("missing or partial Required-unit map");
+      if (acceptedPlans.get(revision.profileId)?.revision.id === revision.id || revisionMappings.length || createdHere.length) fail("missing or partial Required-unit map");
     } else {
       validateAcceptedPlanRequiredUnitRows({ tenantId: revision.tenantId, profileId: revision.profileId, revisionId: revision.id,
         requiredSet,
@@ -93,19 +148,12 @@ export function validateOwnershipHistory(database: Database.Database): void {
     for (const part of revisionParts) {
       if (part.relativePath && !isSafeRelativePath(part.relativePath)) fail("Part path");
       if (part.filename && (!isSafeRelativePath(part.filename) || part.filename.includes("/"))) fail("Part filename");
-      if (part.projectionPartId != null && !projections.some(projection => projection.id === part.projectionPartId && projection.profileId === revision.profileId && projection.tenantId === revision.tenantId)) fail("Part projection Plan");
-    }
-  }
-  for (const profile of profiles) {
-    const history = revisions.filter(revision => revision.profileId === profile.id);
-    if (profile.acceptedPlanRevisionId == null) {
-      if (profile.acceptedPlanVersion !== 0 || history.length) fail("missing accepted Plan pointer");
-    } else {
-      const accepted = history.find(revision => revision.id === profile.acceptedPlanRevisionId && revision.tenantId === profile.tenantId) ?? fail("accepted Plan pointer");
-      if (profile.acceptedPlanVersion <= 0) fail("accepted Plan pointer");
-      const acceptedInput = acceptedInputs.find(input => input.profileId === profile.id);
-      if ((accepted.provenanceKind === "tracked" && acceptedInput?.inputSetId !== accepted.inputSetId)
-        || (accepted.provenanceKind === "legacy" && acceptedInput)) fail("accepted Plan input pointer");
+      if (part.projectionPartId != null) {
+        if (!Number.isSafeInteger(part.projectionPartId) || part.projectionPartId <= 0) fail("Part projection Plan");
+        const projection = projections.find(projection => projection.id === part.projectionPartId);
+        if (projection ? projection.profileId !== revision.profileId || projection.tenantId !== revision.tenantId
+          : acceptedPlans.get(revision.profileId)?.kind !== "compatibility_dirty") fail("Part projection Plan");
+      }
     }
   }
 }

@@ -20,6 +20,7 @@ syn = { version = "=2.0.119", features = ["visit"], optional = true }
 prettyplease = { version = "=0.2.37", optional = true }
 
 [features]
+desktop_rebuild = ["pp-domain/desktop_rebuild"]
 codegen = ["pp-domain/codegen","dep:typify", "dep:schemars", "dep:syn", "dep:prettyplease"]
 
 [[bin]]

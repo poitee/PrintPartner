@@ -2143,6 +2143,27 @@
     },
     {
       "method": "GET",
+      "path": "/api/v1/settings/features",
+      "owner": "web/apps/server/src/routes/tenant-features.ts",
+      "websocket": false,
+      "authRequired": true
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/settings/features",
+      "owner": "web/apps/server/src/routes/tenant-features.ts",
+      "websocket": false,
+      "authRequired": true
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/settings/features",
+      "owner": "web/apps/server/src/routes/tenant-features.ts",
+      "websocket": false,
+      "authRequired": true
+    },
+    {
+      "method": "GET",
       "path": "/api/v1/settings/github-pat",
       "owner": "web/apps/server/src/routes/settings.ts",
       "websocket": false,
@@ -5770,6 +5791,27 @@
       "method": "PUT",
       "path": "/settings/external-access",
       "owner": "web/apps/server/src/routes/settings.ts",
+      "websocket": false,
+      "authRequired": true
+    },
+    {
+      "method": "GET",
+      "path": "/settings/features",
+      "owner": "web/apps/server/src/routes/tenant-features.ts",
+      "websocket": false,
+      "authRequired": true
+    },
+    {
+      "method": "HEAD",
+      "path": "/settings/features",
+      "owner": "web/apps/server/src/routes/tenant-features.ts",
+      "websocket": false,
+      "authRequired": true
+    },
+    {
+      "method": "PATCH",
+      "path": "/settings/features",
+      "owner": "web/apps/server/src/routes/tenant-features.ts",
       "websocket": false,
       "authRequired": true
     },
