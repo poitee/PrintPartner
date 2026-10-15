@@ -67,6 +67,10 @@ pub(crate) fn preflight(
     };
     check_owner()?;
     #[cfg(test)]
+    if owned {
+        capture_tests::arm_owned_swap();
+    }
+    #[cfg(test)]
     capture_tests::transient_swap(path, 0, false)?;
     let metadata = open_file("print-partner.db").and_then(|file| file.metadata());
     #[cfg(test)]
@@ -668,8 +672,119 @@ mod capture_tests {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 
     thread_local! {
+        static OWNED_TRANSIENT_SWAP: std::cell::Cell<Option<u8>> = const { std::cell::Cell::new(None) };
         static TRANSIENT_SWAP: std::cell::Cell<Option<(u8, bool)>> = const { std::cell::Cell::new(None) };
         static REPLACE_DURING_CAPTURE: std::cell::Cell<Option<(u8, u8)>> = const { std::cell::Cell::new(None) };
+    }
+
+    pub(super) fn arm_owned_swap() {
+        if let Some(checkpoint) = OWNED_TRANSIENT_SWAP.take() {
+            TRANSIENT_SWAP.set(Some((checkpoint, false)));
+        }
+    }
+
+    #[test]
+    fn ticket_t_12_postlease_writer_uses_admitted_descriptor() {
+        for checkpoint in 0..=3 {
+            let path = std::env::temp_dir().join(format!(
+                "pp-owned-writer-{}",
+                hex::encode(rand::random::<[u8; 8]>())
+            ));
+            let admitted = crate::lease::admit_directory(&path).unwrap();
+            drop(admitted);
+            let conn = Connection::open(path.join("print-partner.db")).unwrap();
+            conn.execute_batch("CREATE TABLE capture_fixture(value TEXT);")
+                .unwrap();
+            drop(conn);
+            let replacement = path.with_extension("replacement");
+            std::fs::create_dir(&replacement).unwrap();
+            std::fs::write(replacement.join("print-partner.db"), b"decoy").unwrap();
+            PREFLIGHT_COPIES.set(0);
+            OWNED_TRANSIENT_SWAP.set(Some(checkpoint));
+            let result = crate::WriterOwner::open(&path, crate::Limits::default());
+            OWNED_TRANSIENT_SWAP.set(None);
+            TRANSIENT_SWAP.set(None);
+            let (writer, ready) = result.unwrap();
+            assert_eq!(ready.previous_version, 0);
+            assert_eq!(PREFLIGHT_COPIES.get(), 2);
+            writer.shutdown().unwrap();
+            assert_eq!(
+                std::fs::read(replacement.join("print-partner.db")).unwrap(),
+                b"decoy"
+            );
+            assert!(!path.join(".desktop-owner.json").exists());
+            std::fs::remove_dir_all(&path).unwrap();
+            std::fs::remove_dir_all(replacement).unwrap();
+        }
+    }
+
+    #[test]
+    fn ticket_t_12_postlease_refuses_changed_directory_before_early_returns() {
+        for database in ["missing", "empty", "populated"] {
+            for replacement in ["directory", "symlink", "permissions"] {
+                let path = std::env::temp_dir().join(format!(
+                    "pp-owned-identity-{}",
+                    hex::encode(rand::random::<[u8; 8]>())
+                ));
+                let lease = crate::lease::StorageLease::acquire(&path).unwrap();
+                let db = path.join("print-partner.db");
+                match database {
+                    "empty" => std::fs::write(&db, b"").unwrap(),
+                    "populated" => {
+                        let conn = Connection::open(&db).unwrap();
+                        conn.execute_batch("CREATE TABLE capture_fixture(value TEXT);")
+                            .unwrap();
+                    }
+                    _ => {}
+                }
+                let before = std::fs::read(&db).ok();
+                let retired = path.with_extension("retired");
+                if replacement == "permissions" {
+                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o777))
+                        .unwrap();
+                } else {
+                    std::fs::rename(&path, &retired).unwrap();
+                    if replacement == "symlink" {
+                        std::os::unix::fs::symlink(&retired, &path).unwrap();
+                    } else {
+                        std::fs::DirBuilder::new()
+                            .mode(0o700)
+                            .create(&path)
+                            .unwrap();
+                    }
+                }
+                PREFLIGHT_COPIES.set(0);
+                let result = lease.preflight();
+                let copies = PREFLIGHT_COPIES.get();
+                if replacement == "permissions" {
+                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
+                        .unwrap();
+                } else {
+                    if replacement == "symlink" {
+                        std::fs::remove_file(&path).unwrap();
+                    } else {
+                        std::fs::remove_dir(&path).unwrap();
+                    }
+                    std::fs::rename(retired, &path).unwrap();
+                }
+                assert_eq!(std::fs::read(&db).ok(), before);
+                let released = lease.release();
+                assert!(
+                    released.lock_released && released.marker_removed && released.runtime_removed
+                );
+                std::fs::remove_dir_all(path).unwrap();
+                let error = result.unwrap_err().to_string();
+                assert!(
+                    error.contains(if replacement == "permissions" {
+                        "Unsafe data directory permissions"
+                    } else {
+                        "Data directory was replaced"
+                    }),
+                    "{database}/{replacement}: {error}"
+                );
+                assert_eq!(copies, 0);
+            }
+        }
     }
 
     pub(super) fn transient_swap(database: &Path, checkpoint: u8, restore: bool) -> Result<()> {

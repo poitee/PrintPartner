@@ -12,7 +12,7 @@ use std::{
         unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     },
     path::{Path, PathBuf},
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
 };
 
 pub struct LeaseRelease {
@@ -25,7 +25,7 @@ pub struct LeaseRelease {
 pub struct StorageLease {
     lock: Option<File>,
     lease_guard: Option<guard::StorageLease>,
-    data_dir: PathBuf,
+    admitted: Arc<AdmittedDirectory>,
     runtime_dir: PathBuf,
     lease: String,
     release_allowed: bool,
@@ -107,14 +107,17 @@ fn validate_directory_permissions(metadata: &std::fs::Metadata) -> Result<()> {
 
 impl AdmittedDirectory {
     pub(crate) fn preflight(&self) -> Result<()> {
+        self.preflight_schema(false).map(|_| ())
+    }
+
+    fn preflight_schema(&self, owned: bool) -> Result<u64> {
         self.validate_identity()?;
         crate::schema::preflight(
             &self.path.join("print-partner.db"),
-            false,
+            owned,
             |name| self.open_preflight_file(name),
             || self.validate_identity(),
-        )?;
-        Ok(())
+        )
     }
 
     fn validate_identity(&self) -> Result<()> {
@@ -412,26 +415,20 @@ impl StorageLease {
         Ok(Self {
             lock: Some(lock),
             lease_guard: Some(lease_guard),
-            data_dir: admitted.path,
+            admitted: Arc::new(admitted),
             runtime_dir,
             lease,
             release_allowed: true,
         })
     }
     pub(crate) fn preflight(&self) -> Result<u64> {
-        let path = self.data_dir().join("print-partner.db");
-        crate::schema::preflight(
-            &path,
-            true,
-            |name| File::open(path.with_file_name(name)),
-            || Ok(()),
-        )
+        self.admitted.preflight_schema(true)
     }
     pub fn record_child(directory: &Path, pid: u32) -> Result<()> {
         guard::record_child(directory, pid)
     }
     pub fn data_dir(&self) -> &Path {
-        &self.data_dir
+        &self.admitted.path
     }
     pub fn runtime_dir(&self) -> &Path {
         &self.runtime_dir
@@ -454,7 +451,7 @@ impl StorageLease {
     }
     pub fn retain_until_process_exit(mut self) {
         self.release_allowed = false;
-        let directory = self.data_dir.clone();
+        let directory = self.admitted.path.clone();
         failed_releases()
             .lock()
             .expect("failed release registry poisoned")
@@ -494,7 +491,7 @@ impl StorageLease {
     fn finish_release(&mut self) -> LeaseRelease {
         let runtime_removed =
             !self.runtime_dir.exists() || std::fs::remove_dir(&self.runtime_dir).is_ok();
-        let marker = self.data_dir.join(".desktop-owner.json");
+        let marker = self.admitted.path.join(".desktop-owner.json");
         let marker_removed = runtime_removed
             && match std::fs::remove_file(&marker) {
                 Ok(()) => true,
@@ -520,7 +517,7 @@ impl StorageLease {
             let retained = Self {
                 lock: self.lock.take(),
                 lease_guard: self.lease_guard.take(),
-                data_dir: self.data_dir.clone(),
+                admitted: self.admitted.clone(),
                 runtime_dir: self.runtime_dir.clone(),
                 lease: self.lease.clone(),
                 release_allowed: false,
@@ -529,7 +526,7 @@ impl StorageLease {
                 .lock()
                 .expect("failed release registry poisoned")
                 .insert(
-                    self.data_dir.clone(),
+                    self.admitted.path.clone(),
                     RetainedLease {
                         lease: retained,
                         retry_allowed: true,
