@@ -367,12 +367,12 @@ snapshot serialization remains deferred.
 
 GRE-602 also adds `Create`, `Touch`, `SetBase`, `AttachAddon`,
 `ReplaceAttachment`, `Detach`, and `Delete` through the same authenticated queue.
-Mutations use immediate transactions. Typed outcomes distinguish missing builds,
+Mutations use deadline-aware writer admission and immediate transactions. Typed outcomes distinguish missing builds,
 sources, and layers from duplicate names and attachments. Names reuse the gated
 `pp-contracts::build_identity::BuildName`; IDs use `pp_domain::PositiveId`.
 Create and Touch return boxed summaries. Attachment changes mark
 `config_modified_at`, and returned layers retain the 1,024-layer cap. Delete
-removes tenant-scoped production and filament settings and defers foreign keys
+removes tenant-scoped production, filament, and plan feature settings and defers foreign keys
 so accepted graph references can cascade together. Errors, cancellation, and
 budget exhaustion roll back the transaction.
 
