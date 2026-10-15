@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Throwaway native observations. This instrument makes no safety verdict."""
 import argparse
+from contextlib import closing
 import ctypes
 import hashlib
 import json
@@ -184,7 +185,7 @@ def run_case(native, tree, kind, actions):
     names.append(kind + "/moved-parent/lease")
     fd = os.open(tree.path(prefix + "lease"), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
     row = {"case": kind, "actions": [], "successors": [], "fd": fd}
-    with select.kqueue() as kq:
+    with closing(select.kqueue()) as kq:
         try:
             row["initial"] = snapshot(native, tree, fd, names)
             late = kind == "late_registration_after_delete"
