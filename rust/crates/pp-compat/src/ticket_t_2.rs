@@ -1860,3 +1860,104 @@ fn ticket_t_3_drain_force_killed_owner_during_startup_kills_group() {
         );
     }
 }
+
+#[tokio::test]
+async fn ticket_t_3_drain_repeated_eof_joins_unread_response_body() {
+    use axum::{body::Body, http::Request};
+
+    let scratch = Scratch::new("unread-response-eof");
+    let events = scratch.root.join("data/stream-events");
+    let mut expected = String::new();
+    let mut previous = Vec::new();
+    for cycle in 0..2 {
+        assert!(
+            previous
+                .iter()
+                .all(|pid| super::drain::process_group_absent(*pid))
+        );
+        let supervisor = super::Supervisor::launch_shell(
+            super::ShellSpec {
+                script: concat!(
+                    "exec /usr/bin/node -e '",
+                    include_str!("fixtures/drain-stream.cjs"),
+                    "'"
+                ),
+                ..shell_spec(&scratch)
+            },
+            super::SupervisorConfig::default(),
+        )
+        .unwrap();
+        let handle = supervisor.handle.clone();
+        let mut status = handle.status.clone();
+        wait_status(&mut status, |state| {
+            matches!(state, super::Status::Ready { .. })
+        })
+        .await;
+        let pid = match *status.borrow() {
+            super::Status::Ready { pid, .. } => pid,
+            _ => unreachable!(),
+        };
+        assert_eq!(recorded_pids(&scratch.pidfile()).len(), cycle + 1);
+        assert_eq!(live_pids(&scratch.pidfile()), vec![pid]);
+        let endpoint = handle.endpoint().unwrap();
+        let response = tokio::time::timeout(
+            Duration::from_secs(3),
+            endpoint.forward(
+                Request::builder()
+                    .uri("/stream")
+                    .body(Body::empty())
+                    .unwrap(),
+            ),
+        )
+        .await
+        .expect("fixture did not send response headers")
+        .unwrap();
+        assert_eq!(response.status(), 200);
+        assert_eq!(
+            response.headers()["content-type"],
+            "application/octet-stream"
+        );
+        let held_body = response.into_body();
+        expected.push_str("GET /stream\n");
+        assert_eq!(std::fs::read_to_string(&events).unwrap(), expected);
+        assert!(!endpoint.connections.tasks.is_empty());
+        supervisor.disarm_restarts();
+        let started = std::time::Instant::now();
+        let exit = tokio::time::timeout(Duration::from_secs(5), supervisor.shutdown())
+            .await
+            .expect("unread response blocked shutdown")
+            .expect("unread response connection was not joined");
+        let elapsed = started.elapsed();
+        assert_eq!(exit, super::CompatExit::Graceful);
+        assert!(elapsed < Duration::from_secs(5));
+        assert!(endpoint.connections.tasks.is_empty());
+        assert!(handle.endpoint().is_none());
+        assert!(matches!(*handle.status.borrow(), super::Status::Stopped));
+        assert!(super::drain::process_group_absent(pid));
+        assert!(live_pids(&scratch.pidfile()).is_empty());
+        let refused = endpoint
+            .forward(
+                Request::builder()
+                    .uri("/stream")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(refused.to_string(), "Compatibility generation is stopping");
+        expected.push_str("EOF\n");
+        assert_eq!(std::fs::read_to_string(&events).unwrap(), expected);
+        assert_eq!(recorded_pids(&scratch.pidfile()).len(), cycle + 1);
+        println!(
+            "{}",
+            serde_json::json!({
+                "case": "unread_response_eof", "cycle": cycle, "pid": pid,
+                "compat_exit": "graceful", "shutdown_ms": elapsed.as_millis(),
+                "connection_tasks": 0, "old_group_absent": true,
+                "stale_endpoint_error": refused.to_string(), "events": expected,
+            })
+        );
+        drop(held_body);
+        previous.push(pid);
+    }
+}

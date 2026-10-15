@@ -113,3 +113,36 @@ node --check rust/crates/pp-compat/tests/fixtures/startup-no-stdin.cjs
 The local run supplied an existing manifest through
 `PP_DESKTOP_RELEASE_MANIFEST` for compile-time embedding. The startup fixture
 uses its checked-in simulator and does not load the manifest's release assets.
+
+The pp-compat simulator test
+`ticket_t_3_drain_repeated_eof_joins_unread_response_body` covers shutdown after
+response headers arrive while the caller keeps the response body unread. A Node
+Unix-socket fixture writes a 1 MiB chunk without ending the response and ignores
+SIGTERM. The test retains the body until shutdown has returned and all cleanup
+assertions have passed. Each of two supervisor cycles requires a successful
+response header, an active connection task, graceful shutdown within five
+seconds, zero connection tasks, an unpublished and rejecting stale endpoint,
+and an absent child process group before the next start. The exact event log
+contains one `GET /stream` and one `EOF` per cycle.
+
+The negative control temporarily removes `self.cancelled.cancel()` from
+`Connections::close`. The test fails with
+`unread response connection was not joined: Compatibility connection join timed out`.
+Restoring the cancellation makes both cycles pass. This proves the connection
+join needs cancellation even after pipe EOF and child exit. No production change
+or control hook ships. The fixture does not exercise the measured release bundle,
+HTTP gateway draining, storage recovery, worker cutover, or actual Mac logout.
+
+Run with a generated manifest available for the build-time embedding prerequisite:
+
+```sh
+cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-compat --no-tests=fail -E 'test(ticket_t_3_drain_repeated_eof_joins_unread_response_body)' --success-output immediate
+node --check rust/crates/pp-compat/src/fixtures/drain-stream.cjs
+```
+
+Local verification supplied `/tmp/gre333-stage/bundle-manifest.json` through
+`PP_DESKTOP_RELEASE_MANIFEST` only for compile-time embedding. The negative
+control failed 0/1 in 2.321s. The restored drain selection passed 20/20, with
+50 skipped, in 30.324s. The new case recorded shutdown at 12ms and 8ms, zero
+connection tasks, and the exact event log `GET /stream\nEOF\n` twice. These are
+simulator acceptance results, not release performance measurements.
