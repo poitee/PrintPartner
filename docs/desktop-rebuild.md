@@ -209,7 +209,9 @@ Before recursive creation, admission checks existing input prefixes and their re
 
 Store admission checks permissions on an open directory descriptor and holds it while it resolves the canonical path. It compares that descriptor's device and inode with the canonical directory, then rechecks the canonical leaf's owner and permissions. Replacement at this checkpoint fails with `Data directory was replaced` before lock creation, ownership cleanup or database preflight. Existing aliases remain supported.
 
-These Unix checks remain snapshots, not path confinement. Replacement after the admission checkpoint, ancestor replacement, ACL policy, standalone Node admission, and Windows runtime permission policy remain open.
+Lease acquisition keeps that descriptor through OS-lock acquisition and opens `.desktop.lock` relative to it. It rechecks directory identity and permissions before opening the lock, before locking, and after locking, before ownership marker access. An observed replacement fails with `Data directory was replaced`. A lock created during a replacement race belongs to the admitted directory; refusal closes the lock without path-based cleanup.
+
+These Unix checks remain snapshots, not path confinement. Replacement after the OS-lock checkpoints, transient replacement restored between checks, ancestor replacement, ACL policy, standalone Node admission, and Windows runtime permission policy remain open. The standalone Rust writer still performs its first read-only database preflight before lease acquisition.
 
 Windows auxiliary app data and config use `<APPDATA>/com.poitee.printpartner`. Cache uses `<LOCALAPPDATA>/com.poitee.printpartner`; logs append `logs` to that local directory. Missing or empty variables fall back independently to `~/AppData/Roaming` and `~/AppData/Local`. Nonempty relative or parent-traversing values return a named error. The legacy store remains `~/.print-partner`. Windows ignores XDG values; macOS and Linux ignore Windows values.
 

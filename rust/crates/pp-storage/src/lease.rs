@@ -6,7 +6,10 @@ use std::{
     collections::BTreeMap,
     fs::{File, OpenOptions},
     io::Write,
-    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
+    os::{
+        fd::{AsRawFd, FromRawFd},
+        unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
+    },
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
 };
@@ -32,8 +35,18 @@ pub struct StorageLease {
 /// must be owner-controlled regular files with one link. Ancestors must be root or
 /// effective-user owned and deny group/other write unless sticky. These are path
 /// snapshots, not confinement. A held descriptor checks leaf identity through
-/// canonicalization. ACL policy and later path replacement remain separate concerns.
+/// canonicalization. Lease acquisition retains it through OS locking. ACL policy
+/// and replacement after those checkpoints remain separate concerns.
 pub fn prepare_directory(path: &Path) -> Result<PathBuf> {
+    Ok(admit_directory(path)?.path)
+}
+
+struct AdmittedDirectory {
+    path: PathBuf,
+    directory: File,
+}
+
+fn admit_directory(path: &Path) -> Result<AdmittedDirectory> {
     ensure!(!path.as_os_str().is_empty(), "Data directory path is empty");
     let path = if path.is_absolute() {
         path.to_path_buf()
@@ -60,33 +73,65 @@ pub fn prepare_directory(path: &Path) -> Result<PathBuf> {
         })?;
     let metadata = opened.metadata()?;
     ensure!(metadata.is_dir(), "Data directory is not a directory");
+    validate_directory_permissions(&metadata)?;
+    #[cfg(test)]
+    tests::replace_directory_before_canonicalization(&path)?;
+    let directory = path.canonicalize()?;
+    let admitted = AdmittedDirectory {
+        path: directory,
+        directory: opened,
+    };
+    admitted.validate_identity()?;
+    let directory = &admitted.path;
+    validate_resolved_ancestors(directory, false)?;
+    match std::fs::symlink_metadata(directory.join(".desktop.lock")) {
+        Ok(metadata) => validate_lock_metadata(&metadata)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    Ok(admitted)
+}
+
+fn validate_directory_permissions(metadata: &std::fs::Metadata) -> Result<()> {
     ensure!(
         metadata.uid() == unsafe { libc::geteuid() }
             && metadata.mode() & 0o700 == 0o700
             && metadata.mode() & 0o022 == 0,
         "Unsafe data directory permissions"
     );
-    #[cfg(test)]
-    tests::replace_directory_before_canonicalization(&path)?;
-    let directory = path.canonicalize()?;
-    let named = std::fs::symlink_metadata(&directory)?;
-    ensure!(
-        named.is_dir() && metadata.dev() == named.dev() && metadata.ino() == named.ino(),
-        "Data directory was replaced"
-    );
-    ensure!(
-        named.uid() == unsafe { libc::geteuid() }
-            && named.mode() & 0o700 == 0o700
-            && named.mode() & 0o022 == 0,
-        "Unsafe data directory permissions"
-    );
-    validate_resolved_ancestors(&directory, false)?;
-    match std::fs::symlink_metadata(directory.join(".desktop.lock")) {
-        Ok(metadata) => validate_lock_metadata(&metadata)?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
+    Ok(())
+}
+
+impl AdmittedDirectory {
+    fn validate_identity(&self) -> Result<()> {
+        let opened = self.directory.metadata()?;
+        let named = std::fs::symlink_metadata(&self.path).context("Data directory was replaced")?;
+        ensure!(
+            named.is_dir() && opened.dev() == named.dev() && opened.ino() == named.ino(),
+            "Data directory was replaced"
+        );
+        validate_directory_permissions(&opened)?;
+        validate_directory_permissions(&named)
     }
-    Ok(directory)
+
+    fn open_lock(&self) -> Result<File> {
+        let fd = unsafe {
+            libc::openat(
+                self.directory.as_raw_fd(),
+                c".desktop.lock".as_ptr(),
+                libc::O_RDWR
+                    | libc::O_CREAT
+                    | libc::O_CLOEXEC
+                    | libc::O_NOFOLLOW
+                    | libc::O_NONBLOCK,
+                0o600,
+            )
+        };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        Ok(unsafe { File::from_raw_fd(fd) })
+    }
 }
 
 fn validate_input_ancestors(path: &Path) -> Result<()> {
@@ -262,29 +307,29 @@ pub(crate) fn prior_owner_blocks_unowned(marker_path: &Path) -> Result<bool> {
 
 impl StorageLease {
     pub fn acquire(path: &Path) -> Result<Self> {
-        let data_dir = prepare_directory(path)?;
+        let admitted = admit_directory(path)?;
+        let data_dir = &admitted.path;
         #[cfg(test)]
-        tests::replace_directory_during_lock(&data_dir, 1)?;
+        tests::replace_directory_during_lock(data_dir, 1)?;
+        admitted.validate_identity()?;
         let lock_path = data_dir.join(".desktop.lock");
-        let lock = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(&lock_path)?;
-        validate_lock_identity(&lock, &lock_path)?;
         #[cfg(test)]
-        tests::replace_directory_during_lock(&data_dir, 2)?;
+        tests::replace_directory_during_lock(data_dir, 4)?;
+        let lock = admitted.open_lock()?;
+        #[cfg(test)]
+        tests::replace_directory_during_lock(data_dir, 2)?;
+        admitted.validate_identity()?;
+        validate_lock_identity(&lock, &lock_path)?;
         lock.try_lock_exclusive()
             .context("Data directory already owned")?;
         #[cfg(test)]
-        tests::replace_directory_during_lock(&data_dir, 3)?;
+        tests::replace_directory_during_lock(data_dir, 3)?;
+        admitted.validate_identity()?;
         validate_lock_identity(&lock, &lock_path)?;
+        admitted.validate_identity()?;
         let marker_path = data_dir.join(".desktop-owner.json");
         read_prior_owner(&marker_path)?;
-        let lease_guard = guard::StorageLease::acquire(&data_dir)?;
+        let lease_guard = guard::StorageLease::acquire(data_dir)?;
         if let Some((marker, pid)) = read_prior_owner(&marker_path)? {
             // The OS lock serializes inspection and replacement with every cooperating writer.
             // A free lock alone is insufficient for older standalone writers using only markers.
@@ -325,7 +370,7 @@ impl StorageLease {
         Ok(Self {
             lock: Some(lock),
             lease_guard: Some(lease_guard),
-            data_dir,
+            data_dir: admitted.path,
             runtime_dir,
             lease,
             release_allowed: true,
@@ -583,15 +628,30 @@ mod tests {
         let (selected, replacement) = REPLACE_DIRECTORY_DURING_LOCK.get();
         if selected == checkpoint {
             REPLACE_DIRECTORY_DURING_LOCK.set((0, 0));
-            REPLACE_DIRECTORY_BEFORE_CANONICALIZATION.set(replacement);
-            replace_directory_before_canonicalization(path)?;
+            match replacement {
+                4 => std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o770))?,
+                5 => std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o500))?,
+                6 => {
+                    let retired = path.with_extension("retired");
+                    std::fs::rename(path, &retired)?;
+                    std::fs::DirBuilder::new().mode(0o700).create(path)?;
+                    for name in [".desktop-owner.json", "print-partner.db", "desktop.toml"] {
+                        std::fs::copy(retired.join(name), path.join(name))?;
+                    }
+                    std::fs::rename(retired.join(".desktop.lock"), path.join(".desktop.lock"))?;
+                }
+                _ => {
+                    REPLACE_DIRECTORY_BEFORE_CANONICALIZATION.set(replacement);
+                    replace_directory_before_canonicalization(path)?;
+                }
+            }
         }
         Ok(())
     }
 
     #[test]
     fn ticket_t_12_directory_replacement_through_os_lock_is_refused() {
-        for checkpoint in [1, 2, 3] {
+        for checkpoint in [1, 2, 3, 4] {
             for replacement in [1, 2] {
                 let path = directory();
                 let retired = path.with_extension("retired");
@@ -637,20 +697,58 @@ mod tests {
     }
 
     #[test]
-    fn ticket_t_12_directory_permission_change_through_os_lock_is_refused() {
-        for checkpoint in [1, 2, 3] {
+    fn ticket_t_12_replaced_directory_with_same_lock_refuses_ownership_cleanup() {
+        for checkpoint in [2, 3] {
             let path = directory();
-            REPLACE_DIRECTORY_DURING_LOCK.set((checkpoint, 3));
+            let retired = path.with_extension("retired");
+            let files: [(&str, &[u8]); 3] = [
+                (
+                    ".desktop-owner.json",
+                    br#"{"pid":2147483647,"kind":"standalone"}"#,
+                ),
+                ("print-partner.db", b"never open"),
+                ("desktop.toml", b"port = 45678\n"),
+            ];
+            for (name, bytes) in files {
+                std::fs::write(path.join(name), bytes).unwrap();
+            }
+            REPLACE_DIRECTORY_DURING_LOCK.set((checkpoint, 6));
             let result = StorageLease::acquire(&path);
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
             assert_eq!(
                 result.err().map(|error| error.to_string()),
-                Some("Unsafe data directory permissions".to_owned()),
-                "checkpoint {checkpoint}"
+                Some("Data directory was replaced".to_owned())
             );
-            assert!(!path.join(".desktop-owner.json").exists());
-            assert!(!path.join(".desktop-lease").exists());
+            for directory in [&path, &retired] {
+                for (name, bytes) in files {
+                    assert_eq!(std::fs::read(directory.join(name)).unwrap(), bytes);
+                }
+                assert!(!directory.join(".desktop-lease").exists());
+            }
+            let lock = File::open(path.join(".desktop.lock")).unwrap();
+            lock.try_lock_exclusive().unwrap();
+            FileExt::unlock(&lock).unwrap();
+            std::fs::remove_dir_all(retired).unwrap();
             std::fs::remove_dir_all(path).unwrap();
+        }
+    }
+
+    #[test]
+    fn ticket_t_12_directory_permission_change_through_os_lock_is_refused() {
+        for checkpoint in [1, 2, 3] {
+            for replacement in [3, 4, 5] {
+                let path = directory();
+                REPLACE_DIRECTORY_DURING_LOCK.set((checkpoint, replacement));
+                let result = StorageLease::acquire(&path);
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+                assert_eq!(
+                    result.err().map(|error| error.to_string()),
+                    Some("Unsafe data directory permissions".to_owned()),
+                    "checkpoint {checkpoint}, replacement {replacement}"
+                );
+                assert!(!path.join(".desktop-owner.json").exists());
+                assert!(!path.join(".desktop-lease").exists());
+                std::fs::remove_dir_all(path).unwrap();
+            }
         }
     }
 
