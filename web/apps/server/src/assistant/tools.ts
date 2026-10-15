@@ -1,4 +1,4 @@
-import { readSpoolmanAccess } from "../lib/spoolman-access.js";
+import { readSpoolmanAccess, spoolmanAccessProblem } from "../lib/spoolman-access.js";
 import { readFarmAccess } from "../lib/farm-access.js";
 import { chargeTenantDiskBytes, TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
 import {
@@ -3774,12 +3774,12 @@ export async function applyAssistantAction(
         }
         if (kind === "spoolman") {
           const access = readSpoolmanAccess(deps.repo, planId);
-          if (access.kind !== "allowed") return { ok: false, detail: access.error, code: access.code };
+          if (access.kind !== "allowed") return { ok: false, ...spoolmanAccessProblem(access) };
           const resolved = inventoryId
             ? await resolveFilamentDisplay({ repo: deps.repo, dataDir: "", profileId: planId }, inventoryId)
             : null;
           const currentAccess = readSpoolmanAccess(deps.repo, planId);
-          if (currentAccess.kind !== "allowed") return { ok: false, detail: currentAccess.error, code: currentAccess.code };
+          if (currentAccess.kind !== "allowed") return { ok: false, ...spoolmanAccessProblem(currentAccess) };
           if (!resolved) return { ok: false, detail: "Spoolman inventory filament could not be verified" };
           if (resolved.hex?.toLowerCase() !== colorHex.toLowerCase()) {
             return { ok: false, detail: "Spoolman inventory filament color does not match" };

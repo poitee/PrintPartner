@@ -235,7 +235,7 @@ export async function registerAssistantRoutes(
         return sendProblem(reply, 500, "Internal Server Error", "Internal Server Error");
       }
       if (!result.ok) {
-        const status = result.status === 409 || result.status === 500 || result.status === 503 ? result.status : 400;
+        const status = result.status === 403 || result.status === 404 || result.status === 409 || result.status === 500 || result.status === 503 ? result.status : 400;
         if (status === 500) {
           request.log.error(
             {
@@ -251,7 +251,7 @@ export async function registerAssistantRoutes(
         return sendProblem(
           reply,
           status,
-          status === 409
+          status === 403 ? "Forbidden" : status === 404 ? "Not Found" : status === 409
             ? "Conflict"
             : status === 503
               ? "Service Unavailable"
@@ -259,6 +259,7 @@ export async function registerAssistantRoutes(
                 ? "Internal Server Error"
                 : "Bad Request",
           result.detail ?? "Action failed",
+          result.code,
         );
       }
       removePendingProposedAction(deps.repo, action.id);

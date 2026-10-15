@@ -7506,9 +7506,14 @@ export class AppRepository {
       }
 
       for (const { source, target } of resolved.parts) {
+        const assignment = filamentAssignmentColumns(source.assignment);
+        if (readSpoolmanAccess(this, profileId).kind !== "allowed") {
+          if (assignment.filamentColorId?.trim().startsWith("spoolman:")) assignment.filamentColorId = null;
+          assignment.spoolmanSpoolId = null;
+        }
         const written = this.db
           .update(this.schema.parts)
-          .set(filamentAssignmentColumns(source.assignment))
+          .set(assignment)
           .where(and(eq(this.schema.parts.tenantId, this.tenantId), eq(this.schema.parts.id, target.projectionPartId)))
           .run();
         if (written.changes !== 1) throw new Error("Accepted Part copy failed");
@@ -7595,7 +7600,16 @@ export class AppRepository {
       }
       const roleFilaments = this.getSetting(roleFilamentSettingKey(id));
       if (roleFilaments) {
-        this.setSetting(roleFilamentSettingKey(newProfile.id), roleFilaments);
+        if (readSpoolmanAccess(this, newProfile.id).kind === "allowed") {
+          this.setSetting(roleFilamentSettingKey(newProfile.id), roleFilaments);
+        } else {
+          const defaults = loadRoleFilamentDefaults(this, id);
+          for (const row of Object.values(defaults)) {
+            if (row.filament_color_id?.trim().startsWith("spoolman:")) row.filament_color_id = null;
+            row.spoolman_spool_id = null;
+          }
+          this.setSetting(roleFilamentSettingKey(newProfile.id), JSON.stringify(defaults));
+        }
       }
       copyProductionSetup(this, {
         sourceProfileId: id,

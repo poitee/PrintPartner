@@ -12,6 +12,7 @@ import { loadConfig } from "../config.js";
 import { acceptPlanForTest, editAcceptedPartsForTest } from "../test/accept-plan.js";
 import { registerPartRoutes } from "./parts.js";
 import { registerPlanRoutes } from "./plans.js";
+import { registerAssistantRoutes } from "./assistant.js";
 import { createProductMcpServer } from "../mcp/product-mcp.js";
 import { StatusExecution } from "../integrations/status-execution.js";
 import { InProcessJobRunner } from "../services/job-runner.js";
@@ -66,6 +67,9 @@ describe("Spoolman workflow admission", () => {
         await registerPlanRoutes(routes, deps);
       }, { prefix });
     }
+    await registerAssistantRoutes(app, { repo, config: loadConfig(), jobs: new InProcessJobRunner({
+      getRepo: () => repo, reposDir: sqlite.reposDir, exportsDir: join(dir, "exports"), dataDir: dir,
+    }) });
     await app.ready();
   });
 
@@ -81,6 +85,26 @@ describe("Spoolman workflow admission", () => {
   function planAccess(enabled: boolean) {
     repo.setSetting(`feature_toggles:plan:${profileId}`, JSON.stringify({ spoolman: enabled }));
   }
+
+  it.each(["disabled", "invalid", "revoked-during-read"])("preserves HTTP assistant feature errors when %s", async (state) => {
+    saveBuildPlanningBrief(repo, newBuildPlanningBrief(profileId, "Primary color is Red.", []));
+    planAccess(state === "revoked-during-read");
+    if (state === "invalid") repo.setSetting(`feature_toggles:plan:${profileId}`, '{"spoolman":"invalid"}');
+    if (state === "revoked-during-read") network.mockImplementationOnce(async () => {
+      planAccess(false);
+      return new Response(JSON.stringify([{ id: 7, name: "Red", color_hex: "ff0000" }]));
+    });
+    const before = readBuildPlanningBrief(repo, profileId);
+    const response = await app.inject({ method: "POST", url: "/assistant/actions/apply", payload: { action: {
+      id: "scope-test", type: "propose_assign_role_filament", plan_id: profileId, label: "Assign filament", summary: "Assign primary Red",
+      params: { assignment: { role: "primary", inventory_kind: "spoolman", inventory_id: color, color_hex: "#ff0000" } },
+    } } });
+    const status = state === "invalid" ? 500 : 403;
+    expect(response.statusCode, response.body).toBe(status);
+    expect(response.json()).toMatchObject({ status, code: state === "invalid" ? "FEATURE_TOGGLES_INVALID" : "FEATURE_DISABLED" });
+    expect(readBuildPlanningBrief(repo, profileId)).toEqual(before);
+    expect(network).toHaveBeenCalledTimes(state === "revoked-during-read" ? 1 : 0);
+  });
 
   for (const prefix of ["", "/api/v1"]) {
     it.each(["unused", "part-match"])(`${prefix} rejects new optional role defaults with %s targets`, async (state) => {
