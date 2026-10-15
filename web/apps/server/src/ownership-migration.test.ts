@@ -184,3 +184,46 @@ it("refuses existing share capabilities whose embedded Plan ownership is ambiguo
   expect(() => inspectOwnershipCopy(paths)).toThrow("Unsupported active authority in plan_shares");
   expect(existsSync(paths.destinationDir)).toBe(false);
 });
+
+const profileAssignments = [
+  { kind: "machine", profiles: "printer_profiles", assignments: "printer_profile_assignments", column: "machine_profile_id" },
+  { kind: "filament", profiles: "filament_profiles", assignments: "printer_filament_slot_assignments", column: "filament_profile_id" },
+] as const;
+function insertForeignAssignment(sourceDir: string, kind: "machine" | "filament", profileId: number | null): void {
+  const value = profileId === null ? "NULL" : String(profileId);
+  edit(sourceDir, kind === "machine"
+    ? `INSERT INTO printer_profile_assignments (printer_id,tenant_id,machine_profile_id,updated_at) VALUES ('foreign-printer','account-b',${value},'now')`
+    : `INSERT INTO printer_filament_slot_assignments (printer_id,tenant_id,slot_index,filament_profile_id) VALUES ('foreign-printer','account-b',1,${value})`);
+}
+it.each(profileAssignments.flatMap(spec => ["conflicting", "dangling"].map(state => ({ ...spec, state }))))(
+  "refuses $state foreign $kind profile references before publication", async ({ kind, state }) => {
+    const paths = fixture(); const input = manifest(paths.sourceDir);
+    insertForeignAssignment(paths.sourceDir, kind, state === "dangling" ? 999999 : 1);
+    const db = new Database(join(paths.sourceDir, "print-partner.db"), { readonly: true });
+    try { input.source_digest = createHash("sha256").update(db.serialize()).digest("hex"); } finally { db.close(); }
+    const before = readFileSync(join(paths.sourceDir, "print-partner.db"));
+    const reason = state === "dangling" ? "Dangling relationship" : "Conflicting owner relationship";
+    expect(() => inspectOwnershipCopy(paths)).toThrow(reason);
+    await expect(executeOwnershipCopy({ ...paths, manifest: input })).rejects.toThrow(reason);
+    expect(existsSync(paths.destinationDir)).toBe(false);
+    expect(readFileSync(join(paths.sourceDir, "print-partner.db"))).toEqual(before);
+  },
+);
+it.each(profileAssignments.flatMap(spec => ["consistent", "null"].map(state => ({ ...spec, state }))))(
+  "preserves $state foreign $kind profile references", async ({ kind, profiles, assignments, column, state }) => {
+    const paths = fixture();
+    if (state === "consistent") edit(paths.sourceDir, `UPDATE ${profiles} SET tenant_id='account-b' WHERE id=1`);
+    insertForeignAssignment(paths.sourceDir, kind, state === "null" ? null : 1);
+    const source = new Database(join(paths.sourceDir, "print-partner.db"), { readonly: true });
+    const before = source.prepare(`SELECT * FROM ${assignments}`).all(); source.close();
+    await executeOwnershipCopy({ ...paths, manifest: manifest(paths.sourceDir) });
+    const copy = new Database(join(paths.destinationDir, "print-partner.db"), { readonly: true });
+    try {
+      expect(copy.prepare(`SELECT * FROM ${assignments}`).all()).toEqual(before);
+      expect(copy.prepare(`SELECT tenant_id,${column} AS profile_id FROM ${assignments}`).get()).toEqual({
+        tenant_id: "account-b", profile_id: state === "null" ? null : 1,
+      });
+      if (state === "consistent") expect(copy.prepare(`SELECT tenant_id FROM ${profiles} WHERE id=1`).get()).toEqual({ tenant_id: "account-b" });
+    } finally { copy.close(); }
+  },
+);

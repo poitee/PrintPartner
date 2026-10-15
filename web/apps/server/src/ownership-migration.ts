@@ -90,7 +90,7 @@ function validateData(db: Database.Database, claims = new Map<string, string>())
     const links = new Map<number, typeof foreignKeys>();
     for (const fk of foreignKeys) { const group = links.get(fk.id) ?? []; group.push(fk); links.set(fk.id, group); }
     let supplementalId = -1;
-    for (const [field, target] of Object.entries({ profile_id: "build_profiles", project_id: "projects", part_id: "parts", projection_part_id: "parts", source_id: "projects" })) {
+    for (const [field, target] of Object.entries({ profile_id: "build_profiles", project_id: "projects", part_id: "parts", projection_part_id: "parts", source_id: "projects", machine_profile_id: "printer_profiles", filament_profile_id: "filament_profiles" })) {
       if (columns(db, table).includes(field) && !foreignKeys.some(fk => fk.from === field)) links.set(supplementalId--, [{ id: -1, seq: 0, table: target, from: field, to: "id" }]);
     }
     for (const row of data) for (const link of links.values()) {
