@@ -1,11 +1,39 @@
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "macos")]
+use std::os::fd::AsRawFd;
+#[cfg(not(target_os = "macos"))]
+use std::os::unix::fs::MetadataExt;
 use std::{
     fs::File,
     io::Write,
-    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
 };
+
+#[cfg(target_os = "macos")]
+fn directory_was_removed(directory: &File) -> std::io::Result<bool> {
+    let mut path = [0u8; libc::MAXPATHLEN as usize];
+    // SAFETY: F_GETPATH writes at most MAXPATHLEN bytes into this buffer;
+    // the borrowed File keeps the descriptor open throughout the call.
+    let result = unsafe { libc::fcntl(directory.as_raw_fd(), libc::F_GETPATH, path.as_mut_ptr()) };
+    if result != -1 {
+        return Ok(false);
+    }
+    let error = std::io::Error::last_os_error();
+    // XNU vn_getpath_ext reports ENOENT for a missing vnode name/parent chain.
+    // A renamed directory still resolves through its updated vnode identity.
+    if error.raw_os_error() == Some(libc::ENOENT) {
+        Ok(true)
+    } else {
+        Err(error)
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn directory_was_removed(directory: &File) -> std::io::Result<bool> {
+    Ok(directory.metadata()?.nlink() == 0)
+}
 
 #[cfg(target_os = "linux")]
 pub(crate) fn process_identity(pid: u32) -> Result<String> {
@@ -220,14 +248,14 @@ impl StorageLease {
         let Some(path) = &self.path else {
             return Ok(());
         };
-        if self.directory.metadata()?.nlink() == 0 {
+        if directory_was_removed(&self.directory)? {
             self.path = None;
             return Ok(());
         }
         if path != &self.detached {
             if let Err(error) = std::fs::rename(path, &self.detached) {
                 if error.kind() == std::io::ErrorKind::NotFound
-                    && self.directory.metadata()?.nlink() == 0
+                    && directory_was_removed(&self.directory)?
                 {
                     self.path = None;
                     return Ok(());
@@ -266,6 +294,39 @@ mod tests {
         ));
         std::fs::create_dir(&directory).unwrap();
         directory
+    }
+
+    #[test]
+    fn directory_removal_proof_follows_descriptor_through_rename_and_replacement() {
+        let directory = release_directory();
+        let original = directory.join("original");
+        let renamed = directory.join("renamed");
+        std::fs::create_dir(&original).unwrap();
+        let opened = std::fs::File::open(&original).unwrap();
+        assert!(!super::directory_was_removed(&opened).unwrap());
+
+        std::fs::rename(&original, &renamed).unwrap();
+        assert!(!super::directory_was_removed(&opened).unwrap());
+        std::fs::create_dir(&original).unwrap();
+        assert!(!super::directory_was_removed(&opened).unwrap());
+
+        std::fs::remove_dir(&renamed).unwrap();
+        assert!(super::directory_was_removed(&opened).unwrap());
+        assert!(original.is_dir());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn directory_removal_proof_propagates_descriptor_errors() {
+        let (socket, _peer) = std::os::unix::net::UnixStream::pair().unwrap();
+        let file = std::fs::File::from(std::os::fd::OwnedFd::from(socket));
+        assert_eq!(
+            super::directory_was_removed(&file)
+                .unwrap_err()
+                .raw_os_error(),
+            Some(libc::EBADF)
+        );
     }
 
     #[test]
