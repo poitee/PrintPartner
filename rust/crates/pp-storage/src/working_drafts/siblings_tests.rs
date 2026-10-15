@@ -480,10 +480,7 @@ fn siblings_recovery_root_version_does_not_alias_a_real_root_folder() {
             ),
             (
                 "root_2",
-                &[
-                    ("default", &["base.stl"]),
-                    ("version_2", &["Version 2/*"]),
-                ],
+                &[("default", &["base.stl"]), ("version_2", &["Version 2/*"]),],
             ),
         ])
     );
@@ -513,5 +510,63 @@ fn siblings_recovery_truncated_expansion_does_not_consume_a_discarded_group() {
                 ("beam_mount_80", &["Beam Mount 80/*"]),
             ],
         )])
+    );
+}
+
+#[test]
+fn siblings_share_node_budget_and_refuse_excessive_depth() {
+    let cancelled = AtomicBool::new(false);
+    let mut budget = PreparationBudget::new(
+        &cancelled,
+        PreparationLimits {
+            nodes: 3,
+            ..PreparationLimits::default()
+        },
+    )
+    .unwrap();
+    budget.node(0).unwrap();
+    assert!(matches!(
+        super::siblings::infer(
+            &["Options/A/a.stl".into(), "Options/B/b.stl".into()],
+            &mut budget,
+        ),
+        Err(ReadFailure::LimitExceeded(Resource::Nodes))
+    ));
+    assert!(matches!(
+        infer_within(
+            &["Options/A/a.stl", "Options/B/b.stl"],
+            false,
+            PreparationLimits {
+                depth: 1,
+                ..PreparationLimits::default()
+            },
+        ),
+        Err(ReadFailure::LimitExceeded(Resource::Depth))
+    ));
+}
+
+#[test]
+fn siblings_version_aggregation_respects_the_option_cap() {
+    let mut paths = vec!["Body/base.stl".into()];
+    paths.extend((b'A'..=b'Q').map(|n| format!("Body/Version {}/a.stl", char::from(n))));
+    let paths: Vec<_> = paths.iter().map(String::as_str).collect();
+    let groups = shape(&paths);
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].0, "body");
+    assert_eq!(groups[0].1.len(), 16);
+    assert_eq!(
+        &groups[0].1[..2],
+        &expect(&[(
+            "body",
+            &[
+                ("default", &["Body/base.stl"]),
+                ("version_a", &["Body/Version A/*"]),
+            ],
+        )])[0]
+            .1
+    );
+    assert_eq!(
+        groups[0].1[15],
+        ("version_o".into(), vec!["Body/Version O/*".into()])
     );
 }

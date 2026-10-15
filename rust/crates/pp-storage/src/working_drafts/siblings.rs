@@ -281,11 +281,15 @@ fn infer_scalar(paths: &[String], budget: &mut PreparationBudget<'_>) -> ReadRes
                     claim(&mut consumed, i, Claim::Tree);
                 }
             } else {
+                let id = unique(
+                    slug(scope(&dirs[parent].path)),
+                    &mut candidates.iter().map(|c| c.id.clone()).collect(),
+                );
                 push(
                     &mut candidates,
                     &mut consumed,
                     Candidate {
-                        id: slug(scope(&dirs[parent].path)),
+                        id,
                         dir: parent,
                         optional: false,
                         options: vec![(parent, Claim::Files), (i, Claim::Tree)],
@@ -332,6 +336,7 @@ fn infer_scalar(paths: &[String], budget: &mut PreparationBudget<'_>) -> ReadRes
             }
         }
         for (skeleton, mut options) in skeletons {
+            options.retain(|i| !consumed.contains_key(i));
             let id = slug(&format!(
                 "{} {}",
                 scope(&dirs[i].path),
