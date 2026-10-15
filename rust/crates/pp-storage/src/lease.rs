@@ -657,6 +657,16 @@ mod tests {
     }
 
     #[test]
+    fn ticket_t_12_child_recording_does_not_create_a_missing_store() {
+        let root = directory();
+        let missing = root.join("missing/nested");
+        assert!(record_child(&missing, std::process::id()).is_err());
+        assert!(!root.join("missing").exists());
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn ticket_t_12_child_recorder_uses_retained_owner_through_alias() {
         let path = directory();
         let alias = path.with_extension("alias");
