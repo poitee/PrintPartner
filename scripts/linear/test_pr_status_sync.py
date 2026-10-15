@@ -1,6 +1,8 @@
 import copy
 import datetime as dt
 import importlib.util
+import io
+import json
 from pathlib import Path
 import subprocess
 import textwrap
@@ -11,6 +13,7 @@ from unittest.mock import patch
 spec = importlib.util.spec_from_file_location("sync", Path(__file__).with_name("pr_status_sync.py"))
 sync = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(sync)
+real_gql = sync.gql
 
 
 def ticket(number=1, state="In Progress", age=72):
@@ -21,7 +24,7 @@ def ticket(number=1, state="In Progress", age=72):
 
 def pr(number=1, state="OPEN", body="Refs GRE-1", age=0):
     timestamp = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=age)).isoformat()
-    return {"number": number, "state": state, "body": body, "title": "A slice",
+    return {"number": number, "state": state, "body": body, "title": "A slice", "isCrossRepository": False,
             "headRefName": "slice", "updatedAt": timestamp,
             "mergedAt": timestamp if state == "MERGED" else None,
             "closedAt": timestamp if state != "OPEN" else None}
@@ -42,6 +45,9 @@ class SyncTest(unittest.TestCase):
         self.addCleanup(patch.stopall)
 
     def linear(self, query, variables):
+        if "issues(first:1," in query:
+            iss = self.issues.get(f"{variables['k']}-{variables['n']}")
+            return {"issues": {"nodes": [copy.deepcopy(iss)] if iss else []}}
         if "teams(" in query:
             return {"teams": {"nodes": [{"states": {"nodes": [
                 {"id": name, "name": name} for name in ("In Review", "In Progress", "Backlog", "Done")
@@ -69,6 +75,28 @@ class SyncTest(unittest.TestCase):
         self.assertEqual(sync.refs({"title": "GRE-4 work", "headRefName": "gre-5-slice",
                                    "body": "Closes GRE-1, GRE-2 and GRE-3. Refs GRE-6"}),
                          ({"GRE-1", "GRE-2", "GRE-3"}, {"GRE-1", "GRE-2", "GRE-3", "GRE-4", "GRE-5", "GRE-6"}))
+
+    def test_negated_closing_text_from_real_slice_prs_is_not_a_directive(self):
+        bodies = [
+            "This does not close GRE-401. Production Node still owns application SQL.",  # #298
+            "Does not close GRE-594, GRE-408, or GRE-354.",  # #305
+            "- GRE-448 stays open. This does not complete the child issue and does not close GRE-334.",  # #308
+            "Linear: GRE-387 stage 1 (this PR does not close GRE-387).",  # #210
+            "fix\n\nGRE-528",  # #216 must not match across lines
+        ]
+        for body in bodies:
+            with self.subTest(body=body):
+                self.assertEqual(sync.refs(pr(body=body))[0], set())
+        for directive in ("Fixes", "Closes", "Resolves", "- Fixes", "## Closes"):
+            with self.subTest(directive=directive):
+                self.assertEqual(sync.refs(pr(body=f"{directive} GRE-1, GRE-2 and GRE-3."))[0],
+                                 {"GRE-1", "GRE-2", "GRE-3"})
+
+    def test_negated_close_merge_does_not_mark_ticket_done(self):
+        self.issues = {"GRE-401": ticket(401)}
+        sync._prs = [pr(number=413, body="Refs GRE-401")]
+        sync.apply_pr(pr(number=298, state="MERGED", body="Refs GRE-401. This does not close GRE-401."))
+        self.assertEqual(self.issues["GRE-401"]["state"]["name"], "In Review")
 
     def test_open_then_merge_and_replay(self):
         sync.apply_pr(pr())
@@ -136,6 +164,52 @@ class SyncTest(unittest.TestCase):
         self.assertEqual(self.comments, [])
         sync.apply_pr(pr())
         self.assertEqual(self.issues["GRE-1"]["state"]["name"], "In Review")
+
+    def test_missing_filtered_issue_http_response(self):
+        self.api.side_effect = real_gql
+        response = io.BytesIO(json.dumps({"data": {"issues": {"nodes": []}}}).encode())
+        with patch.dict(sync.os.environ, {"LINEAR_API_KEY": "test-key"}), \
+                patch.object(sync.urllib.request, "urlopen", return_value=response) as request:
+            self.assertIsNone(sync.issue("GRE-999999"))
+        sent = json.loads(request.call_args.args[0].data)
+        self.assertEqual(sent["variables"], {"k": "GRE", "n": 999999})
+        self.assertIn("number:{eq:$n}", sent["query"])
+
+    def test_missing_issue_does_not_block_stale_sweep(self):
+        sync._prs = [pr(body="Refs GRE-999999")]
+        sync.reconcile(3)
+        self.assertEqual(self.issues["GRE-1"]["state"]["name"], "Backlog")
+
+    def test_lookup_graphql_failure_remains_visible_without_echoing_key(self):
+        self.api.side_effect = real_gql
+        response = io.BytesIO(json.dumps({"errors": [{"message": "test-key rate limited"}]}).encode())
+        with patch.dict(sync.os.environ, {"LINEAR_API_KEY": "test-key"}), \
+                patch.object(sync.urllib.request, "urlopen", return_value=response):
+            with self.assertRaisesRegex(RuntimeError, "^Linear API returned GraphQL errors$"):
+                sync.issue("GRE-1")
+
+    def test_fork_event_cannot_change_linear(self):
+        fork = pr()
+        fork["isCrossRepository"] = True
+        self.issues["GRE-1"] = ticket(state="In Review")
+        sync.apply_pr(fork)
+        fork["body"] = ""
+        sync.apply_event(fork, {"action": "edited", "changes": {"body": {"from": "Refs GRE-1"}}})
+        self.assertEqual(self.issues["GRE-1"]["state"]["name"], "In Review")
+        self.assertEqual(self.comments, [])
+        self.assertEqual(self.api.call_count, 0)
+
+    def test_fork_pr_is_excluded_from_reconcile_and_open_pr_protection(self):
+        sync._prs = None
+        fork = pr(body="Refs GRE-1")
+        fork["isCrossRepository"] = True
+        trusted = pr(number=2, body="Refs GRE-2")
+        self.issues["GRE-2"] = ticket(2)
+        pages = [{"data": {"repository": {"pullRequests": {"nodes": [fork, trusted]}}}}]
+        with patch.object(sync, "gh", return_value=pages):
+            sync.reconcile(3)
+        self.assertEqual(self.issues["GRE-1"]["state"]["name"], "Backlog")
+        self.assertEqual(self.issues["GRE-2"]["state"]["name"], "In Review")
 
     def test_failed_comment_can_be_retried(self):
         self.fail_comment = True

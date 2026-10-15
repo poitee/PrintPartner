@@ -5,6 +5,7 @@ Rules (team GRE):
   * PR open and references GRE-NNN (branch gre-NNN-*, or Refs/Fixes/Closes GRE-NNN
     in title/body)                                   -> In Review
   * PR merged with Fixes/Closes/Resolves GRE-NNN     -> Done
+    Closing directives must start the title or a line, with optional Markdown.
   * PR merged with only Refs GRE-NNN (multi-slice)   -> In Progress (if another
     PR for the ticket is still open: stays In Review), comment "slice #N merged;
     next slice pending. Final slice must say 'Fixes GRE-NNN'."
@@ -13,6 +14,7 @@ Rules (team GRE):
   * Cron: In Progress/In Review with no PR activity for STALE_HOURS (48) and no
     open PR -> Backlog, comment "stalled: no PR/commit activity 48h".
 Never touches Done/Canceled/Duplicate issues. Never prints secrets.
+Fork PRs are excluded from both event handling and reconciliation.
 
 Usage:
   pr_status_sync.py event  --pr N        # one PR (Actions pull_request event)
@@ -25,7 +27,7 @@ REPO = os.environ.get("GITHUB_REPOSITORY", "poitee/PrintPartner")
 TEAM = os.environ.get("LINEAR_TEAM_KEY", "GRE")
 STALE_HOURS = int(os.environ.get("STALE_HOURS", "48"))
 DRY = False
-CLOSE_RE = re.compile(r"\b(?:fix(?:es|ed)?|close[sd]?|resolve[sd]?)\s*:?\s+((?:GRE-\d+[\s,]*(?:and\s+)?)+)", re.I)
+CLOSE_RE = re.compile(r"^[ \t#>*-]*(?:fix(?:es|ed)?|close[sd]?|resolve[sd]?)[ \t]*:?[ \t]+((?:GRE-\d+\b[ \t,]*(?:and[ \t]+)?)+)", re.I | re.M)
 REF_RE = re.compile(r"\b(?:refs?|part of|towards?)\s*:?\s+((?:GRE-\d+[\s,]*(?:and\s+)?)+)", re.I)
 ID_RE = re.compile(r"GRE-(\d+)", re.I)
 BRANCH_RE = re.compile(r"^gre-(\d+)\b", re.I)
@@ -59,8 +61,12 @@ def state_id(name):
 
 
 def issue(ident):
-    d = gql('query($id:String!){issue(id:$id){id identifier state{name type} updatedAt}}', {"id": ident})
-    return d["issue"]
+    key, number = ident.rsplit("-", 1)
+    # A filtered connection returns no nodes for an unknown number, rather than
+    # the single-entity lookup's GraphQL not-found error. Other API errors propagate.
+    d = gql('query($k:String!,$n:Float!){issues(first:1,includeArchived:true,filter:{team:{key:{eq:$k}},number:{eq:$n}}){nodes{id identifier state{name type} updatedAt}}}',
+            {"k": key, "n": int(number)})
+    return d["issues"]["nodes"][0] if d["issues"]["nodes"] else None
 
 
 def move(iss, target, comment, *, record_unchanged=False):
@@ -108,7 +114,7 @@ def refs(pr):
     return closing, allids
 
 
-FIELDS = "number,state,title,body,headRefName,mergedAt,closedAt,updatedAt"
+FIELDS = "number,state,title,body,headRefName,mergedAt,closedAt,updatedAt,isCrossRepository"
 _prs = None
 def all_prs():
     global _prs
@@ -118,14 +124,15 @@ def all_prs():
           query($owner:String!, $name:String!, $endCursor:String) {
             repository(owner:$owner, name:$name) {
               pullRequests(first:100, after:$endCursor, orderBy:{field:UPDATED_AT,direction:DESC}) {
-                nodes { number state title body headRefName mergedAt closedAt updatedAt
+                nodes { number state title body headRefName mergedAt closedAt updatedAt isCrossRepository
                   commits(last:1) { nodes { commit { committedDate } } }
                 }
                 pageInfo { hasNextPage endCursor }
               }
             }
           }''', "-f", f"owner={owner}", "-f", f"name={name}")
-        _prs = [pr for page in pages for pr in page["data"]["repository"]["pullRequests"]["nodes"]]
+        _prs = [pr for page in pages for pr in page["data"]["repository"]["pullRequests"]["nodes"]
+                if not pr["isCrossRepository"]]
     return _prs
 
 
@@ -138,6 +145,8 @@ def other_open(ident, exclude):
 
 
 def apply_pr(pr):
+    if pr["isCrossRepository"]:
+        return
     closing, ids = refs(pr)
     n = pr["number"]
     for ident in sorted(ids):
@@ -159,6 +168,8 @@ def apply_pr(pr):
 
 
 def apply_event(pr, event):
+    if pr["isCrossRepository"]:
+        return
     if event.get("action") == "edited":
         previous = dict(pr)
         for field in ("title", "body"):
