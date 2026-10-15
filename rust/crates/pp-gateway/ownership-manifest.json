@@ -405,6 +405,27 @@
         ]
       },
       {
+        "operation": "tool.ui_open_docs",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "build_profiles"
+          },
+          {
+            "kind": "table",
+            "name": "projects"
+          },
+          {
+            "kind": "table",
+            "name": "source_docs"
+          },
+          {
+            "kind": "file",
+            "name": "source-workspace"
+          }
+        ]
+      },
+      {
         "operation": "tool.ui_focus_stl_search",
         "resources": [
           {
@@ -837,7 +858,6 @@
       "tool.start_sync",
       "tool.suggest_source_contributions",
       "tool.ui_focus_kit_option",
-      "tool.ui_open_docs",
       "tool.update_kit_selections",
       "tool.web_search",
       "worker.startManagedProfileSync"
