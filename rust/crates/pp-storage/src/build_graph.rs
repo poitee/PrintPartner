@@ -5,7 +5,7 @@ use anyhow::{Result, anyhow, ensure};
 pub use model::*;
 pub use pp_contracts::build_identity::BuildName;
 use pp_domain::PositiveId;
-use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use std::{
     path::PathBuf,
     sync::{
@@ -494,11 +494,12 @@ fn mutation(
             }
             tx.pragma_update(None, "defer_foreign_keys", "ON")?;
             tx.execute(
-                "DELETE FROM app_settings WHERE tenant_id=?1 AND key IN (?2,?3)",
+                "DELETE FROM app_settings WHERE tenant_id=?1 AND key IN (?2,?3,?4)",
                 params![
                     tenant,
                     format!("production_setup:{build}"),
-                    format!("role_filaments_{build}")
+                    format!("role_filaments_{build}"),
+                    format!("feature_toggles:plan:{build}")
                 ],
             )?;
             ensure!(
@@ -573,7 +574,11 @@ fn read(
     }
 }
 
-pub(super) fn execute(connection: &mut Connection, command: Command) -> Result<BuildOutcome> {
+pub(super) fn execute(
+    connection: &mut Connection,
+    command: Command,
+    admission: crate::writer_admission::Deadline,
+) -> Result<BuildOutcome> {
     ensure!(
         !command.cancelled.load(Ordering::Acquire),
         Failure::Cancelled
@@ -582,12 +587,11 @@ pub(super) fn execute(connection: &mut Connection, command: Command) -> Result<B
         command.command,
         BuildCommand::List | BuildCommand::Read { .. } | BuildCommand::ListLayers { .. }
     );
-    let behavior = if read_only {
-        TransactionBehavior::Deferred
+    let tx = if read_only {
+        connection.transaction()?
     } else {
-        TransactionBehavior::Immediate
+        crate::writer_admission::begin_immediate(connection, admission)?
     };
-    let tx = connection.transaction_with_behavior(behavior)?;
     let tenant = tenant(&tx, &command)?;
     let operation = if read_only { read } else { mutation };
     let outcome = operation(
@@ -608,6 +612,166 @@ pub(super) fn execute(connection: &mut Connection, command: Command) -> Result<B
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn command(command: BuildCommand, repos: PathBuf) -> Command {
+        Command {
+            credential: read_model::Credential::Session(auth::Secret::new(
+                "read-fixture-secret".into(),
+            )),
+            policy: auth::AuthPolicy {
+                registration: auth::RegistrationPolicy::Open,
+                first_user: auth::FirstUserTenant::NewUser,
+                session_tenant: auth::SessionTenantPolicy::AccountTenant,
+            },
+            command,
+            cancelled: Arc::new(AtomicBool::new(false)),
+            repos,
+        }
+    }
+
+    #[test]
+    fn expired_mutations_skip_sql_and_preserve_timeout_before_fresh_mutation() {
+        use crate::writer_admission::Deadline;
+        let root = crate::tests::directory("build-admission");
+        let mut connection = Connection::open(root.join("admission.db")).unwrap();
+        connection
+            .busy_timeout(Duration::from_millis(1234))
+            .unwrap();
+        let build = PositiveId::new(1).unwrap();
+        for mutation in [
+            BuildCommand::Create {
+                name: BuildName::parse("Expired".into()).unwrap(),
+                base_source: None,
+            },
+            BuildCommand::Touch { build },
+            BuildCommand::SetBase {
+                build,
+                source: build,
+            },
+            BuildCommand::AttachAddon {
+                build,
+                source: build,
+            },
+            BuildCommand::ReplaceAttachment {
+                build,
+                layer: build,
+                source: build,
+            },
+            BuildCommand::Detach {
+                build,
+                layer: build,
+            },
+            BuildCommand::Delete { build },
+        ] {
+            let error = execute(
+                &mut connection,
+                command(mutation, PathBuf::new()),
+                Deadline::expired(),
+            )
+            .unwrap_err();
+            assert_eq!(
+                error
+                    .downcast_ref::<rusqlite::Error>()
+                    .unwrap()
+                    .sqlite_error_code(),
+                Some(rusqlite::ErrorCode::DatabaseBusy),
+                "{error:#}"
+            );
+            assert!(connection.is_autocommit());
+            assert_eq!(
+                crate::tests::pragma_value(&connection, "busy_timeout"),
+                1234
+            );
+            assert_eq!(connection.total_changes(), 0);
+        }
+        std::fs::write(
+            root.join("fixture.db"),
+            include_bytes!("../tests/fixtures/accepted-plan-node.db"),
+        )
+        .unwrap();
+        drop(
+            crate::schema::initialize(&root.join("fixture.db"), 34, &auth::catalog_timestamp())
+                .unwrap(),
+        );
+        connection
+            .restore(
+                "main",
+                root.join("fixture.db"),
+                None::<fn(rusqlite::backup::Progress)>,
+            )
+            .unwrap();
+        crate::schema::configure(&connection, false).unwrap();
+        assert!(matches!(
+            execute(
+                &mut connection,
+                command(BuildCommand::Delete { build }, root.join("repos")),
+                Deadline::at_dequeue()
+            )
+            .unwrap(),
+            BuildOutcome::Deleted
+        ));
+        let count: i64 = connection
+            .query_row("SELECT count(*) FROM build_profiles", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+        assert!(connection.is_autocommit());
+        assert_eq!(
+            crate::tests::pragma_value(&connection, "busy_timeout"),
+            5000
+        );
+        drop(connection);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn expired_writer_deadline_does_not_block_deferred_reads() {
+        use crate::writer_admission::Deadline;
+        let root = crate::tests::directory("build-deferred-read");
+        let database = root.join("fixture.db");
+        std::fs::write(
+            &database,
+            include_bytes!("../tests/fixtures/accepted-plan-node.db"),
+        )
+        .unwrap();
+        let (mut connection, _) =
+            crate::schema::initialize(&database, 34, &auth::catalog_timestamp()).unwrap();
+        connection
+            .busy_timeout(Duration::from_millis(1234))
+            .unwrap();
+        let holder = Connection::open(&database).unwrap();
+        holder.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let build = PositiveId::new(1).unwrap();
+        for read in [
+            BuildCommand::List,
+            BuildCommand::Read { build },
+            BuildCommand::ListLayers { build },
+        ] {
+            let outcome = execute(
+                &mut connection,
+                command(read, root.join("repos")),
+                Deadline::expired(),
+            )
+            .unwrap();
+            match outcome {
+                BuildOutcome::Listed { profiles } => assert_eq!(profiles.len(), 1),
+                BuildOutcome::Read { profile } => assert_eq!(profile.id, 1),
+                BuildOutcome::Layers { profile_id, layers } => {
+                    assert_eq!(profile_id, 1);
+                    assert_eq!(layers.len(), 1);
+                }
+                outcome => panic!("{outcome:?}"),
+            }
+            assert!(connection.is_autocommit());
+            assert_eq!(
+                crate::tests::pragma_value(&connection, "busy_timeout"),
+                1234
+            );
+        }
+        holder.execute_batch("ROLLBACK").unwrap();
+        drop(holder);
+        drop(connection);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn lost_reply_is_outcome_unknown() {

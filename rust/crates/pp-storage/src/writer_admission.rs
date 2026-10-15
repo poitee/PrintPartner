@@ -12,6 +12,11 @@ const RETRY_PAUSE: Duration = Duration::from_millis(10);
 pub(super) struct Deadline(Instant);
 
 impl Deadline {
+    #[cfg(all(test, feature = "desktop_rebuild"))]
+    pub(super) fn expired() -> Self {
+        Self(Instant::now())
+    }
+
     pub(super) fn at_dequeue() -> Self {
         Self(Instant::now() + BUSY_TIMEOUT)
     }

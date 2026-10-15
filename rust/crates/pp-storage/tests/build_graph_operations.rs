@@ -701,7 +701,7 @@ fn mutation_duplicate_missing_membership_and_tenant_cases() {
 #[test]
 fn mutation_delete_cascades_accepted_graph_and_scoped_settings() {
     let f = Fixture::new();
-    f.raw().execute_batch("INSERT INTO app_settings(tenant_id,key,value) VALUES('default','production_setup:1','{}'),('default','role_filaments_1','{}'),('other','production_setup:1','keep'),('default','production_setup:2','keep');").unwrap();
+    f.raw().execute_batch("INSERT INTO app_settings(tenant_id,key,value) VALUES('default','production_setup:1','{}'),('default','role_filaments_1','{}'),('default','feature_toggles:plan:1','{}'),('other','production_setup:1','keep'),('other','role_filaments_1','keep'),('other','feature_toggles:plan:1','keep'),('default','production_setup:2','keep'),('default','role_filaments_2','keep'),('default','feature_toggles:plan:2','keep'),('default','feature_toggles','keep');").unwrap();
     assert!(matches!(
         f.run(BuildCommand::Delete { build: id(1) }).unwrap(),
         BuildOutcome::Deleted
@@ -725,7 +725,7 @@ fn mutation_delete_cascades_accepted_graph_and_scoped_settings() {
         assert_eq!(count, 0, "{table}");
     }
     let settings: Vec<(String, String)> = c
-        .prepare("SELECT tenant_id,key FROM app_settings WHERE value='keep' ORDER BY tenant_id")
+        .prepare("SELECT tenant_id,key FROM app_settings WHERE value='keep' ORDER BY tenant_id,key")
         .unwrap()
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
         .unwrap()
@@ -734,11 +734,16 @@ fn mutation_delete_cascades_accepted_graph_and_scoped_settings() {
     assert_eq!(
         settings,
         vec![
+            ("default".into(), "feature_toggles".into()),
+            ("default".into(), "feature_toggles:plan:2".into()),
             ("default".into(), "production_setup:2".into()),
-            ("other".into(), "production_setup:1".into())
+            ("default".into(), "role_filaments_2".into()),
+            ("other".into(), "feature_toggles:plan:1".into()),
+            ("other".into(), "production_setup:1".into()),
+            ("other".into(), "role_filaments_1".into())
         ]
     );
-    let removed: i64 = c.query_row("SELECT count(*) FROM app_settings WHERE tenant_id='default' AND key IN ('production_setup:1','role_filaments_1')", [], |r| r.get(0)).unwrap();
+    let removed: i64 = c.query_row("SELECT count(*) FROM app_settings WHERE tenant_id='default' AND key IN ('production_setup:1','role_filaments_1','feature_toggles:plan:1')", [], |r| r.get(0)).unwrap();
     assert_eq!(removed, 0);
     assert!(
         c.prepare("PRAGMA foreign_key_check")
@@ -957,18 +962,39 @@ fn mutation_create_and_delete_rollback_include_dependent_writes() {
         )
         .unwrap();
     assert_eq!(count, 0);
-    f.raw().execute_batch("DROP TRIGGER reject_layer; INSERT INTO app_settings(tenant_id,key,value) VALUES('default','production_setup:1','keep'); CREATE TRIGGER reject_delete BEFORE DELETE ON build_profiles BEGIN SELECT RAISE(ABORT,'reject delete'); END;").unwrap();
+    f.raw().execute_batch("DROP TRIGGER reject_layer; INSERT INTO app_settings(tenant_id,key,value) VALUES('default','production_setup:1','keep'),('default','role_filaments_1','keep'),('default','feature_toggles:plan:1','keep'); CREATE TRIGGER reject_delete BEFORE DELETE ON build_profiles BEGIN SELECT RAISE(ABORT,'reject delete'); END;").unwrap();
     assert!(f.run(BuildCommand::Delete { build: id(1) }).is_err());
     assert_eq!(f.read().id, 1);
-    let setting: String = f
-        .raw()
-        .query_row(
-            "SELECT value FROM app_settings WHERE tenant_id='default' AND key='production_setup:1'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(setting, "keep");
+    let settings = || {
+        f.raw()
+            .prepare("SELECT key,value FROM app_settings WHERE tenant_id='default' AND key IN ('production_setup:1','role_filaments_1','feature_toggles:plan:1') ORDER BY key")
+            .unwrap()
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+    };
+    let expected = vec![
+        ("feature_toggles:plan:1".into(), "keep".into()),
+        ("production_setup:1".into(), "keep".into()),
+        ("role_filaments_1".into(), "keep".into()),
+    ];
+    assert_eq!(settings(), expected);
+    f.raw().execute_batch("DROP TRIGGER reject_delete; CREATE TRIGGER reject_plan_delete BEFORE DELETE ON app_settings WHEN OLD.tenant_id='default' AND OLD.key='feature_toggles:plan:1' BEGIN SELECT RAISE(ABORT,'reject plan delete'); END;").unwrap();
+    let error = f.run(BuildCommand::Delete { build: id(1) }).unwrap_err();
+    assert!(
+        error.to_string().contains("reject plan delete"),
+        "{error:#}"
+    );
+    assert_eq!(f.read().id, 1);
+    assert_eq!(settings(), expected);
+    assert!(matches!(
+        f.read().accepted_progress,
+        AcceptedProgress::Ready {
+            total_units: 1,
+            remaining_units: 1
+        }
+    ));
     assert_eq!(
         layer_result(&f, BuildCommand::ListLayers { build: id(1) }).len(),
         1
