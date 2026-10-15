@@ -128,7 +128,7 @@ function checkWorkflow(file) {
     report(file, 'jobs', 'INVALID_SHAPE', 'workflow requires a nonempty jobs mapping');
     return;
   }
-  if (basename(file) === 'desktop-contracts.yml') checkDesktopNode(workflow, file);
+  if (/^desktop-contracts\.ya?ml$/i.test(basename(file))) checkDesktopNode(workflow, file);
   const seen = new Set();
   for (const [name, job] of Object.entries(workflow.jobs)) {
     const path = `jobs.${name}`;

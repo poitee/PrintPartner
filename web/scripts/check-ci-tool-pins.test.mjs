@@ -85,6 +85,23 @@ test('Node policy leaves unrelated workflows unchanged', t => {
   assert.equal(result.stdout, summary(0, 0, 0));
 });
 
+for (const filename of ['desktop-contracts.yaml', 'desktop-contracts.YML', 'DESKTOP-CONTRACTS.YAML']) {
+  test(`reject floating Node pins after rename to ${filename}`, t => {
+    const result = run(t, desktop({ node: ['22', '24'] }), [], filename);
+    assert.equal(result.status, 1, result.stdout);
+    assert.equal(result.stdout, summary(0, 0, 2));
+    assert.match(result.stderr, /UNPINNED_NODE: "22"/);
+    assert.match(result.stderr, /UNPINNED_NODE: "24"/);
+  });
+
+  test(`accept exact Node pins after rename to ${filename}`, t => {
+    const result = run(t, desktop(), [], filename);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, summary(0, 0, 0));
+    assert.equal(result.stderr, '');
+  });
+}
+
 for (const [name, source, declarations, tools] of [
   ['current releases', installer('nextest@0.9.148, sccache@0.18.0 ast-grep@0.50.0 cargo-machete@0.9.2'), 1, 4],
   ['quoted flow keys and reordered inputs', `"jobs": {probe: {"steps": [{with: {"tool": "nextest@0.9.148"}, "uses": '${action}'}]}}`, 1, 1],
