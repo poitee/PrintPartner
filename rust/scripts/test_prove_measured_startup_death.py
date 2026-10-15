@@ -1,3 +1,4 @@
+import ast
 import contextlib
 import importlib.util
 import io
@@ -45,9 +46,7 @@ class CleanupTests(unittest.TestCase):
 
 class RuntimeTests(unittest.TestCase):
     def test_rejects_wrong_native_identity_before_creating_evidence(self):
-        node = Path("/usr/bin/node").resolve(strict=True)
-        with node.open("rb") as binary:
-            self.assertIn(binary.read(4), (b"\x7fELF", b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xca\xfe\xba\xbe"))
+        node = Path(sys.executable).resolve(strict=True)
         valid = {"version": "v24.21.0", "abi": "137", "os": "linux", "arch": "x64"}
         for key, value in (("version", "v22.20.0"), ("abi", "127"), ("os", "darwin"), ("arch", "arm64")):
             with self.subTest(key=key), tempfile.TemporaryDirectory() as directory:
@@ -65,6 +64,27 @@ class RuntimeTests(unittest.TestCase):
                 identity.assert_called_once()
                 self.assertEqual(identity.call_args.args[0][0], str(node))
                 stage.assert_not_called()
+                self.assertFalse(evidence.exists())
+
+    def test_stager_native_headers_reach_identity_validation(self):
+        stager = ast.parse(SCRIPT.with_name("stage-desktop.py").read_text())
+        headers = next(ast.literal_eval(node.value.args[0]) for node in stager.body
+                       if isinstance(node, ast.Assign)
+                       and any(isinstance(target, ast.Name) and target.id == "NATIVE_NODE_HEADERS"
+                               for target in node.targets))
+        self.assertEqual(proof.NATIVE_NODE_HEADERS, headers)
+        for header in sorted(headers):
+            with self.subTest(header=header), tempfile.TemporaryDirectory() as directory:
+                node = Path(directory) / "node"
+                node.write_bytes(header)
+                node.chmod(0o755)
+                evidence = Path(directory) / "evidence"
+                with patch.object(sys, "argv", [str(SCRIPT), "--node", str(node), "--evidence", str(evidence)]), \
+                     patch.object(proof.subprocess, "check_output", side_effect=RuntimeError("identity reached")) as identity:
+                    with self.assertRaisesRegex(RuntimeError, "identity reached"):
+                        proof.main()
+                identity.assert_called_once()
+                self.assertEqual(identity.call_args.args[0][0], str(node.resolve()))
                 self.assertFalse(evidence.exists())
 
     def test_rejects_dispatcher_before_execution(self):

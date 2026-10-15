@@ -22,6 +22,13 @@ import time
 
 REPO = Path(__file__).resolve().parents[2]
 TEST = "ticket_t_2::ticket_t_3_drain_measured_release_startup_parent_death"
+NATIVE_NODE_HEADERS = frozenset({
+    b"\x7fELF",
+    b"\xfe\xed\xfa\xcf", b"\xcf\xfa\xed\xfe",
+    b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe",
+    b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca",
+    b"\xca\xfe\xba\xbf", b"\xbf\xba\xfe\xca",
+})
 
 
 def negative_cleanup(output):
@@ -49,7 +56,7 @@ def main():
     args = parser.parse_args()
     node = args.node.resolve(strict=True)
     with node.open("rb") as binary:
-        if binary.read(4) not in (b"\x7fELF", b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xca\xfe\xba\xbe"):
+        if binary.read(4) not in NATIVE_NODE_HEADERS:
             parser.error("--node must resolve to a native ELF or Mach-O executable")
     node_identity = json.loads(subprocess.check_output([str(node), "-p",
         "JSON.stringify({version:process.version,abi:process.versions.modules,os:process.platform,arch:process.arch})"], text=True))

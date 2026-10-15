@@ -256,3 +256,18 @@ Focused results are in `/tmp/gre448-proof-review1/script-tests.log`.
 ```sh
 python3 -m unittest discover -s rust/scripts -p test_prove_measured_startup_death.py -v
 ```
+
+The second review follow-up uses resolved `sys.executable` for mocked identity
+tests and accepts the stager's complete nine-header ELF, Mach-O, and FAT set.
+All five proof-script tests passed, including nine header subcases that reach
+identity validation, canonical header-set equality, and dispatcher rejection
+before execution. All seven stager self-tests passed. Logs are
+`/tmp/gre448-proof-review2/script-tests.log` and `stager-tests.log`.
+
+The bounded rerun with `--negative-control --evidence /tmp/gre448-proof-review2`
+passed one baseline and one restored test with two cycles each. The negative
+test failed once with exit 101 at `startup group outlived force-killed owner`.
+All three recorded PIDs were absent afterward. An independent byte comparison
+confirmed unchanged `lib.rs`, recorded in `source-restoration.log`. Full driver
+results are in `driver.log`, `baseline.log`, `negative.log`, and `restored.log`
+in that evidence directory. No Rust or stager changes were retained.
