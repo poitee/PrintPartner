@@ -4,6 +4,7 @@ import type { IntegrationPort } from "../integrations/store.js";
 import { getIntegrationConfig } from "../integrations/store.js";
 import { selectFarmSuggestionItems } from "../services/plan-features.js";
 import { sendProblem } from "../lib/api-error.js";
+import { readFeatureAccess } from "../lib/feature-access.js";
 import { parseCheckoffUnits } from "../services/printer-checkoff.js";
 import { loadFleet } from "../services/printer-fleet.js";
 import {
@@ -174,6 +175,16 @@ export async function registerPrinterSendQueueRoutes(
         const integration = getIntegrationConfig(deps.repo, integrationId);
         if (!integration) {
           return sendProblem(reply, 400, "Bad Request", "Linked printer host was not found");
+        }
+        if (integration.type === "bambu") {
+          const access = readFeatureAccess(() => deps.repo, "bambu", profileId);
+          if (access.kind !== "allowed") {
+            const status = access.kind === "disabled" ? 403 : 500;
+            return reply.status(status).send({
+              status, title: access.kind === "disabled" ? "Forbidden" : "Internal Server Error",
+              detail: access.error, code: access.code,
+            });
+          }
         }
         if (integration.type !== "moonraker" && integration.type !== "prusalink") {
           return sendProblem(
