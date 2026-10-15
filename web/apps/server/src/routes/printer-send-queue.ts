@@ -1,10 +1,12 @@
 import type { FastifyInstance } from "fastify";
+import type { PrinterSendQueueItem } from "@print-partner/contracts";
 import type { AppRepository } from "../db/repository.js";
 import type { IntegrationPort } from "../integrations/store.js";
 import { getIntegrationConfig } from "../integrations/store.js";
 import { selectFarmSuggestionItems } from "../services/plan-features.js";
 import { sendProblem } from "../lib/api-error.js";
 import { readFeatureAccess } from "../lib/feature-access.js";
+import { desktopFeaturesEnabled } from "../lib/feature-toggles.js";
 import { parseCheckoffUnits } from "../services/printer-checkoff.js";
 import { loadFleet } from "../services/printer-fleet.js";
 import {
@@ -20,6 +22,7 @@ import {
   drainPrinterSendQueue,
   reconcilePrinterSendsAfterProcessStart,
   reconcilePrinterSendsAgainstLiveJobs,
+  selectPrinterSendQueueDrainItems,
 } from "../services/printer-send-queue.js";
 import { computePrinterQueueSuggestions } from "../services/printer-queue-suggestions.js";
 import { parsePrinterUploadMultipart } from "../services/printer-upload-multipart.js";
@@ -31,6 +34,30 @@ type RouteDeps = {
   integrations: IntegrationPort;
   jobs: InProcessJobRunner;
 };
+
+function storedBambuAdmissionProblem(repo: AppRepository, items: PrinterSendQueueItem[]) {
+  if (!desktopFeaturesEnabled()) return null;
+  const fleet = loadFleet(repo);
+  for (const item of items) {
+    const integrationId = fleet.find((printer) => printer.id === item.printer_id)?.integration_id?.trim();
+    if (!integrationId || getIntegrationConfig(repo, integrationId)?.type !== "bambu") continue;
+    if (item.profile_id == null) {
+      return { status: 400, title: "Bad Request", detail: "Pick a plan to bind this send (profile_id required)" };
+    }
+    if (!repo.getOwnedProfileIdentity(item.profile_id)) {
+      return { status: 404, title: "Not Found", detail: "Profile not found" };
+    }
+    const access = readFeatureAccess(() => repo, "bambu", item.profile_id);
+    if (access.kind !== "allowed") {
+      return {
+        status: access.kind === "disabled" ? 403 : 500,
+        title: access.kind === "disabled" ? "Forbidden" : "Internal Server Error",
+        detail: access.error, code: access.code,
+      };
+    }
+  }
+  return null;
+}
 
 export async function registerPrinterSendQueueRoutes(
   app: FastifyInstance,
@@ -226,6 +253,9 @@ export async function registerPrinterSendQueueRoutes(
       const id = String((request.params as { id: string }).id ?? "").trim();
       const body = (request.body ?? {}) as { force?: boolean };
       if (!id) return sendProblem(reply, 400, "Bad Request", "id is required");
+      const item = getPrinterSendQueueItem(deps.repo, id);
+      const problem = storedBambuAdmissionProblem(deps.repo, item ? [item] : []);
+      if (problem) return reply.status(problem.status).send(problem);
       await reconcileLiveSends(request.tenantId);
       const result = await dispatchPrinterSendQueueItem(
         deps.repo,
@@ -274,6 +304,8 @@ export async function registerPrinterSendQueueRoutes(
       }
       const printerId =
         typeof rawPrinterId === "string" ? rawPrinterId.trim() : undefined;
+      const problem = storedBambuAdmissionProblem(deps.repo, selectPrinterSendQueueDrainItems(deps.repo, printerId));
+      if (problem) return reply.status(problem.status).send(problem);
       await reconcileLiveSends(request.tenantId);
       const results = await drainPrinterSendQueue(
         deps.repo,
