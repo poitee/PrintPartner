@@ -30,6 +30,7 @@ console.log(JSON.stringify({ path: '.github/workflows/desktop-contracts.yml', st
   chmodSync(join(directory, 'bin/gh'), 0o755);
   symlinkSync(join(root, 'web/node_modules'), join(directory, 'web/node_modules'));
   writeFileSync(join(directory, contracts), original);
+  writeFileSync(join(directory, '.github/workflows/web-ci.yml'), YAML.stringify(webCI));
   const git = (...args) => {
     const result = spawnSync('git', args, { cwd: directory, encoding: 'utf8' });
     assert.equal(result.status, 0, result.stderr);
@@ -271,3 +272,42 @@ for (const lane of ['web', 'web-build']) {
     assert.equal(repaired.status, 0, repaired.stderr);
   });
 }
+
+for (const [name, mutate] of [
+  ['missing', directory => rmSync(join(directory, '.github/workflows/web-ci.yml'))],
+  ['renamed', directory => renameSync(join(directory, '.github/workflows/web-ci.yml'), join(directory, '.github/workflows/renamed-web.yml'))],
+  ['yaml extension', directory => renameSync(join(directory, '.github/workflows/web-ci.yml'), join(directory, '.github/workflows/web-ci.yaml'))],
+  ['uppercase extension', directory => renameSync(join(directory, '.github/workflows/web-ci.yml'), join(directory, '.github/workflows/web-ci.YML'))],
+  ['duplicate', directory => copyFileSync(join(directory, '.github/workflows/web-ci.yml'), join(directory, '.github/workflows/web-ci.yaml'))],
+  ['symlink', directory => {
+    renameSync(join(directory, '.github/workflows/web-ci.yml'), join(directory, '.github/workflows/real-web.yml'));
+    symlinkSync('real-web.yml', join(directory, '.github/workflows/web-ci.yml'));
+  }],
+]) {
+  test(`event tree rejects Web CI identity ${name}`, t => {
+    const f = fixture(t, mutate);
+    const result = f.run();
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stderr, /INVALID_EVENT_WEB_CI/);
+    const scan = spawnSync(process.execPath, [join(f.directory, cli)], { cwd: f.directory, encoding: 'utf8' });
+    assert.equal(scan.status, 1, scan.stdout + scan.stderr);
+    assert.match(scan.stderr, /INVALID_WEB_CI/);
+  });
+}
+
+test('default scan rejects untracked Web CI despite repaired worktree', t => {
+  const f = fixture(t, directory => rmSync(join(directory, '.github/workflows/web-ci.yml')));
+  writeFileSync(join(f.directory, '.github/workflows/web-ci.yml'), YAML.stringify(webCI));
+  const result = spawnSync(process.execPath, [join(f.directory, cli)], { cwd: f.directory, encoding: 'utf8' });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stderr, /UNTRACKED_WEB_CI/);
+});
+
+test('event tree rejects gitlink at required Web CI path', t => {
+  const f = fixture(t);
+  f.git('update-index', '--add', '--cacheinfo', `160000,${f.sha},.github/workflows/web-ci.yml`);
+  const sha = f.commit();
+  const result = f.run(sha);
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stderr, /INVALID_EVENT_WEB_CI/);
+});

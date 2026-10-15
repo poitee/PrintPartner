@@ -79,16 +79,20 @@ function checkWebNode(workflow, file) {
     const inputs = setup.with;
     const version = inputs?.['node-version'];
     if (!mapping(inputs) || typeof version !== 'string'
-      || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)
+      || !/^22\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)
       || Object.hasOwn(inputs, 'node-version-file') || Object.hasOwn(setup, 'if')
       || Object.hasOwn(setup, 'continue-on-error')) {
-      report(file, path, 'UNPINNED_WEB_NODE', 'setup-node must unconditionally select one exact major.minor.patch string without node-version-file');
+      report(file, path, 'UNPINNED_WEB_NODE', 'setup-node must unconditionally select one exact Node 22 major.minor.patch string without node-version-file');
       continue;
     }
     if (expected !== undefined && version !== expected) {
       report(file, path, 'MISMATCHED_WEB_NODE', `expected ${expected}, received ${version}`);
     }
     expected ??= version;
+    if (steps.slice(0, steps.indexOf(setup)).some(step => typeof step?.run === 'string'
+      && /\b(?:node|npm|npx|corepack|yarn|pnpm)\b/.test(step.run))) {
+      report(file, path, 'EARLY_WEB_NODE_COMMAND', 'Node and dependency commands must follow setup-node and its runtime assertion');
+    }
     const verification = steps[steps.indexOf(setup) + 1];
     if (!mapping(verification) || verification.run !== `test "$(node --version)" = "v${version}"`
       || Object.hasOwn(verification, 'if') || Object.hasOwn(verification, 'continue-on-error')) {
@@ -252,6 +256,12 @@ function checkEventTree() {
     report(eventSha, '.github/workflows', 'INVALID_EVENT_DESKTOP_CONTRACTS', 'expected exactly one regular desktop-contracts.yml workflow in the event tree');
     return;
   }
+  const web = entries.filter(entry => /^\.github\/workflows\/web-ci\.ya?ml$/i.test(entry.path));
+  if (web.length !== 1 || web[0].path !== '.github/workflows/web-ci.yml'
+    || !/^100(?:644|755)$/.test(web[0].mode) || web[0].type !== 'blob') {
+    report(eventSha, '.github/workflows', 'INVALID_EVENT_WEB_CI', 'expected exactly one regular canonical web-ci.yml workflow in the event tree');
+    return;
+  }
   for (const entry of entries.filter(entry => /\.ya?ml$/i.test(entry.path))) {
     if (entry.type !== 'blob' || !/^100(?:644|755)$/.test(entry.mode)) {
       report(entry.path, '$', 'INVALID_EVENT_WORKFLOW', 'workflow must be a regular file');
@@ -281,6 +291,15 @@ if (eventMode) {
     report(directory, '$', 'DUPLICATE_DESKTOP_CONTRACTS', 'expected one desktop contracts workflow; found ' + contracts.map(file => basename(file)).join(', '));
   }
   if (process.argv[2] === undefined) {
+    const web = entries.filter(entry => /^web-ci\.ya?ml$/i.test(entry.name));
+    if (web.length !== 1 || web[0].name !== 'web-ci.yml' || !web[0].isFile()) {
+      report(directory, '$', 'INVALID_WEB_CI', 'expected exactly one regular canonical web-ci.yml workflow');
+    }
+    const trackedWeb = execFileSync('git', ['ls-tree', '-z', 'HEAD', '--', '.github/workflows/'], { cwd: root, encoding: 'utf8' })
+      .split('\0').filter(entry => /\t\.github\/workflows\/web-ci\.ya?ml$/i.test(entry));
+    if (trackedWeb.length !== 1 || !/^100(?:644|755) blob [0-9a-f]+\t\.github\/workflows\/web-ci\.yml$/.test(trackedWeb[0])) {
+      report(directory, '$', 'UNTRACKED_WEB_CI', 'expected one regular canonical Web CI workflow in HEAD');
+    }
     const tracked = execFileSync('git', ['ls-tree', '-z', 'HEAD', '--', '.github/workflows/'], { cwd: root, encoding: 'utf8' })
       .split('\0').filter(entry => /^100(?:644|755) blob [0-9a-f]+\t\.github\/workflows\/desktop-contracts\.ya?ml$/.test(entry))
       .map(entry => basename(entry.split('\t')[1]));

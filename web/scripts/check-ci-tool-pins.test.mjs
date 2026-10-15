@@ -144,11 +144,13 @@ for (const tracked of [false, true, 'symlink']) {
     mkdirSync(join(directory, '.github/workflows'), { recursive: true });
     copyFileSync(cli, join(directory, 'web/scripts/check-ci-tool-pins.mjs'));
     symlinkSync(fileURLToPath(new URL('../node_modules', import.meta.url)), join(directory, 'web/node_modules'));
+    writeFileSync(join(directory, '.github/workflows/web-ci.yml'), JSON.stringify(webCI));
     const contracts = join(directory, '.github/workflows/desktop-contracts.yml');
     if (tracked === 'symlink') symlinkSync('../../contracts.yml', contracts);
     else writeFileSync(contracts, desktop());
     for (const args of [
       ['init', '-q'],
+      ['add', '.github/workflows/web-ci.yml'],
       ['add', tracked ? '.github/workflows/desktop-contracts.yml' : 'web/scripts/check-ci-tool-pins.mjs'],
       ['-c', 'user.name=CI test', '-c', 'user.email=ci@example.invalid', 'commit', '-qm', 'fixture'],
     ]) {
@@ -373,7 +375,7 @@ for (const filename of ['web-ci.yml', 'web-ci.yaml']) {
 }
 
 for (const name of ['web', 'web-build']) {
-  for (const version of ['22', '22.23', '22.x', 'lts/*', '^22.23.3', 'v22.23.3', '22.23.3-rc.1', '022.23.3', '${{ inputs.node }}', 22, null]) {
+  for (const version of ['22', '22.23', '22.x', 'lts/*', '^22.23.3', 'v22.23.3', '22.23.3-rc.1', '022.23.3', '24.21.0', '1.0.0', '${{ inputs.node }}', 22, null]) {
     test(`reject Web CI ${name} Node ${JSON.stringify(version)}`, t => {
       const source = JSON.parse(JSON.stringify(webCI));
       source.jobs[name].steps[0].with['node-version'] = version;
@@ -394,6 +396,9 @@ for (const name of ['web', 'web-build']) {
     ['mismatched runtime check', source => { source.jobs[name].steps[1].run = 'test "$(node --version)" = "v24.21.0"'; }, 'MISSING_WEB_NODE_VERIFICATION'],
     ['conditional runtime check', source => { source.jobs[name].steps[1].if = 'false'; }, 'MISSING_WEB_NODE_VERIFICATION'],
     ['tolerated runtime failure', source => { source.jobs[name].steps[1]['continue-on-error'] = true; }, 'MISSING_WEB_NODE_VERIFICATION'],
+    ['install before setup', source => source.jobs[name].steps.unshift({ run: 'npm ci --ignore-scripts' }), 'EARLY_WEB_NODE_COMMAND'],
+    ['lifecycle before setup', source => source.jobs[name].steps.unshift({ run: 'npm rebuild' }), 'EARLY_WEB_NODE_COMMAND'],
+    ['node before setup', source => source.jobs[name].steps.unshift({ run: 'node scripts/probe.mjs' }), 'EARLY_WEB_NODE_COMMAND'],
     ['late runtime check', source => source.jobs[name].steps.splice(1, 0, { run: 'npm ci' }), 'MISSING_WEB_NODE_VERIFICATION'],
   ]) {
     test(`reject Web CI ${name} ${label}`, t => {
