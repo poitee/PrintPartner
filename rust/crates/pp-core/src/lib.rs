@@ -207,7 +207,7 @@ async fn start_resources(
             port: listener.local_addr()?.port(),
             gateway_rate_limit: owners.owner_of("http.GET /legal/summary")
                 == pp_gateway::ownership::Owner::Rust,
-            record_child: pp_storage::lease::record_child,
+            record_child: Box::new(owner.child_recorder()),
         },
         compat_config,
     )?;

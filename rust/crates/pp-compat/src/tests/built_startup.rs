@@ -91,7 +91,7 @@ async fn built_startup_owner_fixture() {
     let scratch = Scratch { root: root.into() };
     let spec = crate::SpawnSpec {
         bundle: bundle(),
-        record_child,
+        record_child: Box::new(record_child),
         lease: "x".repeat(1024 * 1024),
         ..release_spec(&scratch)
     };

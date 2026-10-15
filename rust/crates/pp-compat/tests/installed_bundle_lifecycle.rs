@@ -229,7 +229,7 @@ async fn installed_bundle_start_health_shutdown() -> Result<()> {
         lease: ownership.lease.clone(),
         lease_file: ownership.lock.try_clone()?,
         gateway_rate_limit: false,
-        record_child: TestOwnership::record_child,
+        record_child: Box::new(TestOwnership::record_child),
         port,
     })?;
     let mut status = supervisor.handle.status.clone();
