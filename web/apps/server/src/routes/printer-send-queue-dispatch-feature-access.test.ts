@@ -205,6 +205,44 @@ describe("stored Bambu send-queue dispatch/drain HTTP admission", () => {
     expect(loadPrinterSendQueue(repo).find((item) => item.id === bambu.id)).toEqual(bambu);
   });
 
+  it.each(["dispatch", "drain"])("%s rechecks access revoked during live-job reconciliation", async (action) => {
+    repo.setSetting("feature_toggles", '{"bambu":true}');
+    repo.setSetting("integrations", JSON.stringify([{ id: "moon", type: "moonraker", name: "Moon", config: {} }, { id: "host", type: "bambu", name: "Bambu", config: {} }]));
+    repo.setSetting("printer.fleet", JSON.stringify([{ id: "moon", integration_id: "moon" }, { id: "printer", integration_id: "host" }]));
+    const moon = seed(repo, jobs.getExportsDir(), profileId, "moon");
+    const bambu = seed(repo, jobs.getExportsDir(), profileId);
+    repo.setSetting(PRINTER_SEND_QUEUE_SETTINGS_KEY, JSON.stringify([moon, bambu, { ...moon, id: "in-flight", state: "sending", upload_job_id: "stale" }]));
+    vi.mocked(jobs.get).mockImplementation(async () => {
+      repo.setSetting(`feature_toggles:plan:${profileId}`, '{"bambu":false}');
+      return null;
+    });
+    const response = await request(action, bambu.id);
+    expect(response.json()).toEqual(disabled);
+    expect(loadPrinterSendQueue(repo).filter((item) => item.state === "queued")).toEqual([moon, bambu]);
+    expect(jobs.get).toHaveBeenCalled();
+    expect(jobs.start).not.toHaveBeenCalled();
+    expect(integrations.getStatus).not.toHaveBeenCalled();
+    expect(readFileSync(moon.artifact_path)).toEqual(bytes);
+    expect(readFileSync(bambu.artifact_path)).toEqual(bytes);
+  });
+
+  it("preflights items added while live-job reconciliation awaits", async () => {
+    configureHost(repo, "moonraker");
+    const moon = seed(repo, jobs.getExportsDir(), profileId);
+    repo.setSetting(PRINTER_SEND_QUEUE_SETTINGS_KEY, JSON.stringify([moon, { ...moon, id: "in-flight", state: "sending", upload_job_id: "stale" }]));
+    vi.mocked(jobs.get).mockImplementation(async () => {
+      repo.setSetting("integrations", JSON.stringify([{ id: "host", type: "moonraker", name: "Moon", config: {} }, { id: "bambu", type: "bambu", name: "Bambu", config: {} }]));
+      repo.setSetting("printer.fleet", JSON.stringify([{ id: "printer", integration_id: "host" }, { id: "bambu", integration_id: "bambu" }]));
+      seed(repo, jobs.getExportsDir(), profileId, "bambu");
+      return null;
+    });
+    expect((await request("drain", "")).json()).toEqual(disabled);
+    expect(loadPrinterSendQueue(repo).filter((item) => item.state === "queued")).toHaveLength(2);
+    expect(jobs.start).not.toHaveBeenCalled();
+    expect(integrations.getStatus).not.toHaveBeenCalled();
+    expect(readFileSync(moon.artifact_path)).toEqual(bytes);
+  });
+
   it("refuses retries before artifact validation and preserves unrelated in-flight items", async () => {
     const item = seed(repo, jobs.getExportsDir(), profileId);
     const retry = { ...item, state: "error", error: "Previous refusal", artifact_path: join(root, "missing.gcode") };

@@ -257,6 +257,9 @@ export async function registerPrinterSendQueueRoutes(
       const problem = storedBambuAdmissionProblem(deps.repo, item ? [item] : []);
       if (problem) return reply.status(problem.status).send(problem);
       await reconcileLiveSends(request.tenantId);
+      const currentItem = getPrinterSendQueueItem(deps.repo, id);
+      const currentProblem = storedBambuAdmissionProblem(deps.repo, currentItem ? [currentItem] : []);
+      if (currentProblem) return reply.status(currentProblem.status).send(currentProblem);
       const result = await dispatchPrinterSendQueueItem(
         deps.repo,
         deps.jobs.getExportsDir(request.tenantId),
@@ -307,6 +310,8 @@ export async function registerPrinterSendQueueRoutes(
       const problem = storedBambuAdmissionProblem(deps.repo, selectPrinterSendQueueDrainItems(deps.repo, printerId));
       if (problem) return reply.status(problem.status).send(problem);
       await reconcileLiveSends(request.tenantId);
+      const currentProblem = storedBambuAdmissionProblem(deps.repo, selectPrinterSendQueueDrainItems(deps.repo, printerId));
+      if (currentProblem) return reply.status(currentProblem.status).send(currentProblem);
       const results = await drainPrinterSendQueue(
         deps.repo,
         deps.jobs.getExportsDir(request.tenantId),
