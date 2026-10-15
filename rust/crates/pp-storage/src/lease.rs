@@ -1927,6 +1927,7 @@ pub(crate) mod tests {
 
     struct Probe {
         child: std::process::Child,
+        role: String,
         lines: std::sync::mpsc::Receiver<String>,
         deadline: std::time::Instant,
     }
@@ -1960,6 +1961,7 @@ pub(crate) mod tests {
             });
             Self {
                 child,
+                role: role.to_owned(),
                 lines,
                 deadline,
             }
@@ -1977,7 +1979,18 @@ pub(crate) mod tests {
         }
         fn expect(&mut self, suffix: &str) {
             loop {
-                let line = self.line().unwrap();
+                let line = self.line().unwrap_or_else(|error| {
+                    let status = match self.child.try_wait() {
+                        Ok(Some(status)) => status.to_string(),
+                        Ok(None) => "running".to_owned(),
+                        Err(error) => format!("try_wait failed: {error}"),
+                    };
+                    panic!(
+                        "unit child role={} pid={} expected marker={suffix:?}: stdout {error:?}; observed child status={status}",
+                        self.role,
+                        self.child.id()
+                    );
+                });
                 println!("unit {} {line}", self.child.id());
                 if line.ends_with(suffix) {
                     return;
@@ -2418,6 +2431,19 @@ pub(crate) mod tests {
         };
         let path = PathBuf::from(std::env::var_os("PP_CONTAINMENT_UNIT_PATH").unwrap());
         match role.as_str() {
+            "probe-failure" => {
+                Probe::spawn("probe-unknown", &path).expect("unpublished marker");
+            }
+            "probe-timeout" => {
+                let mut child = Probe::spawn("probe-wait", &path);
+                child.expect("probe waiting");
+                child.deadline = std::time::Instant::now();
+                child.expect("unpublished marker");
+            }
+            "probe-wait" => {
+                println!("probe waiting");
+                std::io::stdin().lock().lines().next();
+            }
             "flock-held" | "flock-refused" => {
                 let lock = File::open(path.join(".desktop.lock")).unwrap();
                 if role == "flock-held" {
