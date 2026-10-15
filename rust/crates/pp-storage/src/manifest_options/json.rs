@@ -38,14 +38,6 @@ impl<T> OrderedObject<T> {
     }
 
     pub(super) fn iter(&self) -> impl Iterator<Item = (&JsText, &T)> {
-        self.entries.iter().map(|(key, value)| (key, value))
-    }
-
-    pub(super) fn write_json(
-        &self,
-        output: &mut Vec<u8>,
-        mut write_value: impl FnMut(&T, &mut Vec<u8>),
-    ) {
         let mut indices: Vec<_> = self
             .entries
             .iter()
@@ -53,20 +45,34 @@ impl<T> OrderedObject<T> {
             .filter_map(|(position, (key, _))| key.array_index().map(|key| (key, position)))
             .collect();
         indices.sort_unstable_by_key(|(key, _)| *key);
+        indices
+            .into_iter()
+            .map(|(_, position)| position)
+            .chain(
+                self.entries
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (key, _))| key.array_index().is_none())
+                    .map(|(position, _)| position),
+            )
+            .map(|position| {
+                let (key, value) = &self.entries[position];
+                (key, value)
+            })
+    }
+
+    pub(super) fn write_json(
+        &self,
+        output: &mut Vec<u8>,
+        mut write_value: impl FnMut(&T, &mut Vec<u8>),
+    ) {
         output.push(b'{');
         let mut first = true;
-        for position in indices.into_iter().map(|(_, position)| position).chain(
-            self.entries
-                .iter()
-                .enumerate()
-                .filter(|(_, (key, _))| key.array_index().is_none())
-                .map(|(position, _)| position),
-        ) {
+        for (key, value) in self.iter() {
             if !first {
                 output.push(b',');
             }
             first = false;
-            let (key, value) = &self.entries[position];
             key.write_json(output);
             output.push(b':');
             write_value(value, output);
@@ -334,11 +340,7 @@ impl Parser<'_> {
         let token = std::str::from_utf8(&self.bytes[start..self.position])
             .map_err(|_| JsonError::Syntax)?;
         let number = token.parse::<f64>().map_err(|_| JsonError::Syntax)?;
-        Ok(if number.is_finite() {
-            JsonValue::Number(number)
-        } else {
-            JsonValue::Null
-        })
+        Ok(JsonValue::Number(number))
     }
 
     fn whitespace(&mut self) {

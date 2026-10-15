@@ -160,6 +160,53 @@ fn duplicate_variant_ids_are_rejected_after_ecmascript_trim() {
 }
 
 #[test]
+fn selection_projection_uses_javascript_property_order() {
+    let kit = KitManifest::from_request(
+        br#"{"kit":{"selections":{"2":"two","b":"old","1":"one","01":"leading","4294967295":"ordinary","4294967294":"max","b":"new","0":"zero"}}}"#,
+    ).unwrap();
+    let groups = kit
+        .selection_projection()
+        .into_iter()
+        .map(|(group, variants)| {
+            (
+                group.0.as_scalar().unwrap(),
+                variants[0].0.as_scalar().unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        groups,
+        vec![
+            ("0".into(), "zero".into()),
+            ("1".into(), "one".into()),
+            ("2".into(), "two".into()),
+            ("4294967294".into(), "max".into()),
+            ("b".into(), "new".into()),
+            ("01".into(), "leading".into()),
+            ("4294967295".into(), "ordinary".into()),
+        ]
+    );
+}
+
+#[test]
+fn overflow_numbers_remain_numbers_during_field_validation() {
+    for field in ["name", "base_source_id"] {
+        for number in ["1e400", "-1e400"] {
+            let kit = format!(r#"{{"{field}":{number}}}"#);
+            let request = format!(r#"{{"kit":{kit}}}"#);
+            assert_eq!(
+                request_error(request.as_bytes()),
+                format!(r#"{{"detail":"kit.{field} must be a string or null"}}"#).into_bytes()
+            );
+            assert_eq!(
+                stored_error(&kit),
+                br#"{"detail":"stored kit is malformed"}"#
+            );
+        }
+    }
+}
+
+#[test]
 fn surrogate_text_keys_and_errors_remain_lossless() {
     let kit = KitManifest::from_request(
         br#"{"kit":{"name":"\ud800","layers":["\udc00"],"selections":{"\ud800":" \udc00 "},"replacements":{"\udc00":"\ud800"},"choice_tree":[{"\ud800":"\udc00"}],"category_links":["\ud800"]}}"#,
