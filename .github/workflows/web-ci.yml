@@ -64,6 +64,9 @@ concurrency:
 
 jobs:
   web:
+    permissions:
+      contents: read
+      actions: read
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -90,13 +93,16 @@ jobs:
         working-directory: .
         env:
           EVENT_SHA: ${{ github.sha }}
-        run: node web/scripts/check-ci-tool-pins.mjs --event-sha "$EVENT_SHA"
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node web/scripts/check-ci-tool-pins.mjs --event-sha "$EVENT_SHA"
+          node web/scripts/check-desktop-workflow-state.mjs
       - name: Run dependency lifecycle scripts
         run: npm rebuild
       - name: Check Action SHAs and CI installer tool pins
         working-directory: .
         run: |
-          node --test web/scripts/check-ci-tool-pins.test.mjs web/scripts/check-ci-event-tree.test.mjs
+          node --test web/scripts/check-ci-tool-pins.test.mjs web/scripts/check-ci-event-tree.test.mjs web/scripts/check-desktop-workflow-state.test.mjs
           node web/scripts/check-ci-tool-pins.mjs
       - name: Check workaround ratchet
         run: node ../scripts/workaround-ratchet.mjs && node --test ../scripts/workaround-ratchet.test.mjs
@@ -119,6 +125,9 @@ jobs:
         run: npm run lint && npm run lint:dead && npm run typecheck && npm test
 
   web-build:
+    permissions:
+      contents: read
+      actions: read
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -139,7 +148,10 @@ jobs:
         working-directory: .
         env:
           EVENT_SHA: ${{ github.sha }}
-        run: node web/scripts/check-ci-tool-pins.mjs --event-sha "$EVENT_SHA"
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node web/scripts/check-ci-tool-pins.mjs --event-sha "$EVENT_SHA"
+          node web/scripts/check-desktop-workflow-state.mjs
       - name: Run dependency lifecycle scripts
         run: npm rebuild
       - name: Build, bundle, runtime and browser checks
