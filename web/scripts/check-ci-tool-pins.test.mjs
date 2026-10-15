@@ -121,6 +121,28 @@ for (const replacement of [null, 'renamed-contracts.yml', 'desktop-contracts.yml
   });
 }
 
+test('reject multiple desktop contracts filename variants', t => {
+  const directory = mkdtempSync(join(tmpdir(), 'ci-workflow-duplicates-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  writeFileSync(join(directory, 'desktop-contracts.yml'), desktop());
+  writeFileSync(join(directory, 'DESKTOP-CONTRACTS.YAML'), desktop());
+  const result = spawnSync(process.execPath, [cli, directory], { encoding: 'utf8' });
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 1, result.stdout);
+  assert.equal(result.stderr, `${directory} $: DUPLICATE_DESKTOP_CONTRACTS: expected one desktop contracts workflow; found DESKTOP-CONTRACTS.YAML, desktop-contracts.yml\n`);
+  assert.equal(result.stdout, summary(0, 0, 1));
+});
+
+test('reject unrelated workflow without desktop contracts', t => {
+  const result = run(t);
+  writeFileSync(join(result.directory, 'unrelated.yml'), workflow('      - run: echo ok'));
+  const missing = spawnSync(process.execPath, [cli, result.directory], { encoding: 'utf8' });
+  assert.equal(missing.error, undefined);
+  assert.equal(missing.status, 1, missing.stdout);
+  assert.equal(missing.stderr, `${result.directory} $: MISSING_DESKTOP_CONTRACTS: expected one desktop-contracts.yml or desktop-contracts.yaml workflow\n`);
+  assert.equal(missing.stdout, summary(0, 0, 1));
+});
+
 for (const [name, source, declarations, tools] of [
   ['current releases', installer('nextest@0.9.148, sccache@0.18.0 ast-grep@0.50.0 cargo-machete@0.9.2'), 1, 4],
   ['quoted flow keys and reordered inputs', `"jobs": {probe: {"steps": [{with: {"tool": "nextest@0.9.148"}, "uses": '${action}'}]}}`, 1, 1],
@@ -200,8 +222,8 @@ for (const [name, source, diagnostic, path = 'jobs.probe.steps[0].with.tool'] of
 test('empty directory', t => {
   const result = run(t);
   assert.equal(result.status, 1);
-  assert.equal(result.stdout, summary(0, 0, 1));
-  assert.equal(result.stderr, `${result.directory} $: NO_WORKFLOWS: no .yml or .yaml workflow files found\n`);
+  assert.equal(result.stdout, summary(0, 0, 2));
+  assert.equal(result.stderr, `${result.directory} $: NO_WORKFLOWS: no .yml or .yaml workflow files found\n${result.directory} $: MISSING_DESKTOP_CONTRACTS: expected one desktop-contracts.yml or desktop-contracts.yaml workflow\n`);
 });
 
 test('missing directory', t => {

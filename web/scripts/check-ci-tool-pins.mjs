@@ -19,6 +19,7 @@ try {
   console.error('MISSING_PARSER: run npm ci in web/ before checking CI tool pins');
   process.exit(2);
 }
+const desktopContracts = /^desktop-contracts\.ya?ml$/i;
 const directory = resolve(process.argv[2] ?? join(root, '.github/workflows'));
 let declarations = 0;
 let tools = 0;
@@ -128,7 +129,7 @@ function checkWorkflow(file) {
     report(file, 'jobs', 'INVALID_SHAPE', 'workflow requires a nonempty jobs mapping');
     return;
   }
-  if (/^desktop-contracts\.ya?ml$/i.test(basename(file))) checkDesktopNode(workflow, file);
+  if (desktopContracts.test(basename(file))) checkDesktopNode(workflow, file);
   const seen = new Set();
   for (const [name, job] of Object.entries(workflow.jobs)) {
     const path = `jobs.${name}`;
@@ -158,6 +159,12 @@ try {
     .filter(entry => /\.ya?ml$/i.test(entry.name))
     .map(entry => join(directory, entry.name)).sort();
   if (files.length === 0) report(directory, '$', 'NO_WORKFLOWS', 'no .yml or .yaml workflow files found');
+  const contracts = files.filter(file => desktopContracts.test(basename(file)));
+  if (contracts.length === 0) {
+    report(directory, '$', 'MISSING_DESKTOP_CONTRACTS', 'expected one desktop-contracts.yml or desktop-contracts.yaml workflow');
+  } else if (contracts.length > 1) {
+    report(directory, '$', 'DUPLICATE_DESKTOP_CONTRACTS', 'expected one desktop contracts workflow; found ' + contracts.map(file => basename(file)).join(', '));
+  }
   for (const file of files) {
     try {
       checkWorkflow(file);
