@@ -7,7 +7,7 @@ use std::{
 
 use tokio_util::sync::CancellationToken;
 
-const STAY: &str = "read line || exit 1; while read line; do :; done";
+const STAY: &str = "while read line; do :; done";
 
 struct Scratch {
     root: PathBuf,
@@ -419,11 +419,56 @@ async fn ticket_t_3_drain_readiness_timeout_no_leaked_task() {
 }
 
 fn diagnostic_rows(scratch: &Scratch) -> Vec<serde_json::Value> {
-    std::fs::read_to_string(scratch.root.join("data/logs/desktop.jsonl"))
-        .unwrap()
-        .lines()
-        .map(|row| serde_json::from_str(row).unwrap())
-        .collect()
+    let mut rows = Vec::new();
+    for index in (0..=6).rev() {
+        let name = if index == 0 {
+            "desktop.jsonl".to_owned()
+        } else {
+            format!("desktop.{index}.jsonl")
+        };
+        let text = match std::fs::read_to_string(scratch.root.join("data/logs").join(name)) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => panic!("failed to read diagnostic log: {error}"),
+        };
+        rows.extend(
+            text.lines()
+                .map(|row| serde_json::from_str::<serde_json::Value>(row).unwrap()),
+        );
+    }
+    rows
+}
+
+#[test]
+fn ticket_t_2_diagnostic_rows_include_rotated_raw_records_chronologically() {
+    let scratch = Scratch::new("rotated-diagnostics");
+    let directory = scratch.root.join("data/logs");
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(
+        directory.join("desktop.6.jsonl"),
+        "{\"time\":1,\"event\":\"compat_starting\",\"unknown_private_field\":\"must_remain_visible\"}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        directory.join("desktop.1.jsonl"),
+        "{\"time\":2,\"event\":\"compat_ready\"}\n{\"time\":3,\"event\":\"compat_failure\"}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        directory.join("desktop.jsonl"),
+        "{\"time\":4,\"event\":\"compat_crash_guard\"}\n",
+    )
+    .unwrap();
+
+    assert_eq!(
+        diagnostic_rows(&scratch),
+        vec![
+            serde_json::json!({"time":1,"event":"compat_starting","unknown_private_field":"must_remain_visible"}),
+            serde_json::json!({"time":2,"event":"compat_ready"}),
+            serde_json::json!({"time":3,"event":"compat_failure"}),
+            serde_json::json!({"time":4,"event":"compat_crash_guard"}),
+        ]
+    );
 }
 
 #[tokio::test]

@@ -1,8 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::{
+    ffi::CString,
     fs::{File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
-    os::unix::fs::OpenOptionsExt,
+    os::{
+        fd::{AsRawFd, FromRawFd},
+        unix::fs::OpenOptionsExt,
+    },
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
@@ -139,21 +143,44 @@ pub fn recent_diagnostics(data: &Path) -> std::io::Result<String> {
 #[derive(Clone)]
 pub(crate) struct Logs(Arc<Mutex<LogFile>>);
 struct LogFile {
-    directory: PathBuf,
+    directory: File,
     file: File,
     day: u64,
     bytes: u64,
 }
 
+fn open_log(directory: &File) -> std::io::Result<File> {
+    let fd = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            c"desktop.jsonl".as_ptr(),
+            libc::O_WRONLY
+                | libc::O_APPEND
+                | libc::O_CREAT
+                | libc::O_CLOEXEC
+                | libc::O_NOFOLLOW
+                | libc::O_NONBLOCK,
+            0o600 as libc::c_uint,
+        )
+    };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let file = unsafe { File::from_raw_fd(fd) };
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
+    }
+    Ok(file)
+}
+
 impl Logs {
     pub(crate) fn open(directory: PathBuf) -> std::io::Result<Self> {
         std::fs::create_dir_all(&directory)?;
-        let path = directory.join("desktop.jsonl");
-        let file = OpenOptions::new()
-            .append(true)
-            .create(true)
-            .mode(0o600)
-            .open(path)?;
+        let directory = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+            .open(directory)?;
+        let file = open_log(&directory)?;
         let bytes = file.metadata()?.len();
         let day = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -183,22 +210,26 @@ impl Logs {
         row.push('\n');
         if log.day != now / 86400 || log.bytes + row.len() as u64 > 10 * 1024 * 1024 {
             let rotate = (|| -> std::io::Result<()> {
+                open_log(&log.directory)?;
+                let directory = log.directory.as_raw_fd();
                 for index in (1..=6).rev() {
-                    let source = if index == 1 {
-                        log.directory.join("desktop.jsonl")
+                    let source = CString::new(if index == 1 {
+                        "desktop.jsonl".to_owned()
                     } else {
-                        log.directory.join(format!("desktop.{}.jsonl", index - 1))
-                    };
-                    let target = log.directory.join(format!("desktop.{index}.jsonl"));
-                    if source.exists() {
-                        std::fs::rename(source, target)?;
+                        format!("desktop.{}.jsonl", index - 1)
+                    })?;
+                    let target = CString::new(format!("desktop.{index}.jsonl"))?;
+                    if unsafe {
+                        libc::renameat(directory, source.as_ptr(), directory, target.as_ptr())
+                    } != 0
+                    {
+                        let error = std::io::Error::last_os_error();
+                        if error.kind() != std::io::ErrorKind::NotFound {
+                            return Err(error);
+                        }
                     }
                 }
-                log.file = OpenOptions::new()
-                    .append(true)
-                    .create(true)
-                    .mode(0o600)
-                    .open(log.directory.join("desktop.jsonl"))?;
+                log.file = open_log(&log.directory)?;
                 log.bytes = 0;
                 log.day = now / 86400;
                 Ok(())
@@ -272,6 +303,199 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    fn fifo(path: &Path) {
+        use std::os::unix::ffi::OsStrExt;
+        let path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+    }
+
+    #[test]
+    fn ticket_t_2_log_open_rejects_fifo_with_peer() {
+        let scratch = Scratch::new();
+        let path = scratch.0.join("logs/desktop.jsonl");
+        fifo(&path);
+        let _peer = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap();
+        assert!(Logs::open(scratch.0.join("logs")).is_err());
+    }
+
+    #[test]
+    fn ticket_t_2_log_open_rejects_readerless_fifo_promptly() {
+        const CHILD_PATH: &str = "PP_TEST_READERLESS_LOG_FIFO";
+        if let Some(directory) = std::env::var_os(CHILD_PATH) {
+            assert!(Logs::open(PathBuf::from(directory)).is_err());
+            return;
+        }
+        let scratch = Scratch::new();
+        fifo(&scratch.0.join("logs/desktop.jsonl"));
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "logs::tests::ticket_t_2_log_open_rejects_readerless_fifo_promptly",
+                "--nocapture",
+            ])
+            .env(CHILD_PATH, scratch.0.join("logs"))
+            .spawn()
+            .unwrap();
+        let started = std::time::Instant::now();
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(status.success(), "FIFO admission child failed: {status}");
+                break;
+            }
+            if started.elapsed() >= std::time::Duration::from_secs(2) {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("readerless FIFO blocked log admission for 2 seconds");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn ticket_t_2_log_open_rejects_symlink_without_writing_target() {
+        let scratch = Scratch::new();
+        let target = scratch.0.join("outside");
+        std::fs::write(&target, "unchanged\n").unwrap();
+        std::os::unix::fs::symlink(&target, scratch.0.join("logs/desktop.jsonl")).unwrap();
+        let result = Logs::open(scratch.0.join("logs"));
+        if let Ok(logs) = &result {
+            logs.event(Event::Ready, 30);
+        }
+        assert_eq!(std::fs::read_to_string(target).unwrap(), "unchanged\n");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn ticket_t_2_log_open_rejects_symlinked_directory_without_writing_target() {
+        let scratch = Scratch::new();
+        let target = scratch.0.join("outside");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::remove_dir(scratch.0.join("logs")).unwrap();
+        std::os::unix::fs::symlink(&target, scratch.0.join("logs")).unwrap();
+        let result = Logs::open(scratch.0.join("logs"));
+        if let Ok(logs) = &result {
+            logs.event(Event::Ready, 30);
+        }
+        assert_eq!(std::fs::read_dir(target).unwrap().count(), 0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn ticket_t_2_log_rotation_stays_in_admitted_directory_after_symlink_swap() {
+        let scratch = Scratch::new();
+        let directory = scratch.0.join("logs");
+        let logs = Logs::open(directory.clone()).unwrap();
+        logs.event(Event::Starting, 30);
+        let admitted = scratch.0.join("admitted");
+        std::fs::rename(&directory, &admitted).unwrap();
+        let target = scratch.0.join("outside");
+        std::fs::create_dir(&target).unwrap();
+        std::os::unix::fs::symlink(&target, &directory).unwrap();
+        logs.0.lock().unwrap().day = 0;
+        logs.event(Event::Ready, 30);
+        assert_eq!(std::fs::read_dir(target).unwrap().count(), 0);
+        let row = |name: &str| -> serde_json::Value {
+            serde_json::from_slice(&std::fs::read(admitted.join(name)).unwrap()).unwrap()
+        };
+        assert_eq!(row("desktop.1.jsonl")["event"], "compat_starting");
+        assert_eq!(row("desktop.jsonl")["event"], "compat_ready");
+    }
+
+    #[test]
+    fn ticket_t_2_log_rotation_rejects_dangling_symlink_replacement() {
+        let scratch = Scratch::new();
+        let path = scratch.0.join("logs/desktop.jsonl");
+        let logs = Logs::open(scratch.0.join("logs")).unwrap();
+        logs.event(Event::Starting, 30);
+        let before = std::fs::read(&path).unwrap();
+        let original = scratch.0.join("original");
+        std::fs::rename(&path, &original).unwrap();
+        let target = scratch.0.join("outside");
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        logs.0.lock().unwrap().day = 0;
+        logs.event(Event::Ready, 30);
+        assert!(!target.exists(), "rotation created the symlink target");
+        assert_eq!(std::fs::read(original).unwrap(), before);
+        assert!(std::fs::symlink_metadata(path).unwrap().is_symlink());
+    }
+
+    #[test]
+    fn ticket_t_2_log_rotation_preserves_archives_with_dangling_active_symlink() {
+        for size_rollover in [false, true] {
+            let scratch = Scratch::new();
+            let directory = scratch.0.join("logs");
+            let path = directory.join("desktop.jsonl");
+            let logs = Logs::open(directory.clone()).unwrap();
+            logs.event(Event::Starting, 30);
+            let before = std::fs::read(&path).unwrap();
+            let original = scratch.0.join("original");
+            std::fs::rename(&path, &original).unwrap();
+            let target = scratch.0.join("outside");
+            std::os::unix::fs::symlink(&target, &path).unwrap();
+            let archives = ["one\n", "two\n", "three\n", "four\n", "five\n", "six\n"];
+            for (index, bytes) in archives.iter().enumerate() {
+                std::fs::write(
+                    directory.join(format!("desktop.{}.jsonl", index + 1)),
+                    bytes,
+                )
+                .unwrap();
+            }
+            {
+                let mut log = logs.0.lock().unwrap();
+                if size_rollover {
+                    log.bytes = 10 * 1024 * 1024;
+                } else {
+                    log.day = 0;
+                }
+            }
+            for _ in 0..3 {
+                logs.event(Event::Ready, 30);
+            }
+            for (index, bytes) in archives.iter().enumerate() {
+                assert_eq!(
+                    std::fs::read(directory.join(format!("desktop.{}.jsonl", index + 1))).ok(),
+                    Some(bytes.as_bytes().to_vec()),
+                    "archive {} changed after repeated events, size_rollover={size_rollover}",
+                    index + 1
+                );
+            }
+            assert!(!target.exists(), "rotation created the symlink target");
+            assert_eq!(std::fs::read(original).unwrap(), before);
+            assert!(std::fs::symlink_metadata(path).unwrap().is_symlink());
+        }
+    }
+
+    #[tokio::test]
+    async fn ticket_t_2_log_appends_redacted_records_and_rotates_regular_files() {
+        let scratch = Scratch::new();
+        let path = scratch.0.join("logs/desktop.jsonl");
+        let seed = b"{\"time\":1,\"level\":30,\"event\":\"compat_starting\"}\n";
+        std::fs::write(&path, seed).unwrap();
+        let logs = Logs::open(scratch.0.join("logs")).unwrap();
+        logs.capture(&b"{\"level\":50,\"message\":\"SECRET_TOKEN\"}\n"[..])
+            .await;
+        let appended = std::fs::read(&path).unwrap();
+        assert!(appended.starts_with(seed));
+        let row: serde_json::Value = serde_json::from_slice(&appended[seed.len()..]).unwrap();
+        assert_eq!(row["event"], "compat_output");
+        assert_eq!(row["level"], 50);
+        assert_eq!(row.as_object().unwrap().len(), 3);
+        logs.0.lock().unwrap().day = 0;
+        logs.event(Event::Ready, 30);
+        assert_eq!(
+            std::fs::read(scratch.0.join("logs/desktop.1.jsonl")).unwrap(),
+            appended
+        );
+        let row: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(row["event"], "compat_ready");
+        assert_eq!(row["level"], 30);
+        assert_eq!(row.as_object().unwrap().len(), 3);
     }
 
     #[test]
