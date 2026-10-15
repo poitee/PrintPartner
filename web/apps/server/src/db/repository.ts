@@ -48,6 +48,7 @@ import {
   saveRoleFilamentDefault,
 } from "../services/role-filament-store.js";
 import { getColorById } from "../services/filament-catalog.js";
+import { hasSpoolmanAssignment, readSpoolmanAccess, spoolmanAccessProblem } from "../lib/spoolman-access.js";
 import type { EditableKitRecipe } from "../services/export-kit.js";
 import { REMOTE_CHECKED_AT_KEY, REMOTE_UPDATE_STATUS_KEY } from "../services/source-update-check.js";
 import {
@@ -710,6 +711,7 @@ export type ApplyPlanChangesResult =
       readonly unmappable: readonly UnmappableCheckoffLink[];
     }
   | { readonly kind: "token_allocation_failed" }
+  | { readonly kind: "spoolman_unavailable"; readonly problem: ReturnType<typeof spoolmanAccessProblem> }
   | { readonly kind: "transaction_unavailable" };
 
 export type RecomputePlanDraftResult =
@@ -4399,6 +4401,12 @@ export class AppRepository {
       throw error;
     }
     const roleDefaults = loadRoleFilamentDefaults(this, profileId);
+    if (readSpoolmanAccess(this, profileId).kind !== "allowed") {
+      for (const defaults of Object.values(roleDefaults)) {
+        if (defaults.filament_color_id?.trim().startsWith("spoolman:")) defaults.filament_color_id = null;
+        defaults.spoolman_spool_id = null;
+      }
+    }
     const trackingBySourceLayer = new Map(draftInputs.map((captured) => [captured.sourceLayer, captured.trackingKind]));
     const scannedDraftParts = merged.parts.map(
       (
@@ -6266,6 +6274,13 @@ export class AppRepository {
       }
       const draft = this.getPlanDraft(profileId, draftId);
       if (!draft) return { kind: "not_found" };
+      const spoolmanAccess = readSpoolmanAccess(this, profileId);
+      if (spoolmanAccess.kind !== "allowed" && draft.parts.some((part) =>
+        part.baseRevisionPartId == null && hasSpoolmanAssignment({
+          filament_color_id: part.filamentColorId, spoolman_spool_id: part.spoolmanSpoolId,
+        }))) {
+        return { kind: "spoolman_unavailable", problem: spoolmanAccessProblem(spoolmanAccess) };
+      }
       const draftInputs = canonicalPlanInputs(
         draft.inputs.map((input) => ({
           source_id: input.sourceId,

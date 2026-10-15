@@ -48,6 +48,8 @@ function sendFailure(
   result: Exclude<PlanDraftWorkspaceResult | ApplyDraftWorkspaceResult, { kind: "ready" | "applied" }>,
 ) {
   switch (result.kind) {
+    case "spoolman_unavailable":
+      return reply.status(result.problem.status).send(result.problem);
     case "profile_not_found":
       return reply.status(404).send({ detail: "Plan not found", code: result.kind });
     case "draft_not_found":
@@ -120,6 +122,7 @@ export async function registerPlanDraftRoutes(
         })),
       });
       if (result.kind !== "saved") {
+        if (result.kind === "spoolman_unavailable") return sendFailure(reply, result);
         if (result.kind === "transaction_unavailable") return sendFailure(reply, result);
         const open = result.kind === "draft_changed" ? service.list(profileId)?.filter((draft) => draft.state === "open").at(-1) : null;
         const changed = open ? service.read(profileId, open.draft_id) : null;

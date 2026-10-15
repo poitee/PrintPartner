@@ -30,4 +30,6 @@ The isolated live server preserved 252 bundled colors while off and denied spool
 ![Plan-on with account off exposes the stock picker](gre498-spoolman-workflows/plan-on-account-off.png)
 ![Custom color remains available with Spoolman off](gre498-spoolman-workflows/custom-color-off.png)
 
-Connector configuration remains account-wide. Denied preset imports leave assignments intact. Farm inventory becomes unknown while denied. Deduction checks access before telemetry and every write. Plan-save contracts accept only inclusion and quantity decisions. Broader Orders and farm visibility remain follow-up GRE-498 work.
+Connector configuration remains account-wide. Denied preset imports leave assignments intact. Farm inventory becomes unknown while denied. Deduction checks access before telemetry and every write. Plan publication filters inaccessible defaults for new parts and atomically rejects optional assignments from drafts prepared before revocation; accepted assignments remain. Broader Orders and farm visibility remain follow-up GRE-498 work.
+
+Publication follow-up passed 22 Plan-save tests and 20 route tests across focused runs, plus server typecheck and lint. Tests cover invalid settings, legacy behavior, catalog/custom defaults, retained accepted assignments, rollback, and the actual `/plans/:id/save` 403 response. Plan-draft routes have no `/api/v1` alias.
