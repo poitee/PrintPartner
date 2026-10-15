@@ -32,15 +32,13 @@ const MAX_OPTIONS: usize = 16;
 const OPTIONS_CONTAINER: &str =
     r"(^|[^a-z0-9])(options?|recommended|variants?|alternatives?|choose)($|[^a-z0-9])";
 const VERSION: &str = r"(^|[^a-z0-9])version($|[^a-z0-9])";
-/// What an inferred option selects: only a folder's direct files (the
-/// `default` variant) or the folder and everything beneath it (`path/*`).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Claim {
     Files,
     Tree,
 }
 struct Candidate {
-    id: String,
+    base_id: String,
     dir: usize,
     optional: bool,
     options: Vec<(usize, Claim)>,
@@ -90,7 +88,10 @@ fn within_claimed_tree(dirs: &[Directory], consumed: &HashMap<usize, Claim>, mut
 }
 fn children(dirs: &[Directory], i: usize) -> Vec<usize> {
     let mut out:Vec<_>=dirs[i].children.iter().copied().filter(|i|!test(r"^(cad|step|stp|3mf|stl|stls|images?|img|pics?|pictures|assets?|gerbers?|3d|archives?|docs?|manuals?|pdf|src|source|step files)$",&dirs[*i].name)&&dirs[*i].total>0).collect();
-    out.sort_by(|a, b| crate::read_model::views::folder_compare(&dirs[*a].path, &dirs[*b].path));
+    out.sort_by(|a, b| {
+        crate::read_model::views::folder_compare(&dirs[*a].path, &dirs[*b].path)
+            .then_with(|| dirs[*a].path.cmp(&dirs[*b].path))
+    });
     out
 }
 fn tokens(s: &str) -> HashSet<String> {
@@ -139,13 +140,16 @@ fn claim(consumed: &mut HashMap<usize, Claim>, i: usize, claim: Claim) {
     *current = (*current).max(claim);
 }
 fn push(candidates: &mut Vec<Candidate>, consumed: &mut HashMap<usize, Claim>, mut c: Candidate) {
-    if candidates.len() >= MAX_CANDIDATES
-        || c.options.is_empty()
-        || candidates.iter().any(|p| p.id == c.id)
-    {
+    if candidates.len() >= MAX_CANDIDATES || c.options.is_empty() {
         return;
     }
     c.options.truncate(MAX_OPTIONS);
+    if candidates
+        .iter()
+        .any(|p| p.dir == c.dir && p.optional == c.optional && p.options == c.options)
+    {
+        return;
+    }
     for (i, kind) in &c.options {
         claim(consumed, *i, *kind);
     }
@@ -193,10 +197,13 @@ fn infer_scalar(paths: &[String], budget: &mut PreparationBudget<'_>) -> ReadRes
         dirs[parent].direct += 1;
     }
     let mut order: Vec<_> = (1..dirs.len()).collect();
-    order.sort_by(|a, b| crate::read_model::views::folder_compare(&dirs[*a].path, &dirs[*b].path));
+    order.sort_by(|a, b| {
+        crate::read_model::views::folder_compare(&dirs[*a].path, &dirs[*b].path)
+            .then_with(|| dirs[*a].path.cmp(&dirs[*b].path))
+    });
     let mut candidates = Vec::new();
     let mut consumed = HashMap::new();
-    for i in order {
+    for &i in &order {
         budget.check()?;
         let info = &dirs[i];
         let deprecated = test("deprecated|obsolete|legacy", &info.name);
@@ -213,7 +220,7 @@ fn infer_scalar(paths: &[String], budget: &mut PreparationBudget<'_>) -> ReadRes
                 &mut candidates,
                 &mut consumed,
                 Candidate {
-                    id: slug(&info.path),
+                    base_id: slug(&info.path),
                     dir: i,
                     optional: true,
                     options: children(&dirs, i)
@@ -236,7 +243,7 @@ fn infer_scalar(paths: &[String], budget: &mut PreparationBudget<'_>) -> ReadRes
                     &mut candidates,
                     &mut consumed,
                     Candidate {
-                        id: slug(&info.path),
+                        base_id: slug(&info.path),
                         dir: i,
                         optional: false,
                         options,
@@ -249,7 +256,7 @@ fn infer_scalar(paths: &[String], budget: &mut PreparationBudget<'_>) -> ReadRes
                     &mut candidates,
                     &mut consumed,
                     Candidate {
-                        id: slug(&info.path),
+                        base_id: slug(&info.path),
                         dir: i,
                         optional: true,
                         options: vec![(i, Claim::Tree)],
@@ -263,7 +270,7 @@ fn infer_scalar(paths: &[String], budget: &mut PreparationBudget<'_>) -> ReadRes
                 &mut candidates,
                 &mut consumed,
                 Candidate {
-                    id: slug(&info.path),
+                    base_id: slug(&info.path),
                     dir: i,
                     optional: true,
                     options: vec![(i, Claim::Tree)],
@@ -281,15 +288,11 @@ fn infer_scalar(paths: &[String], budget: &mut PreparationBudget<'_>) -> ReadRes
                     claim(&mut consumed, i, Claim::Tree);
                 }
             } else {
-                let id = unique(
-                    slug(scope(&dirs[parent].path)),
-                    &mut candidates.iter().map(|c| c.id.clone()).collect(),
-                );
                 push(
                     &mut candidates,
                     &mut consumed,
                     Candidate {
-                        id,
+                        base_id: slug(scope(&dirs[parent].path)),
                         dir: parent,
                         optional: false,
                         options: vec![(parent, Claim::Files), (i, Claim::Tree)],
@@ -298,7 +301,7 @@ fn infer_scalar(paths: &[String], budget: &mut PreparationBudget<'_>) -> ReadRes
             }
         }
     }
-    for i in 0..dirs.len() {
+    for i in std::iter::once(0).chain(order) {
         if candidates.len() >= MAX_CANDIDATES {
             break;
         }
@@ -342,7 +345,7 @@ fn infer_scalar(paths: &[String], budget: &mut PreparationBudget<'_>) -> ReadRes
                 scope(&dirs[i].path),
                 skeleton.replace('#', "n")
             ));
-            if options.len() < 2 || candidates.iter().any(|p| p.id == id) {
+            if options.len() < 2 {
                 continue;
             }
             if candidates.len() >= MAX_CANDIDATES {
@@ -367,7 +370,7 @@ fn infer_scalar(paths: &[String], budget: &mut PreparationBudget<'_>) -> ReadRes
                 &mut candidates,
                 &mut consumed,
                 Candidate {
-                    id,
+                    base_id: id,
                     dir: i,
                     optional: false,
                     options: options.into_iter().map(|i| (i, Claim::Tree)).collect(),
@@ -376,16 +379,14 @@ fn infer_scalar(paths: &[String], budget: &mut PreparationBudget<'_>) -> ReadRes
         }
     }
     let mut groups = Vec::new();
+    let mut group_ids = HashSet::new();
     for c in candidates {
         if c.optional && c.options.len() > 1 {
             for (i, _) in c.options {
                 if dirs[i].total == 0 {
                     continue;
                 }
-                let id = slug(&dirs[i].path);
-                if groups.iter().any(|(k, _)| *k == id) {
-                    continue;
-                }
+                let id = unique(slug(&dirs[i].path), &mut group_ids);
                 groups.push((id, optional_group(&dirs[i].name, &dirs[i].path, true)));
             }
             continue;
@@ -431,7 +432,7 @@ fn infer_scalar(paths: &[String], budget: &mut PreparationBudget<'_>) -> ReadRes
         if c.optional {
             if let Some(v) = variants.first() {
                 groups.push((
-                    c.id,
+                    unique(c.base_id, &mut group_ids),
                     Group {
                         rule: "pick_one".into(),
                         label: Some(format!("{} (optional)", dirs[c.dir].name)),
@@ -460,7 +461,7 @@ fn infer_scalar(paths: &[String], budget: &mut PreparationBudget<'_>) -> ReadRes
             }
         } else if variants.len() >= 2 {
             groups.push((
-                c.id,
+                unique(c.base_id, &mut group_ids),
                 Group {
                     rule: "pick_one".into(),
                     label: Some(dirs[c.dir].name.clone()),
