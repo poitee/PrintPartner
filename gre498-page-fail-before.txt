@@ -1,0 +1,574 @@
+
+> @print-partner/web@0.1.0 test
+> vitest run src/pages/PartsPage.baseline-features.test.tsx --maxWorkers=1
+
+
+ RUN  v4.1.11 /persist/worktrees/t3/PrintPartner/gre-498-202610150631-1a12/web/apps/web
+
+ ❯ src/pages/PartsPage.baseline-features.test.tsx (3 tests | 2 failed) 2283ms
+     × keeps controls visible while the selected Plan has pending edits 1046ms
+     × flag-on: renders PlanFeaturesCard on a selected empty Plan and fetches features 1033ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/pages/PartsPage.baseline-features.test.tsx > PartsPage feature toggles integration > keeps controls visible while the selected Plan has pending edits
+TestingLibraryElementError: Unable to find role="button" and name "Print farm: Inherit"
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"stack-page mx-auto w-full max-w-none"[39m
+    [36m>[39m
+      [36m<header[39m
+        [33mclass[39m=[32m"relative flex flex-col gap-3 pb-4 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"min-w-0 flex-1"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-start gap-3"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33maria-hidden[39m=[32m"true"[39m
+              [33mclass[39m=[32m"desk-well h-10 w-10 shrink-0"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mclass[39m=[32m"lucide lucide-package h-5 w-5"[39m
+                [33mfill[39m=[32m"none"[39m
+                [33mheight[39m=[32m"24"[39m
+                [33mstroke[39m=[32m"currentColor"[39m
+                [33mstroke-linecap[39m=[32m"round"[39m
+                [33mstroke-linejoin[39m=[32m"round"[39m
+                [33mstroke-width[39m=[32m"2"[39m
+                [33mviewBox[39m=[32m"0 0 24 24"[39m
+                [33mwidth[39m=[32m"24"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"[39m
+                [36m/>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M12 22V12"[39m
+                [36m/>[39m
+                [36m<polyline[39m
+                  [33mpoints[39m=[32m"3.29 7 12 12 20.71 7"[39m
+                [36m/>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"m7.5 4.27 9 5.15"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</span>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"min-w-0 flex-1"[39m
+            [36m>[39m
+              [36m<p[39m
+                [33mclass[39m=[32m"eyebrow mb-1 text-muted-foreground"[39m
+              [36m>[39m
+                [0mPrepare[0m
+              [36m</p>[39m
+              [36m<h1[39m
+                [33mclass[39m=[32m"text-page"[39m
+              [36m>[39m
+                [0mPlan[0m
+              [36m</h1>[39m
+              [36m<p[39m
+                [33mclass[39m=[32m"mt-1 text-body text-muted-foreground"[39m
+              [36m>[39m
+                [0mChoose files, quantities, and colors for this Build.[0m
+              [36m</p>[39m
+            [36m</div>[39m
+          [36m</div>[39m
+        [36m</div>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-center gap-3"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"text-xs text-muted-foreground"[39m
+              [33mrole[39m=[32m"status"[39m
+            [36m/>[39m
+            [36m<button[39m
+              [33mclass[39m=[32m"inline-flex select-none items-center justify-center gap-2 rounded-md text-sm font-medium transition-[color,background-color,box-shadow,border-color] disabled:pointer-events-none disabled:opacity-50 active:scale-[0.98] text-foreground hover:bg-accent/80 hover:text-accent-foreground h-9 min-w-9 px-4 py-2"[39m
+              [33mdisabled[39m=[32m""[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mclass[39m=[32m"lucide lucide-printer mr-1 h-4 w-4"[39m
+                [33mfill[39m=[32m"none"[39m
+                [33mheight[39m=[32m"24"[39m
+                [33mstroke[39m=[32m"currentColor"[39m
+                [33mstroke-linecap[39m=[32m"round"[39m
+                [33mstroke-linejoin[39m=[32m"round"[39m
+                [33mstroke-width[39m=[32m"2"[39m
+                [33mviewBox[39m=[32m"0 0 24 24"[39m
+                [33mwidth[39m=[32m"24"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"[39m
+                [36m/>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M6 9V3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v6"[39m
+                [36m/>[39m
+                [36m<rect[39m
+                  [33mheight[39m=[32m"8"[39m
+                  [33mrx[39m=[32m"1"[39m
+                  [33mwidth[39m=[32m"12"[39m
+                  [33mx[39m=[32m"6"[39m
+                  [33my[39m=[32m"14"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+              [0m Print[0m
+            [36m</button>[39m
+            [36m<button[39m
+              [33mclass[39m=[32m"inline-flex select-none items-center justify-center gap-2 rounded-md text-sm font-medium transition-[color,background-color,box-shadow,border-color] disabled:pointer-events-none disabled:opacity-50 active:scale-[0.98] border border-border-strong bg-background shadow-sm hover:border-primary/50 hover:bg-accent hover:text-accent-foreground h-9 min-w-9 px-4 py-2"[39m
+            [36m>[39m
+              [0mShare Build[0m
+            [36m</button>[39m
+          [36m</div>[39m
+        [36m</div>[39m
+      [36m</header>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"stack-page mx-auto w-full max-w-none"[39m
+    [36m>[39m
+      [36m<header[39m
+        [33mclass[39m=[32m"relative flex flex-col gap-3 pb-4 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"min-w-0 flex-1"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-start gap-3"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33maria-hidden[39m=[32m"true"[39m
+              [33mclass[39m=[32m"desk-well h-10 w-10 shrink-0"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mclass[39m=[32m"lucide lucide-package h-5 w-5"[39m
+                [33mfill[39m=[32m"none"[39m
+                [33mheight[39m=[32m"24"[39m
+                [33mstroke[39m=[32m"currentColor"[39m
+                [33mstroke-linecap[39m=[32m"round"[39m
+                [33mstroke-linejoin[39m=[32m"round"[39m
+                [33mstroke-width[39m=[32m"2"[39m
+                [33mviewBox[39m=[32m"0 0 24 24"[39m
+                [33mwidth[39m=[32m"24"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"[39m
+                [36m/>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M12 22V12"[39m
+                [36m/>[39m
+                [36m<polyline[39m
+                  [33mpoints[39m=[32m"3.29 7 12 12 20.71 7"[39m
+                [36m/>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"m7.5 4.27 9 5.15"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</span>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"min-w-0 flex-1"[39m
+            [36m>[39m
+              [36m<p[39m
+                [33mclass[39m=[32m"eyebrow mb-1 text-muted-foreground"[39m
+              [36m>[39m
+                [0mPrepare[0m
+              [36m</p>[39m
+              [36m<h1[39m
+                [33mclass[39m=[32m"text-page"[39m
+              [36m>[39m
+                [0mPlan[0m
+              [36m</h1>[39m
+              [36m<p[39m
+                [33mclass[39m=[32m"mt-1 text-body text-muted-foreground"[39m
+              [36m>[39m
+                [0mChoose files, quantities, and colors for this Build.[0m
+              [36m</p>[39m
+            [36m</div>[39m
+          [36m</div>[39m
+        [36m</div>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-center gap-3"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"text-xs text-muted-foreground"[39m
+              [33mrole[39m=[32m"status"[39m
+            [36m/>[39m
+            [36m<button[39m
+              [33mclass[39m=[32m"inline-flex select-none items-center justify-center gap-2 rounded-md text-sm font-medium transition-[color,background-color,box-shadow,border-color] disabled:pointer-events-none disabled:opacity-50 active:scale-[0.98] text-foreground hover:bg-accent/80 hover:text-accent-foreground h-9 min-w-9 px-4 py-2"[39m
+              [33mdisabled[39m=[32m""[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mclass[39m=[32m"lucide lucide-printer mr-1 h-4 w-4"[39m
+                [33mfill[39m=[32m"none"[39m
+                [33mheight[39m=[32m"24"[39m
+                [33mstroke[39m=[32m"currentColor"[39m
+                [33mstroke-linecap[39m=[32m"round"[39m
+                [33mstroke-linejoin[39m=[32m"round"[39m
+                [33mstroke-width[39m=[32m"2"[39m
+                [33mviewBox[39m=[32m"0 0 24 24"[39m
+                [33mwidth[39m=[32m"24"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"[39m
+                [36m/>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M6 9V3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v6"[39m
+                [36m/>[39m
+                [36m<rect[39m
+                  [33mheight[39m=[32m"8"[39m
+                  [33mrx[39m=[32m"1"[39m
+                  [33mwidth[39m=[32m"12"[39m
+                  [33mx[39m=[32m"6"[39m
+                  [33my[39m=[32m"14"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+              [0m Print[0m
+            [36m</button>[39m
+            [36m<button[39m
+              [33mclass[39m=[32m"inline-flex select-none items-center justify-center gap-2 rounded-md text-sm font-medium transition-[color,background-color,box-shadow,border-color] disabled:pointer-events-none disabled:opacity-50 active:scale-[0.98] border border-border-strong bg-background shadow-sm hover:border-primary/50 hover:bg-accent hover:text-accent-foreground h-9 min-w-9 px-4 py-2"[39m
+            [36m>[39m
+              [0mShare Build[0m
+            [36m</button>[39m
+          [36m</div>[39m
+        [36m</div>[39m
+      [36m</header>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+[36m</body>[39m
+ ❯ waitForWrapper ../../node_modules/@testing-library/dom/dist/wait-for.js:163:27
+ ❯ ../../node_modules/@testing-library/dom/dist/query-helpers.js:86:33
+ ❯ src/pages/PartsPage.baseline-features.test.tsx:124:25
+    122|     state.pending = true;
+    123|     renderPage();
+    124|     expect(await screen.findByRole("button", { name: "Print farm: Inhe…
+       |                         ^
+    125|     expect(state.fetchCalls).toEqual([1]);
+    126|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  src/pages/PartsPage.baseline-features.test.tsx > PartsPage feature toggles integration > flag-on: renders PlanFeaturesCard on a selected empty Plan and fetches features
+TestingLibraryElementError: Unable to find an element with the text: Plan feature toggles. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"stack-page mx-auto w-full max-w-none"[39m
+    [36m>[39m
+      [36m<header[39m
+        [33mclass[39m=[32m"relative flex flex-col gap-3 pb-4 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"min-w-0 flex-1"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-start gap-3"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33maria-hidden[39m=[32m"true"[39m
+              [33mclass[39m=[32m"desk-well h-10 w-10 shrink-0"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mclass[39m=[32m"lucide lucide-package h-5 w-5"[39m
+                [33mfill[39m=[32m"none"[39m
+                [33mheight[39m=[32m"24"[39m
+                [33mstroke[39m=[32m"currentColor"[39m
+                [33mstroke-linecap[39m=[32m"round"[39m
+                [33mstroke-linejoin[39m=[32m"round"[39m
+                [33mstroke-width[39m=[32m"2"[39m
+                [33mviewBox[39m=[32m"0 0 24 24"[39m
+                [33mwidth[39m=[32m"24"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"[39m
+                [36m/>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M12 22V12"[39m
+                [36m/>[39m
+                [36m<polyline[39m
+                  [33mpoints[39m=[32m"3.29 7 12 12 20.71 7"[39m
+                [36m/>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"m7.5 4.27 9 5.15"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</span>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"min-w-0 flex-1"[39m
+            [36m>[39m
+              [36m<p[39m
+                [33mclass[39m=[32m"eyebrow mb-1 text-muted-foreground"[39m
+              [36m>[39m
+                [0mPrepare[0m
+              [36m</p>[39m
+              [36m<h1[39m
+                [33mclass[39m=[32m"text-page"[39m
+              [36m>[39m
+                [0mPlan[0m
+              [36m</h1>[39m
+              [36m<p[39m
+                [33mclass[39m=[32m"mt-1 text-body text-muted-foreground"[39m
+              [36m>[39m
+                [0mChoose files, quantities, and colors for this Build.[0m
+              [36m</p>[39m
+            [36m</div>[39m
+          [36m</div>[39m
+        [36m</div>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-center gap-3"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"text-xs text-muted-foreground"[39m
+              [33mrole[39m=[32m"status"[39m
+            [36m/>[39m
+            [36m<button[39m
+              [33mclass[39m=[32m"inline-flex select-none items-center justify-center gap-2 rounded-md text-sm font-medium transition-[color,background-color,box-shadow,border-color] disabled:pointer-events-none disabled:opacity-50 active:scale-[0.98] text-foreground hover:bg-accent/80 hover:text-accent-foreground h-9 min-w-9 px-4 py-2"[39m
+              [33mdisabled[39m=[32m""[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mclass[39m=[32m"lucide lucide-printer mr-1 h-4 w-4"[39m
+                [33mfill[39m=[32m"none"[39m
+                [33mheight[39m=[32m"24"[39m
+                [33mstroke[39m=[32m"currentColor"[39m
+                [33mstroke-linecap[39m=[32m"round"[39m
+                [33mstroke-linejoin[39m=[32m"round"[39m
+                [33mstroke-width[39m=[32m"2"[39m
+                [33mviewBox[39m=[32m"0 0 24 24"[39m
+                [33mwidth[39m=[32m"24"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"[39m
+                [36m/>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M6 9V3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v6"[39m
+                [36m/>[39m
+                [36m<rect[39m
+                  [33mheight[39m=[32m"8"[39m
+                  [33mrx[39m=[32m"1"[39m
+                  [33mwidth[39m=[32m"12"[39m
+                  [33mx[39m=[32m"6"[39m
+                  [33my[39m=[32m"14"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+              [0m Print[0m
+            [36m</button>[39m
+            [36m<button[39m
+              [33mclass[39m=[32m"inline-flex select-none items-center justify-center gap-2 rounded-md text-sm font-medium transition-[color,background-color,box-shadow,border-color] disabled:pointer-events-none disabled:opacity-50 active:scale-[0.98] border border-border-strong bg-background shadow-sm hover:border-primary/50 hover:bg-accent hover:text-accent-foreground h-9 min-w-9 px-4 py-2"[39m
+            [36m>[39m
+              [0mShare Build[0m
+            [36m</button>[39m
+          [36m</div>[39m
+        [36m</div>[39m
+      [36m</header>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"space-y-3"[39m
+      [36m>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"text-sm text-muted-foreground"[39m
+        [36m>[39m
+          [0mAdd a source from the Library to get started.[0m
+        [36m</p>[39m
+        [36m<a[39m
+          [33mclass[39m=[32m"inline-flex select-none items-center justify-center gap-2 rounded-md text-sm font-medium transition-[color,background-color,box-shadow,border-color] disabled:pointer-events-none disabled:opacity-50 active:scale-[0.98] bg-primary text-primary-foreground shadow-sm hover:bg-primary/90 hover:shadow-md h-9 min-w-9 px-4 py-2"[39m
+          [33mdata-discover[39m=[32m"true"[39m
+          [33mhref[39m=[32m"/sources?profile=1"[39m
+        [36m>[39m
+          [0mAdd sources[0m
+        [36m</a>[39m
+      [36m</div>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"stack-page mx-auto w-full max-w-none"[39m
+    [36m>[39m
+      [36m<header[39m
+        [33mclass[39m=[32m"relative flex flex-col gap-3 pb-4 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"min-w-0 flex-1"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-start gap-3"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33maria-hidden[39m=[32m"true"[39m
+              [33mclass[39m=[32m"desk-well h-10 w-10 shrink-0"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mclass[39m=[32m"lucide lucide-package h-5 w-5"[39m
+                [33mfill[39m=[32m"none"[39m
+                [33mheight[39m=[32m"24"[39m
+                [33mstroke[39m=[32m"currentColor"[39m
+                [33mstroke-linecap[39m=[32m"round"[39m
+                [33mstroke-linejoin[39m=[32m"round"[39m
+                [33mstroke-width[39m=[32m"2"[39m
+                [33mviewBox[39m=[32m"0 0 24 24"[39m
+                [33mwidth[39m=[32m"24"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"[39m
+                [36m/>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M12 22V12"[39m
+                [36m/>[39m
+                [36m<polyline[39m
+                  [33mpoints[39m=[32m"3.29 7 12 12 20.71 7"[39m
+                [36m/>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"m7.5 4.27 9 5.15"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</span>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"min-w-0 flex-1"[39m
+            [36m>[39m
+              [36m<p[39m
+                [33mclass[39m=[32m"eyebrow mb-1 text-muted-foreground"[39m
+              [36m>[39m
+                [0mPrepare[0m
+              [36m</p>[39m
+              [36m<h1[39m
+                [33mclass[39m=[32m"text-page"[39m
+              [36m>[39m
+                [0mPlan[0m
+              [36m</h1>[39m
+              [36m<p[39m
+                [33mclass[39m=[32m"mt-1 text-body text-muted-foreground"[39m
+              [36m>[39m
+                [0mChoose files, quantities, and colors for this Build.[0m
+              [36m</p>[39m
+            [36m</div>[39m
+          [36m</div>[39m
+        [36m</div>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-center gap-3"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"text-xs text-muted-foreground"[39m
+              [33mrole[39m=[32m"status"[39m
+            [36m/>[39m
+            [36m<button[39m
+              [33mclass[39m=[32m"inline-flex select-none items-center justify-center gap-2 rounded-md text-sm font-medium transition-[color,background-color,box-shadow,border-color] disabled:pointer-events-none disabled:opacity-50 active:scale-[0.98] text-foreground hover:bg-accent/80 hover:text-accent-foreground h-9 min-w-9 px-4 py-2"[39m
+              [33mdisabled[39m=[32m""[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mclass[39m=[32m"lucide lucide-printer mr-1 h-4 w-4"[39m
+                [33mfill[39m=[32m"none"[39m
+                [33mheight[39m=[32m"24"[39m
+                [33mstroke[39m=[32m"currentColor"[39m
+                [33mstroke-linecap[39m=[32m"round"[39m
+                [33mstroke-linejoin[39m=[32m"round"[39m
+                [33mstroke-width[39m=[32m"2"[39m
+                [33mviewBox[39m=[32m"0 0 24 24"[39m
+                [33mwidth[39m=[32m"24"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"[39m
+                [36m/>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M6 9V3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v6"[39m
+                [36m/>[39m
+                [36m<rect[39m
+                  [33mheight[39m=[32m"8"[39m
+                  [33mrx[39m=[32m"1"[39m
+                  [33mwidth[39m=[32m"12"[39m
+                  [33mx[39m=[32m"6"[39m
+                  [33my[39m=[32m"14"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+              [0m Print[0m
+            [36m</button>[39m
+            [36m<button[39m
+              [33mclass[39m=[32m"inline-flex select-none items-center justify-center gap-2 rounded-md text-sm font-medium transition-[color,background-color,box-shadow,border-color] disabled:pointer-events-none disabled:opacity-50 active:scale-[0.98] border border-border-strong bg-background shadow-sm hover:border-primary/50 hover:bg-accent hover:text-accent-foreground h-9 min-w-9 px-4 py-2"[39m
+            [36m>[39m
+              [0mShare Build[0m
+            [36m</button>[39m
+          [36m</div>[39m
+        [36m</div>[39m
+      [36m</header>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"space-y-3"[39m
+      [36m>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"text-sm text-muted-foreground"[39m
+        [36m>[39m
+          [0mAdd a source from the Library to get started.[0m
+        [36m</p>[39m
+        [36m<a[39m
+          [33mclass[39m=[32m"inline-flex select-none items-center justify-center gap-2 rounded-md text-sm font-medium transition-[color,background-color,box-shadow,border-color] disabled:pointer-events-none disabled:opacity-50 active:scale-[0.98] bg-primary text-primary-foreground shadow-sm hover:bg-primary/90 hover:shadow-md h-9 min-w-9 px-4 py-2"[39m
+          [33mdata-discover[39m=[32m"true"[39m
+          [33mhref[39m=[32m"/sources?profile=1"[39m
+        [36m>[39m
+          [0mAdd sources[0m
+        [36m</a>[39m
+      [36m</div>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+[36m</body>[39m
+ ❯ waitForWrapper ../../node_modules/@testing-library/dom/dist/wait-for.js:163:27
+ ❯ ../../node_modules/@testing-library/dom/dist/query-helpers.js:86:33
+ ❯ src/pages/PartsPage.baseline-features.test.tsx:132:25
+    130|     renderPage();
+    131|
+    132|     expect(await screen.findByText("Plan feature toggles")).toBeTruthy…
+       |                         ^
+    133|     expect(screen.getByText("Add a source from the Library to get star…
+    134|     expect(await screen.findByText("Print farm")).toBeTruthy();
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  2 failed | 1 passed (3)
+   Start at  10:52:02
+   Duration  9.94s (transform 2.52s, setup 0ms, import 5.11s, tests 2.28s, environment 1.87s)
+
+npm error Lifecycle script `test` failed with error:
+npm error code 1
+npm error path /persist/worktrees/t3/PrintPartner/gre-498-202610150631-1a12/web/apps/web
+npm error workspace @print-partner/web@0.1.0
+npm error location /persist/worktrees/t3/PrintPartner/gre-498-202610150631-1a12/web/apps/web
+npm error command failed
+npm error command sh -c vitest run src/pages/PartsPage.baseline-features.test.tsx --maxWorkers=1
