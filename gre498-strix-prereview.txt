@@ -1,0 +1,9 @@
+[strix-prereview via Qwen — advisory, not the merge score]
+- web/apps/web/src/queries/planFeatures.ts:15 — `staleTime` is set to 30 seconds, which may cause unnecessary refetches or stale data issues depending on user interaction frequency. Consider increasing it or removing it if immediate consistency is required.
+- web/apps/web/src/components/plan/PlanFeaturesCard.tsx:68 — The component returns `null` when `hasCapability` is false, but does not handle the case where `profileId` is invalid or missing (though typed as number, runtime checks might be safer).
+- web/apps/web/src/components/plan/PlanFeaturesCard.tsx:72 — `isControlsDisabled` logic disables controls if `patchMutation.isPending`, but doesn't account for multiple concurrent mutations potentially causing race conditions in UI state.
+- web/apps/web/src/pages/PartsPage.tsx:94 — `PlanFeaturesCard` is rendered with `key={selectedProfileId}`, which forces remounting on profile change. This is correct for isolation but ensure no expensive initialization happens on every switch.
+- web/apps/web/src/queries/tenantFeatures.ts:25 — Invalidating all `planFeatures` queries on tenant feature patch might be too broad; consider invalidating only affected plans if possible, though current approach ensures consistency.
+- web/packages/contracts/src/plan-features.ts:18 — `overrideToChoice` and `choiceToOverridePatch` are pure functions but lack unit tests in this diff. Ensure they are covered elsewhere or add tests here.
+- web/apps/web/src/components/plan/PlanFeaturesCard.test.tsx:120 — Test "keeps an in-flight save in its original Plan cache after switching Plans" uses complex async mocking that could be flaky. Simplify or add more robust waiting strategies.
+- web/apps/server/src/routes/plan-features.test.ts:125 — Test restarts SQLite and recreates app/repo, which is heavy. Ensure this pattern is isolated and doesn't leak state between tests.
