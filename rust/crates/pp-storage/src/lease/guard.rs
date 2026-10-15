@@ -1,10 +1,7 @@
+use super::directory::Directory;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use std::{
-    io::Write,
-    os::unix::fs::{OpenOptionsExt, PermissionsExt},
-    path::{Path, PathBuf},
-};
+use std::{io::Write, os::unix::fs::OpenOptionsExt, path::Path};
 
 #[cfg(target_os = "linux")]
 pub(crate) fn process_identity(pid: u32) -> Result<String> {
@@ -114,43 +111,41 @@ struct Owner {
 }
 
 pub(crate) struct StorageLease {
-    path: Option<PathBuf>,
+    directory: Directory,
+    pub(super) lease_directory: Directory,
+    path: Option<String>,
     pub(crate) identity: String,
-    detached: PathBuf,
+    detached: String,
 }
 impl StorageLease {
-    pub(crate) fn acquire(directory: &Path) -> Result<Self> {
+    pub(super) fn acquire(directory: &Directory) -> Result<Self> {
         let identity = process_identity(std::process::id())?;
         let owner = Owner {
             pid: std::process::id(),
             process_identity: identity.clone(),
             instance: hex::encode(rand::random::<[u8; 16]>()),
         };
-        let candidate = directory.join(format!(".desktop-lease-candidate-{}", owner.instance));
-        let lease = directory.join(".desktop-lease");
-        std::fs::create_dir(&candidate)?;
+        let held_directory = Directory(directory.try_clone()?);
+        let candidate = format!(".desktop-lease-candidate-{}", owner.instance);
+        let lease = ".desktop-lease";
+        directory.create_dir(&candidate)?;
         let result = (|| {
-            std::fs::set_permissions(&candidate, std::fs::Permissions::from_mode(0o700))?;
-            let mut file = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(candidate.join("owner.json"))?;
+            let candidate_directory = directory.open_dir(&candidate)?;
+            let mut file = candidate_directory.create_file("owner.json")?;
             file.write_all(&serde_json::to_vec(&owner)?)?;
             file.sync_all()?;
             for _ in 0..16 {
-                match std::fs::symlink_metadata(&lease) {
-                    Ok(metadata) => {
-                        anyhow::ensure!(metadata.is_dir(), "storage_lease_marker_invalid")
-                    }
+                match directory.open_dir(lease) {
+                    Ok(_) => {}
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                        match std::fs::rename(&candidate, &lease) {
+                        match directory.rename(&candidate, directory, lease) {
                             Ok(()) => {
                                 return Ok(Self {
-                                    path: Some(lease),
+                                    directory: held_directory,
+                                    lease_directory: candidate_directory,
+                                    path: Some(lease.into()),
                                     identity,
-                                    detached: directory
-                                        .join(format!(".desktop-lease-release-{}", owner.instance)),
+                                    detached: format!(".desktop-lease-release-{}", owner.instance),
                                 });
                             }
                             Err(error)
@@ -164,13 +159,16 @@ impl StorageLease {
                             Err(error) => return Err(error.into()),
                         }
                     }
-                    Err(error) => return Err(error.into()),
+                    Err(error) => return Err(error).context("storage_lease_marker_invalid"),
                 }
-                let bytes = match super::read_record(&lease.join("owner.json")) {
+                let bytes = match directory
+                    .open_dir(lease)
+                    .and_then(|lease| lease.read_file("owner.json"))
+                {
                     Ok(bytes) => bytes,
                     Err(error)
                         if error.kind() == std::io::ErrorKind::NotFound
-                            && !lease.try_exists()? =>
+                            && matches!(directory.open_dir(lease), Err(error) if error.kind() == std::io::ErrorKind::NotFound) =>
                     {
                         continue;
                     }
@@ -191,9 +189,10 @@ impl StorageLease {
                     "Data directory already owned"
                 );
                 // A retained nonempty destination prevents stale observers from retiring a new lease.
-                match std::fs::rename(
-                    &lease,
-                    directory.join(format!(".desktop-lease-retired-{}", prior.instance)),
+                match directory.rename(
+                    lease,
+                    directory,
+                    &format!(".desktop-lease-retired-{}", prior.instance),
                 ) {
                     Ok(()) => {}
                     Err(error)
@@ -206,14 +205,18 @@ impl StorageLease {
             }
             bail!("Data directory ownership changed repeatedly; retry startup")
         })();
-        let _ = std::fs::remove_dir_all(candidate);
+        if let Ok(candidate_directory) = directory.open_dir(&candidate) {
+            let _ = candidate_directory.remove_file("owner.json");
+            let _ = directory.remove_dir(&candidate);
+        }
         result
     }
     pub(crate) fn detach(&mut self) -> Result<()> {
         if let Some(path) = &self.path
             && path != &self.detached
         {
-            std::fs::rename(path, &self.detached)?;
+            self.directory
+                .rename(path, &self.directory, &self.detached)?;
             self.path = Some(self.detached.clone());
         }
         Ok(())
@@ -222,7 +225,9 @@ impl StorageLease {
     pub(crate) fn release(&mut self) -> Result<()> {
         self.detach()?;
         if let Some(path) = &self.path {
-            std::fs::remove_dir_all(path)?;
+            self.lease_directory.remove_file("previous-marker.json")?;
+            self.lease_directory.remove_file("owner.json")?;
+            self.directory.remove_dir(path)?;
             self.path = None;
         }
         Ok(())
@@ -292,9 +297,17 @@ mod tests {
             identity,
             super::process_identity(std::process::id()).unwrap()
         );
-        let lease = super::StorageLease::acquire(&directory).unwrap();
+        let lease = super::StorageLease::acquire(
+            &super::super::admit_directory(&directory).unwrap().directory,
+        )
+        .unwrap();
         assert_eq!(lease.identity, identity);
-        assert!(super::StorageLease::acquire(&directory).is_err());
+        assert!(
+            super::StorageLease::acquire(
+                &super::super::admit_directory(&directory).unwrap().directory
+            )
+            .is_err()
+        );
         drop(lease);
         let stale = directory.join(".desktop-lease");
         std::fs::create_dir(&stale).unwrap();
@@ -308,7 +321,12 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        drop(super::StorageLease::acquire(&directory).unwrap());
+        drop(
+            super::StorageLease::acquire(
+                &super::super::admit_directory(&directory).unwrap().directory,
+            )
+            .unwrap(),
+        );
         std::fs::remove_dir_all(directory).unwrap();
     }
 
