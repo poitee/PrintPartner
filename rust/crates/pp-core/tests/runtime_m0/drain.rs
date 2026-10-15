@@ -582,7 +582,13 @@ async fn ticket_t_3_drain_legal_summary_alias_parity() {
         )
         .await;
         assert_eq!(status, *expected_status, "Rust candidate {method} {path}");
-        for header in ["content-type", "content-length", "cache-control"] {
+        for header in [
+            "content-type",
+            "content-length",
+            "cache-control",
+            "x-ratelimit-limit",
+            "x-ratelimit-remaining",
+        ] {
             assert_eq!(
                 headers.get(header),
                 expected_headers.get(header),
@@ -642,7 +648,13 @@ async fn ticket_t_3_drain_legal_summary_alias_parity() {
             let (status, headers, body) =
                 response.expect("Rust alias must not wait for stopped Node");
             assert_eq!(status, *expected_status, "Rust alias {method} {path}");
-            for header in ["content-type", "content-length", "cache-control"] {
+            for header in [
+                "content-type",
+                "content-length",
+                "cache-control",
+                "x-ratelimit-limit",
+                "x-ratelimit-remaining",
+            ] {
                 assert_eq!(
                     headers.get(header),
                     expected_headers.get(header),
@@ -692,4 +704,177 @@ async fn ticket_t_3_drain_legal_summary_flag_off() {
     );
     assert_clean(&runtime.shutdown().await, child);
     println!("legal_summary flag_off: refused cutover; Node alias remains 200");
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn ticket_t_3_drain_legal_shared_rate_limit_parity() {
+    let Some(data) = isolated_case("ticket_t_3_drain_legal_shared_rate_limit_parity", true).await
+    else {
+        return;
+    };
+    const LEGAL: &str = "http:GET /legal/summary current";
+    let index = pp_gateway::ownership::manifest::admit_bundled_manifest().unwrap();
+    let mut runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    let mut golden: Vec<(axum::http::HeaderValue, axum::http::HeaderValue)> = Vec::new();
+    for rust_owned in [false, true] {
+        let cookie = bootstrap(&mut runtime).await;
+        for n in 0..1000 {
+            let path = if n % 2 == 0 {
+                "/legal/summary"
+            } else {
+                "/api/v1/legal/license"
+            };
+            let (status, _, _) = request(
+                runtime.origin(),
+                path,
+                "GET",
+                Some(&cookie),
+                None,
+                None,
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "request {n}, Rust={rust_owned}");
+        }
+        // Every alias and HEAD must observe the same exhausted app budget.
+        for method in ["GET", "HEAD"] {
+            for path in [
+                "/legal/summary",
+                "/api/v1/legal/summary",
+                "/api/v1/legal/license",
+            ] {
+                let (status, headers, body) = request(
+                    runtime.origin(),
+                    path,
+                    method,
+                    Some(&cookie),
+                    None,
+                    None,
+                    None,
+                )
+                .await;
+                assert_eq!(
+                    status,
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "exhausted {method} {path}, Rust={rust_owned}"
+                );
+                assert_eq!(headers["x-ratelimit-remaining"], "0");
+                let reset: u64 = headers["x-ratelimit-reset"]
+                    .to_str()
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                assert!((1..=60).contains(&reset));
+                assert_eq!(headers["retry-after"], headers["x-ratelimit-reset"]);
+                if method == "GET" {
+                    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                    assert_eq!(value["statusCode"], 429);
+                    assert_eq!(value["error"], "Too Many Requests");
+                    assert!(
+                        value["message"]
+                            .as_str()
+                            .unwrap()
+                            .starts_with("Rate limit exceeded, retry in ")
+                    );
+                } else {
+                    assert!(body.is_empty());
+                }
+                let representation = (
+                    headers["content-type"].clone(),
+                    headers["content-length"].clone(),
+                );
+                if rust_owned {
+                    assert_eq!(representation.0, golden[0].0);
+                } else {
+                    golden.push(representation);
+                }
+            }
+        }
+        let (status, headers, _) = request(
+            runtime.origin(),
+            "/health",
+            "GET",
+            Some(&cookie),
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(!headers.contains_key("x-ratelimit-limit"));
+        let (status, headers, _) = request(
+            runtime.origin(),
+            "/api/v1/parts/999999/thumbnail",
+            "GET",
+            Some(&cookie),
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert_ne!(status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            headers["x-ratelimit-remaining"], "999",
+            "media budget is independent"
+        );
+        for n in 0..=120 {
+            let (status, headers, _) = request(
+                runtime.origin(),
+                "/api/v1/printers/missing/capabilities",
+                "GET",
+                Some(&cookie),
+                None,
+                None,
+                None,
+            )
+            .await;
+            assert_eq!(
+                headers["x-ratelimit-limit"], "120",
+                "route-specific limit retained"
+            );
+            if n < 120 {
+                assert_ne!(status, StatusCode::TOO_MANY_REQUESTS);
+            } else {
+                assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+            }
+        }
+        if rust_owned {
+            let (status, _, _) = request(
+                runtime.origin(),
+                "/__desktop/rate-limit",
+                "POST",
+                Some(&cookie),
+                None,
+                None,
+                None,
+            )
+            .await;
+            assert_eq!(
+                status,
+                StatusCode::FORBIDDEN,
+                "public callers cannot debit quota"
+            );
+        }
+        println!(
+            "health exemption, separate media budget, stricter route quota and private debit boundary: passed; Rust={rust_owned}"
+        );
+        println!(
+            "legal shared quota Rust={rust_owned}: 1000 mixed Node/legal requests admitted exactly once; 6 exhausted GET/HEAD requests returned 429"
+        );
+        if !rust_owned {
+            let receipt = json!({"schema":"pp-operation-parity-v1", "operation":LEGAL,
+                "manifest_sha256":index.digest(),"fixtures":4,"passed":4,"failed":0})
+            .to_string();
+            runtime
+                .shutdown_with_cutover(LEGAL, &receipt)
+                .await
+                .unwrap_or_else(|e| panic!("{:?}", e.1));
+            runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+        } else {
+            let child = pid(&runtime);
+            assert_clean(&runtime.shutdown().await, child);
+            break;
+        }
+    }
 }

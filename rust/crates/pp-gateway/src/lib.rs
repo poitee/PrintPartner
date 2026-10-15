@@ -26,6 +26,7 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 mod assets;
 pub mod ownership;
+mod rate_limit;
 
 use ownership::{Owner, cutover::OperationOwners};
 
@@ -111,6 +112,7 @@ struct GatewayState {
     cookie_name: String,
     assets: PathBuf,
     compat: CompatHandle,
+    rate_limits: Option<tokio::sync::Mutex<rate_limit::Budgets>>,
     access: Arc<Mutex<Sessions>>,
     routes: Vec<Operation>,
     denied: Vec<DeniedOperation>,
@@ -194,6 +196,8 @@ impl Gateway {
             cookie_name: format!("pp_desktop_{}", address.port()),
             assets,
             compat,
+            rate_limits: (owners.owner_of("http.GET /legal/summary") == Owner::Rust)
+                .then(|| tokio::sync::Mutex::new(rate_limit::Budgets::default())),
             access: Arc::new(Mutex::new(Sessions {
                 draining: false,
                 active: 0,
@@ -561,6 +565,20 @@ async fn handle(
     };
     *request.uri_mut() = target.uri;
     let path = target.path;
+    if path == "/__desktop/rate-limit" && request.method() == "POST" {
+        let bucket = state.compat.endpoint().and_then(|endpoint| {
+            endpoint.rate_limit_bucket(
+                header(&request, "x-pp-rate-debit")?,
+                header(&request, "x-pp-rate-signature")?,
+            )
+        });
+        return match (&state.rate_limits, bucket) {
+            (Some(budgets), Some(media)) => {
+                axum::Json(budgets.lock().await.consume(media)).into_response()
+            }
+            _ => error(StatusCode::FORBIDDEN, "Private quota debit required"),
+        };
+    }
     let mut origins = request.headers().get_all("origin").iter();
     let origin = origins.next();
     let upgrade = request.headers().contains_key("upgrade");
@@ -700,6 +718,23 @@ async fn handle(
         if matches!(path.as_str(), "/legal/summary" | "/api/v1/legal/summary")
             && matches!(request.method().as_str(), "GET" | "HEAD")
         {
+            let quota = if let Some(budgets) = &state.rate_limits {
+                Some(budgets.lock().await.consume(false))
+            } else {
+                None
+            };
+            if let Some(response) = quota
+                .as_ref()
+                .and_then(|quota| quota.rejection(request.method() == "HEAD"))
+            {
+                return response.map(|body| {
+                    Body::new(TrackedBody {
+                        body,
+                        _admission: admission,
+                        cancelled: Box::pin(state.cancelled.clone().cancelled_owned()),
+                    })
+                });
+            }
             let document =
                 include_str!("../../../../web/apps/server/src/data/legal/LICENSE-SUMMARY.md");
             let body = if request.method() == "HEAD" {
@@ -718,6 +753,9 @@ async fn handle(
             response
                 .headers_mut()
                 .insert("cache-control", HeaderValue::from_static("no-store"));
+            if let Some(quota) = quota {
+                quota.apply(&mut response);
+            }
             return response.map(|body| {
                 Body::new(TrackedBody {
                     body,

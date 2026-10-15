@@ -26,3 +26,6 @@ pp-drivers = { path = "../pp-drivers" }
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

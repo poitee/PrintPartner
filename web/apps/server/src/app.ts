@@ -1,6 +1,6 @@
 import { StatusExecution } from "./integrations/status-execution.js";
 import { moonrakerHostSnapshot } from "./moonraker-host-snapshot.js";
-import { acquireDataDirectory, desktopContext, desktopPrincipal, mappedDesktopTenant, mappedDesktopDatabaseAvailable, registerDesktopBoundary } from "./desktop-context.js";
+import { acquireDataDirectory, desktopContext, desktopPrincipal, desktopRateLimit, mappedDesktopTenant, mappedDesktopDatabaseAvailable, registerDesktopBoundary } from "./desktop-context.js";
 import { rustOwnedCopy } from "./db/rust-owned.js";
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
@@ -283,6 +283,7 @@ async function configureApp(app: FastifyInstance, config: ServerConfig, ports: R
   await app.register(cors, { origin: config.corsOrigin, credentials: true });
   // Media and application traffic have separate bounded budgets per IP.
   await app.register(rateLimit, {
+    global: !desktopContext()?.gateway_rate_limit,
     max: 1000,
     timeWindow: "1 minute",
     cache: 10000, // Store limit info for max 10k IPs
@@ -294,6 +295,16 @@ async function configureApp(app: FastifyInstance, config: ServerConfig, ports: R
     allowList: (request) => /^(?:\/api\/v[12])?\/health(?:\?|$)/.test(request.url),
     redis: undefined, // Use in-memory store for single-instance deployments
   });
+  if (desktopContext()?.gateway_rate_limit) {
+    app.addHook("onRoute", (route) => {
+      if (route.config?.rateLimit != null) return;
+      if (Array.isArray(route.onRequest)) {
+        if (!route.onRequest.includes(desktopRateLimit)) route.onRequest.push(desktopRateLimit);
+      }
+      else if (route.onRequest) route.onRequest = [route.onRequest, desktopRateLimit];
+      else route.onRequest = [desktopRateLimit];
+    });
+  }
   // Compress SPA assets and API JSON; event streams are excluded so MCP and
   // job streams stay unbuffered. Uncompressed JS alone is ~1 MB on first load.
   await app.register(compress, {

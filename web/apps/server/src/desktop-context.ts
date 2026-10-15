@@ -1,7 +1,7 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { closeSync, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import { z } from "zod";
 import { admitDesktopAccount, accountModeSchema, type DesktopAccount } from "./desktop-account.js";
 import { presentDesktopChildCredential } from "./desktop-child-credential.js";
@@ -17,6 +17,7 @@ const baseSetupSchema = z.strictObject({
   lease: z.string().regex(/^[a-f0-9]{64}$/),
   parent_pid: z.number().int().positive(),
   port: z.number().int().min(1).max(65535),
+  gateway_rate_limit: z.boolean().optional(),
   child_process_identity: z.string().min(1),
 });
 const setupSchema = z.union([baseSetupSchema.extend({ account_mode: accountModeSchema }), baseSetupSchema]);
@@ -36,7 +37,36 @@ let account: DesktopAccount = { kind: "synthetic" };
 const principals = new WeakMap<FastifyRequest, SessionUser>();
 
 export function desktopContext() {
-  return context && { data_dir: context.data_dir, socket_path: context.socket_path, parent_pid: context.parent_pid, port: context.port };
+  return context && { data_dir: context.data_dir, socket_path: context.socket_path, parent_pid: context.parent_pid, port: context.port, gateway_rate_limit: context.gateway_rate_limit === true };
+}
+
+const quotaSchema = z.strictObject({ remaining: z.number().int().min(0).max(1000), reset: z.number().int().min(1).max(60), exceeded: z.boolean() });
+
+// Only routes using the global limiter call this hook. Fastify retains ownership
+// of stricter route-specific limits and health remains exempt.
+export async function desktopRateLimit(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  const setup = context;
+  if (!setup?.gateway_rate_limit || /^(?:\/api\/v[12])?\/health(?:\?|$)/.test(request.url)) return;
+  const path = request.url.split("?", 1)[0];
+  const media = /^(?:\/api\/v[12])?\/parts\/\d+\/(?:mesh|thumbnail)$/.test(path);
+  const encoded = Buffer.from(JSON.stringify({ generation: setup.generation, bucket: media ? "media" : "app", issued_at: Date.now() })).toString("hex");
+  const signature = createHmac("sha256", Buffer.from(setup.key, "hex")).update(encoded).digest("hex");
+  let quota: z.infer<typeof quotaSchema>;
+  try {
+    const response = await fetch(`http://127.0.0.1:${setup.port}/__desktop/rate-limit`, {
+      method: "POST", headers: { "x-pp-rate-debit": encoded, "x-pp-rate-signature": signature }, signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) throw new Error("Quota debit rejected");
+    quota = quotaSchema.parse(await response.json());
+  } catch {
+    throw Object.assign(new Error("Desktop rate limit unavailable"), { statusCode: 503 });
+  }
+  reply.header("x-ratelimit-limit", 1000).header("x-ratelimit-remaining", quota.remaining).header("x-ratelimit-reset", quota.reset);
+  if (quota.exceeded) {
+    reply.header("retry-after", quota.reset);
+    const after = quota.reset === 60 ? "1 minute" : `${quota.reset} second${quota.reset === 1 ? "" : "s"}`;
+    throw Object.assign(new Error(`Rate limit exceeded, retry in ${after}`), { statusCode: 429 });
+  }
 }
 
 export function installDesktopContext(input: unknown): void {
