@@ -71,30 +71,50 @@ class OwnedTree:
 
 
 class Native:
-    def __init__(self):
+    def __init__(self, sdk):
+        self.constants = sdk["constants"]
+        self.options = (0, self.constants["FSOPT_PACK_INVAL_ATTRS"])
+        abi = sdk["abi"]
+        if (abi["attrlist_size"] != ctypes.sizeof(AttrList)
+                or abi["attrlist_offsets"] != [getattr(AttrList, name).offset for name, _ in AttrList._fields_]
+                or abi["attribute_set_size"] != 20 or abi["uint32_size"] != 4
+                or abi["uint_size"] != ctypes.sizeof(ctypes.c_uint)
+                or abi["size_t_size"] != ctypes.sizeof(ctypes.c_size_t)):
+            raise ValueError("ctypes layout disagrees with the compiled macOS SDK")
         self.libc = ctypes.CDLL(None, use_errno=True)
         self.getattr = getattr(self.libc, "fgetattrlist", None)
         if self.getattr is not None:
-            self.getattr.argtypes = [ctypes.c_int, ctypes.POINTER(AttrList), ctypes.c_void_p,
-                                     ctypes.c_size_t, ctypes.c_ulong]
+            self.getattr.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p,
+                                     ctypes.c_size_t, ctypes.c_uint]
             self.getattr.restype = ctypes.c_int
         self.swap = getattr(self.libc, "renamex_np", None)
         if self.swap is not None:
             self.swap.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
             self.swap.restype = ctypes.c_int
-        self.notes = {n: getattr(select, "KQ_NOTE_" + n) for n in
+        self.notes = {n: self.constants["NOTE_" + n] for n in
                       ("DELETE", "RENAME", "REVOKE", "LINK", "WRITE", "ATTRIB", "EXTEND")}
+        mapping = {"EVFILT_VNODE": "KQ_FILTER_VNODE"}
+        mapping.update({name: "KQ_" + name for name in self.constants
+                        if name.startswith(("EV_", "NOTE_"))})
+        self.select_bindings = {name: {"sdk": self.constants[name],
+                                       "python": getattr(select, binding, None)}
+                                for name, binding in mapping.items()}
+        for binding in self.select_bindings.values():
+            if binding["python"] is not None and binding["python"] != binding["sdk"]:
+                raise ValueError("Python select constant disagrees with the macOS SDK")
 
     def attrs(self, fd, options):
         if self.getattr is None:
             return {"status": "unavailable", "api": "fgetattrlist"}
-        request = AttrList(5, 0, 0x80000000, 0, 1, 0, 0)
+        common = self.constants["ATTR_CMN_RETURNED_ATTRS"]
+        directory = self.constants["ATTR_DIR_LINKCOUNT"]
+        request = AttrList(self.constants["ATTR_BIT_MAP_COUNT"], 0, common, 0, directory, 0, 0)
         buffer = ctypes.create_string_buffer(b"\xa5" * 64, 64)
         ctypes.set_errno(0)
         rc = self.getattr(fd, ctypes.byref(request), buffer, len(buffer), options)
         error = ctypes.get_errno()
         raw = buffer.raw
-        row = {"rc": rc, "errno": error, "options": options, "raw_hex": raw.hex(),
+        row = {"rc": rc, "errno": error, "options": options, "raw_hex": raw.hex(), "fd": fd,
                "request_hex": bytes(request).hex(), "buffer_size": len(raw),
                "status": "error" if rc else "unparsed"}
         if rc:
@@ -107,7 +127,7 @@ class Native:
         masks = dict(zip(("common", "volume", "directory", "file", "fork"),
                          struct.unpack_from("=5I", raw, 4)))
         row["returned_masks"] = masks
-        if masks != {"common": 0x80000000, "volume": 0, "directory": 1, "file": 0, "fork": 0}:
+        if masks != {"common": common, "volume": 0, "directory": directory, "file": 0, "fork": 0}:
             row["status"] = "missing_or_unexpected_attributes"
             return row
         if length != 28:
@@ -124,28 +144,31 @@ class Native:
                 for e in events]
 
     def register(self, kq, fd):
-        registration = select.kevent(fd, filter=select.KQ_FILTER_VNODE,
-            flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR | select.KQ_EV_RECEIPT,
+        constants = self.constants
+        registration = select.kevent(fd, filter=constants["EVFILT_VNODE"],
+            flags=constants["EV_ADD"] | constants["EV_CLEAR"] | constants["EV_RECEIPT"],
             fflags=sum(self.notes.values()))
         receipt = attempt(lambda: self.event_data(kq.control([registration], 1, 0)))
         events = receipt.get("value", [])
         valid = (len(events) == 1 and events[0]["ident"] == fd
-                 and events[0]["filter"] == select.KQ_FILTER_VNODE
-                 and events[0]["flags"] & select.KQ_EV_ERROR and events[0]["data"] == 0)
-        return {"status": "registered" if valid else "unavailable_or_failed", "receipt": receipt}
+                 and events[0]["filter"] == constants["EVFILT_VNODE"]
+                 and events[0]["flags"] & constants["EV_ERROR"] and events[0]["data"] == 0)
+        return {"status": "registered" if valid else "unavailable_or_failed", "receipt": receipt,
+                "request": self.event_data([registration]), "kqueue_fd": kq.fileno()}
 
     def exchange(self, tree, source, target):
         if self.swap is None:
             return {"status": "unavailable", "api": "renamex_np"}
         ctypes.set_errno(0)
-        rc = self.swap(os.fsencode(tree.path(source)), os.fsencode(tree.path(target)), 2)
+        flags = self.constants["RENAME_SWAP"]
+        rc = self.swap(os.fsencode(tree.path(source)), os.fsencode(tree.path(target)), flags)
         return {"status": "completed" if rc == 0 else "error_or_unsupported",
-                "rc": rc, "errno": ctypes.get_errno(), "flags": 2}
+                "rc": rc, "errno": ctypes.get_errno(), "flags": flags}
 
 
 def snapshot(native, tree, fd, names):
     before = attempt(lambda: stat_data(os.fstat(fd)))
-    attrs = [native.attrs(fd, options) for options in (0, 8)]
+    attrs = [native.attrs(fd, options) for options in native.options]
     after = attempt(lambda: stat_data(os.fstat(fd)))
     return {"monotonic_ns": time.monotonic_ns(), "fd": fd, "held_before_attrs": before,
             "attrs": attrs, "held_after_attrs": after,
@@ -185,8 +208,8 @@ def run_case(native, tree, kind, actions):
     names.append(kind + "/moved-parent/lease")
     fd = os.open(tree.path(prefix + "lease"), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
     row = {"case": kind, "actions": [], "successors": [], "fd": fd}
-    with closing(select.kqueue()) as kq:
-        try:
+    try:
+        with closing(select.kqueue()) as kq:
             row["initial"] = snapshot(native, tree, fd, names)
             late = kind == "late_registration_after_delete"
             if not late:
@@ -213,8 +236,11 @@ def run_case(native, tree, kind, actions):
                         return None
                     return getattr(tree, op)(*[prefix + arg for arg in args])
                 outcome = attempt(execute)
-                row["actions"].append({"operation": action, "outcome": outcome})
-                if outcome["status"] == "error":
+                row["actions"].append({"operation": action, "outcome": outcome,
+                                       "after_action": snapshot(native, tree, fd, names)})
+                if (outcome["status"] == "error"
+                        or (isinstance(outcome.get("value"), dict)
+                            and outcome["value"].get("status") != "completed")):
                     break
             if late:
                 row["registration"] = native.register(kq, fd)
@@ -239,10 +265,10 @@ def run_case(native, tree, kind, actions):
                 successor["final_identity"] = tree.identity(name)
                 successor["final_content"] = attempt(lambda: tree.path(name + "/successor.txt").read_text())
             row["status"] = "observations_only"
-        finally:
-            if kind == "permissions":
-                row["permission_restore"] = attempt(lambda: tree.chmod(kind + "/parent", 0o700))
-            os.close(fd)
+    finally:
+        if kind == "permissions":
+            row["permission_restore"] = attempt(lambda: tree.chmod(kind + "/parent", 0o700))
+        os.close(fd)
     return row
 
 
@@ -257,11 +283,14 @@ def command(args):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", required=True)
+    parser.add_argument("--sdk-helper")
     args = parser.parse_args()
     if sys.platform != "darwin" or not hasattr(select, "kqueue"):
         print(json.dumps({"status": "UNEXECUTED_NATIVE_REQUIRED", "native_executed": False,
                           "host": platform.platform()}))
         return 77
+    if not args.sdk_helper:
+        parser.error("--sdk-helper must name the compiled native-sdk instrument")
     supplied = Path(args.root)
     runner_temp = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
     root = supplied.resolve(strict=True)
@@ -272,16 +301,24 @@ def main():
         raise ValueError("root must be fresh, empty, owned, mode 0700 and below RUNNER_TEMP")
     if ctypes.sizeof(AttrList) != 24 or [getattr(AttrList, name).offset for name, _ in AttrList._fields_] != [0, 2, 4, 8, 12, 16, 20]:
         raise ValueError("unexpected attrlist ABI")
+    sdk_command = command([args.sdk_helper, str(root)])
+    print(json.dumps({"sdk_command": sdk_command}), flush=True)
+    if sdk_command.get("rc") != 0:
+        raise RuntimeError("native SDK metadata failed: " + json.dumps(sdk_command))
+    sdk = json.loads(sdk_command["stdout"])
     tree = OwnedTree(root)
-    native = Native()
+    native = Native(sdk)
+    commands = [command(argv) for argv in (["sw_vers"], ["uname", "-a"],
+                ["df", "-P", str(root)])]
+    if sdk["statfs"]["rc"] == 0:
+        commands.append(command(["/usr/sbin/diskutil", "info", "-plist", sdk["statfs"]["mounted_device"]]))
     result = {"status": "NATIVE_OBSERVATIONS_ONLY", "native_executed": True,
               "safety_verdict": "NOT_EVALUATED", "root": str(root), "uid": os.getuid(),
               "source_commit": os.environ.get("GITHUB_SHA"), "platform": platform.platform(),
               "uname": list(platform.uname()), "python": sys.version,
-              "commands": [command(argv) for argv in (["sw_vers"], ["uname", "-a"],
-                  ["df", "-P", str(root)], ["/usr/bin/stat", "-f", "%T", str(root)],
-                  ["/usr/sbin/diskutil", "info", "-plist", str(root)])],
-              "abi": {"attrlist_size": ctypes.sizeof(AttrList), "options": [0, 8]},
+              "commands": commands, "sdk_command": sdk_command, "sdk": sdk,
+              "select_bindings": native.select_bindings,
+              "abi": {"attrlist_size": ctypes.sizeof(AttrList), "options": native.options},
               "hashes": {}, "cases": [],
               "unexecuted_controls": ["forced revoke/unmount prohibited", "product release/retry/Drop and successor race protocols outside scope", "other filesystems and OS releases"]}
     source_root = Path(__file__).resolve().parent
@@ -302,7 +339,7 @@ def main():
             sensitivity = "case_insensitive"
     result["case_sensitivity"] = {"created": created, "alternate": alternate,
                                   "observation": sensitivity}
-    result["invalid_descriptor_attribute_control"] = [native.attrs(-1, flag) for flag in (0, 8)]
+    result["invalid_descriptor_attribute_control"] = [native.attrs(-1, flag) for flag in native.options]
     tree.write("metadata.json", json.dumps(result, indent=2) + "\n")
     for kind, actions in CASES.items():
         row = run_case(native, tree, kind, actions)

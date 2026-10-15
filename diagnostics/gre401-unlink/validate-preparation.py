@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Validate preparation only. Never emulate native events."""
 import ast
+import argparse
 import hashlib
 import json
 from pathlib import Path
@@ -10,6 +11,9 @@ import sys
 import yaml
 
 
+parser = argparse.ArgumentParser()
+parser.add_argument('--scratch', type=Path)
+args = parser.parse_args()
 folder = Path(__file__).resolve().parent
 repo = folder.parents[1]
 workflow = repo / '.github/workflows/desktop-native-macos.yml'
@@ -46,15 +50,37 @@ assert policy['concurrency']['cancel-in-progress'] == 'false'
 assert 'github.run_id' in policy['concurrency']['group']
 assert len(policy['jobs']) == 1
 job = policy['jobs']['observations']
-assert job['runs-on'] == 'macos-26' and int(job['timeout-minutes']) <= 10
+assert job['runs-on'] == 'macos-26' and int(job['timeout-minutes']) == 8
 steps = job['steps']
 assert steps[0]['uses'] == 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'
 assert steps[0]['with']['persist-credentials'] == 'false'
 assert steps[-1]['uses'] == 'actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9'
 assert 'always()' in steps[-1]['if']
-assert int(steps[-1]['with']['retention-days']) <= 7
+assert int(steps[-1]['with']['retention-days']) == 7
 assert 'secrets.' not in workflow.read_text()
 results.append({'workflow_policy': 'validated', 'manual_only': True, 'jobs': 1})
+shell = steps[1]['run']
+completed = subprocess.run(['bash', '-n'], input=shell, capture_output=True, text=True)
+assert completed.returncode == 0, completed.stderr
+results.append({'bash_syntax': 'valid'})
+assert '--sdk-helper "$probe_root/native-sdk"' in shell
+assert '-D_DARWIN_C_SOURCE -Wall -Wextra -Werror' in shell
+assert 'trap ' in shell and 'exit-code.txt' in shell
+assert 'select.KQ_' not in probe.read_text()
+constants = {node.slice.value for node in ast.walk(module)
+             if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant)
+             and isinstance(node.slice.value, str)
+             and node.slice.value.startswith(('EV_', 'EVFILT_', 'ATTR_', 'FSOPT_', 'RENAME_'))}
+sdk_source = folder / 'native-sdk.c'
+assert all(name in sdk_source.read_text() for name in constants)
+case_node = next(node for node in module.body if isinstance(node, ast.Assign)
+                 and any(isinstance(target, ast.Name) and target.id == 'CASES' for target in node.targets))
+cases = ast.literal_eval(case_node.value)
+assert len(cases) == 19
+assert {action[0] for actions in cases.values() for action in actions} == {
+    'rename', 'rename_parent', 'chmod', 'swap', 'successor', 'mkdir', 'rmdir', 'unlink'}
+results.append({'case_registry': list(cases), 'sdk_constant_references': sorted(constants),
+                'native_api_bindings': 'Source inspected against Apple LP64 declarations and CPython implementation. Exact SDK compilation remains native-only.'})
 original = folder / 'research-original.py'
 provenance = json.loads((folder / 'provenance.json').read_text())
 assert hashlib.sha256(original.read_bytes()).hexdigest() == provenance['source_hashes']['native-vnode-probe.py']
@@ -62,6 +88,20 @@ assert hashlib.sha256(original.read_bytes()).hexdigest() == provenance['source_h
 if sys.platform != 'darwin':
     nonexistent = folder / 'must-not-create-native-root'
     assert not nonexistent.exists()
+
+    if args.scratch:
+        assert args.scratch.is_dir()
+        binary_path = args.scratch / 'native-sdk-linux-unexecuted'
+        command = ['clang', '-std=c11', '-Wall', '-Wextra', '-Werror', str(sdk_source), '-o', str(binary_path)]
+        completed = subprocess.run(command, capture_output=True, text=True)
+        results.append({'argv': command, 'exit_code': completed.returncode,
+                        'stdout': completed.stdout, 'stderr': completed.stderr,
+                        'limitation': 'Only the non-Apple branch compiles on this host.'})
+        assert completed.returncode == 0
+        completed = subprocess.run([str(binary_path)], capture_output=True, text=True)
+        results.append({'argv': [str(binary_path)], 'exit_code': completed.returncode,
+                        'stdout': completed.stdout, 'stderr': completed.stderr})
+        assert completed.returncode == 77 and completed.stderr == 'UNEXECUTED_NATIVE_REQUIRED\n'
     command = [sys.executable, '-B', str(probe), '--root', str(nonexistent)]
     completed = subprocess.run(command, capture_output=True, text=True)
     results.append({'argv': command, 'exit_code': completed.returncode,
@@ -73,5 +113,5 @@ if sys.platform != 'darwin':
 print(json.dumps({'status': 'PREPARATION_CHECKS_ONLY', 'native_executed': False,
                   'actionlint_sha256': pinned_hash, 'results': results,
                   'hashes': {str(path.relative_to(repo)): hashlib.sha256(path.read_bytes()).hexdigest()
-                             for path in [probe, workflow, original, folder / 'provenance.json',
+                             for path in [probe, sdk_source, workflow, original, folder / 'provenance.json',
                                           folder / 'research-to-experiment.patch', Path(__file__)]}}, indent=2))

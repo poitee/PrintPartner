@@ -29,6 +29,7 @@ jobs:
           probe_root=$(mktemp -d "$RUNNER_TEMP/gre401-unlink.XXXXXXXX")
           chmod 0700 "$probe_root"
           echo "root=$probe_root" >> "$GITHUB_OUTPUT"
+          trap 'printf "%s\n" "$?" > "$probe_root/exit-code.txt"' EXIT
           mkdir -m 0700 "$probe_root/objects"
           {
             printf 'GITHUB_SHA=%s\n' "$GITHUB_SHA"
@@ -36,8 +37,23 @@ jobs:
             sw_vers
             shasum -a 256 diagnostics/gre401-unlink/* .github/workflows/desktop-native-macos.yml
           } > "$probe_root/source-and-host.txt"
+          {
+            xcrun --show-sdk-path
+            xcrun --show-sdk-version
+            xcrun clang --version
+          } > "$probe_root/sdk-and-toolchain.txt" 2>&1
           set +e
+          xcrun clang -std=c11 -D_DARWIN_C_SOURCE -Wall -Wextra -Werror diagnostics/gre401-unlink/native-sdk.c \
+            -o "$probe_root/native-sdk" > "$probe_root/compile.log" 2>&1
+          compile_status=$?
+          printf '%s\n' "$compile_status" > "$probe_root/compile-exit-code.txt"
+          if [ "$compile_status" -ne 0 ]; then
+            cat "$probe_root/compile.log"
+            exit "$compile_status"
+          fi
+          shasum -a 256 "$probe_root/native-sdk" >> "$probe_root/sdk-and-toolchain.txt"
           python3 -B diagnostics/gre401-unlink/native-vnode-probe.py --root "$probe_root/objects" \
+            --sdk-helper "$probe_root/native-sdk" \
             > "$probe_root/stdout.log" 2> "$probe_root/stderr.log"
           probe_status=$?
           set -e
