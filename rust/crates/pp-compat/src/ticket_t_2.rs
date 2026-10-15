@@ -232,12 +232,18 @@ async fn ticket_t_3_drain_supervisor_recovered_crash_can_shutdown_gracefully() {
 async fn ticket_t_3_drain_supervisor_shutdown_reports_forced_exit() {
     let scratch = Scratch::new("forced");
     let spec = super::ShellSpec {
-        script: "trap '' TERM; while :; do sleep 1; done",
+        script: "trap '' TERM; printf 'term-trap-ready\\n'; while :; do sleep 1; done",
         ..shell_spec(&scratch)
     };
     let supervisor =
         super::Supervisor::launch_shell(spec, super::SupervisorConfig::default()).unwrap();
     wait_live(&scratch.pidfile(), 1).await;
+    pump_until(|| {
+        diagnostic_rows(&scratch)
+            .iter()
+            .any(|row| row["event"] == "compat_output")
+    })
+    .await;
     let started = std::time::Instant::now();
     assert_eq!(
         supervisor.shutdown().await.unwrap(),
