@@ -876,6 +876,40 @@ mod tests {
     }
 
     #[test]
+    fn missing_atomic_lease_release_and_retry_complete() {
+        for retry in [false, true] {
+            let path = directory();
+            let owner = StorageLease::acquire(&path).unwrap();
+            std::fs::remove_dir_all(path.join(".desktop-lease")).unwrap();
+            let released = if retry {
+                let blocker = owner.runtime_dir().join("block-release");
+                std::fs::write(&blocker, b"retain").unwrap();
+                let failed = owner.release();
+                assert!(failed.ownership_retained && !failed.lock_released);
+                let lock = File::open(path.join(".desktop.lock")).unwrap();
+                assert!(lock.try_lock_exclusive().is_err());
+                std::fs::remove_file(blocker).unwrap();
+                StorageLease::retry_failed_release(&path).unwrap()
+            } else {
+                owner.release()
+            };
+            assert_released(released, &path);
+        }
+    }
+
+    #[test]
+    fn missing_atomic_lease_drop_allows_reacquisition() {
+        let path = directory();
+        let owner = StorageLease::acquire(&path).unwrap();
+        let runtime = owner.runtime_dir().to_path_buf();
+        std::fs::remove_dir_all(path.join(".desktop-lease")).unwrap();
+        drop(owner);
+        assert!(!runtime.exists());
+        let next = StorageLease::acquire(&path).unwrap();
+        assert_released(next.release(), &path);
+    }
+
+    #[test]
     fn missing_marker_release_and_retry_complete() {
         for retry in [false, true] {
             let path = directory();
