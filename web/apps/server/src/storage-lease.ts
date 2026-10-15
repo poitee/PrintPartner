@@ -126,20 +126,27 @@ export function acquireStorageLease(directory: string): { identity: string; inst
             }
             throw error;
           }
-          let heldPath = lease;
           const detached = join(directory, `.desktop-lease-release-${instance}`);
+          let stage: "published" | "detached" | "verified" = "published";
           return { identity, instance, release: () => {
-            if (heldPath === lease) {
+            if (stage === "published") {
               // A lease removed or republished by someone else is no longer ours to retire.
               if (!recordNamesInstance(join(lease, "owner.json"), instance)) return;
               // Detach the whole lease before cleanup so a contender never observes an empty lease.
               try { renameSync(lease, detached); }
               catch (error) { if (isFsError(error, ["ENOENT"])) return; throw error; }
-              // The check and the rename cannot be one step, so hand back a lease republished in between.
-              if (!recordNamesInstance(join(detached, "owner.json"), instance)) { renameSync(detached, lease); return; }
-              heldPath = detached;
+              stage = "detached";
             }
-            rmSync(heldPath, { recursive: true });
+            if (stage === "detached") {
+              // The check and the rename cannot be one step, so hand back a lease republished in between.
+              if (!recordNamesInstance(join(detached, "owner.json"), instance)) {
+                renameSync(detached, lease);
+                stage = "published";
+                return;
+              }
+              stage = "verified";
+            }
+            rmSync(detached, { recursive: true, force: true });
           } };
         }
         case "invalid":

@@ -205,19 +205,28 @@ export function acquireDataDirectory(dataDir: string): () => void {
     throw error;
   }
   const detachedMarker = join(canonical, `.desktop-owner-release-${lease.instance}.json`);
-  let markerRemoved = false;
+  let markerStage: "recorded" | "detached" | "checked" | "removed" = "recorded";
   const held: HeldDataDirectory = { refs: 1, identity: lease.identity, release: () => {
     // Preserve ownership if marker cleanup fails, so callers can retry safely.
-    if (!markerRemoved) {
+    if (markerStage === "recorded") {
       // A marker removed or rewritten by someone else is no longer ours to remove.
-      if (recordNamesInstance(marker, lease.instance)) {
-        try { renameSync(marker, detachedMarker); }
-        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-        // The check and the rename cannot be one step, so hand back a marker rewritten in between.
-        if (existsSync(detachedMarker) && !recordNamesInstance(detachedMarker, lease.instance)) linkSync(detachedMarker, marker);
-        rmSync(detachedMarker, { force: true });
+      if (!recordNamesInstance(marker, lease.instance)) markerStage = "removed";
+      else {
+        try { renameSync(marker, detachedMarker); markerStage = "detached"; }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          markerStage = "removed";
+        }
       }
-      markerRemoved = true;
+    }
+    if (markerStage === "detached") {
+      // The check and the rename cannot be one step, so hand back a marker rewritten in between.
+      if (!recordNamesInstance(detachedMarker, lease.instance)) linkSync(detachedMarker, marker);
+      markerStage = "checked";
+    }
+    if (markerStage === "checked") {
+      rmSync(detachedMarker, { force: true });
+      markerStage = "removed";
     }
     // Once the marker is gone this entry no longer stands for a reservation, even
     // if detaching the lease fails. A later connection then has to acquire again.

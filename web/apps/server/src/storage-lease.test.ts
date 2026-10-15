@@ -302,7 +302,7 @@ describe("release after the lease is removed externally", () => {
   it.each([
     { record: "lease owner", path: (dir: string) => join(dir, ".desktop-lease", "owner.json") },
     { record: "owner marker", path: (dir: string) => join(dir, ".desktop-owner.json") },
-  ])("acquireDataDirectory keeps release retryable while its $record is unreadable", ({ path }) => {
+  ])("acquireDataDirectory keeps release retryable while its $record is unreadable", { skip: process.getuid?.() === 0 }, ({ path }) => {
     const dir = dataDir();
     const release = acquireDataDirectory(dir);
     chmodSync(path(dir), 0o000);
@@ -348,5 +348,34 @@ describe("release after the lease is removed externally", () => {
     const record = path === ".desktop-lease" ? join(dir, path, "owner.json") : join(dir, path);
     expect(readFileSync(record, "utf8")).toBe(foreign);
     expect(readdirSync(dir).filter((name) => name.includes("-release-"))).toEqual([]);
+  });
+
+  it.skipIf(process.getuid?.() === 0).each([
+    { record: "lease", path: ".desktop-lease", owner: "/owner.json" },
+    { record: "owner marker", path: ".desktop-owner.json", owner: "" },
+  ])("resumes from the detached $record when its check fails after the detach", ({ path, owner }) => {
+    const dir = dataDir();
+    const child = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
+      import fs from "node:fs";
+      import { syncBuiltinESMExports } from "node:module";
+      import { acquireDataDirectory } from ${JSON.stringify(new URL("./desktop-context.ts", import.meta.url).href)};
+      const target = ${JSON.stringify(join(dir, path))};
+      const rename = fs.renameSync;
+      let detached;
+      fs.renameSync = function(from, to) {
+        const result = rename.call(this, from, to);
+        if (!detached && from === target) { detached = to; fs.chmodSync(to + ${JSON.stringify(owner)}, 0o000); }
+        return result;
+      };
+      syncBuiltinESMExports();
+      const release = acquireDataDirectory(${JSON.stringify(dir)});
+      let first;
+      try { release(); first = "released"; } catch (error) { first = error.code; }
+      fs.chmodSync(detached + ${JSON.stringify(owner)}, 0o600);
+      release();
+      console.log(JSON.stringify({ first, entries: fs.readdirSync(${JSON.stringify(dir)}) }));
+    `], { encoding: "utf8" });
+    expect(child.status, child.stderr).toBe(0);
+    expect(JSON.parse(child.stdout)).toEqual({ first: "EACCES", entries: [] });
   });
 });
