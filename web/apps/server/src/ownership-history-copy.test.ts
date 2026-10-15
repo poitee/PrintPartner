@@ -155,10 +155,11 @@ it.each([true, false])("copies tracked=%s accepted history and keeps both owners
   }
 });
 
-it.each([true, false].flatMap(tracked => ["notes", "quantity", "insert"].map(change => ({ tracked, change }))))(
+it.each([true, false].flatMap(tracked => ["notes", "quantity", "insert", "delete"].map(change => ({ tracked, change }))))(
   "copies tracked=$tracked compatibility_dirty history after a working $change edit", async ({ tracked, change }) => {
     const paths = fixture(tracked);
     edit(paths.sourceDir, db => {
+      if (change === "delete") { db.pragma("foreign_keys = ON"); db.exec("DELETE FROM parts WHERE id=1"); }
       if (change === "notes") db.exec("UPDATE parts SET notes='working edit' WHERE id=1");
       if (change === "quantity") db.exec("UPDATE parts SET quantity_override=3,quantity_effective=3 WHERE id=1");
       if (change === "insert") db.exec("INSERT INTO parts (id,profile_id,match_key,relative_path,filename,source_layer) VALUES (3,1,'new','new.stl','new.stl','base:A')");
@@ -239,6 +240,49 @@ it.each(["inspect", "apply"].flatMap(mode => ["missing", "other-set", "timestamp
   if (mode === "inspect") expect(() => inspectOwnershipCopy(paths)).toThrow(/input/i);
   else await refused(paths, input);
 });
+
+it.each(["inspect", "apply"].flatMap(mode => ["missing-map", "version-mismatch"].map(kind => ({ mode, kind }))))(
+  "$mode refuses a dirty Plan's $kind inferred current revision", async ({ mode, kind }) => {
+    const paths = fixture();
+    edit(paths.sourceDir, db => { db.exec("UPDATE parts SET notes='working edit' WHERE id=1"); });
+    const input = manifest(paths.sourceDir);
+    edit(paths.sourceDir, db => {
+      if (kind === "version-mismatch") db.exec("UPDATE build_profiles SET accepted_plan_version=100 WHERE id=1");
+      if (kind === "missing-map") {
+        const triggers = z.array(z.object({ name: z.string(), sql: z.string() })).parse(db.prepare("SELECT name,sql FROM sqlite_schema WHERE name IN ('trg_plan_revision_required_units_immutable_delete','trg_required_units_immutable_delete','trg_plan_revision_required_unit_sets_immutable_delete')").all());
+        for (const trigger of triggers) db.exec(`DROP TRIGGER "${trigger.name}"`);
+        db.exec("DELETE FROM plan_revision_required_units WHERE revision_id=1; DELETE FROM required_units WHERE created_in_revision_id=1; DELETE FROM plan_revision_required_unit_sets WHERE revision_id=1");
+        for (const trigger of triggers) db.exec(trigger.sql);
+      }
+      input.source_digest = hash(db.serialize());
+    });
+    if (kind === "missing-map") input.claims = input.claims.filter(claim => !["plan_revision_required_units", "required_units", "plan_revision_required_unit_sets"].includes(claim.table) || claim.rowid !== 1);
+    if (mode === "inspect") expect(() => inspectOwnershipCopy(paths)).toThrow(kind === "missing-map" ? /Required-unit map/ : /version/);
+    else await refused(paths, input);
+  },
+);
+
+it.each(["inspect", "apply"].flatMap(mode => ["foreign-projection", "invalid-projection", "missing-ready-projection"].map(kind => ({ mode, kind }))))(
+  "$mode refuses $kind references after relaxing dirty historical projections", async ({ mode, kind }) => {
+    const paths = fixture(); const input = manifest(paths.sourceDir);
+    edit(paths.sourceDir, db => {
+      if (kind !== "missing-ready-projection") {
+        db.exec("UPDATE parts SET notes='working edit' WHERE id=1");
+        const trigger = z.object({ sql: z.string() }).parse(db.prepare("SELECT sql FROM sqlite_schema WHERE name='trg_plan_revision_parts_immutable_update'").get());
+        db.exec("DROP TRIGGER trg_plan_revision_parts_immutable_update");
+        db.prepare("UPDATE plan_revision_parts SET projection_part_id=? WHERE revision_id=1").run(kind === "foreign-projection" ? 2 : -1);
+        db.exec(trigger.sql);
+      } else {
+        db.pragma("foreign_keys = ON");
+        db.exec("DELETE FROM parts WHERE id=1; UPDATE build_profiles SET accepted_plan_revision_id=1 WHERE id=1");
+      }
+      input.source_digest = hash(db.serialize());
+    });
+    if (kind === "missing-ready-projection") input.claims = input.claims.filter(claim => !["parts", "print_progress"].includes(claim.table) || claim.rowid !== 1);
+    if (mode === "inspect") expect(() => inspectOwnershipCopy(paths)).toThrow("Part projection Plan");
+    else await refused(paths, input);
+  },
+);
 
 it.each(ownershipHistoryTables)("requires an explicit owner for every %s history row", async table => {
   const paths = fixture(); const input = manifest(paths.sourceDir);

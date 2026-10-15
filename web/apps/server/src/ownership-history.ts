@@ -72,31 +72,7 @@ export function validateOwnershipHistory(database: Database.Database): void {
   for (const accepted of acceptedInputs) {
     if (!sets.some(set => set.id === accepted.inputSetId && set.profileId === accepted.profileId && set.tenantId === accepted.tenantId)) fail("accepted input pointer");
   }
-  for (const revision of revisions) {
-    const revisionParts = parts.filter(part => part.revisionId === revision.id);
-    validateAcceptedPlanRevisionRows({ tenantId: revision.tenantId, profileId: revision.profileId, revision,
-      parent: revisions.find(parent => parent.id === revision.parentRevisionId) ?? null, revisionParts });
-    if (revision.parentRevisionId != null && !revisions.some(parent => parent.id === revision.parentRevisionId && parent.revisionNumber < revision.revisionNumber)) fail("revision lineage");
-    if (revision.provenanceKind === "tracked" && !sets.some(set => set.id === revision.inputSetId && set.profileId === revision.profileId && set.tenantId === revision.tenantId)) fail("revision input Plan");
-    const requiredSet = unitSets.find(set => set.revisionId === revision.id);
-    const revisionMappings = mappings.filter(mapping => mapping.revisionId === revision.id);
-    const createdHere = units.filter(unit => unit.createdInRevisionId === revision.id);
-    if (!requiredSet) {
-      if (profiles.some(profile => profile.acceptedPlanRevisionId === revision.id) || revisionMappings.length || createdHere.length) fail("missing or partial Required-unit map");
-    } else {
-      validateAcceptedPlanRequiredUnitRows({ tenantId: revision.tenantId, profileId: revision.profileId, revisionId: revision.id,
-        requiredSet,
-        parts: revisionParts.map(part => ({ revisionPartId: part.id, included: part.included, quantityEffective: part.quantityEffective })),
-        mappings: revisionMappings,
-        units: units.filter(unit => unit.profileId === revision.profileId), creationRevisions: revisions,
-        createdHere });
-    }
-    for (const part of revisionParts) {
-      if (part.relativePath && !isSafeRelativePath(part.relativePath)) fail("Part path");
-      if (part.filename && (!isSafeRelativePath(part.filename) || part.filename.includes("/"))) fail("Part filename");
-      if (part.projectionPartId != null && !projections.some(projection => projection.id === part.projectionPartId && projection.profileId === revision.profileId && projection.tenantId === revision.tenantId)) fail("Part projection Plan");
-    }
-  }
+  const acceptedPlans = new Map<number, { kind: "compatibility_dirty" | "ready"; revision: (typeof revisions)[number] }>();
   for (const profile of profiles) {
     const history = revisions.filter(revision => revision.profileId === profile.id);
     if (!Number.isSafeInteger(profile.acceptedPlanVersion) || profile.acceptedPlanVersion < 0) fail("accepted Plan version");
@@ -108,8 +84,40 @@ export function validateOwnershipHistory(database: Database.Database): void {
       ? history.sort((left, right) => right.revisionNumber - left.revisionNumber)[0]
       : history.find(revision => revision.id === profile.acceptedPlanRevisionId && revision.tenantId === profile.tenantId))
       ?? fail("accepted Plan pointer");
+    if (profile.acceptedPlanRevisionId == null && profile.acceptedPlanVersion !== accepted.revisionNumber) fail("accepted Plan version disagrees with history");
+    acceptedPlans.set(profile.id, { kind: profile.acceptedPlanRevisionId == null ? "compatibility_dirty" : "ready", revision: accepted });
     validateAcceptedPlanInputHeaderRows({ tenantId: profile.tenantId, profileId: profile.id, revision: accepted,
       acceptedInput: acceptedInputs.find(input => input.profileId === profile.id),
       inputSet: sets.find(set => set.id === accepted.inputSetId) });
+  }
+  for (const revision of revisions) {
+    const revisionParts = parts.filter(part => part.revisionId === revision.id);
+    validateAcceptedPlanRevisionRows({ tenantId: revision.tenantId, profileId: revision.profileId, revision,
+      parent: revisions.find(parent => parent.id === revision.parentRevisionId) ?? null, revisionParts });
+    if (revision.parentRevisionId != null && !revisions.some(parent => parent.id === revision.parentRevisionId && parent.revisionNumber < revision.revisionNumber)) fail("revision lineage");
+    if (revision.provenanceKind === "tracked" && !sets.some(set => set.id === revision.inputSetId && set.profileId === revision.profileId && set.tenantId === revision.tenantId)) fail("revision input Plan");
+    const requiredSet = unitSets.find(set => set.revisionId === revision.id);
+    const revisionMappings = mappings.filter(mapping => mapping.revisionId === revision.id);
+    const createdHere = units.filter(unit => unit.createdInRevisionId === revision.id);
+    if (!requiredSet) {
+      if (acceptedPlans.get(revision.profileId)?.revision.id === revision.id || revisionMappings.length || createdHere.length) fail("missing or partial Required-unit map");
+    } else {
+      validateAcceptedPlanRequiredUnitRows({ tenantId: revision.tenantId, profileId: revision.profileId, revisionId: revision.id,
+        requiredSet,
+        parts: revisionParts.map(part => ({ revisionPartId: part.id, included: part.included, quantityEffective: part.quantityEffective })),
+        mappings: revisionMappings,
+        units: units.filter(unit => unit.profileId === revision.profileId), creationRevisions: revisions,
+        createdHere });
+    }
+    for (const part of revisionParts) {
+      if (part.relativePath && !isSafeRelativePath(part.relativePath)) fail("Part path");
+      if (part.filename && (!isSafeRelativePath(part.filename) || part.filename.includes("/"))) fail("Part filename");
+      if (part.projectionPartId != null) {
+        if (!Number.isSafeInteger(part.projectionPartId) || part.projectionPartId <= 0) fail("Part projection Plan");
+        const projection = projections.find(projection => projection.id === part.projectionPartId);
+        if (projection ? projection.profileId !== revision.profileId || projection.tenantId !== revision.tenantId
+          : acceptedPlans.get(revision.profileId)?.kind !== "compatibility_dirty") fail("Part projection Plan");
+      }
+    }
   }
 }
