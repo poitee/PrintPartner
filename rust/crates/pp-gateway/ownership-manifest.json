@@ -433,6 +433,35 @@
             "name": "build_profiles"
           }
         ]
+      },
+      {
+        "operation": "tool.get_source_docs",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "projects"
+          },
+          {
+            "kind": "table",
+            "name": "source_docs"
+          },
+          {
+            "kind": "table",
+            "name": "source_notes"
+          },
+          {
+            "kind": "table",
+            "name": "source_revisions"
+          },
+          {
+            "kind": "table",
+            "name": "app_settings"
+          },
+          {
+            "kind": "file",
+            "name": "source-workspace"
+          }
+        ]
       }
     ],
     "unresolved": [
@@ -819,7 +848,6 @@
       "tool.get_print_stats",
       "tool.get_printer_checkoff",
       "tool.get_remaining",
-      "tool.get_source_docs",
       "tool.get_source_inventory",
       "tool.import_guide_notes",
       "tool.ingest_guide_text",

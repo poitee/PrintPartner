@@ -8,7 +8,8 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as schema from "./db/schema.js";
 import { schemaMigrations } from "./db/migrations-sqlite.js";
 import { digestPlanRevisionParts, MAX_ACCEPTED_OPERATIONAL_ROW_TEXT_BYTES } from "./services/plan-publication.js";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import * as operationalReader from "./db/accepted-plan-operational.js";
 import { z } from "zod";
 import { SqliteDatabase, getDb } from "./db/client.js";
 import { AppRepository } from "./db/repository.js";
@@ -30,7 +31,7 @@ const roots: string[] = [];
 const now = "2026-10-15T00:00:00.000Z";
 const hash = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
 beforeEach(() => { process.env.PP_DESKTOP_REBUILD = "1"; });
-afterEach(() => { delete process.env.PP_DESKTOP_REBUILD; roots.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })); });
+afterEach(() => { vi.restoreAllMocks(); delete process.env.PP_DESKTOP_REBUILD; roots.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })); });
 function edit(source: string, operation: (db: Database.Database) => void) {
   const db = new Database(join(source, "print-partner.db"));
   try { db.pragma("foreign_keys = OFF"); operation(db); } finally { db.close(); }
@@ -183,8 +184,20 @@ it.each([true, false].flatMap(tracked => ["notes", "quantity", "insert", "delete
       expect(db.prepare("SELECT accepted_plan_revision_id,accepted_plan_version FROM build_profiles WHERE id=1").get())
         .toEqual({ accepted_plan_revision_id: null, accepted_plan_version: 1 });
     });
+    const reader = vi.spyOn(operationalReader, "readAcceptedPlanOperationalSnapshotInternal");
     const input = manifest(paths.sourceDir); const before = files(paths.sourceDir);
+    const dirtyReads = () => reader.mock.calls.flatMap(([dependencies], index) => dependencies.profileId === 1
+      ? [{ tenantId: dependencies.tenantId, reposDir: dependencies.reposDir, result: reader.mock.results[index] }]
+      : []);
+    expect(dirtyReads()).toEqual([{ tenantId: "default", reposDir: join(paths.sourceDir, "repos"),
+      result: { type: "return", value: { kind: "compatibility_dirty" } } }]);
+    reader.mockClear();
     await executeOwnershipCopy({ ...paths, manifest: input });
+    expect(dirtyReads()).toEqual([
+      { tenantId: "default", reposDir: join(paths.sourceDir, "repos"), result: { type: "return", value: { kind: "compatibility_dirty" } } },
+      { tenantId: "account-a", reposDir: expect.stringMatching(/\/\.ownership-copy-[^/]+\/repos$/),
+        result: { type: "return", value: { kind: "compatibility_dirty" } } },
+    ]);
     expect(files(paths.sourceDir)).toEqual(before);
     const source = new Database(join(paths.sourceDir, "print-partner.db"), { readonly: true });
     const copy = new Database(join(paths.destinationDir, "print-partner.db"), { readonly: true });

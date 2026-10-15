@@ -145,12 +145,15 @@ for (const tracked of [false, true, 'symlink']) {
     copyFileSync(cli, join(directory, 'web/scripts/check-ci-tool-pins.mjs'));
     symlinkSync(fileURLToPath(new URL('../node_modules', import.meta.url)), join(directory, 'web/node_modules'));
     writeFileSync(join(directory, '.github/workflows/web-ci.yml'), JSON.stringify(webCI));
+    for (const name of ['integration-smoke', 'pr-evidence']) {
+      copyFileSync(fileURLToPath(new URL(`../../.github/workflows/${name}.yml`, import.meta.url)), join(directory, `.github/workflows/${name}.yml`));
+    }
     const contracts = join(directory, '.github/workflows/desktop-contracts.yml');
     if (tracked === 'symlink') symlinkSync('../../contracts.yml', contracts);
     else writeFileSync(contracts, desktop());
     for (const args of [
       ['init', '-q'],
-      ['add', '.github/workflows/web-ci.yml'],
+      ['add', '.github/workflows/web-ci.yml', '.github/workflows/integration-smoke.yml', '.github/workflows/pr-evidence.yml'],
       ['add', tracked ? '.github/workflows/desktop-contracts.yml' : 'web/scripts/check-ci-tool-pins.mjs'],
       ['-c', 'user.name=CI test', '-c', 'user.email=ci@example.invalid', 'commit', '-qm', 'fixture'],
     ]) {
@@ -434,3 +437,72 @@ test('repository Web CI has exact matching Node pins and runtime checks', t => {
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout, summary(0, 0, 0));
 });
+
+for (const [filename, name, code, optional] of [
+  ['integration-smoke.yml', 'postgres', 'INTEGRATION', true],
+  ['pr-evidence.yml', 'lint-pr-body', 'EVIDENCE', false],
+]) {
+  const source = () => ({ jobs: { [name]: {
+    ...(optional ? { if: "github.event_name != 'workflow_dispatch' || inputs.postgres" } : {}),
+    steps: JSON.parse(JSON.stringify(webCI.jobs.web.steps)),
+  } } });
+  for (const extension of ['yml', 'yaml', 'YML']) {
+    test(`accept exact Node pin in ${filename} as ${extension}`, t => {
+      const result = run(t, JSON.stringify(source()), [], filename.replace('yml', extension));
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, summary(0, 0, 0));
+    });
+  }
+  for (const version of ['22', '22.23', '22.x', 'lts/*', '^22.23.3', 'v22.23.3', '22.23.3-rc.1', '022.23.3', '24.21.0', '${{ inputs.node }}', 22, null]) {
+    test(`reject ${filename} Node ${JSON.stringify(version)}`, t => {
+      const data = source();
+      data.jobs[name].steps[0].with['node-version'] = version;
+      const result = run(t, JSON.stringify(data), [], filename);
+      assert.equal(result.status, 1, result.stdout);
+      assert.match(result.stderr, new RegExp(`UNPINNED_${code}_NODE:`));
+    });
+  }
+  for (const [label, mutate, diagnostic] of [
+    ['missing lane', data => delete data.jobs[name], 'INVALID_SHAPE'],
+    ['renamed lane', data => { data.jobs.other = data.jobs[name]; delete data.jobs[name]; }, `INVALID_${code}_NODE_SETUP`],
+    ['matrix override', data => { data.jobs[name].strategy = { matrix: { node: ['22'] } }; }, `INVALID_${code}_NODE_SETUP`],
+    ['tolerated lane', data => { data.jobs[name]['continue-on-error'] = true; }, `INVALID_${code}_NODE_SETUP`],
+    ...(optional ? [false, true, 'false', '${{ false }}', 'inputs.postgres', undefined].map(condition => [
+      `unexpected smoke condition ${condition}`, data => {
+        if (condition === undefined) delete data.jobs[name].if;
+        else data.jobs[name].if = condition;
+      }, `INVALID_${code}_NODE_SETUP`,
+    ]) : []),
+    ['dependent lane', data => { data.jobs[name].needs = ['skipped']; }, `INVALID_${code}_NODE_SETUP`],
+    ...(!optional ? [['conditional lane', data => { data.jobs[name].if = false; }, `INVALID_${code}_NODE_SETUP`]] : []),
+    ['missing setup', data => data.jobs[name].steps.shift(), `INVALID_${code}_NODE_SETUP`],
+    ['duplicate setup', data => data.jobs[name].steps.push(data.jobs[name].steps[0]), `INVALID_${code}_NODE_SETUP`],
+    ['version file', data => { data.jobs[name].steps[0].with['node-version-file'] = '.nvmrc'; }, `UNPINNED_${code}_NODE`],
+    ['conditional setup', data => { data.jobs[name].steps[0].if = false; }, `UNPINNED_${code}_NODE`],
+    ['tolerated setup', data => { data.jobs[name].steps[0]['continue-on-error'] = true; }, `UNPINNED_${code}_NODE`],
+    ['missing assertion', data => data.jobs[name].steps.pop(), `MISSING_${code}_NODE_VERIFICATION`],
+    ['mismatched assertion', data => { data.jobs[name].steps[1].run = 'test "$(node --version)" = "v22.23.4"'; }, `MISSING_${code}_NODE_VERIFICATION`],
+    ['conditional assertion', data => { data.jobs[name].steps[1].if = false; }, `MISSING_${code}_NODE_VERIFICATION`],
+    ['tolerated assertion', data => { data.jobs[name].steps[1]['continue-on-error'] = true; }, `MISSING_${code}_NODE_VERIFICATION`],
+    ['early install', data => data.jobs[name].steps.unshift({ run: 'npm ci' }), `EARLY_${code}_NODE_COMMAND`],
+    ['late assertion', data => data.jobs[name].steps.splice(1, 0, { run: 'npm ci' }), `MISSING_${code}_NODE_VERIFICATION`],
+  ]) {
+    test(`reject ${filename} ${label}`, t => {
+      const data = source();
+      mutate(data);
+      const result = run(t, JSON.stringify(data), [], filename);
+      assert.equal(result.status, 1, result.stdout);
+      assert.match(result.stderr, new RegExp(`${diagnostic}:`));
+    });
+  }
+  test(`accept future ${filename} patch with matching assertion`, t => {
+    const result = run(t, JSON.stringify(source()).replaceAll('22.23.3', '22.23.4'), [], filename);
+    assert.equal(result.status, 0, result.stderr);
+  });
+  test(`repository ${filename} has exact Node pin and runtime assertion`, t => {
+    const data = readFileSync(fileURLToPath(new URL(`../../.github/workflows/${filename}`, import.meta.url)), 'utf8');
+    const result = run(t, data, [], filename);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, summary(0, 0, 0));
+  });
+}
