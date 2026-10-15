@@ -44,6 +44,10 @@ export function validateOwnershipHistory(database: Database.Database): void {
     if (!set.publishedAt || !isCanonicalTimestamp(set.publishedAt) || !isCanonicalTimestamp(set.recordedAt)
       || selected.length !== set.expectedInputCount || ![1, 2].includes(set.formatVersion)
       || new Set(selected.map(input => input.sourceId)).size !== selected.length) fail("unpublished or incomplete Plan inputs");
+    if (set.formatVersion === 2 && (
+      new Set(selected.map(input => input.sourceLayer)).size !== selected.length
+      || new Set(selected.map(input => input.layerOrder)).size !== selected.length
+    )) fail("duplicate Plan input layer or order");
     for (const input of selected) {
       const source = sources.find(source => source.id === input.sourceId);
       if (!source || source.tenantId !== set.tenantId || input.tenantId !== set.tenantId

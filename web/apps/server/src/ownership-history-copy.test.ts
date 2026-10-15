@@ -375,3 +375,47 @@ it.each(["absent", "partial-mapping", "orphan-unit"])("copies retained pre-map h
     } finally { copy.close(); }
   } finally { store.close(); }
 });
+
+it.each(["inspect", "apply"].flatMap(mode => ["valid", "layer", "order"].map(duplicate => ({ mode, duplicate }))))(
+  "$mode validates retained format-2 input identity with $duplicate layers/orders", async ({ mode, duplicate }) => {
+    const paths = fixture();
+    const canonical = [
+      { source_id: 1, source_layer: "base:A", layer_order: 0, tracking_kind: "revision" as const, source_revision_id: 12, manifest_digest: hash("manifest-1-2"), effective_naming_digest: "c".repeat(64) },
+      { source_id: 2, source_layer: "addon:B", layer_order: 1, tracking_kind: "revision" as const, source_revision_id: 22, manifest_digest: hash("manifest-2-2"), effective_naming_digest: "c".repeat(64) },
+    ];
+    edit(paths.sourceDir, raw => {
+      const db = drizzle(raw);
+      const header = db.select().from(schema.planRevisionInputSets).all().find(row => row.id === 1)!;
+      db.insert(schema.planRevisionInputSets).values({ ...header, id: 3, expectedInputCount: 2, inputSetDigest: digestPlanInputs(canonical) }).run();
+      const inputs = db.select().from(schema.planRevisionInputs).all();
+      for (const [index, input] of inputs.entries()) db.insert(schema.planRevisionInputs).values({ ...input, id: index + 3,
+        inputSetId: 3, sourceLayer: canonical[index]!.source_layer, layerOrder: canonical[index]!.layer_order }).run();
+      const revision = db.select().from(schema.planRevisions).all().find(row => row.id === 1)!;
+      const part = db.select().from(schema.planRevisionParts).all().find(row => row.revisionId === 1)!;
+      raw.exec("DROP TRIGGER trg_plan_revisions_immutable_update; UPDATE plan_revisions SET revision_number=2 WHERE id=1");
+      db.insert(schema.planRevisions).values({ ...revision, id: 3, inputSetId: 3 }).run();
+      db.insert(schema.planRevisionParts).values({ ...part, id: 3, revisionId: 3 }).run();
+      raw.exec("UPDATE plan_revisions SET parent_revision_id=3 WHERE id=1");
+      raw.exec(schemaMigrations.find(sql => sql.startsWith("CREATE TRIGGER IF NOT EXISTS trg_plan_revisions_immutable_update\n"))!);
+    });
+    const input = manifest(paths.sourceDir); input.claims.forEach(claim => { claim.user_id = "account-a"; });
+    if (duplicate !== "valid") edit(paths.sourceDir, raw => {
+      if (duplicate === "layer") canonical[1]!.source_layer = canonical[0]!.source_layer;
+      if (duplicate === "order") canonical[1]!.layer_order = canonical[0]!.layer_order;
+      raw.prepare("UPDATE plan_revision_inputs SET source_layer=?,layer_order=? WHERE id=4").run(canonical[1]!.source_layer, canonical[1]!.layer_order);
+      raw.prepare("UPDATE plan_revision_input_sets SET input_set_digest=? WHERE id=3").run(digestPlanInputs(canonical));
+      input.source_digest = hash(raw.serialize());
+    });
+    if (duplicate !== "valid") {
+      if (mode === "inspect") expect(() => inspectOwnershipCopy(paths)).toThrow("duplicate Plan input layer or order");
+      else await refused(paths, input);
+    } else if (mode === "inspect") expect(inspectOwnershipCopy(paths).claims.some(claim => claim.table === "plan_revision_input_sets" && claim.rowid === 3)).toBe(true);
+    else {
+      await executeOwnershipCopy({ ...paths, manifest: input });
+      const db = new Database(join(paths.destinationDir, "print-partner.db"));
+      try { expect(db.prepare("SELECT source_layer,layer_order,tenant_id FROM plan_revision_inputs WHERE input_set_id=3 ORDER BY layer_order").all()).toEqual([
+        { source_layer: "base:A", layer_order: 0, tenant_id: "account-a" }, { source_layer: "addon:B", layer_order: 1, tenant_id: "account-a" },
+      ]); } finally { db.close(); }
+    }
+  },
+);
