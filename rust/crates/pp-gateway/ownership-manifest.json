@@ -351,6 +351,19 @@
       {
         "operation": "tool.get_job_status",
         "resources": []
+      },
+      {
+        "operation": "tool.list_plan_snapshots",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "build_profiles"
+          },
+          {
+            "kind": "table",
+            "name": "plan_snapshots"
+          }
+        ]
       }
     ],
     "unresolved": [
@@ -743,7 +756,6 @@
       "tool.inspect_repo_tree",
       "tool.list_build_differences",
       "tool.list_example_builds",
-      "tool.list_plan_snapshots",
       "tool.propose_add_build_checklist_items",
       "tool.propose_add_custom_filament",
       "tool.propose_add_source",
