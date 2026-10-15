@@ -1,5 +1,5 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
-import { closeSync, existsSync, fstatSync, linkSync, mkdirSync, openSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
@@ -221,7 +221,11 @@ export function acquireDataDirectory(dataDir: string): () => void {
     }
     if (markerStage === "detached") {
       // The check and the rename cannot be one step, so hand back a marker rewritten in between.
-      if (!recordNamesInstance(detachedMarker, lease.instance)) linkSync(detachedMarker, marker);
+      // Neither link nor a directory rename replaces an entry republished since.
+      if (!recordNamesInstance(detachedMarker, lease.instance)) {
+        if (lstatSync(detachedMarker).isDirectory()) renameSync(detachedMarker, marker);
+        else linkSync(detachedMarker, marker);
+      }
       markerStage = "checked";
     }
     if (markerStage === "checked") {

@@ -313,12 +313,22 @@ describe("release after the lease is removed externally", () => {
     releases.push(acquireDataDirectory(dir));
   });
 
+  const foreign = JSON.stringify({ pid: process.pid, kind: "standalone", process_identity: "another-writer", instance });
   it.each([
-    { record: "lease", path: ".desktop-lease" },
-    { record: "owner marker", path: ".desktop-owner.json" },
-  ])("hands back a $record republished between the ownership check and the detach", ({ path }) => {
+    { record: "lease", path: ".desktop-lease",
+      republish: `fs.mkdirSync(target); fs.writeFileSync(target + "/owner.json", ${JSON.stringify(foreign)});`,
+      kept: (target: string) => readFileSync(join(target, "owner.json"), "utf8") === foreign },
+    { record: "owner marker", path: ".desktop-owner.json",
+      republish: `fs.writeFileSync(target, ${JSON.stringify(foreign)});`,
+      kept: (target: string) => readFileSync(target, "utf8") === foreign },
+    { record: "dangling symlink marker", path: ".desktop-owner.json",
+      republish: `fs.symlinkSync("missing-owner.json", target);`,
+      kept: (target: string) => readlinkSync(target) === "missing-owner.json" },
+    { record: "directory marker", path: ".desktop-owner.json",
+      republish: `fs.mkdirSync(target); fs.writeFileSync(target + "/evidence", "retain");`,
+      kept: (target: string) => readFileSync(join(target, "evidence"), "utf8") === "retain" },
+  ])("hands back a $record republished between the ownership check and the detach", ({ path, republish, kept }) => {
     const dir = dataDir();
-    const foreign = JSON.stringify({ pid: process.pid, kind: "standalone", process_identity: "another-writer", instance });
     const child = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
       import fs from "node:fs";
       import { syncBuiltinESMExports } from "node:module";
@@ -330,12 +340,7 @@ describe("release after the lease is removed externally", () => {
         if (!injected && from === target) {
           injected = true;
           fs.rmSync(target, { recursive: true });
-          if (${JSON.stringify(path)} === ".desktop-lease") {
-            fs.mkdirSync(target);
-            fs.writeFileSync(target + "/owner.json", ${JSON.stringify(foreign)});
-          } else {
-            fs.writeFileSync(target, ${JSON.stringify(foreign)});
-          }
+          ${republish}
         }
         return rename.call(this, from, to);
       };
@@ -345,8 +350,7 @@ describe("release after the lease is removed externally", () => {
     `], { encoding: "utf8" });
     expect(child.status, child.stderr).toBe(0);
     expect(JSON.parse(child.stdout)).toEqual({ injected: true });
-    const record = path === ".desktop-lease" ? join(dir, path, "owner.json") : join(dir, path);
-    expect(readFileSync(record, "utf8")).toBe(foreign);
+    expect(kept(join(dir, path))).toBe(true);
     expect(readdirSync(dir).filter((name) => name.includes("-release-"))).toEqual([]);
   });
 
