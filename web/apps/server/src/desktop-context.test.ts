@@ -278,3 +278,23 @@ describe("orphaned desktop owner release", () => {
     } finally { rmSync(directory, { recursive: true, force: true }); }
   });
 });
+
+it.each(["file", "dangling link"])("refuses standalone writers with a pending native restore %s", async (kind) => {
+  const { symlinkSync } = await import("node:fs");
+  const directory = mkdtempSync(join(tmpdir(), "pp-native-restore-"));
+  const journal = join(directory, ".offline-restore-journal.json");
+  const database = join(directory, "print-partner.db");
+  writeFileSync(database, "interrupted restore data");
+  try {
+    if (kind === "file") writeFileSync(journal, "pending journal");
+    else symlinkSync(join(directory, "missing-journal"), journal);
+    expect(() => acquireDataDirectory(directory)).toThrow("Pending native restore requires desktop recovery");
+    expect(readFileSync(database, "utf8")).toBe("interrupted restore data");
+    rmSync(journal);
+    const release = acquireDataDirectory(directory);
+    release();
+    expect(readFileSync(database, "utf8")).toBe("interrupted restore data");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
