@@ -753,7 +753,11 @@ export async function registerPlanRoutes(
       });
     }
     const savedDefaults = loadRoleFilamentDefaults(deps.repo, id);
-    if (Object.values(savedDefaults).some((saved) => hasSpoolmanAssignment(saved))) {
+    const includedRoles = new Set(snapshot.snapshot.parts.filter((part) => part.included)
+      .map((part) => normalizePartRole(part.effectiveRole)));
+    const rolesToApply = canonicalRoleOrder().filter((role) => includedRoles.has(role)
+      && (savedDefaults[role]?.filament_color_id || savedDefaults[role]?.filament_custom_hex));
+    if (rolesToApply.some((role) => hasSpoolmanAssignment(savedDefaults[role] ?? {}))) {
       const access = readSpoolmanAccess(deps.repo, id);
       if (access.kind !== "allowed") {
         const problem = spoolmanAccessProblem(access);
@@ -762,7 +766,7 @@ export async function registerPlanRoutes(
     }
     const expected = acceptedPlanBasis(snapshot.snapshot);
     let updated = 0;
-    for (const role of canonicalRoleOrder()) {
+    for (const role of rolesToApply) {
       const saved = savedDefaults[role];
       if (!saved?.filament_color_id && !saved?.filament_custom_hex) continue;
       const result = deps.repo.assignAcceptedFilament({

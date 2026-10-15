@@ -9,7 +9,7 @@ import type { AssistantProposedAction } from "@print-partner/contracts";
 import { AppRepository } from "../db/repository.js";
 import { SqliteDatabase, getDb } from "../db/client.js";
 import { loadConfig } from "../config.js";
-import { acceptPlanForTest } from "../test/accept-plan.js";
+import { acceptPlanForTest, editAcceptedPartsForTest } from "../test/accept-plan.js";
 import { registerPartRoutes } from "./parts.js";
 import { registerPlanRoutes } from "./plans.js";
 import { createProductMcpServer } from "../mcp/product-mcp.js";
@@ -83,6 +83,20 @@ describe("Spoolman workflow admission", () => {
   }
 
   for (const prefix of ["", "/api/v1"]) {
+    it.each(["accent", "future-role", "excluded"])(`${prefix} ignores unused optional defaults for %s`, async (unused) => {
+      planAccess(false);
+      saveRoleFilamentDefault(repo, profileId, "primary", { filament_custom_hex: "#123456" });
+      saveRoleFilamentDefault(repo, profileId, unused === "excluded" ? "primary" : unused,
+        { filament_color_id: color, spoolman_spool_id: spool });
+      if (unused === "excluded") editAcceptedPartsForTest(repo, profileId, [{ projectionPartId: partId, included: false }]);
+      const response = await app.inject({ method: "POST", url: `${prefix}/plans/${profileId}/apply-role-colors`,
+        payload: { refresh_thumbnails: false } });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json().updated).toBe(unused === "excluded" ? 0 : 1);
+      expect(repo.getProfilePartRows(profileId)[0]).toMatchObject({ filamentColorId: null,
+        filamentCustomHex: unused === "excluded" ? null : "#123456" });
+      expect(network).not.toHaveBeenCalled();
+    });
     it.each([[false, false], [false, true], [true, false], [true, true]])(
       `${prefix} admits assignments using account %s and Plan %s`, async (account, plan) => {
         repo.setSetting("feature_toggles", JSON.stringify({ spoolman: account }));
