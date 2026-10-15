@@ -155,6 +155,65 @@ it.each([true, false])("copies tracked=%s accepted history and keeps both owners
   }
 });
 
+it.each([true, false].flatMap(tracked => ["notes", "quantity", "insert"].map(change => ({ tracked, change }))))(
+  "copies tracked=$tracked compatibility_dirty history after a working $change edit", async ({ tracked, change }) => {
+    const paths = fixture(tracked);
+    edit(paths.sourceDir, db => {
+      if (change === "notes") db.exec("UPDATE parts SET notes='working edit' WHERE id=1");
+      if (change === "quantity") db.exec("UPDATE parts SET quantity_override=3,quantity_effective=3 WHERE id=1");
+      if (change === "insert") db.exec("INSERT INTO parts (id,profile_id,match_key,relative_path,filename,source_layer) VALUES (3,1,'new','new.stl','new.stl','base:A')");
+      expect(db.prepare("SELECT accepted_plan_revision_id,accepted_plan_version FROM build_profiles WHERE id=1").get())
+        .toEqual({ accepted_plan_revision_id: null, accepted_plan_version: 1 });
+    });
+    const input = manifest(paths.sourceDir); const before = files(paths.sourceDir);
+    await executeOwnershipCopy({ ...paths, manifest: input });
+    expect(files(paths.sourceDir)).toEqual(before);
+    const source = new Database(join(paths.sourceDir, "print-partner.db"), { readonly: true });
+    const copy = new Database(join(paths.destinationDir, "print-partner.db"), { readonly: true });
+    try {
+      for (const table of ["build_profiles", "parts", "print_progress", ...ownershipHistoryTables]) {
+        const rows = z.array(z.record(z.string(), z.unknown())).parse(source.prepare(`SELECT rowid AS __rowid,* FROM "${table}" ORDER BY rowid`).all());
+        expect(copy.prepare(`SELECT rowid AS __rowid,* FROM "${table}" ORDER BY rowid`).all()).toEqual(rows.map(row => ({
+          ...row, tenant_id: input.claims.find(claim => claim.table === table && claim.rowid === row.__rowid)?.user_id ?? row.tenant_id,
+        })));
+      }
+      expect(copy.prepare("SELECT name,sql FROM sqlite_schema ORDER BY name").all()).toEqual(source.prepare("SELECT name,sql FROM sqlite_schema ORDER BY name").all());
+    } finally { source.close(); copy.close(); }
+    for (let restart = 0; restart < 2; restart++) {
+      const store = new SqliteDatabase(paths.destinationDir); store.connect();
+      try {
+        const a = new AppRepository(getDb(store), "account-a", store.reposDir);
+        const b = new AppRepository(getDb(store), "account-b", store.reposDir);
+        expect(a.readAcceptedPlanOperationalSnapshot(1)).toEqual({ kind: "compatibility_dirty" });
+        expect(a.getAcceptedPlanRevision(1)).toBeNull();
+        expect(b.readAcceptedPlanOperationalSnapshot(2).kind).toBe("ready");
+        expect(() => b.readAcceptedPlanOperationalSnapshot(1)).toThrow("Profile not found");
+        expect(() => a.readAcceptedPlanOperationalSnapshot(2)).toThrow("Profile not found");
+        expect(a.getAcceptedPlanRevisionInputSet(1)?.inputs[0]?.source_revision_id ?? null).toBe(tracked ? 12 : null);
+      } finally { store.close(); }
+    }
+  },
+);
+
+it.each(["zero-version", "negative-version", "fractional-version", "missing-history", "digest", "artifact", "owner"])(
+  "refuses unsafe compatibility_dirty $0 state during inspect and apply", async kind => {
+    const paths = fixture(); const input = manifest(paths.sourceDir);
+    edit(paths.sourceDir, db => {
+      db.exec("UPDATE parts SET notes='working edit' WHERE id=1");
+      if (kind === "zero-version") db.exec("UPDATE build_profiles SET accepted_plan_version=0 WHERE id=1");
+      if (kind === "negative-version") db.exec("UPDATE build_profiles SET accepted_plan_version=-1 WHERE id=1");
+      if (kind === "fractional-version") db.exec("UPDATE build_profiles SET accepted_plan_version=1.5 WHERE id=1");
+      if (kind === "missing-history") db.exec("INSERT INTO build_profiles (id,name,accepted_plan_version) VALUES (3,'Missing history',1)");
+      if (kind === "digest") db.exec("DROP TRIGGER trg_plan_revisions_immutable_update; UPDATE plan_revisions SET snapshot_digest='wrong' WHERE id=1");
+      if (kind === "owner") db.exec("DROP TRIGGER trg_plan_revisions_immutable_update; UPDATE plan_revisions SET tenant_id='account-b' WHERE id=1");
+      input.source_digest = hash(db.serialize());
+    });
+    if (kind === "artifact") writeFileSync(join(paths.sourceDir, "repos/1/revisions/commit-2/a.stl"), "tampered");
+    expect(() => inspectOwnershipCopy(paths)).toThrow();
+    await refused(paths, input);
+  },
+);
+
 it.each(ownershipHistoryTables)("requires an explicit owner for every %s history row", async table => {
   const paths = fixture(); const input = manifest(paths.sourceDir);
   const selected = input.claims.findIndex(claim => claim.table === table);

@@ -98,8 +98,9 @@ export function validateOwnershipHistory(database: Database.Database): void {
   }
   for (const profile of profiles) {
     const history = revisions.filter(revision => revision.profileId === profile.id);
+    if (!Number.isSafeInteger(profile.acceptedPlanVersion) || profile.acceptedPlanVersion < 0) fail("accepted Plan version");
     if (profile.acceptedPlanRevisionId == null) {
-      if (profile.acceptedPlanVersion !== 0 || history.length) fail("missing accepted Plan pointer");
+      if ((profile.acceptedPlanVersion === 0) !== (history.length === 0)) fail("missing accepted Plan pointer");
     } else {
       const accepted = history.find(revision => revision.id === profile.acceptedPlanRevisionId && revision.tenantId === profile.tenantId) ?? fail("accepted Plan pointer");
       if (profile.acceptedPlanVersion <= 0) fail("accepted Plan pointer");
