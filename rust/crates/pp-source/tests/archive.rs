@@ -537,6 +537,99 @@ mod acquisition_labels {
     }
 
     #[test]
+    fn raw_long_labels_contract_to_valid_file_and_directory_paths() {
+        let raw_dir = vec!["e\u{301}".repeat(70); 20].join("/");
+        let normalized_dir = vec!["é".repeat(70); 20].join("/");
+        for (suffix, payload, raw_len, normalized_len) in [
+            ("", b"".as_slice(), 4220, 2819),
+            ("part.stl", b"x".as_slice(), 4228, 2828),
+        ] {
+            let raw = format!("{raw_dir}/{suffix}");
+            let expected = if suffix.is_empty() {
+                normalized_dir.clone()
+            } else {
+                format!("{normalized_dir}/{suffix}")
+            };
+            assert_eq!(raw.len(), raw_len);
+            assert_eq!(expected.len(), normalized_len);
+            let fixture = Fixture::new();
+            write_members(&fixture, &[(&raw, payload)]);
+            let mut source = fixture.tenant().source(42).unwrap();
+            assert!(matches!(
+                source.extract_zip(
+                    fixture.input(),
+                    ArchiveLimits::default(),
+                    &AtomicBool::new(false),
+                ),
+                Err(ArchiveError::UnsafeEntry)
+            ));
+            assert!(!fixture.candidate().exists());
+            assert!(matches!(
+                source.extract_zip_with_label_policy(
+                    fixture.input(),
+                    ArchiveLimits::default(),
+                    ArchiveLabelPolicy::Strict,
+                    &AtomicBool::new(false),
+                ),
+                Err(ArchiveError::UnsafeEntry)
+            ));
+            assert!(!fixture.candidate().exists());
+            let ready = source
+                .extract_zip_with_label_policy(
+                    fixture.input(),
+                    ArchiveLimits::default(),
+                    ArchiveLabelPolicy::NfcAtAcquisition,
+                    &AtomicBool::new(false),
+                )
+                .unwrap();
+            let destination = fixture.candidate().join("files").join(&expected);
+            if suffix.is_empty() {
+                assert!(
+                    ready
+                        .receipt()
+                        .directories
+                        .iter()
+                        .any(|path| path.as_str() == expected)
+                );
+                assert!(destination.is_dir());
+                assert!(ready.receipt().files.is_empty());
+            } else {
+                assert_eq!(ready.receipt().files.len(), 1);
+                assert_eq!(ready.receipt().files[0].path.as_str(), expected);
+                assert_eq!(fs::read(destination).unwrap(), b"x");
+            }
+            ready.discard().unwrap();
+            assert!(!fixture.candidate().exists());
+        }
+    }
+
+    #[test]
+    fn contracted_paths_still_reject_post_nfc_overflow_and_release_stage() {
+        let raw_dir = vec!["e\u{301}".repeat(70); 30].join("/");
+        for suffix in ["", "part.stl"] {
+            let raw = format!("{raw_dir}/{suffix}");
+            let label = raw.trim_end_matches('/');
+            assert!(label.nfc().collect::<String>().len() > 4096);
+            let fixture = Fixture::new();
+            write_members(&fixture, &[(&raw, b"")]);
+            assert!(matches!(
+                fixture
+                    .tenant()
+                    .source(42)
+                    .unwrap()
+                    .extract_zip_with_label_policy(
+                        fixture.input(),
+                        ArchiveLimits::default(),
+                        ArchiveLabelPolicy::NfcAtAcquisition,
+                        &AtomicBool::new(false),
+                    ),
+                Err(ArchiveError::UnsafeEntry)
+            ));
+            assert!(!fixture.candidate().exists());
+        }
+    }
+
+    #[test]
     fn normalized_readiness_publishes_exact_payloads_and_preserves_original_zip() {
         let fixture = Fixture::new();
         write_members(
