@@ -78,6 +78,23 @@ function fixture(tracked = true) {
   });
   return { sourceDir, destinationDir: join(root, "copy") };
 }
+function appendAcceptedRevision(sourceDir: string) {
+  edit(sourceDir, raw => {
+    const db = drizzle(raw);
+    const revision = db.select().from(schema.planRevisions).all().filter(row => row.profileId === 1).sort((left, right) => right.revisionNumber - left.revisionNumber)[0];
+    const part = db.select().from(schema.planRevisionParts).all().find(row => row.revisionId === revision?.id);
+    const mapping = db.select().from(schema.planRevisionRequiredUnits).all().find(row => row.revisionId === revision?.id);
+    const unit = db.select().from(schema.requiredUnits).all().find(row => row.token === mapping?.requiredUnitToken);
+    const header = db.select().from(schema.planRevisionRequiredUnitSets).all().find(row => row.revisionId === revision?.id);
+    if (!revision || !part || !mapping || !unit || !header) throw new Error("Missing accepted parent fixture");
+    const child = db.insert(schema.planRevisions).values({ ...revision, id: undefined, revisionNumber: revision.revisionNumber + 1, parentRevisionId: revision.id }).returning().get();
+    const childPart = db.insert(schema.planRevisionParts).values({ ...part, id: undefined, revisionId: child.id }).returning().get();
+    db.insert(schema.planRevisionRequiredUnits).values({ ...mapping, revisionId: child.id, revisionPartId: childPart.id }).run();
+    db.insert(schema.planRevisionRequiredUnitSets).values({ ...header, revisionId: child.id,
+      mappingDigest: digestRequiredUnitMap({ revisionId: child.id, expectedUnitCount: 1, rows: [{ revisionPartId: childPart.id, unitIndex: 0, token: unit.token, objectName: unit.objectName }] }) }).run();
+    raw.prepare("UPDATE build_profiles SET accepted_plan_revision_id=?,accepted_plan_version=? WHERE id=1").run(child.id, child.revisionNumber);
+  });
+}
 function manifest(sourceDir: string) {
   const inventory = inspectOwnershipCopy({ sourceDir });
   const db = new Database(join(sourceDir, "print-partner.db"), { readonly: true });
@@ -339,6 +356,53 @@ it.each(["mapped-limit", "mapped-overflow"])("enforces the dirty history row-tex
   } finally { copy.close(); }
 });
 
+it.each(["inspect", "apply"].flatMap(mode => ["missing-parent", "non-immediate-parent"].map(kind => ({ mode, kind }))))(
+  "$mode refuses dirty history with $kind", async ({ mode, kind }) => {
+    const paths = fixture(); appendAcceptedRevision(paths.sourceDir);
+    if (kind === "non-immediate-parent") appendAcceptedRevision(paths.sourceDir);
+    edit(paths.sourceDir, db => { db.exec("UPDATE parts SET notes='working edit' WHERE id=1"); });
+    const input = manifest(paths.sourceDir);
+    edit(paths.sourceDir, db => {
+      const trigger = z.object({ sql: z.string() }).parse(db.prepare("SELECT sql FROM sqlite_schema WHERE name='trg_plan_revisions_immutable_update'").get());
+      db.exec("DROP TRIGGER trg_plan_revisions_immutable_update");
+      if (kind === "missing-parent") db.exec("UPDATE plan_revisions SET parent_revision_id=NULL WHERE profile_id=1 AND revision_number=2");
+      else db.exec("UPDATE plan_revisions SET parent_revision_id=1 WHERE profile_id=1 AND revision_number=3");
+      db.exec(trigger.sql);
+      input.source_digest = hash(db.serialize());
+    });
+    if (mode === "inspect") expect(() => inspectOwnershipCopy(paths)).toThrow(/lineage/);
+    else await refused(paths, input);
+  },
+);
+it.each(["inspect", "apply"].flatMap(mode => ["completed", "assembled", "assembled-without-completed"].map(kind => ({ mode, kind }))))(
+  "$mode refuses dirty current-coordinate progress with invalid $kind", async ({ mode, kind }) => {
+    const paths = fixture();
+    edit(paths.sourceDir, db => { db.exec("UPDATE parts SET notes='working edit' WHERE id=1"); });
+    const input = manifest(paths.sourceDir);
+    edit(paths.sourceDir, db => {
+      if (kind === "completed") db.exec("UPDATE print_progress SET completed=2 WHERE part_id=1 AND unit_index=0");
+      if (kind === "assembled") db.exec("UPDATE print_progress SET completed=1,assembled=2 WHERE part_id=1 AND unit_index=0");
+      if (kind === "assembled-without-completed") db.exec("UPDATE print_progress SET completed=0,assembled=1 WHERE part_id=1 AND unit_index=0");
+      input.source_digest = hash(db.serialize());
+    });
+    if (mode === "inspect") expect(() => inspectOwnershipCopy(paths)).toThrow(/progress/);
+    else await refused(paths, input);
+  },
+);
+it("copies a complete three-revision dirty chain and retained out-of-range progress", async () => {
+  const paths = fixture(); appendAcceptedRevision(paths.sourceDir); appendAcceptedRevision(paths.sourceDir);
+  edit(paths.sourceDir, db => { db.exec("UPDATE parts SET notes='working edit' WHERE id=1; INSERT INTO print_progress (part_id,unit_index,completed,assembled) VALUES (1,3,1,1)"); });
+  const input = manifest(paths.sourceDir); const before = files(paths.sourceDir);
+  await executeOwnershipCopy({ ...paths, manifest: input }); expect(files(paths.sourceDir)).toEqual(before);
+  const copy = new Database(join(paths.destinationDir, "print-partner.db"), { readonly: true });
+  try {
+    expect(copy.prepare("SELECT revision_number,parent_revision_id FROM plan_revisions WHERE profile_id=1 ORDER BY revision_number").all()).toEqual([
+      { revision_number: 1, parent_revision_id: null }, { revision_number: 2, parent_revision_id: 1 }, { revision_number: 3, parent_revision_id: 3 },
+    ]);
+    expect(copy.prepare("SELECT tenant_id,completed,assembled FROM print_progress WHERE part_id=1 AND unit_index=3").get()).toEqual({ tenant_id: "account-a", completed: 1, assembled: 1 });
+  } finally { copy.close(); }
+});
+
 it.each(ownershipHistoryTables)("requires an explicit owner for every %s history row", async table => {
   const paths = fixture(); const input = manifest(paths.sourceDir);
   const selected = input.claims.findIndex(claim => claim.table === table);
@@ -425,21 +489,8 @@ it.each(["unknown-plan", "wrong-scope", "unknown-layout", "symlink", "collision"
 
 it.each([{ corrupt: false, dirty: false }, { corrupt: true, dirty: false }, { corrupt: false, dirty: true }])("validates retained parent Plan history, corrupt=$corrupt dirty=$dirty", async ({ corrupt, dirty }) => {
   const paths = fixture();
-  edit(paths.sourceDir, raw => {
-    const db = drizzle(raw);
-    const revision = db.select().from(schema.planRevisions).all().find(row => row.id === 1)!;
-    const part = db.select().from(schema.planRevisionParts).all().find(row => row.revisionId === 1)!;
-    const mapping = db.select().from(schema.planRevisionRequiredUnits).all().find(row => row.revisionId === 1)!;
-    const unit = db.select().from(schema.requiredUnits).all().find(row => row.token === mapping.requiredUnitToken)!;
-    db.insert(schema.planRevisions).values({ ...revision, id: 3, revisionNumber: 2, parentRevisionId: 1 }).run();
-    db.insert(schema.planRevisionParts).values({ ...part, id: 3, revisionId: 3 }).run();
-    db.insert(schema.planRevisionRequiredUnits).values({ ...mapping, revisionId: 3, revisionPartId: 3 }).run();
-    const header = db.select().from(schema.planRevisionRequiredUnitSets).all().find(row => row.revisionId === 1)!;
-    db.insert(schema.planRevisionRequiredUnitSets).values({ ...header, revisionId: 3,
-      mappingDigest: digestRequiredUnitMap({ revisionId: 3, expectedUnitCount: 1, rows: [{ revisionPartId: 3, unitIndex: 0, token: unit.token, objectName: unit.objectName }] }) }).run();
-    raw.exec("UPDATE build_profiles SET accepted_plan_revision_id=3,accepted_plan_version=2 WHERE id=1");
-    if (dirty) raw.exec("UPDATE parts SET notes='working edit after two revisions' WHERE id=1");
-  });
+  appendAcceptedRevision(paths.sourceDir);
+  if (dirty) edit(paths.sourceDir, raw => { raw.exec("UPDATE parts SET notes='working edit after two revisions' WHERE id=1"); });
   const input = manifest(paths.sourceDir);
   if (corrupt) {
     edit(paths.sourceDir, db => { db.exec("DROP TRIGGER trg_plan_revisions_immutable_update; UPDATE plan_revisions SET snapshot_digest='wrong' WHERE id=1"); input.source_digest = hash(db.serialize()); });

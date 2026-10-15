@@ -7,6 +7,7 @@ import {
   acceptedPlanStoredTextBytes,
   validateAcceptedPlanStoredTextBytes,
   validateAcceptedPlanInputHeaderRows,
+  validateAcceptedPlanProgressRows,
   validateAcceptedPlanRevisionPartRows,
   validateAcceptedPlanRevisionRows,
   validateAcceptedPlanRequiredUnitRows,
@@ -35,6 +36,8 @@ export function validateOwnershipHistory(database: Database.Database): void {
   const revisions = db.select().from(schema.planRevisions).all();
   const parts = db.select().from(schema.planRevisionParts).all();
   const projections = db.select().from(schema.parts).all();
+  const progress = z.array(z.object({ id: z.number(), tenantId: z.string(), partId: z.number(), unitIndex: z.number(), completed: z.unknown(), assembled: z.unknown() }))
+    .parse(database.prepare("SELECT id,tenant_id AS tenantId,part_id AS partId,unit_index AS unitIndex,completed,assembled FROM print_progress").all());
   const partBooleans = new Map(z.array(z.object({ id: z.number(), included: z.unknown(), geometrySame: z.unknown() }))
     .parse(database.prepare("SELECT id,included,geometry_same AS geometrySame FROM plan_revision_parts").all()).map(row => [row.id, row]));
   const sets = db.select().from(schema.planRevisionInputSets).all();
@@ -102,6 +105,7 @@ export function validateOwnershipHistory(database: Database.Database): void {
     if (profile.acceptedPlanRevisionId == null) {
       if (profile.acceptedPlanVersion !== accepted.revisionNumber) fail("accepted Plan version disagrees with history");
       if (history.length !== profile.acceptedPlanVersion || history.some((revision, index) => revision.revisionNumber !== profile.acceptedPlanVersion - index)) fail("incomplete accepted Plan history");
+      if (history.some((revision, index) => revision.parentRevisionId !== (history[index + 1]?.id ?? null))) fail("revision lineage");
     }
     acceptedPlans.set(profile.id, { kind: profile.acceptedPlanRevisionId == null ? "compatibility_dirty" : "ready", revision: accepted });
     validateAcceptedPlanInputHeaderRows({ tenantId: profile.tenantId, profileId: profile.id, revision: accepted,
@@ -112,6 +116,9 @@ export function validateOwnershipHistory(database: Database.Database): void {
     const revisionParts = parts.filter(part => part.revisionId === revision.id);
     if (acceptedPlans.get(revision.profileId)?.revision.id === revision.id) {
       validateAcceptedPlanRevisionPartRows({ revisionParts, revisionBooleans: partBooleans });
+      validateAcceptedPlanProgressRows({ tenantId: revision.tenantId,
+        parts: revisionParts.map(part => ({ projectionPartId: part.projectionPartId ?? fail("Part projection Plan"), quantityEffective: part.quantityEffective })),
+        rows: progress });
     }
     validateAcceptedPlanRevisionRows({ tenantId: revision.tenantId, profileId: revision.profileId, revision,
       parent: revisions.find(parent => parent.id === revision.parentRevisionId) ?? null, revisionParts });
