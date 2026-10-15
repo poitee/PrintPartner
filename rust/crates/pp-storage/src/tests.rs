@@ -1682,7 +1682,7 @@ fn ticket_t_7_migrations() {
     let node_hash = hex::encode(Sha256::digest(&bytes));
     let root = directory("schema-parity-fixtures");
     let web = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../web");
-    let output = std::process::Command::new(&node)
+    let output = Command::new(&node)
         .current_dir(&web)
         .args([
             "--conditions=development",
