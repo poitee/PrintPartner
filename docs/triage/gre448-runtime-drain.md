@@ -660,7 +660,7 @@ and the full corresponding representation length. Successful responses retain
 text/plain; charset=utf-8. A 429 retains application/json; charset=utf-8 and the
 exact statusCode, error and message fields in their serialized order. Its retry
 message and Content-Length are checked against that response's own reset value,
-including singular seconds and the one-minute form. Retry-After must equal
+using the wording appropriate to its observed timer. Retry-After must equal
 X-RateLimit-Reset within 1 through 60 seconds. Limit and remaining headers,
 no-store, and CORS metadata are also checked. Time-dependent headers and body
 lengths are validated locally before stable metadata is compared across runs.
@@ -697,3 +697,16 @@ failed for Node, the isolated Rust candidate, restart 1, and restart 2. Both
 restarts ran with Node stopped and left authority unchanged. The alias and
 flag-off tests also passed. Local logs are under
 `/persist/home/.local/state/pstack-t3/gre448-negotiation/` on fleet VM 133.
+
+The companion `rate_limit::tests::ticket_t_3_drain_rate_limit_representation_boundaries`
+uses a paused Tokio clock to force reset values 60, 59, and 1. It checks exact
+429 GET bytes, HEAD emptiness, representation lengths, retry/reset headers and
+quota metadata at each boundary. This deterministically covers Rust's
+`1 minute`, `59 seconds`, and `1 second` serialization. The live Node/Rust matrix
+validates observed timers; it does not force Node's clock to these boundaries.
+
+Both rate-limit unit tests passed locally after this addition. A temporary
+`1 seconds` mutation failed the new test's representation-length assertion
+with actual 98 and expected 97 bytes. Restoring the source returned both tests
+to green. The mutation was not committed. Logs are `boundary-negative.log` and
+`boundary-restored.log` in the evidence directory above.
