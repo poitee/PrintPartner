@@ -21,5 +21,8 @@ Mounted-query tests exercise Review, role and catalog caches together across off
 ![Default-off controls retain saved references](gre498-spoolman-workflows/default-off.png)
 ![Plan-on/account-off exposes stock](gre498-spoolman-workflows/plan-on-account-off.png)
 ![Custom color remains usable while off](gre498-spoolman-workflows/custom-color-off.png)
+![An already-open dialog drops live observations after revocation](gre498-spoolman-workflows/retained-dialog-off.png)
 
 All 22 CI checks settled successfully at `a406a80a`, including runtime after an earlier unchanged Rust supervisor timeout. Opus could not score: “Claude API rate limit reached. Try again later.” The authorized gpt-6-astra fallback scored that head 7.8/10 and requested dialog/mutation fixes. Those require a fresh exact-head gate. The diff exceeded the original 1.5k-line target; redundant hook tests were removed in favor of combined behavioral coverage. Broader Orders and farm visibility remain follow-up GRE-498 work.
+
+Round-one fixes bind all role-response publication to the captured action scope/generation, sanitize ordinary results without clearing saved references, and refresh discarded optional results. Dialogs resolve live observations from the scoped catalog and retain entered custom hex separately. All seven web suites passed 54 tests; the final dialog/mutation suite passed 11 tests with restoration held pending until fresh data. The retained-dialog screenshot uses the fixture Plan toggle through DOM dispatch while the modal stays open. Fresh exact-head CI and scoring remain required.

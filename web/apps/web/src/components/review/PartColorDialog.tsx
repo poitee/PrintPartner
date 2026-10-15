@@ -29,7 +29,18 @@ export default function PartColorDialog({ part, profileId, onClose }: {
     if (catalogQuery.isError) void catalogQuery.refetch();
   };
   const [selection, setSelection] = useState("current");
-  const [hex, setHex] = useState(part.filament_hex ?? "#808080");
+  const [enteredHex, setEnteredHex] = useState<string | null>(null);
+
+  const isSpoolmanAssigned = Boolean(part.filament_color_id?.trim().startsWith("spoolman:"));
+  const liveColor = spoolmanAccess.allowed
+    ? catalogQuery.data?.spoolman_colors?.find((color) => color.id === part.filament_color_id)
+    : undefined;
+  const currentDisplay = isSpoolmanAssigned
+    ? (part.filament_custom_hex || liveColor?.combo_label || liveColor?.display_name || part.filament_color_id)
+    : (part.filament_display || part.filament_hex || "Unassigned");
+  const defaultHex = part.filament_custom_hex
+    ?? (isSpoolmanAssigned ? liveColor?.hex : part.filament_hex) ?? "#808080";
+  const hex = enteredHex ?? defaultHex;
 
   const allowedRoles = (options?.roles ?? []).filter(
     (role) => spoolmanAccess.allowed || !role.filament_color_id?.startsWith("spoolman:"),
@@ -61,7 +72,7 @@ export default function PartColorDialog({ part, profileId, onClose }: {
         <DialogTitle>Change part color</DialogTitle>
         <DialogDescription className="break-all">{part.filename}. This changes only this part, not its {part.role || "primary"} role or the other parts.</DialogDescription>
       </DialogHeader>
-      <p className="text-sm">Current color: {part.filament_display || part.filament_hex || "Unassigned"}</p>
+      <p className="text-sm">Current color: {currentDisplay}</p>
       {loadError ? <div role="alert">Could not load colors. <Button variant="outline" onClick={retryLoad}>Retry</Button></div> : !options ? <p role="status">Loading colors…</p> : null}
       <fieldset disabled={mutation.isPending} className="space-y-3 min-w-0">
         <label htmlFor={`${id}-choice`} className="block text-sm font-medium">Part color</label>
@@ -76,8 +87,8 @@ export default function PartColorDialog({ part, profileId, onClose }: {
         {selection === "custom" && <div className="space-y-2">
           <label htmlFor={`${id}-hex`} className="block text-sm">Hex color</label>
           <div className="flex gap-2">
-            <input aria-label="Pick custom color" type="color" value={customValid ? `#${hex.trim().replace(/^#/, "")}` : "#808080"} onChange={(event) => setHex(event.target.value)} />
-            <input id={`${id}-hex`} className="min-w-0 rounded border bg-background p-2" value={hex} onChange={(event) => setHex(event.target.value)} placeholder="#RRGGBB" />
+            <input aria-label="Pick custom color" type="color" value={customValid ? `#${hex.trim().replace(/^#/, "")}` : "#808080"} onChange={(event) => setEnteredHex(event.target.value)} />
+            <input id={`${id}-hex`} className="min-w-0 rounded border bg-background p-2" value={hex} onChange={(event) => setEnteredHex(event.target.value)} placeholder="#RRGGBB" />
           </div>
           {!customValid && <p role="alert">Enter a six-digit hex color, such as #FF6600.</p>}
         </div>}

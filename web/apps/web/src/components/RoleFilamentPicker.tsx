@@ -53,6 +53,19 @@ const CHECKER_BG =
   "repeating-conic-gradient(rgba(120,120,120,0.25) 0% 25%, transparent 0% 50%)";
 
 type ColorGroup = { label: string; colors: CatalogColor[] };
+type SpoolmanAction = ReturnType<ReturnType<typeof useSpoolmanWorkflowAccess>["beginAction"]>;
+
+function sanitizeRoleRows(rows: RoleFilamentRow[]): RoleFilamentRow[] {
+  return rows.map((row) => (
+    row.filament_color_id?.trim().startsWith("spoolman:")
+      ? {
+          ...row,
+          filament_display: row.filament_color_id,
+          filament_hex: row.filament_custom_hex ?? null,
+        }
+      : row
+  ));
+}
 
 type Props = {
   profileId: number;
@@ -426,8 +439,9 @@ function RoleFilamentPickerInner({
   const savedClearTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   const publishRows = useCallback(
-    (nextRows: RoleFilamentRow[]) => {
-      publishRoleFilaments(queryClient, profileId, nextRows);
+    (nextRows: RoleFilamentRow[], action: SpoolmanAction) => {
+      if (!action.isCurrent()) return;
+      publishRoleFilaments(queryClient, profileId, action.isSpoolmanAllowed() ? nextRows : sanitizeRoleRows(nextRows));
     },
     [profileId, queryClient],
   );
@@ -462,13 +476,22 @@ function RoleFilamentPickerInner({
     async (
       result: { updated: number; thumbnails_cleared: number; roles: RoleFilamentRow[] },
       role: string,
+      action: SpoolmanAction,
+      isOptionalSpoolman: boolean,
     ) => {
-      publishRows(result.roles);
+      if (!action.isCurrent()) return;
+      if (isOptionalSpoolman && !action.isSpoolmanAllowed()) {
+        void invalidateRoleFilaments(queryClient, profileId);
+        markRoleSaved(role);
+        return;
+      }
+      publishRows(result.roles, action);
       await onUpdated?.();
+      if (!action.isCurrent()) return;
       bumpThumbnailCache();
       markRoleSaved(role);
     },
-    [markRoleSaved, onUpdated, publishRows],
+    [markRoleSaved, onUpdated, profileId, publishRows, queryClient],
   );
 
   useEffect(() => {
@@ -496,7 +519,9 @@ function RoleFilamentPickerInner({
   }, [catalog]);
 
   const onPickCatalog = async (role: string, colorId: string) => {
-    if (colorId && colorId.startsWith("spoolman:") && !spoolmanAccess.currentAccessAllowed()) {
+    const isSpoolman = Boolean(colorId && colorId.startsWith("spoolman:"));
+    const action = spoolmanAccess.beginAction();
+    if (isSpoolman && !action.isSpoolmanAllowed()) {
       setLoadError("Spoolman integration is disabled.");
       return;
     }
@@ -509,12 +534,15 @@ function RoleFilamentPickerInner({
         filament_custom_hex: null,
         spoolman_spool_id: null,
       });
-      await afterColorChange(result, role);
+      await afterColorChange(result, role, action, isSpoolman);
     } catch (e) {
+      if (!action.isCurrent()) return;
       setLoadError(e instanceof Error ? e.message : String(e));
       setRoleSaveStatus((prev) => ({ ...prev, [role]: "error" }));
     } finally {
-      setSavingRole(null);
+      if (action.isCurrent()) {
+        setSavingRole(null);
+      }
     }
   };
 
@@ -525,7 +553,13 @@ function RoleFilamentPickerInner({
     }
     const parsed = parseSpoolmanFilamentId(row.filament_color_id ?? "");
     if (!parsed) return;
+    const action = spoolmanAccess.beginAction();
+    if (spoolId && !action.isSpoolmanAllowed()) {
+      setLoadError("Spoolman integration is disabled.");
+      return;
+    }
     setSavingRole(row.role);
+    setRoleSaveStatus((prev) => ({ ...prev, [row.role]: "saving" }));
     try {
       const spoolman_spool_id = spoolId
         ? buildSpoolmanSpoolId(parsed.integrationId, Number(spoolId))
@@ -535,16 +569,21 @@ function RoleFilamentPickerInner({
         filament_color_id: row.filament_color_id,
         spoolman_spool_id,
       });
-      publishRows(result.roles);
-      onUpdated?.();
+      await afterColorChange(result, row.role, action, Boolean(spoolman_spool_id));
     } catch (e) {
+      if (!action.isCurrent()) return;
       setLoadError(e instanceof Error ? e.message : String(e));
+      setRoleSaveStatus((prev) => ({ ...prev, [row.role]: "error" }));
     } finally {
-      setSavingRole(null);
+      if (action.isCurrent()) {
+        setSavingRole(null);
+      }
     }
   };
 
   const onPickCustomHex = async (role: string, hex: string) => {
+    const action = spoolmanAccess.beginAction();
+    if (!action.isCurrent()) return;
     setSavingRole(role);
     setRoleSaveStatus((prev) => ({ ...prev, [role]: "saving" }));
     try {
@@ -554,12 +593,15 @@ function RoleFilamentPickerInner({
         filament_custom_hex: hex || null,
         spoolman_spool_id: null,
       });
-      await afterColorChange(result, role);
+      await afterColorChange(result, role, action, false);
     } catch (e) {
+      if (!action.isCurrent()) return;
       setLoadError(e instanceof Error ? e.message : String(e));
       setRoleSaveStatus((prev) => ({ ...prev, [role]: "error" }));
     } finally {
-      setSavingRole(null);
+      if (action.isCurrent()) {
+        setSavingRole(null);
+      }
     }
   };
 
@@ -590,7 +632,7 @@ function RoleFilamentPickerInner({
       if (!mayContinue()) return;
       const result = await applyRoleColorsToParts(profileId);
       if (!mayContinue()) return;
-      publishRows(result.roles);
+      publishRows(result.roles, action);
       await onUpdated?.();
       if (!mayContinue()) return;
       bumpThumbnailCache();
@@ -615,40 +657,54 @@ function RoleFilamentPickerInner({
 
   const onApplyAllRoleColors = async () => {
     setLoadError(null);
+    const action = spoolmanAccess.beginAction();
+    if (!action.isCurrent()) return;
     setBusyAction("apply");
     try {
       const result = await applyRoleColorsToParts(profileId);
-      publishRows(result.roles);
+      if (!action.isCurrent()) return;
+      publishRows(result.roles, action);
       await onUpdated?.();
+      if (!action.isCurrent()) return;
       bumpThumbnailCache();
       if (result.updated === 0) {
         toast.message("Set role colors above first, then rebuild the Plan to include parts.");
       }
     } catch (e) {
+      if (!action.isCurrent()) return;
       const msg = e instanceof Error ? e.message : String(e);
       setLoadError(msg);
       toast.error(msg);
     } finally {
-      setBusyAction(null);
+      if (action.isCurrent()) {
+        setBusyAction(null);
+      }
     }
   };
 
   const onRegenerateThumbnails = async () => {
     setLoadError(null);
+    const action = spoolmanAccess.beginAction();
+    if (!action.isCurrent()) return;
     setBusyAction("regenerate");
     try {
       const { cleared } = await regeneratePlanThumbnails(profileId);
+      if (!action.isCurrent()) return;
       await onUpdated?.();
+      if (!action.isCurrent()) return;
       bumpThumbnailCache();
       if (cleared > 0) {
         toast.message(`Regenerating thumbnails (${cleared} cleared)`);
       }
     } catch (e) {
+      if (!action.isCurrent()) return;
       const msg = e instanceof Error ? e.message : String(e);
       setLoadError(msg);
       toast.error(msg);
     } finally {
-      setBusyAction(null);
+      if (action.isCurrent()) {
+        setBusyAction(null);
+      }
     }
   };
 

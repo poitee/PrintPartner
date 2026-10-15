@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,7 +16,9 @@ vi.mock("../api/endpoints/media", () => ({ regeneratePlanThumbnails: vi.fn() }))
 vi.mock("../lib/thumbnailCache", () => ({ bumpThumbnailCache: vi.fn() }));
 
 let client: QueryClient;
+const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
 let planSpoolman = false;
+let onFetchHook: ((path: string, url: URL, init?: RequestInit) => Promise<Response | undefined> | Response | undefined) | null = null;
 
 function planFeaturesData(id: number, enabled: boolean): PlanFeatures {
   return {
@@ -77,10 +80,15 @@ function makeReviewPart(overrides: Partial<ReviewPart> = {}): ReviewPart {
 beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
   planSpoolman = false;
+  onFetchHook = null;
 
-  vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+  vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, "http://localhost");
     const path = url.pathname;
+    if (onFetchHook) {
+      const hooked = await onFetchHook(path, url, init);
+      if (hooked) return hooked;
+    }
     const json = (value: unknown, status = 200) =>
       new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
 
@@ -96,8 +104,11 @@ beforeEach(() => {
     if (path === "/filaments/catalog") {
       return json(planSpoolman ? mockCatalog : { ...mockCatalog, spoolman_colors: [], spoolman_status: "disabled", spoolman_error: "Feature spoolman is disabled." });
     }
-    if (path.includes("/role-filaments")) {
+    if (path.endsWith("/role-filaments")) {
       return json({ roles: mockRoles });
+    }
+    if (path.endsWith("/role-filament")) {
+      return json({ updated: 1, thumbnails_cleared: 0, roles: mockRoles });
     }
     if (path.includes("/spoolman/spools")) {
       return json({ spools: mockSpools });
@@ -161,7 +172,8 @@ describe("RoleFilamentPicker and PartColorDialog plan-aware visibility", () => {
     );
 
     await screen.findByText(/accent: Catalog Red/);
-    expect(screen.getByText("Current color: Spoolman Blue")).toBeTruthy();
+    expect(screen.getByText("Current color: spoolman:int-1:filament:2")).toBeTruthy();
+    expect(screen.queryByText(/Spoolman Blue/)).toBeNull();
 
     expect(screen.queryByText(/primary: Spoolman Blue/)).toBeNull();
     expect(screen.getByText(/accent: Catalog Red/)).toBeTruthy();
@@ -294,5 +306,131 @@ describe("RoleFilamentPicker and PartColorDialog plan-aware visibility", () => {
 
     expect(screen.getByRole("button", { name: "Import colors" })).toHaveProperty("disabled", false);
     expect(applyRoleColorsSpy).not.toHaveBeenCalled();
+  });
+  it.each(["catalog", "spool"])("discards delayed %s enrichment across same-tick off/on", async (type) => {
+    planSpoolman = true;
+    let resolveSave: ((response: Response) => void) | undefined;
+    onFetchHook = (path, _url, init) => {
+      if (path.endsWith("/role-filament") && init?.method === "PUT") {
+        return new Promise<Response>((resolve) => {
+          resolveSave = resolve;
+        });
+      }
+    };
+
+    render(
+      <QueryClientProvider client={client}>
+        <RoleFilamentPicker profileId={1} />
+      </QueryClientProvider>,
+    );
+
+    const button = await screen.findByRole("button", { name: "Change Primary color" });
+    if (type === "catalog") {
+      fireEvent.click(button);
+      const option = await screen.findByRole("button", { name: /Spoolman Blue/ });
+      fireEvent.click(option);
+    } else {
+      fireEvent.click(button);
+      const select = await screen.findByRole("combobox", { name: "Physical spool for Primary" });
+      fireEvent.change(select, { target: { value: "5" } });
+    }
+
+    await waitFor(() => expect(resolveSave).toBeDefined());
+
+    act(() => {
+      client.setQueryData(queryKeys.planFeatures(1), planFeaturesData(1, false));
+      client.setQueryData(queryKeys.planFeatures(1), planFeaturesData(1, true));
+    });
+
+    const enrichedRoles = mockRoles.map((row) => ({ ...row, filament_display: "Stale Enriched Spoolman Blue" }));
+    const finishSave = resolveSave;
+    if (!finishSave) throw new Error("Role mutation did not start");
+    await act(async () => {
+      finishSave(new Response(JSON.stringify({ updated: 1, thumbnails_cleared: 0, roles: enrichedRoles }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }));
+    });
+
+    expect(screen.queryByText("Stale Enriched Spoolman Blue")).toBeNull();
+  });
+
+  it("masks live current color on retained open PartColorDialog across off/on", async () => {
+    planSpoolman = true;
+    const part = makeReviewPart({ filament_color_id: "spoolman:int-1:filament:2", filament_display: "Spoolman Blue", filament_hex: "#0000ff" });
+
+    const { rerender } = render(<PartColorDialog part={part} profileId={1} onClose={vi.fn()} />, { wrapper });
+
+    await screen.findByText("Current color: Spoolman Blue");
+    expect(screen.getByRole("button", { name: "Save part color" })).toHaveProperty("disabled", true);
+
+    planSpoolman = false;
+    act(() => {
+      client.setQueryData(queryKeys.planFeatures(1), planFeaturesData(1, false));
+    });
+
+    rerender(<PartColorDialog part={part} profileId={1} onClose={vi.fn()} />);
+
+    expect(screen.getByText("Current color: spoolman:int-1:filament:2")).toBeTruthy();
+    expect(screen.queryByText(/Spoolman Blue/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Save part color" })).toHaveProperty("disabled", true);
+
+    let finishCatalog: ((response: Response) => void) | undefined;
+    onFetchHook = (path) => path === "/filaments/catalog"
+      ? new Promise<Response>((resolve) => { finishCatalog = resolve; }) : undefined;
+    planSpoolman = true;
+    act(() => {
+      client.setQueryData(queryKeys.planFeatures(1), planFeaturesData(1, true));
+    });
+
+    rerender(<PartColorDialog part={part} profileId={1} onClose={vi.fn()} />);
+
+    expect(screen.getByText("Current color: spoolman:int-1:filament:2")).toBeTruthy();
+    await waitFor(() => expect(finishCatalog).toBeDefined());
+    if (!finishCatalog) throw new Error("Catalog refresh did not start");
+    finishCatalog(new Response(JSON.stringify({ ...mockCatalog, spoolman_colors: mockCatalog.spoolman_colors?.map((color) => ({ ...color, combo_label: "Fresh inventory blue" })) }), { headers: { "content-type": "application/json" } }));
+    await screen.findByText("Current color: Fresh inventory blue");
+  });
+
+  it("preserves ordinary custom entry across access changes and sanitizes role mutation responses", async () => {
+    planSpoolman = true;
+    const part = makeReviewPart({ filament_color_id: "spoolman:int-1:filament:2", filament_display: "Spoolman Blue", filament_hex: "#0000ff" });
+
+    let patchBody: unknown = null;
+    onFetchHook = (path, _url, init) => {
+      if (path.includes("/parts/1") && init?.method === "PATCH") {
+        if (typeof init.body !== "string") throw new Error("Expected a JSON request body");
+        patchBody = JSON.parse(init.body);
+        return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+    };
+
+    const { rerender } = render(<PartColorDialog part={part} profileId={1} onClose={vi.fn()} />, { wrapper });
+
+    await screen.findByText("Current color: Spoolman Blue");
+    const select = screen.getByLabelText("Part color");
+    fireEvent.change(select, { target: { value: "custom" } });
+
+    const hexInput = screen.getByLabelText("Hex color");
+    fireEvent.change(hexInput, { target: { value: "#336699" } });
+
+    planSpoolman = false;
+    act(() => {
+      client.setQueryData(queryKeys.planFeatures(1), planFeaturesData(1, false));
+    });
+
+    rerender(<PartColorDialog part={part} profileId={1} onClose={vi.fn()} />);
+
+    expect(screen.getByLabelText<HTMLInputElement>("Hex color").value).toBe("#336699");
+    const saveBtn = screen.getByRole("button", { name: "Save part color" });
+    expect(saveBtn).toHaveProperty("disabled", false);
+
+    fireEvent.click(saveBtn);
+    await waitFor(() => {
+      expect(patchBody).toEqual({
+        filament_color_id: null,
+        filament_custom_hex: "#336699",
+      });
+    });
   });
 });
