@@ -237,7 +237,7 @@ fn ticket_t_7_ownership_manifest_claims_every_source_participant() {
             count("job."),
             hooks.len()
         ],
-        [833, 89, 38, 4, 10, 9],
+        [839, 89, 38, 4, 10, 9],
         "census counts changed; review the new participants and their owners"
     );
 }

@@ -224,6 +224,39 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
             })
         );
     }
+    for (id, operation) in [
+        (
+            "http.GET /settings/features",
+            "http:GET /settings/features current",
+        ),
+        (
+            "http.HEAD /settings/features",
+            "http:GET /settings/features current",
+        ),
+        (
+            "http.GET /api/v1/settings/features",
+            "http:GET /settings/features current",
+        ),
+        (
+            "http.HEAD /api/v1/settings/features",
+            "http:GET /settings/features current",
+        ),
+        (
+            "http.PATCH /settings/features",
+            "http:PATCH /settings/features current",
+        ),
+        (
+            "http.PATCH /api/v1/settings/features",
+            "http:PATCH /settings/features current",
+        ),
+    ] {
+        assert_eq!(
+            index.resources_for(id),
+            Err(AdmissionError::UnresolvedResources {
+                operation: operation.into()
+            })
+        );
+    }
     let manifest = manifest();
     let unresolved: BTreeSet<_> = manifest["resources"]["unresolved"]
         .as_array()
@@ -249,7 +282,7 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.preview_source_naming",
     ]);
     assert_eq!(reviewed.len(), 15);
-    assert_eq!(unresolved.len(), 426);
+    assert_eq!(unresolved.len(), 428);
     let resolved: BTreeSet<_> = index
         .claims()
         .values()
