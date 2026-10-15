@@ -469,15 +469,11 @@ impl StorageLease {
     /// Capture child recording for this lease. Release revokes all captured callbacks.
     pub fn child_recorder(&self) -> impl Fn(&Path, u32) -> Result<()> + Send + Sync + 'static {
         let child_marker = self.child_marker.clone();
-        move |directory, pid| {
+        move |_, pid| {
             let owner = child_marker
                 .lock()
                 .map_err(|_| anyhow::anyhow!("Child marker state poisoned"))?;
             let owner = owner.as_ref().context("Desktop ownership was released")?;
-            ensure!(
-                directory == owner.admitted.path,
-                "Child marker directory differs from owner"
-            );
             owner.admitted.validate_identity()?;
             guard::record_child(&owner.admitted, pid, Some(&owner.lease_hash))?;
             owner.admitted.validate_identity()
