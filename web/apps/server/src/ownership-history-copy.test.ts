@@ -867,6 +867,33 @@ function corruptPlate(source: string, mutate: (raw: Database.Database) => void) 
   });
 }
 
+it.each([
+  { kind: "backward-head", guard: "head" },
+  { kind: "missing-initial", guard: "revision sequence" },
+  { kind: "sequence-gap", guard: "revision sequence" },
+  { kind: "non-immediate-undo", guard: "undo provenance" },
+])("refuses retained Plate $kind with the history guard", async ({ kind, guard }) => {
+  const paths = plateFixture(); const input = manifest(paths.sourceDir);
+  corruptPlate(paths.sourceDir, raw => {
+    if (kind === "backward-head") raw.exec("UPDATE accepted_plate_heads SET current_revision_id=2 WHERE profile_id=1");
+    if (kind === "missing-initial") {
+      for (const number of [3, 2, 1]) raw.prepare("UPDATE accepted_plate_revisions SET revision_number=? WHERE profile_id=1 AND revision_number=?").run(number + 1, number);
+    }
+    if (kind === "sequence-gap") raw.exec("UPDATE accepted_plate_revisions SET revision_number=4 WHERE id=3");
+    if (kind === "non-immediate-undo") raw.exec("UPDATE accepted_plate_revisions SET undo_from_revision_id=1 WHERE id=3");
+  });
+  const store = new SqliteDatabase(paths.sourceDir); store.connect();
+  try { expect(new AppRepository(getDb(store), "default", store.reposDir).readAcceptedPlates(1).kind).toBe("ready"); }
+  finally { store.close(); }
+  edit(paths.sourceDir, raw => { input.source_digest = hash(raw.serialize()); });
+  expect(() => inspectOwnershipCopy(paths)).toThrow(`Unsafe accepted Plate history: ${guard}`);
+  const before = files(paths.sourceDir);
+  await expect(executeOwnershipCopy({ ...paths, manifest: input })).rejects.toThrow(`Unsafe accepted Plate history: ${guard}`);
+  expect(existsSync(paths.destinationDir)).toBe(false);
+  expect(files(paths.sourceDir)).toEqual(before);
+  expect(readdirSync(join(paths.sourceDir, "..")).filter(name => name.startsWith(".ownership-copy-"))).toEqual([]);
+});
+
 it.each(["digest", "count", "ordinal", "geometry", "token", "association", "basis-digest", "mapping-digest", "version", "timestamp", "owner", "undo", "head", "pinned", "placement", "unplaced-pinned", "trimmed-text"])(
   "refuses malformed retained Plate $0 without publishing", async kind => {
     const paths = plateFixture(); const input = manifest(paths.sourceDir);

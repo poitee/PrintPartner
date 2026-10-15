@@ -41,6 +41,23 @@ export function validateOwnershipPlateHistory(database: Database.Database): void
   const fail = (message: string): never => { throw new Error(`Unsafe accepted Plate history: ${message}`); };
   const positive = (value: number) => Number.isSafeInteger(value) && value > 0;
   const canonical = (value: string) => value.length > 0 && value.trim() === value;
+  const revisionsById = new Map(revisions.map(revision => [revision.id, revision]));
+  const revisionGroups = new Map<string, Map<number, typeof schema.acceptedPlateRevisions.$inferSelect>>();
+  for (const revision of revisions) {
+    const key = JSON.stringify([revision.tenantId, revision.profileId]);
+    let group = revisionGroups.get(key);
+    if (!group) {
+      group = new Map();
+      revisionGroups.set(key, group);
+    }
+    if (group.has(revision.revisionNumber)) fail("revision sequence");
+    group.set(revision.revisionNumber, revision);
+  }
+  for (const group of revisionGroups.values()) {
+    for (let number = 1; number <= group.size; number++) {
+      if (!group.has(number)) fail("revision sequence");
+    }
+  }
   const rawUnits = z.array(z.object({ placement: z.string(), pinned: z.unknown() })).parse(database.prepare("SELECT placement,pinned FROM accepted_plate_units").all());
   for (const unit of rawUnits) {
     if (!["auto", "manual", "unplaced"].includes(unit.placement) || (unit.pinned !== 0 && unit.pinned !== 1)
@@ -50,13 +67,14 @@ export function validateOwnershipPlateHistory(database: Database.Database): void
     .parse(database.prepare("SELECT id,included FROM plan_revision_parts").all()).map(part => [part.id, part.included]));
   const plates = db.select().from(schema.acceptedPlates).all();
   const units = db.select().from(schema.acceptedPlateUnits).all();
+  const plateAssociations = new Set(plates.map(plate => JSON.stringify([plate.tenantId, plate.revisionId, plate.plateId])));
   for (const plate of plates) {
     if (![plate.plateId, plate.printerId, plate.printerName, plate.printerModel].every(canonical)) fail("noncanonical Plate text");
-    if (!revisions.some(revision => revision.id === plate.revisionId && revision.tenantId === plate.tenantId)) fail("orphan Plate");
+    if (revisionsById.get(plate.revisionId)?.tenantId !== plate.tenantId) fail("orphan Plate");
   }
   for (const unit of units) {
     if (!canonical(unit.requiredUnitToken) || !canonical(unit.plateId)
-      || !plates.some(plate => plate.tenantId === unit.tenantId && plate.revisionId === unit.revisionId && plate.plateId === unit.plateId)) fail("orphan unit or noncanonical token");
+      || !plateAssociations.has(JSON.stringify([unit.tenantId, unit.revisionId, unit.plateId]))) fail("orphan unit or noncanonical token");
   }
   for (const revision of revisions) {
     if (![revision.id, revision.profileId, revision.planRevisionId, revision.planVersion, revision.revisionNumber,
@@ -76,15 +94,16 @@ export function validateOwnershipPlateHistory(database: Database.Database): void
     readAcceptedPlateRevisionLayoutInternal({ db, schema, tenantId: revision.tenantId }, revision.id,
       revision.expectedPlateCount, revision.expectedUnitCount, tokens, revision.layoutDigest);
     if (revision.undoFromRevisionId != null) {
-      const undo = revisions.find(undo => undo.id === revision.undoFromRevisionId);
+      const undo = revisionsById.get(revision.undoFromRevisionId);
       if (!positive(revision.undoFromRevisionId) || !undo || undo.tenantId !== revision.tenantId || undo.profileId !== revision.profileId
-        || undo.revisionNumber >= revision.revisionNumber || undo.planRevisionId !== revision.planRevisionId
+        || undo.revisionNumber !== revision.revisionNumber - 1 || undo.planRevisionId !== revision.planRevisionId
         || undo.planVersion !== revision.planVersion || undo.planRevisionDigest !== revision.planRevisionDigest
         || undo.requiredUnitMappingDigest !== revision.requiredUnitMappingDigest) fail("undo provenance");
     }
   }
   for (const head of db.select().from(schema.acceptedPlateHeads).all()) {
+    const group = revisionGroups.get(JSON.stringify([head.tenantId, head.profileId]));
     if (!positive(head.profileId) || !positive(head.currentRevisionId)
-      || !revisions.some(revision => revision.id === head.currentRevisionId && revision.profileId === head.profileId && revision.tenantId === head.tenantId)) fail("head");
+      || !group || group.get(group.size)?.id !== head.currentRevisionId) fail("head");
   }
 }
