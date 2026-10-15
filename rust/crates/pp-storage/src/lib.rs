@@ -9,6 +9,8 @@ pub mod features;
 pub mod jobs;
 pub mod lease;
 #[cfg(feature = "desktop_rebuild")]
+pub mod manifest_options;
+#[cfg(feature = "desktop_rebuild")]
 pub mod manifest_text;
 #[cfg(feature = "desktop_rebuild")]
 pub mod native_secrets;

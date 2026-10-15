@@ -280,6 +280,18 @@ policy, and revalidation rejects changed policy or revoked credentials. Physical
 owner admission checks the storage identity. These internal APIs compile behind
 the feature; D15/D16 will wire them into jobs. The current job engine is unchanged.
 
+## D10a manifest model receipt
+
+GRE-604 D10a adds `pp_storage::manifest_options::KitManifest` behind `desktop_rebuild`.
+The pure model parses request and stored JSON, normalizes selection variant IDs,
+projects typed selections, and emits JavaScript-compatible JSON with UTF-16 text
+and ordered objects. Input errors emit lossless JSON detail bodies.
+The codec enforces 8 MiB, 64 levels, and 100,000 nodes.
+Focused codec unit tests and public model integration tests run in the desktop gates.
+
+ManifestBuilder, graph observation, known-group validation, default selection
+insertion, storage commands, and runtime wiring remain deferred.
+
 ## Map one existing account
 
 Build with the `desktop_rebuild` Cargo feature and start with `PP_DESKTOP_REBUILD=1` or `PP_DESKTOP_REBUILD=true`.
