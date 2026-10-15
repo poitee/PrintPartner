@@ -460,3 +460,58 @@ fn siblings_charge_one_node_per_folder_and_honor_cancellation() {
         Err(ReadFailure::Cancelled)
     ));
 }
+
+#[test]
+fn siblings_recovery_root_version_does_not_alias_a_real_root_folder() {
+    assert_eq!(
+        shape(&[
+            "base.stl",
+            "Version 2/a.stl",
+            "root/base.stl",
+            "root/Version 2/b.stl",
+        ]),
+        expect(&[
+            (
+                "root",
+                &[
+                    ("default", &["root/base.stl"]),
+                    ("version_2", &["root/Version 2/*"]),
+                ],
+            ),
+            (
+                "root_2",
+                &[
+                    ("default", &["base.stl"]),
+                    ("version_2", &["Version 2/*"]),
+                ],
+            ),
+        ])
+    );
+}
+
+#[test]
+fn siblings_recovery_truncated_expansion_does_not_consume_a_discarded_group() {
+    let mut paths: Vec<_> = (1..=15).map(|n| format!("A Beam {n}/a.stl")).collect();
+    paths.extend([
+        "A Beam Mount 1/a.stl".into(),
+        "A Beam Mount 2/a.stl".into(),
+        "Beam Mount 65/a.stl".into(),
+        "Beam Mount 80/a.stl".into(),
+    ]);
+    let paths: Vec<_> = paths.iter().map(String::as_str).collect();
+    let groups = shape(&paths);
+    assert_eq!(groups.len(), 2);
+    assert_eq!(groups[0].0, "root_a_beam_n");
+    assert_eq!(groups[0].1.len(), 16);
+    assert_eq!(
+        &groups[1..],
+        expect(&[(
+            "root_beam_mount_n",
+            &[
+                ("a_beam_mount_2", &["A Beam Mount 2/*"]),
+                ("beam_mount_65", &["Beam Mount 65/*"]),
+                ("beam_mount_80", &["Beam Mount 80/*"]),
+            ],
+        )])
+    );
+}
