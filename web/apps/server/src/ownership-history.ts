@@ -22,6 +22,11 @@ export const ownershipHistoryTables = [
 
 export function validateOwnershipHistory(database: Database.Database): void {
   const db = drizzle(database);
+  for (const row of db.select({ bytes: acceptedPlanStoredTextBytes(true, [schema.buildProfiles.tenantId,
+    schema.buildProfiles.name, schema.buildProfiles.orderNumber, schema.buildProfiles.specialRequest,
+    schema.buildProfiles.archivedAt]) }).from(schema.buildProfiles).all()) {
+    validateAcceptedPlanStoredTextBytes(row.bytes, "pointer", "Accepted Plan Build text is corrupt");
+  }
   for (const table of [schema.sourceRevisions, schema.planRevisionInputSets, schema.planRevisionInputs,
     schema.planAcceptedInputSets, schema.planRevisions, schema.planRevisionParts, schema.requiredUnits,
     schema.planRevisionRequiredUnits, schema.planRevisionRequiredUnitSets]) {

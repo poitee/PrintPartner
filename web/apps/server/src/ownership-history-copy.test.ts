@@ -403,6 +403,31 @@ it("copies a complete three-revision dirty chain and retained out-of-range progr
   } finally { copy.close(); }
 });
 
+it.each([
+  { kind: "source-overflow", mode: "inspect" }, { kind: "source-overflow", mode: "apply" },
+  { kind: "mapped-overflow", mode: "apply" }, { kind: "mapped-limit", mode: "apply" },
+])("$mode enforces the dirty Build text budget at $kind", async ({ mode, kind }) => {
+  const paths = fixture();
+  edit(paths.sourceDir, db => { db.exec("UPDATE parts SET notes='working edit' WHERE id=1"); });
+  const input = manifest(paths.sourceDir);
+  edit(paths.sourceDir, raw => {
+    const profile = drizzle(raw).select().from(schema.buildProfiles).all().find(profile => profile.id === 1);
+    if (!profile) throw new Error("Missing Build");
+    const bytes = [profile.tenantId, profile.name, profile.orderNumber, profile.specialRequest, profile.archivedAt]
+      .reduce((total, value) => total + (value == null ? 0 : Buffer.byteLength(value, "utf8")), 0);
+    const targetBytes = MAX_ACCEPTED_OPERATIONAL_ROW_TEXT_BYTES + (kind === "source-overflow" ? 1 : kind === "mapped-limit" ? -2 : 0);
+    raw.prepare("UPDATE build_profiles SET special_request=? WHERE id=1").run("x".repeat(targetBytes - bytes));
+    input.source_digest = hash(raw.serialize());
+  });
+  if (mode === "inspect") { expect(() => inspectOwnershipCopy(paths)).toThrow(/Build text/); return; }
+  if (kind !== "source-overflow") expect(inspectOwnershipCopy(paths).source_digest).toBe(input.source_digest);
+  if (kind !== "mapped-limit") { await refused(paths, input); return; }
+  await executeOwnershipCopy({ ...paths, manifest: input });
+  const store = new SqliteDatabase(paths.destinationDir); store.connect();
+  try { expect(new AppRepository(getDb(store), "account-a", store.reposDir).readAcceptedPlanOperationalSnapshot(1)).toEqual({ kind: "compatibility_dirty" }); }
+  finally { store.close(); }
+});
+
 it.each(ownershipHistoryTables)("requires an explicit owner for every %s history row", async table => {
   const paths = fixture(); const input = manifest(paths.sourceDir);
   const selected = input.claims.findIndex(claim => claim.table === table);
