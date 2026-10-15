@@ -467,6 +467,12 @@ for (const [filename, name, code, optional] of [
     ['renamed lane', data => { data.jobs.other = data.jobs[name]; delete data.jobs[name]; }, `INVALID_${code}_NODE_SETUP`],
     ['matrix override', data => { data.jobs[name].strategy = { matrix: { node: ['22'] } }; }, `INVALID_${code}_NODE_SETUP`],
     ['tolerated lane', data => { data.jobs[name]['continue-on-error'] = true; }, `INVALID_${code}_NODE_SETUP`],
+    ...(optional ? [false, true, 'false', '${{ false }}', 'inputs.postgres', undefined].map(condition => [
+      `unexpected smoke condition ${condition}`, data => {
+        if (condition === undefined) delete data.jobs[name].if;
+        else data.jobs[name].if = condition;
+      }, `INVALID_${code}_NODE_SETUP`,
+    ]) : []),
     ['dependent lane', data => { data.jobs[name].needs = ['skipped']; }, `INVALID_${code}_NODE_SETUP`],
     ...(!optional ? [['conditional lane', data => { data.jobs[name].if = false; }, `INVALID_${code}_NODE_SETUP`]] : []),
     ['missing setup', data => data.jobs[name].steps.shift(), `INVALID_${code}_NODE_SETUP`],

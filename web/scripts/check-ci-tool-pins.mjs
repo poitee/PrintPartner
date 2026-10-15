@@ -73,7 +73,7 @@ function checkDesktopNode(workflow, file) {
   }
 }
 
-function checkNodeLanes(workflow, file, names, code = 'WEB', optional = false) {
+function checkNodeLanes(workflow, file, names, code = 'WEB', condition) {
   let expected;
   for (const name of names) {
     const path = `jobs.${name}`;
@@ -81,9 +81,10 @@ function checkNodeLanes(workflow, file, names, code = 'WEB', optional = false) {
     const steps = Array.isArray(job?.steps) ? job.steps : [];
     const setups = steps.filter(step => mapping(step) && typeof step.uses === 'string'
       && step.uses.split('@')[0].toLowerCase() === 'actions/setup-node');
-    if (!mapping(job) || ['strategy', 'needs', 'continue-on-error', ...(optional ? [] : ['if'])].some(key => Object.hasOwn(job, key))
+    if (!mapping(job) || ['strategy', 'needs', 'continue-on-error'].some(key => Object.hasOwn(job, key))
+      || (condition === undefined ? Object.hasOwn(job, 'if') : job.if !== condition)
       || setups.length !== 1) {
-      report(file, path, `INVALID_${code}_NODE_SETUP`, 'expected one setup-node step in each required lane without strategy or failure overrides');
+      report(file, path, `INVALID_${code}_NODE_SETUP`, 'expected one setup-node step in each required lane with its permitted condition and without strategy or failure overrides');
       continue;
     }
     const setup = setups[0];
@@ -186,7 +187,7 @@ function checkWorkflow(file, source = readFileSync(file, 'utf8')) {
     if (eventMode) checkDesktopExecution(workflow, file);
   }
   if (/^web-ci\.ya?ml$/.test(basename(file))) checkNodeLanes(workflow, file, ['web', 'web-build']);
-  if (/^integration-smoke\.ya?ml$/i.test(basename(file))) checkNodeLanes(workflow, file, ['postgres'], 'INTEGRATION', true);
+  if (/^integration-smoke\.ya?ml$/i.test(basename(file))) checkNodeLanes(workflow, file, ['postgres'], 'INTEGRATION', "github.event_name != 'workflow_dispatch' || inputs.postgres");
   if (/^pr-evidence\.ya?ml$/i.test(basename(file))) checkNodeLanes(workflow, file, ['lint-pr-body'], 'EVIDENCE');
   const seen = new Set();
   for (const [name, job] of Object.entries(workflow.jobs)) {

@@ -363,3 +363,16 @@ for (const [name, job, diagnostic] of [
     });
   }
 }
+
+test('event tree rejects disabled smoke lane despite repaired checkout', t => {
+  const path = '.github/workflows/integration-smoke.yml';
+  const f = fixture(t, directory => {
+    const workflow = YAML.parse(readFileSync(join(directory, path), 'utf8'));
+    workflow.jobs.postgres.if = false;
+    writeFileSync(join(directory, path), YAML.stringify(workflow));
+  });
+  copyFileSync(join(root, path), join(f.directory, path));
+  const result = f.run();
+  assert.equal(result.status, 1, result.stdout);
+  assert.match(result.stderr, /INVALID_INTEGRATION_NODE_SETUP/);
+});
