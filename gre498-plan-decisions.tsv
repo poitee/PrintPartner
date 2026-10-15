@@ -1,0 +1,4 @@
+ts	phase	decision	why	evidence	result
+2026-10-15T10:34:03Z	start	Own Plan override slice from 0e68ac73	User assigned sole ownership and exact scope	Linear GRE-498; PR 460; PR 454	no duplicate owner
+2026-10-15T10:34:03Z	design	Reuse stored partial booleans and null inheritance	Existing server domain already models the three states	web/apps/server/src/services/plan-features.ts	UI delegated; server proof owned locally
+2026-10-15T10:36:09Z	proof	Persist all four overrides across SQLite restart	Prove actual stored behavior instead of response-only success	/tmp/gre498-server-pass-after.txt; /tmp/gre498-persistence-mutant.txt	88 tests pass; lost-write mutation fails

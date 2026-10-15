@@ -1,0 +1,78 @@
+
+> @print-partner/server@0.1.0 test
+> vitest run src/routes/plan-features.test.ts -t persists every Plan override --maxWorkers=1
+
+
+ RUN  v4.1.11 /persist/worktrees/t3/PrintPartner/gre-498-202610150631-1a12/web/apps/server
+
+ ❯ src/routes/plan-features.test.ts (66 tests | 1 failed | 65 skipped) 750ms
+     × persists every Plan override across restart and restores live tenant inheritance 743ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/routes/plan-features.test.ts > plan features and aggregate farm suggestions > persists every Plan override across restart and restores live tenant inheritance
+AssertionError: expected { profile_id: 1, overrides: {}, …(1) } to deeply equal { profile_id: 1, …(2) }
+
+- Expected
++ Received
+
+  {
+    "effective": {
+      "bambu": {
+-       "enabled": false,
+-       "source": "plan",
++       "enabled": true,
++       "source": "user",
+      },
+      "farm": {
+-       "enabled": false,
+-       "source": "plan",
++       "enabled": true,
++       "source": "user",
+      },
+      "orders": {
+-       "enabled": false,
+-       "source": "plan",
++       "enabled": true,
++       "source": "user",
+      },
+      "spoolman": {
+-       "enabled": false,
+-       "source": "plan",
++       "enabled": true,
++       "source": "user",
+      },
+    },
+-   "overrides": {
+-     "bambu": false,
+-     "farm": false,
+-     "orders": false,
+-     "spoolman": false,
+-   },
++   "overrides": {},
+    "profile_id": 1,
+  }
+
+ ❯ src/routes/plan-features.test.ts:140:46
+    138|     await createApp();
+    139|
+    140|     expect((await app.inject(url())).json()).toEqual({
+       |                                              ^
+    141|       profile_id: profileId,
+    142|       overrides: disabled,
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 65 skipped (66)
+   Start at  10:34:36
+   Duration  9.07s (transform 3.92s, setup 208ms, import 7.59s, tests 750ms, environment 0ms)
+
+npm error Lifecycle script `test` failed with error:
+npm error code 1
+npm error path /persist/worktrees/t3/PrintPartner/gre-498-202610150631-1a12/web/apps/server
+npm error workspace @print-partner/server@0.1.0
+npm error location /persist/worktrees/t3/PrintPartner/gre-498-202610150631-1a12/web/apps/server
+npm error command failed
+npm error command sh -c vitest run src/routes/plan-features.test.ts -t 'persists every Plan override' --maxWorkers=1

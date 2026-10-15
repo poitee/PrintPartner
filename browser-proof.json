@@ -1,0 +1,31 @@
+{
+  "baseline": {
+    "content": [
+      {
+        "type": "text",
+        "text": "Preview automation evaluate failed: Error: Expected Plan feature controls when rebuild capability is enabled; none are present\n    at <anonymous>:1:95\n    at <anonymous>:1:240"
+      }
+    ],
+    "isError": true
+  },
+  "flagOff": {
+    "controls": 0,
+    "featureRequests": 0,
+    "capability": false,
+    "apiStatus": 404
+  },
+  "after": "PASS Plan feature controls visible",
+  "steps": [
+    "All four controls initially inherited Default Off",
+    "Clicked all four On; real GET returned four true overrides",
+    "Reload retained farm true with source plan",
+    "Enabled tenant farm through Settings UI",
+    "Clicked Plan farm Off; real GET returned false with source plan",
+    "Clicked Plan farm Inherit; real GET omitted farm override and returned true with source user",
+    "Reload retained inherited account value"
+  ],
+  "ports": {
+    "on": 5183,
+    "off": 5184
+  }
+}

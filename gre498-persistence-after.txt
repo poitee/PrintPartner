@@ -1,0 +1,13 @@
+
+> @print-partner/server@0.1.0 test
+> vitest run src/routes/plan-features.test.ts -t persists every Plan override --maxWorkers=1
+
+
+ RUN  v4.1.11 /persist/worktrees/t3/PrintPartner/gre-498-202610150631-1a12/web/apps/server
+
+
+ Test Files  1 passed (1)
+      Tests  1 passed | 65 skipped (66)
+   Start at  10:34:14
+   Duration  9.03s (transform 3.98s, setup 182ms, import 7.41s, tests 1.07s, environment 0ms)
+
