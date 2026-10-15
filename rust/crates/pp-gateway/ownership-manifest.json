@@ -462,6 +462,35 @@
             "name": "source-workspace"
           }
         ]
+      },
+      {
+        "operation": "tool.get_source_inventory",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "projects"
+          },
+          {
+            "kind": "table",
+            "name": "source_docs"
+          },
+          {
+            "kind": "table",
+            "name": "source_notes"
+          },
+          {
+            "kind": "table",
+            "name": "source_revisions"
+          },
+          {
+            "kind": "table",
+            "name": "app_settings"
+          },
+          {
+            "kind": "file",
+            "name": "source-workspace"
+          }
+        ]
       }
     ],
     "unresolved": [
@@ -848,7 +877,6 @@
       "tool.get_print_stats",
       "tool.get_printer_checkoff",
       "tool.get_remaining",
-      "tool.get_source_inventory",
       "tool.import_guide_notes",
       "tool.ingest_guide_text",
       "tool.ingest_guide_url",
