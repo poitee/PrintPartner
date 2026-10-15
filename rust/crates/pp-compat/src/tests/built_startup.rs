@@ -99,7 +99,6 @@ async fn built_startup_owner_fixture() {
         .unwrap();
     let supervisor = Supervisor::start(spec).unwrap();
     startup_wait_async(&scratch.pidfile()).await;
-    // A stopped reader cannot drain the setup write, which exceeds Linux pipe capacity.
     tokio::time::sleep(Duration::from_millis(100)).await;
     let pids = recorded_pids(&scratch.pidfile());
     assert_eq!(pids.len(), 1);

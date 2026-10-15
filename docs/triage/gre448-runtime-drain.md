@@ -520,3 +520,13 @@ warnings denied, workspace formatting, Python compilation, observer syntax,
 workflow YAML parsing, native-dispatcher rejection, and the AST ratchet also
 passed. The test helper lives under `src/tests/`, with unchanged lint baselines.
 This is the implementation run; independent parent verification remains separate.
+
+The owner independently ran the full negative-control command on 2026-10-15.
+Both baseline cycles passed, the disarmed guard failed the intended invariant,
+and both restored cycles passed. Direct `/proc` and process-group checks found
+every recorded owner, backend, watcher, and peer absent. Positive cleanup used
+no fallback signals. The restoration hash matched production source, and the
+built entry hash stayed unchanged. Independent receipts and `owner-audit.json`
+are in `/tmp/gre448-parent-death-owner/proof/run-o8j_4qrm`. Crate boundaries,
+the unchanged AST ratchet, Python compilation, observer syntax, comment review,
+and diff checks also passed.
