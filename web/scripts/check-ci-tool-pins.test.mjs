@@ -13,15 +13,77 @@ const workflow = step => `jobs:\n  probe:\n    steps:\n${step}\n`;
 const installer = input => workflow(`      - uses: ${action}\n        with:\n          tool: ${input}`);
 const summary = (declarations, tools, errors) => `install_declarations=${declarations} tool_specs=${tools} errors=${errors}\n`;
 
-function run(t, source, args = []) {
+function run(t, source, args = [], filename = 'fixture.yaml') {
   const directory = mkdtempSync(join(tmpdir(), 'ci-tool-pins-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const file = join(directory, 'fixture.yaml');
+  const file = join(directory, filename);
   if (source !== undefined) writeFileSync(file, source);
   const result = spawnSync(process.execPath, [cli, directory, ...args], { encoding: 'utf8' });
   assert.equal(result.error, undefined);
   return { ...result, file, directory };
 }
+
+const setupNode = 'actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1';
+const matrixInput = '${{ matrix.node }}';
+const desktop = (matrix = { node: ['22.23.3', '24.21.0'] }, steps = [
+  { uses: setupNode, with: { 'node-version': matrixInput } },
+]) => JSON.stringify({ jobs: { parity: { strategy: { matrix }, steps } } });
+
+for (const [name, source] of [
+  ['exact patches', desktop()],
+  ['future patch bump', desktop({ node: ['22.23.4', '24.21.1'] })],
+  ['compact expression', desktop(undefined, [{ uses: setupNode, with: { 'node-version': '${{matrix.node}}' } }])],
+  ['anchored matrix', `nodes: &nodes ['22.23.3', '24.21.0']\njobs:\n  parity:\n    strategy:\n      matrix: {node: *nodes}\n    steps:\n      - uses: ${setupNode}\n        with: {node-version: '${matrixInput}'}`],
+]) {
+  test(`accept desktop Node ${name}`, t => {
+    const result = run(t, source, [], 'desktop-contracts.yml');
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr, '');
+    assert.equal(result.stdout, summary(0, 0, 0));
+  });
+}
+
+for (const value of ['22', '24', '22.23', '22.x', 'lts/*', 'latest', 'node', '^22.23.3', '>=22', 'v22.23.3', '22.23.3-rc.1', '22.23.3+build', '022.23.3', '', '${{ inputs.node }}', 22, 22.23, null, {}]) {
+  test(`reject desktop Node version ${JSON.stringify(value)}`, t => {
+    const result = run(t, desktop({ node: [value, '24.21.0'] }), [], 'desktop-contracts.yml');
+    assert.equal(result.status, 1, result.stdout);
+    assert.equal(result.stderr, `${result.file} jobs.parity.strategy.matrix.node[0]: UNPINNED_NODE: ${JSON.stringify(value)}; expected major.minor.patch string\n`);
+    assert.equal(result.stdout, summary(0, 0, 1));
+  });
+}
+
+for (const [name, source, diagnostic] of [
+  ['empty matrix', desktop({ node: [] }), 'INVALID_NODE_MATRIX'],
+  ['scalar node', desktop({ node: '22.23.3' }), 'INVALID_NODE_MATRIX'],
+  ['missing node', desktop({}), 'INVALID_NODE_MATRIX'],
+  ['dynamic matrix', desktop('${{ fromJSON(inputs.matrix) }}'), 'INVALID_NODE_MATRIX'],
+  ['duplicate version', desktop({ node: ['22.23.3', '22.23.3'] }), 'INVALID_NODE_MATRIX'],
+  ['include override', desktop({ node: ['22.23.3'], include: [{ node: '24' }] }), 'INVALID_NODE_MATRIX'],
+  ['exclude override', desktop({ node: ['22.23.3'], exclude: [] }), 'INVALID_NODE_MATRIX'],
+  ['extra axis', desktop({ node: ['22.23.3'], os: ['ubuntu-latest'] }), 'INVALID_NODE_MATRIX'],
+  ['missing parity', 'jobs: {other: {steps: []}}', 'INVALID_NODE_MATRIX'],
+  ['missing strategy', `jobs: {parity: {steps: [{uses: '${setupNode}'}]}}`, 'INVALID_NODE_MATRIX'],
+  ['missing setup', desktop(undefined, []), 'INVALID_NODE_SETUP'],
+  ['duplicate setup', desktop(undefined, [{ uses: setupNode }, { uses: setupNode }]), 'INVALID_NODE_SETUP'],
+  ...['24', '${{ matrix.other }}', '${{ inputs.node }}', null].map(value => [
+    `bypassed matrix ${value}`, desktop(undefined, [{ uses: setupNode, with: { 'node-version': value } }]), 'INVALID_NODE_SETUP',
+  ]),
+  ['version file', desktop(undefined, [{ uses: setupNode, with: { 'node-version': matrixInput, 'node-version-file': '.nvmrc' } }]), 'INVALID_NODE_SETUP'],
+  ['missing inputs', desktop(undefined, [{ uses: setupNode }]), 'INVALID_NODE_SETUP'],
+  ['anchored floating matrix', `nodes: &nodes ['22', '24.21.0']\njobs: {parity: {strategy: {matrix: {node: *nodes}}, steps: [{uses: '${setupNode}', with: {node-version: '${matrixInput}'}}]}}`, 'UNPINNED_NODE'],
+]) {
+  test(`reject desktop Node ${name}`, t => {
+    const result = run(t, source, [], 'desktop-contracts.yml');
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stderr, new RegExp(`: ${diagnostic}:`));
+  });
+}
+
+test('Node policy leaves unrelated workflows unchanged', t => {
+  const result = run(t, desktop({ node: ['22', '24'] }));
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, summary(0, 0, 0));
+});
 
 for (const [name, source, declarations, tools] of [
   ['current releases', installer('nextest@0.9.148, sccache@0.18.0 ast-grep@0.50.0 cargo-machete@0.9.2'), 1, 4],
