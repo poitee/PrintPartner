@@ -670,16 +670,16 @@ impl Document {
         array: bool,
     ) -> ReadResult<JsText> {
         budget.visit(depth)?;
-        match self.node(id, budget)? {
-            Node::Null => Ok(JsText::scalar(if array { "" } else { "null" })),
-            Node::Bool(b) => Ok(JsText::scalar(&b.to_string())),
-            Node::Number(n) => Ok(JsText::scalar(&number_text(*n))),
+        let text = match self.node(id, budget)? {
+            Node::Null => JsText::scalar(if array { "" } else { "null" }),
+            Node::Bool(b) => JsText::scalar(&b.to_string()),
+            Node::Number(n) => JsText::scalar(&number_text(*n)),
             Node::String(s) => {
                 budget.visit(depth)?;
                 budget.expansion(s.units().len() * 2)?;
-                Ok(s.clone())
+                return Ok(s.clone());
             }
-            Node::Mapping(_) => Ok(JsText::scalar("[object Object]")),
+            Node::Mapping(_) => JsText::scalar("[object Object]"),
             Node::Sequence(v) => {
                 let mut out = Vec::new();
                 for (i, n) in v.iter().enumerate() {
@@ -696,10 +696,12 @@ impl Document {
                     budget.expansion(s.units().len() * 2)?;
                     out.extend_from_slice(s.units());
                 }
-                Ok(JsText::from_units(out))
+                return Ok(JsText::from_units(out));
             }
             Node::Alias(_) => unreachable!(),
-        }
+        };
+        budget.expansion(text.units().len() * 2)?;
+        Ok(text)
     }
     pub fn truthy(&self, id: usize, budget: &mut PreparationBudget<'_>) -> ReadResult<bool> {
         Ok(match self.node(id, budget)? {
@@ -736,6 +738,69 @@ mod tests {
     fn units(document: &Document, key: &str, budget: &mut PreparationBudget<'_>) -> Vec<u16> {
         let id = document.get(document.root, key, budget).unwrap().unwrap();
         document.text(id, budget).unwrap().units().to_vec()
+    }
+
+    #[test]
+    fn yaml_direct_coercion_charges_all_output_bytes() {
+        let cancel = AtomicBool::new(false);
+        for (source, expected) in [
+            ("null", "null"),
+            ("true", "true"),
+            ("1e21", "1e+21"),
+            ("{}", "[object Object]"),
+        ] {
+            let mut parse_budget =
+                PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
+            let doc = Document::parse(source.as_bytes(), &mut parse_budget).unwrap();
+            let bytes = expected.encode_utf16().count() * 2;
+            for limit in [bytes - 1, bytes] {
+                let mut budget = PreparationBudget::new(
+                    &cancel,
+                    PreparationLimits {
+                        total_document_bytes: limit,
+                        ..PreparationLimits::default()
+                    },
+                )
+                .unwrap();
+                let result = doc.text(doc.root, &mut budget);
+                if limit == bytes {
+                    assert_eq!(result.unwrap().as_scalar().as_deref(), Some(expected));
+                    assert!(matches!(
+                        doc.text(doc.root, &mut budget),
+                        Err(ReadFailure::LimitExceeded(
+                            super::super::observation::Resource::DocumentBytes
+                        ))
+                    ));
+                } else {
+                    assert!(
+                        matches!(
+                            result,
+                            Err(ReadFailure::LimitExceeded(
+                                super::super::observation::Resource::DocumentBytes
+                            ))
+                        ),
+                        "{source}"
+                    );
+                }
+            }
+        }
+        let source = b"x: {}";
+        let mut budget = PreparationBudget::new(
+            &cancel,
+            PreparationLimits {
+                total_document_bytes: 8,
+                ..PreparationLimits::default()
+            },
+        )
+        .unwrap();
+        budget.document(source.len(), source.len()).unwrap();
+        let doc = Document::parse(source, &mut budget).unwrap();
+        assert!(matches!(
+            doc.optional_text(doc.root, "x", &mut budget),
+            Err(ReadFailure::LimitExceeded(
+                super::super::observation::Resource::DocumentBytes
+            ))
+        ));
     }
 
     #[test]
