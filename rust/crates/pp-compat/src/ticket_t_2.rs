@@ -419,11 +419,24 @@ async fn ticket_t_3_drain_readiness_timeout_no_leaked_task() {
 }
 
 fn diagnostic_rows(scratch: &Scratch) -> Vec<serde_json::Value> {
-    std::fs::read_to_string(scratch.root.join("data/logs/desktop.jsonl"))
-        .unwrap()
-        .lines()
-        .map(|row| serde_json::from_str(row).unwrap())
-        .collect()
+    let mut rows = Vec::new();
+    for index in (0..=6).rev() {
+        let name = if index == 0 {
+            "desktop.jsonl".to_owned()
+        } else {
+            format!("desktop.{index}.jsonl")
+        };
+        let text = match std::fs::read_to_string(scratch.root.join("data/logs").join(name)) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => panic!("failed to read diagnostic log: {error}"),
+        };
+        rows.extend(
+            text.lines()
+                .map(|row| serde_json::from_str::<serde_json::Value>(row).unwrap()),
+        );
+    }
+    rows
 }
 
 #[test]
