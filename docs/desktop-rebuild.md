@@ -297,9 +297,18 @@ Replace both account IDs with the existing user's `users.id`.
 
 Set its permissions to `0600` and its owner to the user who runs the desktop process.
 The file must be a regular file, at most 4096 bytes, with no symlink at its path.
-Unknown fields, malformed JSON, missing users, a `default` account, and unequal user and tenant IDs fail startup before product database writes.
+Unknown fields, malformed JSON, missing users, and unequal user and tenant IDs fail startup before product database writes.
 The mapping selects exactly one account. It never selects the first row or changes stored tenant ownership.
-Legacy copies whose account data belongs to `default` remain unsupported.
+A self-hosted first account can have the stored ID `default`, which claims its legacy `default` tenant.
+Select that account explicitly with this mapping, only when a matching `users.id = 'default'` row exists.
+
+```json
+{"version":1,"kind":"existing-account","user_id":"default","tenant_id":"default"}
+```
+
+A missing mapping still refuses populated account databases, including a claimed `default` account.
+Mapping another user ID onto the shared `default` tenant remains unsupported and fails before product database writes.
+Shared single-user-auth copies whose user IDs differ from `default` need a separate ownership migration.
 
 Core pins mapping presence and the SHA256 of its bytes under the storage lease for the full runtime lifetime.
 Every compatibility child checks the same pin before product startup.
@@ -310,7 +319,7 @@ The session provider is `desktop`. A nonadmin account stays nonadmin, and deleti
 
 Mapped mode uses the isolated Source filesystem policy and runs tenant workers only for the selected account.
 It skips global starter seeding, Source ownership repair, legacy export and manifest migration, outcome conversion, Advisor backfill, and shared transfer artifact sweeping.
-It does not modify foreign or `default` product rows to make them accessible.
+It does not modify product rows outside the selected tenant to make them accessible.
 Backup routes, including restore, are unavailable while mapped.
 Replacing the database file, including through a symlink alias, rejects subsequent authenticated requests and stops scheduling tenant work.
 Stop the runtime before restoring or replacing a copy, then restart for fresh admission.

@@ -109,17 +109,22 @@ fn selected() -> Value {
 }
 #[cfg(feature = "desktop_rebuild")]
 async fn foreign_snapshot(data: &Path) -> Value {
-    node(data, r#"
-        const db = new Database(data + '/print-partner.db', {readonly:true});
-        const result = {};
-        for (const {name} of db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all()) {
-          if (!db.prepare(`PRAGMA table_info("${name}")`).all().some(c => c.name === 'tenant_id')) continue;
-          result[name] = db.prepare(`SELECT * FROM "${name}" WHERE tenant_id <> 'account-a' ORDER BY rowid`).all();
-        }
-        for (const table of ['sessions','auth_identities','password_reset_tokens']) result[table] = db.prepare(`SELECT * FROM "${table}" ORDER BY rowid`).all();
-        result.users = db.prepare("SELECT * FROM users WHERE id <> 'account-a' ORDER BY id").all();
+    snapshot_outside(data, "account-a").await
+}
+#[cfg(feature = "desktop_rebuild")]
+async fn snapshot_outside(data: &Path, owner: &str) -> Value {
+    node(data, &format!(r#"
+        const owner = {};
+        const db = new Database(data + '/print-partner.db', {{readonly:true}});
+        const result = {{}};
+        for (const {{name}} of db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all()) {{
+          if (!db.prepare(`PRAGMA table_info("${{name}}")`).all().some(c => c.name === 'tenant_id')) continue;
+          result[name] = db.prepare(`SELECT * FROM "${{name}}" WHERE tenant_id <> ? ORDER BY rowid`).all(owner);
+        }}
+        for (const table of ['sessions','auth_identities','password_reset_tokens']) result[table] = db.prepare(`SELECT * FROM "${{table}}" ORDER BY rowid`).all();
+        result.users = db.prepare("SELECT * FROM users WHERE id <> ? ORDER BY id").all(owner);
         db.close(); console.log(JSON.stringify(result));
-    "#).await
+    "#, json!(owner))).await
 }
 #[cfg(feature = "desktop_rebuild")]
 async fn bootstrap(runtime: &mut CoreRuntime) -> String {
@@ -593,6 +598,118 @@ async fn launch_credentials_are_revoked_on_same_origin_account_switch() {
 
 #[cfg(feature = "desktop_rebuild")]
 #[tokio::test]
+async fn claimed_default_account_maps_legacy_default_data_without_foreign_changes() {
+    let Some(data) = isolated(
+        "claimed_default_account_maps_legacy_default_data_without_foreign_changes",
+        true,
+    )
+    .await
+    else {
+        return;
+    };
+    fixture(&data).await;
+    node(&data, "const db = new Database(data + '/print-partner.db'); db.prepare(\"INSERT INTO users (id,email,display_name,password_hash,is_admin,created_at) VALUES ('default','first@example.test','First account','hash',1,'2026-10-14')\").run(); db.close(); console.log('{}');").await;
+    mapping(
+        &data,
+        json!({"version":1,"kind":"existing-account","user_id":"default","tenant_id":"default"}),
+    );
+    let before = snapshot_outside(&data, "default").await;
+    let mut runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    let cookie = bootstrap(&mut runtime).await;
+    let (status, me) = api(&runtime, &cookie, "/auth/me", "GET", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        me["user"],
+        json!({"user_id":"default","login":"first@example.test","display_name":"First account","email":"first@example.test","provider":"desktop","hasPassword":true,"is_admin":true})
+    );
+    let (status, legacy) = api(&runtime, &cookie, "/plans/303", "GET", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(legacy["name"], "Legacy Plan");
+    for id in [101, 202] {
+        assert_eq!(
+            api(&runtime, &cookie, &format!("/plans/{id}"), "GET", None)
+                .await
+                .0,
+            StatusCode::NOT_FOUND,
+            "{id}"
+        );
+        assert_eq!(
+            api(
+                &runtime,
+                &cookie,
+                &format!("/plans/{id}"),
+                "PATCH",
+                Some(json!({"name":"Stolen"}))
+            )
+            .await
+            .0,
+            StatusCode::NOT_FOUND,
+            "{id}"
+        );
+    }
+    let (status, listing) = api(&runtime, &cookie, "/plans?tenant_id=account-a", "GET", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let listed: Vec<_> = listing["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|profile| profile["id"].as_i64().unwrap())
+        .collect();
+    assert!(listed.contains(&303), "{listed:?}");
+    assert!(
+        !listed.contains(&101) && !listed.contains(&202),
+        "{listed:?}"
+    );
+    let (status, _) = api(
+        &runtime,
+        &cookie,
+        "/plans/303",
+        "PATCH",
+        Some(json!({"name":"Legacy edited"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, created) = api(
+        &runtime,
+        &cookie,
+        "/plans",
+        "POST",
+        Some(json!({"name":"Default new Plan"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let created_id = created["id"].as_i64().unwrap();
+    assert_eq!(
+        api(
+            &runtime,
+            &cookie,
+            "/backups/restore",
+            "POST",
+            Some(json!({}))
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert!(runtime.shutdown().await.complete());
+    assert_eq!(snapshot_outside(&data, "default").await, before);
+    let owned = node(&data, &format!("const db = new Database(data + '/print-partner.db', {{readonly:true}}); console.log(JSON.stringify(db.prepare(\"SELECT id,tenant_id,name FROM build_profiles WHERE id IN (303, ?) ORDER BY id\").all({created_id}))); db.close();")).await;
+    assert_eq!(
+        owned,
+        json!([{"id":303,"tenant_id":"default","name":"Legacy edited"},{"id":created_id,"tenant_id":"default","name":"Default new Plan"}])
+    );
+    let mut runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    let cookie = bootstrap(&mut runtime).await;
+    assert_eq!(
+        api(&runtime, &cookie, "/plans/303", "GET", None).await.1["name"],
+        "Legacy edited"
+    );
+    assert!(runtime.shutdown().await.complete());
+    assert_eq!(snapshot_outside(&data, "default").await, before);
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
 async fn mapping_refusals_happen_before_product_writes() {
     let Some(root) = isolated("mapping_refusals_happen_before_product_writes", true).await else {
         return;
@@ -605,6 +722,7 @@ async fn mapping_refusals_happen_before_product_writes() {
         "unknown-user",
         "mismatch",
         "default",
+        "unclaimed-default",
         "symlink",
         "public-mode",
         "old-schema",
@@ -636,6 +754,10 @@ async fn mapping_refusals_happen_before_product_writes() {
                 "default" => mapping(
                     &data,
                     json!({"version":1,"kind":"existing-account","user_id":"default","tenant_id":"default"}),
+                ),
+                "unclaimed-default" => mapping(
+                    &data,
+                    json!({"version":1,"kind":"existing-account","user_id":"account-a","tenant_id":"default"}),
                 ),
                 "symlink" => {
                     mapping(&data, selected());
