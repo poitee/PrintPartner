@@ -329,27 +329,16 @@ fn read_record(path: &Path) -> std::io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn read_prior_owner(marker_path: &Path) -> Result<Option<(serde_json::Value, u32)>> {
-    match std::fs::symlink_metadata(marker_path) {
-        Ok(_) => {}
+fn read_prior_owner(
+    open_file: impl Fn(&str) -> std::io::Result<File>,
+) -> Result<Option<(serde_json::Value, u32)>> {
+    let mut file = match open_file(".desktop-owner.json") {
+        Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error).context("storage_lease_marker_invalid"),
-    }
-    #[cfg(test)]
-    if REMOVE_MARKER_BEFORE_READ.with(std::cell::Cell::take) {
-        std::fs::remove_file(marker_path)?;
-    }
-    let bytes = match read_record(marker_path) {
-        Ok(bytes) => bytes,
-        Err(error)
-            if error.kind() == std::io::ErrorKind::NotFound
-                && std::fs::symlink_metadata(marker_path)
-                    .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
-        {
-            return Ok(None);
-        }
-        Err(error) => return Err(error).context("storage_lease_marker_invalid"),
     };
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut file, &mut bytes).context("storage_lease_marker_invalid")?;
     parse_prior_owner(&bytes).map(Some)
 }
 
@@ -368,15 +357,8 @@ fn parse_prior_owner(bytes: &[u8]) -> Result<(serde_json::Value, u32)> {
 pub(crate) fn prior_owner_blocks_unowned(
     open_file: impl Fn(&str) -> std::io::Result<File>,
 ) -> Result<bool> {
-    let mut file = match open_file(".desktop-owner.json") {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(error) => return Err(error).context("storage_lease_marker_invalid"),
-    };
-    let mut bytes = Vec::new();
-    std::io::Read::read_to_end(&mut file, &mut bytes).context("storage_lease_marker_invalid")?;
-    let (marker, pid) = parse_prior_owner(&bytes)?;
-    Ok(!prior_writer_is_stale(&marker, pid))
+    Ok(read_prior_owner(open_file)?
+        .is_some_and(|(marker, pid)| !prior_writer_is_stale(&marker, pid)))
 }
 
 impl StorageLease {
@@ -408,14 +390,14 @@ impl StorageLease {
         let marker_path = data_dir.join(".desktop-owner.json");
         #[cfg(test)]
         tests::marker_inspection_swap(data_dir, 1, false)?;
-        let prior = read_prior_owner(&marker_path);
+        let prior = read_prior_owner(|name| admitted.open_preflight_file(name));
         #[cfg(test)]
         tests::marker_inspection_swap(data_dir, 1, true)?;
         prior?;
         let lease_guard = guard::StorageLease::acquire(data_dir)?;
         #[cfg(test)]
         tests::marker_inspection_swap(data_dir, 2, false)?;
-        let prior = read_prior_owner(&marker_path);
+        let prior = read_prior_owner(|name| admitted.open_preflight_file(name));
         #[cfg(test)]
         tests::marker_inspection_swap(data_dir, 2, true)?;
         if let Some((marker, pid)) = prior? {
@@ -646,58 +628,89 @@ mod tests {
     }
 
     fn assert_acquisition_marker_ignores_swap(checkpoint: u8) {
-        {
+        let path = directory();
+        let replacement = path.with_extension("replacement");
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&replacement)
+            .unwrap();
+        let marker =
+            serde_json::json!({"pid": std::process::id(), "kind": "standalone"}).to_string();
+        let decoy: &[u8] = if checkpoint == 1 {
+            b"invalid decoy"
+        } else {
+            br#"{"pid":2147483647,"kind":"standalone"}"#
+        };
+        std::fs::write(path.join(".desktop-owner.json"), &marker).unwrap();
+        std::fs::write(path.join("print-partner.db"), b"never open").unwrap();
+        std::fs::write(replacement.join(".desktop-owner.json"), decoy).unwrap();
+        MARKER_INSPECTION_SWAP.set(Some((checkpoint, false)));
+        let result = StorageLease::acquire(&path);
+        assert_eq!(
+            MARKER_INSPECTION_SWAP.take(),
+            None,
+            "marker checkpoint was not reached"
+        );
+        let error = match result {
+            Ok(owner) => {
+                owner.release();
+                None
+            }
+            Err(error) => Some(error.to_string()),
+        };
+        assert_eq!(
+            error.as_deref(),
+            Some("A prior writer may still be alive"),
+            "checkpoint {checkpoint}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(path.join(".desktop-owner.json")).unwrap(),
+            marker
+        );
+        assert_eq!(
+            std::fs::read(path.join("print-partner.db")).unwrap(),
+            b"never open"
+        );
+        assert_eq!(
+            std::fs::read(replacement.join(".desktop-owner.json")).unwrap(),
+            decoy
+        );
+        assert_eq!(std::fs::read_dir(&replacement).unwrap().count(), 1);
+        assert!(!path.join(".desktop-lease").exists());
+        std::fs::remove_dir_all(path).unwrap();
+        std::fs::remove_dir_all(replacement).unwrap();
+    }
+
+    #[test]
+    fn ticket_t_12_acquisition_marker_refuses_symlink_to_regular_record() {
+        for live in [false, true] {
             let path = directory();
-            let replacement = path.with_extension("replacement");
-            std::fs::DirBuilder::new()
-                .mode(0o700)
-                .create(&replacement)
-                .unwrap();
-            let marker =
-                serde_json::json!({"pid": std::process::id(), "kind": "standalone"}).to_string();
-            let decoy: &[u8] = if checkpoint == 1 {
-                b"invalid decoy"
-            } else {
-                br#"{"pid":2147483647,"kind":"standalone"}"#
-            };
-            std::fs::write(path.join(".desktop-owner.json"), &marker).unwrap();
-            std::fs::write(path.join("print-partner.db"), b"never open").unwrap();
-            std::fs::write(replacement.join(".desktop-owner.json"), decoy).unwrap();
-            MARKER_INSPECTION_SWAP.set(Some((checkpoint, false)));
-            let result = StorageLease::acquire(&path);
+            let record = serde_json::json!({
+                "pid": if live { std::process::id() } else { i32::MAX as u32 },
+                "kind": "standalone"
+            })
+            .to_string();
+            std::fs::write(path.join("private-marker"), &record).unwrap();
+            let marker = path.join(".desktop-owner.json");
+            std::os::unix::fs::symlink("private-marker", &marker).unwrap();
+            let error = StorageLease::acquire(&path).err().unwrap();
+            assert_eq!(error.to_string(), "storage_lease_marker_invalid");
             assert_eq!(
-                MARKER_INSPECTION_SWAP.take(),
-                None,
-                "marker checkpoint was not reached"
-            );
-            let error = match result {
-                Ok(owner) => {
-                    owner.release();
-                    None
-                }
-                Err(error) => Some(error.to_string()),
-            };
-            assert_eq!(
-                error.as_deref(),
-                Some("A prior writer may still be alive"),
-                "checkpoint {checkpoint}"
+                error
+                    .downcast_ref::<std::io::Error>()
+                    .and_then(std::io::Error::raw_os_error),
+                Some(libc::ELOOP)
             );
             assert_eq!(
-                std::fs::read_to_string(path.join(".desktop-owner.json")).unwrap(),
-                marker
+                std::fs::read_link(marker).unwrap(),
+                Path::new("private-marker")
             );
             assert_eq!(
-                std::fs::read(path.join("print-partner.db")).unwrap(),
-                b"never open"
+                std::fs::read_to_string(path.join("private-marker")).unwrap(),
+                record
             );
-            assert_eq!(
-                std::fs::read(replacement.join(".desktop-owner.json")).unwrap(),
-                decoy
-            );
-            assert_eq!(std::fs::read_dir(&replacement).unwrap().count(), 1);
             assert!(!path.join(".desktop-lease").exists());
             std::fs::remove_dir_all(path).unwrap();
-            std::fs::remove_dir_all(replacement).unwrap();
         }
     }
 
