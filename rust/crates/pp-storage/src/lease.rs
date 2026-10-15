@@ -2059,9 +2059,9 @@ pub(crate) mod tests {
 
     fn local_reentry(path: &Path) {
         let owner = StorageLease::acquire(path).unwrap();
+        let cell = store_cell(owner.data_dir());
         std::fs::rename(path.join(".desktop-lease"), path.join("original")).unwrap();
         let original = snapshot(&path.join("original"));
-        let cell = store_cell(path);
         std::thread::scope(|scope| {
             let (entered_tx, entered) = std::sync::mpsc::channel();
             let (resume_tx, resume) = std::sync::mpsc::channel();
@@ -2134,10 +2134,11 @@ pub(crate) mod tests {
 
     fn in_place_retry(path: &Path) {
         let owner = StorageLease::acquire(path).unwrap();
+        let key = owner.data_dir().to_path_buf();
+        let cell = store_cell(&key);
         let blocker = owner.runtime_dir().join("block");
         std::fs::write(&blocker, b"retain").unwrap();
         assert_eq!(flags(owner.release()), (false, false, false, true));
-        let cell = store_cell(path);
         assert!(
             !cell.is_poisoned(),
             "ordinary Result failure must not poison"
@@ -2194,7 +2195,7 @@ pub(crate) mod tests {
             );
         });
         assert!(
-            Arc::ptr_eq(&cell, &store_cell(path)),
+            Arc::ptr_eq(&cell, &store_cell(&key)),
             "empty cell was replaced"
         );
         assert!(cell.lock().unwrap().is_empty());
@@ -2206,6 +2207,7 @@ pub(crate) mod tests {
 
     fn failed_relock(path: &Path) {
         let owner = StorageLease::acquire(path).unwrap();
+        let cell = store_cell(owner.data_dir());
         let ids = resource_ids(&owner);
         std::fs::rename(path.join(".desktop-lease"), path.join("original")).unwrap();
         let holder = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -2217,7 +2219,6 @@ pub(crate) mod tests {
             *target.borrow_mut() = Some(holder);
         });
         assert_eq!(flags(owner.release()), (true, true, false, true));
-        let cell = store_cell(path);
         let before = snapshot(path);
         {
             let entries = cell.lock().unwrap();
@@ -2290,6 +2291,7 @@ pub(crate) mod tests {
     }
     fn occupied_retention(path: &Path, release: bool) {
         let (first, second) = interfered_owners(path);
+        let cell = store_cell(first.data_dir());
         let first_ids = resource_ids(&first);
         let second_ids = resource_ids(&second);
         let before = snapshot(path);
@@ -2308,7 +2310,6 @@ pub(crate) mod tests {
             before,
             "occupied retention destroyed an existing owner's metadata"
         );
-        let cell = store_cell(path);
         let entries = cell.lock().unwrap();
         assert_eq!(
             entries.len(),
@@ -2335,11 +2336,11 @@ pub(crate) mod tests {
     }
     fn poisoned_retention(path: &Path) {
         let (first, second) = interfered_owners(path);
+        let cell = store_cell(first.data_dir());
         let first_ids = resource_ids(&first);
         let second_ids = resource_ids(&second);
         std::fs::write(first.runtime_dir().join("block"), b"retain").unwrap();
         assert_eq!(flags(first.release()), (false, false, false, true));
-        let cell = store_cell(path);
         assert!(
             !cell.is_poisoned(),
             "ordinary release failure poisoned cell"
@@ -2386,13 +2387,27 @@ pub(crate) mod tests {
             "occupied-release",
             "poison",
         ] {
-            let root = directory();
-            let scratch = root.join("scratch");
-            std::fs::create_dir(&scratch).unwrap();
-            let mut child = Probe::spawn(role, &root);
-            child.expect("containment unit complete");
-            child.reap();
-            std::fs::remove_dir_all(root).unwrap();
+            for alias in [false, true] {
+                let root = directory();
+                let scratch = root.join("scratch");
+                std::fs::create_dir(&scratch).unwrap();
+                let alias_path = root.with_extension("alias");
+                let path = if alias {
+                    std::os::unix::fs::symlink(&root, &alias_path).unwrap();
+                    assert_ne!(alias_path, alias_path.canonicalize().unwrap());
+                    &alias_path
+                } else {
+                    &root
+                };
+                println!("unit fixture {role} alias={alias}");
+                let mut child = Probe::spawn(role, path);
+                child.expect("containment unit complete");
+                child.reap();
+                if alias {
+                    std::fs::remove_file(alias_path).unwrap();
+                }
+                std::fs::remove_dir_all(root).unwrap();
+            }
         }
     }
     #[test]
