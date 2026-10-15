@@ -415,22 +415,22 @@ describe("release after the lease is removed externally", () => {
     { record: "directory marker", path: ".desktop-owner.json",
       republish: `fs.mkdirSync(target); fs.writeFileSync(target + "/evidence", "retain");`,
       kept: (target: string) => readFileSync(join(target, "evidence"), "utf8") === "retain" },
-    { record: "socket lease", blocksAdmission: true, path: ".desktop-lease",
+    { record: "socket lease", admissionError: "storage_lease_marker_invalid: Data directory lease is malformed or unreadable", path: ".desktop-lease",
       prepare: `const server = net.createServer(); await new Promise(resolve => server.listen(socketPath, resolve)); server.unref();`,
       republish: `fs.mkdirSync(target); fs.renameSync(socketPath, target + "/owner.json");`,
       kept: (target: string) => lstatSync(join(target, "owner.json")).isSocket() },
-    { record: "socket marker", blocksAdmission: true, path: ".desktop-owner.json",
+    { record: "socket marker", admissionError: expect.objectContaining({ code: "ENXIO" }), path: ".desktop-owner.json",
       prepare: `const server = net.createServer(); await new Promise(resolve => server.listen(socketPath, resolve)); server.unref();`,
       republish: `fs.renameSync(socketPath, target);`,
       kept: (target: string) => lstatSync(target).isSocket() },
-    { record: "symlink-loop lease", blocksAdmission: true, path: ".desktop-lease",
+    { record: "symlink-loop lease", admissionError: "storage_lease_marker_invalid: Data directory lease is malformed or unreadable", path: ".desktop-lease",
       republish: `fs.mkdirSync(target); fs.symlinkSync("owner.json", target + "/owner.json");`,
       kept: (target: string) => readlinkSync(join(target, "owner.json")) === "owner.json" },
-    { record: "symlink-loop marker", blocksAdmission: true, path: ".desktop-owner.json",
+    { record: "symlink-loop marker", admissionError: expect.objectContaining({ code: "EEXIST" }), path: ".desktop-owner.json",
       prepare: `fs.symlinkSync(socketPath + ".loop", socketPath + ".loop");`,
       republish: `fs.symlinkSync(socketPath + ".loop", target);`,
       kept: (target: string) => readlinkSync(target) === join(target, "..", "foreign.sock.loop") },
-  ])("hands back a $record republished between the ownership check and the detach", ({ path, prepare = "", republish, kept, blocksAdmission = false }) => {
+  ])("hands back a $record republished between the ownership check and the detach", ({ path, prepare = "", republish, kept, admissionError }) => {
     const dir = dataDir();
     const child = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
       import fs from "node:fs";
@@ -458,7 +458,7 @@ describe("release after the lease is removed externally", () => {
     expect(JSON.parse(child.stdout)).toEqual({ injected: true });
     expect(kept(join(dir, path))).toBe(true);
     expect(readdirSync(dir).filter((name) => name.includes("-release-"))).toEqual([]);
-    if (blocksAdmission) expect(() => acquireDataDirectory(dir)).toThrow();
+    if (admissionError) expect(() => acquireDataDirectory(dir)).toThrow(admissionError);
   });
 
   it.skipIf(process.getuid?.() === 0).each([

@@ -56,6 +56,7 @@ pub struct SpawnSpec {
     pub lease: String,
     pub lease_file: std::fs::File,
     pub port: u16,
+    pub gateway_rate_limit: bool,
     pub record_child: RecordChild,
 }
 
@@ -121,6 +122,36 @@ struct Principal<'a> {
 }
 
 impl Endpoint {
+    /// Authenticate a quota debit from this private, measured Node generation.
+    pub fn rate_limit_bucket(&self, encoded: &str, signature: &str) -> Option<bool> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Debit {
+            generation: String,
+            bucket: String,
+            issued_at: u64,
+        }
+        if encoded.len() > 1024 || signature.len() != 64 {
+            return None;
+        }
+        let mut verifier = Hmac::<Sha256>::new_from_slice(&self.key).ok()?;
+        verifier.update(encoded.as_bytes());
+        verifier.verify_slice(&hex::decode(signature).ok()?).ok()?;
+        let debit: Debit = serde_json::from_slice(&hex::decode(encoded).ok()?).ok()?;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()?
+            .as_millis() as u64;
+        if debit.generation != self.generation || now.abs_diff(debit.issued_at) > 5000 {
+            return None;
+        }
+        match debit.bucket.as_str() {
+            "app" => Some(false),
+            "media" => Some(true),
+            _ => None,
+        }
+    }
+
     /// Socket endpoint with no child. Tests drop publication while a refresh is blocked on it.
     pub fn bound_to(socket: impl Into<PathBuf>) -> Arc<Self> {
         Arc::new(Self {
@@ -503,7 +534,7 @@ impl Process {
         let mut stdin = child.stdin.take().context("Missing parent-liveness pipe")?;
         let mut setup = serde_json::json!({ "version":1, "data_dir":spec.data_dir, "socket_path":endpoint.socket,
             "generation":endpoint.generation, "key":hex::encode(key), "lease":spec.lease, "parent_pid":std::process::id(),
-            "port":spec.port, "child_process_identity":child_identity });
+            "port":spec.port, "gateway_rate_limit":spec.gateway_rate_limit, "child_process_identity":child_identity });
         spec.account_pin.apply(&mut setup);
         if write_setup_or_cancel(&mut stdin, setup, cancelled)
             .await

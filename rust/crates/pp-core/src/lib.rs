@@ -205,6 +205,8 @@ async fn start_resources(
             lease: owner.secret().to_owned(),
             lease_file: owner.clone_file()?,
             port: listener.local_addr()?.port(),
+            gateway_rate_limit: owners.owner_of("http.GET /legal/summary")
+                == pp_gateway::ownership::Owner::Rust,
             record_child: Box::new(owner.child_recorder()),
         },
         compat_config,

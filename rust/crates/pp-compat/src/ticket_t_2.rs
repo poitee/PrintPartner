@@ -95,6 +95,7 @@ fn release_spec(scratch: &Scratch) -> super::SpawnSpec {
         lease: "lease".into(),
         lease_file,
         port: 0,
+        gateway_rate_limit: false,
         record_child: Box::new(ignore_child),
     }
 }
@@ -232,12 +233,18 @@ async fn ticket_t_3_drain_supervisor_recovered_crash_can_shutdown_gracefully() {
 async fn ticket_t_3_drain_supervisor_shutdown_reports_forced_exit() {
     let scratch = Scratch::new("forced");
     let spec = super::ShellSpec {
-        script: "trap '' TERM; while :; do sleep 1; done",
+        script: "trap '' TERM; printf 'term-trap-ready\\n'; while :; do sleep 1; done",
         ..shell_spec(&scratch)
     };
     let supervisor =
         super::Supervisor::launch_shell(spec, super::SupervisorConfig::default()).unwrap();
     wait_live(&scratch.pidfile(), 1).await;
+    pump_until(|| {
+        diagnostic_rows(&scratch)
+            .iter()
+            .any(|row| row["event"] == "compat_output")
+    })
+    .await;
     let started = std::time::Instant::now();
     assert_eq!(
         supervisor.shutdown().await.unwrap(),
@@ -1861,6 +1868,7 @@ async fn measured_startup_owner_death_fixture() {
     }
     let spec = super::SpawnSpec {
         bundle,
+        gateway_rate_limit: false,
         record_child: Box::new(measured_startup_record_child),
         lease: "x".repeat(1024 * 1024),
         ..release_spec(&scratch)
@@ -2183,6 +2191,7 @@ async fn ticket_t_3_drain_measured_release_repeated_eof_cleanup() {
         let events = scratch.root.join("data/lifecycle-events");
         let supervisor = super::Supervisor::start(super::SpawnSpec {
             bundle: bundle.clone(),
+            gateway_rate_limit: false,
             record_child: Box::new(MeasuredLifecycleCycle::record_child),
             ..release_spec(&scratch)
         })
@@ -2323,3 +2332,42 @@ async fn ticket_t_3_drain_measured_release_repeated_eof_cleanup() {
 #[cfg(target_os = "linux")]
 #[path = "tests/built_startup.rs"]
 mod built_startup;
+
+#[test]
+fn ticket_t_3_drain_rate_limit_debits_require_current_generation_signature() {
+    use hmac::Mac;
+    let endpoint = super::Endpoint::bound_to("unused-quota-test.sock");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let debit = |generation: &str, bucket: &str, time: u64| {
+        let encoded = hex::encode(
+            serde_json::to_vec(&serde_json::json!({
+                "generation":generation, "bucket":bucket, "issued_at":time,
+            }))
+            .unwrap(),
+        );
+        let mut signer = hmac::Hmac::<sha2::Sha256>::new_from_slice(&[9; 32]).unwrap();
+        signer.update(encoded.as_bytes());
+        let signature = hex::encode(signer.finalize().into_bytes());
+        (encoded, signature)
+    };
+    for (bucket, expected) in [("app", false), ("media", true)] {
+        let (encoded, signature) = debit("test-generation", bucket, now);
+        assert_eq!(
+            endpoint.rate_limit_bucket(&encoded, &signature),
+            Some(expected)
+        );
+        assert_eq!(endpoint.rate_limit_bucket(&encoded, &"00".repeat(32)), None);
+    }
+    for (generation, bucket, time) in [
+        ("prior-generation", "app", now),
+        ("test-generation", "unknown", now),
+        ("test-generation", "app", now - 6000),
+        ("test-generation", "app", now + 6000),
+    ] {
+        let (encoded, signature) = debit(generation, bucket, time);
+        assert_eq!(endpoint.rate_limit_bucket(&encoded, &signature), None);
+    }
+}

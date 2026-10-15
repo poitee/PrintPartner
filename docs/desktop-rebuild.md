@@ -392,7 +392,9 @@ The 64 KiB stored-row text cap remains an integrity check. Accepted reads also
 propagate resource exhaustion instead of embedding it in context errors. The
 feature-off reader retains its existing error classification.
 
-This does not complete D9 or unblock D10b. Main now contains the observation
+D9 is complete with the [final coverage and integration audit](desktop-rebuild-d9-audit.md).
+D10b remains blocked on GRE-607 working-draft observation and #450.
+Required-unit planning integration belongs to GRE-606 D11. Main now contains the observation
 contracts and budgets. The bounded YAML parser, builder manifest helpers, group merging, hints,
 and STL inference remain prerequisites for D10b integration. The existing
 `manifest_options` JSON model stays in place for later integration.

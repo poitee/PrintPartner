@@ -556,6 +556,15 @@ fn mutation_duplicate_missing_membership_and_tenant_cases() {
             .unwrap(),
             BuildOutcome::InvalidBaseSource
         ));
+        let invalid_rows: i64 = f
+            .raw()
+            .query_row(
+                "SELECT count(*) FROM build_profiles WHERE tenant_id='default' AND name='Invalid'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(invalid_rows, 0);
         for command in [
             BuildCommand::SetBase {
                 build,
@@ -1045,4 +1054,221 @@ fn mutation_list_budget_is_shared_between_build_summaries() {
         ),
         "{error:?}"
     );
+}
+
+#[test]
+fn audit_delete_cascades_public_accepted_plate_graph_across_reopen() {
+    let mut f = Fixture::from_bytes(include_bytes!("fixtures/accepted-plate-node.db"));
+    let tables = [
+        "profile_layers",
+        "parts",
+        "print_progress",
+        "plan_drafts",
+        "plan_draft_inputs",
+        "plan_draft_parts",
+        "plan_draft_required_unit_reconciliations",
+        "plan_draft_required_unit_assignments",
+        "plan_revisions",
+        "plan_revision_parts",
+        "plan_revision_input_sets",
+        "plan_revision_inputs",
+        "plan_accepted_input_sets",
+        "plan_revision_required_unit_sets",
+        "plan_revision_required_units",
+        "plan_apply_requests",
+        "required_units",
+        "accepted_plate_revisions",
+        "accepted_plate_heads",
+        "accepted_plates",
+        "accepted_plate_units",
+    ];
+    for table in tables {
+        let count: i64 = f
+            .raw()
+            .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap();
+        assert!(count > 0, "fixture must exercise {table}");
+    }
+    let sources: i64 = f
+        .raw()
+        .query_row("SELECT count(*) FROM projects", [], |r| r.get(0))
+        .unwrap();
+    assert!(sources > 0);
+    assert!(matches!(
+        f.run(BuildCommand::Delete { build: id(1) }).unwrap(),
+        BuildOutcome::Deleted
+    ));
+    f.owner.take().unwrap().shutdown().unwrap();
+    for _ in 0..2 {
+        let (owner, _) = WriterOwner::open(&f.root, Limits::default()).unwrap();
+        let client = owner.build_graph_with_policy(policy()).unwrap();
+        assert!(matches!(
+            client
+                .execute(
+                    credential(),
+                    BuildCommand::Read { build: id(1) },
+                    Arc::new(AtomicBool::new(false)),
+                    Duration::from_secs(2)
+                )
+                .unwrap(),
+            BuildOutcome::MissingBuild
+        ));
+        owner.shutdown().unwrap();
+        let c = f.raw();
+        for table in ["build_profiles"].into_iter().chain(tables) {
+            let count: i64 = c
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(count, 0, "delete must cascade {table}");
+        }
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM projects", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            sources
+        );
+        assert!(
+            c.prepare("PRAGMA foreign_key_check")
+                .unwrap()
+                .query([])
+                .unwrap()
+                .next()
+                .unwrap()
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn audit_delete_cascades_terminal_jobs_and_preserves_controls_across_reopen() {
+    for status in ["completed", "sent"] {
+        let mut f = Fixture::new();
+        let (control, _) = create(&f, "Same tenant control", None);
+        f.raw().execute_batch("INSERT INTO build_profiles(id,tenant_id,name) VALUES(999,'other','Foreign control')").unwrap();
+        let sources: i64 = f
+            .raw()
+            .query_row("SELECT count(*) FROM projects", [], |r| r.get(0))
+            .unwrap();
+        assert!(sources > 0);
+        for (job, tenant, build) in [
+            ("target-job", "default", 1),
+            ("control-job", "default", control.get() as i64),
+            ("foreign-job", "other", 999),
+        ] {
+            f.raw().execute("INSERT INTO print_jobs(id,tenant_id,profile_id,at,status) VALUES(?1,?2,?3,'2026-01-01T00:00:00.000Z',?4)",
+                rusqlite::params![job, tenant, build, status]).unwrap();
+        }
+        assert!(matches!(
+            f.run(BuildCommand::Delete { build: id(1) }).unwrap(),
+            BuildOutcome::Deleted
+        ));
+        f.owner.take().unwrap().shutdown().unwrap();
+        for _ in 0..2 {
+            let (owner, _) = WriterOwner::open(&f.root, Limits::default()).unwrap();
+            let client = owner.build_graph_with_policy(policy()).unwrap();
+            assert!(matches!(
+                client
+                    .execute(
+                        credential(),
+                        BuildCommand::Read { build: id(1) },
+                        Arc::new(AtomicBool::new(false)),
+                        Duration::from_secs(2)
+                    )
+                    .unwrap(),
+                BuildOutcome::MissingBuild
+            ));
+            assert!(
+                matches!(client.execute(credential(), BuildCommand::Read { build: control },
+                Arc::new(AtomicBool::new(false)), Duration::from_secs(2)).unwrap(), BuildOutcome::Read { profile } if profile.name == "Same tenant control")
+            );
+            owner.shutdown().unwrap();
+            let c = f.raw();
+            let jobs: Vec<(String, String)> = c
+                .prepare("SELECT id,status FROM print_jobs ORDER BY id")
+                .unwrap()
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap();
+            assert_eq!(
+                jobs,
+                vec![
+                    ("control-job".into(), status.into()),
+                    ("foreign-job".into(), status.into())
+                ]
+            );
+            assert_eq!(
+                c.query_row(
+                    "SELECT count(*) FROM build_profiles WHERE id IN (?1,999)",
+                    [control.get() as i64],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+                2
+            );
+            assert_eq!(
+                c.query_row("SELECT count(*) FROM projects", [], |r| r.get::<_, i64>(0))
+                    .unwrap(),
+                sources
+            );
+            assert!(
+                c.prepare("PRAGMA foreign_key_check")
+                    .unwrap()
+                    .query([])
+                    .unwrap()
+                    .next()
+                    .unwrap()
+                    .is_none()
+            );
+        }
+    }
+}
+
+#[test]
+fn audit_created_build_and_attachments_survive_owner_reopen() {
+    let mut f = Fixture::new();
+    sources(&f);
+    let (build, _) = create(&f, "Persisted build", Some(id(1)));
+    let expected = layer_result(
+        &f,
+        BuildCommand::AttachAddon {
+            build,
+            source: id(2),
+        },
+    );
+    assert_eq!(
+        expected
+            .iter()
+            .map(|layer| (
+                layer.layer_order,
+                layer.layer_type.as_str(),
+                layer.project_id
+            ))
+            .collect::<Vec<_>>(),
+        vec![(0, "base", Some(1)), (1, "addon", Some(2))]
+    );
+    f.owner.take().unwrap().shutdown().unwrap();
+    let (owner, _) = WriterOwner::open(&f.root, Limits::default()).unwrap();
+    let client = owner.build_graph_with_policy(policy()).unwrap();
+    let outcome = client
+        .execute(
+            credential(),
+            BuildCommand::ListLayers { build },
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+    assert!(
+        matches!(outcome, BuildOutcome::Layers { profile_id, layers }
+        if profile_id == build.get() as i64 && layers == expected)
+    );
+    let outcome = client
+        .execute(
+            credential(),
+            BuildCommand::Read { build },
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+    assert!(matches!(outcome, BuildOutcome::Read { profile } if profile.name == "Persisted build"));
+    owner.shutdown().unwrap();
 }
