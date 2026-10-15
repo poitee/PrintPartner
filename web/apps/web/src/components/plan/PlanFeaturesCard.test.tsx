@@ -295,7 +295,6 @@ describe("PlanFeaturesCard", () => {
     const farmOn = await screen.findByRole("button", { name: "Print farm: On" });
     expect(farmOn.getAttribute("aria-pressed")).toBe("true");
 
-    // Switch to Plan 2 using the SAME QueryClient
     rerender(
       <QueryClientProvider client={queryClient}>
         <PlanFeaturesCard profileId={2} />
@@ -305,14 +304,12 @@ describe("PlanFeaturesCard", () => {
     const ordersOn = await screen.findByRole("button", { name: "Orders: On" });
     expect(ordersOn.getAttribute("aria-pressed")).toBe("true");
 
-    // Mutating Plan 2
     const bambuOn = screen.getByRole("button", { name: "Bambu printers: On" });
     fireEvent.click(bambuOn);
 
     await waitFor(() => {
       expect(state.patchCalls).toContainEqual({ profileId: 2, patch: { bambu: true } });
     });
-    // No patch was made for profileId: 1
     expect(state.patchCalls.filter((c) => c.profileId === 1)).toEqual([]);
   });
 
@@ -355,14 +352,12 @@ describe("PlanFeaturesCard", () => {
     const farmOn = await screen.findByRole("button", { name: "Print farm: On" });
     expect(farmOn.getAttribute("aria-pressed")).toBe("true");
 
-    // Initiate mutation on Plan 1
     const bambuOn = screen.getByRole("button", { name: "Bambu printers: On" });
     fireEvent.click(bambuOn);
 
     await waitFor(() => expect(bambuOn).toHaveProperty("disabled", true));
     expect(bambuOn.getAttribute("aria-pressed")).toBe("false");
 
-    // Switch to Plan 2 while Plan 1 patch is in flight, sharing SAME QueryClient
     rerender(
       <QueryClientProvider client={queryClient}>
         <PlanFeaturesCard profileId={2} />
@@ -372,7 +367,6 @@ describe("PlanFeaturesCard", () => {
     const ordersOn = await screen.findByRole("button", { name: "Orders: On" });
     expect(ordersOn.getAttribute("aria-pressed")).toBe("true");
 
-    // Now Plan 1's pending patch finishes and resolves with updated.profile_id = 1
     const plan1Updated: PlanFeatures = {
       profile_id: 1,
       overrides: { farm: true, bambu: true },
@@ -386,16 +380,13 @@ describe("PlanFeaturesCard", () => {
     resolvePatchPlan1?.(plan1Updated);
 
     await waitFor(() => {
-      // Query cache for Plan 1 correctly updated by updated.profile_id
       const cachedPlan1 = queryClient.getQueryData<PlanFeatures>(queryKeys.planFeatures(1));
       expect(cachedPlan1?.overrides.bambu).toBe(true);
-      // Query cache for Plan 2 remained intact
       const cachedPlan2 = queryClient.getQueryData<PlanFeatures>(queryKeys.planFeatures(2));
       expect(cachedPlan2?.overrides.orders).toBe(true);
       expect(cachedPlan2?.overrides.bambu).toBeUndefined();
     });
 
-    // Plan 2 UI still displays Plan 2 choices
     expect(ordersOn.getAttribute("aria-pressed")).toBe("true");
   });
 });
