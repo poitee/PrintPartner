@@ -508,6 +508,12 @@ impl StorageLease {
     pub fn allow_drop_cleanup(&mut self) {
         self.release_allowed = true;
     }
+    /// A failed step reports `ownership_retained` and keeps this lease's lock and
+    /// guard for `retry_failed_release`. That flag does not prove the OS lock was
+    /// reacquired. A missing shared lease name does not prove its directory was
+    /// deleted, so after external removal or relocation every release fails until
+    /// the original name returns or this process exits. A successor published at
+    /// that name in the meantime is not distinguished from the original.
     pub fn release(mut self) -> LeaseRelease {
         self.release_allowed = false;
         #[cfg(test)]
