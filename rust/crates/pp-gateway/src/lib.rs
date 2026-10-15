@@ -697,6 +697,26 @@ async fn handle(
         );
     }
     if operation.owner == Owner::Rust {
+        if matches!(path.as_str(), "/legal/summary" | "/api/v1/legal/summary")
+            && matches!(request.method().as_str(), "GET" | "HEAD")
+        {
+            let document =
+                include_str!("../../../../web/apps/server/src/data/legal/LICENSE-SUMMARY.md");
+            let body = if request.method() == "HEAD" {
+                Body::empty()
+            } else {
+                Body::from(document)
+            };
+            let mut response = Response::new(body);
+            response.headers_mut().insert(
+                "content-type",
+                HeaderValue::from_static("text/plain; charset=utf-8"),
+            );
+            response
+                .headers_mut()
+                .insert("content-length", HeaderValue::from(document.len()));
+            return response;
+        }
         let mut response = (
             StatusCode::SERVICE_UNAVAILABLE,
             axum::Json(serde_json::json!({

@@ -457,3 +457,239 @@ async fn ticket_t_3_drain_runtime_forced_compat_refuses_cutover() {
         json!({"case":"forced_compat", "shutdown":shutdown, "cutover":cutover, "elapsed_ms":elapsed.as_millis(), "old_child_absent":true})
     );
 }
+
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn ticket_t_3_drain_legal_summary_alias_parity() {
+    let Some(data) = isolated_case("ticket_t_3_drain_legal_summary_alias_parity", true).await
+    else {
+        return;
+    };
+    const LEGAL: &str = "http:GET /legal/summary current";
+    let mut runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    let cookie = bootstrap(&mut runtime).await;
+    let mut fixtures = Vec::new();
+    for method in ["GET", "HEAD"] {
+        for path in ["/legal/summary", "/api/v1/legal/summary"] {
+            let (status, headers, body) = request(
+                runtime.origin(),
+                path,
+                method,
+                Some(&cookie),
+                None,
+                None,
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(headers["content-type"], "text/plain; charset=utf-8");
+            assert_eq!(
+                headers["content-length"]
+                    .to_str()
+                    .unwrap()
+                    .parse::<usize>()
+                    .unwrap(),
+                include_bytes!("../../../../../web/apps/server/src/data/legal/LICENSE-SUMMARY.md")
+                    .len()
+            );
+            if method == "GET" {
+                assert_eq!(
+                    body,
+                    include_bytes!(
+                        "../../../../../web/apps/server/src/data/legal/LICENSE-SUMMARY.md"
+                    )
+                );
+            } else {
+                assert!(body.is_empty());
+            }
+            fixtures.push((method, path, status, headers, body));
+        }
+    }
+    println!("legal_summary Node fixtures: 4 passed; 0 failed");
+    let failed = json!({"schema":"pp-operation-parity-v1", "operation":LEGAL,
+        "manifest_sha256":pp_gateway::ownership::manifest::admit_bundled_manifest().unwrap().digest(),
+        "fixtures":4,"passed":3,"failed":1}).to_string();
+    let (returned, refusal) = *runtime
+        .shutdown_with_cutover(LEGAL, &failed)
+        .await
+        .expect_err("failed parity must not cut over");
+    assert!(matches!(refusal, CutoverRefusal::ParityFailures { .. }));
+    assert!(!data.join(CUTOVER_FILE).exists());
+    let child = pid(&returned);
+    // A separate gateway with no compat endpoint probes the Rust candidate.
+    // Its test authority never changes the running desktop's ownership record.
+    let candidate_data = data.join("parity-candidate");
+    fs::create_dir(&candidate_data).unwrap();
+    let index = pp_gateway::ownership::manifest::admit_bundled_manifest().unwrap();
+    let candidate_receipt = json!({"schema":"pp-operation-parity-v1", "operation":LEGAL,
+        "manifest_sha256":index.digest(),"fixtures":1,"passed":1,"failed":0})
+    .to_string();
+    let candidate_plan = pp_gateway::ownership::cutover::plan(
+        Some(&index),
+        &pp_gateway::ownership::cutover::OperationOwners::node_only(),
+        LEGAL,
+        &candidate_receipt,
+    )
+    .unwrap();
+    assert!(matches!(
+        candidate_plan.commit(
+            &candidate_data,
+            pp_gateway::ownership::cutover::DrainEvidence {
+                tracked_idle: true,
+                gateway_idle: true,
+                compat: Some(CompatExit::Graceful),
+            }
+        ),
+        pp_gateway::ownership::cutover::CutoverReceipt::Committed { .. }
+    ));
+    let (owners, _) =
+        pp_gateway::ownership::cutover::recover(&candidate_data, Some(&index)).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut candidate = pp_gateway::Gateway::start(
+        listener,
+        PathBuf::new(),
+        pp_compat::CompatHandle::unpublished(),
+        &owners,
+    )
+    .unwrap();
+    let target = candidate.take_launch_target().unwrap().into_url();
+    let (status, headers, _) = request(
+        candidate.origin(),
+        target.strip_prefix(candidate.origin()).unwrap(),
+        "GET",
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let cookie = headers["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    for (method, path, expected_status, expected_headers, expected_body) in &fixtures {
+        let (status, headers, body) = request(
+            candidate.origin(),
+            path,
+            method,
+            Some(cookie),
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(status, *expected_status, "Rust candidate {method} {path}");
+        for header in ["content-type", "content-length"] {
+            assert_eq!(
+                headers.get(header),
+                expected_headers.get(header),
+                "candidate {method} {path} {header}"
+            );
+        }
+        assert_eq!(&body, expected_body, "candidate {method} {path}");
+    }
+    candidate.stop().await.unwrap();
+    assert!(!data.join(CUTOVER_FILE).exists());
+    println!(
+        "legal_summary Node/Rust HTTP parity: 4 passed; 0 failed; desktop authority still Node"
+    );
+    let passed = json!({"schema":"pp-operation-parity-v1", "operation":LEGAL,
+        "manifest_sha256":pp_gateway::ownership::manifest::admit_bundled_manifest().unwrap().digest(),
+        "fixtures":fixtures.len(),"passed":fixtures.len(),"failed":0}).to_string();
+    let (shutdown, cutover) = returned
+        .shutdown_with_cutover(LEGAL, &passed)
+        .await
+        .unwrap_or_else(|error| panic!("{:?}", error.1));
+    assert_clean(&shutdown, child);
+    assert!(matches!(
+        cutover,
+        pp_gateway::ownership::cutover::CutoverReceipt::Committed {
+            participants: 4,
+            ..
+        }
+    ));
+    let record = fs::read(data.join(CUTOVER_FILE)).unwrap();
+    for restart in 1..=2 {
+        let mut runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+        let child = pid(&runtime);
+        let cookie = bootstrap(&mut runtime).await;
+        for (method, path, expected_status, expected_headers, expected_body) in &fixtures {
+            struct Resume(u32);
+            impl Drop for Resume {
+                fn drop(&mut self) {
+                    unsafe { libc::kill(self.0 as i32, libc::SIGCONT) };
+                }
+            }
+            assert_eq!(unsafe { libc::kill(child as i32, libc::SIGSTOP) }, 0);
+            let resume = Resume(child);
+            let response = tokio::time::timeout(
+                Duration::from_secs(5),
+                request(
+                    runtime.origin(),
+                    path,
+                    method,
+                    Some(&cookie),
+                    None,
+                    None,
+                    None,
+                ),
+            )
+            .await;
+            drop(resume);
+            let (status, headers, body) =
+                response.expect("Rust alias must not wait for stopped Node");
+            assert_eq!(status, *expected_status, "Rust alias {method} {path}");
+            for header in ["content-type", "content-length"] {
+                assert_eq!(
+                    headers.get(header),
+                    expected_headers.get(header),
+                    "{method} {path} {header}"
+                );
+            }
+            assert_eq!(&body, expected_body, "{method} {path}");
+        }
+        assert_clean(&runtime.shutdown().await, child);
+        assert_eq!(fs::read(data.join(CUTOVER_FILE)).unwrap(), record);
+        println!(
+            "{}",
+            json!({"case":"legal_summary_parity","restart":restart,"aliases":4,"passed":4,"failed":0,"node_stopped_during_requests":true,"authority_unchanged":true})
+        );
+    }
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn ticket_t_3_drain_legal_summary_flag_off() {
+    let Some(data) = isolated_case("ticket_t_3_drain_legal_summary_flag_off", false).await else {
+        return;
+    };
+    let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    let child = pid(&runtime);
+    let (mut runtime, refusal) = *runtime
+        .shutdown_with_cutover("http:GET /legal/summary current", "{}")
+        .await
+        .expect_err("flag is off");
+    assert_eq!(refusal, CutoverRefusal::FlagOff);
+    assert!(!data.join(CUTOVER_FILE).exists());
+    let cookie = bootstrap(&mut runtime).await;
+    let (status, _, body) = request(
+        runtime.origin(),
+        "/api/v1/legal/summary",
+        "GET",
+        Some(&cookie),
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body,
+        include_bytes!("../../../../../web/apps/server/src/data/legal/LICENSE-SUMMARY.md")
+    );
+    assert_clean(&runtime.shutdown().await, child);
+    println!("legal_summary flag_off: refused cutover; Node alias remains 200");
+}
