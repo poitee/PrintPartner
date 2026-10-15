@@ -324,6 +324,7 @@ impl StorageLease {
         #[cfg(test)]
         tests::replace_directory_during_lock(data_dir, 1)?;
         admitted.validate_identity()?;
+        validate_resolved_ancestors(data_dir, false)?;
         let lock_path = data_dir.join(".desktop.lock");
         #[cfg(test)]
         tests::replace_directory_during_lock(data_dir, 4)?;

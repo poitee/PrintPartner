@@ -229,7 +229,7 @@ Store admission checks permissions on an open directory descriptor and holds it 
 
 Lease acquisition keeps that descriptor through OS-lock acquisition and opens `.desktop.lock` relative to it. It rechecks directory identity and permissions before opening the lock, before locking, and after locking, before ownership marker access. An observed replacement fails with `Data directory was replaced`. A lock created during a replacement race belongs to the admitted directory; refusal closes the lock without path-based cleanup.
 
-The standalone Rust writer retains the same admitted descriptor through its first read-only database preflight and into lease acquisition. It rechecks identity and permissions immediately before preflight, refusing an observed replacement before database capture, temporary-copy creation or SQLite open.
+The standalone Rust writer retains the same admitted descriptor through its first read-only database preflight and into lease acquisition. It rechecks identity and permissions immediately before preflight, refusing an observed replacement before database capture, temporary-copy creation or SQLite open. It rechecks resolved ancestor permissions after preflight, before lock creation.
 
 These Unix checks remain snapshots, not path confinement. Replacement during preflight capture or after the OS-lock checkpoints, transient replacement restored between checks, ancestor replacement, ACL policy, standalone Node admission, and Windows runtime permission policy remain open.
 
