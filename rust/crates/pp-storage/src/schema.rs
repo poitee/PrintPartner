@@ -54,13 +54,21 @@ pub(crate) fn preflight(
     #[cfg(test)]
     PREFLIGHT_CALLS.update(|calls| calls + 1);
     let marker = path.parent().unwrap().join(".desktop-owner.json");
+    #[cfg(test)]
+    let owner_checkpoint = std::cell::Cell::new(3);
     let check_owner = || -> Result<()> {
         validate_directory()?;
+        #[cfg(test)]
+        owner_checkpoint.update(|checkpoint| checkpoint + 1);
+        #[cfg(test)]
+        capture_tests::transient_swap(path, owner_checkpoint.get(), false)?;
         let blocked = if owned {
             Ok(false)
         } else {
             crate::lease::prior_owner_blocks_unowned(&marker)
         };
+        #[cfg(test)]
+        capture_tests::transient_swap(path, owner_checkpoint.get(), true)?;
         validate_directory()?;
         ensure!(!blocked?, "Data directory already owned");
         Ok(())
@@ -804,6 +812,69 @@ mod capture_tests {
             TRANSIENT_SWAP.set(Some((checkpoint, true)));
         }
         Ok(())
+    }
+
+    #[test]
+    fn ticket_t_12_preflight_marker_ignores_transient_directory_swap() {
+        for checkpoint in [4, 5] {
+            for live in [false, true] {
+                let path = std::env::temp_dir().join(format!(
+                    "pp-marker-descriptor-{}",
+                    hex::encode(rand::random::<[u8; 8]>())
+                ));
+                let admitted = crate::lease::admit_directory(&path).unwrap();
+                let conn = Connection::open(path.join("print-partner.db")).unwrap();
+                conn.execute_batch("CREATE TABLE capture_fixture(value TEXT);")
+                    .unwrap();
+                drop(conn);
+                let replacement = path.with_extension("replacement");
+                std::fs::DirBuilder::new()
+                    .mode(0o700)
+                    .create(&replacement)
+                    .unwrap();
+                let marker = |is_live| {
+                    serde_json::json!({
+                        "pid": if is_live { std::process::id() } else { i32::MAX as u32 },
+                        "kind": "standalone"
+                    })
+                    .to_string()
+                };
+                let original = marker(live);
+                let decoy = marker(!live);
+                if checkpoint == 4 || !live {
+                    std::fs::write(path.join(".desktop-owner.json"), &original).unwrap();
+                }
+                std::fs::write(replacement.join(".desktop-owner.json"), &decoy).unwrap();
+                let before = std::fs::read(path.join("print-partner.db")).unwrap();
+                TRANSIENT_SWAP.set(Some((checkpoint, false)));
+                let result = admitted.preflight();
+                let swap = TRANSIENT_SWAP.take();
+                assert_eq!(swap, None, "marker checkpoint was not reached");
+                assert_eq!(
+                    std::fs::read(path.join("print-partner.db")).unwrap(),
+                    before
+                );
+                assert_eq!(
+                    std::fs::read_to_string(replacement.join(".desktop-owner.json")).unwrap(),
+                    decoy
+                );
+                assert!(!path.join(".desktop.lock").exists());
+                assert!(!path.join(".desktop-lease").exists());
+                std::fs::remove_dir_all(&path).unwrap();
+                std::fs::remove_dir_all(replacement).unwrap();
+                if live && checkpoint == 4 {
+                    assert_eq!(
+                        result.unwrap_err().to_string(),
+                        "Data directory already owned"
+                    );
+                } else {
+                    assert!(
+                        result.is_ok(),
+                        "checkpoint {checkpoint}, live {live}: {result:?}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
