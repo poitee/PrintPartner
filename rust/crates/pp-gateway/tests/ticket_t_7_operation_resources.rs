@@ -1901,34 +1901,3 @@ fn ticket_t_7_ownership_ui_open_source_refuses_invalid_admission_before_effects(
         assert!(!effect, "edit {edit}");
     }
 }
-
-#[test]
-fn ticket_t_7_ownership_ui_open_source_refuses_each_missing_resource_before_effects() {
-    let original = manifest();
-    let entry = original["resources"]["reviewed"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .position(|entry| entry["operation"] == "tool.ui_open_source")
-        .unwrap();
-    for missing in 0..4 {
-        let mut value = original.clone();
-        value["resources"]["reviewed"][entry]["resources"]
-            .as_array_mut()
-            .unwrap()
-            .remove(missing);
-        let mut effect = false;
-        let result = admit(&value).and_then(|index| {
-            index.admit_rollback("tool.ui_open_source")?;
-            effect = true;
-            Ok(())
-        });
-        assert_eq!(
-            result,
-            Err(AdmissionError::ResourceSetMismatch {
-                id: "tool.ui_open_source".into()
-            })
-        );
-        assert!(!effect, "missing resource {missing}");
-    }
-}

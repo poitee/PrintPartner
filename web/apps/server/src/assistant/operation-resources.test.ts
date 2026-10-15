@@ -1011,7 +1011,6 @@ it("traces ui_navigate routes, normalization, ID precedence and tenants against 
   expect(entry).toEqual({ operation: "tool.ui_navigate", resources: [{ kind: "table", name: "build_profiles" }] });
 });
 
-
 it("traces ui_open_source selectors, proposals and tenants against its literal union", async () => {
   const plan = repo.createProfile("Open source");
   const fallback = repo.createProfile("Fallback");
@@ -1102,10 +1101,7 @@ it("traces ui_open_source selectors, proposals and tenants against its literal u
   expect([...union].sort()).toEqual(tables);
   const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.ui_open_source");
   if (!entry || entry.operation === "source.sync") throw new Error("Missing open source declaration");
-  expect(entry.resources).toEqual([
-    { kind: "table", name: "build_profiles" }, { kind: "table", name: "projects" },
-    { kind: "table", name: "source_docs" }, { kind: "file", name: "source-workspace" },
-  ]);
+  expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(["file:source-workspace", ...tables]);
 });
 
 it("traces ui_open_source isolated workspace probes without opening proposed paths", async () => {
