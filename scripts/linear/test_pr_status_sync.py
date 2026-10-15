@@ -92,8 +92,22 @@ class SyncTest(unittest.TestCase):
         sync.apply_pr(pr(state="MERGED"))
         sync.apply_pr(pr(state="MERGED"))
         self.assertEqual(self.issues["GRE-1"]["state"]["name"], "In Review")
-        self.assertEqual(self.comments, [{"issueId": "1", "body": "[pr-status-sync] slice PR #1 merged; still open: #2."}])
+        self.assertEqual(self.comments, [{"issueId": "1", "body": "[pr-status-sync] slice PR #1 merged ('Refs' only); next slice pending. Final slice PR must say 'Fixes GRE-1'."}])
         self.assertEqual([query for query, _ in self.api.call_args_list if "issueUpdate(" in query], [])
+
+    def test_slice_comment_is_stable_when_other_open_prs_change(self):
+        self.issues["GRE-1"] = ticket(state="In Review")
+        for others in ([pr(number=2), pr(number=3)], [pr(number=3)], []):
+            sync._prs = others
+            sync.apply_pr(pr(state="MERGED"))
+        self.assertEqual(self.issues["GRE-1"]["state"]["name"], "In Progress")
+        self.assertEqual(len(self.comments), 1)
+        sync.apply_pr(pr(number=4, state="MERGED"))
+        self.assertEqual(len(self.comments), 2)
+        sync._prs = [pr(number=5)]
+        sync.apply_pr(pr(number=4, state="MERGED"))
+        self.assertEqual(len(self.comments), 2)
+        self.assertEqual(self.issues["GRE-1"]["state"]["name"], "In Review")
 
     def test_refs_slice_does_not_revive_todo_or_backlog(self):
         for state in ("Todo", "Backlog"):

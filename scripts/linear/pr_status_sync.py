@@ -147,12 +147,13 @@ def apply_pr(pr):
         if pr["state"] == "OPEN":
             move(iss, "In Review", f"PR #{n} open: {pr['title'][:80]}")
         elif pr["state"] == "MERGED":
+            slice_comment = f"slice PR #{n} merged ('Refs' only); next slice pending. Final slice PR must say 'Fixes {ident}'."
             if ident in closing:
                 move(iss, "Done", f"PR #{n} merged with 'Fixes {ident}'.")
             elif other_open(ident, n):
-                move(iss, "In Review", f"slice PR #{n} merged; still open: #{other_open(ident, n)[0]}.", record_unchanged=True)
-            elif iss["state"]["name"] == "In Review":  # never pull Todo/Backlog back up
-                move(iss, "In Progress", f"slice PR #{n} merged ('Refs' only); next slice pending. Final slice PR must say 'Fixes {ident}'.")
+                move(iss, "In Review", slice_comment, record_unchanged=True)
+            elif iss["state"]["name"] in {"In Review", "In Progress"}:  # never pull Todo/Backlog back up
+                move(iss, "In Progress", slice_comment, record_unchanged=True)
         elif pr["state"] == "CLOSED" and iss["state"]["name"] == "In Review" and not other_open(ident, n):
             move(iss, "In Progress", f"PR #{n} closed without merge; no other open PR.")
 
