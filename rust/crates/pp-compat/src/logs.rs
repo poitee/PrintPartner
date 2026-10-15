@@ -1,8 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::{
+    ffi::CString,
     fs::{File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
-    os::unix::fs::OpenOptionsExt,
+    os::{
+        fd::{AsRawFd, FromRawFd},
+        unix::fs::OpenOptionsExt,
+    },
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
@@ -139,19 +143,30 @@ pub fn recent_diagnostics(data: &Path) -> std::io::Result<String> {
 #[derive(Clone)]
 pub(crate) struct Logs(Arc<Mutex<LogFile>>);
 struct LogFile {
-    directory: PathBuf,
+    directory: File,
     file: File,
     day: u64,
     bytes: u64,
 }
 
-fn open_log(path: &Path) -> std::io::Result<File> {
-    let file = OpenOptions::new()
-        .append(true)
-        .create(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)?;
+fn open_log(directory: &File) -> std::io::Result<File> {
+    let fd = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            c"desktop.jsonl".as_ptr(),
+            libc::O_WRONLY
+                | libc::O_APPEND
+                | libc::O_CREAT
+                | libc::O_CLOEXEC
+                | libc::O_NOFOLLOW
+                | libc::O_NONBLOCK,
+            0o600 as libc::c_uint,
+        )
+    };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let file = unsafe { File::from_raw_fd(fd) };
     if !file.metadata()?.is_file() {
         return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
     }
@@ -161,7 +176,11 @@ fn open_log(path: &Path) -> std::io::Result<File> {
 impl Logs {
     pub(crate) fn open(directory: PathBuf) -> std::io::Result<Self> {
         std::fs::create_dir_all(&directory)?;
-        let file = open_log(&directory.join("desktop.jsonl"))?;
+        let directory = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+            .open(directory)?;
+        let file = open_log(&directory)?;
         let bytes = file.metadata()?.len();
         let day = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -191,19 +210,26 @@ impl Logs {
         row.push('\n');
         if log.day != now / 86400 || log.bytes + row.len() as u64 > 10 * 1024 * 1024 {
             let rotate = (|| -> std::io::Result<()> {
-                open_log(&log.directory.join("desktop.jsonl"))?;
+                open_log(&log.directory)?;
+                let directory = log.directory.as_raw_fd();
                 for index in (1..=6).rev() {
-                    let source = if index == 1 {
-                        log.directory.join("desktop.jsonl")
+                    let source = CString::new(if index == 1 {
+                        "desktop.jsonl".to_owned()
                     } else {
-                        log.directory.join(format!("desktop.{}.jsonl", index - 1))
-                    };
-                    let target = log.directory.join(format!("desktop.{index}.jsonl"));
-                    if source.exists() {
-                        std::fs::rename(source, target)?;
+                        format!("desktop.{}.jsonl", index - 1)
+                    })?;
+                    let target = CString::new(format!("desktop.{index}.jsonl"))?;
+                    if unsafe {
+                        libc::renameat(directory, source.as_ptr(), directory, target.as_ptr())
+                    } != 0
+                    {
+                        let error = std::io::Error::last_os_error();
+                        if error.kind() != std::io::ErrorKind::NotFound {
+                            return Err(error);
+                        }
                     }
                 }
-                log.file = open_log(&log.directory.join("desktop.jsonl"))?;
+                log.file = open_log(&log.directory)?;
                 log.bytes = 0;
                 log.day = now / 86400;
                 Ok(())
