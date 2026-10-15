@@ -38,7 +38,14 @@ impl Drop for PreflightCopy {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    pub(crate) static PREFLIGHT_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub(crate) fn preflight(path: &Path, owned: bool) -> Result<u64> {
+    #[cfg(test)]
+    PREFLIGHT_CALLS.update(|calls| calls + 1);
     let marker = path.parent().unwrap().join(".desktop-owner.json");
     ensure!(
         owned || !crate::lease::prior_owner_blocks_unowned(&marker)?,

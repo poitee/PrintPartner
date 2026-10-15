@@ -89,6 +89,8 @@ fn admit_directory(path: &Path) -> Result<AdmittedDirectory> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
     }
+    #[cfg(test)]
+    tests::replace_directory_before_writer_preflight(directory)?;
     Ok(admitted)
 }
 
@@ -205,6 +207,7 @@ thread_local! {
     static FAIL_MARKER_WRITE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static REMOVE_MARKER_BEFORE_READ: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static REPLACE_LOCK_BEFORE_VALIDATION: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+    static REPLACE_DIRECTORY_BEFORE_WRITER_PREFLIGHT: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
     static REPLACE_DIRECTORY_DURING_LOCK: std::cell::Cell<(u8, u8)> = const { std::cell::Cell::new((0, 0)) };
     static REPLACE_DIRECTORY_BEFORE_CANONICALIZATION: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
 }
@@ -622,6 +625,73 @@ mod tests {
         assert_eq!(std::fs::read_dir(&path).unwrap().count(), 0);
         std::fs::remove_dir_all(retired).unwrap();
         std::fs::remove_dir(path).unwrap();
+    }
+
+    pub(super) fn replace_directory_before_writer_preflight(path: &Path) -> Result<()> {
+        let replacement = REPLACE_DIRECTORY_BEFORE_WRITER_PREFLIGHT.take();
+        if replacement != 0 {
+            REPLACE_DIRECTORY_BEFORE_CANONICALIZATION.set(replacement);
+            replace_directory_before_canonicalization(path)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn ticket_t_12_writer_preflight_rejects_replaced_admitted_directory() {
+        for replacement in [1, 2] {
+            assert_writer_preflight_refuses(replacement, "Data directory was replaced");
+        }
+    }
+
+    #[test]
+    fn ticket_t_12_writer_preflight_rejects_changed_admitted_permissions() {
+        assert_writer_preflight_refuses(3, "Unsafe data directory permissions");
+    }
+
+    fn assert_writer_preflight_refuses(replacement: u8, expected: &str) {
+        let path = directory();
+        let files: [(&str, &[u8]); 5] = [
+            (
+                ".desktop-owner.json",
+                br#"{"pid":2147483647,"kind":"standalone"}"#,
+            ),
+            ("print-partner.db", b"never open"),
+            ("print-partner.db-wal", b"copied wal"),
+            ("print-partner.db-journal", b"copied journal"),
+            ("desktop.toml", b"port = 45678\n"),
+        ];
+        for (name, bytes) in files {
+            std::fs::write(path.join(name), bytes).unwrap();
+        }
+        crate::schema::PREFLIGHT_CALLS.set(0);
+        REPLACE_DIRECTORY_BEFORE_WRITER_PREFLIGHT.set(replacement);
+        let result = crate::WriterOwner::open(&path, crate::Limits::default());
+        let error = result.err().map(|error| error.to_string());
+        let preserved = if replacement == 3 {
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+            path.clone()
+        } else {
+            path.with_extension("retired")
+        };
+        for (name, bytes) in files {
+            assert_eq!(std::fs::read(preserved.join(name)).unwrap(), bytes);
+        }
+        assert_eq!(std::fs::read_dir(&preserved).unwrap().count(), files.len());
+        if replacement != 3 {
+            assert_eq!(std::fs::read_dir(&path).unwrap().count(), 0);
+        }
+        std::fs::remove_dir_all(preserved).unwrap();
+        if replacement == 2 {
+            std::fs::remove_file(&path).unwrap();
+            std::fs::remove_dir_all(path.with_extension("replacement")).unwrap();
+        } else if replacement == 1 {
+            std::fs::remove_dir_all(path).unwrap();
+        }
+        assert_eq!(
+            error.as_deref(),
+            Some(expected),
+            "replacement {replacement}"
+        );
     }
 
     pub(super) fn replace_directory_during_lock(path: &Path, checkpoint: u8) -> Result<()> {
