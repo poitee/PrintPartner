@@ -22,8 +22,13 @@ export const queryKeys = {
   printerCheckoffLinks: ["printerCheckoffLinks"] as const,
   unattributedPrints: ["unattributedPrints"] as const,
   roleFilaments: (profileId: number) => ["roleFilaments", profileId] as const,
-  filamentCatalog: ["filamentCatalog"] as const,
-  spoolmanSpools: (integrationId: string) => ["spoolmanSpools", integrationId] as const,
+  filamentCatalogs: ["filamentCatalog"] as const,
+  filamentCatalog: (profileId?: number | null) =>
+    profileId != null ? (["filamentCatalog", profileId] as const) : (["filamentCatalog"] as const),
+  spoolmanSpools: (integrationId: string, profileId?: number | null) =>
+    profileId != null
+      ? (["spoolmanSpools", integrationId, profileId] as const)
+      : (["spoolmanSpools", integrationId] as const),
   workflowGuide: ["workflowGuide"] as const,
   dateFormatSetting: ["dateFormatSetting"] as const,
   buildTrackingSettings: ["buildTrackingSettings"] as const,

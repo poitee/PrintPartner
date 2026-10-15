@@ -106,9 +106,40 @@ export async function parseColorPreset(file: File): Promise<ColorPreset> {
  * Returns the number of roles applied. A catalog color id takes precedence over
  * a custom hex, mirroring how the role picker stores colors.
  */
-export async function applyColorPreset(profileId: number, preset: ColorPreset): Promise<number> {
+export async function applyColorPreset(
+  profileId: number,
+  preset: ColorPreset,
+  options?: {
+    isCurrent?: () => boolean;
+    allowSpoolman?: () => boolean;
+  },
+): Promise<number> {
+  const hasSpoolmanAssignments = preset.roles.some(
+    (role) =>
+      Boolean(role.filament_color_id?.trim().startsWith("spoolman:")) ||
+      Boolean(role.spoolman_spool_id?.trim()),
+  );
+
+  if (options?.isCurrent && !options.isCurrent()) {
+    throw new Error("Plan switch or permission changed.");
+  }
+
+  if (hasSpoolmanAssignments && options?.allowSpoolman && !options.allowSpoolman()) {
+    throw new Error("Spoolman integration is disabled.");
+  }
+
   let applied = 0;
   for (const role of preset.roles) {
+    if (options?.isCurrent && !options.isCurrent()) {
+      throw new Error("Plan switch or permission changed.");
+    }
+    const hasSpoolman =
+      Boolean(role.filament_color_id?.trim().startsWith("spoolman:")) ||
+      Boolean(role.spoolman_spool_id?.trim());
+    if (hasSpoolman && options?.allowSpoolman && !options.allowSpoolman()) {
+      throw new Error("Spoolman integration is disabled.");
+    }
+
     await saveRoleFilament(profileId, {
       role: role.role,
       filament_color_id: role.filament_color_id ?? null,

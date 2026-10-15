@@ -292,8 +292,12 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
     toggleUnit,
     busyPartId,
   } = usePlanWorkspace();
-  const { configured: spoolmanConfigured, integrationId } = useSpoolmanEnabled();
-  const spoolsQuery = useSpoolmanSpoolsQuery(spoolmanConfigured ? integrationId : null);
+  const profileId = includedReview.profile_id;
+  const { configured: spoolmanConfigured, integrationId } = useSpoolmanEnabled(profileId);
+  const spoolsQuery = useSpoolmanSpoolsQuery(spoolmanConfigured ? integrationId : null, {
+    profileId,
+    enabled: spoolmanConfigured,
+  });
   const spools = spoolsQuery.data ?? NO_SPOOLS;
   const spoolsLoading = spoolsQuery.isLoading;
   const persisted = useMemo(() => loadPersistedReviewPartsUi(), []);

@@ -3,6 +3,7 @@ import type { ReviewPart } from "../../api/endpoints/planManifests";
 import { useFilamentCatalogQuery } from "../../queries/filaments";
 import { usePatchPartMutation } from "../../queries/planReview";
 import { useRoleFilamentsQuery } from "../../queries/roleFilaments";
+import { useSpoolmanWorkflowAccess } from "../../hooks/useSpoolmanWorkflowAccess";
 import { catalogColorGroups } from "../FilamentSwatch";
 import { Button } from "../ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
@@ -17,7 +18,8 @@ export default function PartColorDialog({ part, profileId, onClose }: {
   const id = useId();
   const mutation = usePatchPartMutation(profileId);
   const rolesQuery = useRoleFilamentsQuery(profileId);
-  const catalogQuery = useFilamentCatalogQuery();
+  const catalogQuery = useFilamentCatalogQuery({ profileId });
+  const spoolmanAccess = useSpoolmanWorkflowAccess(profileId);
   const options = rolesQuery.data && catalogQuery.data
     ? { roles: rolesQuery.data, catalog: catalogQuery.data }
     : null;
@@ -29,9 +31,13 @@ export default function PartColorDialog({ part, profileId, onClose }: {
   const [selection, setSelection] = useState("current");
   const [hex, setHex] = useState(part.filament_hex ?? "#808080");
 
+  const allowedRoles = (options?.roles ?? []).filter(
+    (role) => spoolmanAccess.allowed || !role.filament_color_id?.startsWith("spoolman:"),
+  );
+
   const choices = new Map<string, ColorChoice>();
-  options?.roles.forEach((role, index) => choices.set(`build:${index}`, { colorId: role.filament_color_id, hex: role.filament_custom_hex ?? role.filament_hex }));
-  const groups = catalogColorGroups(options?.catalog ?? null);
+  allowedRoles.forEach((role) => choices.set(`build:${role.role}`, { colorId: role.filament_color_id, hex: role.filament_custom_hex ?? role.filament_hex }));
+  const groups = catalogColorGroups(options?.catalog ?? null).filter((group) => spoolmanAccess.allowed || group.label !== "Spoolman");
   groups.forEach((group) => group.colors.forEach((color) => choices.set(`catalog:${color.id}`, { colorId: color.id, hex: null })));
   const selected = choices.get(selection);
   const customValid = /^#?[0-9a-fA-F]{6}$/.test(hex.trim());
@@ -39,6 +45,7 @@ export default function PartColorDialog({ part, profileId, onClose }: {
   const save = async () => {
     const choice = selection === "custom" ? { colorId: null, hex: hex.trim() } : selected;
     if (!choice) return;
+    if (choice.colorId?.startsWith("spoolman:") && !spoolmanAccess.currentAccessAllowed()) return;
     try {
       await mutation.mutateAsync({ partId: part.id, body: {
         filament_color_id: choice.colorId,
@@ -60,9 +67,9 @@ export default function PartColorDialog({ part, profileId, onClose }: {
         <label htmlFor={`${id}-choice`} className="block text-sm font-medium">Part color</label>
         <select id={`${id}-choice`} className="w-full min-w-0 rounded border bg-background p-2" value={selection} onChange={(event) => setSelection(event.target.value)}>
           <option value="current">Keep current color</option>
-          <optgroup label="Build colors">
-            {options?.roles.map((role, index) => <option key={role.role} value={`build:${index}`}>{role.role}: {role.filament_display || role.filament_hex || "Unassigned"}</option>)}
-          </optgroup>
+          {allowedRoles.length > 0 && <optgroup label="Build colors">
+            {allowedRoles.map((role) => <option key={role.role} value={`build:${role.role}`}>{role.role}: {role.filament_display || role.filament_hex || "Unassigned"}</option>)}
+          </optgroup>}
           {groups.map((group) => <optgroup key={group.label} label={group.label}>{group.colors.map((color) => <option key={color.id} value={`catalog:${color.id}`}>{color.combo_label || color.display_name}</option>)}</optgroup>)}
           <option value="custom">Custom color…</option>
         </select>

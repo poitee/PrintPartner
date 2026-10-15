@@ -1,5 +1,7 @@
+import { useMemo } from "react";
 import type { FilamentCatalog } from "../api/endpoints/filaments";
 import { useFilamentCatalogQuery } from "../queries/filaments";
+import { useSpoolmanWorkflowAccess } from "./useSpoolmanWorkflowAccess";
 
 type SpoolmanCatalogState = {
   catalog: FilamentCatalog | null;
@@ -28,12 +30,28 @@ export function isSpoolmanIntegrationConfigured(
   return status !== "disabled" && status !== "not_found";
 }
 
-export function useSpoolmanEnabled(): SpoolmanCatalogState {
-  const catalogQuery = useFilamentCatalogQuery();
-  const catalog = catalogQuery.data ?? null;
-  const integrationId = catalog?.default_spoolman_integration_id?.trim() ?? null;
-  const enabled = isSpoolmanIntegrationActive(catalog);
-  const configured = isSpoolmanIntegrationConfigured(catalog);
+export function useSpoolmanEnabled(profileId: number): SpoolmanCatalogState {
+  const access = useSpoolmanWorkflowAccess(profileId);
+  const catalogQuery = useFilamentCatalogQuery({ profileId });
+  const rawCatalog = catalogQuery.data ?? null;
+
+  const catalog = useMemo<FilamentCatalog | null>(() => {
+    if (!rawCatalog) return null;
+    if (!access.allowed) {
+      return {
+        ...rawCatalog,
+        spoolman_colors: [],
+        spoolman_status: rawCatalog.spoolman_status === "disabled" ? "disabled" : undefined,
+      };
+    }
+    return rawCatalog;
+  }, [rawCatalog, access.allowed]);
+
+  const integrationId = access.allowed
+    ? (catalog?.default_spoolman_integration_id?.trim() ?? null)
+    : null;
+  const enabled = access.allowed && isSpoolmanIntegrationActive(catalog);
+  const configured = access.allowed && isSpoolmanIntegrationConfigured(catalog);
 
   return { catalog, integrationId, enabled, configured, loading: catalogQuery.isPending };
 }
