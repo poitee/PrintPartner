@@ -386,6 +386,9 @@ for (const name of ['web', 'web-build']) {
   }
   for (const [label, mutate, diagnostic] of [
     ['missing lane', source => delete source.jobs[name], 'INVALID_WEB_NODE_SETUP'],
+    ['conditional lane', source => { source.jobs[name].if = false; }, 'INVALID_WEB_NODE_SETUP'],
+    ['tolerated lane failure', source => { source.jobs[name]['continue-on-error'] = true; }, 'INVALID_WEB_NODE_SETUP'],
+    ['dependent lane', source => { source.jobs[name].needs = ['skipped']; }, 'INVALID_WEB_NODE_SETUP'],
     ['matrix override', source => { source.jobs[name].strategy = { matrix: { node: ['22'] } }; }, 'INVALID_WEB_NODE_SETUP'],
     ['duplicate setup', source => source.jobs[name].steps.push(source.jobs[name].steps[0]), 'INVALID_WEB_NODE_SETUP'],
     ['missing setup', source => source.jobs[name].steps.shift(), 'INVALID_WEB_NODE_SETUP'],

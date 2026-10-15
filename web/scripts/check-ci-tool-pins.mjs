@@ -71,8 +71,9 @@ function checkWebNode(workflow, file) {
     const steps = Array.isArray(job?.steps) ? job.steps : [];
     const setups = steps.filter(step => mapping(step) && typeof step.uses === 'string'
       && step.uses.split('@')[0].toLowerCase() === 'actions/setup-node');
-    if (!mapping(job) || Object.hasOwn(job, 'strategy') || setups.length !== 1) {
-      report(file, path, 'INVALID_WEB_NODE_SETUP', 'expected one setup-node step in each required lane without a strategy override');
+    if (!mapping(job) || ['strategy', 'if', 'needs', 'continue-on-error'].some(key => Object.hasOwn(job, key))
+      || setups.length !== 1) {
+      report(file, path, 'INVALID_WEB_NODE_SETUP', 'expected one setup-node step in each unconditional required lane without strategy or failure overrides');
       continue;
     }
     const setup = setups[0];
