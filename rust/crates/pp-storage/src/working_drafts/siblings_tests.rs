@@ -75,10 +75,12 @@ fn assert_shape_in_any_order(paths: &[&str], expected: &[Expected<'_>]) {
 fn assert_selectable_shape(paths: &[&str], expected: &[Expected<'_>]) {
     for (group, variants) in shape(paths) {
         for (variant, _) in variants {
-            let body = serde_json::to_vec(&serde_json::json!({
+            let body = match serde_json::to_vec(&serde_json::json!({
                 "kit": {"selections": {&group: &variant}}
-            }))
-            .unwrap();
+            })) {
+                Ok(body) => body,
+                Err(error) => panic!("selection request serialization failed: {error}"),
+            };
             let manifest = crate::manifest_options::KitManifest::from_request(&body)
                 .unwrap_or_else(|error| panic!("unselectable {group:?}/{variant:?}: {error:?}"));
             assert_eq!(
