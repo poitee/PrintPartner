@@ -145,7 +145,7 @@ for (const tracked of [false, true, 'symlink']) {
     copyFileSync(cli, join(directory, 'web/scripts/check-ci-tool-pins.mjs'));
     symlinkSync(fileURLToPath(new URL('../node_modules', import.meta.url)), join(directory, 'web/node_modules'));
     writeFileSync(join(directory, '.github/workflows/web-ci.yml'), JSON.stringify(webCI));
-    for (const name of ['integration-smoke', 'pr-evidence']) {
+    for (const name of ['integration-smoke', 'pr-evidence', 'desktop-e2e', 'desktop-webkit']) {
       copyFileSync(fileURLToPath(new URL(`../../.github/workflows/${name}.yml`, import.meta.url)), join(directory, `.github/workflows/${name}.yml`));
     }
     const contracts = join(directory, '.github/workflows/desktop-contracts.yml');
@@ -153,7 +153,7 @@ for (const tracked of [false, true, 'symlink']) {
     else writeFileSync(contracts, desktop());
     for (const args of [
       ['init', '-q'],
-      ['add', '.github/workflows/web-ci.yml', '.github/workflows/integration-smoke.yml', '.github/workflows/pr-evidence.yml'],
+      ['add', '.github/workflows/web-ci.yml', '.github/workflows/integration-smoke.yml', '.github/workflows/pr-evidence.yml', '.github/workflows/desktop-e2e.yml', '.github/workflows/desktop-webkit.yml'],
       ['add', tracked ? '.github/workflows/desktop-contracts.yml' : 'web/scripts/check-ci-tool-pins.mjs'],
       ['-c', 'user.name=CI test', '-c', 'user.email=ci@example.invalid', 'commit', '-qm', 'fixture'],
     ]) {
@@ -438,13 +438,15 @@ test('repository Web CI has exact matching Node pins and runtime checks', t => {
   assert.equal(result.stdout, summary(0, 0, 0));
 });
 
-for (const [filename, name, code, optional] of [
+for (const [filename, name, code, optional, major = 22] of [
   ['integration-smoke.yml', 'postgres', 'INTEGRATION', true],
   ['pr-evidence.yml', 'lint-pr-body', 'EVIDENCE', false],
+  ['desktop-e2e.yml', 'linux-smoke', 'E2E', false],
+  ['desktop-webkit.yml', 'webkit-stl', 'WEBKIT', false, 24],
 ]) {
   const source = () => ({ jobs: { [name]: {
     ...(optional ? { if: "github.event_name != 'workflow_dispatch' || inputs.postgres" } : {}),
-    steps: JSON.parse(JSON.stringify(webCI.jobs.web.steps)),
+    steps: JSON.parse(JSON.stringify(webCI.jobs.web.steps).replaceAll('22.23.3', `${major}.23.3`)),
   } } });
   for (const extension of ['yml', 'yaml', 'YML']) {
     test(`accept exact Node pin in ${filename} as ${extension}`, t => {
@@ -453,7 +455,7 @@ for (const [filename, name, code, optional] of [
       assert.equal(result.stdout, summary(0, 0, 0));
     });
   }
-  for (const version of ['22', '22.23', '22.x', 'lts/*', '^22.23.3', 'v22.23.3', '22.23.3-rc.1', '022.23.3', '24.21.0', '${{ inputs.node }}', 22, null]) {
+  for (const version of ['22', '22.23', '22.x', 'lts/*', '^22.23.3', 'v22.23.3', '22.23.3-rc.1', '022.23.3', ...(major === 22 ? ['24.21.0'] : ['22.23.3', '24', '24.21', '24.x', '024.21.0']), '${{ inputs.node }}', 22, null]) {
     test(`reject ${filename} Node ${JSON.stringify(version)}`, t => {
       const data = source();
       data.jobs[name].steps[0].with['node-version'] = version;
@@ -496,7 +498,7 @@ for (const [filename, name, code, optional] of [
     });
   }
   test(`accept future ${filename} patch with matching assertion`, t => {
-    const result = run(t, JSON.stringify(source()).replaceAll('22.23.3', '22.23.4'), [], filename);
+    const result = run(t, JSON.stringify(source()).replaceAll(`${major}.23.3`, `${major}.23.4`), [], filename);
     assert.equal(result.status, 0, result.stderr);
   });
   test(`repository ${filename} has exact Node pin and runtime assertion`, t => {
