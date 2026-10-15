@@ -1,3 +1,4 @@
+import { hasSpoolmanAssignment, readSpoolmanAccess, spoolmanAccessProblem } from "../lib/spoolman-access.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { join } from "node:path";
 import { z } from "zod";
@@ -621,7 +622,7 @@ export async function registerPlanRoutes(
         thumbsDir: deps.thumbsDir,
         reportTiming: (timings) => request.log.info({ profileId: id, includeExcluded: include_excluded, ...timings }, "Plan review timing"),
         loadFilamentContext: (colorIds) =>
-          preloadSpoolmanForColorIds({ repo: deps.repo, dataDir: deps.dataDir }, colorIds),
+          preloadSpoolmanForColorIds({ repo: deps.repo, dataDir: deps.dataDir, profileId: id }, colorIds),
       });
       if (result.kind === "not_found") {
         return reply.status(404).send({ detail: "Profile not found" });
@@ -663,7 +664,7 @@ export async function registerPlanRoutes(
     const id = Number((request.params as { id: string }).id);
     if (!deps.repo.getOwnedProfileIdentity(id)) return reply.status(404).send({ detail: "Profile not found" });
     const roles = deps.repo.getRoleFilaments(id);
-    await enrichRoleFilamentRows(roles, { repo: deps.repo, dataDir: deps.dataDir });
+    await enrichRoleFilamentRows(roles, { repo: deps.repo, dataDir: deps.dataDir, profileId: id });
     return { roles };
   });
 
@@ -680,6 +681,13 @@ export async function registerPlanRoutes(
     const role = String(body.role ?? "").trim();
     if (!role) return reply.status(400).send({ detail: "role is required" });
     const normalizedRole = normalizePartRole(role);
+    if (hasSpoolmanAssignment(body)) {
+      const access = readSpoolmanAccess(deps.repo, id);
+      if (access.kind !== "allowed") {
+        const problem = spoolmanAccessProblem(access);
+        return reply.status(problem.status).send(problem);
+      }
+    }
     const assignment = completeRoleAssignment(body);
     const snapshot = deps.repo.readAcceptedPlanOperationalSnapshot(id);
     if (snapshot.kind === "empty") {
@@ -690,7 +698,7 @@ export async function registerPlanRoutes(
         spoolman_spool_id: columns.spoolmanSpoolId,
       });
       const roles = deps.repo.getRoleFilaments(id);
-      await enrichRoleFilamentRows(roles, { repo: deps.repo, dataDir: deps.dataDir });
+      await enrichRoleFilamentRows(roles, { repo: deps.repo, dataDir: deps.dataDir, profileId: id });
       return { updated: 0, thumbnails_cleared: 0, roles };
     }
     if (snapshot.kind !== "ready") {
@@ -724,7 +732,7 @@ export async function registerPlanRoutes(
       }
     }
     const roles = deps.repo.getRoleFilaments(id);
-    await enrichRoleFilamentRows(roles, { repo: deps.repo, dataDir: deps.dataDir });
+    await enrichRoleFilamentRows(roles, { repo: deps.repo, dataDir: deps.dataDir, profileId: id });
     return { updated: result.assigned.length, thumbnails_cleared, roles };
   });
 
@@ -736,7 +744,7 @@ export async function registerPlanRoutes(
     const snapshot = deps.repo.readAcceptedPlanOperationalSnapshot(id);
     if (snapshot.kind === "empty") {
       const roles = deps.repo.getRoleFilaments(id);
-      await enrichRoleFilamentRows(roles, { repo: deps.repo, dataDir: deps.dataDir });
+      await enrichRoleFilamentRows(roles, { repo: deps.repo, dataDir: deps.dataDir, profileId: id });
       return { updated: 0, thumbnails_cleared: 0, roles };
     }
     if (snapshot.kind !== "ready") {
@@ -745,6 +753,13 @@ export async function registerPlanRoutes(
       });
     }
     const savedDefaults = loadRoleFilamentDefaults(deps.repo, id);
+    if (Object.values(savedDefaults).some((saved) => hasSpoolmanAssignment(saved))) {
+      const access = readSpoolmanAccess(deps.repo, id);
+      if (access.kind !== "allowed") {
+        const problem = spoolmanAccessProblem(access);
+        return reply.status(problem.status).send(problem);
+      }
+    }
     const expected = acceptedPlanBasis(snapshot.snapshot);
     let updated = 0;
     for (const role of canonicalRoleOrder()) {
@@ -762,7 +777,7 @@ export async function registerPlanRoutes(
       ? clearPlanThumbnailCache(deps.repo, deps.thumbsDir, id)
       : 0;
     const roles = deps.repo.getRoleFilaments(id);
-    await enrichRoleFilamentRows(roles, { repo: deps.repo, dataDir: deps.dataDir });
+    await enrichRoleFilamentRows(roles, { repo: deps.repo, dataDir: deps.dataDir, profileId: id });
     return { updated, thumbnails_cleared, roles };
   });
 
@@ -776,7 +791,7 @@ export async function registerPlanRoutes(
       const filamentContext =
         accepted.kind === "ready"
           ? await preloadSpoolmanForColorIds(
-              { repo: deps.repo, dataDir: deps.dataDir },
+              { repo: deps.repo, dataDir: deps.dataDir, profileId: id },
               accepted.snapshot.parts.map((part) => part.filamentColorId),
             )
           : undefined;

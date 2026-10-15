@@ -146,7 +146,7 @@ export async function registerPlanDraftRoutes(
       const review = await projectCapturedPlanReview({
         snapshot: captured.accepted.snapshot, includeExcluded: true,
         reposDir: deps.reposDir, thumbsDir: deps.thumbsDir,
-        loadFilamentContext: (colorIds) => preloadSpoolmanForColorIds({ repo: deps.repo, dataDir: deps.dataDir }, colorIds),
+        loadFilamentContext: (colorIds) => preloadSpoolmanForColorIds({ repo: deps.repo, dataDir: deps.dataDir, profileId }, colorIds),
         reportTiming: (timing) => request.log.info({ ...timing, profileId,
           commandMs: committed - started, snapshotMs, totalMs: performance.now() - started,
         }, "Plan save timing"),

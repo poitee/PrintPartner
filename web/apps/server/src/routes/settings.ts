@@ -49,7 +49,7 @@ import {
 } from "../services/source-monitoring-settings.js";
 import { hostedPlanningPolicy } from "../lib/hosted-planning.js";
 import { isRecord } from "../lib/guards.js";
-import { readFeatureAccess } from "../lib/feature-access.js";
+import { readSpoolmanQueryAccess, spoolmanAccessProblem } from "../lib/spoolman-access.js";
 import { registerTenantFeatureRoutes } from "./tenant-features.js";
 
 type RouteDeps = { repo: AppRepository; dataDir: string; config?: ServerConfig };
@@ -415,14 +415,10 @@ export async function registerStubRoutes(app: FastifyInstance, deps: RouteDeps):
   });
 
   app.get("/filaments/catalog", async (request, reply) => {
-    const access = readFeatureAccess(() => deps.repo, "spoolman");
-    if (access.kind === "invalid") {
-      return reply.status(500).send({
-        status: 500,
-        title: "Internal Server Error",
-        detail: access.error,
-        code: access.code,
-      });
+    const access = readSpoolmanQueryAccess(deps.repo, request.query);
+    if (access.kind !== "allowed" && access.kind !== "disabled") {
+      const problem = spoolmanAccessProblem(access);
+      return reply.status(problem.status).send(problem);
     }
     const catalog = loadFilamentCatalog();
     const custom = listCustomFilaments(deps.dataDir).map((f) => ({

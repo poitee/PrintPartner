@@ -1,3 +1,4 @@
+import { readSpoolmanAccess } from "../lib/spoolman-access.js";
 import type { AppRepository } from "../db/repository.js";
 import { getIntegrationConfig } from "../integrations/store.js";
 import {
@@ -35,6 +36,7 @@ export type FilamentResolveContext = {
 type ResolveDeps = {
   repo: AppRepository;
   dataDir: string;
+  profileId?: number;
 };
 
 function fromCatalogColor(color: CatalogColor): FilamentDisplay {
@@ -94,12 +96,14 @@ export async function resolveFilamentDisplay(
   const parsed = parseSpoolmanFilamentId((colorId ?? "").trim());
   if (!parsed) return null;
 
+  if (readSpoolmanAccess(deps.repo, deps.profileId).kind !== "allowed") return null;
   const integration = getIntegrationConfig(deps.repo, parsed.integrationId);
   if (!integration || integration.type !== "spoolman") return null;
   if (integration.config.enabled === false) return null;
 
   try {
     const filaments = await listSpoolmanFilaments(integration.config);
+    if (readSpoolmanAccess(deps.repo, deps.profileId).kind !== "allowed") return null;
     const filament = filaments.find((f) => f.id === parsed.filamentId);
     if (!filament) return null;
     return fromSpoolmanFilament(filament);
@@ -113,7 +117,7 @@ async function buildFilamentResolveContext(deps: ResolveDeps): Promise<FilamentR
   const spoolsByIntegration = new Map<string, SpoolmanSpool[]>();
 
   const defaultId = deps.repo.getSetting("default_spoolman_integration_id")?.trim();
-  if (defaultId) {
+  if (defaultId && readSpoolmanAccess(deps.repo, deps.profileId).kind === "allowed") {
     const integration = getIntegrationConfig(deps.repo, defaultId);
     if (integration?.type === "spoolman" && integration.config.enabled !== false) {
       try {
@@ -144,6 +148,7 @@ async function buildFilamentResolveContext(deps: ResolveDeps): Promise<FilamentR
     resolve(colorId) {
       const sync = resolveFilamentDisplaySync(deps, colorId);
       if (sync) return sync;
+      if (readSpoolmanAccess(deps.repo, deps.profileId).kind !== "allowed") return null;
       const fid = (colorId ?? "").trim();
       const filament = spoolmanFilamentByKey.get(fid);
       if (filament) return fromSpoolmanFilament(filament);
@@ -151,6 +156,7 @@ async function buildFilamentResolveContext(deps: ResolveDeps): Promise<FilamentR
     },
 
     spoolSummaries(colorId) {
+      if (readSpoolmanAccess(deps.repo, deps.profileId).kind !== "allowed") return [];
       const parsed = parseSpoolmanFilamentId((colorId ?? "").trim());
       if (!parsed) return [];
       const spools = spoolsByIntegration.get(parsed.integrationId);
@@ -159,6 +165,7 @@ async function buildFilamentResolveContext(deps: ResolveDeps): Promise<FilamentR
     },
 
     spoolSummariesForPart(colorId, spoolRef) {
+      if (readSpoolmanAccess(deps.repo, deps.profileId).kind !== "allowed") return [];
       const parsed = parseSpoolmanFilamentId((colorId ?? "").trim());
       if (!parsed) return [];
       const spools = spoolsByIntegration.get(parsed.integrationId);
@@ -174,7 +181,7 @@ export async function preloadSpoolmanForColorIds(
   colorIds: Iterable<string | null | undefined>,
 ): Promise<FilamentResolveContext> {
   const byIntegration = new Map<string, Set<number>>();
-  for (const raw of colorIds) {
+  for (const raw of readSpoolmanAccess(deps.repo, deps.profileId).kind === "allowed" ? colorIds : []) {
     const parsed = parseSpoolmanFilamentId((raw ?? "").trim());
     if (!parsed) continue;
     let ids = byIntegration.get(parsed.integrationId);
@@ -219,12 +226,14 @@ export async function preloadSpoolmanForColorIds(
     resolve(colorId) {
       const sync = resolveFilamentDisplaySync(deps, colorId);
       if (sync) return sync;
+      if (readSpoolmanAccess(deps.repo, deps.profileId).kind !== "allowed") return null;
       const fid = (colorId ?? "").trim();
       const filament = mergedFilaments.get(fid);
       if (filament) return fromSpoolmanFilament(filament);
       return base.resolve(colorId);
     },
     spoolSummaries(colorId) {
+      if (readSpoolmanAccess(deps.repo, deps.profileId).kind !== "allowed") return [];
       const parsed = parseSpoolmanFilamentId((colorId ?? "").trim());
       if (!parsed) return [];
       const spools = spoolsByIntegration.get(parsed.integrationId);
@@ -232,6 +241,7 @@ export async function preloadSpoolmanForColorIds(
       return base.spoolSummaries(colorId);
     },
     spoolSummariesForPart(colorId, spoolRef) {
+      if (readSpoolmanAccess(deps.repo, deps.profileId).kind !== "allowed") return [];
       const parsed = parseSpoolmanFilamentId((colorId ?? "").trim());
       if (!parsed) return [];
       const spools = spoolsByIntegration.get(parsed.integrationId);

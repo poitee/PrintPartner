@@ -343,4 +343,38 @@ describe("filament catalog feature admission", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+  for (const prefix of ["", "/api/v1"]) {
+    for (const resource of ["catalog"]) {
+      it.each([[false, false], [false, true], [true, false], [true, true]])(
+        `${prefix} ${resource} uses the owned Plan override over account %s with Plan %s`,
+        async (account, plan) => {
+          const profileId = repo.createProfile("Scoped inventory").id;
+          repo.setSetting("feature_toggles", JSON.stringify({ spoolman: account }));
+          repo.setSetting(`feature_toggles:plan:${profileId}`, JSON.stringify({ spoolman: plan }));
+          const response = await app.inject(`${prefix}/filaments/catalog?profile_id=${profileId}`);
+          expect(response.statusCode).toBe(200);
+          expectBaseAndCustom(response.json());
+          expect(response.json().spoolman_status).toBe(plan ? "ok" : "disabled");
+          expect(network).toHaveBeenCalledTimes(plan ? 1 : 0);
+        },
+      );
+      it(`${prefix} ${resource} validates scope before inventory and rejects foreign Plans`, async () => {
+        repo.setSetting("feature_toggles", '{"spoolman":true}');
+        const foreign = tenantStorage.run("other", () => repo.createProfile("Foreign"));
+        for (const profileId of ["", "0", "-1", "1.5", "1e2", "9007199254740992", "1&profile_id=2"]) {
+          expect((await app.inject(`${prefix}/filaments/catalog?profile_id=${profileId}`)).statusCode).toBe(400);
+        }
+        for (const profileId of [String(foreign.id), "999999"]) {
+          expect((await app.inject(`${prefix}/filaments/catalog?profile_id=${profileId}`)).statusCode).toBe(404);
+        }
+        const profileId = repo.createProfile("Corrupt Plan").id;
+        repo.setSetting(`feature_toggles:plan:${profileId}`, '{"spoolman":"yes"}');
+        expect((await app.inject(`${prefix}/filaments/catalog?profile_id=${profileId}`)).json()).toEqual(invalid);
+        expect(network).not.toHaveBeenCalled();
+        vi.stubEnv("PP_DESKTOP_REBUILD", "0");
+        expect((await app.inject(`${prefix}/filaments/catalog?profile_id=${profileId}`)).statusCode).toBe(200);
+      });
+    }
+  }
+
 });
