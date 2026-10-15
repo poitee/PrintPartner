@@ -54,7 +54,7 @@ const TABLES = ["table:app_settings", "table:projects", "table:source_docs"];
 const FILE_RESOURCES = ["file:source-workspace", "table:projects", "table:source_docs"];
 const manifest = z.object({ resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -1483,6 +1483,183 @@ it.each(["trusted", "isolated"])("traces compare_source_revisions %s SQL and sna
   expect([...union].sort()).toEqual(["file:source-workspace", "table:projects", "table:source_docs", "table:source_revisions"]);
   const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.compare_source_revisions");
   expect(entry, "Missing compare_source_revisions declaration").toEqual({ operation: "tool.compare_source_revisions", resources: [
+    { kind: "table", name: "projects" }, { kind: "table", name: "source_docs" },
+    { kind: "table", name: "source_revisions" }, { kind: "file", name: "source-workspace" },
+  ] });
+});
+
+it.each(["trusted", "isolated"])("traces audit_source_provenance %s SQL, provenance and README paths", async (policy) => {
+  const repos = join(dataDir, "repos");
+  const workspace = join(repos, String(sourceId));
+  fs.mkdirSync(workspace, { recursive: true });
+  const auditRoot = policy === "isolated" ? workspace : root;
+  const db = drizzle(sqlite, { schema });
+  const auditRepo = policy === "isolated" ? new AppRepository(db, undefined, repos, schema, { sourceFilesystemPolicy: ISOLATED_SOURCE_FILESYSTEM }) : repo;
+  repo.updateSource(sourceId, { local_path: auditRoot, last_commit_sha: "audit-head", url: "https://example.test/audit" });
+  fs.writeFileSync(join(auditRoot, "README.md"), "Fixture\nAuthor: Ada Example\nMaintainer: Later match\n");
+  fs.writeFileSync(join(auditRoot, "LICENSE.txt"), "License contents are not opened");
+  fs.mkdirSync(join(auditRoot, "nested"));
+  fs.writeFileSync(join(auditRoot, "nested", "COPYING"), "Nested license");
+  fs.writeFileSync(join(auditRoot, "nested", "notice.md"), "Notice");
+  fs.writeFileSync(join(auditRoot, "not-license.txt"), "Not a license filename");
+  for (const excluded of [".git", "node_modules", ".docs-text"]) {
+    fs.mkdirSync(join(auditRoot, excluded));
+    fs.writeFileSync(join(auditRoot, excluded, "LICENSE"), "Excluded");
+  }
+  for (const [name, target] of [["NOTICE.link", join(auditRoot, "LICENSE.txt")], ["COPYING.link", join(dataDir, "outside.txt")], ["linked-directory", userRoot]]) {
+    fs.symlinkSync(target, join(auditRoot, name));
+  }
+  const revisionA = repo.recordSourceRevision({ sourceId, upstreamRevisionKey: "audit-old", manifestDigest: "a".repeat(64), snapshotLocator: `${sourceId}/revisions/old`, syncedAt: "2026-01-01", completeness: "complete" });
+  const revisionB = repo.recordSourceRevision({ sourceId, upstreamRevisionKey: "audit-head", manifestDigest: "b".repeat(64), snapshotLocator: `${sourceId}/revisions/head`, syncedAt: "2026-01-02", completeness: "complete" });
+  repo.recordSourceRevision({ sourceId: userId, upstreamRevisionKey: "unrelated", manifestDigest: "c".repeat(64), snapshotLocator: "unrelated", syncedAt: "2026-01-03", completeness: "complete" });
+  const foreign = tenantStorage.run("other", () => {
+    const source = repo.createSource({ name: "Fixture", source_kind: "local" });
+    repo.recordSourceRevision({ sourceId: source.id, upstreamRevisionKey: "foreign", manifestDigest: "d".repeat(64), snapshotLocator: "foreign", syncedAt: "2026-01-04", completeness: "complete" });
+    return source;
+  });
+  const tables = ["table:projects", "table:source_docs", "table:source_revisions"];
+  const union = new Set<string>();
+  async function trace(input: Record<string, unknown>, tenantId = "default", allowedRoots = [auditRoot, userRoot, workspace, join(repos, String(userId)), join(repos, String(unsyncedId)), join(repos, String(foreign.id))]) {
+    statements = [];
+    observer.state.files = [];
+    observer.state.active = true;
+    let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+    try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("audit_source_provenance", input, { repo: auditRepo })); }
+    finally { observer.state.active = false; }
+    for (const statement of statements) {
+      const sql = z.string().parse(statement);
+      const revisions = new RegExp(`^select "[a-z_]+"(?:, "[a-z_]+")* from "source_revisions" where \\("source_revisions"\\."tenant_id" = '${tenantId}' and "source_revisions"\\."project_id" = [1-9][0-9]*(?:\\.0)?\\) order by "source_revisions"\\."id" asc$`);
+      const resource = revisions.test(sql) ? "table:source_revisions" : tableForObservedSelect(sql, tenantId);
+      expect(tables).toContain(resource);
+      union.add(resource);
+    }
+    for (const { api, args } of observer.state.files) {
+      expect(["realpathSync", "lstatSync", "statSync", "readdirSync", "readFileSync"], api).toContain(api);
+      const path = z.string().parse(args[0]);
+      expect(path === repos || allowedRoots.some((allowed) => under(allowed, path)), `${api} ${path}`).toBe(true);
+      if (api === "readdirSync") expect(args).toEqual([path, { withFileTypes: true }]);
+      else if (api === "readFileSync") {
+        expect(args).toEqual([path, "utf8"]);
+        expect(path).toMatch(/\/(?:README\.md|Readme\.md|readme\.md|ReadMe\.md|README\.MD|author\.txt)$/);
+      } else expect(args).toEqual([path]);
+      union.add("file:source-workspace");
+    }
+    expect(output.proposedAction).toBeUndefined();
+    return z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
+  }
+  function reads() {
+    return observer.state.files.filter(({ api }) => api === "readFileSync").map(({ args, result }) => ({ path: args[0], text: result }));
+  }
+  const missing = { error: "source_id or source_name required" };
+  for (const input of [{}, { source_name: "  " }, { source_id: -1 }, { source_id: 999999, source_name: "Fixture" }, { source_name: "Absent" }, { source_id: foreign.id }]) {
+    expect(await trace(input)).toEqual(missing);
+    expect(reads()).toEqual([]);
+  }
+  expect(await trace({ source_id: sourceId }, "other")).toEqual(missing);
+  expect(observer.state.files).toEqual([]);
+  const expectedProvenance = {
+    url: "https://example.test/audit", pinned_revision: "audit-head", manifest_hashes: ["a".repeat(64), "b".repeat(64)],
+    author_signal: "Author: Ada Example", license_files: ["LICENSE.txt", "nested/COPYING", "nested/notice.md"],
+    commercial_print_permission: "review_license_file", confidence: "revision_pinned",
+  };
+  for (const input of [{ source_id: sourceId }, { source_id: String(sourceId), source_name: "Absent" }, { source_name: " Fixture " }, { source_name: "fixture" }, { source_name: "fix_ture" }, { source_name: "Fixture @ v2" }, { source_id: "invalid", source_name: "Fixture" }]) {
+    const result = await trace(input);
+    expect(result.provenance).toEqual(expectedProvenance);
+    expect(result.source).toEqual(expect.objectContaining({ id: sourceId, name: "Fixture", doc_count: 1, local_path: policy === "isolated" ? null : auditRoot, content_available: true, last_commit_sha: "audit-head" }));
+    expect(result.revisions).toEqual([
+      { id: revisionA.id, source_id: sourceId, upstream_revision_key: "audit-old", manifest_digest: "a".repeat(64), snapshot_locator: `${sourceId}/revisions/old`, synced_at: "2026-01-01", completeness: "complete" },
+      { id: revisionB.id, source_id: sourceId, upstream_revision_key: "audit-head", manifest_digest: "b".repeat(64), snapshot_locator: `${sourceId}/revisions/head`, synced_at: "2026-01-02", completeness: "complete" },
+    ]);
+    expect(reads()).toEqual([{ path: join(auditRoot, "README.md"), text: "Fixture\nAuthor: Ada Example\nMaintainer: Later match\n" }]);
+    expect(statements.filter((sql) => z.string().parse(sql).includes('from "source_revisions"'))).toHaveLength(2);
+    expect(observer.state.files.some(({ args }) => typeof args[0] === "string" && /\/(?:\.git|node_modules|\.docs-text)\//.test(args[0]))).toBe(false);
+    expect(observer.state.files.some(({ api, args }) => api === "readdirSync" && args[0] === join(auditRoot, "linked-directory"))).toBe(false);
+  }
+  const other = await trace({ source_name: "Fixture" }, "other");
+  expect(other.source).toEqual(expect.objectContaining({ id: foreign.id, doc_count: 0 }));
+  expect(other.provenance).toEqual({ url: null, pinned_revision: null, manifest_hashes: ["d".repeat(64)], author_signal: null, license_files: [], commercial_print_permission: "unknown", confidence: "unverified" });
+  expect(reads()).toEqual([]);
+  repo.updateSource(sourceId, { last_commit_sha: null });
+  expect((await trace({ source_id: sourceId })).provenance).toEqual({ ...expectedProvenance, pinned_revision: null, confidence: "unverified" });
+
+  fs.writeFileSync(join(auditRoot, "Readme.md"), "Maintainer: Second candidate");
+  fs.rmSync(join(auditRoot, "README.md"));
+  expect((await trace({ source_id: sourceId })).provenance).toEqual({ ...expectedProvenance, pinned_revision: null, confidence: "unverified", author_signal: "Maintainer: Second candidate" });
+  expect(reads()).toEqual([{ path: join(auditRoot, "Readme.md"), text: "Maintainer: Second candidate" }]);
+  for (const spelling of ["readme.md", "ReadMe.md", "README.MD"]) {
+    fs.renameSync(join(auditRoot, "Readme.md"), join(auditRoot, spelling));
+    expect((await trace({ source_id: sourceId })).provenance).toEqual({ ...expectedProvenance, pinned_revision: null, confidence: "unverified", author_signal: "Maintainer: Second candidate" });
+    expect(reads()).toEqual([{ path: join(auditRoot, spelling), text: "Maintainer: Second candidate" }]);
+    fs.renameSync(join(auditRoot, spelling), join(auditRoot, "Readme.md"));
+  }
+  fs.writeFileSync(join(auditRoot, "README.md"), "x".repeat(48000) + "\nAuthor: Beyond cap");
+  expect((await trace({ source_id: sourceId })).provenance).toEqual({ ...expectedProvenance, pinned_revision: null, confidence: "unverified", author_signal: null });
+  expect(reads()).toEqual([{ path: join(auditRoot, "README.md"), text: "x".repeat(48000) + "\nAuthor: Beyond cap" }]);
+  fs.rmSync(join(auditRoot, "README.md"));
+  fs.writeFileSync(join(auditRoot, "author.txt"), "Copyright 2026 Inside author");
+  fs.symlinkSync(join(auditRoot, "author.txt"), join(auditRoot, "README.md"));
+  expect((await trace({ source_id: sourceId })).provenance).toEqual({ ...expectedProvenance, pinned_revision: null, confidence: "unverified", author_signal: "Copyright 2026 Inside author" });
+  expect(reads()).toEqual([{ path: join(auditRoot, "author.txt"), text: "Copyright 2026 Inside author" }]);
+  fs.rmSync(join(auditRoot, "README.md"));
+  fs.symlinkSync(join(userRoot, "README.md"), join(auditRoot, "README.md"));
+  expect((await trace({ source_id: sourceId })).provenance).toEqual({ ...expectedProvenance, pinned_revision: null, confidence: "unverified", author_signal: "Maintainer: Second candidate" });
+  expect(reads()).toEqual([{ path: join(auditRoot, "Readme.md"), text: "Maintainer: Second candidate" }]);
+  fs.rmSync(join(auditRoot, "README.md"));
+  fs.mkdirSync(join(auditRoot, "README.md"));
+  expect((await trace({ source_id: sourceId })).provenance).toEqual({ ...expectedProvenance, pinned_revision: null, confidence: "unverified", author_signal: "Maintainer: Second candidate" });
+  fs.rmSync(join(auditRoot, "README.md"), { recursive: true });
+  fs.rmSync(join(auditRoot, "Readme.md"));
+  expect((await trace({ source_id: sourceId })).provenance).toEqual({ ...expectedProvenance, pinned_revision: null, confidence: "unverified", author_signal: null });
+  expect(reads()).toEqual([]);
+
+  const empty = join(workspace, "empty");
+  fs.mkdirSync(empty);
+  const noFiles = { url: "https://example.test/audit", pinned_revision: null, manifest_hashes: ["a".repeat(64), "b".repeat(64)], author_signal: null, license_files: [], commercial_print_permission: "unknown", confidence: "unverified" };
+  fs.writeFileSync(join(workspace, "file-root"), "A file root");
+  for (const path of [empty, join(workspace, "missing"), join(workspace, "file-root"), "", null]) {
+    sqlite.prepare("UPDATE projects SET local_path = ? WHERE id = ?").run(path, sourceId);
+    expect((await trace({ source_id: sourceId })).provenance).toEqual(noFiles);
+    expect(reads()).toEqual([]);
+  }
+  fs.writeFileSync(join(userRoot, "README.md"), "Author: Followed root");
+  fs.writeFileSync(join(userRoot, "LICENSE"), "External license");
+  const link = join(workspace, "root-link");
+  fs.symlinkSync(userRoot, link);
+  for (const path of [link, join(link, "nested")]) {
+    fs.mkdirSync(join(userRoot, "nested"), { recursive: true });
+    fs.writeFileSync(join(userRoot, "nested", "README.md"), "Author: Followed ancestor");
+    repo.updateSource(sourceId, { local_path: path });
+    const result = await trace({ source_id: sourceId });
+    expect(result.provenance).toEqual(policy === "isolated" ? noFiles : { ...noFiles, author_signal: path === link ? "Author: Followed root" : "Author: Followed ancestor", license_files: path === link ? ["LICENSE"] : [], commercial_print_permission: path === link ? "review_license_file" : "unknown" });
+    expect(reads()).toEqual(policy === "isolated" ? [] : [{ path: join(userRoot, ...(path === link ? [] : ["nested"]), "README.md"), text: path === link ? "Author: Followed root" : "Author: Followed ancestor" }]);
+  }
+  const physical = join(workspace, "physical", "child");
+  fs.mkdirSync(physical, { recursive: true });
+  fs.writeFileSync(join(physical, "README.md"), "Author: Internal ancestor");
+  fs.writeFileSync(join(physical, "LICENSE"), "Internal license");
+  fs.symlinkSync(join(workspace, "physical"), join(workspace, "internal-link"));
+  repo.updateSource(sourceId, { local_path: join(workspace, "internal-link", "child") });
+  const internalProvenance = { ...noFiles, author_signal: "Author: Internal ancestor", license_files: ["LICENSE"], commercial_print_permission: "review_license_file" };
+  expect((await trace({ source_id: sourceId })).provenance).toEqual(internalProvenance);
+  expect(reads()).toEqual([{ path: join(physical, "README.md"), text: "Author: Internal ancestor" }]);
+  const canonicalRepos = join(dataDir, "canonical-repos");
+  fs.renameSync(repos, canonicalRepos);
+  fs.symlinkSync(canonicalRepos, repos);
+  try {
+    expect((await trace({ source_id: sourceId }, "default", [workspace, join(canonicalRepos, String(sourceId))])).provenance).toEqual(internalProvenance);
+    expect(reads()).toEqual([{ path: join(canonicalRepos, String(sourceId), "physical", "child", "README.md"), text: "Author: Internal ancestor" }]);
+  } finally {
+    fs.rmSync(repos);
+    fs.renameSync(canonicalRepos, repos);
+  }
+  repo.updateSource(sourceId, { local_path: workspace });
+  fs.rmSync(workspace, { recursive: true });
+  fs.symlinkSync(userRoot, workspace);
+  expect((await trace({ source_id: sourceId })).provenance).toEqual(policy === "isolated" ? noFiles : { ...noFiles, author_signal: "Author: Followed root", license_files: ["LICENSE"], commercial_print_permission: "review_license_file" });
+  expect(reads()).toEqual(policy === "isolated" ? [] : [{ path: join(userRoot, "README.md"), text: "Author: Followed root" }]);
+  expect([...union].sort()).toEqual(["file:source-workspace", ...tables]);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.audit_source_provenance");
+  expect(entry, "Missing audit_source_provenance declaration").toEqual({ operation: "tool.audit_source_provenance", resources: [
     { kind: "table", name: "projects" }, { kind: "table", name: "source_docs" },
     { kind: "table", name: "source_revisions" }, { kind: "file", name: "source-workspace" },
   ] });
