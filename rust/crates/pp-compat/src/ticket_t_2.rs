@@ -2319,3 +2319,7 @@ async fn ticket_t_3_drain_measured_release_repeated_eof_cleanup() {
     }
     assert_eq!(completed.len(), 3);
 }
+
+#[cfg(target_os = "linux")]
+#[path = "tests/built_startup.rs"]
+mod built_startup;

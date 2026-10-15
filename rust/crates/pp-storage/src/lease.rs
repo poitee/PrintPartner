@@ -113,6 +113,7 @@ impl AdmittedDirectory {
     fn preflight_schema(&self, owned: bool) -> Result<u64> {
         self.validate_identity()?;
         crate::schema::preflight(
+            #[cfg(test)]
             &self.path.join("print-partner.db"),
             owned,
             |name| self.open_preflight_file(name),
@@ -132,6 +133,19 @@ impl AdmittedDirectory {
     }
 
     fn open_preflight_file(&self, name: &str) -> std::io::Result<File> {
+        #[cfg(test)]
+        if name == ".desktop-owner.json" && REMOVE_MARKER_BEFORE_READ.take() {
+            let result = unsafe {
+                libc::unlinkat(
+                    self.directory.as_raw_fd(),
+                    c".desktop-owner.json".as_ptr(),
+                    0,
+                )
+            };
+            if result < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+        }
         let name = CString::new(name)?;
         let fd = unsafe {
             libc::openat(
@@ -148,8 +162,13 @@ impl AdmittedDirectory {
             return Err(std::io::Error::last_os_error());
         }
         let file = unsafe { File::from_raw_fd(fd) };
-        if !file.metadata()?.is_file() {
-            return Err(std::io::Error::from_raw_os_error(libc::EINVAL));
+        let metadata = file.metadata()?;
+        if !metadata.is_file() {
+            return Err(std::io::Error::from_raw_os_error(if metadata.is_dir() {
+                libc::EISDIR
+            } else {
+                libc::EINVAL
+            }));
         }
         Ok(file)
     }
@@ -330,20 +349,33 @@ fn read_prior_owner(marker_path: &Path) -> Result<Option<(serde_json::Value, u32
         }
         Err(error) => return Err(error).context("storage_lease_marker_invalid"),
     };
+    parse_prior_owner(&bytes).map(Some)
+}
+
+fn parse_prior_owner(bytes: &[u8]) -> Result<(serde_json::Value, u32)> {
     let marker: serde_json::Value =
-        serde_json::from_slice(&bytes).context("storage_lease_marker_invalid")?;
+        serde_json::from_slice(bytes).context("storage_lease_marker_invalid")?;
     let pid = marker["pid"]
         .as_u64()
         .filter(|pid| *pid > 0 && *pid <= i32::MAX as u64)
         .context("storage_lease_marker_invalid")? as u32;
-    Ok(Some((marker, pid)))
+    Ok((marker, pid))
 }
 
 /// Inspect marker liveness without changing storage before schema validation.
 /// Acquisition checks the marker again while holding both ownership guards.
-pub(crate) fn prior_owner_blocks_unowned(marker_path: &Path) -> Result<bool> {
-    Ok(read_prior_owner(marker_path)?
-        .is_some_and(|(marker, pid)| !prior_writer_is_stale(&marker, pid)))
+pub(crate) fn prior_owner_blocks_unowned(
+    open_file: impl Fn(&str) -> std::io::Result<File>,
+) -> Result<bool> {
+    let mut file = match open_file(".desktop-owner.json") {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error).context("storage_lease_marker_invalid"),
+    };
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut file, &mut bytes).context("storage_lease_marker_invalid")?;
+    let (marker, pid) = parse_prior_owner(&bytes)?;
+    Ok(!prior_writer_is_stale(&marker, pid))
 }
 
 impl StorageLease {
