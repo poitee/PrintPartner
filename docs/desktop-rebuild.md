@@ -289,7 +289,10 @@ GRE-602 adds the read-only first half of `pp_storage::build_graph` behind
 through the existing writer queue and return typed summaries and ordered layers.
 `List` rejects more than 64 builds, shares one graph budget across summaries,
 and checks cancellation between builds.
+`ListLayers` caps results at 1,024 layers and checks cancellation during iteration.
 Summary facts reuse the accepted graph reader and freshness calculation.
+Corrupt freshness inputs return explicit unavailable freshness and integrity
+progress for that build while retaining healthy builds in lists.
 Summaries validate PPJS metadata losslessly. Existing scalar snapshot projections
 report `manifest_text` integrity failures for non-scalar metadata; lossless public
 snapshot serialization remains deferred.
