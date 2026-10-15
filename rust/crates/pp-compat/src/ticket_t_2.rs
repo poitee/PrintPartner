@@ -1818,18 +1818,141 @@ async fn startup_owner_death_fixture() {
     drop(supervisor);
 }
 
+const MEASURED_STARTUP_STAGE: &str = "PP_COMPAT_MEASURED_STARTUP_STAGE";
+
+fn measured_startup_record_child(data: &Path, pid: u32) -> anyhow::Result<()> {
+    let root = data.parent().unwrap();
+    super::record_test_pid(&root.join("pids"), pid)?;
+    if let Some(stage) = std::env::var_os(MEASURED_STARTUP_STAGE) {
+        let executed = PathBuf::from(stage).join("web/startup-executed.json");
+        startup_wait(
+            Duration::from_secs(5),
+            "measured Node entry never executed",
+            || executed.exists(),
+        );
+        let receipt: serde_json::Value = serde_json::from_slice(&std::fs::read(executed)?)?;
+        assert_eq!(receipt["pid"], pid);
+        assert_eq!(receipt["preload"], "gre448-measured-simulator");
+        assert_eq!(receipt["stdin_flowing"], serde_json::Value::Null);
+    }
+    assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGSTOP) }, 0);
+    startup_wait(Duration::from_secs(5), "measured Node did not stop", || {
+        startup_process_state(pid) == Some('T')
+    });
+    std::fs::write(
+        data.join(".desktop-owner.json"),
+        br#"{"child_process_identity":"gre448-startup-fixture"}"#,
+    )?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn measured_startup_owner_death_fixture() {
+    let Some(root) = std::env::var_os(STARTUP_OWNER_ROOT) else {
+        return;
+    };
+    let scratch = Scratch { root: root.into() };
+    let bundle = measured_startup_bundle();
+    if let Some(stage) = std::env::var_os(MEASURED_STARTUP_STAGE) {
+        let executed = PathBuf::from(stage).join("web/startup-executed.json");
+        if executed.exists() {
+            std::fs::remove_file(executed).unwrap();
+        }
+    }
+    let spec = super::SpawnSpec {
+        bundle,
+        record_child: measured_startup_record_child,
+        lease: "x".repeat(1024 * 1024),
+        ..release_spec(&scratch)
+    };
+    super::release::verify_bundle(&spec.bundle, &spec.bundle.web_root.join("apps/web/dist"))
+        .unwrap();
+    let supervisor = super::Supervisor::start(spec).unwrap();
+    let started = std::time::Instant::now();
+    while recorded_pids(&scratch.pidfile()).is_empty() {
+        assert!(
+            started.elapsed() < Duration::from_secs(25),
+            "measured spawn never recorded child"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    // On this current-thread runtime, reaching here means spawn yielded after record_child returned.
+    tokio::task::yield_now().await;
+    let pid = recorded_pids(&scratch.pidfile());
+    assert_eq!(pid.len(), 1);
+    assert_eq!(startup_process_state(pid[0]), Some('T'));
+    assert!(matches!(
+        *supervisor.handle.status.borrow(),
+        super::Status::Starting
+    ));
+    assert!(supervisor.handle.endpoint().is_none());
+    assert_eq!(*supervisor.health_probes_completed.borrow(), 0);
+    println!(
+        "measured bundle verified; Node stopped; startup setup pending; status=starting; probes=0; spawns=1"
+    );
+    std::fs::write(scratch.root.join("owner-ready.tmp"), pid[0].to_string()).unwrap();
+    std::fs::rename(
+        scratch.root.join("owner-ready.tmp"),
+        scratch.root.join("owner-ready"),
+    )
+    .unwrap();
+    std::future::pending::<()>().await;
+    drop(supervisor);
+}
+
 #[test]
 fn ticket_t_3_drain_force_killed_owner_during_startup_kills_group() {
+    startup_owner_death_cycles(
+        "ticket_t_2::startup_owner_death_fixture",
+        Path::new("/usr/bin/node"),
+        Duration::from_secs(8),
+    );
+}
+
+fn measured_startup_bundle() -> super::Bundle {
+    let manifest: serde_json::Value = serde_json::from_slice(include_bytes!(concat!(
+        env!("OUT_DIR"),
+        "/bundle-manifest.json"
+    )))
+    .unwrap();
+    let (node, web_root) = match std::env::var_os(MEASURED_STARTUP_STAGE) {
+        Some(stage) => {
+            let stage = PathBuf::from(stage);
+            (stage.join("node"), stage.join("web"))
+        }
+        None => (
+            PathBuf::from("/usr/bin/node"),
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../web"),
+        ),
+    };
+    super::Bundle {
+        node,
+        entry: web_root.join("apps/server/dist/current/desktop.js"),
+        web_root,
+        runtime_version: manifest["runtime_version"].as_str().unwrap().into(),
+        commit: manifest["commit"].as_str().unwrap().into(),
+    }
+}
+
+#[test]
+fn ticket_t_3_drain_measured_release_startup_parent_death() {
+    let bundle = measured_startup_bundle();
+    super::release::verify_bundle(&bundle, &bundle.web_root.join("apps/web/dist")).unwrap();
+    startup_owner_death_cycles(
+        "ticket_t_2::measured_startup_owner_death_fixture",
+        &bundle.node,
+        Duration::from_secs(30),
+    );
+}
+
+fn startup_owner_death_cycles(helper: &str, node: &Path, startup_timeout: Duration) {
     use std::os::unix::process::{CommandExt, ExitStatusExt};
 
+    assert!(node.is_file(), "native Node executable missing");
     for cycle in 0..2 {
         let scratch = Scratch::new("startup-owner-death");
         let owner = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "ticket_t_2::startup_owner_death_fixture",
-                "--nocapture",
-            ])
+            .args(["--exact", helper, "--nocapture"])
             .env(STARTUP_OWNER_ROOT, &scratch.root)
             .process_group(0)
             .spawn()
@@ -1841,7 +1964,7 @@ fn ticket_t_3_drain_force_killed_owner_during_startup_kills_group() {
         };
         let ready = fixture.scratch.root.join("owner-ready");
         startup_wait(
-            Duration::from_secs(8),
+            startup_timeout,
             "owner never acknowledged pending setup",
             || {
                 assert!(
@@ -1857,15 +1980,9 @@ fn ticket_t_3_drain_force_killed_owner_during_startup_kills_group() {
         assert_eq!(unsafe { libc::getpgid(pid as i32) }, pid as i32);
         #[cfg(target_os = "linux")]
         {
-            let native_node = std::process::Command::new("/usr/bin/node")
-                .args(["-p", "process.execPath"])
-                .output()
-                .unwrap();
-            assert!(native_node.status.success());
-            let native_node = String::from_utf8(native_node.stdout).unwrap();
             assert_eq!(
                 std::fs::canonicalize(format!("/proc/{pid}/exe")).unwrap(),
-                std::fs::canonicalize(native_node.trim()).unwrap(),
+                std::fs::canonicalize(node).unwrap(),
             );
         }
         fixture.peer = Some(
@@ -1886,6 +2003,10 @@ fn ticket_t_3_drain_force_killed_owner_during_startup_kills_group() {
             || startup_process_state(pid) == Some('T'),
         );
         assert!(startup_process_live(peer_pid));
+        println!(
+            "startup death armed helper={helper}; cycle={cycle}; owner={}; node={pid}; peer={peer_pid}; node_stopped=true; peer_live=true",
+            fixture.owner.id()
+        );
         let killed = std::time::Instant::now();
         assert_eq!(
             unsafe { libc::kill(-(fixture.owner.id() as i32), libc::SIGKILL) },
@@ -1912,7 +2033,7 @@ fn ticket_t_3_drain_force_killed_owner_during_startup_kills_group() {
         );
         assert_eq!(recorded_pids(&fixture.scratch.pidfile()), vec![pid]);
         println!(
-            "startup owner death cycle={cycle}; spawns=1; Node and peer dead; elapsed_ms={}",
+            "startup owner death helper={helper}; cycle={cycle}; spawns=1; Node and peer dead; elapsed_ms={}",
             killed.elapsed().as_millis()
         );
     }
