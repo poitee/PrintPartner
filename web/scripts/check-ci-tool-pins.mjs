@@ -22,7 +22,11 @@ try {
   console.error('MISSING_PARSER: run npm ci --ignore-scripts in web/ before checking CI tool pins');
   process.exit(2);
 }
-const additionalNodeWorkflows = ['integration-smoke', 'pr-evidence'];
+const desktopNodeLanes = [
+  ['desktop-e2e', 'linux-smoke', 'E2E', 22],
+  ['desktop-webkit', 'webkit-stl', 'WEBKIT', 24],
+];
+const additionalNodeWorkflows = ['integration-smoke', 'pr-evidence', ...desktopNodeLanes.map(([name]) => name)];
 const desktopContracts = /^desktop-contracts\.ya?ml$/;
 const directory = resolve(process.argv[2] ?? join(root, '.github/workflows'));
 let declarations = 0;
@@ -73,7 +77,7 @@ function checkDesktopNode(workflow, file) {
   }
 }
 
-function checkNodeLanes(workflow, file, names, code = 'WEB', condition) {
+function checkNodeLanes(workflow, file, names, code = 'WEB', condition, major = 22) {
   let expected;
   for (const name of names) {
     const path = `jobs.${name}`;
@@ -91,10 +95,10 @@ function checkNodeLanes(workflow, file, names, code = 'WEB', condition) {
     const inputs = setup.with;
     const version = inputs?.['node-version'];
     if (!mapping(inputs) || typeof version !== 'string'
-      || !/^22\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)
+      || !new RegExp(`^${major}\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$`).test(version)
       || Object.hasOwn(inputs, 'node-version-file') || Object.hasOwn(setup, 'if')
       || Object.hasOwn(setup, 'continue-on-error')) {
-      report(file, path, `UNPINNED_${code}_NODE`, 'setup-node must unconditionally select one exact Node 22 major.minor.patch string without node-version-file');
+      report(file, path, `UNPINNED_${code}_NODE`, `setup-node must unconditionally select one exact Node ${major} major.minor.patch string without node-version-file`);
       continue;
     }
     if (expected !== undefined && version !== expected) {
@@ -185,6 +189,11 @@ function checkWorkflow(file, source = readFileSync(file, 'utf8')) {
   if (desktopContracts.test(basename(file))) {
     checkDesktopNode(workflow, file);
     if (eventMode) checkDesktopExecution(workflow, file);
+  }
+  for (const [name, lane, code, major] of desktopNodeLanes) {
+    if (new RegExp(`^${name}\\.ya?ml$`, 'i').test(basename(file))) {
+      checkNodeLanes(workflow, file, [lane], code, undefined, major);
+    }
   }
   if (/^web-ci\.ya?ml$/.test(basename(file))) checkNodeLanes(workflow, file, ['web', 'web-build']);
   if (/^integration-smoke\.ya?ml$/i.test(basename(file))) checkNodeLanes(workflow, file, ['postgres'], 'INTEGRATION', "github.event_name != 'workflow_dispatch' || inputs.postgres");

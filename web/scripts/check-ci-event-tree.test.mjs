@@ -31,7 +31,7 @@ console.log(JSON.stringify({ path: '.github/workflows/desktop-contracts.yml', st
   symlinkSync(join(root, 'web/node_modules'), join(directory, 'web/node_modules'));
   writeFileSync(join(directory, contracts), original);
   writeFileSync(join(directory, '.github/workflows/web-ci.yml'), YAML.stringify(webCI));
-  for (const name of ['integration-smoke', 'pr-evidence']) {
+  for (const name of ['integration-smoke', 'pr-evidence', 'desktop-e2e', 'desktop-webkit']) {
     copyFileSync(join(root, `.github/workflows/${name}.yml`), join(directory, `.github/workflows/${name}.yml`));
   }
   const git = (...args) => {
@@ -318,6 +318,8 @@ test('event tree rejects gitlink at required Web CI path', t => {
 for (const [name, job, diagnostic] of [
   ['integration-smoke', 'postgres', 'UNPINNED_INTEGRATION_NODE'],
   ['pr-evidence', 'lint-pr-body', 'UNPINNED_EVIDENCE_NODE'],
+  ['desktop-e2e', 'linux-smoke', 'UNPINNED_E2E_NODE'],
+  ['desktop-webkit', 'webkit-stl', 'UNPINNED_WEBKIT_NODE'],
 ]) {
   test(`event tree rejects floating ${name} despite repaired checkout`, t => {
     const path = `.github/workflows/${name}.yml`;
@@ -376,3 +378,23 @@ test('event tree rejects disabled smoke lane despite repaired checkout', t => {
   assert.equal(result.status, 1, result.stdout);
   assert.match(result.stderr, /INVALID_INTEGRATION_NODE_SETUP/);
 });
+
+for (const [name, lane, code] of [
+  ['desktop-e2e', 'linux-smoke', 'E2E'],
+  ['desktop-webkit', 'webkit-stl', 'WEBKIT'],
+]) {
+  test(`event tree rejects missing ${name} assertion despite repaired checkout`, t => {
+    const path = `.github/workflows/${name}.yml`;
+    const f = fixture(t, directory => {
+      const workflow = YAML.parse(readFileSync(join(directory, path), 'utf8'));
+      const steps = workflow.jobs[lane].steps;
+      const setup = steps.findIndex(step => step.uses?.startsWith('actions/setup-node@'));
+      steps.splice(setup + 1, 1);
+      writeFileSync(join(directory, path), YAML.stringify(workflow));
+    });
+    copyFileSync(join(root, path), join(f.directory, path));
+    const result = f.run();
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stderr, new RegExp(`MISSING_${code}_NODE_VERIFICATION`));
+  });
+}
