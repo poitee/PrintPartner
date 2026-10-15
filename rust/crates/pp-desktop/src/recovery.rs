@@ -322,7 +322,27 @@ mod tests {
         assert!(!gate.admit(&CoreStatus::Guarded));
         assert!(!gate.admit_restore(&CoreStatus::Guarded));
         gate.refused();
-        assert!(gate.admit_restore(&CoreStatus::Failed));
+        assert!(!gate.admit_restore(&CoreStatus::Failed));
+        assert!(gate.admit_restore(&CoreStatus::Guarded));
+    }
+
+    #[test]
+    fn ticket_t_2_native_restore_refuses_and_disables_failed() {
+        let gate = RecoveryGate::default();
+        assert!(!gate.restore_enabled(&CoreStatus::Failed));
+        assert!(!gate.admit_restore(&CoreStatus::Failed));
+        assert!(gate.restore_enabled(&CoreStatus::Guarded));
+        assert!(gate.admit_restore(&CoreStatus::Guarded));
+    }
+
+    #[test]
+    fn ticket_t_2_native_restore_resets_restart_gate_on_coalesced_failed() {
+        let gate = RecoveryGate::default();
+        assert!(gate.admit(&CoreStatus::Guarded));
+        assert!(!gate.observe(&CoreStatus::Failed));
+        assert!(gate.observe(&CoreStatus::Guarded));
+        assert!(gate.restore_enabled(&CoreStatus::Guarded));
+        assert!(gate.admit_restore(&CoreStatus::Guarded));
     }
 
     #[test]

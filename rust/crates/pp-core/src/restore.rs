@@ -131,6 +131,37 @@ pub(super) fn install(
 mod tests {
     use super::*;
     #[test]
+    fn ticket_t_2_offline_restore_refuses_failed_before_filesystem_preparation() {
+        let data = std::env::temp_dir().join(format!(
+            "pp-restore-failed-{}",
+            hex::encode(rand::random::<[u8; 8]>())
+        ));
+        let owner = StorageLease::acquire(&data).unwrap();
+        let journal = data.join(".offline-restore-journal.json");
+        std::fs::write(&journal, b"pending fixture").unwrap();
+        let mut state = Admission::Idle;
+        assert_eq!(
+            state
+                .prepare(&owner, &CoreStatus::Failed, std::path::Path::new("missing"))
+                .unwrap_err()
+                .to_string(),
+            "Restore requires a stopped, unavailable service"
+        );
+        assert!(matches!(state, Admission::Idle));
+        assert_eq!(std::fs::read(&journal).unwrap(), b"pending fixture");
+        assert!(StorageLease::acquire(&data).is_err());
+        assert_eq!(
+            state
+                .prepare(&owner, &CoreStatus::Guarded, std::path::Path::new("missing"))
+                .unwrap_err()
+                .to_string(),
+            "Pending restore requires recovery before preparing another backup"
+        );
+        drop(owner);
+        std::fs::remove_dir_all(data).unwrap();
+    }
+
+    #[test]
     fn ticket_t_2_offline_restore_requires_all_drain_proofs() {
         let data = std::env::temp_dir().join(format!(
             "pp-restore-proof-{}",
