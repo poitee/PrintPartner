@@ -116,9 +116,9 @@ def main():
     command = ["cargo", "test", "--locked", "--manifest-path", "rust/Cargo.toml", "-p", "pp-compat",
                "--lib", TEST, "--", "--exact", "--ignored", "--nocapture", "--test-threads=1"]
 
-    def proof(label):
+    def proof(label, test_command=None):
         env["PP_COMPAT_BUILT_STARTUP_EVIDENCE"] = str(evidence / label)
-        status = run(label, command)
+        status = run(label, command if test_command is None else test_command)
         output = (evidence / f"{label}.log").read_text()
         if status == 0:
             require("test result: ok. 1 passed; 0 failed" in output, "exact built startup test did not run")
@@ -137,8 +137,16 @@ def main():
 
     require(proof("baseline")[0] == 0, "full built startup baseline failed")
     if args.negative_control:
-        source = REPO / "rust/crates/pp-compat/src/lib.rs"
-        original_source = source.read_bytes()
+        tracked_source = REPO / "rust/crates/pp-compat/src/lib.rs"
+        original_source = tracked_source.read_bytes()
+        isolated_rust = stage / "negative-source/rust"
+        shutil.copytree(REPO / "rust", isolated_rust, ignore=shutil.ignore_patterns("target"))
+        source = isolated_rust / "crates/pp-compat/src/lib.rs"
+        require(source.read_bytes() == original_source, "isolated production source differs")
+        negative_command = command.copy()
+        negative_command[negative_command.index("--manifest-path") + 1] = str(isolated_rust / "Cargo.toml")
+        separator = negative_command.index("--")
+        negative_command[separator:separator] = ["--target-dir", str(stage / "negative-target")]
         measured_source, shell = original_source.split(b"    async fn spawn_shell(", 1)
         before = b"let (parent_read, parent_death) ="
         require(measured_source.count(before) == 1, "ambiguous production guard declaration")
@@ -148,11 +156,18 @@ def main():
         changed = measured_source.replace(before, before + b"        parent_death.release();\n", 1) + b"    async fn spawn_shell(" + shell
         try:
             source.write_bytes(changed)
-            status, output = proof("negative")
+            write_json(evidence / "negative-isolation.json", {
+                "tracked_source": str(tracked_source), "tracked_source_sha256": digest(tracked_source),
+                "isolated_source": str(source), "mutated_source_sha256": digest(source),
+                "cargo_target": str(stage / "negative-target"), "tracked_source_unmodified": tracked_source.read_bytes() == original_source})
+            require(tracked_source.read_bytes() == original_source, "tracked source changed before negative control")
+            status, output = proof("negative", negative_command)
         finally:
             source.write_bytes(original_source)
             require(source.read_bytes() == original_source, "production source restoration failed")
-            write_json(evidence / "source-restoration.json", {"lib_sha256": digest(source), "byte_for_byte_restored": True})
+            require(tracked_source.read_bytes() == original_source, "negative control changed tracked source")
+            write_json(evidence / "source-restoration.json", {"lib_sha256": digest(source), "byte_for_byte_restored": True,
+                       "tracked_source_unmodified": True, "isolated_source": str(source)})
         require(status == 101 and "built startup group outlived force-killed owner" in output,
                 "negative did not fail intended production parent-death invariant")
         require("test result: FAILED. 0 passed; 1 failed" in output, "negative ran no exact test")

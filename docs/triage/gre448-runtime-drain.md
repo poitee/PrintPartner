@@ -484,14 +484,17 @@ Keep the pinned native Node directory first in `PATH` for the npm commands.
 The driver rejects shell dispatchers before executing them. Each invocation
 creates a separate `run-*` evidence directory and records its exact commands.
 
-The negative control temporarily disarms the production parent-death guard in
-`Process::spawn`. The same exact test must fail with
+The negative control copies the Rust workspace into the isolated stage and
+disarms the production parent-death guard only in that private source copy.
+Its Cargo target directory is separate from the calling checkout. The same exact
+test must fail with
 `built startup group outlived force-killed owner`. A pre-cleanup observation
 requires the owner to be reaped, the backend still stopped, and the peer alive.
 The fixture then kills and reaps the leaked group. A `finally` block restores
-`lib.rs` byte-for-byte before checking the negative result. The driver requires
-two more cycles with the restored guard and retains the restoration hash.
-Run this source-mutating control without concurrent builds in the same checkout.
+the private `lib.rs` byte-for-byte before checking the negative result. The
+calling checkout's source stays unchanged, including if termination bypasses
+`finally`. The driver requires two more cycles with the original guard and
+retains source isolation and restoration hashes.
 
 Evidence includes original and instrumented manifests, original and instrumented
 preload hashes, the instrumented preload, built entry and Node hashes, startup
@@ -530,3 +533,16 @@ built entry hash stayed unchanged. Independent receipts and `owner-audit.json`
 are in `/tmp/gre448-parent-death-owner/proof/run-o8j_4qrm`. Crate boundaries,
 the unchanged AST ratchet, Python compilation, observer syntax, comment review,
 and diff checks also passed.
+
+Review identified that termination could bypass restoration of the original
+source-mutating control. The control now mutates only a private Rust workspace
+copy and compiles it into a separate Cargo target. The owner reran the full
+proof in `/tmp/gre448-parent-death-owner/isolated-proof/run-s92c0dby`: four
+positive cycles passed, the isolated negative failed the intended invariant,
+and all 19 recorded PIDs were absent. Tracked `lib.rs` stayed unchanged.
+The cancellation harness `/tmp/gre448-parent-death-owner/prove-interruption.py`
+then ran two real baseline cycles per signal and blocked Cargo immediately
+after the private fault was written. SIGTERM and SIGKILL each bypassed
+`finally` and left the private copy mutated, while tracked source remained
+byte-for-byte unchanged. Receipts are in
+`/tmp/gre448-parent-death-owner/interruption/receipts.json`.
