@@ -12,6 +12,7 @@ import {
 import { parseStlPackUnitTokens } from "../services/export-stl-pack.js";
 import { parseCheckoffUnits, parseUnlabeledNames } from "../services/printer-checkoff.js";
 import { sendProblem } from "../lib/api-error.js";
+import { readFeatureAccess } from "../lib/feature-access.js";
 import { hostedPlanningPolicy } from "../lib/hosted-planning.js";
 import { sendIfTenantDiskQuotaExceeded } from "../lib/tenant-disk-quota.js";
 import { getIntegrationAdapter } from "../integrations/registry.js";
@@ -353,6 +354,16 @@ export async function registerJobRoutes(
         const integration = getIntegrationConfig(repo, integrationId);
         if (!integration) {
           return sendProblem(reply, 400, "Bad Request", "Linked printer host was not found");
+        }
+        if (integration.type === "bambu") {
+          const access = readFeatureAccess(() => repo, "bambu", profileId);
+          if (access.kind !== "allowed") {
+            const status = access.kind === "disabled" ? 403 : 500;
+            return reply.status(status).send({
+              status, title: access.kind === "disabled" ? "Forbidden" : "Internal Server Error",
+              detail: access.error, code: access.code,
+            });
+          }
         }
         if (integration.type !== "moonraker" && integration.type !== "prusalink") {
           return sendProblem(
