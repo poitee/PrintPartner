@@ -14,6 +14,8 @@ mod drain;
 mod origin;
 mod preferences;
 mod rebuild;
+mod restore;
+pub use restore::{RestoreMetadata, RestoreOutcome, RestoreScope};
 mod state_file;
 
 pub use origin::OriginChange;
@@ -57,6 +59,7 @@ pub struct CoreHandle {
     monitoring: pp_gateway::MonitoringControl,
     gate: ShutdownGate,
     preferences: preferences::Client,
+    recovery: restore::Client,
 }
 impl Clone for CoreHandle {
     fn clone(&self) -> Self {
@@ -65,6 +68,7 @@ impl Clone for CoreHandle {
             monitoring: self.monitoring.clone(),
             gate: self.gate.clone(),
             preferences: self.preferences.clone(),
+            recovery: self.recovery.clone(),
         }
     }
 }
@@ -93,7 +97,17 @@ impl CoreHandle {
         self.compat.status.clone()
     }
     pub async fn recover_compat(&self) -> Result<()> {
-        self.compat.recover().await
+        self.recovery.restart().await
+    }
+
+    pub async fn prepare_restore(&self, archive: PathBuf) -> Result<RestoreMetadata> {
+        self.recovery.prepare(archive).await
+    }
+    pub async fn cancel_restore(&self) -> Result<()> {
+        self.recovery.cancel().await
+    }
+    pub async fn confirm_restore(&self) -> Result<RestoreOutcome> {
+        self.recovery.confirm().await
     }
 
     pub fn track_shutdown_work(&self) -> Result<TrackedShutdownWork, &'static str> {
@@ -116,6 +130,14 @@ pub struct CoreRuntime {
     launch: Option<LaunchTarget>,
     shutdown_requested: pp_gateway::ShutdownRequested,
 }
+enum StopIntent {
+    Shutdown(Option<CutoverPlan>),
+    Restore(
+        pp_storage::restore::PreparedRestore,
+        tokio::sync::oneshot::Sender<RestoreOutcome>,
+    ),
+}
+
 struct Resources {
     owners: OperationOwners,
     origin_change: Option<OriginChange>,
@@ -186,6 +208,10 @@ async fn start_resources(
         );
     }
     let mut owner = StorageLease::acquire(&data_dir)?;
+    if let Err(error) = pp_storage::restore::recover_pending(&owner) {
+        owner.retain_until_process_exit();
+        return Err(error.context("Pending offline restore recovery failed; writers refused"));
+    }
     let account_pin =
         pp_compat::DesktopAccountPin::capture(owner.data_dir(), desktop_rebuild.enabled())?;
     let (owners, boot) = cutover::recover(owner.data_dir(), ownership)
@@ -301,6 +327,9 @@ impl CoreRuntime {
                     let requested_by_gateway = resources.gateway.shutdown_requested();
                     let requested_by_adapter = requested_by_gateway.clone();
                     let (preferences, mut commands) = preferences::Client::channel();
+                    let (recovery, mut recovery_commands) = restore::Client::channel();
+                    let mut recovery_state = restore::Admission::Idle;
+                    let mut recovery_status = resources.supervisor.handle.status.clone();
                     let public = resources.gateway.take_launch_target().map(|launch| {
                         (
                             resources.gateway.origin().to_owned(),
@@ -309,6 +338,7 @@ impl CoreRuntime {
                                 monitoring: resources.gateway.monitoring_control(),
                                 gate: resources.gate.clone(),
                                 preferences,
+                                recovery,
                             },
                             launch,
                             requested_by_adapter,
@@ -317,18 +347,49 @@ impl CoreRuntime {
                             resources.owner.data_dir().to_owned(),
                         )
                     });
-                    let mut plan = None;
+                    let mut intent = StopIntent::Shutdown(None);
                     if started.send(public).is_ok() {
                         let gateway_stopped = requested_by_gateway.wait();
                         tokio::pin!(gateway_stopped);
                         loop {
                             tokio::select! {
                                 biased;
-                                received = &mut stopped => { plan = received.ok().flatten(); break; },
+                                received = &mut stopped => { intent = StopIntent::Shutdown(received.ok().flatten()); break; },
                                 _ = &mut gateway_stopped => {
                                     stopped.close();
-                                    plan = stopped.try_recv().ok().flatten();
+                                    intent = StopIntent::Shutdown(stopped.try_recv().ok().flatten());
                                     break;
+                                },
+                                changed = recovery_status.changed() => {
+                                    if changed.is_err() { break; }
+                                    if matches!(recovery_state, restore::Admission::RestartRequested) {
+                                        recovery_state = restore::Admission::Idle;
+                                    }
+                                },
+                                Some(command) = recovery_commands.recv() => match command {
+                                    restore::Command::Prepare(archive, reply) => {
+                                        let result = recovery_state.prepare(&resources.owner, &resources.supervisor.handle.status.borrow(), &archive);
+                                        let accepted = result.is_ok();
+                                        if reply.send(result).is_err() && accepted { recovery_state = restore::Admission::Idle; }
+                                    }
+                                    restore::Command::Cancel(reply) => {
+                                        if matches!(recovery_state, restore::Admission::Prepared(_)) { recovery_state = restore::Admission::Idle; }
+                                        let _ = reply.send(());
+                                    }
+                                    restore::Command::Confirm(reply) => {
+                                        match recovery_state.take() {
+                                            Ok(prepared) => { intent = StopIntent::Restore(prepared, reply); break; }
+                                            Err(error) => { let _ = reply.send(RestoreOutcome::FailedUnchanged(error.to_string())); }
+                                        }
+                                    }
+                                    restore::Command::Restart(reply) => {
+                                        let result = if matches!(recovery_state, restore::Admission::Idle) {
+                                            recovery_status.borrow_and_update();
+                                            resources.supervisor.handle.recover().await
+                                        } else { Err(anyhow::anyhow!("Another recovery action is pending")) };
+                                        if result.is_ok() { recovery_state = restore::Admission::RestartRequested; }
+                                        let _ = reply.send(result);
+                                    }
                                 },
                                 command = commands.recv() => match command {
                                     Some(command) => command.execute(&resources.owner),
@@ -337,8 +398,11 @@ impl CoreRuntime {
                             }
                         }
                     }
+                    drop(recovery_state);
+                    recovery_commands.close();
+                    drop(recovery_commands);
                     preferences::settle(&mut commands, &resources.owner).await;
-                    let receipt = stop_resources(resources, plan).await;
+                    let receipt = stop_resources(resources, intent).await;
                     let _ = completed.send(receipt);
                 });
             })
@@ -459,7 +523,7 @@ impl CoreRuntime {
 
 async fn stop_resources(
     resources: Resources,
-    plan: Option<CutoverPlan>,
+    intent: StopIntent,
 ) -> (ShutdownReceipt, Option<CutoverReceipt>) {
     let (tracked_idle, gateway_idle) = drain::reject_and_wait(
         MUTATION_DRAIN,
@@ -491,6 +555,22 @@ async fn stop_resources(
     if !gateway_idle {
         receipt.errors.push("gateway_drain_timed_out");
     }
+    let plan = match intent {
+        StopIntent::Shutdown(plan) => plan,
+        StopIntent::Restore(prepared, reply) => {
+            let outcome = restore::install(&resources.owner, &receipt, prepared);
+            let installed = matches!(outcome, RestoreOutcome::InstalledServiceStopped);
+            let _ = reply.send(outcome);
+            if !installed {
+                resources.owner.retain_until_process_exit();
+                receipt
+                    .errors
+                    .push("restore_failed_storage_ownership_retained");
+                return (receipt, None);
+            }
+            None
+        }
+    };
     let cutover = plan.map(|plan| {
         plan.commit(
             resources.owner.data_dir(),

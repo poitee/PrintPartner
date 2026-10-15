@@ -88,6 +88,10 @@ pub(crate) fn preflight(path: &Path, owned: bool) -> Result<u64> {
         "Data directory already owned"
     );
     let conn = Connection::open(copy.0.join("print-partner.db"))?;
+    validate_restore_schema(&conn)
+}
+
+pub(crate) fn validate_restore_schema(conn: &Connection) -> Result<u64> {
     let integrity: String = conn.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
     ensure!(
         integrity == "ok",
@@ -128,7 +132,7 @@ pub(crate) fn preflight(path: &Path, owned: bool) -> Result<u64> {
         version == 0 || version >= 31,
         "Cannot upgrade database schema version {version}; install Print Partner v3.3.0 first"
     );
-    crate::jobs::validate_schema(&conn, version)?;
+    crate::jobs::validate_schema(conn, version)?;
     Ok(version)
 }
 

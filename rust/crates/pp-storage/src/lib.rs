@@ -428,8 +428,18 @@ impl WriterOwner {
             "Storage limits must be positive"
         );
         let admitted = lease::admit_directory(directory)?;
+        anyhow::ensure!(
+            !directory
+                .join(".offline-restore-journal.json")
+                .try_exists()?,
+            "Pending offline restore requires desktop recovery before writer startup"
+        );
         admitted.preflight()?;
         let lease = lease::StorageLease::acquire_admitted(admitted)?;
+        anyhow::ensure!(
+            !restore::pending(&lease)?,
+            "Pending offline restore requires desktop recovery before writer startup"
+        );
         let path = lease.data_dir().join("print-partner.db");
         let version = schema::preflight(&path, true)?;
         for name in ["repos", "sources", "exports", "thumbs", "covers"] {

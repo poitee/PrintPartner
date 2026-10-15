@@ -88,6 +88,7 @@ fn run() -> Result<u8> {
     let mut data = None;
     let mut test_exit = None;
     let mut test_recovery_logs = false;
+    let mut test_recovery_restore = false;
     while let Some(argument) = args.next() {
         match argument.as_str() {
             "--dev-stage" if cfg!(debug_assertions) => {
@@ -108,6 +109,12 @@ fn run() -> Result<u8> {
                 )
             }
             "--test-recovery-logs" if cfg!(debug_assertions) => test_recovery_logs = true,
+            "--test-recovery-restore"
+                if cfg!(debug_assertions)
+                    && std::env::var("PP_DESKTOP_RECOVERY_UI").is_ok_and(|value| value == "1") =>
+            {
+                test_recovery_restore = true
+            }
             _ => anyhow::bail!("Unsupported desktop launch argument"),
         }
     }
@@ -167,6 +174,24 @@ fn run() -> Result<u8> {
             return Err(error);
         }
     };
+    if test_recovery_restore {
+        let handle = core.handle();
+        let app_handle = app.handle().clone();
+        tauri::async_runtime::spawn(async move {
+            let mut status = handle.subscribe();
+            while !matches!(
+                *status.borrow_and_update(),
+                CoreStatus::Guarded | CoreStatus::Failed
+            ) {
+                if status.changed().await.is_err() {
+                    return;
+                }
+            }
+            let _ = app_handle.clone().run_on_main_thread(move || {
+                recovery::restore_backup(&app_handle, handle, std::sync::Arc::default())
+            });
+        });
+    }
     let shutdown_requested = core.shutdown_requested();
     let app_handle = app.handle().clone();
     let stop_signal = runtime.spawn(async move {
@@ -229,12 +254,16 @@ fn build_tray(
     let show = MenuItem::with_id(app, "show", "Show Print Partner", true, None::<&str>)?;
     let status = MenuItem::with_id(app, "status", "Service ready", false, None::<&str>)?;
     let recover = MenuItem::with_id(app, "recover", "Restart service", false, None::<&str>)?;
+    let restore = MenuItem::with_id(app, "restore", "Restore backup", false, None::<&str>)?;
     let logs = MenuItem::with_id(app, "logs", "View logs", true, None::<&str>)?;
     let folder = MenuItem::with_id(app, "data", "Open data folder", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Print Partner", true, None::<&str>)?;
     let recovery_ui = std::env::var("PP_DESKTOP_RECOVERY_UI").is_ok_and(|value| value == "1");
     let menu = if recovery_ui {
-        Menu::with_items(app, &[&show, &status, &logs, &recover, &folder, &quit])?
+        Menu::with_items(
+            app,
+            &[&show, &status, &logs, &recover, &restore, &folder, &quit],
+        )?
     } else {
         Menu::with_items(app, &[&show, &status, &recover, &quit])?
     };
@@ -261,6 +290,9 @@ fn build_tray(
             "recover" => {
                 recovery::restart(app, recovery.clone(), recovery_gate.clone());
             }
+            "restore" if recovery_ui => {
+                recovery::restore_backup(app, recovery.clone(), recovery_gate.clone())
+            }
             "logs" if recovery_ui => diagnostics.view_logs(app),
             "data" if recovery_ui => diagnostics.open_data(app),
             "quit" => app.exit(0),
@@ -282,11 +314,13 @@ fn build_tray(
                 CoreStatus::Failed => "Service failed",
             };
             let guarded = gate.observe(&state);
-            let (status, recover) = (status.clone(), recover.clone());
+            let restore_enabled = gate.restore_enabled(&state);
+            let (status, recover, restore) = (status.clone(), recover.clone(), restore.clone());
             if app_handle
                 .run_on_main_thread(move || {
                     let _ = status.set_text(text);
                     let _ = recover.set_enabled(guarded);
+                    let _ = restore.set_enabled(restore_enabled);
                 })
                 .is_err()
             {

@@ -81,7 +81,7 @@ fn row(owner: &StorageLease) -> String {
 }
 
 #[test]
-fn offline_restore_sqlite_scope_and_stale_wal() {
+fn ticket_t_2_offline_restore_sqlite_scope_and_stale_wal() {
     for (version, scope) in [(1, "legacy"), (2, "database-only"), (2, "full")] {
         let f = Fixture::new();
         let owner = f.owner();
@@ -124,7 +124,7 @@ fn offline_restore_sqlite_scope_and_stale_wal() {
 }
 
 #[test]
-fn offline_restore_rejects_unexpected_duplicate_scope_and_unsafe_live_paths() {
+fn ticket_t_2_offline_restore_rejects_unexpected_duplicate_scope_and_unsafe_live_paths() {
     let f = Fixture::new();
     let owner = f.owner();
     fs::write(owner.data_dir().join("print-partner.db"), b"unchanged").unwrap();
@@ -151,16 +151,20 @@ fn offline_restore_rejects_unexpected_duplicate_scope_and_unsafe_live_paths() {
 }
 
 #[test]
-fn offline_restore_faults_roll_back_and_interruption_recovers() {
+fn ticket_t_2_offline_restore_faults_roll_back_and_interruption_recovers() {
     for interrupt in [false, true] {
-        for stop_at in 1..=8 {
+        for stop_at in 1..=30 {
             let f = Fixture::new();
             let owner = f.owner();
             let data = owner.data_dir();
             fs::write(data.join("print-partner.db"), b"original db").unwrap();
             fs::create_dir(data.join("repos")).unwrap();
             fs::write(data.join("repos/old"), b"original root").unwrap();
-            let archive = f.archive(2, "full", &[("repos/new", b"restored root")]);
+            let archive = f.archive(
+                2,
+                "full",
+                &[("repos/new", b"restored root"), ("thumbs/new", b"new root")],
+            );
             let prepared = PreparedRestore::prepare(&owner, &archive).unwrap();
             let mut calls = 0;
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -189,6 +193,144 @@ fn offline_restore_faults_roll_back_and_interruption_recovers() {
             );
             assert_eq!(fs::read(data.join("repos/old")).unwrap(), b"original root");
             assert!(!data.join("repos/new").exists());
+            assert!(!data.join("thumbs").exists());
         }
     }
+}
+
+#[test]
+fn ticket_t_2_offline_restore_applies_staged_wal_rows() {
+    let f = Fixture::new();
+    let owner = f.owner();
+    let db = f.0.join("wal.db");
+    let conn = Connection::open(&db).unwrap();
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE restored(value TEXT); INSERT INTO restored VALUES ('WAL row');").unwrap();
+    let path = f.0.join("wal.tar.gz");
+    let mut tar = tar::Builder::new(GzEncoder::new(
+        fs::File::create(&path).unwrap(),
+        Compression::default(),
+    ));
+    append(&mut tar, "backup-metadata.json", br#"{"version":"2","formatVersion":2,"createdAt":"2026-10-15T00:00:00Z","appVersion":"3.3.0","scope":{"kind":"database-only","includedRoots":[]}}"#);
+    append(&mut tar, "print-partner.db", &fs::read(&db).unwrap());
+    append(
+        &mut tar,
+        "print-partner.db-wal",
+        &fs::read(f.0.join("wal.db-wal")).unwrap(),
+    );
+    tar.into_inner().unwrap().finish().unwrap();
+    PreparedRestore::prepare(&owner, &path)
+        .unwrap()
+        .activate(&owner)
+        .unwrap();
+    assert_eq!(row(&owner), "WAL row");
+    assert!(!owner.data_dir().join("print-partner.db-wal").exists());
+    drop(conn);
+}
+
+#[test]
+fn ticket_t_2_offline_restore_pax_paths_and_links_are_validated() {
+    for (name, kind) in [
+        ("repos/../escape", tar::EntryType::Regular),
+        ("repos/link", tar::EntryType::Symlink),
+        ("repos/hardlink", tar::EntryType::Link),
+        ("repos/fifo", tar::EntryType::Fifo),
+    ] {
+        let f = Fixture::new();
+        let owner = f.owner();
+        fs::write(owner.data_dir().join("print-partner.db"), b"unchanged").unwrap();
+        let path = f.0.join("unsafe.tar.gz");
+        let mut tar = tar::Builder::new(GzEncoder::new(
+            fs::File::create(&path).unwrap(),
+            Compression::default(),
+        ));
+        tar.append_pax_extensions([("path", name.as_bytes())])
+            .unwrap();
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(kind);
+        header.set_size(0);
+        header.set_mode(0o600);
+        if kind.is_symlink() || kind.is_hard_link() {
+            header.set_link_name("/tmp/external").unwrap();
+        }
+        header.set_cksum();
+        tar.append_data(&mut header, "repos/entry", &[][..])
+            .unwrap();
+        tar.into_inner().unwrap().finish().unwrap();
+        assert!(PreparedRestore::prepare(&owner, &path).is_err());
+        assert_eq!(
+            fs::read(owner.data_dir().join("print-partner.db")).unwrap(),
+            b"unchanged"
+        );
+    }
+    let f = Fixture::new();
+    let owner = f.owner();
+    let path = f.archive(2, "full", &[]);
+    let contents = fs::read(&path).unwrap();
+    let mut tar = tar::Builder::new(GzEncoder::new(
+        fs::File::create(f.0.join("pax.tar.gz")).unwrap(),
+        Compression::default(),
+    ));
+    let mut original = tar::Archive::new(flate2::read::GzDecoder::new(&contents[..]));
+    for entry in original.entries().unwrap() {
+        let mut entry = entry.unwrap();
+        tar.append(&entry.header().clone(), &mut entry).unwrap();
+    }
+    let name = format!("repos/{}", "x".repeat(150));
+    tar.append_pax_extensions([("path", name.as_bytes())])
+        .unwrap();
+    append(&mut tar, "truncated-name", b"long path contents");
+    tar.into_inner().unwrap().finish().unwrap();
+    PreparedRestore::prepare(&owner, &f.0.join("pax.tar.gz"))
+        .unwrap()
+        .activate(&owner)
+        .unwrap();
+    assert_eq!(
+        fs::read(owner.data_dir().join(name)).unwrap(),
+        b"long path contents"
+    );
+    assert_eq!(row(&owner), "backup row");
+}
+
+#[test]
+fn ticket_t_2_offline_restore_recovery_rejects_escaping_journal() {
+    let f = Fixture::new();
+    let owner = f.owner();
+    let outside = f.0.join("outside");
+    fs::write(&outside, b"preserve").unwrap();
+    for journal in [
+        serde_json::json!({"version":1,"stage":"../outside","entries":[]}),
+        serde_json::json!({"version":1,"stage":format!(".offline-restore-{}", "a".repeat(32)),"entries":[{"name":"../outside","previous":false,"replacement":true}]}),
+    ] {
+        fs::write(owner.data_dir().join(JOURNAL), journal.to_string()).unwrap();
+        assert!(recover_pending(&owner).is_err());
+        assert_eq!(fs::read(&outside).unwrap(), b"preserve");
+        assert!(owner.data_dir().join(JOURNAL).exists());
+    }
+}
+
+#[test]
+fn ticket_t_2_offline_restore_keeps_files_when_rollback_is_incomplete() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new();
+    let owner = f.owner();
+    fs::write(owner.data_dir().join(DATABASE), b"original database").unwrap();
+    let archive = f.archive(2, "database-only", &[]);
+    let prepared = PreparedRestore::prepare(&owner, &archive).unwrap();
+    let old = prepared.stage.join("old");
+    let error = prepared
+        .activate_with(&owner, || {
+            fs::set_permissions(&old, fs::Permissions::from_mode(0o000))?;
+            anyhow::bail!("activation failure with unreadable rollback files")
+        })
+        .unwrap_err();
+    assert!(error.to_string().contains("Recovery required"), "{error:#}");
+    assert!(pending(&owner).unwrap());
+    assert!(StorageLease::acquire(owner.data_dir()).is_err());
+    fs::set_permissions(old, fs::Permissions::from_mode(0o700)).unwrap();
+    recover_pending(&owner).unwrap();
+    assert_eq!(
+        fs::read(owner.data_dir().join(DATABASE)).unwrap(),
+        b"original database"
+    );
+    assert!(!pending(&owner).unwrap());
 }

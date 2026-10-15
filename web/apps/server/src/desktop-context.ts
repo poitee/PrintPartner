@@ -76,6 +76,9 @@ export function releaseOrphanedDesktopOwner(setup: { data_dir: string; socket_pa
 function assertDataDirectoryAvailable(dataDir: string): void {
   if (!existsSync(dataDir)) return;
   const canonical = realpathSync(dataDir);
+  if (lstatSync(join(canonical, ".offline-restore-journal.json"), { throwIfNoEntry: false })) {
+    throw new Error("Pending native restore requires desktop recovery");
+  }
   if (!existsSync(join(canonical, ".desktop-owner.json"))) return;
   if (context?.data_dir === canonical) return;
   // Under the shared storage lease, recover stale markers from either runtime.
