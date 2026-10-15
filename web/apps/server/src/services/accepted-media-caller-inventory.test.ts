@@ -118,6 +118,7 @@ describe("known accepted media production caller inventory", () => {
       readAcceptedPlanReview: ["assistant/tools.ts", "routes/plans.ts"],
       observeAcceptedArtifact: ["services/accepted-plan-review.ts"],
       openVerifiedAcceptedArtifact: [
+        "ownership-migration.ts",
         "routes/parts.ts",
         "services/accepted-artifact-geometry.ts",
         "services/export-stl-pack.ts",
