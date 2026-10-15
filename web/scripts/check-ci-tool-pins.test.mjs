@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, cpSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import process from 'node:process';
@@ -144,11 +144,13 @@ for (const tracked of [false, true, 'symlink']) {
     mkdirSync(join(directory, '.github/workflows'), { recursive: true });
     copyFileSync(cli, join(directory, 'web/scripts/check-ci-tool-pins.mjs'));
     symlinkSync(fileURLToPath(new URL('../node_modules', import.meta.url)), join(directory, 'web/node_modules'));
+    writeFileSync(join(directory, '.github/workflows/web-ci.yml'), JSON.stringify(webCI));
     const contracts = join(directory, '.github/workflows/desktop-contracts.yml');
     if (tracked === 'symlink') symlinkSync('../../contracts.yml', contracts);
     else writeFileSync(contracts, desktop());
     for (const args of [
       ['init', '-q'],
+      ['add', '.github/workflows/web-ci.yml'],
       ['add', tracked ? '.github/workflows/desktop-contracts.yml' : 'web/scripts/check-ci-tool-pins.mjs'],
       ['-c', 'user.name=CI test', '-c', 'user.email=ci@example.invalid', 'commit', '-qm', 'fixture'],
     ]) {
@@ -356,3 +358,79 @@ for (const [name, source] of [
     assert.equal(result.stdout, summary(0, 0, 0));
   });
 }
+
+const webCI = { jobs: Object.fromEntries(['web', 'web-build'].map(name => [name, {
+  steps: [
+    { uses: setupNode, with: { 'node-version': '22.23.3' } },
+    { run: 'test "$(node --version)" = "v22.23.3"' },
+  ],
+}])) };
+
+for (const filename of ['web-ci.yml', 'web-ci.yaml']) {
+  test(`accept exact matching Web CI pins in ${filename}`, t => {
+    const result = run(t, JSON.stringify(webCI), [], filename);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, summary(0, 0, 0));
+  });
+}
+
+for (const name of ['web', 'web-build']) {
+  for (const version of ['22', '22.23', '22.x', 'lts/*', '^22.23.3', 'v22.23.3', '22.23.3-rc.1', '022.23.3', '24.21.0', '1.0.0', '${{ inputs.node }}', 22, null]) {
+    test(`reject Web CI ${name} Node ${JSON.stringify(version)}`, t => {
+      const source = JSON.parse(JSON.stringify(webCI));
+      source.jobs[name].steps[0].with['node-version'] = version;
+      const result = run(t, JSON.stringify(source), [], 'web-ci.yml');
+      assert.equal(result.status, 1, result.stdout);
+      assert.match(result.stderr, new RegExp(`jobs.${name}: UNPINNED_WEB_NODE:`));
+    });
+  }
+  for (const [label, mutate, diagnostic] of [
+    ['missing lane', source => delete source.jobs[name], 'INVALID_WEB_NODE_SETUP'],
+    ['conditional lane', source => { source.jobs[name].if = false; }, 'INVALID_WEB_NODE_SETUP'],
+    ['tolerated lane failure', source => { source.jobs[name]['continue-on-error'] = true; }, 'INVALID_WEB_NODE_SETUP'],
+    ['dependent lane', source => { source.jobs[name].needs = ['skipped']; }, 'INVALID_WEB_NODE_SETUP'],
+    ['matrix override', source => { source.jobs[name].strategy = { matrix: { node: ['22'] } }; }, 'INVALID_WEB_NODE_SETUP'],
+    ['duplicate setup', source => source.jobs[name].steps.push(source.jobs[name].steps[0]), 'INVALID_WEB_NODE_SETUP'],
+    ['missing setup', source => source.jobs[name].steps.shift(), 'INVALID_WEB_NODE_SETUP'],
+    ['version file', source => { source.jobs[name].steps[0].with['node-version-file'] = '.nvmrc'; }, 'UNPINNED_WEB_NODE'],
+    ['conditional setup', source => { source.jobs[name].steps[0].if = 'false'; }, 'UNPINNED_WEB_NODE'],
+    ['tolerated setup failure', source => { source.jobs[name].steps[0]['continue-on-error'] = true; }, 'UNPINNED_WEB_NODE'],
+    ['missing runtime check', source => source.jobs[name].steps.pop(), 'MISSING_WEB_NODE_VERIFICATION'],
+    ['mismatched runtime check', source => { source.jobs[name].steps[1].run = 'test "$(node --version)" = "v24.21.0"'; }, 'MISSING_WEB_NODE_VERIFICATION'],
+    ['conditional runtime check', source => { source.jobs[name].steps[1].if = 'false'; }, 'MISSING_WEB_NODE_VERIFICATION'],
+    ['tolerated runtime failure', source => { source.jobs[name].steps[1]['continue-on-error'] = true; }, 'MISSING_WEB_NODE_VERIFICATION'],
+    ['install before setup', source => source.jobs[name].steps.unshift({ run: 'npm ci --ignore-scripts' }), 'EARLY_WEB_NODE_COMMAND'],
+    ['lifecycle before setup', source => source.jobs[name].steps.unshift({ run: 'npm rebuild' }), 'EARLY_WEB_NODE_COMMAND'],
+    ['node before setup', source => source.jobs[name].steps.unshift({ run: 'node scripts/probe.mjs' }), 'EARLY_WEB_NODE_COMMAND'],
+    ['late runtime check', source => source.jobs[name].steps.splice(1, 0, { run: 'npm ci' }), 'MISSING_WEB_NODE_VERIFICATION'],
+  ]) {
+    test(`reject Web CI ${name} ${label}`, t => {
+      const source = JSON.parse(JSON.stringify(webCI));
+      mutate(source);
+      const result = run(t, JSON.stringify(source), [], 'web-ci.yml');
+      assert.equal(result.status, 1, result.stdout);
+      assert.match(result.stderr, new RegExp(`: ${diagnostic}:`));
+    });
+  }
+}
+
+test('reject Web CI lane patch mismatch despite matching runtime checks', t => {
+  const source = JSON.parse(JSON.stringify(webCI));
+  source.jobs['web-build'].steps[0].with['node-version'] = '22.23.4';
+  source.jobs['web-build'].steps[1].run = 'test "$(node --version)" = "v22.23.4"';
+  const result = run(t, JSON.stringify(source), [], 'web-ci.yml');
+  assert.equal(result.status, 1, result.stdout);
+  assert.match(result.stderr, /MISMATCHED_WEB_NODE: expected 22.23.3, received 22.23.4/);
+});
+
+test('accept coordinated future Web CI patch bump', t => {
+  const result = run(t, JSON.stringify(webCI).replaceAll('22.23.3', '22.23.4'), [], 'web-ci.yml');
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('repository Web CI has exact matching Node pins and runtime checks', t => {
+  const source = readFileSync(fileURLToPath(new URL('../../.github/workflows/web-ci.yml', import.meta.url)), 'utf8');
+  const result = run(t, source, [], 'web-ci.yml');
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, summary(0, 0, 0));
+});
