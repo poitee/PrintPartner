@@ -85,6 +85,16 @@ function observeLease(lease: string): LeaseObservation {
   return ownerIsStale(owner) ? { kind: "stale", owner } : { kind: "live" };
 }
 
+/** Anything but our own readable owner record leaves the lease for admission to judge. */
+function holdsLease(lease: string, instance: string): boolean {
+  try {
+    const recorded: unknown = JSON.parse(readOwnershipRecord(join(lease, "owner.json")));
+    return leaseOwnerSchema.parse(recorded).instance === instance;
+  } catch {
+    return false;
+  }
+}
+
 function invalidLeaseError(cause: unknown): Error {
   return new Error("storage_lease_marker_invalid: Data directory lease is malformed or unreadable", { cause });
 }
@@ -115,8 +125,13 @@ export function acquireStorageLease(directory: string): { identity: string; rele
           let heldPath = lease;
           const detached = join(directory, `.desktop-lease-release-${instance}`);
           return { identity, release: () => {
-            // Detach the whole lease before cleanup so a contender never observes an empty lease.
-            if (heldPath === lease) { renameSync(lease, detached); heldPath = detached; }
+            if (heldPath === lease) {
+              // A lease removed or republished by someone else is no longer ours to retire.
+              if (!holdsLease(lease, instance)) return;
+              // Detach the whole lease before cleanup so a contender never observes an empty lease.
+              renameSync(lease, detached);
+              heldPath = detached;
+            }
             rmSync(heldPath, { recursive: true });
           } };
         }

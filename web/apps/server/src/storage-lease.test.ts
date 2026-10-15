@@ -244,3 +244,45 @@ describe("lease observation races", () => {
     expect(existsSync(join(dir, ".desktop-owner.json"))).toBe(false);
   });
 });
+
+describe("release after the lease is removed externally", () => {
+  it.each(acquisition)("$name treats a missing lease as released and admits the next writer", ({ acquire }) => {
+    const dir = dataDir();
+    const release = acquire(dir);
+    rmSync(join(dir, ".desktop-lease"), { recursive: true });
+    release();
+    expect(readdirSync(dir)).toEqual([]);
+    releases.push(acquire(dir));
+  });
+
+  it("leaves a lease another writer republished in place", () => {
+    const dir = dataDir();
+    const held = acquireStorageLease(dir);
+    rmSync(join(dir, ".desktop-lease"), { recursive: true });
+    const next = acquireStorageLease(dir);
+    releases.push(next.release);
+    const before = inventory(dir);
+    held.release();
+    expect(inventory(dir)).toEqual(before);
+    expect(() => acquireStorageLease(dir)).toThrow("already owned");
+  });
+
+  it("acquireDataDirectory treats a missing owner marker as released", () => {
+    const dir = dataDir();
+    const release = acquireDataDirectory(dir);
+    rmSync(join(dir, ".desktop-owner.json"));
+    release();
+    expect(readdirSync(dir)).toEqual([]);
+    releases.push(acquireDataDirectory(dir));
+  });
+
+  it("acquireDataDirectory leaves an owner marker another writer recorded in place", () => {
+    const dir = dataDir();
+    const release = acquireDataDirectory(dir);
+    const foreign = JSON.stringify({ pid: process.pid, kind: "standalone", process_identity: "another-writer" });
+    writeFileSync(join(dir, ".desktop-owner.json"), foreign);
+    release();
+    expect(readFileSync(join(dir, ".desktop-owner.json"), "utf8")).toBe(foreign);
+    rmSync(join(dir, ".desktop-owner.json"));
+  });
+});

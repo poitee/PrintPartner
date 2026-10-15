@@ -184,6 +184,15 @@ export function storageWorkerEnv(dataDir: string): Record<string, string> {
   return { [storageParentIdentityEnv]: held.identity };
 }
 
+/** A marker removed, rewritten or made unreadable by someone else is no longer ours to remove. */
+function recordsStandaloneOwner(marker: string, identity: string): boolean {
+  let recorded: unknown;
+  try { recorded = JSON.parse(readOwnershipRecord(marker)); }
+  catch { return false; }
+  return typeof recorded === "object" && recorded !== null && "pid" in recorded && "process_identity" in recorded &&
+    recorded.pid === process.pid && recorded.process_identity === identity;
+}
+
 export function acquireDataDirectory(dataDir: string): () => void {
   if (context) {
     if (realpathSync(dataDir) !== context.data_dir) throw new Error("Desktop storage lease rejected");
@@ -207,7 +216,7 @@ export function acquireDataDirectory(dataDir: string): () => void {
   const held: HeldDataDirectory = { refs: 1, identity: lease.identity, release: () => {
     // Preserve ownership if marker cleanup fails, so callers can retry safely.
     if (!markerRemoved) {
-      rmSync(marker);
+      if (recordsStandaloneOwner(marker, lease.identity)) rmSync(marker);
       markerRemoved = true;
     }
     // Once the marker is gone this entry no longer stands for a reservation, even
