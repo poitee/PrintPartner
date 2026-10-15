@@ -111,6 +111,7 @@ def denied(method, path):
 
 
 PURE_READS = {
+    '/legal/summary': 'routes/legal.ts registerLegalRoutes reads LICENSE-SUMMARY.md; Rust serves the same bundled document without mutations or provider calls',
     '/printers': 'routes/printers.ts:160 -> services/printer-fleet.ts:103 loadFleet only parses repo.getSetting',
     '/integrations': 'routes/integrations.ts:26 -> integrations/store.ts:155 list projects stored settings and adapter capabilities without calling providers',
 }

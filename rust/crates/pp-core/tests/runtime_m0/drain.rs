@@ -878,3 +878,260 @@ async fn ticket_t_3_drain_legal_shared_rate_limit_parity() {
         }
     }
 }
+
+#[cfg(feature = "desktop_rebuild")]
+async fn legal_cors_request(
+    origin: &str,
+    cookie: &str,
+    method: &str,
+    path: &str,
+    with_origin: bool,
+) -> (StatusCode, axum::http::HeaderMap, Vec<u8>) {
+    use http_body_util::BodyExt;
+    let socket = tokio::net::TcpStream::connect(origin.strip_prefix("http://").unwrap())
+        .await
+        .unwrap();
+    let (mut sender, connection) =
+        hyper::client::conn::http1::handshake(hyper_util::rt::TokioIo::new(socket))
+            .await
+            .unwrap();
+    tokio::spawn(async move { connection.await.unwrap() });
+    let mut request = axum::http::Request::builder()
+        .method(method)
+        .uri(path)
+        .header("host", origin.strip_prefix("http://").unwrap())
+        .header("cookie", cookie);
+    if with_origin {
+        request = request.header("origin", origin);
+    }
+    let response = sender
+        .send_request(request.body(axum::body::Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let (head, body) = response.into_parts();
+    (
+        head.status,
+        head.headers,
+        body.collect().await.unwrap().to_bytes().to_vec(),
+    )
+}
+
+#[cfg(feature = "desktop_rebuild")]
+async fn legal_cors_matrix(
+    origin: &str,
+    cookie: &str,
+) -> Vec<std::collections::BTreeMap<String, String>> {
+    for method in ["GET", "HEAD"] {
+        for path in ["/legal/summary", "/api/v1/legal/summary"] {
+            let (status, headers, _) = request(
+                origin,
+                path,
+                method,
+                Some(cookie),
+                None,
+                Some("http://foreign.invalid"),
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::FORBIDDEN);
+            assert!(!headers.contains_key("access-control-allow-origin"));
+        }
+    }
+    let mut fixtures = Vec::new();
+    for status in [StatusCode::OK, StatusCode::TOO_MANY_REQUESTS] {
+        for method in ["GET", "HEAD"] {
+            for path in ["/legal/summary", "/api/v1/legal/summary"] {
+                for with_origin in [true, false] {
+                    let (actual, headers, body) =
+                        legal_cors_request(origin, cookie, method, path, with_origin).await;
+                    assert_eq!(actual, status, "{method} {path}, Origin={with_origin}");
+                    assert_eq!(
+                        headers
+                            .get("access-control-allow-origin")
+                            .map(|v| v.to_str().unwrap()),
+                        with_origin.then_some(origin),
+                        "{status} {method} {path}, Origin={with_origin}"
+                    );
+                    assert_eq!(headers["access-control-allow-credentials"], "true");
+                    let vary: Vec<_> = headers
+                        .get_all("vary")
+                        .iter()
+                        .flat_map(|v| v.to_str().unwrap().split(','))
+                        .map(str::trim)
+                        .collect();
+                    assert!(
+                        vary.iter().any(|v| v.eq_ignore_ascii_case("origin")),
+                        "{headers:?}"
+                    );
+                    if method == "HEAD" {
+                        assert!(body.is_empty());
+                    } else if status == StatusCode::OK {
+                        assert_eq!(
+                            body,
+                            include_bytes!(
+                                "../../../../../web/apps/server/src/data/legal/LICENSE-SUMMARY.md"
+                            )
+                        );
+                    } else {
+                        assert_eq!(
+                            serde_json::from_slice::<serde_json::Value>(&body).unwrap()["statusCode"],
+                            429
+                        );
+                    }
+                    let metadata = headers
+                        .iter()
+                        .filter(|(name, _)| {
+                            name.as_str().starts_with("access-control-") || name.as_str() == "vary"
+                        })
+                        .map(|(name, value)| {
+                            let value = if name.as_str() == "access-control-allow-origin" {
+                                "<request-origin>".to_owned()
+                            } else {
+                                value.to_str().unwrap().to_owned()
+                            };
+                            (name.to_string(), value)
+                        })
+                        .collect();
+                    fixtures.push(metadata);
+                }
+            }
+        }
+        if status == StatusCode::OK {
+            for n in 8..1000 {
+                assert_eq!(
+                    legal_cors_request(origin, cookie, "GET", "/legal/summary", false)
+                        .await
+                        .0,
+                    StatusCode::OK,
+                    "quota filler {n}"
+                );
+            }
+        }
+    }
+    assert_eq!(fixtures.len(), 16);
+    fixtures
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn ticket_t_3_drain_legal_summary_cors_parity() {
+    let Some(data) = isolated_case("ticket_t_3_drain_legal_summary_cors_parity", true).await else {
+        return;
+    };
+    const LEGAL: &str = "http:GET /legal/summary current";
+    let index = pp_gateway::ownership::manifest::admit_bundled_manifest().unwrap();
+    let receipt = |passed, failed| {
+        json!({
+            "schema":"pp-operation-parity-v1", "operation":LEGAL,
+            "manifest_sha256":index.digest(), "fixtures":16, "passed":passed, "failed":failed,
+        })
+        .to_string()
+    };
+    let mut runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    let cookie = bootstrap(&mut runtime).await;
+    let golden = legal_cors_matrix(runtime.origin(), &cookie).await;
+    println!(
+        "legal CORS Node: 16 passed; 0 failed; allowed/absent Origin, GET/HEAD, both aliases, 200/429"
+    );
+    let (returned, refusal) = *runtime
+        .shutdown_with_cutover(LEGAL, &receipt(15, 1))
+        .await
+        .expect_err("incomplete CORS parity must refuse cutover");
+    assert!(matches!(refusal, CutoverRefusal::ParityFailures { .. }));
+    assert!(!data.join(CUTOVER_FILE).exists());
+
+    let candidate_data = data.join("cors-candidate");
+    fs::create_dir(&candidate_data).unwrap();
+    let plan = pp_gateway::ownership::cutover::plan(
+        Some(&index),
+        &pp_gateway::ownership::cutover::OperationOwners::node_only(),
+        LEGAL,
+        &receipt(16, 0),
+    )
+    .unwrap();
+    assert!(matches!(
+        plan.commit(
+            &candidate_data,
+            pp_gateway::ownership::cutover::DrainEvidence {
+                tracked_idle: true,
+                gateway_idle: true,
+                compat: Some(CompatExit::Graceful),
+            }
+        ),
+        pp_gateway::ownership::cutover::CutoverReceipt::Committed { .. }
+    ));
+    let (owners, _) =
+        pp_gateway::ownership::cutover::recover(&candidate_data, Some(&index)).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut candidate = pp_gateway::Gateway::start(
+        listener,
+        PathBuf::new(),
+        pp_compat::CompatHandle::unpublished(),
+        &owners,
+    )
+    .unwrap();
+    let target = candidate.take_launch_target().unwrap().into_url();
+    let (status, headers, _) = request(
+        candidate.origin(),
+        target.strip_prefix(candidate.origin()).unwrap(),
+        "GET",
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let cookie = headers["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    let actual = legal_cors_matrix(candidate.origin(), cookie).await;
+    assert_eq!(actual, golden, "candidate CORS metadata differs from Node");
+    candidate.stop().await.unwrap();
+    assert!(!data.join(CUTOVER_FILE).exists());
+    println!("legal CORS candidate: 16 passed; 0 failed; desktop authority still Node");
+
+    let child = pid(&returned);
+    let (shutdown, cutover) = returned
+        .shutdown_with_cutover(LEGAL, &receipt(actual.len(), 0))
+        .await
+        .unwrap_or_else(|e| panic!("{:?}", e.1));
+    assert_clean(&shutdown, child);
+    assert!(matches!(
+        cutover,
+        pp_gateway::ownership::cutover::CutoverReceipt::Committed {
+            participants: 4,
+            ..
+        }
+    ));
+    let record = fs::read(data.join(CUTOVER_FILE)).unwrap();
+    for restart in 1..=2 {
+        let mut runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+        let child = pid(&runtime);
+        let cookie = bootstrap(&mut runtime).await;
+        struct Resume(u32);
+        impl Drop for Resume {
+            fn drop(&mut self) {
+                unsafe { libc::kill(self.0 as i32, libc::SIGCONT) };
+            }
+        }
+        assert_eq!(unsafe { libc::kill(child as i32, libc::SIGSTOP) }, 0);
+        let resume = Resume(child);
+        let actual = tokio::time::timeout(
+            Duration::from_secs(30),
+            legal_cors_matrix(runtime.origin(), &cookie),
+        )
+        .await
+        .expect("Rust CORS matrix must not wait for stopped Node");
+        drop(resume);
+        assert_eq!(actual, golden, "recovered CORS metadata differs from Node");
+        assert_clean(&runtime.shutdown().await, child);
+        assert_eq!(fs::read(data.join(CUTOVER_FILE)).unwrap(), record);
+        println!(
+            "legal CORS restart {restart}: 16 passed; 0 failed; Node stopped; authority unchanged"
+        );
+    }
+}
