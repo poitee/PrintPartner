@@ -21,7 +21,7 @@ Paths below are relative to `rust/crates/pp-storage`.
 | JSON escaping, ECMAScript trim, array indices, UTF-16 ordering, exact-byte hashing | `src/manifest_text/tests.rs`, `json_*`, `ecmascript_whitespace_set_and_trim_are_exact`, `array_index_boundaries_match_ecmascript`, `ordering_uses_utf16_rather_than_utf8_or_scalar_values`, `digest_hashes_exact_bytes_without_json_normalization` | Covered beyond the two original carrier tests. |
 | Canonical SQLite TEXT versus PPJS BLOB, malformed input and budgets | `src/manifest_text/tests.rs`, `sqlite_*`, `draft_sql_*` | Covered, including real SQLite storage classes and invalid UTF-8. |
 | Draft aliases, projections, field comparison, metadata separation | `src/manifest_text/tests.rs`, `draft_aliases_projection_and_scalar_mutation_preserve_metadata`, `draft_rejects_manifest_metadata_in_scalar_carrier` | Covered. |
-| `authenticated_graph_is_tenant_scoped_atomic_and_path_scoped`, tenant and membership refusal | `tests/build_graph_operations.rs`, `tenant_isolation_missing_and_invalid_credentials`, `mutation_duplicate_missing_membership_and_tenant_cases`, `mutation_requires_valid_credentials_before_writing` | Covered through the public client. |
+| `authenticated_graph_is_tenant_scoped_atomic_and_path_scoped`, tenant and membership refusal | `tests/build_graph_operations.rs`, `tenant_isolation_missing_and_invalid_credentials`, `mutation_duplicate_missing_membership_and_tenant_cases`, `mutation_requires_valid_credentials_before_writing` | Covered through the public client, including a zero-row assertion after invalid-base refusal. |
 | Same original test, atomic create and attachment persistence | `mutation_create_touch_attachments_and_delete`, `mutation_create_and_delete_rollback_include_dependent_writes`, new `audit_created_build_and_attachments_survive_owner_reopen` | Mutations and rollback covered. The new reopen test compares committed layers and the build name after owner restart. |
 | Same original test, cancellation and stopped owner | `cancelled_and_stopped_requests_are_typed_failures`, `mutation_cancellation_after_transaction_starts_rolls_back_touch` | Covered. |
 | `explicit_delete_cleans_settings_layers_and_survives_reopen` | `mutation_delete_cascades_accepted_graph_and_scoped_settings` plus both new `audit_delete_*` tests | Scoped settings, sources, cascades, foreign keys, and missing build after reopen covered. |
@@ -58,5 +58,5 @@ All three tests pass against the unchanged main implementation. No pre-existing
 behavior failure is claimed. For a negative control, temporarily constrain the
 `DELETE FROM build_profiles` statement to exclude builds with rows in
 `print_jobs` or `accepted_plate_revisions`. Both deletion tests must fail, then pass after restoring
-the original statement. This verifies that the added tests detect a deletion
-regression rather than merely exercising fixture setup.
+the original statement. This verifies that both tests reject a refused public deletion. It does not
+independently mutate each foreign-key cascade constraint.

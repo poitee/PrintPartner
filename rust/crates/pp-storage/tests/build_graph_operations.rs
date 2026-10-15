@@ -556,6 +556,15 @@ fn mutation_duplicate_missing_membership_and_tenant_cases() {
             .unwrap(),
             BuildOutcome::InvalidBaseSource
         ));
+        let invalid_rows: i64 = f
+            .raw()
+            .query_row(
+                "SELECT count(*) FROM build_profiles WHERE tenant_id='default' AND name='Invalid'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(invalid_rows, 0);
         for command in [
             BuildCommand::SetBase {
                 build,
