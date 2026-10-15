@@ -22,6 +22,8 @@ The independent runs passed 234 backend and 47 frontend tests. The production bu
 
 PR review added post-fetch inventory admission and regression coverage for revocation/corruption during both HTTP aliases. All 144 tests in the catalog, proxy, and farm-access suites passed. The prior farm fixture now explicitly opts into Spoolman and verifies unknown inventory without that opt-in.
 
+The revised UI passed 51 tests, including mounted inventory queries with 30-second freshness, synchronous off/on, delayed refresh, and desktop/mobile cached Review masking. Shared preset fixtures retain all five mutation cases with less setup. The production build, focused lint, server typecheck, and dead-code check passed again. In the running app, switching off removed the cached Review filament heading while preserving the saved role reference and Remove control.
+
 The isolated live server preserved 252 bundled colors while off and denied spool reads with `FEATURE_DISABLED`. Plan-on/account-off and both-on returned inventory. Plan-off/account-on remained denied. The browser saved a Spoolman color and selected a 480 g proof spool. Switching off hid inventory choices, preserved the assignment, and kept custom colors and clearing available. The fixture Source has no Git revision; its unrelated sync failure is outside this proof.
 
 ![Default-off Plan controls retain saved references](gre498-spoolman-workflows/default-off.png)

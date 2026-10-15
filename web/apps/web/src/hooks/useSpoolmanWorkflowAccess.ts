@@ -10,6 +10,13 @@ import { useHealthQuery } from "../queries/health";
 import { queryKeys } from "../queries/keys";
 import { usePlanFeaturesQuery } from "../queries/planFeatures";
 
+function purgeProfileSpools(client: ReturnType<typeof useQueryClient>, targetProfileId: number) {
+  client.removeQueries({
+    predicate: (query) =>
+      query.queryKey[0] === "spoolmanSpools" && query.queryKey[2] === targetProfileId,
+  });
+}
+
 export function useSpoolmanWorkflowAccess(profileId: number) {
   const client = useQueryClient();
   const health = useHealthQuery();
@@ -47,8 +54,14 @@ export function useSpoolmanWorkflowAccess(profileId: number) {
   useLayoutEffect(() => {
     scope.current = { profileId };
     mounted.current = true;
+    if (!currentAccessAllowed()) {
+      purgeProfileSpools(client, profileId);
+    }
     const unsubscribe = client.getQueryCache().subscribe(() => {
-      if (!currentAccessAllowed()) generation.current += 1;
+      if (!currentAccessAllowed()) {
+        generation.current += 1;
+        purgeProfileSpools(client, profileId);
+      }
     });
     return () => {
       mounted.current = false;

@@ -17,6 +17,7 @@ import {
   type QuantityUpdate,
 } from "../../context/PlanWorkspaceContext";
 import { useSpoolmanEnabled } from "../../hooks/useSpoolmanEnabled";
+import { useSpoolmanWorkflowAccess } from "../../hooks/useSpoolmanWorkflowAccess";
 import { groupCheckoffParts } from "../../lib/checkoffGroups";
 import { formatCheckoffSummary } from "../../lib/checkoffProgress";
 import { countPartWarnings, partWarningNote } from "../../lib/partWarnings";
@@ -276,6 +277,17 @@ function ReviewSheetRow({
   );
 }
 
+function maskReviewPart(part: ReviewPart, spoolmanAllowed: boolean): ReviewPart {
+  if (spoolmanAllowed) return part;
+  const isSpoolmanFilament = Boolean(part.filament_color_id?.trim().startsWith("spoolman:"));
+  return {
+    ...part,
+    spool_badge: null,
+    spool_summary: undefined,
+    ...(isSpoolmanFilament ? { filament_display: "", filament_hex: null } : {}),
+  };
+}
+
 const NO_SPOOLS: SpoolmanSpoolRow[] = [];
 
 const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function ReviewPartsSheet(
@@ -293,6 +305,7 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
     busyPartId,
   } = usePlanWorkspace();
   const profileId = includedReview.profile_id;
+  const spoolmanAccess = useSpoolmanWorkflowAccess(profileId);
   const { configured: spoolmanConfigured, integrationId } = useSpoolmanEnabled(profileId);
   const spoolsQuery = useSpoolmanSpoolsQuery(spoolmanConfigured ? integrationId : null, {
     profileId,
@@ -362,7 +375,10 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
     savePersistedReviewPartsUi(ui);
   }, [ui]);
 
-  const acceptedParts = useMemo(() => flattenReviewParts(review.part_groups), [review.part_groups]);
+  const acceptedParts = useMemo(() => {
+    const parts = flattenReviewParts(review.part_groups);
+    return spoolmanAccess.allowed ? parts : parts.map((part) => maskReviewPart(part, false));
+  }, [review.part_groups, spoolmanAccess.allowed]);
   const acceptedPartById = useMemo(
     () => new Map(acceptedParts.map((part) => [part.id, part])),
     [acceptedParts],

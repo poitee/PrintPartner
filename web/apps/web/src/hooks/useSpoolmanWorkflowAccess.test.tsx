@@ -10,6 +10,7 @@ import type { FilamentCatalog } from "../api/endpoints/filaments";
 import { queryKeys } from "../queries/keys";
 import { useSpoolmanWorkflowAccess } from "./useSpoolmanWorkflowAccess";
 import { useSpoolmanEnabled } from "./useSpoolmanEnabled";
+import { useSpoolmanSpoolsQuery } from "../queries/filaments";
 
 let client: QueryClient;
 let capabilities: string[];
@@ -206,6 +207,41 @@ describe("useSpoolmanWorkflowAccess", () => {
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.filamentCatalog(1) });
     });
   });
+
+  it.each(["off/on", "invalidation"])("withholds mounted cached spools through %s until refreshed", async (transition) => {
+    planSpoolman = true;
+    client.setDefaultOptions({ queries: { retry: false, staleTime: 30_000, gcTime: Infinity } });
+    client.setQueryData(queryKeys.health, { ok: true, capabilities: [TENANT_FEATURE_TOGGLES_CAPABILITY] });
+    client.setQueryData(queryKeys.planFeatures(1), planFeaturesData(1, true));
+    const oldRows = [{ id: 10, filament_id: 1, remaining_weight: 450, location: null }];
+    for (const id of [undefined, 1, 2]) client.setQueryData(queryKeys.spoolmanSpools("int-1", id), oldRows);
+    let finish: ((response: Response) => void) | undefined;
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn((input: string | URL | Request) => String(input).includes("/spoolman/spools")
+      ? new Promise<Response>((resolve) => { finish = resolve; }) : originalFetch(input)));
+    const { result } = renderHook(() => {
+      const access = useSpoolmanWorkflowAccess(1);
+      return useSpoolmanSpoolsQuery(access.allowed ? "int-1" : null, { profileId: 1, enabled: access.allowed });
+    }, { wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> });
+    expect(result.current.data).toEqual(oldRows);
+    act(() => {
+      if (transition === "invalidation") void client.invalidateQueries({ queryKey: queryKeys.planFeatures(1) });
+      else {
+        client.setQueryData(queryKeys.planFeatures(1), planFeaturesData(1, false));
+        client.setQueryData(queryKeys.planFeatures(1), planFeaturesData(1, true));
+      }
+    });
+    await waitFor(() => expect(finish).toBeDefined());
+    expect(result.current.data).toBeUndefined();
+    expect(client.getQueryData(queryKeys.spoolmanSpools("int-1", 1))).toBeUndefined();
+    expect(client.getQueryData(queryKeys.spoolmanSpools("int-1", 2))).toEqual(oldRows);
+    expect(client.getQueryData(queryKeys.spoolmanSpools("int-1"))).toEqual(oldRows);
+    const newRows = [{ ...oldRows[0], id: 99, remaining_weight: 500 }];
+    if (!finish) throw new Error("Inventory refresh did not start");
+    finish(new Response(JSON.stringify({ spools: newRows }), { headers: { "content-type": "application/json" } }));
+    await waitFor(() => expect(result.current.data).toEqual(newRows));
+  });
+
 });
 
 describe("useSpoolmanEnabled", () => {

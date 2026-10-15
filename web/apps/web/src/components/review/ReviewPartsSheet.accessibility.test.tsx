@@ -12,6 +12,10 @@ import ReviewPartsSheet from "./ReviewPartsSheet";
 const queryMocks = vi.hoisted(() => ({
   usePlanReviewQuery: vi.fn<() => { data: PlanReview | null }>(() => ({ data: null })),
   usePlanWorkspace: vi.fn(),
+  spoolmanAllowed: true,
+  spoolmanConfigured: false,
+  spoolmanIntegrationId: null as string | null,
+  isMobileLayout: false,
 }));
 
 vi.mock("../../context/ProfileContext", () => ({
@@ -29,11 +33,21 @@ vi.mock("../../queries/roleFilaments", () => ({
 vi.mock("../../queries/filaments", () => ({
   useSpoolmanSpoolsQuery: () => ({ data: undefined, isLoading: false }),
 }));
+vi.mock("../../hooks/useSpoolmanWorkflowAccess", () => ({
+  useSpoolmanWorkflowAccess: () => ({
+    allowed: queryMocks.spoolmanAllowed,
+    currentAccessAllowed: () => queryMocks.spoolmanAllowed,
+    beginAction: vi.fn(),
+  }),
+}));
 vi.mock("../../hooks/useSpoolmanEnabled", () => ({
-  useSpoolmanEnabled: () => ({ configured: false, integrationId: null }),
+  useSpoolmanEnabled: () => ({
+    configured: queryMocks.spoolmanConfigured,
+    integrationId: queryMocks.spoolmanIntegrationId,
+  }),
 }));
 vi.mock("../../hooks/useMediaQuery", () => ({
-  useMediaQuery: () => false,
+  useMediaQuery: () => queryMocks.isMobileLayout,
 }));
 vi.mock("../parts/PartThumbExpandButton", () => ({
   default: () => null,
@@ -60,6 +74,10 @@ describe("ReviewPartsSheet accessibility", () => {
 
   beforeEach(() => {
     localStorage.clear();
+    queryMocks.spoolmanAllowed = true;
+    queryMocks.spoolmanConfigured = false;
+    queryMocks.spoolmanIntegrationId = null;
+    queryMocks.isMobileLayout = false;
     queryMocks.usePlanReviewQuery.mockReset().mockReturnValue({ data: null });
     queryMocks.usePlanWorkspace.mockReturnValue({
       draftWorkspace: null,
@@ -274,4 +292,50 @@ describe("ReviewPartsSheet accessibility", () => {
       false,
     );
   });
+
+describe("ReviewPartsSheet Spoolman access revocation masking", () => {
+  it.each([false, true])("masks cached enrichment in sheet when access is denied (isMobileLayout: %s)", (isMobile) => {
+    queryMocks.spoolmanAllowed = false;
+    queryMocks.spoolmanConfigured = true;
+    queryMocks.isMobileLayout = isMobile;
+    localStorage.setItem(REVIEW_PARTS_UI_STORAGE_KEY, JSON.stringify({ layoutMode: "table" }));
+
+    const enrichedReview: PlanReview = {
+      ...review,
+      totals: { ...review.totals, included_parts: 2, total_print_units: 2 },
+      part_groups: [{
+        folder: "parts",
+        source_layer: null,
+        parts: [
+          {
+            id: 1, match_key: "a.stl", relative_path: "parts/a.stl", filename: "a.stl",
+            source_layer: null, status: "ok", role: "primary", requirement: null, option_group_id: null,
+            included: true, filament_color_id: "spoolman:int-1:filament:2", spoolman_spool_id: "spoolman:int-1:spool:5",
+            quantity_auto: 1, quantity_override: null, quantity_effective: 1, printed_count: 0,
+            print_units: [false], missing: true, filament_display: "Spoolman Blue", filament_hex: "#0000ff",
+            spool_badge: "450g left", spool_summary: [{ remaining_g: 450, spool_id: 5 }],
+          },
+          {
+            id: 2, match_key: "b.stl", relative_path: "parts/b.stl", filename: "b.stl",
+            source_layer: null, status: "ok", role: "accent", requirement: null, option_group_id: null,
+            included: true, filament_color_id: "c1", spoolman_spool_id: null,
+            quantity_auto: 1, quantity_override: null, quantity_effective: 1, printed_count: 0,
+            print_units: [false], missing: true, filament_display: "Catalog Red", filament_hex: "#ff0000",
+          },
+        ],
+      }],
+    };
+
+    queryMocks.spoolmanAllowed = true;
+    const { rerender } = render(<MemoryRouter><ReviewPartsSheet review={enrichedReview} planName="Voron" /></MemoryRouter>);
+    expect(screen.getAllByText("450g left").length).toBeGreaterThan(0);
+    queryMocks.spoolmanAllowed = false;
+    rerender(<MemoryRouter><ReviewPartsSheet review={enrichedReview} planName="Voron" /></MemoryRouter>);
+    expect(screen.queryByText("450g left")).toBeNull();
+    expect(screen.queryByText("Spoolman Blue")).toBeNull();
+    expect(screen.getAllByText("Catalog Red").length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: "Remove" }).length).toBe(isMobile ? 4 : 2);
+  });
+});
+
 });
