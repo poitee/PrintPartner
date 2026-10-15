@@ -185,10 +185,14 @@ function validateSnapshotPaths(source: string, db: Database.Database, checkLocal
   const sets = driver.select().from(schema.planRevisionInputSets).all();
   const revisions = driver.select().from(schema.planRevisions).all();
   for (const profile of driver.select().from(schema.buildProfiles).all()) {
-    if (profile.acceptedPlanRevisionId == null) continue;
+    if (profile.acceptedPlanRevisionId == null && profile.acceptedPlanVersion === 0) continue;
     const accepted = readAcceptedPlanOperationalSnapshotInternal({ db: driver, schema, tenantId: profile.tenantId,
       profileId: profile.id, reposDir: join(source, "repos"), sqlite: true,
       resolveSourceSnapshotPath: (sourceId, locator) => locator.startsWith(`${sourceId}/revisions/`) ? join(source, "repos", locator) : null });
+    if (profile.acceptedPlanRevisionId == null) {
+      if (accepted.kind !== "compatibility_dirty") throw new Error("Unsafe accepted Plan operational state");
+      continue;
+    }
     const revision = revisions.find(revision => revision.id === profile.acceptedPlanRevisionId);
     const format1 = sets.some(set => set.id === revision?.inputSetId && set.formatVersion === 1);
     if (accepted.kind !== "ready" && !(accepted.kind === "uninitialized" && format1)) throw new Error("Unsafe accepted Plan operational state");
