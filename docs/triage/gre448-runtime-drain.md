@@ -146,3 +146,93 @@ control failed 0/1 in 2.321s. The restored drain selection passed 20/20, with
 50 skipped, in 30.324s. The new case recorded shutdown at 12ms and 8ms, zero
 connection tasks, and the exact event log `GET /stream\nEOF\n` twice. These are
 simulator acceptance results, not release performance measurements.
+
+## Measured release startup parent death
+
+`ticket_t_3_drain_measured_release_startup_parent_death` adds the measured
+`Process::spawn` path to the startup proof. It is an ordinary pp-compat unit
+test, with no ignore or environment skip. The desktop runtime and fleet Rust
+CI jobs already build the web assets and embed their measured manifest. The
+test uses that embedded identity, the repository web assets, and native
+`/usr/bin/node`. Missing assets or a mismatched manifest fail the test.
+
+The `record_child` callback records the PID, stops Node, and returns a test
+ownership marker. A 1 MiB lease then backpressures the real setup write. On the
+owner's current-thread Tokio runtime, the owner task resumes only after spawn
+has yielded. Before acknowledging startup, the owner requires stopped Node,
+`Starting`, no published endpoint, zero completed health probes, and one child.
+This tests startup before setup delivery, without requiring backend readiness
+or opening desktop storage.
+
+The existing RAII fixture now runs both the shell and measured cases. The
+measured case allows 30 seconds to reach startup while verifying full CI assets.
+The shell case keeps its eight-second startup bound. Each measured case has
+two sequential cycles. A live peer joins Node's group before
+the Rust owner receives SIGKILL. It excludes orphan-group SIGHUP as the reason
+for cleanup. Stopped Node cannot process stdin EOF. Owner exit, Node death, and
+peer death share one five-second deadline. The direct peer must report SIGKILL.
+Each cycle proves both processes dead before the next cycle starts. Failure
+cleanup kills both groups and reaps the direct owner and peer.
+
+This worktree has no built web assets. The local rerun script builds an explicit
+measured simulator package with a copy of native Node v24.21.0, a preload, and
+an entry that leaves stdin unread. It invokes the unchanged release manifest
+builder, embeds that manifest through `PP_DESKTOP_RELEASE_MANIFEST`, and uses
+`PP_COMPAT_MEASURED_STARTUP_STAGE` only to select those assets in the test.
+`verify_bundle` and the real spawn's `verify_backend` both run. The simulator
+entry records its PID and preload marker before the callback stops it. The
+fixture asserts both markers and unread stdin. The package includes minimal
+measured metadata, frontend, contract, domain, and dependency files. These are
+simulator assets, not a production backend bundle or a substitute for release
+verification. No generated manifest or verification bypass is checked in.
+
+Run the bounded fail-before/pass-after proof from the repository root:
+
+```sh
+python3 rust/scripts/prove-measured-startup-death.py --negative-control --evidence /tmp/gre448-proof
+```
+
+The script first requires one passing acceptance test with two cycle receipts.
+It temporarily calls `parent_death.release()` only in measured `Process::spawn`,
+then requires exit 101 and `startup group outlived force-killed owner`.
+A `finally` block restores `lib.rs` byte-for-byte before another passing run.
+The script records its restored source hash and directly checks that negative
+failure cleanup left no live owner, Node, or peer. There is no production code
+change or control hook in the committed diff.
+
+The exact Cargo command for all three runs is:
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-compat --lib ticket_t_2::ticket_t_3_drain_measured_release_startup_parent_death -- --exact --nocapture
+```
+
+The two environment variables and generated asset paths are recorded in
+`/tmp/gre448-proof/environment.json`. `commands.log` records the manifest and
+Cargo commands. `baseline.log`, `negative.log`, and `restored.log` retain the
+full results. `negative-cleanup.json` records the post-failure process states;
+`restored-lib-sha256.txt` records the restored production source hash.
+
+Local results prove measured simulator startup on Linux. CI execution against
+the full built web bundle remains to be reviewed by the parent. Mac logout,
+storage recovery, worker fencing, and full worker cutover remain outside this
+slice.
+
+The final local proof passed one baseline test, failed one negative test with
+exit 101 at the intended five-second invariant, and passed one restored test.
+Both passing runs completed two cycles. All three recorded negative-control
+processes were absent after failure cleanup. The final pp-compat drain selection
+passed 21 tests with 60 skipped. Clippy with warnings denied, workspace format
+checking, both Node syntax checks, and Python syntax checking passed. A supplied
+shell dispatcher was rejected without execution or stage creation.
+
+For local follow-up checks, export both values from `environment.json` before
+running these commands. Full logs are `drain.log`, `clippy.log`, `fmt.log`,
+`syntax.log`, and `native-rejection.log` in the same evidence directory.
+
+```sh
+cargo nextest run --locked --manifest-path rust/Cargo.toml --no-tests=fail -p pp-compat -E 'test(ticket_t_3_drain)' --success-output immediate
+cargo clippy --locked --manifest-path rust/Cargo.toml -p pp-compat --all-targets -- -D warnings
+cargo fmt --all --manifest-path rust/Cargo.toml --check
+node --check rust/crates/pp-compat/tests/fixtures/measured-startup-entry.cjs
+node --check rust/crates/pp-compat/tests/fixtures/measured-startup-preload.cjs
+```
