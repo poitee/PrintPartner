@@ -22,6 +22,7 @@ try {
   console.error('MISSING_PARSER: run npm ci --ignore-scripts in web/ before checking CI tool pins');
   process.exit(2);
 }
+const additionalNodeWorkflows = ['integration-smoke', 'pr-evidence'];
 const desktopContracts = /^desktop-contracts\.ya?ml$/;
 const directory = resolve(process.argv[2] ?? join(root, '.github/workflows'));
 let declarations = 0;
@@ -34,6 +35,15 @@ const report = (file, path, code, message) => {
 const mapping = value => value !== null && typeof value === 'object'
   && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
 const literal = value => typeof value === 'string' && value.trim() !== '' && !value.includes('${{');
+
+function checkNodeWorkflowInventory(entries, file) {
+  for (const name of additionalNodeWorkflows) {
+    const matches = entries.filter(entry => new RegExp(`^${name}\\.ya?ml$`, 'i').test(entry.name));
+    if (matches.length !== 1 || matches[0].name !== `${name}.yml` || !matches[0].regular) {
+      report(file, name, 'INVALID_NODE_WORKFLOW', `expected exactly one regular canonical ${name}.yml workflow`);
+    }
+  }
+}
 
 function checkDesktopNode(workflow, file) {
   const job = workflow.jobs.parity;
@@ -63,17 +73,18 @@ function checkDesktopNode(workflow, file) {
   }
 }
 
-function checkWebNode(workflow, file) {
+function checkNodeLanes(workflow, file, names, code = 'WEB', condition) {
   let expected;
-  for (const name of ['web', 'web-build']) {
+  for (const name of names) {
     const path = `jobs.${name}`;
     const job = workflow.jobs[name];
     const steps = Array.isArray(job?.steps) ? job.steps : [];
     const setups = steps.filter(step => mapping(step) && typeof step.uses === 'string'
       && step.uses.split('@')[0].toLowerCase() === 'actions/setup-node');
-    if (!mapping(job) || ['strategy', 'if', 'needs', 'continue-on-error'].some(key => Object.hasOwn(job, key))
+    if (!mapping(job) || ['strategy', 'needs', 'continue-on-error'].some(key => Object.hasOwn(job, key))
+      || (condition === undefined ? Object.hasOwn(job, 'if') : job.if !== condition)
       || setups.length !== 1) {
-      report(file, path, 'INVALID_WEB_NODE_SETUP', 'expected one setup-node step in each unconditional required lane without strategy or failure overrides');
+      report(file, path, `INVALID_${code}_NODE_SETUP`, 'expected one setup-node step in each required lane with its permitted condition and without strategy or failure overrides');
       continue;
     }
     const setup = setups[0];
@@ -83,21 +94,21 @@ function checkWebNode(workflow, file) {
       || !/^22\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)
       || Object.hasOwn(inputs, 'node-version-file') || Object.hasOwn(setup, 'if')
       || Object.hasOwn(setup, 'continue-on-error')) {
-      report(file, path, 'UNPINNED_WEB_NODE', 'setup-node must unconditionally select one exact Node 22 major.minor.patch string without node-version-file');
+      report(file, path, `UNPINNED_${code}_NODE`, 'setup-node must unconditionally select one exact Node 22 major.minor.patch string without node-version-file');
       continue;
     }
     if (expected !== undefined && version !== expected) {
-      report(file, path, 'MISMATCHED_WEB_NODE', `expected ${expected}, received ${version}`);
+      report(file, path, `MISMATCHED_${code}_NODE`, `expected ${expected}, received ${version}`);
     }
     expected ??= version;
     if (steps.slice(0, steps.indexOf(setup)).some(step => typeof step?.run === 'string'
       && /\b(?:node|npm|npx|corepack|yarn|pnpm)\b/.test(step.run))) {
-      report(file, path, 'EARLY_WEB_NODE_COMMAND', 'Node and dependency commands must follow setup-node and its runtime assertion');
+      report(file, path, `EARLY_${code}_NODE_COMMAND`, 'Node and dependency commands must follow setup-node and its runtime assertion');
     }
     const verification = steps[steps.indexOf(setup) + 1];
     if (!mapping(verification) || verification.run !== `test "$(node --version)" = "v${version}"`
       || Object.hasOwn(verification, 'if') || Object.hasOwn(verification, 'continue-on-error')) {
-      report(file, path, 'MISSING_WEB_NODE_VERIFICATION', 'setup-node must be immediately followed by an unconditional matching runtime version assertion');
+      report(file, path, `MISSING_${code}_NODE_VERIFICATION`, 'setup-node must be immediately followed by an unconditional matching runtime version assertion');
     }
   }
 }
@@ -175,7 +186,9 @@ function checkWorkflow(file, source = readFileSync(file, 'utf8')) {
     checkDesktopNode(workflow, file);
     if (eventMode) checkDesktopExecution(workflow, file);
   }
-  if (/^web-ci\.ya?ml$/.test(basename(file))) checkWebNode(workflow, file);
+  if (/^web-ci\.ya?ml$/.test(basename(file))) checkNodeLanes(workflow, file, ['web', 'web-build']);
+  if (/^integration-smoke\.ya?ml$/i.test(basename(file))) checkNodeLanes(workflow, file, ['postgres'], 'INTEGRATION', "github.event_name != 'workflow_dispatch' || inputs.postgres");
+  if (/^pr-evidence\.ya?ml$/i.test(basename(file))) checkNodeLanes(workflow, file, ['lint-pr-body'], 'EVIDENCE');
   const seen = new Set();
   for (const [name, job] of Object.entries(workflow.jobs)) {
     const path = `jobs.${name}`;
@@ -251,6 +264,7 @@ function checkEventTree() {
       const [mode, type, oid] = metadata.split(' ');
       return { mode, type, oid, path };
     });
+  checkNodeWorkflowInventory(entries.map(entry => ({ name: basename(entry.path), regular: entry.type === 'blob' && /^100(?:644|755)$/.test(entry.mode) })), eventSha);
   const contracts = entries.filter(entry => /^\.github\/workflows\/desktop-contracts\.ya?ml$/.test(entry.path));
   if (contracts.length !== 1 || contracts[0].path !== '.github/workflows/desktop-contracts.yml'
     || !/^100(?:644|755)$/.test(contracts[0].mode) || contracts[0].type !== 'blob') {
@@ -292,6 +306,10 @@ if (eventMode) {
     report(directory, '$', 'DUPLICATE_DESKTOP_CONTRACTS', 'expected one desktop contracts workflow; found ' + contracts.map(file => basename(file)).join(', '));
   }
   if (process.argv[2] === undefined) {
+    checkNodeWorkflowInventory(entries.map(entry => ({ name: entry.name, regular: entry.isFile() })), directory);
+    const trackedNodes = execFileSync('git', ['ls-tree', '-z', 'HEAD', '--', '.github/workflows/'], { cwd: root, encoding: 'utf8' })
+      .split('\0').filter(Boolean).map(entry => ({ name: basename(entry.split('\t')[1]), regular: /^100(?:644|755) blob /.test(entry) }));
+    checkNodeWorkflowInventory(trackedNodes, 'HEAD');
     const web = entries.filter(entry => /^web-ci\.ya?ml$/i.test(entry.name));
     if (web.length !== 1 || web[0].name !== 'web-ci.yml' || !web[0].isFile()) {
       report(directory, '$', 'INVALID_WEB_CI', 'expected exactly one regular canonical web-ci.yml workflow');
