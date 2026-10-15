@@ -282,6 +282,24 @@ policy, and revalidation rejects changed policy or revoked credentials. Physical
 owner admission checks the storage identity. These internal APIs compile behind
 the feature; D15/D16 will wire them into jobs. The current job engine is unchanged.
 
+## D9 build graph read receipt
+
+GRE-602 adds the read-only first half of `pp_storage::build_graph` behind
+`desktop_rebuild`. Authenticated `List`, `Read`, and `ListLayers` commands run
+through the existing writer queue and return typed summaries and ordered layers.
+Summary facts reuse the accepted graph reader and freshness calculation.
+Summaries validate PPJS metadata losslessly. Existing scalar snapshot projections
+report `manifest_text` integrity failures for non-scalar metadata; lossless public
+snapshot serialization remains deferred.
+
+Build creation, mutation, and deletion remain the next GRE-602 slice. This does
+not complete D9 or unblock D10b. The reference bounded YAML parser, group merging,
+hints, and STL inference depend on the absent `working_drafts::observation`
+infrastructure. That dependency remains a D10b prerequisite. The existing
+`manifest_options` JSON model stays in place for later integration.
+No runtime caller is added. Future user-visible callers must also check
+`PP_DESKTOP_REBUILD` for exactly `1` or `true`.
+
 ## D10a manifest model receipt
 
 GRE-604 D10a adds `pp_storage::manifest_options::KitManifest` behind `desktop_rebuild`.
