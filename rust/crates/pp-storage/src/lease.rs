@@ -41,12 +41,12 @@ pub fn prepare_directory(path: &Path) -> Result<PathBuf> {
     Ok(admit_directory(path)?.path)
 }
 
-struct AdmittedDirectory {
+pub(crate) struct AdmittedDirectory {
     path: PathBuf,
     directory: File,
 }
 
-fn admit_directory(path: &Path) -> Result<AdmittedDirectory> {
+pub(crate) fn admit_directory(path: &Path) -> Result<AdmittedDirectory> {
     ensure!(!path.as_os_str().is_empty(), "Data directory path is empty");
     let path = if path.is_absolute() {
         path.to_path_buf()
@@ -89,6 +89,8 @@ fn admit_directory(path: &Path) -> Result<AdmittedDirectory> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
     }
+    #[cfg(test)]
+    tests::replace_directory_before_writer_preflight(directory)?;
     Ok(admitted)
 }
 
@@ -103,6 +105,12 @@ fn validate_directory_permissions(metadata: &std::fs::Metadata) -> Result<()> {
 }
 
 impl AdmittedDirectory {
+    pub(crate) fn preflight(&self) -> Result<()> {
+        self.validate_identity()?;
+        crate::schema::preflight(&self.path.join("print-partner.db"), false)?;
+        Ok(())
+    }
+
     fn validate_identity(&self) -> Result<()> {
         let opened = self.directory.metadata()?;
         let named = std::fs::symlink_metadata(&self.path).context("Data directory was replaced")?;
@@ -205,6 +213,7 @@ thread_local! {
     static FAIL_MARKER_WRITE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static REMOVE_MARKER_BEFORE_READ: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static REPLACE_LOCK_BEFORE_VALIDATION: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+    static REPLACE_DIRECTORY_BEFORE_WRITER_PREFLIGHT: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
     static REPLACE_DIRECTORY_DURING_LOCK: std::cell::Cell<(u8, u8)> = const { std::cell::Cell::new((0, 0)) };
     static REPLACE_DIRECTORY_BEFORE_CANONICALIZATION: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
 }
@@ -307,11 +316,15 @@ pub(crate) fn prior_owner_blocks_unowned(marker_path: &Path) -> Result<bool> {
 
 impl StorageLease {
     pub fn acquire(path: &Path) -> Result<Self> {
-        let admitted = admit_directory(path)?;
+        Self::acquire_admitted(admit_directory(path)?)
+    }
+
+    pub(crate) fn acquire_admitted(admitted: AdmittedDirectory) -> Result<Self> {
         let data_dir = &admitted.path;
         #[cfg(test)]
         tests::replace_directory_during_lock(data_dir, 1)?;
         admitted.validate_identity()?;
+        validate_resolved_ancestors(data_dir, false)?;
         let lock_path = data_dir.join(".desktop.lock");
         #[cfg(test)]
         tests::replace_directory_during_lock(data_dir, 4)?;
@@ -622,6 +635,145 @@ mod tests {
         assert_eq!(std::fs::read_dir(&path).unwrap().count(), 0);
         std::fs::remove_dir_all(retired).unwrap();
         std::fs::remove_dir(path).unwrap();
+    }
+
+    pub(super) fn replace_directory_before_writer_preflight(path: &Path) -> Result<()> {
+        let replacement = REPLACE_DIRECTORY_BEFORE_WRITER_PREFLIGHT.take();
+        match replacement {
+            0 => {}
+            4 => std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o770))?,
+            5 => std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o500))?,
+            _ => {
+                REPLACE_DIRECTORY_BEFORE_CANONICALIZATION.set(replacement);
+                replace_directory_before_canonicalization(path)?;
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn ticket_t_12_writer_preflight_rejects_replaced_admitted_directory() {
+        for replacement in [1, 2] {
+            assert_writer_preflight_refuses(replacement, "Data directory was replaced");
+        }
+    }
+
+    #[test]
+    fn ticket_t_12_writer_preflight_rejects_changed_admitted_permissions() {
+        for replacement in [3, 4, 5] {
+            assert_writer_preflight_refuses(replacement, "Unsafe data directory permissions");
+        }
+    }
+
+    fn assert_writer_preflight_refuses(replacement: u8, expected: &str) {
+        let path = directory();
+        let files: [(&str, &[u8]); 5] = [
+            (
+                ".desktop-owner.json",
+                br#"{"pid":2147483647,"kind":"standalone"}"#,
+            ),
+            ("print-partner.db", b"never open"),
+            ("print-partner.db-wal", b"copied wal"),
+            ("print-partner.db-journal", b"copied journal"),
+            ("desktop.toml", b"port = 45678\n"),
+        ];
+        for (name, bytes) in files {
+            std::fs::write(path.join(name), bytes).unwrap();
+        }
+        crate::schema::PREFLIGHT_CALLS.set(0);
+        REPLACE_DIRECTORY_BEFORE_WRITER_PREFLIGHT.set(replacement);
+        let result = crate::WriterOwner::open(&path, crate::Limits::default());
+        let error = result.err().map(|error| error.to_string());
+        assert_eq!(crate::schema::PREFLIGHT_CALLS.get(), 0);
+        let preserved = if replacement >= 3 {
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+            path.clone()
+        } else {
+            path.with_extension("retired")
+        };
+        for (name, bytes) in files {
+            assert_eq!(std::fs::read(preserved.join(name)).unwrap(), bytes);
+        }
+        assert_eq!(std::fs::read_dir(&preserved).unwrap().count(), files.len());
+        if replacement < 3 {
+            assert_eq!(std::fs::read_dir(&path).unwrap().count(), 0);
+        }
+        std::fs::remove_dir_all(preserved).unwrap();
+        if replacement == 2 {
+            std::fs::remove_file(&path).unwrap();
+            std::fs::remove_dir_all(path.with_extension("replacement")).unwrap();
+        } else if replacement == 1 {
+            std::fs::remove_dir_all(path).unwrap();
+        }
+        assert_eq!(
+            error.as_deref(),
+            Some(expected),
+            "replacement {replacement}"
+        );
+    }
+
+    #[test]
+    fn ticket_t_12_writer_preflight_retains_admission_into_os_lock() {
+        for replacement in [1, 2, 3] {
+            let path = directory();
+            let admitted = admit_directory(&path).unwrap();
+            crate::schema::PREFLIGHT_CALLS.set(0);
+            admitted.preflight().unwrap();
+            assert_eq!(crate::schema::PREFLIGHT_CALLS.get(), 1);
+            REPLACE_DIRECTORY_BEFORE_WRITER_PREFLIGHT.set(replacement);
+            replace_directory_before_writer_preflight(&path).unwrap();
+            let result = StorageLease::acquire_admitted(admitted);
+            let expected = if replacement == 3 {
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+                "Unsafe data directory permissions"
+            } else {
+                assert_eq!(
+                    std::fs::read_dir(path.with_extension("retired"))
+                        .unwrap()
+                        .count(),
+                    0
+                );
+                std::fs::remove_dir(path.with_extension("retired")).unwrap();
+                "Data directory was replaced"
+            };
+            assert_eq!(result.err().unwrap().to_string(), expected);
+            assert_eq!(std::fs::read_dir(&path).unwrap().count(), 0);
+            if replacement == 2 {
+                std::fs::remove_file(&path).unwrap();
+                std::fs::remove_dir(path.with_extension("replacement")).unwrap();
+            } else {
+                std::fs::remove_dir(path).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn ticket_t_12_writer_preflight_rechecks_ancestor_permissions_before_lock() {
+        let parent = directory();
+        let path = parent.join("store");
+        let admitted = admit_directory(&path).unwrap();
+        let marker = br#"{"pid":2147483647,"kind":"standalone"}"#;
+        std::fs::write(path.join(".desktop-owner.json"), marker).unwrap();
+        std::fs::write(path.join("print-partner.db"), b"").unwrap();
+        std::fs::write(path.join("desktop.toml"), b"port = 45678\n").unwrap();
+        admitted.preflight().unwrap();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o777)).unwrap();
+        let error = StorageLease::acquire_admitted(admitted)
+            .err()
+            .map(|error| error.to_string());
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(error.as_deref(), Some("Unsafe data directory ancestor"));
+        assert_eq!(
+            std::fs::read(path.join(".desktop-owner.json")).unwrap(),
+            marker
+        );
+        assert_eq!(std::fs::read(path.join("print-partner.db")).unwrap(), b"");
+        assert_eq!(
+            std::fs::read(path.join("desktop.toml")).unwrap(),
+            b"port = 45678\n"
+        );
+        assert_eq!(std::fs::read_dir(&path).unwrap().count(), 3);
+        std::fs::remove_dir_all(parent).unwrap();
     }
 
     pub(super) fn replace_directory_during_lock(path: &Path, checkpoint: u8) -> Result<()> {
