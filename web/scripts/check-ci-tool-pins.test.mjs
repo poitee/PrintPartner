@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import process from 'node:process';
@@ -16,6 +16,9 @@ const summary = (declarations, tools, errors) => `install_declarations=${declara
 function run(t, source, args = [], filename = 'fixture.yaml') {
   const directory = mkdtempSync(join(tmpdir(), 'ci-tool-pins-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
+  if (source !== undefined && !/^desktop-contracts\.ya?ml$/i.test(filename)) {
+    writeFileSync(join(directory, 'desktop-contracts.yml'), desktop());
+  }
   const file = join(directory, filename);
   if (source !== undefined) writeFileSync(file, source);
   const result = spawnSync(process.execPath, [cli, directory, ...args], { encoding: 'utf8' });
@@ -99,6 +102,22 @@ for (const filename of ['desktop-contracts.yaml', 'desktop-contracts.YML', 'DESK
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stdout, summary(0, 0, 0));
     assert.equal(result.stderr, '');
+  });
+}
+
+for (const replacement of [null, 'renamed-contracts.yml', 'desktop-contracts.yml.disabled']) {
+  test(`reject repository workflows after desktop contracts ${replacement ?? 'removal'}`, t => {
+    const directory = mkdtempSync(join(tmpdir(), 'ci-workflow-presence-'));
+    t.after(() => rmSync(directory, { recursive: true, force: true }));
+    cpSync(fileURLToPath(new URL('../../.github/workflows', import.meta.url)), directory, { recursive: true });
+    const original = join(directory, 'desktop-contracts.yml');
+    if (replacement === null) rmSync(original);
+    else renameSync(original, join(directory, replacement));
+    const result = spawnSync(process.execPath, [cli, directory], { encoding: 'utf8' });
+    assert.equal(result.error, undefined);
+    assert.equal(result.status, 1, result.stdout);
+    assert.equal(result.stderr, `${directory} $: MISSING_DESKTOP_CONTRACTS: expected one desktop-contracts.yml or desktop-contracts.yaml workflow\n`);
+    assert.match(result.stdout, / errors=1\n$/);
   });
 }
 
