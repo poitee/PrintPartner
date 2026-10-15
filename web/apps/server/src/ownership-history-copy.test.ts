@@ -392,6 +392,32 @@ it.each(["inspect", "apply"].flatMap(mode => ["current", "historical"].map(kind 
     else await refused(paths, input);
   },
 );
+it.each(["inspect", "apply"].flatMap(mode => ["current", "historical"].map(kind => ({ mode, kind }))))(
+  "$mode refuses post-initial format-1 inputs on the $kind dirty revision", async ({ mode, kind }) => {
+    const paths = fixture(); appendAcceptedRevision(paths.sourceDir);
+    if (kind === "historical") appendAcceptedRevision(paths.sourceDir);
+    edit(paths.sourceDir, raw => {
+      const db = drizzle(raw);
+      const set = db.select().from(schema.planRevisionInputSets).all().find(row => row.id === 1);
+      const input = db.select().from(schema.planRevisionInputs).all().find(row => row.inputSetId === 1);
+      if (!set || !input) throw new Error("Missing accepted input fixture");
+      const legacy = db.insert(schema.planRevisionInputSets).values({ ...set, id: undefined, formatVersion: 1,
+        inputSetDigest: digestFormat1Inputs([{ sourceRevisionId: 12, manifestDigest: hash("manifest-1-2") }]) }).returning().get();
+      db.insert(schema.planRevisionInputs).values({ ...input, id: undefined, inputSetId: legacy.id, sourceLayer: "legacy:1", effectiveNamingDigest: null }).run();
+      raw.exec("UPDATE parts SET notes='working edit' WHERE id=1");
+    });
+    const input = manifest(paths.sourceDir);
+    edit(paths.sourceDir, db => {
+      const trigger = z.object({ sql: z.string() }).parse(db.prepare("SELECT sql FROM sqlite_schema WHERE name='trg_plan_revisions_immutable_update'").get());
+      db.exec("DROP TRIGGER trg_plan_revisions_immutable_update; UPDATE plan_revisions SET input_set_id=(SELECT id FROM plan_revision_input_sets WHERE profile_id=1 AND format_version=1) WHERE profile_id=1 AND revision_number=2");
+      db.exec(trigger.sql);
+      if (kind === "current") db.exec("UPDATE plan_accepted_input_sets SET input_set_id=(SELECT id FROM plan_revision_input_sets WHERE profile_id=1 AND format_version=1) WHERE profile_id=1");
+      input.source_digest = hash(db.serialize());
+    });
+    if (mode === "inspect") expect(() => inspectOwnershipCopy(paths)).toThrow(/publication format/);
+    else await refused(paths, input);
+  },
+);
 it.each(["inspect", "apply"].flatMap(mode => ["completed", "assembled", "assembled-without-completed"].map(kind => ({ mode, kind }))))(
   "$mode refuses dirty current-coordinate progress with invalid $kind", async ({ mode, kind }) => {
     const paths = fixture();
