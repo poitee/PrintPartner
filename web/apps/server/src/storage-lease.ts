@@ -140,7 +140,9 @@ export function acquireStorageLease(directory: string): { identity: string; inst
             if (stage === "detached") {
               // The check and the rename cannot be one step, so hand back a lease republished in between.
               if (!recordNamesInstance(join(detached, "owner.json"), instance)) {
-                renameSync(detached, lease);
+                // A detached lease already removed by someone else leaves nothing to hand back.
+                try { renameSync(detached, lease); }
+                catch (error) { if (!isFsError(error, ["ENOENT"])) throw error; }
                 stage = "published";
                 return;
               }

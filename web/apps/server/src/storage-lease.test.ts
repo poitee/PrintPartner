@@ -382,4 +382,35 @@ describe("release after the lease is removed externally", () => {
     expect(child.status, child.stderr).toBe(0);
     expect(JSON.parse(child.stdout)).toEqual({ first: "EACCES", entries: [] });
   });
+
+  it.each([
+    { record: "lease", path: ".desktop-lease" },
+    { record: "owner marker", path: ".desktop-owner.json" },
+  ])("completes when someone removes the detached $record before the hand-back", ({ path }) => {
+    const dir = dataDir();
+    const child = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
+      import fs from "node:fs";
+      import { syncBuiltinESMExports } from "node:module";
+      import { acquireDataDirectory } from ${JSON.stringify(new URL("./desktop-context.ts", import.meta.url).href)};
+      const target = ${JSON.stringify(join(dir, path))};
+      const rename = fs.renameSync;
+      let injected = false;
+      fs.renameSync = function(from, to) {
+        if (!injected && from === target) {
+          injected = true;
+          fs.rmSync(target, { recursive: true });
+          fs.writeFileSync(target, "foreign");
+          const result = rename.call(this, from, to);
+          fs.rmSync(to, { recursive: true });
+          return result;
+        }
+        return rename.call(this, from, to);
+      };
+      syncBuiltinESMExports();
+      acquireDataDirectory(${JSON.stringify(dir)})();
+      console.log(JSON.stringify({ injected, entries: fs.readdirSync(${JSON.stringify(dir)}) }));
+    `], { encoding: "utf8" });
+    expect(child.status, child.stderr).toBe(0);
+    expect(JSON.parse(child.stdout)).toEqual({ injected: true, entries: [] });
+  });
 });

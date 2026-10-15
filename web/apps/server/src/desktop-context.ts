@@ -222,9 +222,14 @@ export function acquireDataDirectory(dataDir: string): () => void {
     if (markerStage === "detached") {
       // The check and the rename cannot be one step, so hand back a marker rewritten in between.
       // Neither link nor a directory rename replaces an entry republished since.
+      // A detached marker already removed by someone else leaves nothing to hand back.
       if (!recordNamesInstance(detachedMarker, lease.instance)) {
-        if (lstatSync(detachedMarker).isDirectory()) renameSync(detachedMarker, marker);
-        else linkSync(detachedMarker, marker);
+        try {
+          if (lstatSync(detachedMarker).isDirectory()) renameSync(detachedMarker, marker);
+          else linkSync(detachedMarker, marker);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
       }
       markerStage = "checked";
     }
