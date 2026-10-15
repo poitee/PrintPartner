@@ -63,9 +63,9 @@ def issue(ident):
     return d["issue"]
 
 
-def move(iss, target, comment):
+def move(iss, target, comment, *, record_unchanged=False):
     cur = iss["state"]["name"]
-    if cur == target or iss["state"]["type"] in TERMINAL:
+    if (cur == target and not record_unchanged) or iss["state"]["type"] in TERMINAL:
         return False
     if DRY:
         print(f"{iss['identifier']}: {cur} -> {target} | {comment}")
@@ -85,6 +85,8 @@ def move(iss, target, comment):
                 raise RuntimeError("Linear commentCreate failed")
             break
         cursor = d["pageInfo"]["endCursor"]
+    if cur == target:
+        return False
     updated = gql('mutation($id:String!,$s:String!){issueUpdate(id:$id,input:{stateId:$s}){success}}',
         {"id": iss["id"], "s": state_id(target)})
     if not updated["issueUpdate"]["success"]:
@@ -148,7 +150,7 @@ def apply_pr(pr):
             if ident in closing:
                 move(iss, "Done", f"PR #{n} merged with 'Fixes {ident}'.")
             elif other_open(ident, n):
-                move(iss, "In Review", f"slice PR #{n} merged; still open: #{other_open(ident, n)[0]}.")
+                move(iss, "In Review", f"slice PR #{n} merged; still open: #{other_open(ident, n)[0]}.", record_unchanged=True)
             elif iss["state"]["name"] == "In Review":  # never pull Todo/Backlog back up
                 move(iss, "In Progress", f"slice PR #{n} merged ('Refs' only); next slice pending. Final slice PR must say 'Fixes {ident}'.")
         elif pr["state"] == "CLOSED" and iss["state"]["name"] == "In Review" and not other_open(ident, n):

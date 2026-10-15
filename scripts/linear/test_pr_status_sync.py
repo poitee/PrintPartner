@@ -86,6 +86,15 @@ class SyncTest(unittest.TestCase):
         sync.apply_pr(pr(state="MERGED"))
         self.assertEqual(self.issues["GRE-1"]["state"]["name"], "In Review")
 
+    def test_merged_slice_records_comment_when_already_in_review(self):
+        self.issues["GRE-1"] = ticket(state="In Review")
+        sync._prs = [pr(number=2)]
+        sync.apply_pr(pr(state="MERGED"))
+        sync.apply_pr(pr(state="MERGED"))
+        self.assertEqual(self.issues["GRE-1"]["state"]["name"], "In Review")
+        self.assertEqual(self.comments, [{"issueId": "1", "body": "[pr-status-sync] slice PR #1 merged; still open: #2."}])
+        self.assertEqual([query for query, _ in self.api.call_args_list if "issueUpdate(" in query], [])
+
     def test_refs_slice_does_not_revive_todo_or_backlog(self):
         for state in ("Todo", "Backlog"):
             with self.subTest(state=state):
@@ -188,6 +197,16 @@ class SyncTest(unittest.TestCase):
                                 cwd="/tmp", capture_output=True, text=True)
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout.strip(), "LINEAR_API_KEY secret not set; skipping")
+
+    def test_workflow_bootstrap_skips_when_base_has_no_script(self):
+        workflow = Path(__file__).parents[2] / ".github/workflows/linear-pr-sync.yml"
+        command = textwrap.dedent(workflow.read_text().split("run: |\n", 1)[1])
+        command = command.replace("${{ github.event_name }}", "pull_request_target")
+        result = subprocess.run(["/bin/bash", "-c", command], env={"LINEAR_API_KEY": "test-sentinel", "PATH": ""},
+                                cwd="/tmp", capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), "Sync script absent at trusted base; scheduled reconciliation will retry")
+        self.assertNotIn("test-sentinel", result.stdout + result.stderr)
 
 
 if __name__ == "__main__":
