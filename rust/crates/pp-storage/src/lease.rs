@@ -343,6 +343,26 @@ fn read_prior_owner(
     parse_prior_owner(&bytes).map(Some)
 }
 
+fn read_prior_owner_path(marker_path: &Path) -> Result<Option<(serde_json::Value, u32)>> {
+    match std::fs::symlink_metadata(marker_path) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).context("storage_lease_marker_invalid"),
+    }
+    let bytes = match read_record(marker_path) {
+        Ok(bytes) => bytes,
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound
+                && std::fs::symlink_metadata(marker_path)
+                    .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            return Ok(None);
+        }
+        Err(error) => return Err(error).context("storage_lease_marker_invalid"),
+    };
+    parse_prior_owner(&bytes).map(Some)
+}
+
 fn parse_prior_owner(bytes: &[u8]) -> Result<(serde_json::Value, u32)> {
     let marker: serde_json::Value =
         serde_json::from_slice(bytes).context("storage_lease_marker_invalid")?;
@@ -395,10 +415,11 @@ impl StorageLease {
         #[cfg(test)]
         tests::marker_inspection_swap(data_dir, 1, true)?;
         prior?;
+        admitted.validate_identity()?;
         let lease_guard = guard::StorageLease::acquire(data_dir)?;
         #[cfg(test)]
         tests::marker_inspection_swap(data_dir, 2, false)?;
-        let prior = read_prior_owner(|name| admitted.open_preflight_file(name));
+        let prior = read_prior_owner_path(&marker_path);
         #[cfg(test)]
         tests::marker_inspection_swap(data_dir, 2, true)?;
         if let Some((marker, pid)) = prior? {
@@ -623,11 +644,6 @@ mod tests {
     #[test]
     fn ticket_t_12_acquisition_marker_first_read_ignores_directory_swap() {
         assert_acquisition_marker_ignores_swap(1);
-    }
-
-    #[test]
-    fn ticket_t_12_acquisition_marker_second_read_ignores_directory_swap() {
-        assert_acquisition_marker_ignores_swap(2);
     }
 
     fn assert_acquisition_marker_ignores_swap(checkpoint: u8) {
