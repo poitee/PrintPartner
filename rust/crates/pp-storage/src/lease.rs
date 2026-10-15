@@ -661,6 +661,27 @@ mod tests {
     }
 
     #[test]
+    fn ticket_t_12_child_recorder_uses_retained_owner_through_alias() {
+        let path = directory();
+        let alias = path.with_extension("alias");
+        let owner = StorageLease::acquire(&path).unwrap();
+        std::os::unix::fs::symlink(&path, &alias).unwrap();
+        let before: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path.join(".desktop-owner.json")).unwrap())
+                .unwrap();
+        owner.child_recorder()(&alias, std::process::id()).unwrap();
+        let after: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path.join(".desktop-owner.json")).unwrap())
+                .unwrap();
+        assert_eq!(after["lease_hash"], before["lease_hash"]);
+        assert_eq!(after["child_pid"], std::process::id());
+        assert_eq!(std::fs::read_dir(&path).unwrap().count(), 3);
+        assert!(owner.release().lock_released);
+        std::fs::remove_file(alias).unwrap();
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
     fn ticket_t_12_child_recorder_is_revoked_before_reacquisition() {
         let path = directory();
         let owner = StorageLease::acquire(&path).unwrap();
