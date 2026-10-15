@@ -376,3 +376,52 @@ cargo fmt --all --manifest-path rust/Cargo.toml --check
 python3 -m unittest discover -s rust/scripts -p test_prove_measured_startup_death.py -v
 node --check rust/crates/pp-compat/tests/fixtures/measured-lifecycle-entry.cjs
 ```
+
+## Built backend repeated EOF cleanup
+
+`rust/tests/built_backend_lifecycle.py` runs the built
+`web/apps/server/dist/current/desktop.js` with its real dependency tree and native
+Node. It supplies the desktop ownership marker, inherited lock descriptor 198,
+and parent setup protocol. Signed Unix-socket `/health` requests require an
+available SQLite database and an authenticated desktop principal before each
+shutdown.
+
+Three sequential cycles reuse one data directory. Each cycle closes the setup
+pipe while the Python owner stays alive. A test-only preload records stdin EOF,
+received signals, and the application's process-group kill without replacing the
+server entry, routes, database, or shutdown implementation. The harness requires
+EOF before the application's kill, no SIGTERM, child exit, an absent process
+group, and a removed socket before the next start.
+Receipts identify the resolved Node version and ABI, built entry digest, server
+package version, health response, and prior child identities.
+
+Run after `npm --prefix web ci` and `npm --prefix web run build`:
+
+```sh
+python3 rust/tests/built_backend_lifecycle.py --node "$(command -v node)" --negative-control --evidence /tmp/gre448-built-backend
+```
+
+The negative control suppresses stdin EOF delivery in the test observer. It must
+fail the same bounded shutdown assertion after real health readiness. Failure
+cleanup kills and reaps the owned child. The driver then restores normal EOF
+delivery and requires three further cycles to pass. Production source and built
+assets stay unchanged during this control. Desktop runtime CI runs this command
+against its freshly built backend and uploads the receipts and logs.
+
+This is Linux headless evidence for the built backend's EOF path. It does not
+exercise the Rust supervisor's measured spawn path, interrupted printer uploads,
+full worker cutover, startup parent-death, or actual macOS logout. Those areas
+retain their separate evidence and remaining ticket gates.
+
+The owner independently ran the full command on 2026-10-15 with native Node
+v24.21.0, ABI 137, Linux x64. Three baseline and three restored cycles passed.
+The suppressed-EOF cycle failed with `backend did not stop after stdin EOF`;
+its guard recorded external cleanup and no remaining PID or group. All six
+positive guards recorded no external signal. All seven child PIDs were absent
+when checked after completion. The built entry digest stayed
+`0356744362f0fa28e5ad3ed516de7fc71aca167af7fa6428a4e6b87650541bc7`.
+Local receipts are in `/tmp/gre448-built-proof/owner-proof`. This negative control
+proves the test detects missing EOF delivery; it does not identify a new
+production defect. Python compile, Node syntax, native dispatcher rejection,
+comment review, and diff checks passed. The implementation child independently
+ran the same complete proof before the owner's rerun.
