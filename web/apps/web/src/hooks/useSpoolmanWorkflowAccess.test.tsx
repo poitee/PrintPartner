@@ -7,12 +7,13 @@ import {
   TENANT_FEATURE_TOGGLES_CAPABILITY,
   type PlanFeatures,
 } from "@print-partner/contracts";
-import type { FilamentCatalog } from "../api/endpoints/filaments";
+import type { FilamentCatalog, RoleFilamentRow } from "../api/endpoints/filaments";
 import { queryKeys } from "../queries/keys";
 import { useSpoolmanWorkflowAccess } from "./useSpoolmanWorkflowAccess";
 import { useSpoolmanEnabled } from "./useSpoolmanEnabled";
 import { useSpoolmanSpoolsQuery } from "../queries/filaments";
 import { usePlanReviewQuery } from "../queries/planReview";
+import { useRoleFilamentsQuery } from "../queries/roleFilaments";
 
 let client: QueryClient;
 let capabilities: string[];
@@ -316,4 +317,52 @@ it.each(["refresh", "error", "revoked response"])("keeps mounted Review stock cl
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect(part()?.spool_badge).toBeNull();
   } else await waitFor(() => expect(part()?.spool_badge).toBe("450g left"));
+});
+
+const mockRoles: RoleFilamentRow[] = [
+  { role: "r1", part_count: 1, filament_color_id: "spoolman:1:2", spoolman_spool_id: "spoolman:1:s1", filament_custom_hex: "#112233", filament_display: "Blue", filament_hex: "#0000ff" },
+  { role: "r2", part_count: 1, filament_color_id: "c1", spoolman_spool_id: null, filament_custom_hex: null, filament_display: "Red", filament_hex: "#ff0000" },
+  { role: "r3", part_count: 1, filament_color_id: "custom:1", spoolman_spool_id: null, filament_custom_hex: "#334455", filament_display: "Custom", filament_hex: "#334455" },
+];
+
+it.each(["refresh", "error", "revoked response"])("keeps mounted role filaments masked across off/on until fresh: %s", async (mode) => {
+  planSpoolman = true;
+  client.setDefaultOptions({ queries: { retry: false, staleTime: 30_000 } });
+  client.setQueryData(queryKeys.health, { ok: true, capabilities: [TENANT_FEATURE_TOGGLES_CAPABILITY] });
+  client.setQueryData(queryKeys.planFeatures(1), planFeaturesData(1, true));
+  for (const id of [1, 2]) client.setQueryData(queryKeys.roleFilaments(id), mockRoles);
+  client.setQueryData(queryKeys.planReview(1), enrichedReview);
+  const pending: Array<(response: Response) => void> = [];
+  const originalFetch = globalThis.fetch;
+  vi.stubGlobal("fetch", vi.fn((input: string | URL | Request) => String(input).includes("/role-filaments")
+    ? new Promise<Response>((resolve) => pending.push(resolve)) : originalFetch(input)));
+  const { result } = renderHook(() => {
+    useSpoolmanWorkflowAccess(1);
+    useSpoolmanWorkflowAccess(1);
+    return useRoleFilamentsQuery(1);
+  }, { wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> });
+  expect(result.current.data).toEqual(mockRoles);
+  const toggle = (enabled: boolean) => client.setQueryData(queryKeys.planFeatures(1), planFeaturesData(1, enabled));
+  act(() => { toggle(false); toggle(true); });
+  await waitFor(() => expect(pending.length).toBeGreaterThan(0));
+  expect(result.current.data?.[0]).toMatchObject({ filament_display: "spoolman:1:2", filament_hex: "#112233", filament_color_id: "spoolman:1:2", spoolman_spool_id: "spoolman:1:s1" });
+  expect(result.current.data?.[1]).toEqual(mockRoles[1]);
+  expect(result.current.data?.[2]).toEqual(mockRoles[2]);
+  expect(client.getQueryData(queryKeys.roleFilaments(2))).toEqual(mockRoles);
+  const before = pending.length;
+  const response = () => new Response(JSON.stringify({ roles: mockRoles }), { status: mode === "error" ? 500 : 200, headers: { "content-type": "application/json" } });
+  if (mode === "revoked response") {
+    act(() => toggle(false));
+    await act(async () => { pending.at(-1)?.(response()); });
+    expect(result.current.data?.[0]?.filament_display).toBe("spoolman:1:2");
+    act(() => toggle(true));
+    await waitFor(() => expect(pending.length).toBeGreaterThan(before));
+  }
+  await act(async () => { for (const finish of pending.slice(0, -1)) finish(response()); });
+  expect(result.current.data?.[0]?.filament_display).toBe("spoolman:1:2");
+  pending.at(-1)?.(response());
+  if (mode === "error") {
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(result.current.data?.[0]?.filament_display).toBe("spoolman:1:2");
+  } else await waitFor(() => expect(result.current.data).toEqual(mockRoles));
 });

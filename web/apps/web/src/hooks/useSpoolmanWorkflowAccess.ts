@@ -7,7 +7,7 @@ import {
 } from "@print-partner/contracts";
 import type { PlanReview } from "../api/endpoints/planManifests";
 import { maskSpoolmanReviewPart } from "../lib/reviewParts";
-import type { FilamentCatalog } from "../api/endpoints/filaments";
+import type { FilamentCatalog, RoleFilamentRow } from "../api/endpoints/filaments";
 import { useHealthQuery } from "../queries/health";
 import { queryKeys } from "../queries/keys";
 import { usePlanFeaturesQuery } from "../queries/planFeatures";
@@ -59,19 +59,26 @@ export function useSpoolmanWorkflowAccess(profileId: number) {
     let previousAllowed = currentAccessAllowed();
     let clearing = false;
     const reviews = { queryKey: ["planReview", profileId] };
-    const clearReviewInventory = () => {
+    const roles = { queryKey: queryKeys.roleFilaments(profileId) };
+    const clearInventoryObservations = () => {
       clearing = true;
       void client.cancelQueries(reviews, { revert: false });
+      void client.cancelQueries(roles, { revert: false });
       client.setQueriesData<PlanReview>(reviews, (review) => review && ({
         ...review, part_groups: review.part_groups.map((group) => ({
           ...group, parts: group.parts.map(maskSpoolmanReviewPart),
         })),
       }));
+      client.setQueriesData<RoleFilamentRow[]>(roles, (rows) => rows?.map((row) => (
+        row.filament_color_id?.trim().startsWith("spoolman:")
+          ? { ...row, filament_display: row.filament_color_id, filament_hex: row.filament_custom_hex ?? null }
+          : row
+      )));
       clearing = false;
     };
     if (!previousAllowed) {
       purgeProfileSpools(client, profileId);
-      clearReviewInventory();
+      clearInventoryObservations();
     }
     const unsubscribe = client.getQueryCache().subscribe((event) => {
       if (clearing) return;
@@ -82,11 +89,14 @@ export function useSpoolmanWorkflowAccess(profileId: number) {
         generation.current += 1;
         purgeProfileSpools(client, profileId);
         if (changed || (event.type === "updated" && event.action.type === "success"
-          && event.query.queryKey[0] === "planReview" && event.query.queryKey[1] === profileId)) {
-          clearReviewInventory();
+          && ((event.query.queryKey[0] === "planReview" && event.query.queryKey[1] === profileId)
+            || (event.query.queryKey[0] === "roleFilaments" && event.query.queryKey[1] === profileId)))) {
+          clearInventoryObservations();
         }
       } else if (changed) {
         void client.invalidateQueries(reviews);
+        void client.invalidateQueries(roles);
+        void client.invalidateQueries({ queryKey: queryKeys.filamentCatalog(profileId) });
       }
     });
 
