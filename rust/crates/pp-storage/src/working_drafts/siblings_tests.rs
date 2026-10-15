@@ -72,6 +72,156 @@ fn assert_shape_in_any_order(paths: &[&str], expected: &[Expected<'_>]) {
     }
 }
 
+fn assert_selectable_shape(paths: &[&str], expected: &[Expected<'_>]) {
+    for (group, variants) in shape(paths) {
+        for (variant, _) in variants {
+            let body = serde_json::to_vec(&serde_json::json!({
+                "kit": {"selections": {&group: &variant}}
+            }))
+            .unwrap();
+            let manifest = crate::manifest_options::KitManifest::from_request(&body)
+                .unwrap_or_else(|error| panic!("unselectable {group:?}/{variant:?}: {error:?}"));
+            assert_eq!(
+                manifest.selection_projection(),
+                vec![(group.clone().into(), vec![variant.into()])]
+            );
+        }
+    }
+    assert_shape_in_any_order(paths, expected);
+}
+
+#[test]
+fn siblings_nonempty_id_selects_punctuation_parent_versions() {
+    assert_selectable_shape(
+        &["!!!/base.stl", "!!!/Version 2/a.stl", "!!!/Version 3/b.stl"],
+        &[(
+            "inferred",
+            &[
+                ("default", &["!!!/base.stl"]),
+                ("version_2", &["!!!/Version 2/*"]),
+                ("version_3", &["!!!/Version 3/*"]),
+            ],
+        )],
+    );
+}
+
+#[test]
+fn siblings_nonempty_id_selects_multiple_empty_slugs() {
+    assert_selectable_shape(
+        &[
+            "!!!/base.stl",
+            "!!!/Version 2/a.stl",
+            "+++/base.stl",
+            "+++/Version 2/b.stl",
+        ],
+        &[
+            (
+                "inferred",
+                &[
+                    ("default", &["!!!/base.stl"]),
+                    ("version_2", &["!!!/Version 2/*"]),
+                ],
+            ),
+            (
+                "inferred_2",
+                &[
+                    ("default", &["+++/base.stl"]),
+                    ("version_2", &["+++/Version 2/*"]),
+                ],
+            ),
+        ],
+    );
+}
+
+#[test]
+fn siblings_nonempty_id_selects_canonical_unicode_ties() {
+    assert_selectable_shape(
+        &[
+            "\u{30ac}/base.stl",
+            "\u{30ac}/Version_A/a.stl",
+            "\u{30ab}\u{3099}/base.stl",
+            "\u{30ab}\u{3099}/Version_A/b.stl",
+        ],
+        &[
+            (
+                "inferred",
+                &[
+                    ("default", &["\u{30ab}\u{3099}/base.stl"]),
+                    ("version_a", &["\u{30ab}\u{3099}/Version_A/*"]),
+                ],
+            ),
+            (
+                "inferred_2",
+                &[
+                    ("default", &["\u{30ac}/base.stl"]),
+                    ("version_a", &["\u{30ac}/Version_A/*"]),
+                ],
+            ),
+        ],
+    );
+}
+
+#[test]
+fn siblings_nonempty_id_keeps_fallback_suffix_collisions_and_root_aliases() {
+    assert_selectable_shape(
+        &[
+            "!!!/base.stl",
+            "!!!/Version A/a.stl",
+            "+++/base.stl",
+            "+++/Version A/b.stl",
+            "inferred/base.stl",
+            "inferred/Version A/c.stl",
+            "inferred_2/base.stl",
+            "inferred_2/Version A/d.stl",
+            "base.stl",
+            "Version A/e.stl",
+            "root/base.stl",
+            "root/Version A/f.stl",
+        ],
+        &[
+            (
+                "inferred",
+                &[
+                    ("default", &["!!!/base.stl"]),
+                    ("version_a", &["!!!/Version A/*"]),
+                ],
+            ),
+            (
+                "inferred_2",
+                &[
+                    ("default", &["+++/base.stl"]),
+                    ("version_a", &["+++/Version A/*"]),
+                ],
+            ),
+            (
+                "inferred_2_2",
+                &[
+                    ("default", &["inferred_2/base.stl"]),
+                    ("version_a", &["inferred_2/Version A/*"]),
+                ],
+            ),
+            (
+                "inferred_3",
+                &[
+                    ("default", &["inferred/base.stl"]),
+                    ("version_a", &["inferred/Version A/*"]),
+                ],
+            ),
+            (
+                "root",
+                &[
+                    ("default", &["root/base.stl"]),
+                    ("version_a", &["root/Version A/*"]),
+                ],
+            ),
+            (
+                "root_2",
+                &[("default", &["base.stl"]), ("version_a", &["Version A/*"])],
+            ),
+        ],
+    );
+}
+
 #[test]
 fn siblings_group_collision_preserves_independent_mods() {
     assert_shape_in_any_order(
