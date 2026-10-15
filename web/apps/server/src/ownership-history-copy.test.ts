@@ -214,6 +214,32 @@ it.each(["zero-version", "negative-version", "fractional-version", "missing-hist
   },
 );
 
+it.each(["inspect", "apply"].flatMap(mode => ["missing", "other-set", "timestamp"].map(kind => ({ mode, kind }))))("$mode refuses a dirty Plan's $kind retained accepted-input pointer", async ({ mode, kind }) => {
+  const paths = fixture();
+  edit(paths.sourceDir, raw => {
+    raw.exec("UPDATE parts SET notes='working edit' WHERE id=1");
+    const db = drizzle(raw);
+    const header = db.select().from(schema.planRevisionInputSets).all().find(row => row.id === 1);
+    const input = db.select().from(schema.planRevisionInputs).all().find(row => row.id === 1);
+    if (!header || !input) throw new Error("Missing tracked fixture inputs");
+    const namingDigest = "d".repeat(64);
+    const digest = digestPlanInputs([{ source_id: input.sourceId, source_layer: input.sourceLayer, layer_order: input.layerOrder,
+      tracking_kind: "revision", source_revision_id: input.sourceRevisionId, manifest_digest: input.manifestDigest, effective_naming_digest: namingDigest }]);
+    db.insert(schema.planRevisionInputSets).values({ ...header, id: 3, inputSetDigest: digest }).run();
+    db.insert(schema.planRevisionInputs).values({ ...input, id: 3, inputSetId: 3, effectiveNamingDigest: namingDigest }).run();
+  });
+  const input = manifest(paths.sourceDir);
+  edit(paths.sourceDir, db => {
+    if (kind === "missing") db.exec("DELETE FROM plan_accepted_input_sets WHERE profile_id=1");
+    if (kind === "other-set") db.exec("UPDATE plan_accepted_input_sets SET input_set_id=3 WHERE profile_id=1");
+    if (kind === "timestamp") db.exec("UPDATE plan_accepted_input_sets SET accepted_at='2026-10-15T01:00:00.000Z' WHERE profile_id=1");
+    input.source_digest = hash(db.serialize());
+  });
+  if (kind === "missing") input.claims = input.claims.filter(claim => claim.table !== "plan_accepted_input_sets" || claim.rowid !== 1);
+  if (mode === "inspect") expect(() => inspectOwnershipCopy(paths)).toThrow(/input/i);
+  else await refused(paths, input);
+});
+
 it.each(ownershipHistoryTables)("requires an explicit owner for every %s history row", async table => {
   const paths = fixture(); const input = manifest(paths.sourceDir);
   const selected = input.claims.findIndex(claim => claim.table === table);

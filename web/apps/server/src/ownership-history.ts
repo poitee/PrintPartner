@@ -2,6 +2,7 @@ import type Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as schema from "./db/schema.js";
 import {
+  validateAcceptedPlanInputHeaderRows,
   validateAcceptedPlanRevisionRows,
   validateAcceptedPlanRequiredUnitRows,
 } from "./db/accepted-plan-operational.js";
@@ -101,12 +102,14 @@ export function validateOwnershipHistory(database: Database.Database): void {
     if (!Number.isSafeInteger(profile.acceptedPlanVersion) || profile.acceptedPlanVersion < 0) fail("accepted Plan version");
     if (profile.acceptedPlanRevisionId == null) {
       if ((profile.acceptedPlanVersion === 0) !== (history.length === 0)) fail("missing accepted Plan pointer");
-    } else {
-      const accepted = history.find(revision => revision.id === profile.acceptedPlanRevisionId && revision.tenantId === profile.tenantId) ?? fail("accepted Plan pointer");
-      if (profile.acceptedPlanVersion <= 0) fail("accepted Plan pointer");
-      const acceptedInput = acceptedInputs.find(input => input.profileId === profile.id);
-      if ((accepted.provenanceKind === "tracked" && acceptedInput?.inputSetId !== accepted.inputSetId)
-        || (accepted.provenanceKind === "legacy" && acceptedInput)) fail("accepted Plan input pointer");
-    }
+      if (profile.acceptedPlanVersion === 0) continue;
+    } else if (profile.acceptedPlanVersion === 0) fail("accepted Plan pointer");
+    const accepted = (profile.acceptedPlanRevisionId == null
+      ? history.sort((left, right) => right.revisionNumber - left.revisionNumber)[0]
+      : history.find(revision => revision.id === profile.acceptedPlanRevisionId && revision.tenantId === profile.tenantId))
+      ?? fail("accepted Plan pointer");
+    validateAcceptedPlanInputHeaderRows({ tenantId: profile.tenantId, profileId: profile.id, revision: accepted,
+      acceptedInput: acceptedInputs.find(input => input.profileId === profile.id),
+      inputSet: sets.find(set => set.id === accepted.inputSetId) });
   }
 }
