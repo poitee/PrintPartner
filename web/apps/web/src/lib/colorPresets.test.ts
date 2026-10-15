@@ -35,7 +35,7 @@ describe("applyColorPreset", () => {
       allowSpoolman: () => false, isCurrent: () => true,
     });
     expect(count).toBe(2);
-    expect(vi.mocked(filamentsApi.saveRoleFilament).mock.calls).toEqual([[1, { ...catalogRole, refresh_thumbnails: false }], [1, { ...customRole, refresh_thumbnails: false }]]);
+    expect(vi.mocked(filamentsApi.saveRoleFilament).mock.calls).toEqual([[1, catalogRole], [1, customRole]]);
   });
 
   it("halts mid-loop and does not write further if permission revoked", async () => {
@@ -49,4 +49,5 @@ describe("applyColorPreset", () => {
     })).rejects.toThrow("Spoolman integration is disabled.");
     expect(filamentsApi.saveRoleFilament).toHaveBeenCalledTimes(1);
   });
+
 });

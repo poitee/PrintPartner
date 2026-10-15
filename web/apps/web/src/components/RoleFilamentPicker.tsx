@@ -38,6 +38,7 @@ import {
   publishRoleFilaments,
   useRoleFilamentsQuery,
 } from "../queries/roleFilaments";
+import { invalidatePlanReview } from "../queries/planReview";
 import { useFilamentCatalogQuery, useSpoolmanSpoolsQuery } from "../queries/filaments";
 import { filterFilamentSpools, formatSpoolOptionLabel } from "../lib/spoolPickerUtils";
 import {
@@ -620,22 +621,32 @@ function RoleFilamentPickerInner({
     const file = await pickColorPresetFile();
     if (!file || !action.isCurrent()) return;
     setBusyAction("import");
+    let started = false;
     try {
       const preset = await parseColorPreset(file);
       if (!action.isCurrent()) return;
-      const optional = preset.roles.some((row) => row.filament_color_id?.trim().startsWith("spoolman:") || row.spoolman_spool_id?.trim());
-      const mayContinue = () => action.isCurrent() && (!optional || action.isSpoolmanAllowed());
+      const optional = preset.roles.some(
+        (row) =>
+          row.filament_color_id?.trim().startsWith("spoolman:") ||
+          row.spoolman_spool_id?.trim(),
+      );
+      started = true;
       const applied = await applyColorPreset(profileId, preset, {
         isCurrent: action.isCurrent,
         allowSpoolman: action.isSpoolmanAllowed,
       });
-      if (!mayContinue()) return;
+      if (!action.isCurrent()) return;
+      if (optional && !action.isSpoolmanAllowed()) {
+        throw new Error("Spoolman integration is disabled.");
+      }
       const result = await applyRoleColorsToParts(profileId);
-      if (!mayContinue()) return;
+      if (!action.isCurrent()) return;
+      if (optional && !action.isSpoolmanAllowed()) {
+        throw new Error("Spoolman integration is disabled.");
+      }
       publishRows(result.roles, action);
       await onUpdated?.();
-      if (!mayContinue()) return;
-      bumpThumbnailCache();
+      if (!action.isCurrent()) return;
       toast.success(
         `Imported ${applied} role color${applied === 1 ? "" : "s"}${
           result.updated > 0
@@ -649,6 +660,11 @@ function RoleFilamentPickerInner({
       setLoadError(msg);
       toast.error(msg);
     } finally {
+      if (started) {
+        void invalidateRoleFilaments(queryClient, profileId);
+        void invalidatePlanReview(queryClient, profileId);
+        bumpThumbnailCache();
+      }
       if (action.isCurrent()) {
         setBusyAction(null);
       }

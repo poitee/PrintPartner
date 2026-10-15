@@ -307,6 +307,149 @@ describe("RoleFilamentPicker and PartColorDialog plan-aware visibility", () => {
     expect(screen.getByRole("button", { name: "Import colors" })).toHaveProperty("disabled", false);
     expect(applyRoleColorsSpy).not.toHaveBeenCalled();
   });
+
+  it.each(["revoked", "forbidden"])("refreshes partial import state after %s interrupts a later role", async (state) => {
+    planSpoolman = true;
+    const applyRoleColorsSpy = vi.spyOn(filamentsApi, "applyRoleColorsToParts");
+    const thumbnailModule = await import("../lib/thumbnailCache");
+    const bumpThumbnailSpy = vi.mocked(thumbnailModule.bumpThumbnailCache);
+    bumpThumbnailSpy.mockClear();
+
+    const presetFile = new File(["{}"], "preset.json", { type: "application/json" });
+    vi.spyOn(colorPresets, "pickColorPresetFile").mockResolvedValue(presetFile);
+    vi.spyOn(colorPresets, "parseColorPreset").mockResolvedValue({
+      type: "print-partner-colors",
+      version: 1,
+      exported_at: "now",
+      roles: [
+        { role: "primary", filament_color_id: "c1", filament_custom_hex: null, spoolman_spool_id: null },
+        { role: "accent", filament_color_id: "spoolman:int-1:filament:2", filament_custom_hex: null, spoolman_spool_id: null },
+      ],
+    });
+
+    const savedRoles: Array<{ role: string; filament_color_id: string | null }> = [];
+    onFetchHook = (path, _url, init) => {
+      if (path === "/plans/1/role-filament" && init?.method === "PUT") {
+        if (typeof init.body !== "string") throw new Error("Expected a JSON request body");
+        const body = JSON.parse(init.body);
+        savedRoles.push({ role: body.role, filament_color_id: body.filament_color_id });
+        if (body.role === "primary") {
+          if (state === "revoked") {
+            planSpoolman = false;
+            client.setQueryData(queryKeys.planFeatures(1), planFeaturesData(1, false));
+          }
+          return new Response(JSON.stringify({ updated: 1, thumbnails_cleared: 0, roles: mockRoles }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({ status: 403, code: "FEATURE_DISABLED", detail: "Feature spoolman is disabled." }), {
+          status: 403,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (path === "/plans/1/role-filaments") {
+        return new Response(JSON.stringify({
+          roles: [
+            { role: "primary", part_count: 2, filament_color_id: "c1", spoolman_spool_id: null, filament_custom_hex: null, filament_display: "Catalog Red", filament_hex: "#ff0000" },
+            { role: "accent", part_count: 1, filament_color_id: "c1", spoolman_spool_id: null, filament_custom_hex: null, filament_display: "Catalog Red", filament_hex: "#ff0000" },
+          ],
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+    };
+
+    render(
+      <QueryClientProvider client={client}>
+        <RoleFilamentPicker profileId={1} />
+      </QueryClientProvider>,
+    );
+
+    await screen.findByRole("button", { name: "Change Primary color" });
+    fireEvent.click(screen.getByRole("button", { name: "Import colors" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Import colors" })).toHaveProperty("disabled", false);
+    });
+
+    expect(savedRoles).toEqual([
+      { role: "primary", filament_color_id: "c1" },
+      ...(state === "forbidden" ? [{ role: "accent", filament_color_id: "spoolman:int-1:filament:2" }] : []),
+    ]);
+    expect(applyRoleColorsSpy).not.toHaveBeenCalled();
+
+    await waitFor(() => {
+      expect(screen.getByText(state === "revoked" ? "Spoolman integration is disabled." : /Feature spoolman is disabled/)).toBeTruthy();
+    });
+
+    expect(bumpThumbnailSpy).toHaveBeenCalled();
+    await waitFor(() => {
+      const cached = client.getQueryData<RoleFilamentRow[]>(queryKeys.roleFilaments(1));
+      expect(cached?.find((r) => r.role === "primary")?.filament_color_id).toBe("c1");
+    });
+    expect(client.getQueryData<PlanFeatures>(queryKeys.planFeatures(1))?.effective.spoolman.enabled).toBe(state !== "revoked");
+  });
+
+  it("refreshes original profile caches on Plan switch without publishing old UI state into other Plan", async () => {
+    planSpoolman = true;
+    const thumbnailModule = await import("../lib/thumbnailCache");
+    const bumpThumbnailSpy = vi.mocked(thumbnailModule.bumpThumbnailCache);
+    bumpThumbnailSpy.mockClear();
+
+    const presetFile = new File(["{}"], "preset.json", { type: "application/json" });
+    vi.spyOn(colorPresets, "pickColorPresetFile").mockResolvedValue(presetFile);
+    vi.spyOn(colorPresets, "parseColorPreset").mockResolvedValue({
+      type: "print-partner-colors",
+      version: 1,
+      exported_at: "now",
+      roles: [
+        { role: "primary", filament_color_id: "c1", filament_custom_hex: null, spoolman_spool_id: null },
+      ],
+    });
+
+    let rerenderFn: (ui: React.ReactElement) => void = () => {};
+    onFetchHook = (path, _url, init) => {
+      if (path === "/plans/1/role-filament" && init?.method === "PUT") {
+        rerenderFn?.(
+          <QueryClientProvider client={client}>
+            <RoleFilamentPicker profileId={2} />
+          </QueryClientProvider>,
+        );
+        return new Response(JSON.stringify({
+          updated: 1,
+          thumbnails_cleared: 0,
+          roles: [{ role: "primary", part_count: 2, filament_color_id: "c1", spoolman_spool_id: null, filament_custom_hex: null, filament_display: "Catalog Red", filament_hex: "#ff0000" }],
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (path === "/plans/2/role-filaments") {
+        return new Response(JSON.stringify({
+          roles: [{ role: "primary", part_count: 5, filament_color_id: null, spoolman_spool_id: null, filament_custom_hex: null, filament_display: "", filament_hex: null }],
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+    };
+
+    const { rerender } = render(
+      <QueryClientProvider client={client}>
+        <RoleFilamentPicker profileId={1} />
+      </QueryClientProvider>,
+    );
+    rerenderFn = rerender;
+
+    await screen.findByRole("button", { name: "Change Primary color" });
+    fireEvent.click(screen.getByRole("button", { name: "Import colors" }));
+
+    await screen.findByRole("button", { name: "Change Primary color" });
+
+    await waitFor(() => {
+      expect(client.getQueryState(queryKeys.roleFilaments(1))?.isInvalidated).toBe(true);
+      expect(bumpThumbnailSpy).toHaveBeenCalled();
+    });
+
+    const plan2Roles = client.getQueryData<{ roles: RoleFilamentRow[] }>(queryKeys.roleFilaments(2));
+    expect(plan2Roles?.roles?.[0]?.filament_color_id ?? null).toBeNull();
+  });
   it.each(["catalog", "spool"])("discards delayed %s enrichment across same-tick off/on", async (type) => {
     planSpoolman = true;
     let resolveSave: ((response: Response) => void) | undefined;

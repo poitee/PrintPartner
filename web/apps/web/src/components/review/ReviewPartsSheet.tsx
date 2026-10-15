@@ -9,6 +9,8 @@ import {
   useState,
 } from "react";
 import type { StlNamingFolderRule } from "@print-partner/contracts";
+import { useQueryClient } from "@tanstack/react-query";
+import { queryKeys } from "../../queries/keys";
 import { toast } from "sonner";
 import type { PlanReview, ReviewPart } from "../../api/endpoints/planManifests";
 import type { RoleFilamentRow, SpoolmanSpoolRow } from "../../api/endpoints/filaments";
@@ -294,6 +296,7 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
     toggleUnit,
     busyPartId,
   } = usePlanWorkspace();
+  const queryClient = useQueryClient();
   const profileId = includedReview.profile_id;
   const spoolmanAccess = useSpoolmanWorkflowAccess(profileId);
   const { configured: spoolmanConfigured, integrationId } = useSpoolmanEnabled(profileId);
@@ -422,9 +425,21 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
     void setIncluded(part, true).catch(() => {});
   };
 
-  const onSpoolChange = (partId: number, spoolman_spool_id: string | null) => {
-    void setSpoolmanSpool(partId, spoolman_spool_id);
-  };
+  const onSpoolChange = useCallback(
+    (partId: number, spoolman_spool_id: string | null) => {
+      const targetProfileId = profileId;
+      const action = spoolmanAccess.beginAction();
+      void setSpoolmanSpool(partId, spoolman_spool_id).catch((err: unknown) => {
+        void queryClient.invalidateQueries({
+          queryKey: queryKeys.planFeatures(targetProfileId),
+        });
+        if (!action.isCurrent()) return;
+        const msg = err instanceof Error ? err.message : (typeof err === "string" ? err : "");
+        toast.error(msg || "Could not update spool assignment.");
+      });
+    },
+    [profileId, queryClient, setSpoolmanSpool, spoolmanAccess],
+  );
 
   const onToggleUnit = useCallback(
     (part: ReviewPart, unitIndex: number) => {

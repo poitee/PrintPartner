@@ -681,15 +681,20 @@ export async function registerPlanRoutes(
     const role = String(body.role ?? "").trim();
     if (!role) return reply.status(400).send({ detail: "role is required" });
     const normalizedRole = normalizePartRole(role);
-    if (hasSpoolmanAssignment(body)) {
+    const assignment = completeRoleAssignment(body);
+    const snapshot = deps.repo.readAcceptedPlanOperationalSnapshot(id);
+    const previousAssignments = snapshot.kind === "empty"
+      ? [loadRoleFilamentDefaults(deps.repo, id)[normalizedRole] ?? {}]
+      : snapshot.kind === "ready" ? snapshot.snapshot.parts
+        .filter((part) => part.included && normalizePartRole(part.effectiveRole) === normalizedRole)
+        .map((part) => ({ filament_color_id: part.filamentColorId, spoolman_spool_id: part.spoolmanSpoolId })) : [];
+    if (previousAssignments.some((previous) => hasSpoolmanAssignment(body, previous))) {
       const access = readSpoolmanAccess(deps.repo, id);
       if (access.kind !== "allowed") {
         const problem = spoolmanAccessProblem(access);
         return reply.status(problem.status).send(problem);
       }
     }
-    const assignment = completeRoleAssignment(body);
-    const snapshot = deps.repo.readAcceptedPlanOperationalSnapshot(id);
     if (snapshot.kind === "empty") {
       const columns = filamentAssignmentColumns(assignment);
       saveRoleFilamentDefault(deps.repo, id, normalizedRole, {

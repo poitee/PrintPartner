@@ -83,6 +83,24 @@ describe("Spoolman workflow admission", () => {
   }
 
   for (const prefix of ["", "/api/v1"]) {
+    it.each(["published", "empty"])(`${prefix} permits retained role references and spool clearing in a %s Plan`, async (state) => {
+      const id = state === "published" ? profileId : repo.createProfile("Unpublished").id;
+      repo.setSetting(`feature_toggles:plan:${id}`, '{"spoolman":true}');
+      const update = (filament_color_id: string, spoolman_spool_id: string | null) => app.inject({
+        method: "PUT", url: `${prefix}/plans/${id}/role-filament`,
+        payload: { role: "primary", filament_color_id, spoolman_spool_id, refresh_thumbnails: false },
+      });
+      expect((await update(color, spool)).statusCode).toBe(200);
+      repo.setSetting(`feature_toggles:plan:${id}`, '{"spoolman":false}');
+      network.mockClear();
+      for (const retainedSpool of [spool, null]) expect((await update(color, retainedSpool)).statusCode).toBe(200);
+      expect((await update(`${color}0`, null)).statusCode).toBe(403);
+      expect((await update(color, spool)).statusCode).toBe(403);
+      expect(repo.getRoleFilaments(id)).toContainEqual(expect.objectContaining({
+        role: "primary", filament_color_id: color, spoolman_spool_id: null,
+      }));
+      expect(network).not.toHaveBeenCalled();
+    });
     it(`${prefix} permits unchanged optional defaults but rejects changed inventory references`, async () => {
       planAccess(true);
       expect((await app.inject({ method: "PATCH", url: `${prefix}/parts/${partId}`,
