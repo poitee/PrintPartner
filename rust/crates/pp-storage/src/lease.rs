@@ -510,10 +510,17 @@ impl StorageLease {
     }
     /// A failed step reports `ownership_retained` and keeps this lease's lock and
     /// guard for `retry_failed_release`. That flag does not prove the OS lock was
-    /// reacquired. A missing shared lease name does not prove its directory was
-    /// deleted, so after external removal or relocation every release fails until
-    /// the original name returns or this process exits. A successor published at
-    /// that name in the meantime is not distinguished from the original.
+    /// reacquired. Release renames whatever directory is bound at the shared
+    /// `.desktop-lease` name. While no entry is bound there, as after external
+    /// removal or relocation, release and every retry fail and retain ownership
+    /// until this process exits. Renaming this lease's own directory back to that
+    /// name lets a retry release normally.
+    ///
+    /// Unresolved defect (GRE-401), not part of this contract: if another
+    /// directory, such as a successor lease, is bound at that name, a retry
+    /// reports success. It moves that directory to this lease's private release
+    /// name and removes `owner.json` from this lease's own directory, wherever
+    /// that directory was relocated.
     pub fn release(mut self) -> LeaseRelease {
         self.release_allowed = false;
         #[cfg(test)]
