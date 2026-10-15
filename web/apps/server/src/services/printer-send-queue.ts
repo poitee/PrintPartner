@@ -174,6 +174,12 @@ export async function dispatchPrinterSendQueueItem(
 /** Max queue items examined in one HTTP drain request (status checks can be slow). */
 export const DRAIN_ITEM_CAP = 8;
 
+export function selectPrinterSendQueueDrainItems(repo: AppRepository, printerId?: string): PrinterSendQueueItem[] {
+  return listActivePrinterSendQueue(repo).filter(
+    (item) => item.state === "queued" && (printerId === undefined || item.printer_id === printerId),
+  ).slice(0, DRAIN_ITEM_CAP);
+}
+
 /**
  * For each waiting queue item, dispatch to its queued Printer when that host is idle.
  * At most one send per printer per drain pass. Bounded by {@link DRAIN_ITEM_CAP}.
@@ -187,15 +193,11 @@ export async function drainPrinterSendQueue(
   },
   options: { printerId?: string } = {},
 ): Promise<Array<{ item_id: string; job_id?: string; error?: string }>> {
-  const queued = listActivePrinterSendQueue(repo).filter(
-    (item) =>
-      item.state === "queued" &&
-      (options.printerId === undefined || item.printer_id === options.printerId),
-  );
+  const queued = selectPrinterSendQueueDrainItems(repo, options.printerId);
   const results: Array<{ item_id: string; job_id?: string; error?: string }> = [];
   const usedPrinters = new Set<string>();
 
-  for (const item of queued.slice(0, DRAIN_ITEM_CAP)) {
+  for (const item of queued) {
     let dispatched: Awaited<ReturnType<typeof dispatchPrinterSendQueueItem>>;
     try {
       dispatched = await dispatchPrinterSendQueueItem(repo, exportsDir, item.id, {
