@@ -353,6 +353,15 @@
         "resources": []
       },
       {
+        "operation": "tool.ui_highlight_part",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "build_profiles"
+          }
+        ]
+      },
+      {
         "operation": "tool.list_plan_snapshots",
         "resources": [
           {
@@ -790,7 +799,6 @@
       "tool.suggest_source_contributions",
       "tool.ui_focus_kit_option",
       "tool.ui_focus_stl_search",
-      "tool.ui_highlight_part",
       "tool.ui_navigate",
       "tool.ui_open_docs",
       "tool.ui_open_source",
