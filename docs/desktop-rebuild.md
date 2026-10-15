@@ -128,6 +128,31 @@ cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features des
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --doc
 ```
 
+### D12 YAML parser
+
+The second GRE-607 unit ports `pp-storage::working_drafts::yaml`, the manifest
+YAML reader, compiled only with `desktop_rebuild`. The module is crate-private
+and has no callers yet. It expects `dead_code` until the builder manifest
+helpers use it. The optional `saphyr-parser` dependency (pinned `=0.1.0`, with
+`arraydeque`) is enabled only by the feature, so default builds do not compile
+it.
+
+`Document::parse` charges the shared `PreparationBudget` for nodes, depth,
+visits, and expansion, and checks cancellation. It accepts one document with
+core-schema tags, `!`, anchors, and aliases. Duplicate keys, extra documents,
+other tags, and tag/value mismatches return `InvalidDocument`. Scalars keep
+JavaScript UTF-16 semantics: lone surrogate escapes such as `"\uD800"` survive
+parsing, the private-use sentinel `U+E000` round-trips in every scalar style,
+and keys follow JavaScript property order. `text`, `optional_text`, and
+`truthy` apply JavaScript string and truthiness coercion.
+
+The remaining D12 units are builder manifest helpers, the executor after D11,
+and preparation.
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib working_drafts::yaml
+```
+
 ### D4 media reconciliation
 
 GRE-599 reconciles media already shipped in #131. The `pp-source` media library, the `pp-source-media` CLI, and all unconditional #131 exports remain available in the default build. This slice adds a historical audit and documentation. It adds no feature behavior, host, runtime API, or dependency.
