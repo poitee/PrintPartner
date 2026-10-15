@@ -1,4 +1,5 @@
 use super::manifest::{Group as DomainGroup, Groups as DomainGroups, Variant as DomainVariant};
+use super::observation::{PreparationBudget, ReadResult};
 use crate::manifest_text::{ManifestText, OptionGroupId, VariantId};
 #[derive(Clone)]
 struct Variant {
@@ -26,11 +27,23 @@ struct Directory {
     total: usize,
     children: Vec<usize>,
 }
+const MAX_CANDIDATES: usize = 12;
+const MAX_OPTIONS: usize = 16;
+const OPTIONS_CONTAINER: &str =
+    r"(^|[^a-z0-9])(options?|recommended|variants?|alternatives?|choose)($|[^a-z0-9])";
+const VERSION: &str = r"(^|[^a-z0-9])version($|[^a-z0-9])";
+/// What an inferred option selects: only a folder's direct files (the
+/// `default` variant) or the folder and everything beneath it (`path/*`).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Claim {
+    Files,
+    Tree,
+}
 struct Candidate {
     id: String,
     dir: usize,
     optional: bool,
-    options: Vec<(usize, bool)>,
+    options: Vec<(usize, Claim)>,
 }
 fn test(re: &str, s: &str) -> bool {
     match regress::Regex::with_flags(re, "i") {
@@ -48,6 +61,32 @@ fn slug(s: &str) -> String {
         }
     }
     out.trim_matches('_').chars().take(64).collect()
+}
+fn scope(path: &str) -> &str {
+    if path.is_empty() { "root" } else { path }
+}
+fn unique(base: String, used: &mut HashSet<String>) -> String {
+    let mut id = base.clone();
+    let mut n = 1;
+    while !used.insert(id.clone()) {
+        n += 1;
+        id = format!("{base}_{n}");
+    }
+    id
+}
+fn archived(dir: &Directory) -> bool {
+    test("archive", &dir.path)
+}
+fn within_claimed_tree(dirs: &[Directory], consumed: &HashMap<usize, Claim>, mut i: usize) -> bool {
+    loop {
+        if consumed.get(&i) == Some(&Claim::Tree) {
+            return true;
+        }
+        if i == 0 {
+            return false;
+        }
+        i = dirs[i].parent;
+    }
 }
 fn children(dirs: &[Directory], i: usize) -> Vec<usize> {
     let mut out:Vec<_>=dirs[i].children.iter().copied().filter(|i|!test(r"^(cad|step|stp|3mf|stl|stls|images?|img|pics?|pictures|assets?|gerbers?|3d|archives?|docs?|manuals?|pdf|src|source|step files)$",&dirs[*i].name)&&dirs[*i].total>0).collect();
@@ -95,17 +134,24 @@ fn tokens(s: &str) -> HashSet<String> {
         })
         .collect()
 }
-fn push(candidates: &mut Vec<Candidate>, consumed: &mut HashSet<usize>, mut c: Candidate) {
-    if candidates.len() >= 12 || c.options.is_empty() || candidates.iter().any(|p| p.id == c.id) {
+fn claim(consumed: &mut HashMap<usize, Claim>, i: usize, claim: Claim) {
+    let current = consumed.entry(i).or_insert(claim);
+    *current = (*current).max(claim);
+}
+fn push(candidates: &mut Vec<Candidate>, consumed: &mut HashMap<usize, Claim>, mut c: Candidate) {
+    if candidates.len() >= MAX_CANDIDATES
+        || c.options.is_empty()
+        || candidates.iter().any(|p| p.id == c.id)
+    {
         return;
     }
-    c.options.truncate(16);
-    for (i, _) in &c.options {
-        consumed.insert(*i);
+    c.options.truncate(MAX_OPTIONS);
+    for (i, kind) in &c.options {
+        claim(consumed, *i, *kind);
     }
     candidates.push(c)
 }
-fn infer_scalar(paths: &[String]) -> Groups {
+fn infer_scalar(paths: &[String], budget: &mut PreparationBudget<'_>) -> ReadResult<Groups> {
     let paths: Vec<_> = paths
         .iter()
         .map(|p| {
@@ -127,6 +173,7 @@ fn infer_scalar(paths: &[String]) -> Groups {
             let child = if let Some(i) = index.get(&path) {
                 *i
             } else {
+                budget.node(end)?;
                 let i = dirs.len();
                 dirs.push(Directory {
                     parent,
@@ -148,13 +195,14 @@ fn infer_scalar(paths: &[String]) -> Groups {
     let mut order: Vec<_> = (1..dirs.len()).collect();
     order.sort_by(|a, b| crate::read_model::views::folder_compare(&dirs[*a].path, &dirs[*b].path));
     let mut candidates = Vec::new();
-    let mut consumed = HashSet::new();
+    let mut consumed = HashMap::new();
     for i in order {
+        budget.check()?;
         let info = &dirs[i];
         let deprecated = test("deprecated|obsolete|legacy", &info.name);
         if (test("deprecated|obsolete|legacy", &info.path) && !deprecated)
-            || test("archive", &info.path)
-            || consumed.contains(&i)
+            || archived(info)
+            || consumed.contains_key(&i)
         {
             continue;
         }
@@ -168,23 +216,22 @@ fn infer_scalar(paths: &[String]) -> Groups {
                     id: slug(&info.path),
                     dir: i,
                     optional: true,
-                    options: children(&dirs, i).into_iter().map(|i| (i, false)).collect(),
+                    options: children(&dirs, i)
+                        .into_iter()
+                        .map(|i| (i, Claim::Tree))
+                        .collect(),
                 },
             );
             continue;
         }
-        if test(
-            r"\b(options?|recommended|variants?|alternatives?|choose)\b",
-            &info.name,
-        ) && !optional
-        {
+        if test(OPTIONS_CONTAINER, &info.name) && !optional {
             let c = children(&dirs, i);
             if c.len() >= 2 {
                 let mut options = Vec::new();
                 if deprecated && dirs[parent].direct > 0 {
-                    options.push((parent, true))
+                    options.push((parent, Claim::Files))
                 }
-                options.extend(c.into_iter().map(|i| (i, false)));
+                options.extend(c.into_iter().map(|i| (i, Claim::Tree)));
                 push(
                     &mut candidates,
                     &mut consumed,
@@ -205,7 +252,7 @@ fn infer_scalar(paths: &[String]) -> Groups {
                         id: slug(&info.path),
                         dir: i,
                         optional: true,
-                        options: vec![(i, false)],
+                        options: vec![(i, Claim::Tree)],
                     },
                 );
                 continue;
@@ -219,31 +266,45 @@ fn infer_scalar(paths: &[String]) -> Groups {
                     id: slug(&info.path),
                     dir: i,
                     optional: true,
-                    options: vec![(i, false)],
+                    options: vec![(i, Claim::Tree)],
                 },
             );
             continue;
         }
-        if test(r"\bversion\b", &info.name) && info.total > 0 && dirs[parent].direct > 0 {
-            push(
-                &mut candidates,
-                &mut consumed,
-                Candidate {
-                    id: slug(&dirs[parent].path),
-                    dir: parent,
-                    optional: false,
-                    options: vec![(parent, true), (i, false)],
-                },
-            );
+        if test(VERSION, &info.name) && info.total > 0 && dirs[parent].direct > 0 {
+            if let Some(versions) = candidates
+                .iter_mut()
+                .find(|c| c.dir == parent && c.options[0] == (parent, Claim::Files))
+            {
+                if versions.options.len() < MAX_OPTIONS {
+                    versions.options.push((i, Claim::Tree));
+                    claim(&mut consumed, i, Claim::Tree);
+                }
+            } else {
+                push(
+                    &mut candidates,
+                    &mut consumed,
+                    Candidate {
+                        id: slug(scope(&dirs[parent].path)),
+                        dir: parent,
+                        optional: false,
+                        options: vec![(parent, Claim::Files), (i, Claim::Tree)],
+                    },
+                );
+            }
         }
     }
     for i in 0..dirs.len() {
-        if candidates.len() >= 12 {
+        if candidates.len() >= MAX_CANDIDATES {
             break;
+        }
+        budget.check()?;
+        if within_claimed_tree(&dirs, &consumed, i) {
+            continue;
         }
         let c: Vec<_> = children(&dirs, i)
             .into_iter()
-            .filter(|i| !consumed.contains(i) && dirs[*i].total > 0)
+            .filter(|i| !consumed.contains_key(i) && !archived(&dirs[*i]))
             .collect();
         let mut skeletons: Vec<(String, Vec<usize>)> = Vec::new();
         for child in &c {
@@ -271,8 +332,16 @@ fn infer_scalar(paths: &[String]) -> Groups {
             }
         }
         for (skeleton, mut options) in skeletons {
-            if options.len() < 2 {
+            let id = slug(&format!(
+                "{} {}",
+                scope(&dirs[i].path),
+                skeleton.replace('#', "n")
+            ));
+            if options.len() < 2 || candidates.iter().any(|p| p.id == id) {
                 continue;
+            }
+            if candidates.len() >= MAX_CANDIDATES {
+                break;
             }
             let mut shared = tokens(&dirs[options[0]].name);
             for child in &options[1..] {
@@ -285,23 +354,18 @@ fn infer_scalar(paths: &[String]) -> Groups {
                     .copied()
                     .filter(|i| {
                         let t = tokens(&dirs[*i].name);
-                        shared.iter().all(|s| t.contains(s))
+                        !consumed.contains_key(i) && shared.iter().all(|s| t.contains(s))
                     })
                     .collect();
             }
-            let root = if dirs[i].path.is_empty() {
-                "root"
-            } else {
-                &dirs[i].path
-            };
             push(
                 &mut candidates,
                 &mut consumed,
                 Candidate {
-                    id: slug(&format!("{root} {}", skeleton.replace('#', "n"))),
+                    id,
                     dir: i,
                     optional: false,
-                    options: options.into_iter().map(|i| (i, false)).collect(),
+                    options: options.into_iter().map(|i| (i, Claim::Tree)).collect(),
                 },
             );
         }
@@ -322,17 +386,22 @@ fn infer_scalar(paths: &[String]) -> Groups {
             continue;
         }
         let mut variants = Vec::new();
-        for (i, default) in c.options {
+        let mut used = HashSet::new();
+        for (i, kind) in c.options {
             let d = &dirs[i];
-            if default {
+            if kind == Claim::Files {
                 variants.push(Variant {
-                    id: "default".into(),
+                    id: unique("default".into(), &mut used),
                     label: Some(format!("Default ({})", d.name)),
                     parts: paths
                         .iter()
                         .filter(|p| {
-                            p.starts_with(&format!("{}/", d.path))
-                                && !p[d.path.len() + 1..].contains('/')
+                            let file = if d.path.is_empty() {
+                                Some(p.as_str())
+                            } else {
+                                p.strip_prefix(&d.path).and_then(|p| p.strip_prefix('/'))
+                            };
+                            file.is_some_and(|f| !f.is_empty() && !f.contains('/'))
                         })
                         .cloned()
                         .collect(),
@@ -340,11 +409,14 @@ fn infer_scalar(paths: &[String]) -> Groups {
                 });
             } else if d.total > 0 {
                 variants.push(Variant {
-                    id: if slug(&d.name).is_empty() {
-                        slug(&d.path)
-                    } else {
-                        slug(&d.name)
-                    },
+                    id: unique(
+                        if slug(&d.name).is_empty() {
+                            slug(&d.path)
+                        } else {
+                            slug(&d.name)
+                        },
+                        &mut used,
+                    ),
                     label: Some(d.name.clone()),
                     parts: vec![format!("{}/*", d.path)],
                     excludes: Vec::new(),
@@ -401,7 +473,7 @@ fn infer_scalar(paths: &[String]) -> Groups {
             .map(|index| (0, index))
             .unwrap_or((1, 0))
     });
-    groups
+    Ok(groups)
 }
 fn optional_group(name: &str, path: &str, modification: bool) -> Group {
     Group {
@@ -434,8 +506,11 @@ fn optional_group(name: &str, path: &str, modification: bool) -> Group {
     }
 }
 
-pub(super) fn infer(paths: &[String]) -> DomainGroups {
-    infer_scalar(paths)
+pub(super) fn infer(
+    paths: &[String],
+    budget: &mut PreparationBudget<'_>,
+) -> ReadResult<DomainGroups> {
+    Ok(infer_scalar(paths, budget)?
         .into_iter()
         .map(|(id, g)| {
             (
@@ -459,5 +534,5 @@ pub(super) fn infer(paths: &[String]) -> DomainGroups {
                 },
             )
         })
-        .collect()
+        .collect())
 }

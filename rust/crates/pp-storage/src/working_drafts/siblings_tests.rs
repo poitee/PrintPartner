@@ -1,7 +1,20 @@
 use super::manifest::Groups;
+use super::observation::{PreparationBudget, PreparationLimits, ReadFailure, ReadResult, Resource};
+use std::sync::atomic::AtomicBool;
+
+fn infer_within(paths: &[&str], cancelled: bool, limits: PreparationLimits) -> ReadResult<Groups> {
+    let cancelled = AtomicBool::new(cancelled);
+    let mut budget = PreparationBudget::new(&cancelled, limits)?;
+    let paths: Vec<String> = paths.iter().map(|p| (*p).into()).collect();
+    super::siblings::infer(&paths, &mut budget)
+}
 
 fn infer(paths: &[String]) -> Groups {
-    super::siblings::infer(paths)
+    let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
+    match infer_within(&paths, false, PreparationLimits::default()) {
+        Ok(groups) => groups,
+        Err(error) => panic!("sibling inference failed: {error}"),
+    }
 }
 
 type Shape = Vec<(String, Vec<(String, Vec<String>)>)>;
@@ -12,16 +25,16 @@ fn shape(paths: &[&str]) -> Shape {
         .into_iter()
         .map(|(id, group)| {
             (
-                id.0.as_scalar().unwrap(),
+                id.0.as_scalar().unwrap_or_default(),
                 group
                     .variants
                     .into_iter()
                     .map(|v| {
                         (
-                            v.id.0.as_scalar().unwrap(),
+                            v.id.0.as_scalar().unwrap_or_default(),
                             v.parts
                                 .into_iter()
-                                .map(|p| p.0.as_scalar().unwrap())
+                                .map(|p| p.0.as_scalar().unwrap_or_default())
                                 .collect(),
                         )
                     })
@@ -31,7 +44,9 @@ fn shape(paths: &[&str]) -> Shape {
         .collect()
 }
 
-fn expect(groups: &[(&str, &[(&str, &[&str])])]) -> Shape {
+type Expected<'a> = (&'a str, &'a [(&'a str, &'a [&'a str])]);
+
+fn expect(groups: &[Expected<'_>]) -> Shape {
     groups
         .iter()
         .map(|(id, variants)| {
@@ -318,6 +333,38 @@ fn siblings_numeric_inference_skips_claimed_folders() {
 }
 
 #[test]
+fn siblings_later_skeleton_expansion_skips_folders_claimed_earlier() {
+    assert_eq!(
+        shape(&[
+            "Big Spindle 1/a.stl",
+            "Big Spindle 2/b.stl",
+            "Big Spindle Mount 1/c.stl",
+            "Big Spindle Mount 2/d.stl",
+            "Spindle Mount 65/e.stl",
+            "Spindle Mount 80/f.stl"
+        ]),
+        expect(&[
+            (
+                "root_big_spindle_n",
+                &[
+                    ("big_spindle_1", &["Big Spindle 1/*"]),
+                    ("big_spindle_2", &["Big Spindle 2/*"]),
+                    ("big_spindle_mount_1", &["Big Spindle Mount 1/*"]),
+                    ("big_spindle_mount_2", &["Big Spindle Mount 2/*"]),
+                ],
+            ),
+            (
+                "root_spindle_mount_n",
+                &[
+                    ("spindle_mount_65", &["Spindle Mount 65/*"]),
+                    ("spindle_mount_80", &["Spindle Mount 80/*"]),
+                ],
+            ),
+        ])
+    );
+}
+
+#[test]
 fn siblings_default_files_do_not_claim_numeric_subfolders() {
     assert_eq!(
         shape(&[
@@ -388,4 +435,28 @@ fn siblings_numeric_inference_ignores_archived_folders() {
             ],
         )])
     );
+}
+
+#[test]
+fn siblings_charge_one_node_per_folder_and_honor_cancellation() {
+    let paths = ["Options/A/a.stl", "Options/B/b.stl"];
+    let three = PreparationLimits {
+        nodes: 3,
+        ..PreparationLimits::default()
+    };
+    let groups = infer_within(&paths, false, three).unwrap();
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].0.0.as_scalar().as_deref(), Some("options"));
+    assert!(matches!(
+        infer_within(&paths, false, PreparationLimits { nodes: 2, ..three }),
+        Err(ReadFailure::LimitExceeded(Resource::Nodes))
+    ));
+    assert!(matches!(
+        infer_within(&paths, true, PreparationLimits::default()),
+        Err(ReadFailure::Cancelled)
+    ));
+    assert!(matches!(
+        infer_within(&["flat.stl"], true, PreparationLimits::default()),
+        Err(ReadFailure::Cancelled)
+    ));
 }
