@@ -12,6 +12,8 @@ use std::{
     path::PathBuf,
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
+#[cfg(feature = "desktop_rebuild")]
+use unicode_normalization::UnicodeNormalization;
 
 const CANDIDATE: &str = ".candidate";
 pub const MAX_COMPRESSED_BYTES: u64 = 256 * 1024 * 1024;
@@ -92,6 +94,16 @@ impl From<zip::result::ZipError> for ArchiveError {
     }
 }
 type Result<T> = std::result::Result<T, ArchiveError>;
+
+/// How ZIP entry labels become destination paths. Raw archive names stay unchanged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArchiveLabelPolicy {
+    /// Requires labels to satisfy `SourcePath` without normalization.
+    Strict,
+    /// Normalizes destination labels to NFC before validation.
+    #[cfg(feature = "desktop_rebuild")]
+    NfcAtAcquisition,
+}
 
 /// Which reader-resolved value disagreed with the preflight record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -208,10 +220,34 @@ impl ExtractedArchive {
 }
 
 impl SourceRoot {
+    /// Extracts using strict `SourcePath` labels without normalization.
     pub fn extract_zip(
+        &mut self,
+        input: ZipInput,
+        limits: ArchiveLimits,
+        cancelled: &AtomicBool,
+    ) -> Result<ExtractedArchive> {
+        self.extract_zip_impl(input, limits, ArchiveLabelPolicy::Strict, cancelled)
+    }
+
+    /// Applies the label policy before path validation and collision checks.
+    /// Payload bytes and the original input's receipt hash remain unchanged.
+    #[cfg(feature = "desktop_rebuild")]
+    pub fn extract_zip_with_label_policy(
+        &mut self,
+        input: ZipInput,
+        limits: ArchiveLimits,
+        label_policy: ArchiveLabelPolicy,
+        cancelled: &AtomicBool,
+    ) -> Result<ExtractedArchive> {
+        self.extract_zip_impl(input, limits, label_policy, cancelled)
+    }
+
+    fn extract_zip_impl(
         &mut self,
         mut input: ZipInput,
         limits: ArchiveLimits,
+        label_policy: ArchiveLabelPolicy,
         cancelled: &AtomicBool,
     ) -> Result<ExtractedArchive> {
         if limits.max_compressed_bytes > MAX_COMPRESSED_BYTES
@@ -240,7 +276,7 @@ impl SourceRoot {
             cleaned: false,
             _lock: lock,
         };
-        let outcome = self.extract_to(&mut input, limits, cancelled, &stage);
+        let outcome = self.extract_to(&mut input, limits, label_policy, cancelled, &stage);
         match outcome {
             Ok((files, receipt)) => Ok(ExtractedArchive {
                 stage,
@@ -260,6 +296,7 @@ impl SourceRoot {
         &self,
         input: &mut ZipInput,
         limits: ArchiveLimits,
+        label_policy: ArchiveLabelPolicy,
         cancelled: &AtomicBool,
         stage: &Stage,
     ) -> Result<(LocalFiles, ArchiveReceipt)> {
@@ -273,7 +310,13 @@ impl SourceRoot {
         )?;
         compressed.sync_all()?;
         let mut archive_file = stage.root.file_read_write("archive.zip")?;
-        let preflight = inspect_index(&mut archive_file, compressed_bytes, limits, cancelled)?;
+        let preflight = inspect_index_with_label_policy(
+            &mut archive_file,
+            compressed_bytes,
+            limits,
+            label_policy,
+            cancelled,
+        )?;
         bind_zip_reader_to_validated_eocd(&mut archive_file, preflight.eocd_offset)?;
         let mut archive = zip::ZipArchive::with_config(
             zip::read::Config {
@@ -765,6 +808,16 @@ pub(crate) fn inspect_index(
     limits: ArchiveLimits,
     cancelled: &AtomicBool,
 ) -> Result<Preflight> {
+    inspect_index_with_label_policy(file, length, limits, ArchiveLabelPolicy::Strict, cancelled)
+}
+
+fn inspect_index_with_label_policy(
+    file: &mut (impl Read + Seek),
+    length: u64,
+    limits: ArchiveLimits,
+    label_policy: ArchiveLabelPolicy,
+    cancelled: &AtomicBool,
+) -> Result<Preflight> {
     let tail_size = length.min(65_557) as usize;
     file.seek(SeekFrom::End(-(tail_size as i64)))?;
     let mut tail = vec![0u8; tail_size];
@@ -868,12 +921,12 @@ pub(crate) fn inspect_index(
             return Err(ArchiveError::UnsafeEntry);
         }
         let directory = raw_name.ends_with('/');
-        let path = SourcePath::try_from(if directory {
-            raw_name[..raw_name.len() - 1].to_owned()
+        let label = if directory {
+            &raw_name[..raw_name.len() - 1]
         } else {
-            raw_name.clone()
-        })
-        .map_err(|_| ArchiveError::UnsafeEntry)?;
+            &raw_name
+        };
+        let path = archive_path(label, label_policy)?;
         paths
             .insert(&path, directory)
             .map_err(|error| match error {
@@ -930,6 +983,15 @@ pub(crate) fn inspect_index(
         central_offset,
         eocd_offset,
     })
+}
+
+fn archive_path(raw_label: &str, label_policy: ArchiveLabelPolicy) -> Result<SourcePath> {
+    let label = match label_policy {
+        ArchiveLabelPolicy::Strict => raw_label.to_owned(),
+        #[cfg(feature = "desktop_rebuild")]
+        ArchiveLabelPolicy::NfcAtAcquisition => raw_label.nfc().collect(),
+    };
+    SourcePath::try_from(label).map_err(|_| ArchiveError::UnsafeEntry)
 }
 
 fn read_zip64_directory(
