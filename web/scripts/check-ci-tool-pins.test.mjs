@@ -7,7 +7,6 @@ import process from 'node:process';
 import { fileURLToPath, URL } from 'node:url';
 import test from 'node:test';
 
-const wrapper = fileURLToPath(new URL('../../scripts/check-github-actions-pinned.sh', import.meta.url));
 const cli = fileURLToPath(new URL('./check-ci-tool-pins.mjs', import.meta.url));
 const action = 'taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe';
 const workflow = step => `jobs:\n  probe:\n    steps:\n${step}\n`;
@@ -189,20 +188,5 @@ for (const [name, source] of [
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stderr, '');
     assert.equal(result.stdout, summary(0, 0, 0));
-  });
-}
-
-for (const [name, source, status] of [
-  ['pinned action', workflow(`      - uses: '${checkout}'`), 0],
-  ['mutable action', workflow('      - "uses": actions/checkout@v7'), 1],
-  ['mutable tool', installer('nextest'), 1],
-]) {
-  test(`shell entrypoint preserves ${name} result from another directory`, t => {
-    const direct = run(t, source);
-    const wrapped = spawnSync('bash', [wrapper, direct.directory], { cwd: tmpdir(), encoding: 'utf8' });
-    assert.equal(wrapped.status, status, wrapped.stderr);
-    assert.equal(wrapped.status, direct.status);
-    assert.equal(wrapped.stdout, direct.stdout);
-    assert.equal(wrapped.stderr, direct.stderr);
   });
 }

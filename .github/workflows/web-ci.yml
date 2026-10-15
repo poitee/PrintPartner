@@ -73,6 +73,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Check GitHub Actions are SHA-pinned
+        working-directory: .
+        run: bash scripts/check-github-actions-pinned.sh
       - name: Test Linear PR status sync
         working-directory: .
         run: python3 -B -m unittest discover -s scripts/linear -p 'test_*.py' -v
@@ -87,7 +90,7 @@ jobs:
         working-directory: .
         run: |
           node --test web/scripts/check-ci-tool-pins.test.mjs
-          bash scripts/check-github-actions-pinned.sh
+          node web/scripts/check-ci-tool-pins.mjs
       - name: Check workaround ratchet
         run: node ../scripts/workaround-ratchet.mjs && node --test ../scripts/workaround-ratchet.test.mjs
       - name: Check MCP tool inventory golden
