@@ -1299,7 +1299,7 @@ async fn ticket_t_2_process_exit_obeys_every_backoff_deadline_and_cap() {
     // prevent observation of the later backoff attempts. No child reaches Ready.
     let supervisor = super::Supervisor::launch_shell(
         super::ShellSpec {
-            script: r#"trap 'exit 7' USR1; read line || exit 1; data=${line#*'"data_dir":"'}; data=${data%%'"'*}; echo $$ > "$data/armed"; while read line; do :; done"#,
+            script: r#"trap 'exit 7' USR1; read line || exit 0; data=${line#*'"data_dir":"'}; data=${data%%'"'*}; echo $$ > "$data/armed"; while read line; do :; done"#,
             ..shell_spec(&scratch)
         },
         super::SupervisorConfig {
