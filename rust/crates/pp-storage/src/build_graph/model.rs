@@ -31,6 +31,9 @@ pub enum AcceptedProgressUnavailable {
 
 #[derive(Debug, Clone)]
 pub enum PlanFreshness {
+    Unavailable {
+        code: String,
+    },
     Current {
         accepted_input_set_id: i64,
         accepted_at: String,

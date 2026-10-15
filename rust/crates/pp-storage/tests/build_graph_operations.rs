@@ -67,7 +67,7 @@ impl Fixture {
     }
     fn read(&self) -> ProfileSummary {
         match self.run(BuildCommand::Read { build: id(1) }).unwrap() {
-            BuildOutcome::Read { profile } => profile,
+            BuildOutcome::Read { profile } => *profile,
             outcome => panic!("{outcome:?}"),
         }
     }
@@ -349,4 +349,43 @@ fn review_working_counts_non_scalar_metadata_edits() {
             "{context}"
         );
     }
+}
+
+#[test]
+fn review_missing_accepted_input_retains_healthy_build() {
+    let f = Fixture::new();
+    f.mutate("UPDATE plan_accepted_input_sets SET input_set_id=999999; INSERT INTO build_profiles(id,tenant_id,name) VALUES(20,'default','Healthy');");
+    let profile = f.read();
+    assert!(matches!(
+        profile.accepted_progress,
+        AcceptedProgress::Unavailable(AcceptedProgressUnavailable::Integrity)
+    ));
+    assert!(
+        matches!(profile.freshness, PlanFreshness::Unavailable { code } if code == "accepted_inputs")
+    );
+    let BuildOutcome::Listed { profiles } = f.run(BuildCommand::List).unwrap() else {
+        panic!("list")
+    };
+    assert_eq!(profiles.len(), 2);
+    assert!(
+        profiles.iter().any(|profile| profile.id == 20
+            && matches!(profile.accepted_progress, AcceptedProgress::Empty))
+    );
+}
+
+#[test]
+fn review_layers_allow_1024_and_reject_1025() {
+    let f = Fixture::new();
+    f.mutate("DELETE FROM profile_layers; WITH RECURSIVE ids(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM ids WHERE n<1024) INSERT INTO profile_layers(id,tenant_id,profile_id,layer_order,layer_type) SELECT n,'default',1,n,'addon' FROM ids;");
+    let BuildOutcome::Layers { layers, .. } =
+        f.run(BuildCommand::ListLayers { build: id(1) }).unwrap()
+    else {
+        panic!("layers")
+    };
+    assert_eq!(layers.len(), 1024);
+    f.mutate("INSERT INTO profile_layers(id,tenant_id,profile_id,layer_order,layer_type) VALUES(1025,'default',1,1025,'addon');");
+    let error = f
+        .run(BuildCommand::ListLayers { build: id(1) })
+        .unwrap_err();
+    assert!(matches!(error.downcast_ref(), Some(Failure::TooManyLayers)));
 }

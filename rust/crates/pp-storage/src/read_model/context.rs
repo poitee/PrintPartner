@@ -39,6 +39,8 @@ pub(crate) enum AcceptedProgressFacts {
 
 #[derive(Debug, Clone)]
 pub(crate) enum FreshnessFacts {
+    #[cfg(feature = "desktop_rebuild")]
+    Unavailable { code: String },
     Current {
         accepted_input_set_id: i64,
         accepted_at: String,
@@ -330,6 +332,8 @@ fn untracked_reason_json(reason: &UntrackedReasonFacts) -> Value {
 
 fn freshness_json(freshness: &FreshnessFacts) -> Value {
     match freshness {
+        #[cfg(feature = "desktop_rebuild")]
+        FreshnessFacts::Unavailable { code } => json!({"status":"unavailable","code":code}),
         FreshnessFacts::Current {
             accepted_input_set_id,
             accepted_at,
@@ -633,13 +637,26 @@ pub(super) fn capture_build_summary(
     else {
         return Ok(None);
     };
-    let freshness = freshness(tx, tenant, id, &profile, budget)?.0;
+    let freshness = match freshness(tx, tenant, id, &profile, budget) {
+        Ok((freshness, _)) => freshness,
+        Err(error) => match error.downcast_ref::<super::graph::Integrity>() {
+            Some(integrity) => FreshnessFacts::Unavailable {
+                code: integrity.code.to_owned(),
+            },
+            None => return Err(error),
+        },
+    };
     let part_count = tx.query_row(
         "SELECT count(*) FROM parts WHERE profile_id=?1",
         [id],
         |row| row.get(0),
     )?;
-    summary_facts(id, &profile, part_count, accepted, freshness).map(Some)
+    let unavailable = matches!(freshness, FreshnessFacts::Unavailable { .. });
+    let mut facts = summary_facts(id, &profile, part_count, accepted, freshness)?;
+    if unavailable {
+        facts.accepted_progress = AcceptedProgressFacts::Integrity;
+    }
+    Ok(Some(facts))
 }
 
 fn working(

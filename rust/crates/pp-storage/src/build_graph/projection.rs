@@ -79,6 +79,7 @@ pub(crate) fn profile_summary(facts: BuildSummaryFacts) -> ProfileSummary {
         }
     };
     let freshness = match facts.freshness {
+        FreshnessFacts::Unavailable { code } => PlanFreshness::Unavailable { code },
         FreshnessFacts::Current {
             accepted_input_set_id,
             accepted_at,

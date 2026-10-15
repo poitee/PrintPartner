@@ -19,6 +19,7 @@ use std::{
 pub enum Failure {
     Cancelled,
     TooManyBuilds,
+    TooManyLayers,
     QueueFull,
     Stopped,
     OutcomeUnknown,
@@ -44,7 +45,7 @@ pub enum BuildOutcome {
         profiles: Vec<ProfileSummary>,
     },
     Read {
-        profile: ProfileSummary,
+        profile: Box<ProfileSummary>,
     },
     Layers {
         profile_id: i64,
@@ -185,9 +186,14 @@ fn build_exists(tx: &Transaction<'_>, tenant: &str, build: i64) -> Result<bool> 
     .map_err(Into::into)
 }
 
-fn layers(tx: &Transaction<'_>, tenant: &str, build: i64) -> Result<Vec<ProfileLayer>> {
+fn layers(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    build: i64,
+    cancelled: &AtomicBool,
+) -> Result<Vec<ProfileLayer>> {
     let mut statement = tx.prepare(
-        "SELECT layer.id,layer.layer_order,layer.layer_type,layer.project_id,source.name FROM profile_layers layer LEFT JOIN projects source ON source.tenant_id=layer.tenant_id AND source.id=layer.project_id WHERE layer.tenant_id=?1 AND layer.profile_id=?2 ORDER BY layer.layer_order,layer.id",
+        "SELECT layer.id,layer.layer_order,layer.layer_type,layer.project_id,source.name FROM profile_layers layer LEFT JOIN projects source ON source.tenant_id=layer.tenant_id AND source.id=layer.project_id WHERE layer.tenant_id=?1 AND layer.profile_id=?2 ORDER BY layer.layer_order,layer.id LIMIT 1025",
     )?;
     let rows = statement.query_map(params![tenant, build], |row| {
         Ok(ProfileLayer {
@@ -198,8 +204,14 @@ fn layers(tx: &Transaction<'_>, tenant: &str, build: i64) -> Result<Vec<ProfileL
             project_name: row.get(4)?,
         })
     })?;
-    rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(Into::into)
+    let mut layers = Vec::new();
+    for row in rows {
+        ensure!(!cancelled.load(Ordering::Acquire), Failure::Cancelled);
+        let layer = row?;
+        ensure!(layers.len() < 1024, Failure::TooManyLayers);
+        layers.push(layer);
+    }
+    Ok(layers)
 }
 
 fn read(
@@ -241,7 +253,9 @@ fn read(
             else {
                 return Ok(BuildOutcome::MissingBuild);
             };
-            Ok(BuildOutcome::Read { profile })
+            Ok(BuildOutcome::Read {
+                profile: Box::new(profile),
+            })
         }
         BuildCommand::ListLayers { build } => {
             let build = build.get() as i64;
@@ -250,7 +264,7 @@ fn read(
             }
             Ok(BuildOutcome::Layers {
                 profile_id: build,
-                layers: layers(tx, tenant, build)?,
+                layers: layers(tx, tenant, build, cancelled)?,
             })
         }
     }
