@@ -1057,7 +1057,9 @@ fn audit_delete_cascades_public_accepted_plate_graph_across_reopen() {
         "plan_apply_requests",
         "required_units",
         "accepted_plate_revisions",
+        "accepted_plate_heads",
         "accepted_plates",
+        "accepted_plate_units",
     ];
     for table in tables {
         let count: i64 = f
