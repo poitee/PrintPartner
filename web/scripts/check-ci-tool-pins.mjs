@@ -27,13 +27,29 @@ const desktopNodeLanes = [
   ['desktop-webkit', 'webkit-stl', 'WEBKIT', 24],
 ];
 const desktopNodeSetups = {
-  'desktop-runtime': { runtime: [22, 24], 'source-artifacts': [24], 'rust-verify': [24] },
+  'desktop-runtime': {
+    runtime: { majors: [22, 24] },
+    'source-artifacts': { majors: [24] },
+    'rust-verify': { majors: [24] },
+  },
   'desktop-native-macos': {
-    'linux-precheck': [24],
-    'server-smoke': [24],
-    bundle: [24],
-    'bundle-intel': [24],
-    'macos-storage-gate': [22, 24],
+    'linux-precheck': { majors: [24], condition: "${{ needs.changes.outputs.macos != 'false' }}" },
+    'server-smoke': {
+      majors: [24],
+      condition: "${{ !cancelled() && (needs.changes.outputs.macos == 'false' || needs.linux-precheck.result == 'success') }}",
+    },
+    bundle: {
+      majors: [24],
+      condition: "${{ !cancelled() && needs.changes.outputs.macos != 'false' && needs.linux-precheck.result == 'success' }}",
+    },
+    'bundle-intel': {
+      majors: [24],
+      condition: "${{ !cancelled() && needs.changes.outputs.intel == 'true' && needs.linux-precheck.result == 'success' }}",
+    },
+    'macos-storage-gate': {
+      majors: [22, 24],
+      condition: "${{ !cancelled() && needs.changes.outputs.macos != 'false' && needs.linux-precheck.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}",
+    },
   },
 };
 const additionalNodeWorkflows = ['integration-smoke', 'pr-evidence', ...desktopNodeLanes.map(([name]) => name), ...Object.keys(desktopNodeSetups)];
@@ -137,13 +153,15 @@ function checkDesktopNodeSetups(workflow, file, lanes) {
       report(file, `jobs.${name}`, 'UNEXPECTED_DESKTOP_NODE_SETUP', 'Node setups must belong to a declared desktop lane');
     }
   }
-  for (const [name, majors] of Object.entries(lanes)) {
+  for (const [name, { majors, condition: jobCondition }] of Object.entries(lanes)) {
     const path = `jobs.${name}.steps`;
     const steps = workflow.jobs[name]?.steps;
     const setups = Array.isArray(steps) ? steps.filter(step => mapping(step)
       && typeof step.uses === 'string' && step.uses.split('@')[0].toLowerCase() === 'actions/setup-node') : [];
-    if (setups.length !== majors.length || Object.hasOwn(workflow.jobs[name] ?? {}, 'continue-on-error')) {
-      report(file, path, 'INVALID_DESKTOP_NODE_SETUP', `expected ${majors.length} setup-node steps without a job failure override`);
+    const job = workflow.jobs[name];
+    if (setups.length !== majors.length || Object.hasOwn(job ?? {}, 'continue-on-error')
+      || (jobCondition === undefined ? Object.hasOwn(job ?? {}, 'if') : job?.if !== jobCondition)) {
+      report(file, path, 'INVALID_DESKTOP_NODE_SETUP', `expected ${majors.length} setup-node steps with the permitted job condition and without a job failure override`);
       continue;
     }
     for (const [index, setup] of setups.entries()) {

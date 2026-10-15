@@ -634,3 +634,22 @@ for (const filename of ['desktop-runtime.yml', 'desktop-native-macos.yml']) {
     }
   }
 }
+
+for (const [filename, lanes] of [
+  ['desktop-runtime.yml', ['runtime', 'source-artifacts', 'rust-verify']],
+  ['desktop-native-macos.yml', ['linux-precheck', 'server-smoke', 'bundle', 'bundle-intel', 'macos-storage-gate']],
+]) {
+  const original = YAML.parse(readFileSync(fileURLToPath(new URL(`../../.github/workflows/${filename}`, import.meta.url)), 'utf8'));
+  for (const lane of lanes) {
+    for (const condition of [false, true, ...(filename === 'desktop-native-macos.yml' ? [undefined] : [])]) {
+      test(`reject ${filename} ${lane} job condition ${condition}`, t => {
+        const data = JSON.parse(JSON.stringify(original));
+        if (condition === undefined) delete data.jobs[lane].if;
+        else data.jobs[lane].if = condition;
+        const result = run(t, JSON.stringify(data), [], filename);
+        assert.equal(result.status, 1, result.stdout);
+        assert.match(result.stderr, /INVALID_DESKTOP_NODE_SETUP:/);
+      });
+    }
+  }
+}

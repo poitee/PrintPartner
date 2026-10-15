@@ -429,3 +429,18 @@ for (const [label, name, mutate, diagnostic] of [
     assert.match(result.stderr, new RegExp(`${diagnostic}:`));
   });
 }
+
+for (const [name, lane] of [['desktop-runtime', 'runtime'], ['desktop-native-macos', 'bundle']]) {
+  test(`event tree rejects disabled ${name} job despite repaired checkout`, t => {
+    const path = `.github/workflows/${name}.yml`;
+    const f = fixture(t, directory => {
+      const workflow = YAML.parse(readFileSync(join(directory, path), 'utf8'));
+      workflow.jobs[lane].if = false;
+      writeFileSync(join(directory, path), YAML.stringify(workflow));
+    });
+    copyFileSync(join(root, path), join(f.directory, path));
+    const result = f.run();
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stderr, /INVALID_DESKTOP_NODE_SETUP:/);
+  });
+}
