@@ -52,7 +52,7 @@ const TABLES = ["table:app_settings", "table:projects", "table:source_docs"];
 const FILE_RESOURCES = ["file:source-workspace", "table:projects", "table:source_docs"];
 const manifest = z.object({ resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.ui_highlight_part", "tool.ui_focus_stl_search"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -930,4 +930,83 @@ it("traces ui_focus_stl_search proposals, query normalization and tenants agains
   expect([...union].sort()).toEqual(tables);
   const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.ui_focus_stl_search");
   expect(entry).toEqual({ operation: "tool.ui_focus_stl_search", resources: [{ kind: "table", name: "build_profiles" }] });
+});
+
+it("traces ui_navigate routes, normalization, ID precedence and tenants against its literal union", async () => {
+  const plan = repo.createProfile("Search");
+  const fallback = repo.createProfile("Fallback");
+  const foreign = tenantStorage.run("other", () => repo.createProfile("Other"));
+  const tables = ["table:build_profiles"];
+  const union = new Set<string>();
+  async function trace(input: Record<string, unknown>, expected: string[], tenantId = "default", activePlanId?: number) {
+    statements = [];
+    observer.state.files = [];
+    observer.state.active = true;
+    let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+    try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("ui_navigate", input, { repo, activePlanId })); }
+    finally { observer.state.active = false; }
+    const observed = [...new Set(statements.map((sql) => tableForObservedSelect(sql, tenantId)))].sort();
+    expect(observed).toEqual(expected);
+    expect(observer.state.files).toEqual([]);
+    for (const resource of observed) union.add(resource);
+    const content = z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
+    if (content.status === "proposed") {
+      const action = z.object({ id: z.uuid() }).passthrough().parse(content.action);
+      expect(output.proposedAction).toEqual(action);
+      const { id: _id, ...proposal } = action;
+      return { ...content, action: proposal };
+    }
+    expect(output.proposedAction).toBeUndefined();
+    return content;
+  }
+  function proposal(route: string, planId: number) {
+    return {
+      status: "proposed",
+      note: "Not applied yet — user must confirm via Apply in the UI.",
+      action: {
+        type: "ui_navigate", plan_id: planId,
+        label: `Open ${route}`,
+        summary: `Navigate to ${route}${planId > 0 ? ` (plan #${planId})` : ""}.`,
+        params: planId > 0 ? { route, profile_id: planId } : { route },
+      },
+    };
+  }
+  for (const route of ["sources", "build", "review", "checkoff", "settings", "builds", "help"]) {
+    expect(await trace({ route }, [])).toEqual(proposal(route, 0));
+    expect(await trace({ route: `  ${route}\n`, plan_id: plan.id }, tables)).toEqual(proposal(route, plan.id));
+  }
+  for (const [input, route] of [
+    [{}, ""], [{ route: null }, ""], [{ route: " BUILD " }, "BUILD"],
+    [{ route: 42 }, "42"], [{ route: {} }, "[object Object]"], [{ route: [] }, ""],
+  ] satisfies [Record<string, unknown>, string][]) {
+    expect(await trace({ ...input, plan_id: plan.id }, [])).toEqual({ error: `Invalid route: ${route}` });
+  }
+  for (const planId of [plan.id, String(plan.id), ` ${plan.id}.9 `]) {
+    expect(await trace({ route: "build", plan_id: planId, profile_id: foreign.id }, tables, "default", fallback.id)).toEqual(proposal("build", plan.id));
+  }
+  for (const planId of ["invalid", null, {}, []]) {
+    expect(await trace({ route: "build", plan_id: planId, profile_id: String(fallback.id) }, [])).toEqual(proposal("build", fallback.id));
+  }
+  for (const planId of [999999, foreign.id, 0, -1]) {
+    expect(await trace({ route: "review", plan_id: planId }, tables)).toEqual(proposal("review", 0));
+    expect(await trace({ route: "review", plan_id: planId, profile_id: foreign.id }, tables)).toEqual(proposal("review", foreign.id));
+    expect(await trace({ route: "review", plan_id: planId, profile_id: foreign.id }, tables, "default", fallback.id)).toEqual(proposal("review", fallback.id));
+  }
+  expect(await trace({ route: "help", profile_id: foreign.id }, [])).toEqual(proposal("help", foreign.id));
+  expect(await trace({ route: "help", profile_id: "invalid" }, [])).toEqual(proposal("help", 0));
+  expect(await trace({ route: "help", profile_id: -2 }, [])).toEqual(proposal("help", -2));
+  expect(await trace({ route: "help", profile_id: plan.id }, [], "default", foreign.id)).toEqual(proposal("help", foreign.id));
+  expect(await trace({ route: "help", profile_id: plan.id }, [], "default", 0)).toEqual(proposal("help", 0));
+  expect(await trace({ route: "help", plan_id: foreign.id }, tables, "other")).toEqual(proposal("help", foreign.id));
+  expect(await trace({ route: "help", plan_id: plan.id }, tables, "other")).toEqual(proposal("help", 0));
+  sqlite.prepare("ALTER TABLE build_profiles RENAME TO unavailable_profiles").run();
+  try {
+    expect(await trace({ route: "build", plan_id: plan.id, profile_id: fallback.id }, [], "default", fallback.id)).toEqual({ error: "no such table: build_profiles" });
+    expect(await trace({ route: "help", profile_id: plan.id }, [])).toEqual(proposal("help", plan.id));
+  } finally {
+    sqlite.prepare("ALTER TABLE unavailable_profiles RENAME TO build_profiles").run();
+  }
+  expect([...union].sort()).toEqual(tables);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.ui_navigate");
+  expect(entry).toEqual({ operation: "tool.ui_navigate", resources: [{ kind: "table", name: "build_profiles" }] });
 });
