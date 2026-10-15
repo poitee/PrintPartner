@@ -1,0 +1,10 @@
+
+> print-partner-web@3.3.0 lint:dead
+> knip --no-gitignore
+
+Configuration hints (5)
+../apps/server/dist/current/db/client-postgres.js       knip.json  Remove from ignoreUnresolved  
+../apps/server/dist/current/app.js                      knip.json  Remove from ignoreUnresolved  
+../apps/server/dist/current/config.js                   knip.json  Remove from ignoreUnresolved  
+../apps/server/dist/current/lib/tenant-disk-quota.js    knip.json  Remove from ignoreUnresolved  
+scripts/desktop-parity/verify.mts                       knip.json  Remove redundant entry pattern

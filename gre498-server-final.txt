@@ -1,0 +1,86 @@
+
+> @print-partner/server@0.1.0 test
+> vitest run src/routes/plan-features.test.ts src/routes/tenant-features.test.ts --maxWorkers=2
+
+
+ RUN  v4.1.11 /persist/worktrees/t3/PrintPartner/gre-498-202610150631-1a12/web/apps/server
+
+{"level":30,"time":1792061616345,"pid":889303,"hostname":"agent-fleet-4","msg":"[profile-sync] watching bambu under /slicer-profiles/bambu"}
+{"level":30,"time":1792061616350,"pid":889304,"hostname":"agent-fleet-4","msg":"[profile-sync] watching bambu under /slicer-profiles/bambu"}
+{"level":30,"time":1792061616347,"pid":889303,"hostname":"agent-fleet-4","msg":"[profile-sync] watching orca under /slicer-profiles/orca"}
+{"level":30,"time":1792061616347,"pid":889303,"hostname":"agent-fleet-4","msg":"[profile-sync] watching prusa under /slicer-profiles/prusa"}
+{"level":30,"time":1792061616351,"pid":889304,"hostname":"agent-fleet-4","msg":"[profile-sync] watching orca under /slicer-profiles/orca"}
+{"level":30,"time":1792061616352,"pid":889304,"hostname":"agent-fleet-4","msg":"[profile-sync] watching prusa under /slicer-profiles/prusa"}
+{"level":30,"time":1792061616844,"pid":889303,"hostname":"agent-fleet-4","reqId":"req-1","req":{"method":"GET","url":"/plans/1/features","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":40,"time":1792061616850,"pid":889303,"hostname":"agent-fleet-4","workflowId":"1792061616850-rkwxlms","method":"GET","url":"/plans/1/features","statusCode":401,"duration":0,"context":{"params":{"id":"1"},"query":{}},"msg":"GET /plans/1/features"}
+{"level":30,"time":1792061616885,"pid":889304,"hostname":"agent-fleet-4","reqId":"req-1","req":{"method":"GET","url":"/settings/features","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":40,"time":1792061616893,"pid":889304,"hostname":"agent-fleet-4","workflowId":"1792061616893-mop3p0k","method":"GET","url":"/settings/features","statusCode":401,"duration":0,"context":{"params":{},"query":{}},"msg":"GET /settings/features"}
+{"level":30,"time":1792061616851,"pid":889303,"hostname":"agent-fleet-4","reqId":"req-1","res":{"statusCode":401},"responseTime":4.194956999999704,"msg":"request completed"}
+{"level":30,"time":1792061616853,"pid":889303,"hostname":"agent-fleet-4","reqId":"req-2","req":{"method":"PATCH","url":"/plans/1/features","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792061616854,"pid":889303,"hostname":"agent-fleet-4","reqId":"req-2","res":{"statusCode":401},"responseTime":0.9369329999990441,"msg":"request completed"}
+{"level":30,"time":1792061616855,"pid":889303,"hostname":"agent-fleet-4","reqId":"req-3","req":{"method":"GET","url":"/api/v1/plans/1/features","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792061616856,"pid":889303,"hostname":"agent-fleet-4","reqId":"req-3","res":{"statusCode":401},"responseTime":0.5703479999992851,"msg":"request completed"}
+{"level":30,"time":1792061616857,"pid":889303,"hostname":"agent-fleet-4","reqId":"req-4","req":{"method":"PATCH","url":"/api/v1/plans/1/features","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792061616858,"pid":889303,"hostname":"agent-fleet-4","reqId":"req-4","res":{"statusCode":401},"responseTime":0.49739599999884376,"msg":"request completed"}
+{"level":30,"time":1792061616859,"pid":889303,"hostname":"agent-fleet-4","reqId":"req-5","req":{"method":"GET","url":"/api/v2/plans/1/features","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792061616860,"pid":889303,"hostname":"agent-fleet-4","reqId":"req-5","res":{"statusCode":401},"responseTime":0.7304329999988113,"msg":"request completed"}
+{"level":30,"time":1792061616861,"pid":889303,"hostname":"agent-fleet-4","reqId":"req-6","req":{"method":"PATCH","url":"/api/v2/plans/1/features","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792061616862,"pid":889303,"hostname":"agent-fleet-4","reqId":"req-6","res":{"statusCode":401},"responseTime":0.6471089999995456,"msg":"request completed"}
+{"level":30,"time":1792061616864,"pid":889303,"hostname":"agent-fleet-4","reqId":"req-7","req":{"method":"POST","url":"/auth/register","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792061617049,"pid":889303,"hostname":"agent-fleet-4","reqId":"req-7","res":{"statusCode":200},"responseTime":184.47622700000102,"msg":"request completed"}
+{"level":30,"time":1792061617052,"pid":889303,"hostname":"agent-fleet-4","reqId":"req-8","req":{"method":"PATCH","url":"/plans/1/features","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":40,"time":1792061616854,"pid":889303,"hostname":"agent-fleet-4","workflowId":"1792061616854-sgpb2t4","method":"PATCH","url":"/plans/1/features","statusCode":401,"duration":0,"context":{"params":{"id":"1"},"query":{}},"msg":"PATCH /plans/1/features"}
+{"level":40,"time":1792061616856,"pid":889303,"hostname":"agent-fleet-4","workflowId":"1792061616856-lb67in7","method":"GET","url":"/api/v1/plans/1/features","statusCode":401,"duration":0,"context":{"params":{"id":"1"},"query":{}},"msg":"GET /api/v1/plans/1/features"}
+{"level":40,"time":1792061616858,"pid":889303,"hostname":"agent-fleet-4","workflowId":"1792061616858-8r05q8o","method":"PATCH","url":"/api/v1/plans/1/features","statusCode":401,"duration":0,"context":{"params":{"id":"1"},"query":{}},"msg":"PATCH /api/v1/plans/1/features"}
+{"level":40,"time":1792061616860,"pid":889303,"hostname":"agent-fleet-4","workflowId":"1792061616860-2wssxqa","method":"GET","url":"/api/v2/plans/1/features","statusCode":401,"duration":0,"context":{"params":{"id":"1"},"query":{}},"msg":"GET /api/v2/plans/1/features"}
+{"level":40,"time":1792061616862,"pid":889303,"hostname":"agent-fleet-4","workflowId":"1792061616862-7vbcjwn","method":"PATCH","url":"/api/v2/plans/1/features","statusCode":401,"duration":0,"context":{"params":{"id":"1"},"query":{}},"msg":"PATCH /api/v2/plans/1/features"}
+{"level":30,"time":1792061617049,"pid":889303,"hostname":"agent-fleet-4","workflowId":"1792061617049-f6lt8v2","method":"POST","url":"/auth/register","statusCode":200,"duration":181,"context":{"params":{},"query":{}},"msg":"POST /auth/register"}
+{"level":30,"time":1792061616895,"pid":889304,"hostname":"agent-fleet-4","reqId":"req-1","res":{"statusCode":401},"responseTime":6.10576200000105,"msg":"request completed"}
+{"level":30,"time":1792061616896,"pid":889304,"hostname":"agent-fleet-4","reqId":"req-2","req":{"method":"PATCH","url":"/settings/features","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792061616898,"pid":889304,"hostname":"agent-fleet-4","reqId":"req-2","res":{"statusCode":401},"responseTime":1.0213840000014898,"msg":"request completed"}
+{"level":30,"time":1792061616898,"pid":889304,"hostname":"agent-fleet-4","reqId":"req-3","req":{"method":"GET","url":"/api/v1/settings/features","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792061616899,"pid":889304,"hostname":"agent-fleet-4","reqId":"req-3","res":{"statusCode":401},"responseTime":0.5815959999999905,"msg":"request completed"}
+{"level":30,"time":1792061616900,"pid":889304,"hostname":"agent-fleet-4","reqId":"req-4","req":{"method":"PATCH","url":"/api/v1/settings/features","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792061616901,"pid":889304,"hostname":"agent-fleet-4","reqId":"req-4","res":{"statusCode":401},"responseTime":0.4814060000007885,"msg":"request completed"}
+{"level":30,"time":1792061616902,"pid":889304,"hostname":"agent-fleet-4","reqId":"req-5","req":{"method":"GET","url":"/health","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792061616910,"pid":889304,"hostname":"agent-fleet-4","reqId":"req-5","res":{"statusCode":200},"responseTime":8.156167999999525,"msg":"request completed"}
+{"level":30,"time":1792061616911,"pid":889304,"hostname":"agent-fleet-4","reqId":"req-6","req":{"method":"GET","url":"/health","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792061616917,"pid":889304,"hostname":"agent-fleet-4","reqId":"req-6","res":{"statusCode":200},"responseTime":5.563313999999082,"msg":"request completed"}
+{"level":30,"time":1792061616918,"pid":889304,"hostname":"agent-fleet-4","reqId":"req-7","req":{"method":"GET","url":"/health","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792061616921,"pid":889304,"hostname":"agent-fleet-4","reqId":"req-7","res":{"statusCode":200},"responseTime":2.7284880000006524,"msg":"request completed"}
+{"level":30,"time":1792061616921,"pid":889304,"hostname":"agent-fleet-4","reqId":"req-8","req":{"method":"GET","url":"/health","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792061616923,"pid":889304,"hostname":"agent-fleet-4","reqId":"req-8","res":{"statusCode":200},"responseTime":1.3456779999996797,"msg":"request completed"}
+{"level":30,"time":1792061616923,"pid":889304,"hostname":"agent-fleet-4","reqId":"req-9","req":{"method":"GET","url":"/health","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792061616925,"pid":889304,"hostname":"agent-fleet-4","reqId":"req-9","res":{"statusCode":200},"responseTime":1.4640799999997398,"msg":"request completed"}
+{"level":30,"time":1792061616926,"pid":889304,"hostname":"agent-fleet-4","reqId":"req-a","req":{"method":"GET","url":"/health","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792061616927,"pid":889304,"hostname":"agent-fleet-4","reqId":"req-a","res":{"statusCode":200},"responseTime":1.2811230000006617,"msg":"request completed"}
+{"level":30,"time":1792061616928,"pid":889304,"hostname":"agent-fleet-4","reqId":"req-b","req":{"method":"POST","url":"/auth/register","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792061617065,"pid":889304,"hostname":"agent-fleet-4","reqId":"req-b","res":{"statusCode":200},"responseTime":136.65367499999957,"msg":"request completed"}
+{"level":30,"time":1792061617067,"pid":889304,"hostname":"agent-fleet-4","reqId":"req-c","req":{"method":"PATCH","url":"/settings/features","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":40,"time":1792061616897,"pid":889304,"hostname":"agent-fleet-4","workflowId":"1792061616897-yrm1vhd","method":"PATCH","url":"/settings/features","statusCode":401,"duration":0,"context":{"params":{},"query":{}},"msg":"PATCH /settings/features"}
+{"level":40,"time":1792061616899,"pid":889304,"hostname":"agent-fleet-4","workflowId":"1792061616899-c0cnf6x","method":"GET","url":"/api/v1/settings/features","statusCode":401,"duration":0,"context":{"params":{},"query":{}},"msg":"GET /api/v1/settings/features"}
+{"level":40,"time":1792061616901,"pid":889304,"hostname":"agent-fleet-4","workflowId":"1792061616901-t7pwuov","method":"PATCH","url":"/api/v1/settings/features","statusCode":401,"duration":0,"context":{"params":{},"query":{}},"msg":"PATCH /api/v1/settings/features"}
+{"level":30,"time":1792061617065,"pid":889304,"hostname":"agent-fleet-4","workflowId":"1792061617065-46o3xz3","method":"POST","url":"/auth/register","statusCode":200,"duration":136,"context":{"params":{},"query":{}},"msg":"POST /auth/register"}
+{"level":30,"time":1792061617074,"pid":889304,"hostname":"agent-fleet-4","reqId":"req-c","res":{"statusCode":200},"responseTime":6.595386999999391,"msg":"request completed"}
+{"level":30,"time":1792061617075,"pid":889304,"hostname":"agent-fleet-4","reqId":"req-d","req":{"method":"PATCH","url":"/api/v1/settings/features","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792061617074,"pid":889304,"hostname":"agent-fleet-4","workflowId":"1792061617074-k8tbegm","method":"PATCH","url":"/settings/features","statusCode":200,"duration":2,"context":{"params":{},"query":{}},"msg":"PATCH /settings/features"}
+{"level":30,"time":1792061617079,"pid":889303,"hostname":"agent-fleet-4","reqId":"req-8","res":{"statusCode":200},"responseTime":26.511555999999473,"msg":"request completed"}
+{"level":30,"time":1792061617080,"pid":889303,"hostname":"agent-fleet-4","reqId":"req-9","req":{"method":"PATCH","url":"/api/v1/plans/1/features","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792061617078,"pid":889303,"hostname":"agent-fleet-4","workflowId":"1792061617078-zs17a5a","method":"PATCH","url":"/plans/1/features","statusCode":200,"duration":5,"context":{"params":{"id":"1"},"query":{}},"msg":"PATCH /plans/1/features"}
+{"level":30,"time":1792061617089,"pid":889303,"hostname":"agent-fleet-4","reqId":"req-9","res":{"statusCode":200},"responseTime":8.706780999998955,"msg":"request completed"}
+{"level":30,"time":1792061617090,"pid":889303,"hostname":"agent-fleet-4","reqId":"req-a","req":{"method":"PATCH","url":"/api/v2/plans/1/features","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1792061617089,"pid":889303,"hostname":"agent-fleet-4","workflowId":"1792061617089-k2p70fv","method":"PATCH","url":"/api/v1/plans/1/features","statusCode":200,"duration":5,"context":{"params":{"id":"1"},"query":{}},"msg":"PATCH /api/v1/plans/1/features"}
+{"level":30,"time":1792061617081,"pid":889304,"hostname":"agent-fleet-4","reqId":"req-d","res":{"statusCode":200},"responseTime":5.514678000001368,"msg":"request completed"}
+{"level":30,"time":1792061617080,"pid":889304,"hostname":"agent-fleet-4","workflowId":"1792061617080-rbwlnym","method":"PATCH","url":"/api/v1/settings/features","statusCode":200,"duration":2,"context":{"params":{},"query":{}},"msg":"PATCH /api/v1/settings/features"}
+{"level":30,"time":1792061617082,"pid":889304,"hostname":"agent-fleet-4","msg":"[source-watcher] Stopped"}
+{"level":30,"time":1792061617083,"pid":889304,"hostname":"agent-fleet-4","msg":"[profile-sync] stopped"}
+{"level":30,"time":1792061617101,"pid":889303,"hostname":"agent-fleet-4","reqId":"req-a","res":{"statusCode":200},"responseTime":10.35732199999984,"msg":"request completed"}
+{"level":30,"time":1792061617101,"pid":889303,"hostname":"agent-fleet-4","workflowId":"1792061617101-vbst2np","method":"PATCH","url":"/api/v2/plans/1/features","statusCode":200,"duration":6,"context":{"params":{"id":"1"},"query":{}},"msg":"PATCH /api/v2/plans/1/features"}
+{"level":30,"time":1792061617103,"pid":889303,"hostname":"agent-fleet-4","msg":"[source-watcher] Stopped"}
+{"level":30,"time":1792061617105,"pid":889303,"hostname":"agent-fleet-4","msg":"[profile-sync] stopped"}
+
+ Test Files  2 passed (2)
+      Tests  88 passed (88)
+   Start at  10:53:22
+   Duration  29.70s (transform 8.98s, setup 322ms, import 11.83s, tests 31.61s, environment 1ms)
+

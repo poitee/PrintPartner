@@ -1,0 +1,5 @@
+
+> print-partner-web@3.3.0 contracts:schemas
+> node --conditions=development --import tsx scripts/desktop-contracts/schema-check.mjs
+
+PASS: 41 original cases; 10 exported Zod input/output schemas; 50 separate measured supplemental cases; deterministic --check
