@@ -260,6 +260,7 @@ fn validate_lock_identity(file: &File, path: &Path) -> Result<()> {
 
 #[cfg(test)]
 thread_local! {
+    static KEEP_MARKER_INSPECTION_SWAP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static MARKER_INSPECTION_SWAP: std::cell::Cell<Option<(u8, bool)>> = const { std::cell::Cell::new(None) };
     static FAIL_LOCK_UNLOCK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static FAIL_MARKER_WRITE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -605,7 +606,9 @@ mod tests {
         }
         let retired = path.with_extension("retired");
         let replacement = path.with_extension("replacement");
-        if restore {
+        if restore && KEEP_MARKER_INSPECTION_SWAP.take() {
+            MARKER_INSPECTION_SWAP.set(None);
+        } else if restore {
             std::fs::rename(path, &replacement)?;
             std::fs::rename(&retired, path)?;
             MARKER_INSPECTION_SWAP.set(None);
@@ -712,6 +715,57 @@ mod tests {
             assert!(!path.join(".desktop-lease").exists());
             std::fs::remove_dir_all(path).unwrap();
         }
+    }
+
+    #[test]
+    fn ticket_t_12_persistent_swap_before_first_marker_read_preserves_live_replacement() {
+        assert_persistent_swap_preserves_live_replacement(1);
+    }
+
+    #[test]
+    fn ticket_t_12_persistent_swap_before_second_marker_read_preserves_live_replacement() {
+        assert_persistent_swap_preserves_live_replacement(2);
+    }
+
+    fn assert_persistent_swap_preserves_live_replacement(checkpoint: u8) {
+        let path = directory();
+        let replacement = path.with_extension("replacement");
+        let retired = path.with_extension("retired");
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&replacement)
+            .unwrap();
+        let stale = br#"{"pid":2147483647,"kind":"standalone"}"#;
+        let live = serde_json::json!({"pid":std::process::id(),"kind":"standalone"}).to_string();
+        std::fs::write(path.join(".desktop-owner.json"), stale).unwrap();
+        std::fs::write(replacement.join(".desktop-owner.json"), &live).unwrap();
+        KEEP_MARKER_INSPECTION_SWAP.set(true);
+        MARKER_INSPECTION_SWAP.set(Some((checkpoint, false)));
+        let result = StorageLease::acquire(&path);
+        assert_eq!(MARKER_INSPECTION_SWAP.take(), None);
+        assert!(!KEEP_MARKER_INSPECTION_SWAP.take());
+        let error = match result {
+            Ok(owner) => {
+                owner.release();
+                None
+            }
+            Err(error) => Some(error.to_string()),
+        };
+        assert!(
+            error.is_some(),
+            "checkpoint {checkpoint}: persistent swap acquired replacement ownership"
+        );
+        assert_eq!(
+            std::fs::read_to_string(path.join(".desktop-owner.json")).unwrap(),
+            live
+        );
+        assert_eq!(
+            std::fs::read(retired.join(".desktop-owner.json")).unwrap(),
+            stale
+        );
+        assert_eq!(std::fs::read_dir(&path).unwrap().count(), 1);
+        std::fs::remove_dir_all(path).unwrap();
+        std::fs::remove_dir_all(retired).unwrap();
     }
 
     pub(super) fn replace_directory_before_canonicalization(path: &Path) -> Result<()> {
