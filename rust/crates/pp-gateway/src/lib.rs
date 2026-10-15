@@ -718,7 +718,13 @@ async fn handle(
             response
                 .headers_mut()
                 .insert("cache-control", HeaderValue::from_static("no-store"));
-            return response;
+            return response.map(|body| {
+                Body::new(TrackedBody {
+                    body,
+                    _admission: admission,
+                    cancelled: Box::pin(state.cancelled.clone().cancelled_owned()),
+                })
+            });
         }
         let mut response = (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -1569,6 +1575,9 @@ impl http_body::Body for TrackedBody {
 
 #[cfg(test)]
 mod ticket_t_2;
+
+#[cfg(test)]
+mod ticket_t_3;
 
 #[cfg(test)]
 mod tests {
