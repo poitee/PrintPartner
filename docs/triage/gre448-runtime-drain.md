@@ -401,6 +401,9 @@ Run after `npm --prefix web ci` and `npm --prefix web run build`:
 python3 rust/tests/built_backend_lifecycle.py --node "$(command -v node)" --negative-control --evidence /tmp/gre448-built-backend
 ```
 
+Each invocation prints and creates a unique `run-*` directory under the supplied
+evidence root. Repeating the command preserves all previous receipts.
+
 The negative control suppresses stdin EOF delivery in the test observer. It must
 fail the same bounded shutdown assertion after real health readiness. Failure
 cleanup kills and reaps the owned child. The driver then restores normal EOF
@@ -425,3 +428,11 @@ proves the test detects missing EOF delivery; it does not identify a new
 production defect. Python compile, Node syntax, native dispatcher rejection,
 comment review, and diff checks passed. The implementation child independently
 ran the same complete proof before the owner's rerun.
+
+Review found that reusing the documented evidence root raised `FileExistsError`
+after overwriting its artifact identity. The owner reproduced that failure, then
+ran the corrected command twice against the existing root. Both isolated runs
+passed three baseline cycles, the expected negative control, and three restored
+cycles. All 14 child PIDs were absent, and all 60 original evidence files stayed
+byte-for-byte unchanged. The isolated receipts are under
+`/tmp/gre448-built-proof/owner-proof/run-9dy9pxzk` and `run-7pjt7tgu`.

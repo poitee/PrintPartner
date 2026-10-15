@@ -237,6 +237,8 @@ def main():
     require(entry.is_file(), "build web/apps/server before running this proof")
     args.evidence = args.evidence.resolve()
     args.evidence.mkdir(parents=True, exist_ok=True)
+    args.evidence = Path(tempfile.mkdtemp(prefix="run-", dir=args.evidence))
+    print(f"Evidence: {args.evidence}", flush=True)
     artifact = {
         "entry": str(entry), "entry_resolved": str(entry.resolve()),
         "entry_sha256": hashlib.sha256(entry.read_bytes()).hexdigest(),
