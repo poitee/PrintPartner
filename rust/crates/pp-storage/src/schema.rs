@@ -40,6 +40,7 @@ impl Drop for PreflightCopy {
 
 #[cfg(test)]
 thread_local! {
+    static PREFLIGHT_COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(crate) static PREFLIGHT_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -51,6 +52,8 @@ pub(crate) fn preflight(path: &Path, owned: bool) -> Result<u64> {
         owned || !crate::lease::prior_owner_blocks_unowned(&marker)?,
         "Data directory already owned"
     );
+    #[cfg(test)]
+    capture_tests::capture_checkpoint(path, 0)?;
     if !path.exists() || path.metadata()?.len() == 0 {
         return Ok(0);
     }
@@ -64,15 +67,28 @@ pub(crate) fn preflight(path: &Path, owned: bool) -> Result<u64> {
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
                     Err(error) => return Err(error.into()),
                 };
+                #[cfg(test)]
+                capture_tests::capture_checkpoint(
+                    path,
+                    match suffix {
+                        "" => 1,
+                        "-wal" => 2,
+                        _ => 3,
+                    },
+                )?;
                 Ok((suffix.to_owned(), bytes))
             })
             .collect()
     };
     let source = capture()?;
+    #[cfg(test)]
+    capture_tests::capture_checkpoint(path, 4)?;
     let copy = PreflightCopy(std::env::temp_dir().join(format!(
         "pp-preflight-{}",
         hex::encode(rand::random::<[u8; 16]>())
     )));
+    #[cfg(test)]
+    PREFLIGHT_COPIES.update(|copies| copies + 1);
     std::fs::DirBuilder::new().mode(0o700).create(&copy.0)?;
     for (suffix, bytes) in &source {
         if let Some(bytes) = bytes {
@@ -604,5 +620,151 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().starts_with("no such table: "));
+    }
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::*;
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+
+    thread_local! {
+        static REPLACE_DURING_CAPTURE: std::cell::Cell<Option<(u8, u8)>> = const { std::cell::Cell::new(None) };
+    }
+
+    pub(super) fn capture_checkpoint(database: &Path, checkpoint: u8) -> Result<()> {
+        let Some((selected, replacement)) = REPLACE_DURING_CAPTURE.get() else {
+            return Ok(());
+        };
+        if selected != checkpoint {
+            return Ok(());
+        }
+        REPLACE_DURING_CAPTURE.set(None);
+        let path = database.parent().unwrap();
+        if replacement >= 3 {
+            let mode = match replacement {
+                3 => 0o777,
+                4 => 0o770,
+                _ => 0o500,
+            };
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;
+            return Ok(());
+        }
+        let retired = path.with_extension("retired");
+        std::fs::rename(path, &retired)?;
+        let target = if replacement == 2 {
+            path.with_extension("replacement")
+        } else {
+            path.to_path_buf()
+        };
+        std::fs::DirBuilder::new().mode(0o700).create(&target)?;
+        for entry in std::fs::read_dir(&retired)? {
+            let entry = entry?;
+            std::fs::copy(entry.path(), target.join(entry.file_name()))?;
+        }
+        if replacement == 2 {
+            std::os::unix::fs::symlink(target, path)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn ticket_t_12_preflight_capture_rejects_store_replacement_before_copy() {
+        for checkpoint in [1, 2, 3, 4, 0] {
+            for replacement in 1..=5 {
+                assert_capture_refused(checkpoint, replacement, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn ticket_t_12_preflight_capture_rejects_replacement_before_empty_return() {
+        for replacement in 1..=5 {
+            assert_capture_refused(0, replacement, 1);
+        }
+    }
+
+    #[test]
+    fn ticket_t_12_preflight_capture_rejects_replacement_before_missing_return() {
+        for replacement in 1..=5 {
+            assert_capture_refused(0, replacement, 2);
+        }
+    }
+
+    fn assert_capture_refused(checkpoint: u8, replacement: u8, database: u8) {
+        let path = std::env::temp_dir().join(format!(
+            "pp-capture-{}",
+            hex::encode(rand::random::<[u8; 8]>())
+        ));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&path)
+            .unwrap();
+        if database == 1 {
+            std::fs::write(path.join("print-partner.db"), b"").unwrap();
+        } else if database == 0 {
+            let conn = Connection::open(path.join("print-partner.db")).unwrap();
+            conn.execute_batch("CREATE TABLE capture_fixture(value TEXT);")
+                .unwrap();
+        }
+        for (name, bytes) in [
+            ("print-partner.db-wal", b"copied wal".as_slice()),
+            ("print-partner.db-journal", b"copied journal".as_slice()),
+            ("desktop.toml", b"port = 45678\n".as_slice()),
+            (
+                ".desktop-owner.json",
+                br#"{"pid":2147483647,"kind":"standalone"}"#.as_slice(),
+            ),
+        ] {
+            std::fs::write(path.join(name), bytes).unwrap();
+        }
+        let snapshot = |directory: &Path| -> Vec<_> {
+            let mut files: Vec<_> = std::fs::read_dir(directory)
+                .unwrap()
+                .map(|entry| {
+                    let entry = entry.unwrap();
+                    (entry.file_name(), std::fs::read(entry.path()).unwrap())
+                })
+                .collect();
+            files.sort();
+            files
+        };
+        let before = snapshot(&path);
+        PREFLIGHT_COPIES.set(0);
+        let admitted = crate::lease::admit_directory(&path).unwrap();
+        REPLACE_DURING_CAPTURE.set(Some((checkpoint, replacement)));
+        let result = if database == 0 {
+            crate::WriterOwner::open(&path, crate::Limits::default()).map(|_| ())
+        } else {
+            admitted.preflight()
+        };
+        REPLACE_DURING_CAPTURE.set(None);
+        let error = result.err().map(|error| error.to_string());
+        let copies = PREFLIGHT_COPIES.get();
+        if replacement >= 3 {
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        assert_eq!(snapshot(&path), before);
+        if replacement <= 2 {
+            let retired = path.with_extension("retired");
+            assert_eq!(snapshot(&retired), before);
+            std::fs::remove_dir_all(retired).unwrap();
+        }
+        if replacement == 2 {
+            std::fs::remove_file(&path).unwrap();
+            std::fs::remove_dir_all(path.with_extension("replacement")).unwrap();
+        } else {
+            std::fs::remove_dir_all(&path).unwrap();
+        }
+        assert_eq!(
+            copies, 0,
+            "checkpoint {checkpoint}, replacement {replacement}"
+        );
+        let expected = if replacement >= 3 {
+            "Unsafe data directory permissions"
+        } else {
+            "Data directory was replaced"
+        };
+        assert_eq!(error.as_deref(), Some(expected));
     }
 }
