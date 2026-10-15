@@ -328,7 +328,7 @@ Select that account explicitly with this mapping, only when a matching `users.id
 
 A missing mapping still refuses populated account databases, including a claimed `default` account.
 Mapping another user ID onto the shared `default` tenant remains unsupported and fails before product database writes.
-Shared single-user-auth copies whose user IDs differ from `default` need a separate ownership migration.
+For supported legacy data in shared single-user-auth copies, use the [offline ownership copy](#copy-legacy-default-ownership-into-an-account-mapped-desktop) below.
 
 Core pins mapping presence and the SHA256 of its bytes under the storage lease for the full runtime lifetime.
 Every compatibility child checks the same pin before product startup.
@@ -348,3 +348,47 @@ Live external in-place database replacement is unsupported. Use the existing sto
 With both gates enabled, an empty copy without a mapping retains the synthetic desktop owner.
 An existing copy with users requires a valid mapping.
 With either gate disabled, existing users remain refused and the original synthetic setup protocol remains unchanged.
+
+## Copy legacy default ownership into an account-mapped desktop
+
+GRE-353 adds an offline copy command for legacy mutable Plans and Sources. Stop the source server and desktop first. The command reserves the source with `acquireDataDirectory`, reads its current SQLite snapshot including committed WAL data, and leaves its product database and files unchanged. Ownership lease records can change during reservation and release.
+
+Run this command on Linux with Python 3 available. Publication uses libc `renameat2` with `RENAME_NOREPLACE`. The destination must be new, its parent must already exist, and it must not overlap the source. Existing files, directories, empty directories, and symlinks at the destination all cause refusal. The tool builds a private staging directory beside the destination and publishes the complete copy atomically. Caught errors remove staging and publish nothing. Abrupt termination can leave a private `.ownership-copy-*` directory. Power-loss durability is not guaranteed.
+
+From `web/apps/server`, inspect the stopped source with the exact runtime gate enabled:
+
+```sh
+PP_DESKTOP_REBUILD=1 npx tsx --conditions=development src/ownership-migration-cli.ts inspect /absolute/source > inventory.json
+```
+
+The inventory contains a deterministic full-database `source_digest`, table names, row identifiers, and claim placeholders. It contains no credentials, settings values, or document contents. Review every row identifier against your source data. Create a separate manifest with this shape:
+
+```json
+{
+  "version": 1,
+  "source_digest": "COPY_THE_64_CHARACTER_DIGEST_FROM_INVENTORY",
+  "selected_user_id": "account-a",
+  "claims": [
+    { "table": "build_profiles", "rowid": 1, "user_id": "account-a" },
+    { "table": "build_profiles", "rowid": 2, "user_id": "account-b" }
+  ]
+}
+```
+
+Include exactly one claim for every inventory row, including independent rows assigned to other users. Each owner and the selected user must already exist in `users` and must differ from `default`. The selected user identifies the desktop account to open. Claims can distribute unrelated Plans among multiple existing accounts. The tool does not infer ownership, clone shared dependencies, or change IDs. A Plan, its Source relationships, parts, and progress must have consistent owners. Conflicting assignments, dangling references, missing or extra claims, duplicate claims, and destination uniqueness collisions cause refusal. Machine and filament profile references from unchanged foreign assignment rows must also resolve to the same owner.
+
+Apply the reviewed manifest to a new destination:
+
+```sh
+PP_DESKTOP_REBUILD=1 npx tsx --conditions=development src/ownership-migration-cli.ts apply /absolute/source /absolute/new-desktop /absolute/manifest.json
+```
+
+The copy contains a private `desktop-account.json` v1 mapping with `user_id` and `tenant_id` equal to `selected_user_id`. Existing desktop admission rules still apply. All unclaimed rows, including foreign tenant rows, remain unchanged. The global `default` `app_settings.schema_version` stays at `default`. The tool compares every staged table against the expected source rows before committing so trigger side effects cannot silently change unrelated data.
+
+This first unit supports default rows only in `build_profiles`, `projects`, `profile_layers`, `parts`, `print_progress`, `source_docs`, `source_notes`, `plan_decisions`, `printer_profiles`, `process_profiles`, and `filament_profiles`. It discovers tenant tables from SQLite rather than assuming this list covers the schema. Any populated default tenant table outside that list causes refusal, except the global schema version. Bundled starter printer, process, and filament profiles are supported and require explicit claims. Their scalar fields and resolved configuration JSON retain their original bytes. Imported or externally backed profiles cause refusal when `source_path`, `raw_json`, `raw_ini`, or `compatible_printers` is nonempty. This is not a whole-application ownership migration. Do not remove product data merely to bypass refusal.
+
+The tool refuses default settings other than `schema_version`, accepted Plan or Source history, nonzero accepted Plan versions, opaque project metadata and imported-path lists, nonempty decision parameters other than `{}`, and populated decision result JSON. It also refuses stored sessions, password reset tokens, and Plan share capabilities. Share bundles contain ownership references outside the supported row graph. No startup path or HTTP endpoint invokes it.
+
+Filesystem support covers regular files in `repos/<project id>` and `sources/<project id>` for known projects. Symlinks and special files cause refusal. Nonempty `projects.local_path` values cause refusal in this unit, including absolute paths under the source. Relative part and document paths must contain no parent segments, empty segments, backslashes, or external locators. Unknown top-level artifacts and native storage cause refusal. Standard `exports`, `uploads`, `upload-staging`, `staging`, `backups`, `thumbnails`, `previews`, `thumbs`, and `covers` directories are accepted only when empty. Nonempty exports are ambiguous and unsupported, including foreign exports. Ownership markers, leases, the desktop lock, and the source desktop mapping are excluded from the copy. Socket files outside those excluded ownership paths cause refusal.
+
+The source digest is rechecked after reservation and after the SQLite backup. Any database change requires a new inventory and reviewed manifest. The command exits with status 1 on refusal and status 0 with a JSON receipt on success. Both inspect and apply require `PP_DESKTOP_REBUILD` to be exactly `1` or `true`.
