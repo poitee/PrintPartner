@@ -10,7 +10,7 @@ import { schemaMigrations } from "./db/migrations-sqlite.js";
 import { digestPlanRevisionParts, MAX_ACCEPTED_OPERATIONAL_ROW_TEXT_BYTES } from "./services/plan-publication.js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { layoutDigest, LEGACY_ACCEPTED_PLATE_LAYOUT_FORMAT } from "./db/accepted-plate-layout-model.js";
-import { validateOwnershipPlateTextBytes } from "./ownership-plate-history.js";
+import { OwnershipPlateComparisonBudgetError, validateOwnershipPlateTextBytes } from "./ownership-plate-history.js";
 import * as plateReader from "./db/accepted-plates.js";
 import * as operationalReader from "./db/accepted-plan-operational.js";
 import { z } from "zod";
@@ -969,6 +969,106 @@ it("bounds the aggregate Plate row bytes before and after owner expansion", () =
     expect(() => validateOwnershipPlateTextBytes(raw)).toThrow(/text/);
   });
 });
+
+function budgetFixture(counts = [1000]) {
+  const quantity = counts.reduce((total, count) => total + count, 0);
+  const paths = fixture(true, quantity);
+  const store = new SqliteDatabase(paths.sourceDir); store.connect();
+  try {
+    const repo = new AppRepository(getDb(store), "default", store.reposDir);
+    const setup = repo.readAcceptedPlateWorkspaceInput(1);
+    if (setup.kind !== "setup" || setup.units.length !== quantity) throw new Error("Missing Plate setup");
+    let offset = 0;
+    const published = repo.publishAcceptedPlates({ profileId: 1, expected: setup.basis, expectedPlateRevisionId: null,
+      plates: counts.map((count, plateIndex) => {
+        const units = setup.units.slice(offset, offset + count); offset += count;
+        return { plateId: `plate-${plateIndex}`, printerId: "printer", printerName: "Printer", printerModel: "Model",
+          bedWidthUm: 300000, bedDepthUm: 300000, bedHeightUm: 220000, marginUm: 5000,
+          units: units.map((unit, index) => ({ token: unit.token, xUm: 5000 + (index % 40) * 6000, yUm: 5000 + Math.floor(index / 40) * 6000,
+            widthUm: 1000, depthUm: 1000, heightUm: 1000 })) };
+      }) });
+    if (published.kind !== "published") throw new Error(`Plate publication failed ${published.kind}`);
+  } finally { store.close(); }
+  return paths;
+}
+function togglePin(repo: AppRepository) {
+  const state = repo.readAcceptedPlateWorkspaceInput(1);
+  const unit = state.kind === "ready" ? state.plates[0]?.units[0] : undefined;
+  if (state.kind !== "ready" || !unit) throw new Error("Missing Plate state");
+  const pinned = repo.pinAcceptedPlateUnit({ profileId: 1, expected: state.basis, expectedPlateRevisionId: state.plateRevisionId,
+    plateId: "plate-0", token: unit.token, pinned: !unit.pinned });
+  if (pinned.kind !== "moved") throw new Error(`Plate pin failed ${pinned.kind}`);
+}
+function withPlateRepository<T>(sourceDir: string, operation: (repo: AppRepository) => T, tenantId = "default"): T {
+  const store = new SqliteDatabase(sourceDir); store.connect();
+  try { return operation(new AppRepository(getDb(store), tenantId, store.reposDir)); } finally { store.close(); }
+}
+
+it.each(["current", "legacy"])("refuses %s retained Plate history over the comparison budget without publishing", async format => {
+  const paths = budgetFixture(); const input = manifest(paths.sourceDir);
+  withPlateRepository(paths.sourceDir, togglePin);
+  if (format === "legacy") {
+    const state = withPlateRepository(paths.sourceDir, repo => repo.readAcceptedPlateWorkspaceInput(1));
+    if (state.kind !== "ready") throw new Error("Missing Plate state");
+    corruptPlate(paths.sourceDir, raw => raw.prepare("UPDATE accepted_plate_revisions SET layout_digest=? WHERE id=?")
+      .run(layoutDigest(state.plates, LEGACY_ACCEPTED_PLATE_LAYOUT_FORMAT), state.plateRevisionId));
+  }
+  expect(withPlateRepository(paths.sourceDir, repo => repo.readAcceptedPlates(1).kind)).toBe("ready");
+  edit(paths.sourceDir, raw => { raw.pragma("journal_mode = DELETE"); input.source_digest = hash(raw.serialize()); });
+  const before = files(paths.sourceDir);
+  expect(() => inspectOwnershipCopy(paths)).toThrow(OwnershipPlateComparisonBudgetError);
+  expect(files(paths.sourceDir)).toEqual(before);
+  const result = executeOwnershipCopy({ ...paths, manifest: input });
+  await expect(result).rejects.toBeInstanceOf(OwnershipPlateComparisonBudgetError);
+  await expect(result).rejects.toMatchObject({ limit: 1_000_000, charged: 1_000_056 });
+  expect(existsSync(paths.destinationDir)).toBe(false);
+  expect(files(paths.sourceDir)).toEqual(before);
+  expect(readdirSync(join(paths.sourceDir, "..")).filter(name => name.startsWith(".ownership-copy-"))).toEqual([]);
+}, 60_000);
+
+it("refuses one Plate over the comparison budget before staging", async () => {
+  const paths = budgetFixture([1001]);
+  let digest = "";
+  edit(paths.sourceDir, raw => { raw.pragma("journal_mode = DELETE"); digest = hash(raw.serialize()); });
+  const before = files(paths.sourceDir);
+  expect(() => inspectOwnershipCopy(paths)).toThrow(OwnershipPlateComparisonBudgetError);
+  const result = executeOwnershipCopy({ ...paths, manifest: { version: 1, source_digest: digest,
+    selected_user_id: "account-a", claims: [], exports: [] } });
+  await expect(result).rejects.toBeInstanceOf(OwnershipPlateComparisonBudgetError);
+  await expect(result).rejects.toMatchObject({ limit: 1_000_000, charged: 1_001_000 });
+  expect(existsSync(paths.destinationDir)).toBe(false);
+  expect(files(paths.sourceDir)).toEqual(before);
+  expect(readdirSync(join(paths.sourceDir, "..")).filter(name => name.startsWith(".ownership-copy-"))).toEqual([]);
+}, 60_000);
+
+it.each([
+  { name: "below", counts: [1000] },
+  { name: "at", counts: [1000, 25, 20, 5] },
+])("copies Plate history $name the comparison budget", async ({ counts }) => {
+  const paths = budgetFixture(counts);
+  const expected = withPlateRepository(paths.sourceDir, repo => repo.readAcceptedPlates(1));
+  if (expected.kind !== "ready") throw new Error("Missing Plate state");
+  const input = manifest(paths.sourceDir); const before = files(paths.sourceDir);
+  await executeOwnershipCopy({ ...paths, manifest: input });
+  expect(withPlateRepository(paths.destinationDir, repo => repo.readAcceptedPlates(1), "account-a")).toEqual(expected);
+  expect(files(paths.sourceDir)).toEqual(before);
+}, 60_000);
+
+it("copies retained Plate history whose extra units are unplaced", async () => {
+  const paths = budgetFixture();
+  withPlateRepository(paths.sourceDir, repo => {
+    const state = repo.readAcceptedPlateWorkspaceInput(1);
+    if (state.kind !== "ready") throw new Error("Missing Plate state");
+    const published = repo.publishAcceptedPlates({ profileId: 1, expected: state.basis, expectedPlateRevisionId: state.plateRevisionId,
+      plates: state.plates.map(plate => ({ ...plate, units: plate.units.map((unit, index) => index === 0 ? unit : { ...unit, placement: "unplaced" as const, pinned: false }) })) });
+    if (published.kind !== "published") throw new Error(`Plate publication failed ${published.kind}`);
+  });
+  const expected = withPlateRepository(paths.sourceDir, repo => repo.readAcceptedPlates(1));
+  if (expected.kind !== "ready") throw new Error("Missing unplaced Plate state");
+  expect([expected.plateRevisionNumber, expected.plates[0]?.units.filter(unit => unit.placement === "unplaced").length]).toEqual([2, 999]);
+  await executeOwnershipCopy({ ...paths, manifest: manifest(paths.sourceDir) });
+  expect(withPlateRepository(paths.destinationDir, repo => repo.readAcceptedPlates(1), "account-a")).toEqual(expected);
+}, 60_000);
 
 it.each(["unplaced", "restore", "legacy", "missing-head", "stale-basis"])("copies supported $0 Plate history", async kind => {
   const paths = plateFixture();

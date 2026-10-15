@@ -10,6 +10,49 @@ import { schemaMigrations } from "./db/migrations-sqlite.js";
 
 export const ownershipPlateTables = ["accepted_plate_revisions", "accepted_plate_heads", "accepted_plates", "accepted_plate_units"] as const;
 
+const MAX_OWNERSHIP_PLATE_COMPARISONS = 1_000_000;
+type ComparisonUnit = Pick<typeof schema.acceptedPlateUnits.$inferSelect, "revisionId" | "plateId" | "placement">;
+const comparisonUnitSchema: z.ZodType<ComparisonUnit> = z.object({
+  revisionId: z.number(), plateId: z.string(), placement: z.enum(["auto", "manual", "unplaced"]),
+});
+
+export class OwnershipPlateComparisonBudgetError extends Error {
+  constructor(readonly limit: number, readonly charged: number) {
+    super("Unsafe accepted Plate history: comparison budget");
+    this.name = "OwnershipPlateComparisonBudgetError";
+  }
+}
+
+export function chargeOwnershipPlateComparisons(units: Iterable<ComparisonUnit>, limit = MAX_OWNERSHIP_PLATE_COMPARISONS): number {
+  if (!Number.isSafeInteger(limit) || limit < 0 || limit > MAX_OWNERSHIP_PLATE_COMPARISONS) {
+    throw new RangeError("Invalid accepted Plate comparison limit");
+  }
+  const revisions = new Map<number, Map<string, number>>();
+  let charged = 0;
+  for (const unit of units) {
+    if (unit.placement === "unplaced") continue;
+    let plates = revisions.get(unit.revisionId);
+    if (!plates) {
+      plates = new Map();
+      revisions.set(unit.revisionId, plates);
+    }
+    const placed = plates.get(unit.plateId) ?? 0;
+    charged += 2 * placed;
+    if (charged > limit) throw new OwnershipPlateComparisonBudgetError(limit, charged);
+    plates.set(unit.plateId, placed + 1);
+  }
+  return charged;
+}
+
+export function validateOwnershipPlateComparisonBudget(database: Database.Database): void {
+  function* units() {
+    for (const row of database.prepare("SELECT revision_id AS revisionId,plate_id AS plateId,placement FROM accepted_plate_units").iterate()) {
+      yield comparisonUnitSchema.parse(row);
+    }
+  }
+  chargeOwnershipPlateComparisons(units());
+}
+
 export function validateOwnershipPlateTextBytes(database: Database.Database): void {
   const db = drizzle(database);
   for (const table of [schema.acceptedPlateRevisions, schema.acceptedPlateHeads, schema.acceptedPlates, schema.acceptedPlateUnits]) {

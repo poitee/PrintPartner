@@ -9,7 +9,7 @@ import { acquireDataDirectory, desktopContext } from "./desktop-context.js";
 import * as schema from "./db/schema.js";
 import { readAcceptedPlanOperationalSnapshotInternal } from "./db/accepted-plan-operational.js";
 import { readAcceptedPlatesInternal } from "./db/accepted-plates.js";
-import { validateOwnershipPlateProtection, validateOwnershipPlateTextBytes } from "./ownership-plate-history.js";
+import { validateOwnershipPlateComparisonBudget, validateOwnershipPlateProtection, validateOwnershipPlateTextBytes } from "./ownership-plate-history.js";
 import { openVerifiedAcceptedArtifact } from "./services/accepted-artifacts.js";
 import { ownershipHistoryTables, validateOwnershipHistory } from "./ownership-history.js";
 import { inspectOwnershipExports, ownershipExportClaimSchema, ownershipExportTarget, ownershipFileDigest, type OwnershipExport } from "./ownership-exports.js";
@@ -68,6 +68,7 @@ function validateData(db: Database.Database, claims = new Map<string, string>())
   if (readSchemaVersion(db) !== currentSchemaVersion) throw new Error("Current database schema required");
   if (db.pragma("integrity_check", { simple: true }) !== "ok" || z.array(z.unknown()).parse(db.pragma("foreign_key_check")).length) throw new Error("Database integrity or dangling relationship");
   validateOwnershipPlateTextBytes(db);
+  validateOwnershipPlateComparisonBudget(db);
   validateOwnershipPlateProtection(db);
   const names = tables(db);
   const tenantTables = new Set(names.filter(table => columns(db, table).includes("tenant_id")));
