@@ -418,6 +418,15 @@ impl StorageLease {
             release_allowed: true,
         })
     }
+    pub(crate) fn preflight(&self) -> Result<u64> {
+        let path = self.data_dir().join("print-partner.db");
+        crate::schema::preflight(
+            &path,
+            true,
+            |name| File::open(path.with_file_name(name)),
+            || Ok(()),
+        )
+    }
     pub fn record_child(directory: &Path, pid: u32) -> Result<()> {
         guard::record_child(directory, pid)
     }
