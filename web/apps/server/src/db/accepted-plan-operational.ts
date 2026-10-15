@@ -455,6 +455,38 @@ export const validateAcceptedPlanInputHeaderRows = (input: {
   return input.inputSet.formatVersion === 1 ? "format1" : "format2";
 };
 
+export const validateAcceptedPlanRevisionPartRows = (input: {
+  readonly revisionParts: readonly (typeof defaultSchema.planRevisionParts.$inferSelect)[];
+  readonly revisionBooleans: ReadonlyMap<number, { readonly included: unknown; readonly geometrySame: unknown }>;
+}): void => {
+  if (input.revisionParts.some(row => storedBoolean(input.revisionBooleans.get(row.id)?.included) == null
+    || (input.revisionBooleans.get(row.id)?.geometrySame != null
+      && storedBoolean(input.revisionBooleans.get(row.id)?.geometrySame) == null))) {
+    corrupt("projection", "Accepted Plan Part booleans or ownership are corrupt");
+  }
+  const projectionIds = new Set<number>();
+  const partKeys = new Set<string>();
+  for (const part of input.revisionParts) {
+    if (
+      !isPositiveSafeInteger(part.projectionPartId ?? 0) ||
+      projectionIds.has(part.projectionPartId!) ||
+      part.partKey.length === 0 ||
+      partKeys.has(part.partKey) ||
+      !isPositiveSafeInteger(part.quantityInferred) ||
+      part.quantityInferred > 10_000 ||
+      (part.quantityOverride != null &&
+        (!isPositiveSafeInteger(part.quantityOverride) || part.quantityOverride > 10_000)) ||
+      !isPositiveSafeInteger(part.quantityEffective) ||
+      part.quantityEffective > 10_000 ||
+      part.quantityEffective !== (part.quantityOverride ?? part.quantityInferred)
+    ) {
+      corrupt("projection", "Accepted Plan revision Part identity is corrupt");
+    }
+    projectionIds.add(part.projectionPartId!);
+    partKeys.add(part.partKey);
+  }
+};
+
 export const validateAcceptedPlanProjectionRows = (input: {
   readonly tenantId: string;
   readonly revisionParts: readonly (typeof defaultSchema.planRevisionParts.$inferSelect)[];
@@ -477,39 +509,15 @@ export const validateAcceptedPlanProjectionRows = (input: {
         storedBoolean(input.projectionBooleans.get(row.id)?.included) == null ||
         (input.projectionBooleans.get(row.id)?.geometrySame != null &&
           storedBoolean(input.projectionBooleans.get(row.id)?.geometrySame) == null),
-    ) ||
-    input.revisionParts.some(
-      (row) =>
-        storedBoolean(input.revisionBooleans.get(row.id)?.included) == null ||
-        (input.revisionBooleans.get(row.id)?.geometrySame != null &&
-          storedBoolean(input.revisionBooleans.get(row.id)?.geometrySame) == null),
     )
   ) {
     corrupt("projection", "Accepted Plan Part booleans or ownership are corrupt");
   }
+  validateAcceptedPlanRevisionPartRows(input);
   const projectionById = new Map(input.projectionRows.map((row) => [row.id, row]));
-  const projectionIds = new Set<number>();
-  const partKeys = new Set<string>();
   const validated = [...input.revisionParts]
     .sort((left, right) => left.id - right.id)
     .map((part): AcceptedPlanValidatedPart => {
-      if (
-        !isPositiveSafeInteger(part.projectionPartId ?? 0) ||
-        projectionIds.has(part.projectionPartId!) ||
-        part.partKey.length === 0 ||
-        partKeys.has(part.partKey) ||
-        !isPositiveSafeInteger(part.quantityInferred) ||
-        part.quantityInferred > 10_000 ||
-        (part.quantityOverride != null &&
-          (!isPositiveSafeInteger(part.quantityOverride) || part.quantityOverride > 10_000)) ||
-        !isPositiveSafeInteger(part.quantityEffective) ||
-        part.quantityEffective > 10_000 ||
-        part.quantityEffective !== (part.quantityOverride ?? part.quantityInferred)
-      ) {
-        corrupt("projection", "Accepted Plan revision Part identity is corrupt");
-      }
-      projectionIds.add(part.projectionPartId!);
-      partKeys.add(part.partKey);
       const projection = projectionById.get(part.projectionPartId!);
       const effectiveRole = part.roleOverride ?? part.roleInferred;
       if (
@@ -537,7 +545,7 @@ export const validateAcceptedPlanProjectionRows = (input: {
       }
       return { revisionPart: part, projectionPart: projection };
     });
-  if (projectionById.size !== projectionIds.size) {
+  if (projectionById.size !== input.revisionParts.length) {
     corrupt("projection", "Accepted Plan projection has extra Parts");
   }
   return validated;
