@@ -1,7 +1,7 @@
-"""Prove measured Process::spawn startup with a native Node and measured simulator.
+"""Prove measured Process::spawn startup or lifecycle with native Node simulator assets.
 
 The generated package is not a production web bundle. No manifest bypass ships.
-Use --negative-control to disarm only the measured spawn guard, require failure,
+Use --negative-control to remove the scenario's cleanup action, require failure,
 restore lib.rs byte-for-byte, then require the same test to pass.
 """
 
@@ -35,6 +35,10 @@ def negative_cleanup(output):
     matches = re.findall(r"owner=(\d+); node=(\d+); peer=(\d+);", output)
     assert matches, "negative control omitted process identities"
     pids = {pid for cycle in matches for pid in cycle}
+    return dead_process_states(pids)
+
+
+def dead_process_states(pids):
     deadline = time.monotonic() + 2
     while True:
         states = {}
@@ -53,7 +57,10 @@ def main():
     parser.add_argument("--evidence", type=Path, default=Path("/tmp/gre448-proof"))
     parser.add_argument("--node", type=Path, default=Path("/usr/bin/node"))
     parser.add_argument("--negative-control", action="store_true")
+    parser.add_argument("--scenario", choices=("startup", "lifecycle"), default="startup")
     args = parser.parse_args()
+    lifecycle = args.scenario == "lifecycle"
+    test = "ticket_t_2::ticket_t_3_drain_measured_release_repeated_eof_cleanup" if lifecycle else TEST
     node = args.node.resolve(strict=True)
     with node.open("rb") as binary:
         if binary.read(4) not in NATIVE_NODE_HEADERS:
@@ -86,7 +93,8 @@ def main():
     write("packages/domain/dist/current/index.js", "module.exports = {};\n")
     write("node_modules/gre448-simulator/package.json", '{"name":"gre448-simulator","private":true}\n')
     fixtures = REPO / "rust/crates/pp-compat/tests/fixtures"
-    for source, target in (("measured-startup-entry.cjs", "desktop.js"), ("measured-startup-preload.cjs", "desktop-resolution.js")):
+    entry = "measured-lifecycle-entry.cjs" if lifecycle else "measured-startup-entry.cjs"
+    for source, target in ((entry, "desktop.js"), ("measured-startup-preload.cjs", "desktop-resolution.js")):
         write("apps/server/dist/current/" + target, (fixtures / source).read_text())
 
     env = dict(os.environ, PP_DESKTOP_RELEASE_MANIFEST=str(stage / "bundle-manifest.json"), PP_COMPAT_MEASURED_STARTUP_STAGE=str(stage))
@@ -99,44 +107,74 @@ def main():
         with (evidence / (label + ".log")).open("w") as log:
             result = subprocess.run(command, cwd=REPO, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=timeout)
         print(f"{label}: exit={result.returncode}; log={evidence / (label + '.log')}", flush=True)
-        if TEST in command and result.returncode == 0:
+        if test in command and result.returncode == 0:
             output = (evidence / (label + ".log")).read_text()
             assert "test result: ok. 1 passed; 0 failed" in output, "acceptance test did not run"
-            assert "cycle=0; spawns=1; Node and peer dead" in output
-            assert "cycle=1; spawns=1; Node and peer dead" in output
+            if lifecycle:
+                for cycle in range(3):
+                    assert f'"cycle":{cycle},' in output, "missing lifecycle cycle receipt"
+                assert output.count('"case":"measured_lifecycle"') == 3
+            else:
+                assert "cycle=0; spawns=1; Node and peer dead" in output
+                assert "cycle=1; spawns=1; Node and peer dead" in output
         return result.returncode
 
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip()
     manifest_command = [sys.executable, str(REPO / "rust/scripts/build-desktop-manifest.py"), "--web", str(web), "--node", str(stage / "node"), "--package-root", str(stage), "--output", env["PP_DESKTOP_RELEASE_MANIFEST"], "--commit", commit]
     if run("manifest", manifest_command) != 0:
         sys.exit("manifest generation failed")
-    command = ["cargo", "test", "--locked", "--manifest-path", "rust/Cargo.toml", "-p", "pp-compat", "--lib", TEST, "--", "--exact", "--nocapture"]
+    manifest_path = Path(env["PP_DESKTOP_RELEASE_MANIFEST"])
+    manifest = json.loads(manifest_path.read_text())
+    (evidence / "asset-identity.json").write_text(json.dumps({
+        "scenario": args.scenario,
+        "manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+        "node_sha256": manifest["node_sha256"],
+        "backend": manifest["backend"],
+        "commit": manifest["commit"],
+    }, indent=2) + "\n")
+    command = ["cargo", "test", "--locked", "--manifest-path", "rust/Cargo.toml", "-p", "pp-compat", "--lib", test, "--", "--exact", "--nocapture"]
+    if lifecycle:
+        command.append("--ignored")
     if run("baseline", command) != 0:
-        sys.exit("baseline measured startup test failed")
+        sys.exit("baseline measured test failed")
     if args.negative_control:
         source = REPO / "rust/crates/pp-compat/src/lib.rs"
         original = source.read_bytes()
-        measured, shell = original.split(b"    async fn spawn_shell(", 1)
-        before = b"let (parent_read, parent_death) ="
-        assert measured.count(before) == 1
-        measured = measured.replace(before, b"let (parent_read, mut parent_death) =", 1)
-        before = b"        drop(parent_read);\n"
-        assert measured.count(before) == 1
-        measured = measured.replace(before, before + b"        parent_death.release();\n", 1)
+        if lifecycle:
+            before = b"        self.cancelled.cancel();\n"
+            assert original.count(before) == 1
+            changed = original.replace(before, b"", 1)
+            invariant = "measured EOF owned connection cleanup failed"
+        else:
+            measured, shell = original.split(b"    async fn spawn_shell(", 1)
+            before = b"let (parent_read, parent_death) ="
+            assert measured.count(before) == 1
+            measured = measured.replace(before, b"let (parent_read, mut parent_death) =", 1)
+            before = b"        drop(parent_read);\n"
+            assert measured.count(before) == 1
+            measured = measured.replace(before, before + b"        parent_death.release();\n", 1)
+            changed = measured + b"    async fn spawn_shell(" + shell
+            invariant = "startup group outlived force-killed owner"
         try:
-            source.write_bytes(measured + b"    async fn spawn_shell(" + shell)
+            source.write_bytes(changed)
             status = run("negative", command)
         finally:
             source.write_bytes(original)
         assert source.read_bytes() == original, "production source restoration failed"
         (evidence / "restored-lib-sha256.txt").write_text(hashlib.sha256(original).hexdigest() + "\n")
         negative = (evidence / "negative.log").read_text()
-        assert status != 0 and "startup group outlived force-killed owner" in negative, "negative control did not fail the intended invariant"
+        assert status == 101 and invariant in negative, "negative control did not fail the intended invariant"
         assert "test result: FAILED. 0 passed; 1 failed" in negative, "negative control ran no acceptance test"
-        states = negative_cleanup(negative)
+        if lifecycle:
+            assert "Compatibility connection join timed out" in negative, "negative control missed the owned join timeout"
+            pids = re.findall(r"measured lifecycle cycle=\d+; node=(\d+);", negative)
+            assert pids, "negative control omitted lifecycle PID"
+            states = dead_process_states(set(pids))
+        else:
+            states = negative_cleanup(negative)
         (evidence / "negative-cleanup.json").write_text(json.dumps(states, indent=2) + "\n")
         if run("restored", command) != 0:
-            sys.exit("restored measured startup test failed")
+            sys.exit("restored measured test failed")
     print(f"Measured simulator proof passed. Assets and logs retained at {evidence}")
 
 
