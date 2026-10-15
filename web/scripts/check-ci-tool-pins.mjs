@@ -63,6 +63,40 @@ function checkDesktopNode(workflow, file) {
   }
 }
 
+function checkWebNode(workflow, file) {
+  let expected;
+  for (const name of ['web', 'web-build']) {
+    const path = `jobs.${name}`;
+    const job = workflow.jobs[name];
+    const steps = Array.isArray(job?.steps) ? job.steps : [];
+    const setups = steps.filter(step => mapping(step) && typeof step.uses === 'string'
+      && step.uses.split('@')[0].toLowerCase() === 'actions/setup-node');
+    if (!mapping(job) || Object.hasOwn(job, 'strategy') || setups.length !== 1) {
+      report(file, path, 'INVALID_WEB_NODE_SETUP', 'expected one setup-node step in each required lane without a strategy override');
+      continue;
+    }
+    const setup = setups[0];
+    const inputs = setup.with;
+    const version = inputs?.['node-version'];
+    if (!mapping(inputs) || typeof version !== 'string'
+      || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)
+      || Object.hasOwn(inputs, 'node-version-file') || Object.hasOwn(setup, 'if')
+      || Object.hasOwn(setup, 'continue-on-error')) {
+      report(file, path, 'UNPINNED_WEB_NODE', 'setup-node must unconditionally select one exact major.minor.patch string without node-version-file');
+      continue;
+    }
+    if (expected !== undefined && version !== expected) {
+      report(file, path, 'MISMATCHED_WEB_NODE', `expected ${expected}, received ${version}`);
+    }
+    expected ??= version;
+    const verification = steps[steps.indexOf(setup) + 1];
+    if (!mapping(verification) || verification.run !== `test "$(node --version)" = "v${version}"`
+      || Object.hasOwn(verification, 'if') || Object.hasOwn(verification, 'continue-on-error')) {
+      report(file, path, 'MISSING_WEB_NODE_VERIFICATION', 'setup-node must be immediately followed by an unconditional matching runtime version assertion');
+    }
+  }
+}
+
 function checkUses(step, file, path, seen) {
   if (!Object.hasOwn(step, 'uses')) return;
   if (!literal(step.uses)) {
@@ -136,6 +170,7 @@ function checkWorkflow(file, source = readFileSync(file, 'utf8')) {
     checkDesktopNode(workflow, file);
     if (eventMode) checkDesktopExecution(workflow, file);
   }
+  if (/^web-ci\.ya?ml$/.test(basename(file))) checkWebNode(workflow, file);
   const seen = new Set();
   for (const [name, job] of Object.entries(workflow.jobs)) {
     const path = `jobs.${name}`;

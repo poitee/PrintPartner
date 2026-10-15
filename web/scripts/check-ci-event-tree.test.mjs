@@ -253,3 +253,21 @@ test('Release grants its reusable Web CI caller permission to read workflow stat
   assert.equal(release.jobs.quality.uses, './.github/workflows/web-ci.yml');
   assert.equal(release.jobs.quality.permissions.actions, 'read');
 });
+
+for (const lane of ['web', 'web-build']) {
+  test(`event tree rejects floating Web CI ${lane} Node despite repaired checkout`, t => {
+    const f = fixture(t, directory => {
+      const workflow = JSON.parse(JSON.stringify(webCI));
+      workflow.jobs[lane].steps.find(step => step.uses?.startsWith('actions/setup-node@')).with['node-version'] = '22';
+      writeFileSync(join(directory, '.github/workflows/web-ci.yml'), YAML.stringify(workflow));
+    });
+    writeFileSync(join(f.directory, '.github/workflows/web-ci.yml'), YAML.stringify(webCI));
+    f.git('add', '.github');
+    f.commit();
+    const result = f.run();
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stderr, new RegExp(`jobs.${lane}: UNPINNED_WEB_NODE:`));
+    const repaired = f.run(f.git('rev-parse', 'HEAD'));
+    assert.equal(repaired.status, 0, repaired.stderr);
+  });
+}
