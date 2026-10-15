@@ -423,6 +423,54 @@ mod tests {
     }
 
     #[test]
+    fn externally_removed_or_relocated_lease_detach_reports_not_found() {
+        for relocate in [false, true] {
+            let directory = std::env::temp_dir().join(format!(
+                "pp-guard-external-{}",
+                hex::encode(rand::random::<[u8; 16]>())
+            ));
+            std::os::unix::fs::DirBuilderExt::mode(&mut std::fs::DirBuilder::new(), 0o700)
+                .create(&directory)
+                .unwrap();
+            let admitted = super::super::admit_directory(&directory).unwrap();
+            let mut old = super::StorageLease::acquire(&admitted.directory).unwrap();
+            let shared = directory.join(".desktop-lease");
+            let hidden = directory.join("hidden-lease");
+            let bytes = std::fs::read(shared.join("owner.json")).unwrap();
+            if relocate {
+                std::fs::rename(&shared, &hidden).unwrap();
+            } else {
+                std::fs::remove_dir_all(&shared).unwrap();
+            }
+
+            for _ in 0..2 {
+                let error = old.release().unwrap_err();
+                assert_eq!(
+                    error
+                        .downcast_ref::<std::io::Error>()
+                        .unwrap()
+                        .raw_os_error(),
+                    Some(libc::ENOENT)
+                );
+                assert_eq!(old.path.as_deref(), Some(".desktop-lease"));
+                assert!(!directory.join(&old.detached).exists());
+                if relocate {
+                    assert_eq!(std::fs::read(hidden.join("owner.json")).unwrap(), bytes);
+                }
+            }
+
+            if relocate {
+                std::fs::rename(&hidden, &shared).unwrap();
+                old.release().unwrap();
+                assert_eq!(old.path, None);
+                assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 0);
+            }
+            drop(old);
+            std::fs::remove_dir_all(directory).unwrap();
+        }
+    }
+
+    #[test]
     fn matching_process_identity_remains_live() {
         let pid = std::process::id();
         let identity = super::process_identity(pid).unwrap();
