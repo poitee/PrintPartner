@@ -60,10 +60,9 @@ export function useSpoolmanWorkflowAccess(profileId: number) {
     let clearing = false;
     const reviews = { queryKey: ["planReview", profileId] };
     const roles = { queryKey: queryKeys.roleFilaments(profileId) };
+    const catalog = { queryKey: queryKeys.filamentCatalog(profileId), exact: true };
     const clearInventoryObservations = () => {
       clearing = true;
-      void client.cancelQueries(reviews, { revert: false });
-      void client.cancelQueries(roles, { revert: false });
       client.setQueriesData<PlanReview>(reviews, (review) => review && ({
         ...review, part_groups: review.part_groups.map((group) => ({
           ...group, parts: group.parts.map(maskSpoolmanReviewPart),
@@ -74,6 +73,11 @@ export function useSpoolmanWorkflowAccess(profileId: number) {
           ? { ...row, filament_display: row.filament_color_id, filament_hex: row.filament_custom_hex ?? null }
           : row
       )));
+      client.setQueriesData<FilamentCatalog>(catalog, (data) => data && ({
+        ...data,
+        spoolman_colors: [],
+        spoolman_status: "disabled",
+      }));
       clearing = false;
     };
     if (!previousAllowed) {
@@ -85,12 +89,18 @@ export function useSpoolmanWorkflowAccess(profileId: number) {
       const allowedNow = currentAccessAllowed();
       const changed = allowedNow !== previousAllowed;
       previousAllowed = allowedNow;
+      if (changed) {
+        void client.cancelQueries(reviews, { revert: false });
+        void client.cancelQueries(roles, { revert: false });
+        void client.cancelQueries(catalog, { revert: false });
+      }
       if (!allowedNow) {
         generation.current += 1;
         purgeProfileSpools(client, profileId);
         if (changed || (event.type === "updated" && event.action.type === "success"
           && ((event.query.queryKey[0] === "planReview" && event.query.queryKey[1] === profileId)
-            || (event.query.queryKey[0] === "roleFilaments" && event.query.queryKey[1] === profileId)))) {
+            || (event.query.queryKey[0] === "roleFilaments" && event.query.queryKey[1] === profileId)
+            || (event.query.queryKey[0] === "filamentCatalog" && event.query.queryKey[1] === profileId)))) {
           clearInventoryObservations();
         }
       } else if (changed) {

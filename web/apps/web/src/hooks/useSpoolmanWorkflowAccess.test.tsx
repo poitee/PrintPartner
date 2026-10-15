@@ -11,7 +11,7 @@ import type { FilamentCatalog, RoleFilamentRow } from "../api/endpoints/filament
 import { queryKeys } from "../queries/keys";
 import { useSpoolmanWorkflowAccess } from "./useSpoolmanWorkflowAccess";
 import { useSpoolmanEnabled } from "./useSpoolmanEnabled";
-import { useSpoolmanSpoolsQuery } from "../queries/filaments";
+import { useFilamentCatalogQuery, useSpoolmanSpoolsQuery } from "../queries/filaments";
 import { usePlanReviewQuery } from "../queries/planReview";
 import { useRoleFilamentsQuery } from "../queries/roleFilaments";
 
@@ -365,4 +365,79 @@ it.each(["refresh", "error", "revoked response"])("keeps mounted role filaments 
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect(result.current.data?.[0]?.filament_display).toBe("spoolman:1:2");
   } else await waitFor(() => expect(result.current.data).toEqual(mockRoles));
+});
+
+it.each(["refresh", "error", "revoked response"])("keeps mounted catalog spoolman choices cleared across off/on until fresh: %s", async (mode) => {
+  planSpoolman = true;
+  client.setDefaultOptions({ queries: { retry: false, staleTime: 30_000 } });
+  client.setQueryData(queryKeys.health, { ok: true, capabilities: [TENANT_FEATURE_TOGGLES_CAPABILITY] });
+  client.setQueryData(queryKeys.planFeatures(1), planFeaturesData(1, true));
+  for (const id of [1, 2]) client.setQueryData(queryKeys.filamentCatalog(id), mockCatalog);
+  client.setQueryData(queryKeys.filamentCatalog(), mockCatalog);
+  const pending: Array<(response: Response) => void> = [];
+  const originalFetch = globalThis.fetch;
+  vi.stubGlobal("fetch", vi.fn((input: string | URL | Request) => String(input).includes("/filaments/catalog")
+    ? new Promise<Response>((resolve) => pending.push(resolve)) : originalFetch(input)));
+  const { result } = renderHook(() => {
+    useSpoolmanWorkflowAccess(1);
+    useSpoolmanWorkflowAccess(1);
+    return useFilamentCatalogQuery({ profileId: 1 });
+  }, { wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> });
+  expect(result.current.data?.spoolman_colors).toEqual(mockCatalog.spoolman_colors);
+  const toggle = (enabled: boolean) => client.setQueryData(queryKeys.planFeatures(1), planFeaturesData(1, enabled));
+  act(() => { toggle(false); toggle(true); });
+  await waitFor(() => expect(pending.length).toBeGreaterThan(0));
+  expect(result.current.data?.spoolman_colors).toEqual([]);
+  expect(result.current.data?.spoolman_status).toBe("disabled");
+  expect(result.current.data?.colors).toEqual(mockCatalog.colors);
+  expect(client.getQueryData<FilamentCatalog>(queryKeys.filamentCatalog(2))?.spoolman_colors).toEqual(mockCatalog.spoolman_colors);
+  expect(client.getQueryData<FilamentCatalog>(queryKeys.filamentCatalog())?.spoolman_colors).toEqual(mockCatalog.spoolman_colors);
+  const before = pending.length;
+  const existingColor = mockCatalog.spoolman_colors?.[0];
+  if (!existingColor) throw new Error("Catalog fixture has no optional color");
+  const freshCatalog: FilamentCatalog = { ...mockCatalog, spoolman_colors: [{ ...existingColor, id: "spoolman:1:fresh" }] };
+  const response = () => new Response(JSON.stringify(freshCatalog), { status: mode === "error" ? 500 : 200, headers: { "content-type": "application/json" } });
+  if (mode === "revoked response") {
+    act(() => toggle(false));
+    await act(async () => { pending.at(-1)?.(response()); });
+    expect(result.current.data?.spoolman_colors).toEqual([]);
+    expect(result.current.data?.spoolman_status).toBe("disabled");
+    act(() => toggle(true));
+    await waitFor(() => expect(pending.length).toBeGreaterThan(before));
+  }
+  await act(async () => { for (const finish of pending.slice(0, -1)) finish(response()); });
+  expect(result.current.data?.spoolman_colors).toEqual([]);
+  pending.at(-1)?.(response());
+  if (mode === "error") {
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(result.current.data?.spoolman_colors).toEqual([]);
+    expect(result.current.data?.spoolman_status).toBe("disabled");
+  } else {
+    await waitFor(() => expect(result.current.data?.spoolman_colors).toEqual(freshCatalog.spoolman_colors));
+    expect(result.current.data?.spoolman_status).toBe("ok");
+  }
+});
+
+it("loads ordinary catalog and delayed role data during disabled startup", async () => {
+  planSpoolman = false;
+  client.setQueryData(queryKeys.health, { ok: true, capabilities: [TENANT_FEATURE_TOGGLES_CAPABILITY] });
+  client.setQueryData(queryKeys.planFeatures(1), planFeaturesData(1, false));
+  let finishRoles: ((response: Response) => void) | undefined;
+  const originalFetch = globalThis.fetch;
+  vi.stubGlobal("fetch", vi.fn((input: string | URL | Request) => String(input).includes("/role-filaments")
+    ? new Promise<Response>((resolve) => { finishRoles = resolve; }) : originalFetch(input)));
+  const { result } = renderHook(() => {
+    useSpoolmanWorkflowAccess(1);
+    const catalog = useFilamentCatalogQuery({ profileId: 1 });
+    const roles = useRoleFilamentsQuery(1);
+    return { catalog, roles };
+  }, { wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> });
+  await waitFor(() => expect(result.current.catalog.isSuccess).toBe(true));
+  expect(result.current.catalog.data?.colors).toEqual(mockCatalog.colors);
+  expect(result.current.catalog.data?.spoolman_colors).toEqual([]);
+  expect(result.current.catalog.data?.spoolman_status).toBe("disabled");
+  if (!finishRoles) throw new Error("Role read did not start");
+  finishRoles(new Response(JSON.stringify({ roles: mockRoles }), { headers: { "content-type": "application/json" } }));
+  await waitFor(() => expect(result.current.roles.isSuccess).toBe(true));
+  expect(result.current.roles.data?.[1]).toEqual(mockRoles[1]);
 });
