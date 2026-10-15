@@ -403,8 +403,8 @@ function insertRevision(
   return created.id;
 }
 
-function readStoredPlates(
-  dependencies: AcceptedPlateDependencies,
+export function readAcceptedPlateRevisionLayoutInternal(
+  dependencies: Pick<AcceptedPlateDependencies, "db" | "schema" | "tenantId">,
   revisionId: number,
   expectedPlateCount: number,
   expectedUnitCount: number,
@@ -565,7 +565,7 @@ function readAcceptedPlateState(
       throw new AcceptedPlateIntegrityError("revision");
     }
     const objectNames = requiredObjectNames(accepted.snapshot);
-    const stored = readStoredPlates(
+    const stored = readAcceptedPlateRevisionLayoutInternal(
       dependencies,
       revision.id,
       revision.expectedPlateCount,
@@ -772,7 +772,7 @@ export function publishAcceptedPlatesInternal(
         currentRevision.planRevisionDigest === accepted.snapshot.revisionDigest &&
         currentRevision.requiredUnitMappingDigest === accepted.snapshot.requiredUnitMappingDigest;
       if (sameAcceptedBasis) {
-        readStoredPlates(
+        readAcceptedPlateRevisionLayoutInternal(
           dependencies,
           currentRevision.id,
           currentRevision.expectedPlateCount,
@@ -908,7 +908,7 @@ function editAcceptedPlatesInternal(
       throw new AcceptedPlateIntegrityError("revision");
     }
     const expectedTokens = new Set(requiredObjectNames(accepted.snapshot).keys());
-    const plates = readStoredPlates(
+    const plates = readAcceptedPlateRevisionLayoutInternal(
       dependencies,
       currentRevision.id,
       currentRevision.expectedPlateCount,
@@ -1091,7 +1091,7 @@ export function restoreAcceptedPlatesInternal(
     ) {
       return { kind: "stale_accepted_plan" };
     }
-    const plates = readStoredPlates(
+    const plates = readAcceptedPlateRevisionLayoutInternal(
       dependencies,
       revision.id,
       revision.expectedPlateCount,

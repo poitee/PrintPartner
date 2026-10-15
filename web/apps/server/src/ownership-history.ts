@@ -15,9 +15,12 @@ import {
 import { digestFormat1Inputs, isCanonicalTimestamp, isSafeRelativePath, SHA256_PATTERN } from "./db/accepted-plan-operational-model.js";
 import { digestPlanInputs } from "./services/plan-freshness.js";
 
+import { ownershipPlateTables, validateOwnershipPlateHistory } from "./ownership-plate-history.js";
+
 export const ownershipHistoryTables = [
   "source_revisions", "plan_revision_input_sets", "plan_revision_inputs", "plan_accepted_input_sets",
   "plan_revisions", "plan_revision_parts", "required_units", "plan_revision_required_units", "plan_revision_required_unit_sets",
+  ...ownershipPlateTables,
 ] as const;
 
 export function validateOwnershipHistory(database: Database.Database): void {
@@ -156,4 +159,5 @@ export function validateOwnershipHistory(database: Database.Database): void {
       }
     }
   }
+  validateOwnershipPlateHistory(database);
 }
