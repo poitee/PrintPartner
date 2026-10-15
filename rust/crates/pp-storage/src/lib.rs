@@ -17,6 +17,7 @@ pub mod native_secrets;
 #[cfg(feature = "desktop_rebuild")]
 pub mod profiles;
 pub mod read_model;
+pub mod restore;
 mod schema;
 mod writer_admission;
 
