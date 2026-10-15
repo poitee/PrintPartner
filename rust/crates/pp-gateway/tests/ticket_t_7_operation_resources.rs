@@ -275,14 +275,15 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.ui_focus_stl_search",
         "tool.ui_navigate",
         "tool.ui_open_source",
+        "tool.ui_open_docs",
         "tool.read_source_file",
         "tool.list_sources",
         "tool.list_source_categories",
         "tool.search_source_files",
         "tool.preview_source_naming",
     ]);
-    assert_eq!(reviewed.len(), 15);
-    assert_eq!(unresolved.len(), 428);
+    assert_eq!(reviewed.len(), 16);
+    assert_eq!(unresolved.len(), 427);
     let resolved: BTreeSet<_> = index
         .claims()
         .values()
@@ -552,6 +553,7 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
         "tool.ui_focus_stl_search",
         "tool.ui_navigate",
         "tool.ui_open_source",
+        "tool.ui_open_docs",
         "tool.read_source_file",
         "tool.list_sources",
         "tool.list_source_categories",
@@ -591,6 +593,7 @@ fn reviewed_participants_cannot_swap_operations() {
         ("tool.ui_highlight_part", "tool.ui_focus_stl_search"),
         ("tool.ui_focus_stl_search", "tool.ui_navigate"),
         ("tool.ui_navigate", "tool.ui_open_source"),
+        ("tool.ui_open_source", "tool.ui_open_docs"),
         ("tool.get_workflow_help", "tool.get_job_status"),
         ("tool.get_job_status", "tool.list_plans"),
         ("tool.get_workflow_help", "tool.list_plans"),
@@ -1711,8 +1714,16 @@ fn ticket_t_7_ownership_ui_navigate_refuses_invalid_admission_before_effects() {
 
 #[test]
 fn ticket_t_7_ownership_ui_open_source_has_complete_node_owned_resources() {
+    assert_ui_open_complete_resources("tool.ui_open_source");
+}
+
+#[test]
+fn ticket_t_7_ownership_ui_open_docs_has_complete_node_owned_resources() {
+    assert_ui_open_complete_resources("tool.ui_open_docs");
+}
+
+fn assert_ui_open_complete_resources(id: &str) {
     use pp_gateway::ownership::{Owner, manifest::Disposition};
-    let id = "tool.ui_open_source";
     let index = admit_bundled_manifest().unwrap();
     let resources = index
         .resources_for(id)
@@ -1729,15 +1740,26 @@ fn ticket_t_7_ownership_ui_open_source_has_complete_node_owned_resources() {
         index.lookup(id).unwrap().disposition,
         Disposition::Owned(Owner::Node)
     );
-    assert_eq!(
-        index.admit_rollback(id),
-        Err(AdmissionError::IncompatibleLiveFormat {
-            operation: id.into(),
-            format: "sqlite-schema".into(),
-            node_reads: 34,
-            rust_writes: Some(35),
-        })
-    );
+    for writer in [json!(35), Value::Null] {
+        let mut value = manifest();
+        value["live_formats"]["sqlite-schema"]["rust_writes"] = writer.clone();
+        let mut effect = false;
+        let result = admit(&value).and_then(|index| {
+            index.admit_rollback(id)?;
+            effect = true;
+            Ok(())
+        });
+        assert_eq!(
+            result,
+            Err(AdmissionError::IncompatibleLiveFormat {
+                operation: id.into(),
+                format: "sqlite-schema".into(),
+                node_reads: 34,
+                rust_writes: if writer.is_null() { None } else { Some(35) },
+            })
+        );
+        assert!(!effect);
+    }
     let mut compatible = manifest();
     compatible["live_formats"]["sqlite-schema"]["rust_writes"] = json!(34);
     assert_eq!(
@@ -1776,9 +1798,9 @@ fn ticket_t_7_ownership_ui_open_source_has_complete_node_owned_resources() {
         assert!(!effect);
     }
     assert_eq!(
-        index.resources_for("tool.ui_open_docs"),
+        index.resources_for("tool.get_source_docs"),
         Err(AdmissionError::UnresolvedResources {
-            operation: "tool.ui_open_docs".into(),
+            operation: "tool.get_source_docs".into(),
         })
     );
     for owner in ["rust", "python"] {
@@ -1804,7 +1826,15 @@ fn ticket_t_7_ownership_ui_open_source_has_complete_node_owned_resources() {
 
 #[test]
 fn ticket_t_7_ownership_ui_open_source_refuses_invalid_admission_before_effects() {
-    let id = "tool.ui_open_source";
+    assert_ui_open_invalid_admission("tool.ui_open_source");
+}
+
+#[test]
+fn ticket_t_7_ownership_ui_open_docs_refuses_invalid_admission_before_effects() {
+    assert_ui_open_invalid_admission("tool.ui_open_docs");
+}
+
+fn assert_ui_open_invalid_admission(id: &str) {
     let mut original = manifest();
     original["live_formats"]["sqlite-schema"]["rust_writes"] = json!(34);
     let mut baseline_effect = false;
@@ -1844,21 +1874,21 @@ fn ticket_t_7_ownership_ui_open_source_refuses_invalid_admission_before_effects(
                         .unwrap()
                         .push(json!(id));
                 }
-                malformed("missing reviewed resources for tool.ui_open_source")
+                malformed(&format!("missing reviewed resources for {id}"))
             }
             4 => {
                 value["resources"]["reviewed"]
                     .as_array_mut()
                     .unwrap()
                     .push(original["resources"]["reviewed"][entry].clone());
-                malformed("duplicate resource state for tool.ui_open_source")
+                malformed(&format!("duplicate resource state for {id}"))
             }
             5 => {
                 value["resources"]["unresolved"]
                     .as_array_mut()
                     .unwrap()
                     .push(json!(id));
-                malformed("duplicate resource state for tool.ui_open_source")
+                malformed(&format!("duplicate resource state for {id}"))
             }
             6 | 7 => {
                 regroup(&mut value, id, &[id]);
@@ -1918,9 +1948,9 @@ fn ticket_t_7_ownership_ui_open_source_refuses_invalid_admission_before_effects(
                 let unresolved = value["resources"]["unresolved"].as_array_mut().unwrap();
                 unresolved.retain(|operation| operation != "tool.get_source_docs");
                 unresolved.push(json!("tool.regrouped"));
-                malformed(
-                    "reviewed participant tool.ui_open_source must belong to operation tool.ui_open_source",
-                )
+                malformed(&format!(
+                    "reviewed participant {id} must belong to operation {id}"
+                ))
             }
             _ => unreachable!(),
         };

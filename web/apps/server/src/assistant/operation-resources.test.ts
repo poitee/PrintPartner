@@ -52,7 +52,7 @@ const TABLES = ["table:app_settings", "table:projects", "table:source_docs"];
 const FILE_RESOURCES = ["file:source-workspace", "table:projects", "table:source_docs"];
 const manifest = z.object({ resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -1011,7 +1011,7 @@ it("traces ui_navigate routes, normalization, ID precedence and tenants against 
   expect(entry).toEqual({ operation: "tool.ui_navigate", resources: [{ kind: "table", name: "build_profiles" }] });
 });
 
-it("traces ui_open_source selectors, proposals and tenants against its literal union", async () => {
+it.each(["ui_open_source", "ui_open_docs"] as const)("traces %s selectors, proposals and tenants against its literal union", async (tool) => {
   const plan = repo.createProfile("Open source");
   const fallback = repo.createProfile("Fallback");
   const foreign = tenantStorage.run("other", () => ({
@@ -1026,7 +1026,7 @@ it("traces ui_open_source selectors, proposals and tenants against its literal u
     observer.state.files = [];
     observer.state.active = true;
     let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
-    try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("ui_open_source", input, { repo, activePlanId })); }
+    try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool(tool, input, { repo, activePlanId })); }
     finally { observer.state.active = false; }
     const observed = [...new Set(statements.map((sql) => tableForObservedSelect(sql, tenantId)))].sort();
     expect(observed).toEqual(expected);
@@ -1047,7 +1047,7 @@ it("traces ui_open_source selectors, proposals and tenants against its literal u
       status: "proposed",
       note: "Not applied yet — user must confirm via Apply in the UI.",
       action: {
-        type: "ui_open_source", plan_id: planId,
+        type: tool, plan_id: planId,
         label: `Open ${name} ${tab}`,
         summary: `Open source “${name}” (${tab}).`,
         params: { source_name: name, source_id: id, tab, ...extra },
@@ -1071,7 +1071,7 @@ it("traces ui_open_source selectors, proposals and tenants against its literal u
     expect(await trace({ source_id: id, source_name: "Fixture", plan_id: plan.id }, ["table:projects"])).toEqual({ error: "Source not found" });
   }
   for (const tab of ["docs", "rules", "naming"]) {
-    expect(await trace({ source_id: sourceId, tab, path: " ../outside.md ", query: " bolt " }, sources)).toEqual(proposal(sourceId, "Fixture", tab, 0, { path: " ../outside.md ", query: " bolt " }));
+    expect(await trace({ source_id: sourceId, tab, path: " ../outside.md ", query: " bolt " }, sources)).toEqual(proposal(sourceId, "Fixture", tool === "ui_open_docs" ? "docs" : tab, 0, { path: " ../outside.md ", query: " bolt " }));
   }
   for (const tab of [" Rules ", "other", null, 42]) {
     expect(await trace({ source_id: sourceId, tab, path: 42, query: {} }, sources)).toEqual(proposal(sourceId));
@@ -1099,12 +1099,12 @@ it("traces ui_open_source selectors, proposals and tenants against its literal u
     }
   }
   expect([...union].sort()).toEqual(tables);
-  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.ui_open_source");
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === `tool.${tool}`);
   if (!entry || entry.operation === "source.sync") throw new Error("Missing open source declaration");
   expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(["file:source-workspace", ...tables]);
 });
 
-it("traces ui_open_source isolated workspace probes without opening proposed paths", async () => {
+it.each(["ui_open_source", "ui_open_docs"] as const)("traces %s isolated workspace probes without opening proposed paths", async (tool) => {
   const repos = join(dataDir, "repos");
   const workspace = join(repos, String(sourceId));
   fs.mkdirSync(workspace, { recursive: true });
@@ -1122,7 +1122,7 @@ it("traces ui_open_source isolated workspace probes without opening proposed pat
     observer.state.active = true;
     let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
     try {
-      output = await invokeAssistantTool("ui_open_source", {
+      output = await invokeAssistantTool(tool, {
         ...(byName ? { source_name: "Fixture" } : { source_id: sourceId }),
         plan_id: plan.id, path: "../outside.txt", query: "README",
       }, { repo: isolatedRepo });
@@ -1131,7 +1131,7 @@ it("traces ui_open_source isolated workspace probes without opening proposed pat
     expect(output.proposedAction).toEqual(content.action);
     const { id: _id, ...action } = content.action;
     expect(action).toEqual({
-      type: "ui_open_source", plan_id: plan.id, label: "Open Fixture docs",
+      type: tool, plan_id: plan.id, label: "Open Fixture docs",
       summary: "Open source “Fixture” (docs).",
       params: { source_name: "Fixture", source_id: sourceId, tab: "docs", path: "../outside.txt", query: "README" },
     });
@@ -1157,13 +1157,13 @@ it("traces ui_open_source isolated workspace probes without opening proposed pat
   observer.state.files = [];
   observer.state.active = true;
   let other: Awaited<ReturnType<typeof invokeAssistantTool>>;
-  try { other = await tenantStorage.run("other", () => invokeAssistantTool("ui_open_source", { source_id: sourceId }, { repo: isolatedRepo })); }
+  try { other = await tenantStorage.run("other", () => invokeAssistantTool(tool, { source_id: sourceId }, { repo: isolatedRepo })); }
   finally { observer.state.active = false; }
   expect(JSON.parse(other.content)).toEqual({ error: "Source not found" });
   expect(statements.map((sql) => tableForObservedSelect(sql, "other"))).toEqual(["table:projects"]);
   expect(observer.state.files).toEqual([]);
   expect([...union].sort()).toEqual(["file:source-workspace", ...tables]);
-  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.ui_open_source");
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === `tool.${tool}`);
   if (!entry || entry.operation === "source.sync") throw new Error("Missing open source declaration");
   expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(["file:source-workspace", ...tables]);
 });
