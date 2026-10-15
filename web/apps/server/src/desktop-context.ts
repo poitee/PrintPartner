@@ -211,7 +211,10 @@ export function acquireDataDirectory(dataDir: string): () => void {
     if (markerStage === "recorded") {
       // A marker removed or rewritten by someone else is no longer ours to remove.
       if (!recordNamesInstance(marker, lease.instance)) markerStage = "removed";
-      else {
+      else if (!lease.releaseRecoveryEnabled) {
+        rmSync(marker, { force: true });
+        markerStage = "removed";
+      } else {
         try { renameSync(marker, detachedMarker); markerStage = "detached"; }
         catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;

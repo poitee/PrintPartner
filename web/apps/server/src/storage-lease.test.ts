@@ -245,6 +245,71 @@ describe("lease observation races", () => {
   });
 });
 
+describe.each([undefined, "0", "true", "1"])("release recovery flag %s", (flag) => {
+  it("retries cleanup of an already detached lease", () => {
+    const dir = dataDir();
+    const child = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
+      import fs from "node:fs";
+      import { syncBuiltinESMExports } from "node:module";
+      import { acquireStorageLease } from ${JSON.stringify(new URL("./storage-lease.ts", import.meta.url).href)};
+      const flag = ${JSON.stringify(flag) ?? "undefined"};
+      if (flag === undefined) delete process.env.PP_STORAGE_RELEASE_RECOVERY;
+      else process.env.PP_STORAGE_RELEASE_RECOVERY = flag;
+      const lease = acquireStorageLease(${JSON.stringify(dir)});
+      const remove = fs.rmSync;
+      let failed = false;
+      fs.rmSync = function(path, ...args) {
+        if (!failed && String(path).includes(".desktop-lease-release-")) {
+          failed = true;
+          throw Object.assign(new Error("cleanup denied"), { code: "EACCES" });
+        }
+        return remove.call(this, path, ...args);
+      };
+      syncBuiltinESMExports();
+      let first = null;
+      try { lease.release(); } catch (error) { first = error.code; }
+      lease.release();
+      console.log(JSON.stringify({ first, entries: fs.readdirSync(${JSON.stringify(dir)}) }));
+    `], { encoding: "utf8" });
+    expect(child.status, child.stderr).toBe(0);
+    expect(JSON.parse(child.stdout)).toEqual({ first: "EACCES", entries: [] });
+  });
+
+  it.each([".desktop-lease-release-", ".desktop-owner-release-"])("only opts into detached checks for %s with 1", (prefix) => {
+    const dir = dataDir();
+    const child = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
+      import fs from "node:fs";
+      import { syncBuiltinESMExports } from "node:module";
+      import { acquireDataDirectory } from ${JSON.stringify(new URL("./desktop-context.ts", import.meta.url).href)};
+      const flag = ${JSON.stringify(flag) ?? "undefined"};
+      if (flag === undefined) delete process.env.PP_STORAGE_RELEASE_RECOVERY;
+      else process.env.PP_STORAGE_RELEASE_RECOVERY = flag;
+      const release = acquireDataDirectory(${JSON.stringify(dir)});
+      process.env.PP_STORAGE_RELEASE_RECOVERY = flag === "1" ? "0" : "1";
+      const open = fs.openSync;
+      let rechecked = false;
+      fs.openSync = function(path, ...args) {
+        if (String(path).includes(${JSON.stringify(prefix)})) {
+          rechecked = true;
+          throw Object.assign(new Error("detached record unavailable"), { code: "ENXIO" });
+        }
+        return open.call(this, path, ...args);
+      };
+      syncBuiltinESMExports();
+      let error = null;
+      try { release(); } catch (caught) { error = caught.code; }
+      fs.openSync = open;
+      syncBuiltinESMExports();
+      release();
+      const entries = fs.readdirSync(${JSON.stringify(dir)});
+      acquireDataDirectory(${JSON.stringify(dir)})();
+      console.log(JSON.stringify({ rechecked, error, entries }));
+    `], { encoding: "utf8" });
+    expect(child.status, child.stderr).toBe(0);
+    expect(JSON.parse(child.stdout)).toEqual({ rechecked: flag === "1", error: flag === "1" ? "ENXIO" : null, entries: [] });
+  });
+});
+
 describe("release after the lease is removed externally", () => {
   it.each(acquisition)("$name treats a missing lease as released and admits the next writer", ({ acquire }) => {
     const dir = dataDir();
@@ -347,7 +412,7 @@ describe("release after the lease is removed externally", () => {
       syncBuiltinESMExports();
       acquireDataDirectory(${JSON.stringify(dir)})();
       console.log(JSON.stringify({ injected }));
-    `], { encoding: "utf8" });
+    `], { encoding: "utf8", env: { ...process.env, PP_STORAGE_RELEASE_RECOVERY: "1" } });
     expect(child.status, child.stderr).toBe(0);
     expect(JSON.parse(child.stdout)).toEqual({ injected: true });
     expect(kept(join(dir, path))).toBe(true);
@@ -378,7 +443,7 @@ describe("release after the lease is removed externally", () => {
       fs.chmodSync(detached + ${JSON.stringify(owner)}, 0o600);
       release();
       console.log(JSON.stringify({ first, entries: fs.readdirSync(${JSON.stringify(dir)}) }));
-    `], { encoding: "utf8" });
+    `], { encoding: "utf8", env: { ...process.env, PP_STORAGE_RELEASE_RECOVERY: "1" } });
     expect(child.status, child.stderr).toBe(0);
     expect(JSON.parse(child.stdout)).toEqual({ first: "EACCES", entries: [] });
   });
@@ -409,7 +474,7 @@ describe("release after the lease is removed externally", () => {
       syncBuiltinESMExports();
       acquireDataDirectory(${JSON.stringify(dir)})();
       console.log(JSON.stringify({ injected, entries: fs.readdirSync(${JSON.stringify(dir)}) }));
-    `], { encoding: "utf8" });
+    `], { encoding: "utf8", env: { ...process.env, PP_STORAGE_RELEASE_RECOVERY: "1" } });
     expect(child.status, child.stderr).toBe(0);
     expect(JSON.parse(child.stdout)).toEqual({ injected: true, entries: [] });
   });

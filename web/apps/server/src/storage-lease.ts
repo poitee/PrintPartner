@@ -103,7 +103,8 @@ function invalidLeaseError(cause: unknown): Error {
   return new Error("storage_lease_marker_invalid: Data directory lease is malformed or unreadable", { cause });
 }
 
-export function acquireStorageLease(directory: string): { identity: string; instance: string; release: () => void } {
+export function acquireStorageLease(directory: string): { identity: string; instance: string; releaseRecoveryEnabled: boolean; release: () => void } {
+  const releaseRecoveryEnabled = process.env.PP_STORAGE_RELEASE_RECOVERY === "1";
   const identity = processIdentity(process.pid);
   const instance = randomBytes(16).toString("hex");
   const candidate = join(directory, `.desktop-lease-candidate-${instance}`);
@@ -127,15 +128,15 @@ export function acquireStorageLease(directory: string): { identity: string; inst
             throw error;
           }
           const detached = join(directory, `.desktop-lease-release-${instance}`);
-          let stage: "published" | "detached" | "verified" = "published";
-          return { identity, instance, release: () => {
+          let stage: "published" | "detached" | "cleanup" = "published";
+          return { identity, instance, releaseRecoveryEnabled, release: () => {
             if (stage === "published") {
               // A lease removed or republished by someone else is no longer ours to retire.
               if (!recordNamesInstance(join(lease, "owner.json"), instance)) return;
               // Detach the whole lease before cleanup so a contender never observes an empty lease.
               try { renameSync(lease, detached); }
               catch (error) { if (isFsError(error, ["ENOENT"])) return; throw error; }
-              stage = "detached";
+              stage = releaseRecoveryEnabled ? "detached" : "cleanup";
             }
             if (stage === "detached") {
               // The check and the rename cannot be one step, so hand back a lease republished in between.
@@ -146,7 +147,7 @@ export function acquireStorageLease(directory: string): { identity: string; inst
                 stage = "published";
                 return;
               }
-              stage = "verified";
+              stage = "cleanup";
             }
             rmSync(detached, { recursive: true, force: true });
           } };
