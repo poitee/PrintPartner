@@ -63,21 +63,30 @@ export function useSpoolmanWorkflowAccess(profileId: number) {
     const catalog = { queryKey: queryKeys.filamentCatalog(profileId), exact: true };
     const clearInventoryObservations = () => {
       clearing = true;
-      client.setQueriesData<PlanReview>(reviews, (review) => review && ({
-        ...review, part_groups: review.part_groups.map((group) => ({
-          ...group, parts: group.parts.map(maskSpoolmanReviewPart),
-        })),
-      }));
-      client.setQueriesData<RoleFilamentRow[]>(roles, (rows) => rows?.map((row) => (
-        row.filament_color_id?.trim().startsWith("spoolman:")
+      client.setQueriesData<PlanReview>(reviews, (review) => {
+        if (!review?.part_groups.some((group) => group.parts.some((part) =>
+          part.spool_badge != null || part.spool_summary !== undefined
+          || (part.filament_color_id?.trim().startsWith("spoolman:")
+            && (part.filament_display !== "" || part.filament_hex !== (part.filament_custom_hex ?? null))),
+        ))) return undefined;
+        return {
+          ...review, part_groups: review.part_groups.map((group) => ({
+            ...group, parts: group.parts.map(maskSpoolmanReviewPart),
+          })),
+        };
+      });
+      client.setQueriesData<RoleFilamentRow[]>(roles, (rows) => {
+        if (!rows?.some((row) => row.filament_color_id?.trim().startsWith("spoolman:")
+          && (row.filament_display !== row.filament_color_id || row.filament_hex !== (row.filament_custom_hex ?? null)),
+        )) return undefined;
+        return rows.map((row) => row.filament_color_id?.trim().startsWith("spoolman:")
           ? { ...row, filament_display: row.filament_color_id, filament_hex: row.filament_custom_hex ?? null }
-          : row
-      )));
-      client.setQueriesData<FilamentCatalog>(catalog, (data) => data && ({
-        ...data,
-        spoolman_colors: [],
-        spoolman_status: "disabled",
-      }));
+          : row);
+      });
+      client.setQueriesData<FilamentCatalog>(catalog, (data) => {
+        if (!data || (data.spoolman_status === "disabled" && !data.spoolman_colors?.length)) return undefined;
+        return { ...data, spoolman_colors: [], spoolman_status: "disabled" };
+      });
       clearing = false;
     };
     if (!previousAllowed) {

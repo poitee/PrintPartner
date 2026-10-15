@@ -480,10 +480,11 @@ function RoleFilamentPickerInner({
       action: SpoolmanAction,
       isOptionalSpoolman: boolean,
     ) => {
-      if (!action.isCurrent()) return;
-      if (isOptionalSpoolman && !action.isSpoolmanAllowed()) {
+      if (!action.isCurrent() || (isOptionalSpoolman && !action.isSpoolmanAllowed())) {
         void invalidateRoleFilaments(queryClient, profileId);
-        markRoleSaved(role);
+        void invalidatePlanReview(queryClient, profileId);
+        bumpThumbnailCache();
+        if (action.isCurrent()) markRoleSaved(role);
         return;
       }
       publishRows(result.roles, action);

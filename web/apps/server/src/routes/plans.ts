@@ -683,11 +683,12 @@ export async function registerPlanRoutes(
     const normalizedRole = normalizePartRole(role);
     const assignment = completeRoleAssignment(body);
     const snapshot = deps.repo.readAcceptedPlanOperationalSnapshot(id);
-    const previousAssignments = snapshot.kind === "empty"
-      ? [loadRoleFilamentDefaults(deps.repo, id)[normalizedRole] ?? {}]
-      : snapshot.kind === "ready" ? snapshot.snapshot.parts
+    const previousAssignments = [
+      loadRoleFilamentDefaults(deps.repo, id)[normalizedRole] ?? {},
+      ...(snapshot.kind === "ready" ? snapshot.snapshot.parts
         .filter((part) => part.included && normalizePartRole(part.effectiveRole) === normalizedRole)
-        .map((part) => ({ filament_color_id: part.filamentColorId, spoolman_spool_id: part.spoolmanSpoolId })) : [];
+        .map((part) => ({ filament_color_id: part.filamentColorId, spoolman_spool_id: part.spoolmanSpoolId })) : []),
+    ];
     if (previousAssignments.some((previous) => hasSpoolmanAssignment(body, previous))) {
       const access = readSpoolmanAccess(deps.repo, id);
       if (access.kind !== "allowed") {

@@ -5,7 +5,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TENANT_FEATURE_TOGGLES_CAPABILITY, type PlanFeatures } from "@print-partner/contracts";
 import type { FilamentCatalog, RoleFilamentRow, SpoolmanSpoolRow } from "../api/endpoints/filaments";
-import type { ReviewPart } from "../api/endpoints/planManifests";
+import type { PlanReview, ReviewPart } from "../api/endpoints/planManifests";
 import * as filamentsApi from "../api/endpoints/filaments";
 import * as colorPresets from "../lib/colorPresets";
 import { queryKeys } from "../queries/keys";
@@ -76,6 +76,28 @@ function makeReviewPart(overrides: Partial<ReviewPart> = {}): ReviewPart {
     ...overrides,
   };
 }
+
+const mockReview: PlanReview = {
+  profile_id: 1,
+  accepted_basis: null,
+  plan_name: "Test Plan",
+  layers: [],
+  totals: {
+    included_parts: 1,
+    total_print_units: 1,
+    by_role: {},
+    by_filament: {},
+  },
+  issues: [],
+  has_blockers: false,
+  part_groups: [
+    {
+      folder: "parts",
+      source_layer: "base:test",
+      parts: [makeReviewPart()],
+    },
+  ],
+};
 
 beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
@@ -450,8 +472,19 @@ describe("RoleFilamentPicker and PartColorDialog plan-aware visibility", () => {
     const plan2Roles = client.getQueryData<{ roles: RoleFilamentRow[] }>(queryKeys.roleFilaments(2));
     expect(plan2Roles?.roles?.[0]?.filament_color_id ?? null).toBeNull();
   });
-  it.each(["catalog", "spool"])("discards delayed %s enrichment across same-tick off/on", async (type) => {
+  it.each([
+    ["catalog", "same-tick off/on"],
+    ["catalog", "off stays off"],
+    ["spool", "same-tick off/on"],
+    ["spool", "off stays off"],
+  ] as const)("discards delayed %s enrichment across %s", async (type, transition) => {
     planSpoolman = true;
+    const thumbnailModule = await import("../lib/thumbnailCache");
+    const bumpThumbnailSpy = vi.mocked(thumbnailModule.bumpThumbnailCache);
+    bumpThumbnailSpy.mockClear();
+
+    client.setQueryData(queryKeys.planReview(1, false), mockReview);
+
     let resolveSave: ((response: Response) => void) | undefined;
     onFetchHook = (path, _url, init) => {
       if (path.endsWith("/role-filament") && init?.method === "PUT") {
@@ -480,10 +513,17 @@ describe("RoleFilamentPicker and PartColorDialog plan-aware visibility", () => {
 
     await waitFor(() => expect(resolveSave).toBeDefined());
 
-    act(() => {
-      client.setQueryData(queryKeys.planFeatures(1), planFeaturesData(1, false));
-      client.setQueryData(queryKeys.planFeatures(1), planFeaturesData(1, true));
-    });
+    if (transition === "off stays off") {
+      planSpoolman = false;
+      act(() => {
+        client.setQueryData(queryKeys.planFeatures(1), planFeaturesData(1, false));
+      });
+    } else {
+      act(() => {
+        client.setQueryData(queryKeys.planFeatures(1), planFeaturesData(1, false));
+        client.setQueryData(queryKeys.planFeatures(1), planFeaturesData(1, true));
+      });
+    }
 
     const enrichedRoles = mockRoles.map((row) => ({ ...row, filament_display: "Stale Enriched Spoolman Blue" }));
     const finishSave = resolveSave;
@@ -496,6 +536,8 @@ describe("RoleFilamentPicker and PartColorDialog plan-aware visibility", () => {
     });
 
     expect(screen.queryByText("Stale Enriched Spoolman Blue")).toBeNull();
+    expect(client.getQueryState(queryKeys.planReview(1, false))?.isInvalidated).toBe(true);
+    expect(bumpThumbnailSpy).toHaveBeenCalled();
   });
 
   it("masks live current color on retained open PartColorDialog across off/on", async () => {

@@ -18,7 +18,7 @@ import { InProcessJobRunner } from "../services/job-runner.js";
 import { newBuildPlanningBrief, readBuildPlanningBrief, saveBuildPlanningBrief } from "../services/build-planning.js";
 import { buildSpoolLookup } from "../services/farm-filament.js";
 import { saveFleet } from "../services/printer-fleet.js";
-import { saveRoleFilamentDefault } from "../services/role-filament-store.js";
+import { loadRoleFilamentDefaults, saveRoleFilamentDefault } from "../services/role-filament-store.js";
 
 const color = "spoolman:inventory:filament:7";
 const spool = "spoolman:inventory:spool:11";
@@ -83,6 +83,20 @@ describe("Spoolman workflow admission", () => {
   }
 
   for (const prefix of ["", "/api/v1"]) {
+    it.each(["unused", "part-match"])(`${prefix} rejects new optional role defaults with %s targets`, async (state) => {
+      planAccess(true);
+      if (state === "part-match") await app.inject({ method: "PATCH", url: `${prefix}/parts/${partId}`,
+        payload: { filament_color_id: color, spoolman_spool_id: spool } });
+      const role = state === "unused" ? "accent" : "primary";
+      const before = repo.getPartRow(partId);
+      planAccess(false);
+      const response = await app.inject({ method: "PUT", url: `${prefix}/plans/${profileId}/role-filament`,
+        payload: { role, filament_color_id: color, spoolman_spool_id: spool, refresh_thumbnails: false } });
+      expect(response.statusCode, response.body).toBe(403);
+      expect(loadRoleFilamentDefaults(repo, profileId)[role]).toBeUndefined();
+      expect(repo.getPartRow(partId)).toEqual(before);
+      expect(network).not.toHaveBeenCalled();
+    });
     it.each(["published", "empty"])(`${prefix} permits retained role references and spool clearing in a %s Plan`, async (state) => {
       const id = state === "published" ? profileId : repo.createProfile("Unpublished").id;
       repo.setSetting(`feature_toggles:plan:${id}`, '{"spoolman":true}');
