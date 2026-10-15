@@ -64,7 +64,11 @@ pub(crate) fn preflight(
         Ok(())
     };
     check_owner()?;
+    #[cfg(test)]
+    capture_tests::transient_swap(path, 0, false)?;
     let metadata = std::fs::metadata(path);
+    #[cfg(test)]
+    capture_tests::transient_swap(path, 0, true)?;
     #[cfg(test)]
     capture_tests::capture_checkpoint(path, 0)?;
     validate_directory()?;
@@ -81,7 +85,17 @@ pub(crate) fn preflight(
             .map(|suffix| {
                 let file = path.with_file_name(format!("print-partner.db{suffix}"));
                 validate_directory()?;
+                #[cfg(test)]
+                let checkpoint = match suffix {
+                    "" => 1,
+                    "-wal" => 2,
+                    _ => 3,
+                };
+                #[cfg(test)]
+                capture_tests::transient_swap(path, checkpoint, false)?;
                 let read = std::fs::read(file);
+                #[cfg(test)]
+                capture_tests::transient_swap(path, checkpoint, true)?;
                 #[cfg(test)]
                 capture_tests::capture_checkpoint(
                     path,
@@ -648,7 +662,134 @@ mod capture_tests {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 
     thread_local! {
+        static TRANSIENT_SWAP: std::cell::Cell<Option<(u8, bool)>> = const { std::cell::Cell::new(None) };
         static REPLACE_DURING_CAPTURE: std::cell::Cell<Option<(u8, u8)>> = const { std::cell::Cell::new(None) };
+    }
+
+    pub(super) fn transient_swap(database: &Path, checkpoint: u8, restore: bool) -> Result<()> {
+        if TRANSIENT_SWAP.get() != Some((checkpoint, restore)) {
+            return Ok(());
+        }
+        let path = database.parent().unwrap();
+        let retired = path.with_extension("retired");
+        let replacement = path.with_extension("replacement");
+        if restore {
+            std::fs::remove_file(path)?;
+            std::fs::rename(retired, path)?;
+            TRANSIENT_SWAP.set(None);
+        } else {
+            std::fs::rename(path, retired)?;
+            std::os::unix::fs::symlink(replacement, path)?;
+            TRANSIENT_SWAP.set(Some((checkpoint, true)));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn ticket_t_12_preflight_descriptor_ignores_transient_metadata_swap() {
+        assert_transient_swap_ignored(0);
+    }
+
+    #[test]
+    fn ticket_t_12_preflight_descriptor_ignores_transient_database_swap() {
+        assert_transient_swap_ignored(1);
+    }
+
+    #[test]
+    fn ticket_t_12_preflight_descriptor_ignores_transient_wal_swap() {
+        assert_transient_swap_ignored(2);
+    }
+
+    #[test]
+    fn ticket_t_12_preflight_descriptor_ignores_transient_journal_swap() {
+        assert_transient_swap_ignored(3);
+    }
+
+    fn assert_transient_swap_ignored(checkpoint: u8) {
+        let path = std::env::temp_dir().join(format!(
+            "pp-descriptor-{}",
+            hex::encode(rand::random::<[u8; 8]>())
+        ));
+        let admitted = crate::lease::admit_directory(&path).unwrap();
+        let conn = Connection::open(path.join("print-partner.db")).unwrap();
+        conn.execute_batch("CREATE TABLE capture_fixture(value TEXT);")
+            .unwrap();
+        drop(conn);
+        for name in ["print-partner.db-wal", "print-partner.db-journal"] {
+            std::fs::write(path.join(name), b"").unwrap();
+        }
+        let before = std::fs::read(path.join("print-partner.db")).unwrap();
+        let replacement = path.with_extension("replacement");
+        std::fs::create_dir(&replacement).unwrap();
+        let decoy = match checkpoint {
+            0 => b"".as_slice(),
+            1 => b"outside admitted store",
+            _ => &before,
+        };
+        std::fs::write(replacement.join("print-partner.db"), decoy).unwrap();
+        if checkpoint >= 2 {
+            let name = if checkpoint == 2 {
+                "print-partner.db-wal"
+            } else {
+                "print-partner.db-journal"
+            };
+            std::fs::create_dir(replacement.join(name)).unwrap();
+        }
+        PREFLIGHT_COPIES.set(0);
+        TRANSIENT_SWAP.set(Some((checkpoint, false)));
+        let result = admitted.preflight();
+        TRANSIENT_SWAP.set(None);
+        let copies = PREFLIGHT_COPIES.get();
+        assert_eq!(
+            std::fs::read(path.join("print-partner.db")).unwrap(),
+            before
+        );
+        assert_eq!(
+            std::fs::read(replacement.join("print-partner.db")).unwrap(),
+            decoy
+        );
+        std::fs::remove_dir_all(&path).unwrap();
+        std::fs::remove_dir_all(replacement).unwrap();
+        assert!(result.is_ok(), "checkpoint {checkpoint}: {result:?}");
+        assert_eq!(
+            copies, 1,
+            "checkpoint {checkpoint} read replacement metadata"
+        );
+    }
+
+    #[test]
+    fn ticket_t_12_preflight_descriptor_refuses_symlink_members() {
+        for name in [
+            "print-partner.db",
+            "print-partner.db-wal",
+            "print-partner.db-journal",
+        ] {
+            let path = std::env::temp_dir().join(format!(
+                "pp-descriptor-link-{}",
+                hex::encode(rand::random::<[u8; 8]>())
+            ));
+            let admitted = crate::lease::admit_directory(&path).unwrap();
+            let conn = Connection::open(path.join("print-partner.db")).unwrap();
+            conn.execute_batch("CREATE TABLE capture_fixture(value TEXT);")
+                .unwrap();
+            drop(conn);
+            let external = path.with_extension("external");
+            if name == "print-partner.db" {
+                std::fs::rename(path.join(name), &external).unwrap();
+            } else {
+                std::fs::write(&external, b"").unwrap();
+            }
+            let before = std::fs::read(&external).unwrap();
+            std::os::unix::fs::symlink(&external, path.join(name)).unwrap();
+            PREFLIGHT_COPIES.set(0);
+            let result = admitted.preflight();
+            let copies = PREFLIGHT_COPIES.get();
+            assert_eq!(std::fs::read(&external).unwrap(), before);
+            std::fs::remove_dir_all(path).unwrap();
+            std::fs::remove_file(external).unwrap();
+            assert!(result.is_err(), "preflight followed {name}");
+            assert_eq!(copies, 0, "preflight copied symlink member {name}");
+        }
     }
 
     pub(super) fn capture_checkpoint(database: &Path, checkpoint: u8) -> Result<()> {
