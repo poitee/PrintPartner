@@ -1,6 +1,7 @@
-import { chmodSync, readFileSync, rmdirSync, rmSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { installDesktopContext, desktopContext, mappedDesktopTenant, mappedDesktopDatabaseAvailable, closeDesktopAccount } from "./desktop-context.js";
+import { chmodSync } from "node:fs";
+import {
+  installDesktopContext, desktopContext, mappedDesktopTenant, mappedDesktopDatabaseAvailable, closeDesktopAccount, releaseOrphanedDesktopOwner,
+} from "./desktop-context.js";
 import { interruptPrinterUploadsOnShutdown } from "./services/printer-send-queue.js";
 
 async function setupFromParent(): Promise<unknown> {
@@ -41,17 +42,7 @@ const stop = async () => {
   } finally {
     clearTimeout(deadline);
     const setup = desktopContext();
-    if (setup && process.ppid !== setup.parent_pid) {
-      const marker = join(setup.data_dir, ".desktop-owner.json");
-      try {
-        const owner: unknown = JSON.parse(readFileSync(marker, "utf8"));
-        if (typeof owner === "object" && owner !== null && "pid" in owner && owner.pid === setup.parent_pid) {
-          rmSync(setup.socket_path, { force: true });
-          rmdirSync(dirname(setup.socket_path));
-          rmSync(marker);
-        }
-      } catch { /* Owner cleanup can race a normal Rust shutdown. */ }
-    }
+    if (setup && process.ppid !== setup.parent_pid) releaseOrphanedDesktopOwner(setup);
     process.kill(-process.pid, "SIGKILL");
   }
 };

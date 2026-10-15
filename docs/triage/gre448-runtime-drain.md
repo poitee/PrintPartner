@@ -71,3 +71,45 @@ payload, and an absent old process group before the next start. It emits the
 exact accumulated event log and failure strings. This proves the compat transport
 under a simulator; the merged printer-upload fixtures cover persisted job retry
 policy. It does not prove parent death during desktop startup or Mac logout.
+
+The pp-compat simulator test
+`ticket_t_3_drain_force_killed_owner_during_startup_kills_group` covers abrupt
+owner death during the pending startup setup write. In each of two isolated
+supervisor cycles, a real Node process acknowledges execution without reading
+stdin. A 1 MiB setup keeps startup pending. The owner confirms `Starting`, no
+endpoint, zero health probes, and one child before the outer test stops Node
+and kills the Rust owner with SIGKILL.
+
+A live peer in Node's process group prevents POSIX orphan-group SIGHUP from
+making the test pass without the parent-death watcher. Node cannot handle stdin
+EOF while stopped. Both Node and the peer must terminate within one five-second
+wall-clock budget, and the peer must report SIGKILL. The test checks the first
+cycle's deaths before starting the second and emits a receipt for each cycle.
+Failure cleanup kills the owner and Node groups and reaps direct children.
+
+This proves the supervisor's shell simulator retains the parent-death guard
+across the setup await. It does not exercise the measured release spawn path,
+desktop storage recovery, or actual Mac logout. Full worker cutover and those
+release-level gates remain open.
+
+The startup fixture's negative control temporarily calls
+`parent_death.release()` in `Process::spawn_shell`, after child PID recording
+and before the setup write. The new acceptance test fails with
+`startup group outlived force-killed owner`. Restoring the original guard makes
+both cycles pass. No control hook or production change ships. This is a
+coverage gap, not a newly fixed production defect.
+
+The final local pp-compat drain selection passed 19 tests with 50 skipped.
+Its environment-gated owner helper is outside the drain selection. Run it from
+the integration worktree root with a generated measured manifest available:
+
+```sh
+cargo nextest run --locked --manifest-path rust/Cargo.toml --no-tests=fail -p pp-compat -E 'test(ticket_t_3_drain)' --success-output immediate
+cargo clippy --locked --manifest-path rust/Cargo.toml -p pp-compat --all-targets -- -D warnings
+cargo fmt --all --manifest-path rust/Cargo.toml --check
+node --check rust/crates/pp-compat/tests/fixtures/startup-no-stdin.cjs
+```
+
+The local run supplied an existing manifest through
+`PP_DESKTOP_RELEASE_MANIFEST` for compile-time embedding. The startup fixture
+uses its checked-in simulator and does not load the manifest's release assets.

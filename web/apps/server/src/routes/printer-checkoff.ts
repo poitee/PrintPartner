@@ -27,6 +27,7 @@ import {
 } from "../integrations/store.js";
 import { getIntegrationAdapter } from "../integrations/registry.js";
 import { sendProblem } from "../lib/api-error.js";
+import { readFeatureAccess } from "../lib/feature-access.js";
 import {
   cancelResponseBody,
   readBoundedResponseBody,
@@ -780,6 +781,18 @@ export async function registerPrinterCheckoffRoutes(
       const integrationSummary = deps.integrations.get(integrationId);
       if (!integrationSummary) {
         return sendProblem(reply, 404, "Not Found", "Integration not found");
+      }
+      if (integrationSummary.type === "bambu") {
+        const access = readFeatureAccess(() => deps.repo, "bambu");
+        if (access.kind !== "allowed") {
+          const status = access.kind === "disabled" ? 403 : 500;
+          return reply.status(status).send({
+            status,
+            title: access.kind === "disabled" ? "Forbidden" : "Internal Server Error",
+            detail: access.error,
+            code: access.code,
+          });
+        }
       }
 
       // Always fetch live host status — never trust a client-supplied snapshot.

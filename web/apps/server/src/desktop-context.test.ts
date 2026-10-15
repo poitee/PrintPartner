@@ -1,11 +1,11 @@
 import { once } from "node:events";
 import { createHmac } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { acquireDataDirectory, verifyDesktopPrincipal } from "./desktop-context.js";
+import { acquireDataDirectory, releaseOrphanedDesktopOwner, verifyDesktopPrincipal } from "./desktop-context.js";
 import { processIdentity } from "./storage-lease.js";
 
 const setup = { key: "ab".repeat(32), generation: "cd".repeat(16) };
@@ -257,4 +257,23 @@ it("keeps a live matching-identity marker owned", async () => {
     writeFileSync(join(directory, ".desktop-owner.json"), JSON.stringify({ pid: process.pid, kind: "standalone", process_identity: processIdentity(process.pid) }));
     expect(() => acquireDataDirectory(directory)).toThrow("already owned");
   } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+describe("orphaned desktop owner release", () => {
+  it.each([
+    { scenario: "the dead parent", markerPid: 4242, released: true },
+    { scenario: "another owner", markerPid: 4343, released: false },
+  ])("releases the socket and marker only when the marker names $scenario", ({ markerPid, released }) => {
+    const directory = mkdtempSync(join(tmpdir(), "pp-orphaned-owner-"));
+    const marker = join(directory, ".desktop-owner.json");
+    const socket = join(directory, "run", "pp.sock");
+    try {
+      mkdirSync(join(directory, "run"));
+      writeFileSync(socket, "");
+      writeFileSync(marker, JSON.stringify({ pid: markerPid }), { mode: 0o600 });
+      releaseOrphanedDesktopOwner({ data_dir: directory, socket_path: socket, parent_pid: 4242 });
+      expect({ marker: existsSync(marker), socket: existsSync(socket), socketDir: existsSync(join(directory, "run")) })
+        .toEqual(released ? { marker: false, socket: false, socketDir: false } : { marker: true, socket: true, socketDir: true });
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
 });
