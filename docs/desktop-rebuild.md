@@ -287,6 +287,8 @@ the feature; D15/D16 will wire them into jobs. The current job engine is unchang
 GRE-602 adds the read-only first half of `pp_storage::build_graph` behind
 `desktop_rebuild`. Authenticated `List`, `Read`, and `ListLayers` commands run
 through the existing writer queue and return typed summaries and ordered layers.
+`List` rejects more than 64 builds, shares one graph budget across summaries,
+and checks cancellation between builds.
 Summary facts reuse the accepted graph reader and freshness calculation.
 Summaries validate PPJS metadata losslessly. Existing scalar snapshot projections
 report `manifest_text` integrity failures for non-scalar metadata; lossless public
