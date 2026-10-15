@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import process from 'node:process';
@@ -20,6 +20,14 @@ function fixture(t, mutate = () => {}) {
   mkdirSync(join(directory, '.github/workflows'), { recursive: true });
   mkdirSync(join(directory, 'web/scripts'), { recursive: true });
   copyFileSync(join(root, cli), join(directory, cli));
+  const stateCLI = 'web/scripts/check-desktop-workflow-state.mjs';
+  if (existsSync(join(root, stateCLI))) copyFileSync(join(root, stateCLI), join(directory, stateCLI));
+  mkdirSync(join(directory, 'bin'));
+  writeFileSync(join(directory, 'bin/gh'), `#!/usr/bin/env node
+if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(['api', '--hostname', 'github.com', 'repos/poitee/PrintPartner/actions/workflows/desktop-contracts.yml'])) process.exit(9);
+console.log(JSON.stringify({ path: '.github/workflows/desktop-contracts.yml', state: process.env.TEST_WORKFLOW_STATE ?? 'active' }));
+`);
+  chmodSync(join(directory, 'bin/gh'), 0o755);
   symlinkSync(join(root, 'web/node_modules'), join(directory, 'web/node_modules'));
   writeFileSync(join(directory, contracts), original);
   const git = (...args) => {
@@ -200,10 +208,15 @@ for (const sha of ['', 'HEAD', 'a'.repeat(40), '--help', 'a'.repeat(39)]) {
 }
 
 for (const job of ['web', 'web-build']) {
-  for (const valid of [false, true]) {
-    test(`${job} lifecycle sentinel ${valid ? 'runs after valid event' : 'never runs for missing event workflow'}`, t => {
+  for (const [scenario, valid, state, missing] of [
+    ['runs after valid event', true, 'active', false],
+    ['never runs for missing event workflow', false, 'active', true],
+    ['never runs for API disabled_manually', false, 'disabled_manually', false],
+    ['never runs for API disabled_inactivity', false, 'disabled_inactivity', false],
+  ]) {
+    test(`${job} lifecycle sentinel ${scenario}`, t => {
       const f = fixture(t, directory => {
-        if (!valid) rmSync(join(directory, contracts));
+        if (missing) rmSync(join(directory, contracts));
       });
       const web = join(f.directory, 'web');
       rmSync(join(web, 'node_modules'));
@@ -223,11 +236,12 @@ for (const job of ['web', 'web-build']) {
         if (step.run === 'npm rebuild' || step.name === 'Check Action SHAs and CI installer tool pins') break;
       }
       const result = spawnSync('bash', ['-e', '-c', commands.join('\n')], {
-        cwd: web, encoding: 'utf8', env: { ...process.env, EVENT_SHA: f.sha, GITHUB_SHA: f.sha },
+        cwd: web, encoding: 'utf8', env: { ...process.env, EVENT_SHA: f.sha, GITHUB_SHA: f.sha, GITHUB_REPOSITORY: 'poitee/PrintPartner',
+          GH_TOKEN: 'fixture-token', TEST_WORKFLOW_STATE: state, PATH: `${join(f.directory, 'bin')}:${process.env.PATH}` },
       });
       assert.equal(existsSync(join(web, 'lifecycle-ran')), valid, result.stdout + result.stderr);
       assert.equal(result.status, valid ? 0 : 1, result.stdout + result.stderr);
-      if (!valid) assert.match(result.stderr, /INVALID_EVENT_DESKTOP_CONTRACTS/);
+      if (!valid) assert.match(result.stderr, missing ? /INVALID_EVENT_DESKTOP_CONTRACTS/ : /INVALID_DESKTOP_WORKFLOW_STATE/);
     });
   }
 }
