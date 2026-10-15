@@ -63,7 +63,7 @@ function validateData(db: Database.Database, claims = new Map<string, string>())
   const effective = (table: string, row: Row) => claims.get(key(table, row.__rowid)) ?? row.tenant_id;
   for (const table of names) {
     const data = rows(db, table);
-    if (["sessions", "password_reset_tokens"].includes(table) && data.length) throw new Error(`Unsupported active authority in ${table}`);
+    if (["sessions", "password_reset_tokens", "plan_shares"].includes(table) && data.length) throw new Error(`Unsupported active authority in ${table}`);
     const defaults = data.filter(row => row.tenant_id === "default");
     if (defaults.length && !supported.some(name => name === table)) {
       if (table !== "app_settings" || defaults.some(row => row.key !== "schema_version")) throw new Error(`Unsupported default rows in ${table}`);

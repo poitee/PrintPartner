@@ -177,3 +177,10 @@ it("refuses accepted history even without a history table row", () => {
   const paths = fixture(); edit(paths.sourceDir, "UPDATE build_profiles SET accepted_plan_version=1 WHERE id=1");
   expect(() => inspectOwnershipCopy(paths)).toThrow("Unsupported accepted history");
 });
+
+it("refuses existing share capabilities whose embedded Plan ownership is ambiguous", () => {
+  const paths = fixture();
+  edit(paths.sourceDir, "INSERT INTO plan_shares (id,token,from_user_id,plan_id,plan_name,bundle_json,created_at) VALUES ('share','capability','account-a',1,'Plan A','{}','now')");
+  expect(() => inspectOwnershipCopy(paths)).toThrow("Unsupported active authority in plan_shares");
+  expect(existsSync(paths.destinationDir)).toBe(false);
+});
