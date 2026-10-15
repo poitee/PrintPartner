@@ -444,3 +444,47 @@ for (const [name, lane] of [['desktop-runtime', 'runtime'], ['desktop-native-mac
     assert.match(result.stderr, /INVALID_DESKTOP_NODE_SETUP:/);
   });
 }
+
+for (const [label, name, mutate, diagnostic] of [
+  ...['step', 'job', 'workflow'].map(level => [
+    `masking assertion shell at ${level}`, 'desktop-runtime', workflow => {
+      const shell = 'bash -c \'bash "{0}"; exit 0\'';
+      if (level === 'workflow') workflow.defaults.run.shell = shell;
+      else if (level === 'job') workflow.jobs.runtime.defaults = { run: { shell } };
+      else {
+        const steps = workflow.jobs.runtime.steps;
+        steps[steps.findIndex(step => step.uses?.startsWith('actions/setup-node@')) + 1].shell = shell;
+      }
+    }, 'INVALID_DESKTOP_NODE_SHELL',
+  ]),
+  ['removed linux-precheck dependency', 'desktop-native-macos', workflow => {
+    workflow.jobs.bundle.needs = ['changes'];
+  }, 'INVALID_DESKTOP_NODE_SETUP'],
+  ['dependent runtime lane', 'desktop-runtime', workflow => {
+    workflow.jobs.runtime.needs = ['skipped'];
+  }, 'INVALID_DESKTOP_NODE_SETUP'],
+  ...['removed', 'disabled', 'dependent'].map(change => [
+    `${change} changes prerequisite`, 'desktop-native-macos', workflow => {
+      if (change === 'removed') delete workflow.jobs.changes;
+      else if (change === 'disabled') workflow.jobs.changes.if = false;
+      else workflow.jobs.changes.needs = ['skipped'];
+    }, 'INVALID_DESKTOP_PREREQUISITE',
+  ]),
+]) {
+  test(`event tree rejects ${label} despite repaired checkout and HEAD`, t => {
+    const path = `.github/workflows/${name}.yml`;
+    const f = fixture(t, directory => {
+      const workflow = YAML.parse(readFileSync(join(directory, path), 'utf8'));
+      mutate(workflow);
+      writeFileSync(join(directory, path), YAML.stringify(workflow));
+    });
+    copyFileSync(join(root, path), join(f.directory, path));
+    f.git('add', '.github');
+    const repairedSha = f.commit();
+    const result = f.run();
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stderr, new RegExp(`${diagnostic}:`));
+    const repaired = f.run(repairedSha);
+    assert.equal(repaired.status, 0, repaired.stderr);
+  });
+}
