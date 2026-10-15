@@ -108,6 +108,7 @@ future parsers can share the same budget. Byte counters saturate or use checked
 addition, so oversized charges return `LimitExceeded` instead of overflowing.
 Callers must propagate failures and discard the budget after a refusal. Raw
 document reads and parser expansion retain separate total-byte caps.
+Depth checks precede node and visit charges, matching entry accounting.
 
 Read requests retain storage-private fields. External adapters can inspect them
 but cannot create grants. This unit does not itself admit or perform any reads.

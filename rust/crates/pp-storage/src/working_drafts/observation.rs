@@ -79,7 +79,7 @@ impl PreparationLimits {
     }
 }
 /// Accounting shared by all reads and parsing in one preparation attempt.
-/// Callers must propagate failures. A budget is discarded after a refusal.
+/// Callers must propagate failures and discard a budget after a refusal.
 /// Raw document bytes and expanded parser bytes have independent total caps.
 pub struct PreparationBudget<'a> {
     cancelled: &'a AtomicBool,
@@ -94,7 +94,6 @@ pub struct PreparationBudget<'a> {
     rules: usize,
 }
 impl<'a> PreparationBudget<'a> {
-    /// Validate limits before starting a single preparation attempt.
     pub fn new(cancelled: &'a AtomicBool, limits: PreparationLimits) -> ReadResult<Self> {
         limits.validate()?;
         Ok(Self {
@@ -169,10 +168,10 @@ impl<'a> PreparationBudget<'a> {
     }
     pub fn node(&mut self, depth: usize) -> ReadResult<()> {
         self.check()?;
-        self.nodes = self.nodes.saturating_add(1);
         if depth > self.limits.depth {
             return Err(ReadFailure::LimitExceeded(Resource::Depth));
         }
+        self.nodes = self.nodes.saturating_add(1);
         if self.nodes > self.limits.nodes {
             Err(ReadFailure::LimitExceeded(Resource::Nodes))
         } else {
@@ -181,10 +180,10 @@ impl<'a> PreparationBudget<'a> {
     }
     pub fn visit(&mut self, depth: usize) -> ReadResult<()> {
         self.check()?;
-        self.visits = self.visits.saturating_add(1);
         if depth > self.limits.depth {
             return Err(ReadFailure::LimitExceeded(Resource::Depth));
         }
+        self.visits = self.visits.saturating_add(1);
         if self.visits > self.limits.visits {
             Err(ReadFailure::LimitExceeded(Resource::Visits))
         } else {
@@ -300,7 +299,6 @@ pub struct InventoryPath {
 }
 /// Observation adapter for storage-issued requests. Implementations enforce
 /// locator safety and charge the supplied budget before performing reads.
-/// These contracts do not grant filesystem access or select an adapter.
 pub trait DraftReads: Send + Sync {
     fn resolve_stl_root(
         &self,

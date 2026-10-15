@@ -146,8 +146,6 @@ fn parsing_limits_cover_nodes_visits_rules_and_expansion() {
         budget.visit(2),
         Err(ReadFailure::LimitExceeded(Resource::Depth))
     ));
-    // Depth refusals consume a visit/node in the reference implementation.
-    let mut budget = PreparationBudget::new(&cancelled, limits).unwrap();
     budget.node(1).unwrap();
     budget.visit(1).unwrap();
     budget.rule().unwrap();
