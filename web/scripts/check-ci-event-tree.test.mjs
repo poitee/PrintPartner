@@ -167,7 +167,7 @@ test('event tree rejects gitlink at required workflow path', t => {
   assert.match(result.stderr, /INVALID_EVENT_DESKTOP_CONTRACTS/);
 });
 
-test('event tree accepts yaml extension and extra trigger coverage', t => {
+test('event tree rejects yaml extension despite corrected trigger coverage', t => {
   const f = fixture(t, modify(w => {
     for (const trigger of [w.on.push, w.on.pull_request]) {
       trigger.paths.push('docs/**');
@@ -176,7 +176,18 @@ test('event tree accepts yaml extension and extra trigger coverage', t => {
   }));
   f.git('mv', contracts, '.github/workflows/desktop-contracts.yaml');
   const sha = f.commit();
-  assert.equal(f.run(sha).status, 0);
+  const result = f.run(sha);
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stderr, /INVALID_EVENT_DESKTOP_CONTRACTS/);
+});
+
+test('event tree accepts extra trigger coverage', t => {
+  const f = fixture(t, modify(w => {
+    w.on.push.paths.push('docs/**');
+    w.on.pull_request.paths.push('docs/**');
+  }));
+  const result = f.run();
+  assert.equal(result.status, 0, result.stderr);
 });
 
 for (const sha of ['', 'HEAD', 'a'.repeat(40), '--help', 'a'.repeat(39)]) {

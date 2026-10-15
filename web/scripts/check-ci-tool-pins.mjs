@@ -212,8 +212,9 @@ function checkEventTree() {
       return { mode, type, oid, path };
     });
   const contracts = entries.filter(entry => /^\.github\/workflows\/desktop-contracts\.ya?ml$/.test(entry.path));
-  if (contracts.length !== 1 || !/^100(?:644|755)$/.test(contracts[0].mode) || contracts[0].type !== 'blob') {
-    report(eventSha, '.github/workflows', 'INVALID_EVENT_DESKTOP_CONTRACTS', 'expected exactly one regular desktop contracts workflow in the event tree');
+  if (contracts.length !== 1 || contracts[0].path !== '.github/workflows/desktop-contracts.yml'
+    || !/^100(?:644|755)$/.test(contracts[0].mode) || contracts[0].type !== 'blob') {
+    report(eventSha, '.github/workflows', 'INVALID_EVENT_DESKTOP_CONTRACTS', 'expected exactly one regular desktop-contracts.yml workflow in the event tree');
     return;
   }
   for (const entry of entries.filter(entry => /\.ya?ml$/i.test(entry.path))) {
