@@ -1,4 +1,6 @@
 #[cfg(feature = "desktop_rebuild")]
+pub mod build_identity;
+#[cfg(feature = "desktop_rebuild")]
 pub mod features;
 pub mod gcode_objects;
 

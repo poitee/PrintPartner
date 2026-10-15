@@ -68,6 +68,14 @@ pub(super) fn check(ok: bool, code: &'static str, message: &str) -> Result<()> {
         .into())
     }
 }
+#[cfg(feature = "desktop_rebuild")]
+pub(super) fn budget_check(ok: bool, resource: crate::build_graph::BudgetResource) -> Result<()> {
+    anyhow::ensure!(
+        ok,
+        crate::build_graph::Failure::BudgetExhausted { resource }
+    );
+    Ok(())
+}
 #[derive(Default)]
 pub(crate) struct Budget {
     rows: usize,
@@ -281,8 +289,15 @@ pub(super) fn rows(
         code,
         "Accepted Plan stored row text is corrupt",
     )?;
-    budget.rows += count as usize;
-    budget.bytes += total as usize;
+    budget.rows = budget.rows.saturating_add(count as usize);
+    budget.bytes = budget.bytes.saturating_add(total as usize);
+    #[cfg(feature = "desktop_rebuild")]
+    {
+        use crate::build_graph::BudgetResource;
+        budget_check(budget.rows <= 200_000, BudgetResource::GraphRows)?;
+        budget_check(budget.bytes <= 64 * 1024 * 1024, BudgetResource::GraphBytes)?;
+    }
+    #[cfg(not(feature = "desktop_rebuild"))]
     check(
         budget.rows <= 200_000 && budget.bytes <= 64 * 1024 * 1024,
         code,
