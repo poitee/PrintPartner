@@ -347,6 +347,10 @@
             "name": "source-workspace"
           }
         ]
+      },
+      {
+        "operation": "tool.get_job_status",
+        "resources": []
       }
     ],
     "unresolved": [
@@ -722,7 +726,6 @@
       "tool.get_build_workflow",
       "tool.get_farm_status",
       "tool.get_interaction_graph",
-      "tool.get_job_status",
       "tool.get_kit_catalog",
       "tool.get_plan_checkoff",
       "tool.get_plan_draft",

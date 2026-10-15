@@ -12,8 +12,9 @@ The index covers 833 desktop-registered Fastify routes and aliases, 89 assistant
 
 The resource index joins the resolved ownership claims with an exhaustive `Reviewed` or `Unresolved` partition. `resources_for(participant)` returns a shared immutable typed set or an admission error. HTTP aliases and HEAD inherit their operation's state. Unknown participants and unresolved operations never return an empty set. Missing, duplicate, stale, or downgraded states fail admission. Reviewed operations require exact compiled resource sets, including rejection of extra known resources. Shared Node resources are valid. Rust ownership remains unsupported.
 
-The manifest currently resolves 441 operations. Nine are reviewed and 432 remain explicitly unresolved. `ticket_t_7_operation_resources` derives the partition from admitted claims and checks every unresolved omission. It also checks literal resource sets, aliases, malformed declarations, and reviewed-resource mutations.
+The manifest currently resolves 441 operations. Ten are reviewed and 431 remain explicitly unresolved. `ticket_t_7_operation_resources` derives the partition from admitted claims and checks every unresolved omission. It also checks literal resource sets, aliases, malformed declarations, and reviewed-resource mutations.
 
+- `tool.get_job_status` has an explicitly reviewed empty table/file resource set. It reads the in-memory job runner, including retention pruning. Real-dispatcher traces cover missing runner, default and explicit tenants, owned and foreign job IDs, ID precedence, status/profile/since filters, empty results, and expired completed jobs. SQLite and filesystem observers require zero calls. Deferred job execution is held by fake timers while real queued and cancelled snapshots are read. This declaration does not cover resources used when jobs execute.
 - `tool.list_plans` covers `build_profiles`, `parts`, `profile_layers`, `projects`, `source_revisions`, `app_settings`, `plan_accepted_input_sets`, `plan_revision_input_sets`, `plan_revision_inputs`, and `source-workspace`. The header query joins part counts. Freshness reads layer sources, current revisions, accepted pointers, published input sets, input rows, and global naming settings. Trusted single-user policy makes no filesystem calls. Isolated policy resolves attached sources and active revision roots through filesystem metadata.
 - `tool.get_plan_decisions` covers `build_profiles` and `plan_decisions`. An explicit plan ID reads the tenant-owned profile identity before the decision trail. Active-plan fallback reads only the decision trail. The tool makes no filesystem calls.
 - `tool.get_workflow_help` has an explicitly reviewed empty resource set. It returns the static workflow guide without SQL or filesystem access.
@@ -42,16 +43,16 @@ A rollback returns an operation from Rust to Node after Rust wrote its resources
 
 The declared versions are pinned to source. Node `currentSchemaVersion` is 34 and Rust `pp-storage` stamps 35 after its jobs schema. Both sides read and write source snapshot manifest version 1. Rust has no cover writer, so `source-covers` declares `rust_writes: null`. The Source Sync record's `source-revision-workspace-v1` must match the declared workspace version.
 
-Today every reviewed resource-bearing operation refuses rollback on `sqlite-schema`, because the bundled Node refuses a schema newer than 34. `tool.get_workflow_help` admits rollback with an empty set because it touches no resources or live formats. Unresolved operations refuse with their unresolved-resources error, and unknown participants refuse as unclaimed. A missing, extra, duplicate, untyped or zero-version format, or an omitted `rust_writes`, fails admission. `ticket_t_7_live_formats` checks the literal refusals, an admitted rollback when Node reads schema 35, the covers refusal, and every malformed declaration.
+Today every reviewed resource-bearing operation refuses rollback on `sqlite-schema`, because the bundled Node refuses a schema newer than 34. `tool.get_workflow_help` and `tool.get_job_status` admit rollback with empty sets because neither touches tables, application files or live formats. Unresolved operations refuse with their unresolved-resources error, and unknown participants refuse as unclaimed. A missing, extra, duplicate, untyped or zero-version format, or an omitted `rust_writes`, fails admission. `ticket_t_7_live_formats` checks the literal refusals, an admitted rollback when Node reads schema 35, the covers refusal, and every malformed declaration.
 
 This is a gate for a later cutover. Nothing calls it at runtime yet, and no owner changes.
 
 Still open:
 
-- Tables and files for the 432 unresolved operations. The participant census does not prove their resource access. GRE-402 remains open.
+- Tables and files for the 431 unresolved operations. The participant census does not prove their resource access. GRE-402 remains open.
 - Grouping Node participants across HTTP, tools, jobs, and hooks before any cutover. Today only `source.sync` groups participants across these kinds.
 - Startup hooks are found by call-name verbs (`start`, `migrate`, `sweep`, `backfill`, `prepare`, `seed`) in the server entry points. Timers started inside services are not enumerated.
-- Making rollback possible. Node must read schema 35, or Rust must stop at 34, and a Rust cover writer must exist before `source.sync` can roll back. Resource formats of the 432 unresolved operations stay unknown until their resources are reviewed.
+- Making rollback possible. Node must read schema 35, or Rust must stop at 34, and a Rust cover writer must exist before `source.sync` can roll back. Resource formats of the 431 unresolved operations stay unknown until their resources are reviewed.
 - Rust Source Sync cutover. Node stays the owner. #168 (`LocalSourceSyncWorker`) is a later base after restack, not this branch.
 - Switching every mapped participant together. Disabling Node aliases while the Node watcher still runs is forbidden.
 - A Rust failure must produce its own error and reconciliation result. It must not fall back into a Node mutation.
