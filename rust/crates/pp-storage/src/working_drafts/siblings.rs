@@ -64,6 +64,11 @@ fn scope(path: &str) -> &str {
     if path.is_empty() { "root" } else { path }
 }
 fn unique(base: String, used: &mut HashSet<String>) -> String {
+    let base = if base.is_empty() {
+        "inferred".into()
+    } else {
+        base
+    };
     let mut id = base.clone();
     let mut n = 1;
     while !used.insert(id.clone()) {
