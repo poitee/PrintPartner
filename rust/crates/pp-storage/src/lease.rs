@@ -12,7 +12,7 @@ use std::{
         unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     },
     path::{Path, PathBuf},
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
 };
 
 pub struct LeaseRelease {
@@ -25,7 +25,7 @@ pub struct LeaseRelease {
 pub struct StorageLease {
     lock: Option<File>,
     lease_guard: Option<guard::StorageLease>,
-    data_dir: PathBuf,
+    admitted: Arc<AdmittedDirectory>,
     runtime_dir: PathBuf,
     lease: String,
     release_allowed: bool,
@@ -107,14 +107,18 @@ fn validate_directory_permissions(metadata: &std::fs::Metadata) -> Result<()> {
 
 impl AdmittedDirectory {
     pub(crate) fn preflight(&self) -> Result<()> {
+        self.preflight_schema(false).map(|_| ())
+    }
+
+    fn preflight_schema(&self, owned: bool) -> Result<u64> {
         self.validate_identity()?;
         crate::schema::preflight(
+            #[cfg(test)]
             &self.path.join("print-partner.db"),
-            false,
+            owned,
             |name| self.open_preflight_file(name),
             || self.validate_identity(),
-        )?;
-        Ok(())
+        )
     }
 
     fn validate_identity(&self) -> Result<()> {
@@ -129,6 +133,19 @@ impl AdmittedDirectory {
     }
 
     fn open_preflight_file(&self, name: &str) -> std::io::Result<File> {
+        #[cfg(test)]
+        if name == ".desktop-owner.json" && REMOVE_MARKER_BEFORE_READ.take() {
+            let result = unsafe {
+                libc::unlinkat(
+                    self.directory.as_raw_fd(),
+                    c".desktop-owner.json".as_ptr(),
+                    0,
+                )
+            };
+            if result < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+        }
         let name = CString::new(name)?;
         let fd = unsafe {
             libc::openat(
@@ -145,8 +162,13 @@ impl AdmittedDirectory {
             return Err(std::io::Error::last_os_error());
         }
         let file = unsafe { File::from_raw_fd(fd) };
-        if !file.metadata()?.is_file() {
-            return Err(std::io::Error::from_raw_os_error(libc::EINVAL));
+        let metadata = file.metadata()?;
+        if !metadata.is_file() {
+            return Err(std::io::Error::from_raw_os_error(if metadata.is_dir() {
+                libc::EISDIR
+            } else {
+                libc::EINVAL
+            }));
         }
         Ok(file)
     }
@@ -327,20 +349,33 @@ fn read_prior_owner(marker_path: &Path) -> Result<Option<(serde_json::Value, u32
         }
         Err(error) => return Err(error).context("storage_lease_marker_invalid"),
     };
+    parse_prior_owner(&bytes).map(Some)
+}
+
+fn parse_prior_owner(bytes: &[u8]) -> Result<(serde_json::Value, u32)> {
     let marker: serde_json::Value =
-        serde_json::from_slice(&bytes).context("storage_lease_marker_invalid")?;
+        serde_json::from_slice(bytes).context("storage_lease_marker_invalid")?;
     let pid = marker["pid"]
         .as_u64()
         .filter(|pid| *pid > 0 && *pid <= i32::MAX as u64)
         .context("storage_lease_marker_invalid")? as u32;
-    Ok(Some((marker, pid)))
+    Ok((marker, pid))
 }
 
 /// Inspect marker liveness without changing storage before schema validation.
 /// Acquisition checks the marker again while holding both ownership guards.
-pub(crate) fn prior_owner_blocks_unowned(marker_path: &Path) -> Result<bool> {
-    Ok(read_prior_owner(marker_path)?
-        .is_some_and(|(marker, pid)| !prior_writer_is_stale(&marker, pid)))
+pub(crate) fn prior_owner_blocks_unowned(
+    open_file: impl Fn(&str) -> std::io::Result<File>,
+) -> Result<bool> {
+    let mut file = match open_file(".desktop-owner.json") {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error).context("storage_lease_marker_invalid"),
+    };
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut file, &mut bytes).context("storage_lease_marker_invalid")?;
+    let (marker, pid) = parse_prior_owner(&bytes)?;
+    Ok(!prior_writer_is_stale(&marker, pid))
 }
 
 impl StorageLease {
@@ -412,17 +447,20 @@ impl StorageLease {
         Ok(Self {
             lock: Some(lock),
             lease_guard: Some(lease_guard),
-            data_dir: admitted.path,
+            admitted: Arc::new(admitted),
             runtime_dir,
             lease,
             release_allowed: true,
         })
     }
+    pub(crate) fn preflight(&self) -> Result<u64> {
+        self.admitted.preflight_schema(true)
+    }
     pub fn record_child(directory: &Path, pid: u32) -> Result<()> {
         guard::record_child(directory, pid)
     }
     pub fn data_dir(&self) -> &Path {
-        &self.data_dir
+        &self.admitted.path
     }
     pub fn runtime_dir(&self) -> &Path {
         &self.runtime_dir
@@ -445,7 +483,7 @@ impl StorageLease {
     }
     pub fn retain_until_process_exit(mut self) {
         self.release_allowed = false;
-        let directory = self.data_dir.clone();
+        let directory = self.admitted.path.clone();
         failed_releases()
             .lock()
             .expect("failed release registry poisoned")
@@ -485,7 +523,7 @@ impl StorageLease {
     fn finish_release(&mut self) -> LeaseRelease {
         let runtime_removed =
             !self.runtime_dir.exists() || std::fs::remove_dir(&self.runtime_dir).is_ok();
-        let marker = self.data_dir.join(".desktop-owner.json");
+        let marker = self.admitted.path.join(".desktop-owner.json");
         let marker_removed = runtime_removed
             && match std::fs::remove_file(&marker) {
                 Ok(()) => true,
@@ -511,7 +549,7 @@ impl StorageLease {
             let retained = Self {
                 lock: self.lock.take(),
                 lease_guard: self.lease_guard.take(),
-                data_dir: self.data_dir.clone(),
+                admitted: self.admitted.clone(),
                 runtime_dir: self.runtime_dir.clone(),
                 lease: self.lease.clone(),
                 release_allowed: false,
@@ -520,7 +558,7 @@ impl StorageLease {
                 .lock()
                 .expect("failed release registry poisoned")
                 .insert(
-                    self.data_dir.clone(),
+                    self.admitted.path.clone(),
                     RetainedLease {
                         lease: retained,
                         retry_allowed: true,

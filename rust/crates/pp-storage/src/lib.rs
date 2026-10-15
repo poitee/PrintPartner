@@ -3,6 +3,8 @@ mod auth_scheduler;
 #[cfg(feature = "desktop_rebuild")]
 use auth_scheduler::*;
 pub mod auth;
+#[cfg(feature = "desktop_rebuild")]
+pub mod build_graph;
 pub mod catalog;
 #[cfg(feature = "desktop_rebuild")]
 pub mod features;
@@ -18,6 +20,8 @@ pub mod native_secrets;
 pub mod profiles;
 pub mod read_model;
 mod schema;
+#[cfg(feature = "desktop_rebuild")]
+pub mod working_drafts;
 mod writer_admission;
 
 use anyhow::{Result, anyhow, ensure};
@@ -80,6 +84,11 @@ enum WriterControl {
     AdmitDiskQuota(u32),
 }
 enum Envelope {
+    #[cfg(feature = "desktop_rebuild")]
+    BuildGraph {
+        command: build_graph::Command,
+        reply: build_graph::Reply,
+    },
     #[cfg(feature = "desktop_rebuild")]
     NativeSecrets {
         command: native_secrets::Command,
@@ -430,12 +439,7 @@ impl WriterOwner {
         admitted.preflight()?;
         let lease = lease::StorageLease::acquire_admitted(admitted)?;
         let path = lease.data_dir().join("print-partner.db");
-        let version = schema::preflight(
-            &path,
-            true,
-            |name| std::fs::File::open(path.with_file_name(name)),
-            || Ok(()),
-        )?;
+        let version = lease.preflight()?;
         for name in ["repos", "sources", "exports", "thumbs", "covers"] {
             std::fs::create_dir_all(lease.data_dir().join(name))?;
         }
@@ -559,6 +563,10 @@ impl WriterOwner {
                     #[cfg(feature = "desktop_rebuild")]
                     Envelope::Features { command, reply } => {
                         let _ = reply.send(features::execute(&mut connection, command, admission));
+                    }
+                    #[cfg(feature = "desktop_rebuild")]
+                    Envelope::BuildGraph { command, reply } => {
+                        reply.send(build_graph::execute(&mut connection, command));
                     }
                     Envelope::Read { command, reply } => {
                         let _ = reply.send(read_model::execute(&mut connection, command));

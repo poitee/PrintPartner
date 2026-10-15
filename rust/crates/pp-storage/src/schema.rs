@@ -46,26 +46,37 @@ thread_local! {
 }
 
 pub(crate) fn preflight(
-    path: &Path,
+    #[cfg(test)] path: &Path,
     owned: bool,
     open_file: impl Fn(&str) -> std::io::Result<File>,
     validate_directory: impl Fn() -> Result<()>,
 ) -> Result<u64> {
     #[cfg(test)]
     PREFLIGHT_CALLS.update(|calls| calls + 1);
-    let marker = path.parent().unwrap().join(".desktop-owner.json");
+    #[cfg(test)]
+    let owner_checkpoint = std::cell::Cell::new(3);
     let check_owner = || -> Result<()> {
         validate_directory()?;
+        #[cfg(test)]
+        owner_checkpoint.update(|checkpoint| checkpoint + 1);
+        #[cfg(test)]
+        capture_tests::transient_swap(path, owner_checkpoint.get(), false)?;
         let blocked = if owned {
             Ok(false)
         } else {
-            crate::lease::prior_owner_blocks_unowned(&marker)
+            crate::lease::prior_owner_blocks_unowned(&open_file)
         };
+        #[cfg(test)]
+        capture_tests::transient_swap(path, owner_checkpoint.get(), true)?;
         validate_directory()?;
         ensure!(!blocked?, "Data directory already owned");
         Ok(())
     };
     check_owner()?;
+    #[cfg(test)]
+    if owned {
+        capture_tests::arm_owned_swap();
+    }
     #[cfg(test)]
     capture_tests::transient_swap(path, 0, false)?;
     let metadata = open_file("print-partner.db").and_then(|file| file.metadata());
@@ -668,8 +679,119 @@ mod capture_tests {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 
     thread_local! {
+        static OWNED_TRANSIENT_SWAP: std::cell::Cell<Option<u8>> = const { std::cell::Cell::new(None) };
         static TRANSIENT_SWAP: std::cell::Cell<Option<(u8, bool)>> = const { std::cell::Cell::new(None) };
         static REPLACE_DURING_CAPTURE: std::cell::Cell<Option<(u8, u8)>> = const { std::cell::Cell::new(None) };
+    }
+
+    pub(super) fn arm_owned_swap() {
+        if let Some(checkpoint) = OWNED_TRANSIENT_SWAP.take() {
+            TRANSIENT_SWAP.set(Some((checkpoint, false)));
+        }
+    }
+
+    #[test]
+    fn ticket_t_12_postlease_writer_uses_admitted_descriptor() {
+        for checkpoint in 0..=3 {
+            let path = std::env::temp_dir().join(format!(
+                "pp-owned-writer-{}",
+                hex::encode(rand::random::<[u8; 8]>())
+            ));
+            let admitted = crate::lease::admit_directory(&path).unwrap();
+            drop(admitted);
+            let conn = Connection::open(path.join("print-partner.db")).unwrap();
+            conn.execute_batch("CREATE TABLE capture_fixture(value TEXT);")
+                .unwrap();
+            drop(conn);
+            let replacement = path.with_extension("replacement");
+            std::fs::create_dir(&replacement).unwrap();
+            std::fs::write(replacement.join("print-partner.db"), b"decoy").unwrap();
+            PREFLIGHT_COPIES.set(0);
+            OWNED_TRANSIENT_SWAP.set(Some(checkpoint));
+            let result = crate::WriterOwner::open(&path, crate::Limits::default());
+            OWNED_TRANSIENT_SWAP.set(None);
+            TRANSIENT_SWAP.set(None);
+            let (writer, ready) = result.unwrap();
+            assert_eq!(ready.previous_version, 0);
+            assert_eq!(PREFLIGHT_COPIES.get(), 2);
+            writer.shutdown().unwrap();
+            assert_eq!(
+                std::fs::read(replacement.join("print-partner.db")).unwrap(),
+                b"decoy"
+            );
+            assert!(!path.join(".desktop-owner.json").exists());
+            std::fs::remove_dir_all(&path).unwrap();
+            std::fs::remove_dir_all(replacement).unwrap();
+        }
+    }
+
+    #[test]
+    fn ticket_t_12_postlease_refuses_changed_directory_before_early_returns() {
+        for database in ["missing", "empty", "populated"] {
+            for replacement in ["directory", "symlink", "permissions"] {
+                let path = std::env::temp_dir().join(format!(
+                    "pp-owned-identity-{}",
+                    hex::encode(rand::random::<[u8; 8]>())
+                ));
+                let lease = crate::lease::StorageLease::acquire(&path).unwrap();
+                let db = path.join("print-partner.db");
+                match database {
+                    "empty" => std::fs::write(&db, b"").unwrap(),
+                    "populated" => {
+                        let conn = Connection::open(&db).unwrap();
+                        conn.execute_batch("CREATE TABLE capture_fixture(value TEXT);")
+                            .unwrap();
+                    }
+                    _ => {}
+                }
+                let before = std::fs::read(&db).ok();
+                let retired = path.with_extension("retired");
+                if replacement == "permissions" {
+                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o777))
+                        .unwrap();
+                } else {
+                    std::fs::rename(&path, &retired).unwrap();
+                    if replacement == "symlink" {
+                        std::os::unix::fs::symlink(&retired, &path).unwrap();
+                    } else {
+                        std::fs::DirBuilder::new()
+                            .mode(0o700)
+                            .create(&path)
+                            .unwrap();
+                    }
+                }
+                PREFLIGHT_COPIES.set(0);
+                let result = lease.preflight();
+                let copies = PREFLIGHT_COPIES.get();
+                if replacement == "permissions" {
+                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
+                        .unwrap();
+                } else {
+                    if replacement == "symlink" {
+                        std::fs::remove_file(&path).unwrap();
+                    } else {
+                        std::fs::remove_dir(&path).unwrap();
+                    }
+                    std::fs::rename(retired, &path).unwrap();
+                }
+                assert_eq!(std::fs::read(&db).ok(), before);
+                let released = lease.release();
+                assert!(
+                    released.lock_released && released.marker_removed && released.runtime_removed
+                );
+                std::fs::remove_dir_all(path).unwrap();
+                let error = result.unwrap_err().to_string();
+                assert!(
+                    error.contains(if replacement == "permissions" {
+                        "Unsafe data directory permissions"
+                    } else {
+                        "Data directory was replaced"
+                    }),
+                    "{database}/{replacement}: {error}"
+                );
+                assert_eq!(copies, 0);
+            }
+        }
     }
 
     pub(super) fn transient_swap(database: &Path, checkpoint: u8, restore: bool) -> Result<()> {
@@ -692,31 +814,160 @@ mod capture_tests {
     }
 
     #[test]
+    fn ticket_t_12_preflight_marker_ignores_transient_directory_swap() {
+        for checkpoint in [4, 5] {
+            for live in [None, Some(false), Some(true)] {
+                if checkpoint == 5 && live == Some(true) {
+                    continue;
+                }
+                let path = std::env::temp_dir().join(format!(
+                    "pp-marker-descriptor-{}",
+                    hex::encode(rand::random::<[u8; 8]>())
+                ));
+                let admitted = crate::lease::admit_directory(&path).unwrap();
+                let conn = Connection::open(path.join("print-partner.db")).unwrap();
+                conn.execute_batch("CREATE TABLE capture_fixture(value TEXT);")
+                    .unwrap();
+                drop(conn);
+                let replacement = path.with_extension("replacement");
+                std::fs::DirBuilder::new()
+                    .mode(0o700)
+                    .create(&replacement)
+                    .unwrap();
+                let marker = |is_live| {
+                    serde_json::json!({
+                        "pid": if is_live { std::process::id() } else { i32::MAX as u32 },
+                        "kind": "standalone"
+                    })
+                    .to_string()
+                };
+                let original = live.map(marker);
+                let decoy = marker(!live.unwrap_or(false));
+                if let Some(original) = &original {
+                    std::fs::write(path.join(".desktop-owner.json"), original).unwrap();
+                }
+                std::fs::write(replacement.join(".desktop-owner.json"), &decoy).unwrap();
+                let before = std::fs::read(path.join("print-partner.db")).unwrap();
+                TRANSIENT_SWAP.set(Some((checkpoint, false)));
+                let result = admitted.preflight();
+                let swap = TRANSIENT_SWAP.take();
+                assert_eq!(swap, None, "marker checkpoint was not reached");
+                assert_eq!(
+                    std::fs::read(path.join("print-partner.db")).unwrap(),
+                    before
+                );
+                assert_eq!(
+                    std::fs::read_to_string(replacement.join(".desktop-owner.json")).unwrap(),
+                    decoy
+                );
+                assert_eq!(
+                    std::fs::read_to_string(path.join(".desktop-owner.json")).ok(),
+                    original
+                );
+                assert!(!path.join(".desktop.lock").exists());
+                assert!(!path.join(".desktop-lease").exists());
+                std::fs::remove_dir_all(&path).unwrap();
+                std::fs::remove_dir_all(replacement).unwrap();
+                if live == Some(true) {
+                    assert_eq!(
+                        result.unwrap_err().to_string(),
+                        "Data directory already owned"
+                    );
+                } else {
+                    assert!(
+                        result.is_ok(),
+                        "checkpoint {checkpoint}, live {live:?}: {result:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ticket_t_12_preflight_marker_refuses_symlink_to_regular_record() {
+        for live in [false, true] {
+            let path = std::env::temp_dir().join(format!(
+                "pp-marker-link-{}",
+                hex::encode(rand::random::<[u8; 8]>())
+            ));
+            let admitted = crate::lease::admit_directory(&path).unwrap();
+            let target = path.join("private-marker");
+            let bytes = serde_json::json!({
+                "pid": if live { std::process::id() } else { i32::MAX as u32 },
+                "kind": "standalone"
+            })
+            .to_string();
+            std::fs::write(&target, &bytes).unwrap();
+            let marker = path.join(".desktop-owner.json");
+            std::os::unix::fs::symlink("private-marker", &marker).unwrap();
+            let error = admitted.preflight().unwrap_err();
+            assert_eq!(error.to_string(), "storage_lease_marker_invalid");
+            assert_eq!(std::fs::read_to_string(&target).unwrap(), bytes);
+            assert_eq!(
+                std::fs::read_link(&marker).unwrap(),
+                Path::new("private-marker")
+            );
+            assert_eq!(std::fs::read_dir(&path).unwrap().count(), 2);
+            std::fs::remove_dir_all(path).unwrap();
+        }
+    }
+
+    #[test]
     fn ticket_t_12_preflight_descriptor_ignores_transient_metadata_swap() {
-        assert_transient_swap_ignored(0);
+        assert_transient_swap_ignored(0, false);
     }
 
     #[test]
     fn ticket_t_12_preflight_descriptor_ignores_transient_database_swap() {
-        assert_transient_swap_ignored(1);
+        assert_transient_swap_ignored(1, false);
     }
 
     #[test]
     fn ticket_t_12_preflight_descriptor_ignores_transient_wal_swap() {
-        assert_transient_swap_ignored(2);
+        assert_transient_swap_ignored(2, false);
     }
 
     #[test]
     fn ticket_t_12_preflight_descriptor_ignores_transient_journal_swap() {
-        assert_transient_swap_ignored(3);
+        assert_transient_swap_ignored(3, false);
     }
 
-    fn assert_transient_swap_ignored(checkpoint: u8) {
+    fn preflight_runner(
+        admitted: crate::lease::AdmittedDirectory,
+        owned: bool,
+    ) -> Box<dyn Fn() -> Result<()> + Send> {
+        if owned {
+            let lease = crate::lease::StorageLease::acquire_admitted(admitted).unwrap();
+            Box::new(move || lease.preflight().map(|_| ()))
+        } else {
+            Box::new(move || admitted.preflight())
+        }
+    }
+
+    #[test]
+    fn ticket_t_12_postlease_descriptor_ignores_transient_swaps() {
+        for checkpoint in 0..=3 {
+            assert_transient_swap_ignored(checkpoint, true);
+        }
+    }
+
+    #[test]
+    fn ticket_t_12_postlease_descriptor_refuses_symlink_members() {
+        assert_symlink_members_refused(true);
+    }
+
+    #[test]
+    fn ticket_t_12_postlease_descriptor_refuses_special_members_without_blocking() {
+        assert_special_members_refused(true);
+    }
+
+    fn assert_transient_swap_ignored(checkpoint: u8, owned: bool) {
         let path = std::env::temp_dir().join(format!(
             "pp-descriptor-{}",
             hex::encode(rand::random::<[u8; 8]>())
         ));
         let admitted = crate::lease::admit_directory(&path).unwrap();
+        let preflight = preflight_runner(admitted, owned);
         let conn = Connection::open(path.join("print-partner.db")).unwrap();
         conn.execute_batch("CREATE TABLE capture_fixture(value TEXT);")
             .unwrap();
@@ -743,7 +994,7 @@ mod capture_tests {
         }
         PREFLIGHT_COPIES.set(0);
         TRANSIENT_SWAP.set(Some((checkpoint, false)));
-        let result = admitted.preflight();
+        let result = preflight();
         TRANSIENT_SWAP.set(None);
         let copies = PREFLIGHT_COPIES.get();
         assert_eq!(
@@ -754,6 +1005,7 @@ mod capture_tests {
             std::fs::read(replacement.join("print-partner.db")).unwrap(),
             decoy
         );
+        drop(preflight);
         std::fs::remove_dir_all(&path).unwrap();
         std::fs::remove_dir_all(replacement).unwrap();
         assert!(result.is_ok(), "checkpoint {checkpoint}: {result:?}");
@@ -765,6 +1017,10 @@ mod capture_tests {
 
     #[test]
     fn ticket_t_12_preflight_descriptor_refuses_symlink_members() {
+        assert_symlink_members_refused(false);
+    }
+
+    fn assert_symlink_members_refused(owned: bool) {
         for name in [
             "print-partner.db",
             "print-partner.db-wal",
@@ -775,6 +1031,7 @@ mod capture_tests {
                 hex::encode(rand::random::<[u8; 8]>())
             ));
             let admitted = crate::lease::admit_directory(&path).unwrap();
+            let preflight = preflight_runner(admitted, owned);
             let conn = Connection::open(path.join("print-partner.db")).unwrap();
             conn.execute_batch("CREATE TABLE capture_fixture(value TEXT);")
                 .unwrap();
@@ -788,9 +1045,10 @@ mod capture_tests {
             let before = std::fs::read(&external).unwrap();
             std::os::unix::fs::symlink(&external, path.join(name)).unwrap();
             PREFLIGHT_COPIES.set(0);
-            let result = admitted.preflight();
+            let result = preflight();
             let copies = PREFLIGHT_COPIES.get();
             assert_eq!(std::fs::read(&external).unwrap(), before);
+            drop(preflight);
             std::fs::remove_dir_all(path).unwrap();
             std::fs::remove_file(external).unwrap();
             assert!(result.is_err(), "preflight followed {name}");
@@ -800,6 +1058,10 @@ mod capture_tests {
 
     #[test]
     fn ticket_t_12_preflight_descriptor_refuses_special_members_without_blocking() {
+        assert_special_members_refused(false);
+    }
+
+    fn assert_special_members_refused(owned: bool) {
         use std::os::unix::fs::OpenOptionsExt;
         for name in [
             "print-partner.db",
@@ -812,6 +1074,7 @@ mod capture_tests {
                     hex::encode(rand::random::<[u8; 8]>())
                 ));
                 let admitted = crate::lease::admit_directory(&path).unwrap();
+                let preflight = preflight_runner(admitted, owned);
                 let conn = Connection::open(path.join("print-partner.db")).unwrap();
                 conn.execute_batch("CREATE TABLE capture_fixture(value TEXT);")
                     .unwrap();
@@ -832,7 +1095,7 @@ mod capture_tests {
                 let (tx, rx) = std::sync::mpsc::channel();
                 let worker = std::thread::spawn(move || {
                     PREFLIGHT_COPIES.set(0);
-                    let result = admitted.preflight().map_err(|error| error.to_string());
+                    let result = preflight().map_err(|error| error.to_string());
                     tx.send((result, PREFLIGHT_COPIES.get())).unwrap();
                 });
                 let result = rx.recv_timeout(Duration::from_secs(2));

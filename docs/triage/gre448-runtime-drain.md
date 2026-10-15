@@ -376,3 +376,173 @@ cargo fmt --all --manifest-path rust/Cargo.toml --check
 python3 -m unittest discover -s rust/scripts -p test_prove_measured_startup_death.py -v
 node --check rust/crates/pp-compat/tests/fixtures/measured-lifecycle-entry.cjs
 ```
+
+## Built backend repeated EOF cleanup
+
+`rust/tests/built_backend_lifecycle.py` runs the built
+`web/apps/server/dist/current/desktop.js` with its real dependency tree and native
+Node. It supplies the desktop ownership marker, inherited lock descriptor 198,
+and parent setup protocol. Signed Unix-socket `/health` requests require an
+available SQLite database and an authenticated desktop principal before each
+shutdown.
+
+Three sequential cycles reuse one data directory. Each cycle closes the setup
+pipe while the Python owner stays alive. A test-only preload records stdin EOF,
+received signals, and the application's process-group kill without replacing the
+server entry, routes, database, or shutdown implementation. The harness requires
+EOF before the application's kill, no SIGTERM, child exit, an absent process
+group, and a removed socket before the next start.
+Receipts identify the resolved Node version and ABI, built entry digest, server
+package version, health response, and prior child identities.
+
+Run after `npm --prefix web ci` and `npm --prefix web run build`:
+
+```sh
+python3 rust/tests/built_backend_lifecycle.py --node "$(command -v node)" --negative-control --evidence /tmp/gre448-built-backend
+```
+
+Each invocation prints and creates a unique `run-*` directory under the supplied
+evidence root. Repeating the command preserves all previous receipts.
+
+The negative control suppresses stdin EOF delivery in the test observer. It must
+fail the same bounded shutdown assertion after real health readiness. Failure
+cleanup kills and reaps the owned child. The driver then restores normal EOF
+delivery and requires three further cycles to pass. Production source and built
+assets stay unchanged during this control. Desktop runtime CI runs this command
+against its freshly built backend and uploads the receipts and logs.
+
+This is Linux headless evidence for the built backend's EOF path. It does not
+exercise the Rust supervisor's measured spawn path, interrupted printer uploads,
+full worker cutover, startup parent-death, or actual macOS logout. Those areas
+retain their separate evidence and remaining ticket gates.
+
+The owner independently ran the full command on 2026-10-15 with native Node
+v24.21.0, ABI 137, Linux x64. Three baseline and three restored cycles passed.
+The suppressed-EOF cycle failed with `backend did not stop after stdin EOF`;
+its guard recorded external cleanup and no remaining PID or group. All six
+positive guards recorded no external signal. All seven child PIDs were absent
+when checked after completion. The built entry digest stayed
+`0356744362f0fa28e5ad3ed516de7fc71aca167af7fa6428a4e6b87650541bc7`.
+Local receipts are in `/tmp/gre448-built-proof/owner-proof`. This negative control
+proves the test detects missing EOF delivery; it does not identify a new
+production defect. Python compile, Node syntax, native dispatcher rejection,
+comment review, and diff checks passed. The implementation child independently
+ran the same complete proof before the owner's rerun.
+
+Review found that reusing the documented evidence root raised `FileExistsError`
+after overwriting its artifact identity. The owner reproduced that failure, then
+ran the corrected command twice against the existing root. Both isolated runs
+passed three baseline cycles, the expected negative control, and three restored
+cycles. All 14 child PIDs were absent, and all 60 original evidence files stayed
+byte-for-byte unchanged. The isolated receipts are under
+`/tmp/gre448-built-proof/owner-proof/run-9dy9pxzk` and `run-7pjt7tgu`.
+
+## Full built backend startup parent-death cleanup
+
+`rust/scripts/prove-built-startup-death.py` drives an ignored, exact Rust test
+against an isolated copy of the full desktop build. The owner launches the real
+`desktop.js` through production `Process::spawn`, including its production
+parent-death watcher and release verification. The driver compares the original
+and instrumented release manifests. Only `desktop-resolution.js` changes,
+including its physical path in the workspace dependency inventory. The desktop
+entry, frontend, other workspace files, Node binary, and other dependencies must
+have identical hashes.
+
+The staged resolver preserves the original resolver bytes and appends
+`built-startup-observer.mjs`. This test observer delegates the actual stdin
+`data` listener registration, records the real `setupFromParent` call stack and
+entry SHA-256, then sends itself SIGSTOP before returning to the entry. Static
+entry dependencies have loaded at this milestone. Setup has not arrived, and
+storage and server readiness have not been reached.
+
+The Rust `record_child` callback waits for that stopped milestone. It then
+returns to the production setup write with a one-megabyte fixture lease. The
+stopped backend cannot consume that write. After a further 100 ms, the owner
+requires `Starting`, zero completed health probes, no published endpoint, no
+socket, and exactly one recorded spawn. The oversized setup is intentionally
+invalid for the desktop's normal setup size limit. It never reaches the setup
+parser in this proof.
+
+Each of two cycles SIGKILLs only the owner PID. An unrelated `/bin/sleep` child
+of the test runner joins the backend group. The owner and backend groups must
+differ. The backend remains stopped, so it cannot handle stdin EOF. Within five
+seconds, the backend group must disappear and the peer must die by SIGKILL.
+The Linux test runner acts as a subreaper and reaps the adopted backend and
+watcher. Receipts require absent process identities and an absent group, rather
+than treating zombies as reaped. The spawn ledger must remain at one entry.
+The fixture guard runs only after these positive assertions.
+
+Build and run with a host-native Linux Node 24.21.0 ABI 137 binary:
+
+```sh
+npm --prefix web ci
+VITE_PRINT_PARTNER_DESKTOP=1 npm --prefix web run build
+python3 rust/scripts/prove-built-startup-death.py --node /absolute/path/to/native/node --negative-control --evidence /tmp/gre448-built-startup
+```
+
+Keep the pinned native Node directory first in `PATH` for the npm commands.
+The driver rejects shell dispatchers before executing them. Each invocation
+creates a separate `run-*` evidence directory and records its exact commands.
+
+The negative control copies the Rust workspace into the isolated stage and
+disarms the production parent-death guard only in that private source copy.
+Its Cargo target directory is separate from the calling checkout. The same exact
+test must fail with
+`built startup group outlived force-killed owner`. A pre-cleanup observation
+requires the owner to be reaped, the backend still stopped, and the peer alive.
+The fixture then kills and reaps the leaked group. A `finally` block restores
+the private `lib.rs` byte-for-byte before checking the negative result. The
+calling checkout's source stays unchanged, including if termination bypasses
+`finally`. The driver requires two more cycles with the original guard and
+retains source isolation and restoration hashes.
+
+Evidence includes original and instrumented manifests, original and instrumented
+preload hashes, the instrumented preload, built entry and Node hashes, startup
+stacks, PID start identities, group membership, owner logs, armed state, cycle
+receipts, failure observations, cleanup receipts, and source restoration.
+Desktop runtime CI explicitly runs the full command. CI uploads receipts and
+manifests but excludes the staged package copy. Local runs retain that copy.
+
+This is Linux headless evidence with an instrumented, measured preload and an
+unchanged full built entry and dependency tree. It proves group cleanup after
+owner death during setup, without relying on JavaScript EOF handling. It does
+not prove packaged desktop launch, platform signing, storage readiness, macOS
+logout, or a natural startup stall. Built ready-time EOF and SQLite health remain
+covered by the separate lifecycle proof above.
+
+The implementation run on 2026-10-15 passed two baseline and two restored
+cycles. Disarming the production guard failed the intended group-survival
+assertion, and its guard removed the leaked group. All 19 recorded owner,
+backend, peer, and watcher PIDs were absent after completion. `lib.rs` matched
+its original bytes, and the built entry retained SHA-256
+`0356744362f0fa28e5ad3ed516de7fc71aca167af7fa6428a4e6b87650541bc7`.
+Local receipts are in
+`/tmp/gre448-parent-death-implementation/proof/run-8z69qpl1`.
+The artifact identifies 42,167 measured dependency files. Focused Clippy with
+warnings denied, workspace formatting, Python compilation, observer syntax,
+workflow YAML parsing, native-dispatcher rejection, and the AST ratchet also
+passed. The test helper lives under `src/tests/`, with unchanged lint baselines.
+This is the implementation run; independent parent verification remains separate.
+
+The owner independently ran the full negative-control command on 2026-10-15.
+Both baseline cycles passed, the disarmed guard failed the intended invariant,
+and both restored cycles passed. Direct `/proc` and process-group checks found
+every recorded owner, backend, watcher, and peer absent. Positive cleanup used
+no fallback signals. The restoration hash matched production source, and the
+built entry hash stayed unchanged. Independent receipts and `owner-audit.json`
+are in `/tmp/gre448-parent-death-owner/proof/run-o8j_4qrm`. Crate boundaries,
+the unchanged AST ratchet, Python compilation, observer syntax, comment review,
+and diff checks also passed.
+
+Review identified that termination could bypass restoration of the original
+source-mutating control. The control now mutates only a private Rust workspace
+copy and compiles it into a separate Cargo target. The owner reran the full
+proof in `/tmp/gre448-parent-death-owner/isolated-proof/run-s92c0dby`: four
+positive cycles passed, the isolated negative failed the intended invariant,
+and all 19 recorded PIDs were absent. Tracked `lib.rs` stayed unchanged.
+The cancellation harness `/tmp/gre448-parent-death-owner/prove-interruption.py`
+then ran two real baseline cycles per signal and blocked Cargo immediately
+after the private fault was written. SIGTERM and SIGKILL each bypassed
+`finally` and left the private copy mutated, while tracked source remained
+byte-for-byte unchanged. Receipts are in
+`/tmp/gre448-parent-death-owner/interruption/receipts.json`.

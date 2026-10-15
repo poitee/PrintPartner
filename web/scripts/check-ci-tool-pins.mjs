@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import console from 'node:console';
+import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -19,6 +20,7 @@ try {
   console.error('MISSING_PARSER: run npm ci in web/ before checking CI tool pins');
   process.exit(2);
 }
+const desktopContracts = /^desktop-contracts\.ya?ml$/;
 const directory = resolve(process.argv[2] ?? join(root, '.github/workflows'));
 let declarations = 0;
 let tools = 0;
@@ -128,7 +130,7 @@ function checkWorkflow(file) {
     report(file, 'jobs', 'INVALID_SHAPE', 'workflow requires a nonempty jobs mapping');
     return;
   }
-  if (/^desktop-contracts\.ya?ml$/i.test(basename(file))) checkDesktopNode(workflow, file);
+  if (desktopContracts.test(basename(file))) checkDesktopNode(workflow, file);
   const seen = new Set();
   for (const [name, job] of Object.entries(workflow.jobs)) {
     const path = `jobs.${name}`;
@@ -154,10 +156,26 @@ function checkWorkflow(file) {
 }
 
 try {
-  const files = readdirSync(directory, { withFileTypes: true })
+  const entries = readdirSync(directory, { withFileTypes: true });
+  const files = entries
     .filter(entry => /\.ya?ml$/i.test(entry.name))
     .map(entry => join(directory, entry.name)).sort();
   if (files.length === 0) report(directory, '$', 'NO_WORKFLOWS', 'no .yml or .yaml workflow files found');
+  const contracts = entries.filter(entry => entry.isFile() && desktopContracts.test(entry.name))
+    .map(entry => entry.name).sort();
+  if (contracts.length === 0) {
+    report(directory, '$', 'MISSING_DESKTOP_CONTRACTS', 'expected one desktop-contracts.yml or desktop-contracts.yaml workflow');
+  } else if (contracts.length > 1) {
+    report(directory, '$', 'DUPLICATE_DESKTOP_CONTRACTS', 'expected one desktop contracts workflow; found ' + contracts.map(file => basename(file)).join(', '));
+  }
+  if (process.argv[2] === undefined) {
+    const tracked = execFileSync('git', ['ls-tree', '-z', 'HEAD', '--', '.github/workflows/'], { cwd: root, encoding: 'utf8' })
+      .split('\0').filter(entry => /^100(?:644|755) blob [0-9a-f]+\t\.github\/workflows\/desktop-contracts\.ya?ml$/.test(entry))
+      .map(entry => basename(entry.split('\t')[1]));
+    if (tracked.length !== 1 || contracts.length !== 1 || tracked[0] !== contracts[0]) {
+      report(directory, '$', 'UNTRACKED_DESKTOP_CONTRACTS', 'expected exactly one regular desktop contracts workflow in HEAD');
+    }
+  }
   for (const file of files) {
     try {
       checkWorkflow(file);
