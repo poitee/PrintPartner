@@ -1102,3 +1102,132 @@ async fn present_mapping_pin_rejects_removal_after_crash() {
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert!(runtime.shutdown().await.complete());
 }
+
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn migrated_shared_default_plans_launch_with_explicit_owners() {
+    let Some(root) = isolated(
+        "migrated_shared_default_plans_launch_with_explicit_owners",
+        true,
+    )
+    .await
+    else {
+        return;
+    };
+    let source = root.join("legacy");
+    let destination = root.join("claimed");
+    fs::create_dir_all(&source).unwrap();
+    node(&source, r#"
+        const store = new SqliteDatabase(data); store.connect(); store.close();
+        const db = new Database(data + '/print-partner.db');
+        db.exec(`DELETE FROM app_settings WHERE key <> 'schema_version';
+          INSERT INTO users (id,email,display_name,password_hash,is_admin,created_at) VALUES
+          ('account-a','a@example.test','Selected owner','hash',0,'2026-10-15'),
+          ('account-b','b@example.test','Other owner',NULL,1,'2026-10-15');
+          INSERT INTO build_profiles (id,tenant_id,name) VALUES
+          (303,'default','Shared A'),(404,'default','Shared B'),(505,'account-b','Foreign Plan');
+          INSERT INTO projects (id,tenant_id,name,url) VALUES
+          (77,'default','Legacy Source','https://example.test/legacy');
+          INSERT INTO profile_layers (tenant_id,profile_id,project_id,layer_type) VALUES ('default',303,77,'project');`);
+        db.close(); console.log('{}');
+    "#).await;
+    fs::create_dir_all(source.join("repos/77")).unwrap();
+    fs::write(source.join("repos/77/proof.stl"), "preserved source bytes").unwrap();
+    let before = snapshot_outside(&source, "__all_tenants__").await;
+    let control = root.join("unclaimed-control");
+    node(&source, &format!(r#"const {{cpSync}} = await import('node:fs'); cpSync(data, {}, {{recursive:true}}); console.log('{{}}');"#,json!(control))).await;
+    mapping(&control, selected());
+    let mut unclaimed = CoreRuntime::start(launch(control)).await.unwrap();
+    let cookie = bootstrap(&mut unclaimed).await;
+    assert_eq!(
+        api(&unclaimed, &cookie, "/plans/303", "GET", None).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert!(unclaimed.shutdown().await.complete());
+    println!("unmigrated explicit-account control refuses default Plan with 404");
+    let module = launch(source.clone())
+        .bundle
+        .entry
+        .parent()
+        .unwrap()
+        .join("ownership-migration.js");
+    let migration = node(&source, &format!(r#"
+        const {{inspectOwnershipCopy,executeOwnershipCopy}} = await import({});
+        const inventory = await inspectOwnershipCopy({{sourceDir:data}});
+        const manifest = {{version:1,source_digest:inventory.source_digest,selected_user_id:'account-a',
+          claims:inventory.claims.map(row => ({{table:row.table,rowid:row.rowid,user_id:row.table === 'build_profiles' && row.rowid === 404 ? 'account-b' : 'account-a'}}))}};
+        console.log(JSON.stringify(await executeOwnershipCopy({{sourceDir:data,destinationDir:{},manifest}})));
+    "#, json!(format!("file://{}", module.display())), json!(destination))).await;
+    assert_eq!(
+        migration,
+        json!({"destinationDir":destination,"user_id":"account-a"})
+    );
+    assert_eq!(snapshot_outside(&source, "__all_tenants__").await, before);
+    assert_eq!(
+        fs::read(source.join("repos/77/proof.stl")).unwrap(),
+        b"preserved source bytes"
+    );
+    assert_eq!(
+        fs::read(destination.join("repos/77/proof.stl")).unwrap(),
+        b"preserved source bytes"
+    );
+    let foreign_before = snapshot_outside(&destination, "account-a").await;
+    for round in 0..2 {
+        let mut runtime = CoreRuntime::start(launch(destination.clone()))
+            .await
+            .unwrap();
+        let cookie = bootstrap(&mut runtime).await;
+        let (status, me) = api(&runtime, &cookie, "/auth/me", "GET", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(me["user"]["user_id"], "account-a");
+        assert_eq!(me["user"]["is_admin"], false);
+        let (status, plan) = api(&runtime, &cookie, "/plans/303", "GET", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            plan["name"],
+            if round == 0 {
+                "Shared A"
+            } else {
+                "Claimed edit"
+            }
+        );
+        for id in [404, 505] {
+            for method in ["GET", "PATCH"] {
+                assert_eq!(
+                    api(
+                        &runtime,
+                        &cookie,
+                        &format!("/plans/{id}"),
+                        method,
+                        if method == "PATCH" {
+                            Some(json!({"name":"Stolen"}))
+                        } else {
+                            None
+                        }
+                    )
+                    .await
+                    .0,
+                    StatusCode::NOT_FOUND
+                );
+            }
+        }
+        assert_eq!(
+            api(
+                &runtime,
+                &cookie,
+                "/plans/303",
+                "PATCH",
+                Some(json!({"name":"Claimed edit"}))
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+        assert!(runtime.shutdown().await.complete());
+        assert_eq!(
+            snapshot_outside(&destination, "account-a").await,
+            foreign_before
+        );
+    }
+    assert_eq!(snapshot_outside(&source, "__all_tenants__").await, before);
+}
