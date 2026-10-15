@@ -436,3 +436,87 @@ passed three baseline cycles, the expected negative control, and three restored
 cycles. All 14 child PIDs were absent, and all 60 original evidence files stayed
 byte-for-byte unchanged. The isolated receipts are under
 `/tmp/gre448-built-proof/owner-proof/run-9dy9pxzk` and `run-7pjt7tgu`.
+
+## Full built backend startup parent-death cleanup
+
+`rust/scripts/prove-built-startup-death.py` drives an ignored, exact Rust test
+against an isolated copy of the full desktop build. The owner launches the real
+`desktop.js` through production `Process::spawn`, including its production
+parent-death watcher and release verification. The driver compares the original
+and instrumented release manifests. Only `desktop-resolution.js` changes,
+including its physical path in the workspace dependency inventory. The desktop
+entry, frontend, other workspace files, Node binary, and other dependencies must
+have identical hashes.
+
+The staged resolver preserves the original resolver bytes and appends
+`built-startup-observer.mjs`. This test observer delegates the actual stdin
+`data` listener registration, records the real `setupFromParent` call stack and
+entry SHA-256, then sends itself SIGSTOP before returning to the entry. Static
+entry dependencies have loaded at this milestone. Setup has not arrived, and
+storage and server readiness have not been reached.
+
+The Rust `record_child` callback waits for that stopped milestone. It then
+returns to the production setup write with a one-megabyte fixture lease. The
+stopped backend cannot consume that write. After a further 100 ms, the owner
+requires `Starting`, zero completed health probes, no published endpoint, no
+socket, and exactly one recorded spawn. The oversized setup is intentionally
+invalid for the desktop's normal setup size limit. It never reaches the setup
+parser in this proof.
+
+Each of two cycles SIGKILLs only the owner PID. An unrelated `/bin/sleep` child
+of the test runner joins the backend group. The owner and backend groups must
+differ. The backend remains stopped, so it cannot handle stdin EOF. Within five
+seconds, the backend group must disappear and the peer must die by SIGKILL.
+The Linux test runner acts as a subreaper and reaps the adopted backend and
+watcher. Receipts require absent process identities and an absent group, rather
+than treating zombies as reaped. The spawn ledger must remain at one entry.
+The fixture guard runs only after these positive assertions.
+
+Build and run with a host-native Linux Node 24.21.0 ABI 137 binary:
+
+```sh
+npm --prefix web ci
+VITE_PRINT_PARTNER_DESKTOP=1 npm --prefix web run build
+python3 rust/scripts/prove-built-startup-death.py --node /absolute/path/to/native/node --negative-control --evidence /tmp/gre448-built-startup
+```
+
+Keep the pinned native Node directory first in `PATH` for the npm commands.
+The driver rejects shell dispatchers before executing them. Each invocation
+creates a separate `run-*` evidence directory and records its exact commands.
+
+The negative control temporarily disarms the production parent-death guard in
+`Process::spawn`. The same exact test must fail with
+`built startup group outlived force-killed owner`. A pre-cleanup observation
+requires the owner to be reaped, the backend still stopped, and the peer alive.
+The fixture then kills and reaps the leaked group. A `finally` block restores
+`lib.rs` byte-for-byte before checking the negative result. The driver requires
+two more cycles with the restored guard and retains the restoration hash.
+Run this source-mutating control without concurrent builds in the same checkout.
+
+Evidence includes original and instrumented manifests, original and instrumented
+preload hashes, the instrumented preload, built entry and Node hashes, startup
+stacks, PID start identities, group membership, owner logs, armed state, cycle
+receipts, failure observations, cleanup receipts, and source restoration.
+Desktop runtime CI explicitly runs the full command. CI uploads receipts and
+manifests but excludes the staged package copy. Local runs retain that copy.
+
+This is Linux headless evidence with an instrumented, measured preload and an
+unchanged full built entry and dependency tree. It proves group cleanup after
+owner death during setup, without relying on JavaScript EOF handling. It does
+not prove packaged desktop launch, platform signing, storage readiness, macOS
+logout, or a natural startup stall. Built ready-time EOF and SQLite health remain
+covered by the separate lifecycle proof above.
+
+The implementation run on 2026-10-15 passed two baseline and two restored
+cycles. Disarming the production guard failed the intended group-survival
+assertion, and its guard removed the leaked group. All 19 recorded owner,
+backend, peer, and watcher PIDs were absent after completion. `lib.rs` matched
+its original bytes, and the built entry retained SHA-256
+`0356744362f0fa28e5ad3ed516de7fc71aca167af7fa6428a4e6b87650541bc7`.
+Local receipts are in
+`/tmp/gre448-parent-death-implementation/proof/run-8z69qpl1`.
+The artifact identifies 42,167 measured dependency files. Focused Clippy with
+warnings denied, workspace formatting, Python compilation, observer syntax,
+workflow YAML parsing, native-dispatcher rejection, and the AST ratchet also
+passed. The test helper lives under `src/tests/`, with unchanged lint baselines.
+This is the implementation run; independent parent verification remains separate.
