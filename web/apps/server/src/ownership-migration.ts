@@ -3,24 +3,32 @@ import { execFileSync } from "node:child_process";
 import { copyFileSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import Database from "better-sqlite3";
+import { drizzle } from "drizzle-orm/better-sqlite3";
 import { z } from "zod";
 import { acquireDataDirectory, desktopContext } from "./desktop-context.js";
+import * as schema from "./db/schema.js";
+import { readAcceptedPlanOperationalSnapshotInternal } from "./db/accepted-plan-operational.js";
+import { openVerifiedAcceptedArtifact } from "./services/accepted-artifacts.js";
+import { ownershipHistoryTables, validateOwnershipHistory } from "./ownership-history.js";
+import { inspectOwnershipExports, ownershipExportClaimSchema, ownershipExportTarget, ownershipFileDigest, type OwnershipExport } from "./ownership-exports.js";
+import { schemaMigrations } from "./db/migrations-sqlite.js";
 import { currentSchemaVersion } from "./db/schema.js";
 import { readSchemaVersion } from "./db/upgrade-guard.js";
 
-const supported = ["build_profiles", "projects", "profile_layers", "parts", "print_progress", "source_docs", "source_notes", "plan_decisions", "printer_profiles", "process_profiles", "filament_profiles"] as const;
+const supported = ["build_profiles", "projects", "profile_layers", "parts", "print_progress", "source_docs", "source_notes", "plan_decisions", "printer_profiles", "process_profiles", "filament_profiles", ...ownershipHistoryTables] as const;
 const ownerSchema = z.string().min(1).max(256).refine(value => value !== "default", "Owner must be an existing non-default user");
 const ownershipManifestSchema = z.strictObject({
   version: z.literal(1),
   source_digest: z.string().regex(/^[a-f0-9]{64}$/),
   selected_user_id: ownerSchema,
+  exports: z.array(ownershipExportClaimSchema).default([]),
   claims: z.array(z.strictObject({ table: z.enum(supported), rowid: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), user_id: ownerSchema })),
 });
 const rowSchema = z.record(z.string(), z.unknown());
 const namedSchema = z.object({ name: z.string() });
 const fkSchema = z.object({ id: z.number(), seq: z.number(), table: z.string(), from: z.string(), to: z.string().nullable() });
 type Row = z.infer<typeof rowSchema>;
-type Inventory = { version: 1; source_digest: string; tables: { table: string; rowids: number[] }[]; claims: { table: string; rowid: number; user_id: string }[] };
+type Inventory = { exports: OwnershipExport[]; version: 1; source_digest: string; tables: { table: string; rowids: number[] }[]; claims: { table: string; rowid: number; user_id: string }[] };
 const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
 const key = (table: string, rowid: unknown) => `${table}/${String(rowid)}`;
 function gate(): void {
@@ -77,13 +85,11 @@ function validateData(db: Database.Database, claims = new Map<string, string>())
             if (row[field] != null && row[field] !== "") throw new Error(`Unsupported imported or externally backed profile in ${table}`);
           }
         }
-        if (row.accepted_plan_revision_id != null || row.current_source_revision_id != null || Number(row.accepted_plan_version ?? 0) !== 0) throw new Error("Unsupported accepted history");
         for (const field of ["metadata_json", "imported_paths", "result_json"]) if (row[field] != null && row[field] !== "") throw new Error(`Unsupported opaque state in ${table}`);
         if (row.params_json != null && row.params_json !== "{}") throw new Error("Unsupported decision parameters");
       }
       for (const row of data) {
-        for (const field of ["local_path", "relative_path", "filename", "path"]) safeRelative(row[field]);
-        if (row.local_path) throw new Error("Unsupported nonempty project local_path");
+        for (const field of ["relative_path", "filename", "path", "snapshot_locator"]) safeRelative(row[field]);
       }
     }
     const foreignKeys = z.array(fkSchema).parse(db.pragma(`foreign_key_list(${quote(table)})`));
@@ -106,23 +112,31 @@ function validateData(db: Database.Database, claims = new Map<string, string>())
       if (tenantTables.has(table) && tenantTables.has(head.table) && effective(table, row) !== effective(head.table, parent)) throw new Error(`Conflicting owner relationship in ${table}`);
     }
   }
+  validateOwnershipHistory(db);
   return inventory;
 }
 const excluded = new Set(["print-partner.db", "print-partner.db-wal", "print-partner.db-shm", "desktop-account.json", ".desktop.lock", ".desktop-owner.json", ".desktop-lease"]);
-const emptyDirectories = new Set(["exports", "uploads", "upload-staging", "staging", "backups", "thumbnails", "previews", "thumbs", "covers"]);
+const emptyDirectories = new Set(["uploads", "upload-staging", "staging", "backups", "thumbnails", "previews", "thumbs", "covers"]);
 function checkTree(path: string, destination?: string): void {
   const stat = lstatSync(path);
   if (stat.isDirectory()) {
     if (destination) mkdirSync(destination, { mode: 0o700 });
-    for (const name of readdirSync(path).sort()) checkTree(join(path, name), destination && join(destination, name));
+    for (const name of readdirSync(path).sort()) {
+      safeRelative(name);
+      checkTree(join(path, name), destination && join(destination, name));
+    }
   } else {
-    regular(path);
-    if (destination) copyFileSync(path, destination);
+    const digest = ownershipFileDigest(path);
+    if (destination) {
+      copyFileSync(path, destination);
+      if (ownershipFileDigest(destination) !== digest || ownershipFileDigest(path) !== digest) throw new Error("Source artifact changed during copy");
+    }
   }
 }
 function productFiles(source: string, db: Database.Database, destination?: string): void {
   const projects = new Set(rows(db, "projects").map(row => String(row.id)));
   for (const name of readdirSync(source).sort()) {
+    if (name === "exports") continue;
     if (excluded.has(name) || /^\.desktop-(lease|owner-release)-/.test(name)) continue;
     const path = join(source, name);
     if (name === "repos" || name === "sources") {
@@ -138,6 +152,97 @@ function productFiles(source: string, db: Database.Database, destination?: strin
     } else throw new Error(`Unsupported top-level artifact ${name}`);
   }
 }
+function exportInventory(source: string, db: Database.Database): OwnershipExport[] {
+  const root = join(source, "exports");
+  return missing(root) ? [] : inspectOwnershipExports(root, drizzle(db).select().from(schema.buildProfiles).all());
+}
+function relocatedLocalPath(row: Row, source: string, destination: string): string {
+  const path = z.string().parse(row.local_path);
+  const root = join(source, "repos", String(row.id));
+  const candidate = resolve(path);
+  if (!isAbsolute(path) || (candidate !== root && !candidate.startsWith(`${root}${sep}`))) throw new Error("Unsafe Source local_path");
+  safeRelative(relative(root, candidate));
+  return join(destination, relative(source, candidate));
+}
+function validateSnapshotPaths(source: string, db: Database.Database, checkLocalPaths = true): void {
+  for (const project of rows(db, "projects")) {
+    if (checkLocalPaths && project.local_path) {
+      relocatedLocalPath(project, source, source);
+      checkTree(z.string().parse(project.local_path));
+    }
+  }
+  for (const revision of rows(db, "source_revisions")) {
+    const locator = z.string().parse(revision.snapshot_locator);
+    let cursor = join(source, "repos");
+    for (const piece of locator.split("/")) {
+      cursor = join(cursor, piece);
+      if (!lstatSync(cursor).isDirectory()) throw new Error("Unsafe or missing Source snapshot directory");
+    }
+    checkTree(cursor);
+  }
+  const driver = drizzle(db, { schema });
+  const sets = driver.select().from(schema.planRevisionInputSets).all();
+  const revisions = driver.select().from(schema.planRevisions).all();
+  for (const profile of driver.select().from(schema.buildProfiles).all()) {
+    if (profile.acceptedPlanRevisionId == null) continue;
+    const accepted = readAcceptedPlanOperationalSnapshotInternal({ db: driver, schema, tenantId: profile.tenantId,
+      profileId: profile.id, reposDir: join(source, "repos"), sqlite: true,
+      resolveSourceSnapshotPath: (sourceId, locator) => locator.startsWith(`${sourceId}/revisions/`) ? join(source, "repos", locator) : null });
+    const revision = revisions.find(revision => revision.id === profile.acceptedPlanRevisionId);
+    const format1 = sets.some(set => set.id === revision?.inputSetId && set.formatVersion === 1);
+    if (accepted.kind !== "ready" && !(accepted.kind === "uninitialized" && format1)) throw new Error("Unsafe accepted Plan operational state");
+  }
+  const inputs = driver.select().from(schema.planRevisionInputs).all();
+  const sourceRevisions = driver.select().from(schema.sourceRevisions).all();
+  for (const part of driver.select().from(schema.planRevisionParts).all()) {
+    const revision = revisions.find(revision => revision.id === part.revisionId);
+    const set = sets.find(set => set.id === revision?.inputSetId);
+    if (!set || set.formatVersion !== 2) continue;
+    const input = inputs.find(input => input.inputSetId === set.id && input.sourceLayer === part.sourceLayer);
+    if (!input) throw new Error("Unsafe historical Part input linkage");
+    if (input.trackingKind === "untracked") {
+      if (part.artifactDigest != null) throw new Error("Untracked Part has an artifact digest");
+      continue;
+    }
+    const pinned = sourceRevisions.find(revision => revision.id === input.sourceRevisionId);
+    if (!pinned || !part.artifactDigest) throw new Error("Missing historical Part artifact identity");
+    const opened = openVerifiedAcceptedArtifact({ reposDir: join(source, "repos"), artifact: {
+      kind: "tracked", sourceId: pinned.projectId, sourceRevisionId: pinned.id,
+      snapshotRoot: join(source, "repos", pinned.snapshotLocator), relativePath: part.relativePath, expectedSha256: part.artifactDigest,
+    } });
+    if (opened.kind !== "verified") throw new Error("Unsafe or missing accepted Part artifact");
+    opened.lease.close();
+  }
+}
+function suspendOwnershipTriggers(db: Database.Database): { name: string; sql: string }[] {
+  const names = new Set([
+    "trg_parts_invalidate_accepted_revision_update",
+    "trg_plan_revisions_immutable_update", "trg_plan_revision_parts_immutable_update", "trg_required_units_immutable_update",
+    "trg_plan_revision_required_units_immutable_update", "trg_plan_revision_required_unit_sets_immutable_update",
+  ]);
+  const triggers = z.array(z.object({ name: z.string(), sql: z.string() })).parse(db.prepare("SELECT name, sql FROM sqlite_schema WHERE type='trigger' ORDER BY name").all()).filter(trigger => names.has(trigger.name));
+  const normalize = (sql: string) => sql.replace("CREATE TRIGGER IF NOT EXISTS", "CREATE TRIGGER").replace(/;\s*$/, "").trim();
+  if (triggers.length !== names.size) throw new Error("Missing ownership copy trigger protection");
+  for (const trigger of triggers) {
+    const expected = schemaMigrations.find(sql => sql.startsWith(`CREATE TRIGGER IF NOT EXISTS ${trigger.name}\n`));
+    if (!expected || normalize(expected) !== normalize(trigger.sql)) throw new Error("Unexpected ownership copy trigger definition");
+    db.exec(`DROP TRIGGER ${quote(trigger.name)}`);
+  }
+  return triggers;
+}
+function productFileDigests(source: string): [string, string][] {
+  const result: [string, string][] = [];
+  const walk = (path: string) => {
+    if (lstatSync(path).isDirectory()) {
+      for (const name of readdirSync(path).sort()) { safeRelative(name); walk(join(path, name)); }
+    } else result.push([relative(source, path), ownershipFileDigest(path)]);
+  };
+  for (const name of readdirSync(source).sort()) {
+    if (excluded.has(name) || /^\.desktop-(lease|owner-release)-/.test(name)) continue;
+    walk(join(source, name));
+  }
+  return result;
+}
 function sourceDatabase(sourceDir: string): Database.Database {
   regular(join(sourceDir, "print-partner.db"));
   for (const name of ["print-partner.db-wal", "print-partner.db-shm"]) if (!missing(join(sourceDir, name))) regular(join(sourceDir, name));
@@ -152,7 +257,8 @@ export function inspectOwnershipCopy({ sourceDir }: { sourceDir: string }): Inve
     db = sourceDatabase(source);
     const inventory = validateData(db);
     productFiles(source, db);
-    return { version: 1, source_digest: snapshotDigest(db), tables: inventory,
+    validateSnapshotPaths(source, db);
+    return { exports: exportInventory(source, db), version: 1, source_digest: snapshotDigest(db), tables: inventory,
       claims: inventory.flatMap(({ table, rowids }) => rowids.map(rowid => ({ table, rowid, user_id: "" }))) };
   } finally { db?.close(); release(); }
 }
@@ -183,6 +289,9 @@ export async function executeOwnershipCopy({ sourceDir, destinationDir, manifest
     if (snapshotDigest(db) !== input.source_digest) throw new Error("Stale source snapshot digest");
     const inventory = validateData(db);
     productFiles(source, db);
+    validateSnapshotPaths(source, db);
+    const artifacts = exportInventory(source, db);
+    const sourceFiles = productFileDigests(source);
     const users = new Set(rows(db, "users").map(row => row.id));
     if (!users.has(input.selected_user_id)) throw new Error("Unknown selected owner");
     const expected = new Set(inventory.flatMap(({ table, rowids }) => rowids.map(rowid => key(table, rowid))));
@@ -194,27 +303,69 @@ export async function executeOwnershipCopy({ sourceDir, destinationDir, manifest
     }
     if (claims.size !== expected.size) throw new Error("Missing explicit owner claims");
     validateData(db, claims);
+    const exportOwners = new Map<string, string>();
+    const targets = new Set<string>();
+    for (const claim of input.exports) {
+      const artifact = artifacts.find(artifact => artifact.path === claim.path);
+      if (!artifact || exportOwners.has(claim.path) || artifact.sha256 !== claim.sha256 || artifact.profile_id !== claim.profile_id) throw new Error("Invalid or stale export claim");
+      const profile = rows(db, "build_profiles").find(row => row.id === artifact.profile_id);
+      if (!profile) throw new Error("Unassigned export Plan");
+      const owner = claims.get(key("build_profiles", profile.__rowid)) ?? profile.tenant_id;
+      if (claim.user_id !== owner || !users.has(claim.user_id)) throw new Error("Conflicting export owner");
+      const target = ownershipExportTarget(artifact, claim.user_id);
+      if (targets.has(target)) throw new Error("Export destination collision");
+      targets.add(target); exportOwners.set(claim.path, claim.user_id);
+    }
+    if (exportOwners.size !== artifacts.length) throw new Error("Missing explicit export claims");
     stage = mkdtempSync(join(dirname(destination), ".ownership-copy-"));
     await db.backup(join(stage, "print-partner.db"));
     if (snapshotDigest(db) !== input.source_digest) throw new Error("Source snapshot changed during copy");
     productFiles(source, db, stage);
+    for (const artifact of artifacts) {
+      const owner = exportOwners.get(artifact.path);
+      if (!owner) throw new Error("Missing export owner");
+      const target = join(stage, ownershipExportTarget(artifact, owner));
+      mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
+      copyFileSync(join(source, "exports", artifact.path), target);
+      if (ownershipFileDigest(target) !== artifact.sha256) throw new Error("Export changed during copy");
+    }
+    if (JSON.stringify(exportInventory(source, db)) !== JSON.stringify(artifacts)) throw new Error("Export inventory changed during copy");
     const original = db;
     const copy = new Database(join(stage, "print-partner.db"));
     try {
       copy.pragma("foreign_keys = ON");
       copy.transaction(() => {
-        for (const claim of input.claims) copy.prepare(`UPDATE ${quote(claim.table)} SET tenant_id = ? WHERE rowid = ? AND tenant_id = 'default'`).run(claim.user_id, claim.rowid);
+        const suspended = suspendOwnershipTriggers(copy);
+        for (const claim of [...input.claims].sort((left, right) => Number(left.table === "build_profiles") - Number(right.table === "build_profiles"))) copy.prepare(`UPDATE ${quote(claim.table)} SET tenant_id = ? WHERE rowid = ? AND tenant_id = 'default'`).run(claim.user_id, claim.rowid);
+        for (const row of rows(original, "projects")) {
+          if (row.local_path) copy.prepare("UPDATE projects SET local_path = ? WHERE id = ?").run(relocatedLocalPath(row, source, destination), z.number().parse(row.id));
+        }
+        for (const trigger of suspended) copy.exec(trigger.sql);
+        const schemaRows = (database: Database.Database) => database.prepare("SELECT type,name,tbl_name,sql FROM sqlite_schema ORDER BY type,name").all();
+        if (JSON.stringify(schemaRows(copy)) !== JSON.stringify(schemaRows(original))) throw new Error("Staged schema changed during ownership copy");
         validateData(copy);
+        validateSnapshotPaths(stage ?? "", copy, false);
         for (const table of tables(original)) {
           const expectedRows = rows(original, table).map(row => {
             const owner = claims.get(key(table, row.__rowid));
-            return owner ? { ...row, tenant_id: owner } : row;
+            const changed = owner ? { ...row, tenant_id: owner } : row;
+            return table === "projects" && row.local_path ? { ...changed, local_path: relocatedLocalPath(row, source, destination) } : changed;
           });
           if (JSON.stringify(rows(copy, table)) !== JSON.stringify(expectedRows)) throw new Error(`Unexpected row changes in ${table}`);
         }
       })();
       if (copy.pragma("integrity_check", { simple: true }) !== "ok" || z.array(z.unknown()).parse(copy.pragma("foreign_key_check")).length) throw new Error("Staged database integrity failed");
     } finally { copy.close(); }
+    const stagedFiles = new Map(productFileDigests(stage));
+    if (stagedFiles.size !== sourceFiles.length) throw new Error("Staged artifact inventory differs from source");
+    for (const [path, digest] of sourceFiles) {
+      const artifact = path.startsWith(`exports${sep}`) ? artifacts.find(artifact => artifact.path === path.slice(8).split(sep).join("/")) : undefined;
+      const owner = artifact && exportOwners.get(artifact.path);
+      const target = artifact && owner ? ownershipExportTarget(artifact, owner) : path;
+      if (stagedFiles.get(target) !== digest) throw new Error("Staged artifact bytes differ from source");
+    }
+    if (JSON.stringify(productFileDigests(source)) !== JSON.stringify(sourceFiles)) throw new Error("Source artifacts changed during copy");
+    if (snapshotDigest(db) !== input.source_digest) throw new Error("Source snapshot changed during copy");
     writeFileSync(join(stage, "desktop-account.json"), JSON.stringify({ version: 1, kind: "existing-account", user_id: input.selected_user_id, tenant_id: input.selected_user_id }), { mode: 0o600, flag: "wx" });
     publish(stage, destination);
     stage = undefined;

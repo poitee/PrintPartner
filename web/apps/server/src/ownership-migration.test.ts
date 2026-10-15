@@ -175,7 +175,7 @@ it("does not replace a destination created during the backup", async () => {
 });
 it("refuses accepted history even without a history table row", () => {
   const paths = fixture(); edit(paths.sourceDir, "UPDATE build_profiles SET accepted_plan_version=1 WHERE id=1");
-  expect(() => inspectOwnershipCopy(paths)).toThrow("Unsupported accepted history");
+  expect(() => inspectOwnershipCopy(paths)).toThrow("Unsafe accepted history");
 });
 
 it("refuses existing share capabilities whose embedded Plan ownership is ambiguous", () => {
@@ -227,3 +227,11 @@ it.each(profileAssignments.flatMap(spec => ["consistent", "null"].map(state => (
     } finally { copy.close(); }
   },
 );
+
+it.each(["inspect", "execute"])("%s refuses unsafe unclaimed repository filenames before copying", async mode => {
+  const paths = fixture(); const input = manifest(paths.sourceDir);
+  writeFileSync(join(paths.sourceDir, "repos/1", "unsafe\\name.stl"), "unsafe");
+  if (mode === "inspect") expect(() => inspectOwnershipCopy(paths)).toThrow(/Unsafe/);
+  else await expect(executeOwnershipCopy({ ...paths, manifest: input })).rejects.toThrow(/Unsafe/);
+  expect(existsSync(paths.destinationDir)).toBe(false);
+});
