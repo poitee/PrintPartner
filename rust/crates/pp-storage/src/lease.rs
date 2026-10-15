@@ -1,3 +1,6 @@
+#[cfg(test)]
+#[path = "../tests/common/process.rs"]
+mod child_process;
 mod directory;
 mod guard;
 use anyhow::{Context, Result, ensure};
@@ -32,6 +35,7 @@ pub struct StorageLease {
     lease: String,
     release_allowed: bool,
     child_marker: Arc<Mutex<Option<OwnedChildMarker>>>,
+    last_relock: Option<std::io::Result<()>>,
 }
 
 struct OwnedChildMarker {
@@ -369,6 +373,9 @@ impl StorageLease {
     }
 
     pub(crate) fn acquire_admitted(admitted: AdmittedDirectory) -> Result<Self> {
+        let cell = store_cell(&admitted.path);
+        let entries = cell.lock().map_err(|_| anyhow::anyhow!(POISONED_STORE))?;
+        ensure!(entries.is_empty(), "Data directory already owned");
         let data_dir = &admitted.path;
         #[cfg(test)]
         tests::replace_directory_during_lock(data_dir, 1)?;
@@ -472,6 +479,7 @@ impl StorageLease {
             runtime_dir,
             lease,
             release_allowed: true,
+            last_relock: None,
         })
     }
     pub(crate) fn preflight(&self) -> Result<u64> {
@@ -508,19 +516,17 @@ impl StorageLease {
     pub fn allow_drop_cleanup(&mut self) {
         self.release_allowed = true;
     }
-    /// A failed step reports `ownership_retained` and keeps this lease's lock and
-    /// guard for `retry_failed_release`. That flag does not prove the OS lock was
-    /// reacquired. Release renames whatever directory is bound at the shared
-    /// `.desktop-lease` name. While no entry is bound there, as after external
-    /// removal or relocation, release and every retry fail and retain ownership
-    /// until this process exits. Renaming this lease's own directory back to that
-    /// name lets a retry release normally.
+    /// A failed step reports `ownership_retained` and retains actual resources.
+    /// That flag does not prove the OS lock was reacquired. Once this owner observes
+    /// a missing, foreign, or uninspectable shared lease, or an unexpected detachment
+    /// failure, it permanently refuses namespace mutation and metadata cleanup.
+    /// Restoring its original directory does not enable an in-process retry.
+    /// Resources retained after ambiguity remain until process exit. Earlier runtime,
+    /// marker, and unlock failures and matching-original destination collisions remain retryable.
     ///
-    /// Unresolved defect (GRE-401), not part of this contract: if another
-    /// directory, such as a successor lease, is bound at that name, a retry
-    /// reports success. It moves that directory to this lease's private release
-    /// name and removes `owner.json` from this lease's own directory, wherever
-    /// that directory was relocated.
+    /// This contains retries after observed ambiguity. Inspection followed by
+    /// rename still has a first-release replacement race. Continuous cross-process
+    /// exclusion and detached cleanup races remain unresolved under GRE-401.
     pub fn release(mut self) -> LeaseRelease {
         self.release_allowed = false;
         #[cfg(test)]
@@ -532,48 +538,104 @@ impl StorageLease {
     }
     pub fn retain_until_process_exit(mut self) {
         self.release_allowed = false;
-        let directory = self.admitted.path.clone();
-        failed_releases()
+        let cell = store_cell(&self.admitted.path);
+        let mut entries = cell
             .lock()
-            .expect("failed release registry poisoned")
-            .insert(
-                directory,
-                RetainedLease {
-                    lease: self,
-                    retry_allowed: false,
-                },
-            );
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        entries.push(RetainedLease {
+            lease: self,
+            closure_proved: false,
+        });
     }
     pub fn retry_failed_release(directory: &Path) -> Result<LeaseRelease> {
         Self::retry_failed_release_if_present(directory)?
             .context("No retained failed release for this directory")
     }
-    /// Retry a failed release before restarting, only if closure was proved.
+    /// Retry a failed release only with proven closure and unambiguous ownership.
     /// Missing registry entries leave active leases and other processes untouched.
     pub fn retry_failed_release_if_present(directory: &Path) -> Result<Option<LeaseRelease>> {
         let directory = directory.canonicalize()?;
-        let mut retained = failed_releases()
+        let cell = failed_releases()
             .lock()
-            .expect("failed release registry poisoned");
-        let Some(entry) = retained.get(&directory) else {
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&directory)
+            .cloned();
+        let Some(cell) = cell else {
             return Ok(None);
         };
+        let mut entries = cell.lock().map_err(|_| anyhow::anyhow!(POISONED_STORE))?;
+        if entries.is_empty() {
+            return Ok(None);
+        }
         ensure!(
-            entry.retry_allowed,
+            entries.len() == 1,
+            "Conflicting retained storage leases; ownership retained until process exit"
+        );
+        let entry = &mut entries[0];
+        ensure!(
+            entry.closure_proved,
             "Closure was not proved; ownership retained until process exit"
         );
-        let mut lease = retained
-            .remove(&directory)
-            .expect("retained lease exists")
-            .lease;
-        drop(retained);
-        Ok(Some(lease.finish_release()))
+        ensure!(
+            !entry
+                .lease
+                .lease_guard
+                .as_ref()
+                .is_some_and(guard::StorageLease::is_ambiguous),
+            AMBIGUOUS_OWNERSHIP
+        );
+        let outcome = entry.lease.try_release_steps();
+        if !outcome.ownership_retained {
+            entries.remove(0);
+        }
+        Ok(Some(outcome))
     }
     fn finish_release(&mut self) -> LeaseRelease {
         self.child_marker
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
+        let cell = store_cell(&self.admitted.path);
+        let (mut entries, poisoned) = match cell.lock() {
+            Ok(entries) => (entries, false),
+            Err(error) => (error.into_inner(), true),
+        };
+        if poisoned || !entries.is_empty() {
+            self.retain_resources(&mut entries);
+            return retained_without_cleanup();
+        }
+        let outcome = self.try_release_steps();
+        if outcome.ownership_retained {
+            self.retain_resources(&mut entries);
+        }
+        outcome
+    }
+    fn retain_resources(&mut self, entries: &mut Vec<RetainedLease>) {
+        entries.push(RetainedLease {
+            lease: Self {
+                lock: self.lock.take(),
+                lease_guard: self.lease_guard.take(),
+                admitted: self.admitted.clone(),
+                runtime_dir: self.runtime_dir.clone(),
+                lease: self.lease.clone(),
+                release_allowed: false,
+                child_marker: self.child_marker.clone(),
+                last_relock: self.last_relock.take(),
+            },
+            closure_proved: true,
+        });
+    }
+    fn try_release_steps(&mut self) -> LeaseRelease {
+        if self
+            .lease_guard
+            .as_ref()
+            .is_some_and(guard::StorageLease::is_ambiguous)
+        {
+            return retained_without_cleanup();
+        }
+        self.last_relock = None;
+        #[cfg(test)]
+        tests::release_checkpoint(0);
         let runtime_removed =
             !self.runtime_dir.exists() || std::fs::remove_dir(&self.runtime_dir).is_ok();
         let marker_removed = runtime_removed
@@ -582,12 +644,15 @@ impl StorageLease {
                 .directory
                 .remove_file(".desktop-owner.json")
                 .is_ok();
-        // The shared lease excludes Node writers until OS unlock succeeds.
         let os_unlocked = marker_removed
             && self
                 .lock
                 .as_ref()
                 .is_none_or(|lock| unlock_os_lock(lock).is_ok());
+        #[cfg(test)]
+        if os_unlocked {
+            tests::release_checkpoint(1);
+        }
         let guard_detached = os_unlocked
             && self
                 .lease_guard
@@ -595,29 +660,8 @@ impl StorageLease {
                 .is_none_or(|guard| guard.detach().is_ok());
         if !runtime_removed || !marker_removed || !os_unlocked || !guard_detached {
             if os_unlocked && let Some(lock) = &self.lock {
-                // Failed detachment leaves the shared admission guard in place.
-                // Re-lock when possible, without blocking on another admission.
-                let _ = FileExt::try_lock_exclusive(lock);
+                self.last_relock = Some(FileExt::try_lock_exclusive(lock));
             }
-            let retained = Self {
-                lock: self.lock.take(),
-                lease_guard: self.lease_guard.take(),
-                admitted: self.admitted.clone(),
-                runtime_dir: self.runtime_dir.clone(),
-                lease: self.lease.clone(),
-                release_allowed: false,
-                child_marker: self.child_marker.clone(),
-            };
-            failed_releases()
-                .lock()
-                .expect("failed release registry poisoned")
-                .insert(
-                    self.admitted.path.clone(),
-                    RetainedLease {
-                        lease: retained,
-                        retry_allowed: true,
-                    },
-                );
             return LeaseRelease {
                 marker_removed,
                 runtime_removed,
@@ -637,14 +681,39 @@ impl StorageLease {
     }
 }
 
+const AMBIGUOUS_OWNERSHIP: &str =
+    "Storage lease namespace ownership is ambiguous; ownership retained until process exit";
+const POISONED_STORE: &str =
+    "Storage lease store state poisoned; ownership retained until process exit";
+
 struct RetainedLease {
     lease: StorageLease,
-    retry_allowed: bool,
+    closure_proved: bool,
 }
 
-fn failed_releases() -> &'static Mutex<BTreeMap<PathBuf, RetainedLease>> {
-    static LEASES: OnceLock<Mutex<BTreeMap<PathBuf, RetainedLease>>> = OnceLock::new();
+type StoreCell = Mutex<Vec<RetainedLease>>;
+
+fn failed_releases() -> &'static Mutex<BTreeMap<PathBuf, Arc<StoreCell>>> {
+    static LEASES: OnceLock<Mutex<BTreeMap<PathBuf, Arc<StoreCell>>>> = OnceLock::new();
     LEASES.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+fn store_cell(directory: &Path) -> Arc<StoreCell> {
+    failed_releases()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .entry(directory.to_path_buf())
+        .or_insert_with(|| Arc::new(Mutex::new(Vec::new())))
+        .clone()
+}
+
+fn retained_without_cleanup() -> LeaseRelease {
+    LeaseRelease {
+        marker_removed: false,
+        runtime_removed: false,
+        lock_released: false,
+        ownership_retained: true,
+    }
 }
 
 impl Drop for StorageLease {
@@ -657,8 +726,44 @@ impl Drop for StorageLease {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    pub(crate) fn snapshot(path: &Path) -> Vec<(PathBuf, u64, u64, Vec<u8>)> {
+        fn visit(root: &Path, path: &Path, entries: &mut Vec<(PathBuf, u64, u64, Vec<u8>)>) {
+            let metadata = std::fs::symlink_metadata(path).unwrap();
+            let bytes = if metadata.is_file() {
+                std::fs::read(path).unwrap()
+            } else if metadata.is_symlink() {
+                std::fs::read_link(path)
+                    .unwrap()
+                    .as_os_str()
+                    .as_encoded_bytes()
+                    .to_vec()
+            } else {
+                Vec::new()
+            };
+            entries.push((
+                path.strip_prefix(root).unwrap().to_path_buf(),
+                metadata.dev(),
+                metadata.ino(),
+                bytes,
+            ));
+            if metadata.is_dir() {
+                let mut children: Vec<_> = std::fs::read_dir(path)
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path())
+                    .collect();
+                children.sort();
+                for child in children {
+                    visit(root, &child, entries);
+                }
+            }
+        }
+        let mut entries = Vec::new();
+        visit(path, path, &mut entries);
+        entries
+    }
 
     pub(super) fn marker_inspection_swap(path: &Path, checkpoint: u8, restore: bool) -> Result<()> {
         if MARKER_INSPECTION_SWAP.get() != Some((checkpoint, restore)) {
@@ -1547,7 +1652,7 @@ mod tests {
         }
     }
 
-    fn directory() -> PathBuf {
+    pub(super) fn directory() -> PathBuf {
         let path = std::env::temp_dir().join(format!(
             "pp-release-order-{}",
             hex::encode(rand::random::<[u8; 8]>())
@@ -1778,5 +1883,548 @@ mod tests {
         );
         assert!(StorageLease::acquire(&path).is_err());
         assert_released(owner.release(), &path);
+    }
+    struct ReleaseHook {
+        checkpoint: u8,
+        callback: Box<dyn FnOnce()>,
+    }
+    thread_local! {
+        static RELEASE_HOOK: std::cell::RefCell<Option<ReleaseHook>> = const { std::cell::RefCell::new(None) };
+    }
+    fn on_release(checkpoint: u8, callback: impl FnOnce() + 'static) {
+        RELEASE_HOOK.with(|hook| {
+            *hook.borrow_mut() = Some(ReleaseHook {
+                checkpoint,
+                callback: Box::new(callback),
+            })
+        });
+    }
+    pub(super) fn release_checkpoint(checkpoint: u8) {
+        let hook = RELEASE_HOOK.with(|hook| {
+            let mut hook = hook.borrow_mut();
+            if hook
+                .as_ref()
+                .is_some_and(|hook| hook.checkpoint == checkpoint)
+            {
+                hook.take()
+            } else {
+                None
+            }
+        });
+        if let Some(hook) = hook {
+            (hook.callback)();
+        }
+    }
+
+    struct Resume(Option<std::sync::mpsc::Sender<()>>);
+    impl Drop for Resume {
+        fn drop(&mut self) {
+            if let Some(sender) = self.0.take() {
+                let _ = sender.send(());
+            }
+        }
+    }
+
+    struct Probe {
+        child: std::process::Child,
+        lines: std::sync::mpsc::Receiver<String>,
+        deadline: std::time::Instant,
+    }
+    impl Probe {
+        fn spawn(role: &str, path: &Path) -> Self {
+            use std::io::BufRead;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+            let mut child = super::child_process::command(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "lease::tests::ticket_t_7_writer_containment_unit_subprocess",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env("PP_CONTAINMENT_UNIT_ROLE", role)
+                .env("PP_CONTAINMENT_UNIT_PATH", path)
+                .env("TMPDIR", path.join("scratch"))
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            println!("unit child {} {role}", child.id());
+            let stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+            let (sender, lines) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                for line in stdout.lines() {
+                    if sender.send(line.unwrap()).is_err() {
+                        break;
+                    }
+                }
+            });
+            Self {
+                child,
+                lines,
+                deadline,
+            }
+        }
+        fn line(&self) -> std::result::Result<String, std::sync::mpsc::RecvTimeoutError> {
+            let now = std::time::Instant::now();
+            if now >= self.deadline {
+                return Err(std::sync::mpsc::RecvTimeoutError::Timeout);
+            }
+            let line = self.lines.recv_timeout(self.deadline.duration_since(now));
+            if std::time::Instant::now() >= self.deadline {
+                return Err(std::sync::mpsc::RecvTimeoutError::Timeout);
+            }
+            line
+        }
+        fn expect(&mut self, suffix: &str) {
+            loop {
+                let line = self.line().unwrap();
+                println!("unit {} {line}", self.child.id());
+                if line.ends_with(suffix) {
+                    return;
+                }
+            }
+        }
+        fn reap(mut self) {
+            drop(self.child.stdin.take());
+            let mut completed = false;
+            loop {
+                match self.line() {
+                    Ok(line) => {
+                        println!("unit {} {line}", self.child.id());
+                        completed |= line.starts_with("test result: ok. 1 passed; 0 failed;");
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(error) => panic!("unit stdout {error}"),
+                }
+            }
+            loop {
+                if let Some(status) = self.child.try_wait().unwrap() {
+                    assert!(status.success(), "unit child exited {status}");
+                    assert!(completed, "unit helper did not complete its scenario");
+                    println!("unit reaped {}", self.child.id());
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < self.deadline,
+                    "unit child did not exit"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+    }
+    impl Drop for Probe {
+        fn drop(&mut self) {
+            if self.child.try_wait().unwrap().is_none() {
+                let _ = self.child.kill();
+                let _ = self.child.wait();
+            }
+        }
+    }
+
+    fn resource_ids(lease: &StorageLease) -> Vec<(i32, u64, u64)> {
+        let files: [&File; 3] = [
+            lease.lock.as_ref().unwrap(),
+            &lease.admitted.directory,
+            &lease.lease_guard.as_ref().unwrap().lease_directory,
+        ];
+        files
+            .into_iter()
+            .map(|file| {
+                let metadata = file.metadata().unwrap();
+                (file.as_raw_fd(), metadata.dev(), metadata.ino())
+            })
+            .collect()
+    }
+    fn assert_handles(ids: &[(i32, u64, u64)]) {
+        for &(fd, dev, ino) in ids {
+            let duplicate = unsafe { libc::dup(fd) };
+            assert!(duplicate >= 0, "retained descriptor {fd} closed");
+            let file = unsafe { File::from_raw_fd(duplicate) };
+            let metadata = file.metadata().unwrap();
+            assert_eq!(
+                (metadata.dev(), metadata.ino()),
+                (dev, ino),
+                "retained descriptor replaced"
+            );
+        }
+    }
+    fn flags(outcome: LeaseRelease) -> (bool, bool, bool, bool) {
+        (
+            outcome.marker_removed,
+            outcome.runtime_removed,
+            outcome.lock_released,
+            outcome.ownership_retained,
+        )
+    }
+
+    fn local_reentry(path: &Path) {
+        let owner = StorageLease::acquire(path).unwrap();
+        std::fs::rename(path.join(".desktop-lease"), path.join("original")).unwrap();
+        let original = snapshot(&path.join("original"));
+        let cell = store_cell(path);
+        std::thread::scope(|scope| {
+            let (entered_tx, entered) = std::sync::mpsc::channel();
+            let (resume_tx, resume) = std::sync::mpsc::channel();
+            let releasing = scope.spawn(move || {
+                on_release(1, move || {
+                    entered_tx.send(()).unwrap();
+                    resume
+                        .recv_timeout(std::time::Duration::from_secs(10))
+                        .unwrap();
+                });
+                owner.release()
+            });
+            let resume = Resume(Some(resume_tx));
+            entered
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .unwrap();
+            let (started_tx, started) = std::sync::mpsc::channel();
+            let (result_tx, result) = std::sync::mpsc::channel();
+            scope.spawn(move || {
+                started_tx.send(()).unwrap();
+                result_tx
+                    .send(StorageLease::acquire(path).map_err(|error| error.to_string()))
+                    .unwrap();
+            });
+            started
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .unwrap();
+            assert!(
+                matches!(
+                    result.recv_timeout(std::time::Duration::from_millis(150)),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                ),
+                "same-store acquire crossed unlock-to-retain reservation"
+            );
+            let unrelated = directory();
+            assert_eq!(
+                flags(StorageLease::acquire(&unrelated).unwrap().release()),
+                (true, true, true, false)
+            );
+            std::fs::remove_dir_all(unrelated).unwrap();
+            drop(resume);
+            assert_eq!(flags(releasing.join().unwrap()), (true, true, false, true));
+            assert_eq!(
+                result
+                    .recv_timeout(std::time::Duration::from_secs(10))
+                    .unwrap()
+                    .err()
+                    .unwrap(),
+                "Data directory already owned"
+            );
+        });
+        assert_eq!(snapshot(&path.join("original")), original);
+        let entries = cell.lock().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(
+            entries[0]
+                .lease
+                .lease_guard
+                .as_ref()
+                .unwrap()
+                .is_ambiguous()
+        );
+        assert!(entries[0].lease.last_relock.as_ref().unwrap().is_ok());
+        assert_handles(&resource_ids(&entries[0].lease));
+        drop(entries);
+        let mut contender = Probe::spawn("flock-refused", path);
+        contender.expect("flock refused");
+        contender.reap();
+    }
+
+    fn in_place_retry(path: &Path) {
+        let owner = StorageLease::acquire(path).unwrap();
+        let blocker = owner.runtime_dir().join("block");
+        std::fs::write(&blocker, b"retain").unwrap();
+        assert_eq!(flags(owner.release()), (false, false, false, true));
+        let cell = store_cell(path);
+        assert!(
+            !cell.is_poisoned(),
+            "ordinary Result failure must not poison"
+        );
+        std::fs::remove_file(blocker).unwrap();
+        std::thread::scope(|scope| {
+            let (entered_tx, entered) = std::sync::mpsc::channel();
+            let (resume_tx, resume) = std::sync::mpsc::channel();
+            let retrying = scope.spawn(move || {
+                on_release(0, move || {
+                    entered_tx.send(()).unwrap();
+                    resume
+                        .recv_timeout(std::time::Duration::from_secs(10))
+                        .unwrap();
+                });
+                StorageLease::retry_failed_release(path).unwrap()
+            });
+            let resume = Resume(Some(resume_tx));
+            entered
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .unwrap();
+            let (started_tx, started) = std::sync::mpsc::channel();
+            let (result_tx, result) = std::sync::mpsc::channel();
+            scope.spawn(move || {
+                started_tx.send(()).unwrap();
+                result_tx
+                    .send(StorageLease::retry_failed_release_if_present(path))
+                    .unwrap();
+            });
+            started
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .unwrap();
+            assert!(
+                matches!(
+                    result.recv_timeout(std::time::Duration::from_millis(150)),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                ),
+                "second retry observed a vacant cell during registered retry"
+            );
+            let unrelated = directory();
+            assert_eq!(
+                flags(StorageLease::acquire(&unrelated).unwrap().release()),
+                (true, true, true, false)
+            );
+            std::fs::remove_dir_all(unrelated).unwrap();
+            drop(resume);
+            assert_eq!(flags(retrying.join().unwrap()), (true, true, true, false));
+            assert!(
+                result
+                    .recv_timeout(std::time::Duration::from_secs(10))
+                    .unwrap()
+                    .unwrap()
+                    .is_none()
+            );
+        });
+        assert!(
+            Arc::ptr_eq(&cell, &store_cell(path)),
+            "empty cell was replaced"
+        );
+        assert!(cell.lock().unwrap().is_empty());
+        assert_eq!(
+            flags(StorageLease::acquire(path).unwrap().release()),
+            (true, true, true, false)
+        );
+    }
+
+    fn failed_relock(path: &Path) {
+        let owner = StorageLease::acquire(path).unwrap();
+        let ids = resource_ids(&owner);
+        std::fs::rename(path.join(".desktop-lease"), path.join("original")).unwrap();
+        let holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let target = holder.clone();
+        let key = path.to_path_buf();
+        on_release(1, move || {
+            let mut holder = Probe::spawn("flock-held", &key);
+            holder.expect("flock held");
+            *target.borrow_mut() = Some(holder);
+        });
+        assert_eq!(flags(owner.release()), (true, true, false, true));
+        let cell = store_cell(path);
+        let before = snapshot(path);
+        {
+            let entries = cell.lock().unwrap();
+            assert_eq!(entries.len(), 1);
+            let error = entries[0]
+                .lease
+                .last_relock
+                .as_ref()
+                .unwrap()
+                .as_ref()
+                .unwrap_err();
+            assert_eq!(error.raw_os_error(), Some(libc::EWOULDBLOCK));
+            assert_handles(&ids);
+        }
+        assert!(
+            File::open(path.join(".desktop.lock"))
+                .unwrap()
+                .try_lock_exclusive()
+                .is_err()
+        );
+        holder.borrow_mut().take().unwrap().reap();
+        let free = File::open(path.join(".desktop.lock")).unwrap();
+        free.try_lock_exclusive().unwrap();
+        FileExt::unlock(&free).unwrap();
+        assert_eq!(
+            StorageLease::acquire(path).err().unwrap().to_string(),
+            "Data directory already owned"
+        );
+        #[cfg(target_os = "linux")]
+        let descriptors_before = std::fs::read_dir("/proc/self/fd").unwrap().count();
+        for _ in 0..100 {
+            assert_eq!(
+                StorageLease::retry_failed_release(path)
+                    .err()
+                    .unwrap()
+                    .to_string(),
+                AMBIGUOUS_OWNERSHIP
+            );
+            assert_eq!(snapshot(path), before);
+            assert_handles(&ids);
+        }
+        #[cfg(target_os = "linux")]
+        assert_eq!(
+            std::fs::read_dir("/proc/self/fd").unwrap().count(),
+            descriptors_before
+        );
+        let entries = cell.lock().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(resource_ids(&entries[0].lease), ids);
+        assert_eq!(
+            entries[0]
+                .lease
+                .last_relock
+                .as_ref()
+                .unwrap()
+                .as_ref()
+                .unwrap_err()
+                .raw_os_error(),
+            Some(libc::EWOULDBLOCK)
+        );
+    }
+
+    fn interfered_owners(path: &Path) -> (StorageLease, StorageLease) {
+        let first = StorageLease::acquire(path).unwrap();
+        FileExt::unlock(first.lock.as_ref().unwrap()).unwrap();
+        std::fs::rename(path.join(".desktop-lease"), path.join("original")).unwrap();
+        std::fs::remove_file(path.join(".desktop-owner.json")).unwrap();
+        let second = StorageLease::acquire(path).unwrap();
+        (first, second)
+    }
+    fn occupied_retention(path: &Path, release: bool) {
+        let (first, second) = interfered_owners(path);
+        let first_ids = resource_ids(&first);
+        let second_ids = resource_ids(&second);
+        let before = snapshot(path);
+        first.retain_until_process_exit();
+        assert_eq!(snapshot(path), before);
+        assert_handles(&first_ids);
+        if release {
+            assert_eq!(flags(second.release()), (false, false, false, true));
+        } else {
+            second.retain_until_process_exit();
+        }
+        assert_handles(&first_ids);
+        assert_handles(&second_ids);
+        assert_eq!(
+            snapshot(path),
+            before,
+            "occupied retention destroyed an existing owner's metadata"
+        );
+        let cell = store_cell(path);
+        let entries = cell.lock().unwrap();
+        assert_eq!(
+            entries.len(),
+            2,
+            "occupied retention evicted a real resource bundle"
+        );
+        assert!(!entries[0].closure_proved);
+        assert_eq!(entries[1].closure_proved, release);
+        assert_eq!(resource_ids(&entries[0].lease), first_ids);
+        assert_eq!(resource_ids(&entries[1].lease), second_ids);
+        drop(entries);
+        assert_eq!(
+            StorageLease::retry_failed_release(path)
+                .err()
+                .unwrap()
+                .to_string(),
+            "Conflicting retained storage leases; ownership retained until process exit"
+        );
+        assert_eq!(
+            StorageLease::acquire(path).err().unwrap().to_string(),
+            "Data directory already owned"
+        );
+        assert_eq!(snapshot(path), before);
+    }
+    fn poisoned_retention(path: &Path) {
+        let (first, second) = interfered_owners(path);
+        let first_ids = resource_ids(&first);
+        let second_ids = resource_ids(&second);
+        std::fs::write(first.runtime_dir().join("block"), b"retain").unwrap();
+        assert_eq!(flags(first.release()), (false, false, false, true));
+        let cell = store_cell(path);
+        assert!(
+            !cell.is_poisoned(),
+            "ordinary release failure poisoned cell"
+        );
+        let before = snapshot(path);
+        on_release(0, || panic!("deliberate registered retry panic"));
+        let panic = std::panic::catch_unwind(|| {
+            let _ = StorageLease::retry_failed_release(path);
+        });
+        assert!(panic.is_err(), "fixture must actually unwind");
+        assert!(cell.is_poisoned());
+        assert_eq!(snapshot(path), before);
+        assert_handles(&first_ids);
+        assert_eq!(
+            StorageLease::retry_failed_release(path)
+                .err()
+                .unwrap()
+                .to_string(),
+            POISONED_STORE
+        );
+        assert_eq!(
+            StorageLease::acquire(path).err().unwrap().to_string(),
+            POISONED_STORE
+        );
+        assert_eq!(flags(second.release()), (false, false, false, true));
+        assert_eq!(snapshot(path), before, "poisoned cell ran release stages");
+        assert_handles(&first_ids);
+        assert_handles(&second_ids);
+        let entries = cell
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(resource_ids(&entries[0].lease), first_ids);
+        assert_eq!(resource_ids(&entries[1].lease), second_ids);
+    }
+
+    #[test]
+    fn ticket_t_7_writer_containment_registry_process_schedules() {
+        for role in [
+            "reentry",
+            "in-place",
+            "relock",
+            "occupied-retain",
+            "occupied-release",
+            "poison",
+        ] {
+            let root = directory();
+            let scratch = root.join("scratch");
+            std::fs::create_dir(&scratch).unwrap();
+            let mut child = Probe::spawn(role, &root);
+            child.expect("containment unit complete");
+            child.reap();
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+    #[test]
+    fn ticket_t_7_writer_containment_unit_subprocess() {
+        use std::io::BufRead;
+        let Ok(role) = std::env::var("PP_CONTAINMENT_UNIT_ROLE") else {
+            return;
+        };
+        let path = PathBuf::from(std::env::var_os("PP_CONTAINMENT_UNIT_PATH").unwrap());
+        match role.as_str() {
+            "flock-held" | "flock-refused" => {
+                let lock = File::open(path.join(".desktop.lock")).unwrap();
+                if role == "flock-held" {
+                    lock.try_lock_exclusive().unwrap();
+                    println!("flock held");
+                    std::io::stdin().lock().lines().next();
+                } else {
+                    assert_eq!(
+                        lock.try_lock_exclusive().unwrap_err().raw_os_error(),
+                        Some(libc::EWOULDBLOCK)
+                    );
+                    println!("flock refused");
+                }
+            }
+            "reentry" => local_reentry(&path),
+            "in-place" => in_place_retry(&path),
+            "relock" => failed_relock(&path),
+            "occupied-retain" => occupied_retention(&path, false),
+            "occupied-release" => occupied_retention(&path, true),
+            "poison" => poisoned_retention(&path),
+            other => panic!("unknown containment unit role {other}"),
+        }
+        println!("containment unit complete");
     }
 }

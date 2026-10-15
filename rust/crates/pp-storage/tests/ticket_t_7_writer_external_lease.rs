@@ -241,7 +241,7 @@ fn ticket_t_7_writer_removed_lease_retains_failure_until_owner_exits() {
 }
 
 #[test]
-fn ticket_t_7_writer_relocated_lease_keeps_owner_bytes_until_restored() {
+fn ticket_t_7_writer_relocated_lease_refuses_even_after_restoration() {
     let fixture = Fixture::new();
     let mut owner = Owner::spawn(External::Relocated, &fixture.0);
     owner.expect("retained");
@@ -253,10 +253,21 @@ fn ticket_t_7_writer_relocated_lease_keeps_owner_bytes_until_restored() {
     )
     .unwrap();
     owner.send("restored");
-    owner.expect("released");
-    assert_eq!(names(&fixture.0), [".desktop.lock"]);
+    owner.expect("restoration refused");
+    let original = Original::read(&fixture.0.join(".desktop-lease"));
+    assert_eq!(names(&fixture.0), [".desktop-lease", ".desktop.lock"]);
+    assert_contender_refused(&fixture.0);
     owner.reap();
-    assert_ordinary_admission(&fixture.0);
+    assert_eq!(Original::read(&fixture.0.join(".desktop-lease")), original);
+    let instance: serde_json::Value = serde_json::from_slice(&original.bytes).unwrap();
+    let retired = format!(
+        ".desktop-lease-retired-{}",
+        instance["instance"].as_str().unwrap()
+    );
+    let next = StorageLease::acquire(&fixture.0).unwrap();
+    assert_eq!(Original::read(&fixture.0.join(&retired)), original);
+    assert_eq!(flags(next.release()), RELEASED);
+    assert_eq!(names(&fixture.0), [retired.as_str(), ".desktop.lock"]);
 }
 
 #[test]
@@ -292,8 +303,11 @@ fn ticket_t_7_writer_external_lease_owner_subprocess() {
             "Data directory already owned"
         );
         assert_eq!(
-            flags(StorageLease::retry_failed_release(path).unwrap()),
-            RETAINED
+            StorageLease::retry_failed_release(path)
+                .err()
+                .unwrap()
+                .to_string(),
+            "Storage lease namespace ownership is ambiguous; ownership retained until process exit"
         );
         assert_retained();
     }
@@ -303,19 +317,19 @@ fn ticket_t_7_writer_external_lease_owner_subprocess() {
     std::io::stdin().lock().read_line(&mut line).unwrap();
     if let External::Relocated = external {
         assert_eq!(line.trim_end(), "restored");
-        assert_eq!(
-            flags(StorageLease::retry_failed_release(path).unwrap()),
-            RELEASED
-        );
-        assert_eq!(names(path), [".desktop.lock"]);
-        assert_eq!(
-            StorageLease::retry_failed_release(path)
-                .err()
-                .unwrap()
-                .to_string(),
-            "No retained failed release for this directory"
-        );
-        println!("{STEP}released");
+        for _ in 0..3 {
+            assert_eq!(
+                StorageLease::retry_failed_release(path)
+                    .err()
+                    .unwrap()
+                    .to_string(),
+                "Storage lease namespace ownership is ambiguous; ownership retained until process exit"
+            );
+            assert_eq!(names(path), [".desktop-lease", ".desktop.lock"]);
+            assert_eq!(names(&shared), ["owner.json"]);
+            assert_eq!(Original::read(&shared), original);
+        }
+        println!("{STEP}restoration refused");
         std::io::stdin().lock().read_line(&mut line).unwrap();
     }
 }

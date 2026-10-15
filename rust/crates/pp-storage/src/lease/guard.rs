@@ -2,6 +2,7 @@ use super::directory::Directory;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
+use std::os::unix::fs::MetadataExt;
 
 #[cfg(target_os = "linux")]
 pub(crate) fn process_identity(pid: u32) -> Result<String> {
@@ -146,10 +147,18 @@ struct Owner {
     instance: String,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum State {
+    Shared,
+    Detached,
+    Ambiguous,
+    Released,
+}
+
 pub(crate) struct StorageLease {
     directory: Directory,
     pub(super) lease_directory: Directory,
-    path: Option<String>,
+    state: State,
     pub(crate) identity: String,
     detached: String,
 }
@@ -179,7 +188,7 @@ impl StorageLease {
                                 return Ok(Self {
                                     directory: held_directory,
                                     lease_directory: candidate_directory,
-                                    path: Some(lease.into()),
+                                    state: State::Shared,
                                     identity,
                                     detached: format!(".desktop-lease-release-{}", owner.instance),
                                 });
@@ -247,24 +256,56 @@ impl StorageLease {
         }
         result
     }
-    pub(crate) fn detach(&mut self) -> Result<()> {
-        if let Some(path) = &self.path
-            && path != &self.detached
-        {
-            self.directory
-                .rename(path, &self.directory, &self.detached)?;
-            self.path = Some(self.detached.clone());
+    pub(super) fn is_ambiguous(&self) -> bool {
+        self.state == State::Ambiguous
+    }
+
+    fn inspect_source(&self) -> std::io::Result<()> {
+        let named = self.directory.open_dir(".desktop-lease")?.metadata()?;
+        let held = self.lease_directory.metadata()?;
+        if named.dev() != held.dev() || named.ino() != held.ino() {
+            return Err(std::io::Error::from_raw_os_error(libc::ESTALE));
         }
         Ok(())
     }
 
+    pub(crate) fn detach(&mut self) -> Result<()> {
+        match self.state {
+            State::Ambiguous => bail!(super::AMBIGUOUS_OWNERSHIP),
+            State::Detached | State::Released => return Ok(()),
+            State::Shared => {}
+        }
+        if let Err(error) = self.inspect_source() {
+            self.state = State::Ambiguous;
+            return Err(error.into());
+        }
+        // This inspection permits refusal. It cannot make rename inode-conditional.
+        match self
+            .directory
+            .rename(".desktop-lease", &self.directory, &self.detached)
+        {
+            Ok(()) => {
+                self.state = State::Detached;
+                Ok(())
+            }
+            Err(error) => {
+                if !matches!(error.raw_os_error(), Some(libc::ENOTEMPTY | libc::EEXIST))
+                    || self.inspect_source().is_err()
+                {
+                    self.state = State::Ambiguous;
+                }
+                Err(error.into())
+            }
+        }
+    }
+
     pub(crate) fn release(&mut self) -> Result<()> {
         self.detach()?;
-        if let Some(path) = &self.path {
+        if self.state == State::Detached {
             self.lease_directory.remove_file("previous-marker.json")?;
             self.lease_directory.remove_file("owner.json")?;
-            self.directory.remove_dir(path)?;
-            self.path = None;
+            self.directory.remove_dir(&self.detached)?;
+            self.state = State::Released;
         }
         Ok(())
     }
@@ -423,51 +464,141 @@ mod tests {
     }
 
     #[test]
-    fn externally_removed_or_relocated_lease_detach_reports_not_found() {
-        for relocate in [false, true] {
-            let directory = std::env::temp_dir().join(format!(
-                "pp-guard-external-{}",
-                hex::encode(rand::random::<[u8; 16]>())
-            ));
-            std::os::unix::fs::DirBuilderExt::mode(&mut std::fs::DirBuilder::new(), 0o700)
-                .create(&directory)
-                .unwrap();
+    fn ambiguous_guard_refuses_retries_restoration_and_actual_drop() {
+        use std::os::fd::FromRawFd;
+        use std::os::unix::fs::MetadataExt;
+        for cause in [
+            "removed",
+            "relocated",
+            "foreign",
+            "symlink",
+            "unknown-rename",
+        ] {
+            let directory = super::super::tests::directory();
             let admitted = super::super::admit_directory(&directory).unwrap();
             let mut old = super::StorageLease::acquire(&admitted.directory).unwrap();
             let shared = directory.join(".desktop-lease");
             let hidden = directory.join("hidden-lease");
-            let bytes = std::fs::read(shared.join("owner.json")).unwrap();
-            if relocate {
-                std::fs::rename(&shared, &hidden).unwrap();
-            } else {
-                std::fs::remove_dir_all(&shared).unwrap();
+            let detached = old.detached.clone();
+            match cause {
+                "removed" => std::fs::remove_dir_all(&shared).unwrap(),
+                "unknown-rename" => old.detached.push_str("/nonexistent"),
+                _ => std::fs::rename(&shared, &hidden).unwrap(),
             }
-
-            for _ in 0..2 {
-                let error = old.release().unwrap_err();
-                assert_eq!(
-                    error
-                        .downcast_ref::<std::io::Error>()
-                        .unwrap()
-                        .raw_os_error(),
-                    Some(libc::ENOENT)
-                );
-                assert_eq!(old.path.as_deref(), Some(".desktop-lease"));
-                assert!(!directory.join(&old.detached).exists());
-                if relocate {
-                    assert_eq!(std::fs::read(hidden.join("owner.json")).unwrap(), bytes);
+            let successor = match cause {
+                "foreign" => Some(super::StorageLease::acquire(&admitted.directory).unwrap()),
+                "symlink" => {
+                    std::os::unix::fs::symlink(&hidden, &shared).unwrap();
+                    None
                 }
+                _ => None,
+            };
+            let error = old.detach().unwrap_err();
+            let errno = error
+                .downcast_ref::<std::io::Error>()
+                .unwrap()
+                .raw_os_error();
+            match cause {
+                "foreign" => assert_eq!(errno, Some(libc::ESTALE)),
+                "symlink" => assert!(matches!(errno, Some(libc::ENOTDIR | libc::ELOOP))),
+                _ => assert_eq!(errno, Some(libc::ENOENT)),
             }
-
-            if relocate {
+            assert_eq!(old.state, super::State::Ambiguous);
+            let before = super::super::tests::snapshot(&directory);
+            for _ in 0..3 {
+                assert_eq!(
+                    old.detach().unwrap_err().to_string(),
+                    super::super::AMBIGUOUS_OWNERSHIP
+                );
+                assert_eq!(super::super::tests::snapshot(&directory), before);
+                assert_eq!(
+                    old.release().unwrap_err().to_string(),
+                    super::super::AMBIGUOUS_OWNERSHIP
+                );
+                assert_eq!(super::super::tests::snapshot(&directory), before);
+            }
+            if cause == "relocated" {
                 std::fs::rename(&hidden, &shared).unwrap();
-                old.release().unwrap();
-                assert_eq!(old.path, None);
-                assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 0);
             }
+            if cause == "symlink" {
+                std::fs::remove_file(&shared).unwrap();
+                std::fs::rename(&hidden, &shared).unwrap();
+            }
+            old.detached = detached.clone();
+            let restored = super::super::tests::snapshot(&directory);
+            assert_eq!(
+                old.release().unwrap_err().to_string(),
+                super::super::AMBIGUOUS_OWNERSHIP
+            );
+            assert_eq!(super::super::tests::snapshot(&directory), restored);
+            let successor = if cause == "removed" {
+                Some(super::StorageLease::acquire(&admitted.directory).unwrap())
+            } else {
+                successor
+            };
+            let final_tree = super::super::tests::snapshot(&directory);
+            let descriptor = std::os::fd::AsRawFd::as_raw_fd(&*old.lease_directory);
+            let held = old.lease_directory.try_clone().unwrap();
+            let identity = held.metadata().unwrap();
             drop(old);
+            let duplicate = unsafe { libc::dup(descriptor) };
+            if duplicate >= 0 {
+                let reused = unsafe { std::fs::File::from_raw_fd(duplicate) };
+                let metadata = reused.metadata().unwrap();
+                assert_ne!(
+                    (metadata.dev(), metadata.ino()),
+                    (identity.dev(), identity.ino()),
+                    "direct guard Drop retained its original descriptor"
+                );
+            } else {
+                assert_eq!(
+                    std::io::Error::last_os_error().raw_os_error(),
+                    Some(libc::EBADF)
+                );
+            }
+            drop(held);
+            assert_eq!(
+                super::super::tests::snapshot(&directory),
+                final_tree,
+                "actual ambiguous Drop changed {cause}"
+            );
+            assert!(!directory.join(detached).exists());
+            drop(successor);
             std::fs::remove_dir_all(directory).unwrap();
         }
+    }
+
+    #[test]
+    fn matching_original_collision_and_repeated_direct_release_remain_retryable() {
+        let directory = super::super::tests::directory();
+        let admitted = super::super::admit_directory(&directory).unwrap();
+        let mut owner = super::StorageLease::acquire(&admitted.directory).unwrap();
+        let destination = directory.join(&owner.detached);
+        std::fs::create_dir(&destination).unwrap();
+        std::fs::write(destination.join("keep"), b"collision").unwrap();
+        let before = super::super::tests::snapshot(&directory);
+        let error = owner.detach().unwrap_err();
+        assert!(matches!(
+            error
+                .downcast_ref::<std::io::Error>()
+                .unwrap()
+                .raw_os_error(),
+            Some(libc::ENOTEMPTY | libc::EEXIST)
+        ));
+        assert_eq!(owner.state, super::State::Shared);
+        assert_eq!(super::super::tests::snapshot(&directory), before);
+        std::fs::remove_dir_all(destination).unwrap();
+        owner.detach().unwrap();
+        owner.detach().unwrap();
+        assert_eq!(owner.state, super::State::Detached);
+        owner.release().unwrap();
+        owner.release().unwrap();
+        owner.detach().unwrap();
+        assert_eq!(owner.state, super::State::Released);
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 0);
+        drop(owner);
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 0);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

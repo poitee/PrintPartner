@@ -704,7 +704,7 @@ fn failed_cleanup_retains_marker_and_lock_until_explicit_retry() {
 }
 
 #[test]
-fn directory_lease_cleanup_failure_retains_lock_until_retry() {
+fn directory_lease_ambiguity_retains_lock_even_after_restoration() {
     use fs2::FileExt;
     let (path, owner, _) = fixture("retained-directory-lease");
     let lease_path = path.join(".desktop-lease");
@@ -719,13 +719,19 @@ fn directory_lease_cleanup_failure_retains_lock_until_retry() {
             .try_lock_exclusive()
             .is_err()
     );
+    let original = lease::tests::snapshot(&hidden);
     std::fs::rename(hidden, &lease_path).unwrap();
-    let released = lease::StorageLease::retry_failed_release(&path).unwrap();
-    assert!(released.marker_removed && released.runtime_removed && released.lock_released);
-    assert!(!released.ownership_retained);
-    assert!(!lease_path.exists());
-    let next = lease::StorageLease::acquire(&path).unwrap().release();
-    assert!(next.lock_released);
+    for _ in 0..3 {
+        let error = lease::StorageLease::retry_failed_release(&path)
+            .err()
+            .unwrap();
+        assert_eq!(
+            error.to_string(),
+            "Storage lease namespace ownership is ambiguous; ownership retained until process exit"
+        );
+        assert_eq!(lease::tests::snapshot(&lease_path), original);
+        assert!(lease::StorageLease::acquire(&path).is_err());
+    }
     std::fs::remove_dir_all(path).unwrap();
 }
 
