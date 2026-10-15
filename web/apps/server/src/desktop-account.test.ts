@@ -80,6 +80,26 @@ describe("desktop account admission", () => {
     map(directory, { ...mapping, user_id: "account-b", tenant_id: "account-b" });
     expect(account.principal().user_id).toBe("account-a");
   });
+  it("selects the claimed default account and its legacy tenant only by explicit mapping", () => {
+    const directory = fixture();
+    const db = new Database(join(directory, "print-partner.db"));
+    db.prepare("INSERT INTO users VALUES ('default', 'first@example.test', 'First', 'hash', 1)").run();
+    db.close();
+    map(directory, { ...mapping, user_id: "default", tenant_id: "default" });
+    const before = readFileSync(join(directory, "print-partner.db"));
+    const account = admit(directory, "existing-account-v1");
+    if (account.kind !== "existing") throw new Error("Expected mapped account");
+    expect(account.principal()).toEqual({ user_id: "default", tenant_id: "default", login: "first@example.test",
+      display_name: "First", email: "first@example.test", provider: "desktop", hasPassword: true, is_admin: true });
+    expect(readFileSync(join(directory, "print-partner.db"))).toEqual(before);
+  });
+  it.each(["account-a", "account-b"])("refuses mapping unclaimed account %s onto shared default data", user => {
+    const directory = fixture();
+    map(directory, { ...mapping, user_id: user, tenant_id: "default" });
+    const before = readFileSync(join(directory, "print-partner.db"));
+    expect(() => admit(directory, "existing-account-v1")).toThrow();
+    expect(readFileSync(join(directory, "print-partner.db"))).toEqual(before);
+  });
   it.each(["changed", "removed", "appeared"])("refuses a %s mapping against the runtime pin before writes", kind => {
     const directory = fixture();
     const path = map(directory);

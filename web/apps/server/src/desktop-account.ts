@@ -12,7 +12,7 @@ const mappingSchema = z.strictObject({
   kind: z.literal("existing-account"),
   user_id: z.string().min(1).max(256),
   tenant_id: z.string().min(1).max(256),
-}).refine(value => value.user_id !== "default" && value.tenant_id === value.user_id);
+}).refine(value => value.tenant_id === value.user_id);
 const userSchema = z.object({
   id: z.string(), email: z.string().nullable(), display_name: z.string(),
   password_hash: z.string().nullable(), is_admin: z.union([z.literal(0), z.literal(1)]),
