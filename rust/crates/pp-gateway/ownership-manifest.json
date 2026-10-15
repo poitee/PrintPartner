@@ -375,6 +375,15 @@
         ]
       },
       {
+        "operation": "tool.ui_navigate",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "build_profiles"
+          }
+        ]
+      },
+      {
         "operation": "tool.ui_focus_stl_search",
         "resources": [
           {
@@ -807,7 +816,6 @@
       "tool.start_sync",
       "tool.suggest_source_contributions",
       "tool.ui_focus_kit_option",
-      "tool.ui_navigate",
       "tool.ui_open_docs",
       "tool.ui_open_source",
       "tool.update_kit_selections",
