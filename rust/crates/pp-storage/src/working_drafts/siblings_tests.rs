@@ -61,6 +61,175 @@ fn expect(groups: &[Expected<'_>]) -> Shape {
         .collect()
 }
 
+fn assert_shape_in_any_order(paths: &[&str], expected: &[Expected<'_>]) {
+    let mut paths = paths.to_vec();
+    for _ in 0..paths.len() {
+        assert_eq!(shape(&paths), expect(expected), "paths: {paths:?}");
+        paths.reverse();
+        assert_eq!(shape(&paths), expect(expected), "paths: {paths:?}");
+        paths.reverse();
+        paths.rotate_left(1);
+    }
+}
+
+#[test]
+fn siblings_group_collision_preserves_independent_mods() {
+    assert_shape_in_any_order(
+        &["Mods/Red+Blue/a.stl", "Mods/Red Blue/b.stl"],
+        &[
+            (
+                "mods_red_blue",
+                &[("skip", &[]), ("include", &["Mods/Red Blue/*"])],
+            ),
+            (
+                "mods_red_blue_2",
+                &[("skip", &[]), ("include", &["Mods/Red+Blue/*"])],
+            ),
+        ],
+    );
+}
+
+#[test]
+fn siblings_group_collision_preserves_independent_options() {
+    assert_shape_in_any_order(
+        &[
+            "A+B/Options/X/a.stl",
+            "A+B/Options/Y/b.stl",
+            "A B/Options/X/c.stl",
+            "A B/Options/Y/d.stl",
+        ],
+        &[
+            (
+                "a_b_options",
+                &[("x", &["A B/Options/X/*"]), ("y", &["A B/Options/Y/*"])],
+            ),
+            (
+                "a_b_options_2",
+                &[("x", &["A+B/Options/X/*"]), ("y", &["A+B/Options/Y/*"])],
+            ),
+        ],
+    );
+}
+
+#[test]
+fn siblings_group_collision_preserves_independent_numeric_groups() {
+    assert_shape_in_any_order(
+        &[
+            "A+B/Size 1/a.stl",
+            "A+B/Size 2/b.stl",
+            "A B/Size 1/c.stl",
+            "A B/Size 2/d.stl",
+        ],
+        &[
+            (
+                "a_b_size_n",
+                &[("size_1", &["A B/Size 1/*"]), ("size_2", &["A B/Size 2/*"])],
+            ),
+            (
+                "a_b_size_n_2",
+                &[("size_1", &["A+B/Size 1/*"]), ("size_2", &["A+B/Size 2/*"])],
+            ),
+        ],
+    );
+    assert_shape_in_any_order(
+        &[
+            "Size 1/a.stl",
+            "Size 2/b.stl",
+            "Size+1/c.stl",
+            "Size+2/d.stl",
+        ],
+        &[
+            (
+                "root_size_n",
+                &[("size_1", &["Size 1/*"]), ("size_2", &["Size 2/*"])],
+            ),
+            (
+                "root_size_n_2",
+                &[("size_1", &["Size+1/*"]), ("size_2", &["Size+2/*"])],
+            ),
+        ],
+    );
+}
+
+#[test]
+fn siblings_group_collision_breaks_collation_ties_by_literal_path() {
+    assert_shape_in_any_order(
+        &["Mods/\u{30ac}/a.stl", "Mods/\u{30ab}\u{3099}/b.stl"],
+        &[
+            (
+                "mods",
+                &[("skip", &[]), ("include", &["Mods/\u{30ab}\u{3099}/*"])],
+            ),
+            (
+                "mods_2",
+                &[("skip", &[]), ("include", &["Mods/\u{30ac}/*"])],
+            ),
+        ],
+    );
+}
+
+#[test]
+fn siblings_group_collision_keeps_natural_suffixes_and_cross_kind_groups() {
+    assert_shape_in_any_order(
+        &[
+            "Mods/A B/a.stl",
+            "Mods/A+B/b.stl",
+            "Mods/A+B_2/c.stl",
+            "Mods_A_B/base.stl",
+            "Mods_A_B/Version A/d.stl",
+            "Mods_A_B/Version B/e.stl",
+        ],
+        &[
+            ("mods_a_b", &[("skip", &[]), ("include", &["Mods/A B/*"])]),
+            ("mods_a_b_2", &[("skip", &[]), ("include", &["Mods/A+B/*"])]),
+            (
+                "mods_a_b_2_2",
+                &[("skip", &[]), ("include", &["Mods/A+B_2/*"])],
+            ),
+            (
+                "mods_a_b_3",
+                &[
+                    ("default", &["Mods_A_B/base.stl"]),
+                    ("version_a", &["Mods_A_B/Version A/*"]),
+                    ("version_b", &["Mods_A_B/Version B/*"]),
+                ],
+            ),
+        ],
+    );
+}
+
+#[test]
+fn siblings_group_collision_retains_one_version_aggregate_per_directory() {
+    assert_shape_in_any_order(
+        &[
+            "A B/base.stl",
+            "A B/Version A/a.stl",
+            "A B/Version B/b.stl",
+            "A+B/base.stl",
+            "A+B/Version A/c.stl",
+            "A+B/Version B/d.stl",
+        ],
+        &[
+            (
+                "a_b",
+                &[
+                    ("default", &["A B/base.stl"]),
+                    ("version_a", &["A B/Version A/*"]),
+                    ("version_b", &["A B/Version B/*"]),
+                ],
+            ),
+            (
+                "a_b_2",
+                &[
+                    ("default", &["A+B/base.stl"]),
+                    ("version_a", &["A+B/Version A/*"]),
+                    ("version_b", &["A+B/Version B/*"]),
+                ],
+            ),
+        ],
+    );
+}
+
 #[test]
 fn siblings_options_preserve_folder_order_and_typed_patterns() {
     let groups = infer(&[
