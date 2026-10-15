@@ -3,8 +3,9 @@ pub(crate) mod projection;
 use crate::{Envelope, Shared, WriterOwner, auth, read_model};
 use anyhow::{Result, anyhow, ensure};
 pub use model::*;
+pub use pp_contracts::build_identity::BuildName;
 use pp_domain::PositiveId;
-use rusqlite::{Connection, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use std::{
     path::PathBuf,
     sync::{
@@ -15,11 +16,19 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BudgetResource {
+    GraphRows,
+    GraphBytes,
+    PlateOverlapChecks,
+}
+
 #[derive(Debug)]
 pub enum Failure {
     Cancelled,
     TooManyBuilds,
     TooManyLayers,
+    BudgetExhausted { resource: BudgetResource },
     QueueFull,
     Stopped,
     OutcomeUnknown,
@@ -36,8 +45,39 @@ impl std::error::Error for Failure {}
 #[derive(Clone)]
 pub enum BuildCommand {
     List,
-    Read { build: PositiveId },
-    ListLayers { build: PositiveId },
+    Read {
+        build: PositiveId,
+    },
+    ListLayers {
+        build: PositiveId,
+    },
+    Create {
+        name: BuildName,
+        base_source: Option<PositiveId>,
+    },
+    Touch {
+        build: PositiveId,
+    },
+    SetBase {
+        build: PositiveId,
+        source: PositiveId,
+    },
+    AttachAddon {
+        build: PositiveId,
+        source: PositiveId,
+    },
+    ReplaceAttachment {
+        build: PositiveId,
+        layer: PositiveId,
+        source: PositiveId,
+    },
+    Detach {
+        build: PositiveId,
+        layer: PositiveId,
+    },
+    Delete {
+        build: PositiveId,
+    },
 }
 #[derive(Debug)]
 pub enum BuildOutcome {
@@ -51,7 +91,24 @@ pub enum BuildOutcome {
         profile_id: i64,
         layers: Vec<ProfileLayer>,
     },
+    Created {
+        profile: Box<ProfileSummary>,
+        layers: Vec<ProfileLayer>,
+    },
+    Touched {
+        profile: Box<ProfileSummary>,
+    },
+    Deleted,
     MissingBuild,
+    InvalidBaseSource,
+    MissingSource,
+    MissingLayer,
+    DuplicateName {
+        name: String,
+    },
+    DuplicateAttachment {
+        source_name: String,
+    },
 }
 #[derive(Clone)]
 pub struct BuildGraphClient {
@@ -186,6 +243,31 @@ fn build_exists(tx: &Transaction<'_>, tenant: &str, build: i64) -> Result<bool> 
     .map_err(Into::into)
 }
 
+fn source_name(tx: &Transaction<'_>, tenant: &str, source: i64) -> Result<Option<String>> {
+    tx.query_row(
+        "SELECT name FROM projects WHERE tenant_id=?1 AND id=?2",
+        params![tenant, source],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+fn duplicate_source(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    build: i64,
+    source: i64,
+    except_layer: Option<i64>,
+) -> Result<bool> {
+    tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM profile_layers WHERE tenant_id=?1 AND profile_id=?2 AND project_id=?3 AND (?4 IS NULL OR id<>?4))",
+        params![tenant, build, source, except_layer],
+        |row| row.get(0),
+    )
+    .map_err(Into::into)
+}
+
 fn layers(
     tx: &Transaction<'_>,
     tenant: &str,
@@ -212,6 +294,226 @@ fn layers(
         layers.push(layer);
     }
     Ok(layers)
+}
+
+fn mark_modified(tx: &Transaction<'_>, tenant: &str, build: i64, now: &str) -> Result<()> {
+    ensure!(
+        tx.execute(
+            "UPDATE build_profiles SET config_modified_at=?1 WHERE tenant_id=?2 AND id=?3",
+            params![now, tenant, build],
+        )? == 1,
+        "Build freshness update failed"
+    );
+    Ok(())
+}
+
+fn mutation(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    command: &BuildCommand,
+    repos: &std::path::Path,
+    cancelled: &AtomicBool,
+) -> Result<BuildOutcome> {
+    let mut budget = read_model::graph::Budget::default();
+    match command {
+        BuildCommand::Create { name, base_source } => {
+            let duplicate: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM build_profiles WHERE tenant_id=?1 AND name=?2)",
+                params![tenant, name.as_str()],
+                |row| row.get(0),
+            )?;
+            if duplicate {
+                return Ok(BuildOutcome::DuplicateName {
+                    name: name.as_str().to_owned(),
+                });
+            }
+            let source = if let Some(source) = base_source {
+                let id = source.get() as i64;
+                if source_name(tx, tenant, id)?.is_none() {
+                    return Ok(BuildOutcome::InvalidBaseSource);
+                }
+                Some(id)
+            } else {
+                None
+            };
+            let now = auth::catalog_timestamp();
+            tx.execute(
+                "INSERT INTO build_profiles(tenant_id,name,config_modified_at,last_used_at) VALUES(?1,?2,?3,?3)",
+                params![tenant, name.as_str(), now],
+            )?;
+            let build = tx.last_insert_rowid();
+            if let Some(source) = source {
+                tx.execute(
+                    "INSERT INTO profile_layers(tenant_id,profile_id,layer_order,layer_type,project_id) VALUES(?1,?2,0,'base',?3)",
+                    params![tenant, build, source],
+                )?;
+            }
+            let profile = read_model::graph::build_summary(tx, tenant, build, repos, &mut budget)?
+                .ok_or_else(|| anyhow!("Created Build missing"))?;
+            Ok(BuildOutcome::Created {
+                profile: Box::new(profile),
+                layers: layers(tx, tenant, build, cancelled)?,
+            })
+        }
+        BuildCommand::Touch { build } => {
+            let build = build.get() as i64;
+            let now = auth::catalog_timestamp();
+            if tx.execute(
+                "UPDATE build_profiles SET last_used_at=?1 WHERE tenant_id=?2 AND id=?3",
+                params![now, tenant, build],
+            )? == 0
+            {
+                return Ok(BuildOutcome::MissingBuild);
+            }
+            Ok(BuildOutcome::Touched {
+                profile: Box::new(
+                    read_model::graph::build_summary(tx, tenant, build, repos, &mut budget)?
+                        .ok_or_else(|| anyhow!("Touched Build missing"))?,
+                ),
+            })
+        }
+        BuildCommand::SetBase { build, source } => {
+            let build = build.get() as i64;
+            let source = source.get() as i64;
+            if !build_exists(tx, tenant, build)? {
+                return Ok(BuildOutcome::MissingBuild);
+            }
+            let Some(source_name) = source_name(tx, tenant, source)? else {
+                return Ok(BuildOutcome::MissingSource);
+            };
+            let existing: Option<i64> = tx.query_row(
+                "SELECT id FROM profile_layers WHERE tenant_id=?1 AND profile_id=?2 AND layer_type='base' ORDER BY id LIMIT 1",
+                params![tenant, build],
+                |row| row.get(0),
+            ).optional()?;
+            if duplicate_source(tx, tenant, build, source, existing)? {
+                return Ok(BuildOutcome::DuplicateAttachment { source_name });
+            }
+            if let Some(layer) = existing {
+                tx.execute(
+                    "UPDATE profile_layers SET project_id=?1,layer_order=0 WHERE tenant_id=?2 AND profile_id=?3 AND id=?4",
+                    params![source, tenant, build, layer],
+                )?;
+            } else {
+                tx.execute(
+                    "INSERT INTO profile_layers(tenant_id,profile_id,layer_order,layer_type,project_id) VALUES(?1,?2,0,'base',?3)",
+                    params![tenant, build, source],
+                )?;
+            }
+            mark_modified(tx, tenant, build, &auth::catalog_timestamp())?;
+            Ok(BuildOutcome::Layers {
+                profile_id: build,
+                layers: layers(tx, tenant, build, cancelled)?,
+            })
+        }
+        BuildCommand::AttachAddon { build, source } => {
+            let build = build.get() as i64;
+            let source = source.get() as i64;
+            if !build_exists(tx, tenant, build)? {
+                return Ok(BuildOutcome::MissingBuild);
+            }
+            let Some(source_name) = source_name(tx, tenant, source)? else {
+                return Ok(BuildOutcome::MissingSource);
+            };
+            if duplicate_source(tx, tenant, build, source, None)? {
+                return Ok(BuildOutcome::DuplicateAttachment { source_name });
+            }
+            let next: i64 = tx.query_row(
+                "SELECT coalesce(max(layer_order),-1)+1 FROM profile_layers WHERE tenant_id=?1 AND profile_id=?2",
+                params![tenant, build],
+                |row| row.get(0),
+            )?;
+            tx.execute(
+                "INSERT INTO profile_layers(tenant_id,profile_id,layer_order,layer_type,project_id) VALUES(?1,?2,?3,'addon',?4)",
+                params![tenant, build, next, source],
+            )?;
+            mark_modified(tx, tenant, build, &auth::catalog_timestamp())?;
+            Ok(BuildOutcome::Layers {
+                profile_id: build,
+                layers: layers(tx, tenant, build, cancelled)?,
+            })
+        }
+        BuildCommand::ReplaceAttachment {
+            build,
+            layer,
+            source,
+        } => {
+            let build = build.get() as i64;
+            let layer = layer.get() as i64;
+            let source = source.get() as i64;
+            if !build_exists(tx, tenant, build)? {
+                return Ok(BuildOutcome::MissingBuild);
+            }
+            let member: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM profile_layers WHERE tenant_id=?1 AND profile_id=?2 AND id=?3)",
+                params![tenant, build, layer],
+                |row| row.get(0),
+            )?;
+            if !member {
+                return Ok(BuildOutcome::MissingLayer);
+            }
+            let Some(source_name) = source_name(tx, tenant, source)? else {
+                return Ok(BuildOutcome::MissingSource);
+            };
+            if duplicate_source(tx, tenant, build, source, Some(layer))? {
+                return Ok(BuildOutcome::DuplicateAttachment { source_name });
+            }
+            ensure!(
+                tx.execute(
+                    "UPDATE profile_layers SET project_id=?1 WHERE tenant_id=?2 AND profile_id=?3 AND id=?4",
+                    params![source, tenant, build, layer],
+                )? == 1,
+                "Build attachment changed concurrently"
+            );
+            mark_modified(tx, tenant, build, &auth::catalog_timestamp())?;
+            Ok(BuildOutcome::Layers {
+                profile_id: build,
+                layers: layers(tx, tenant, build, cancelled)?,
+            })
+        }
+        BuildCommand::Detach { build, layer } => {
+            let build = build.get() as i64;
+            let layer = layer.get() as i64;
+            if !build_exists(tx, tenant, build)? {
+                return Ok(BuildOutcome::MissingBuild);
+            }
+            if tx.execute(
+                "DELETE FROM profile_layers WHERE tenant_id=?1 AND profile_id=?2 AND id=?3",
+                params![tenant, build, layer],
+            )? == 0
+            {
+                return Ok(BuildOutcome::MissingLayer);
+            }
+            mark_modified(tx, tenant, build, &auth::catalog_timestamp())?;
+            Ok(BuildOutcome::Deleted)
+        }
+        BuildCommand::Delete { build } => {
+            let build = build.get() as i64;
+            if !build_exists(tx, tenant, build)? {
+                return Ok(BuildOutcome::MissingBuild);
+            }
+            tx.pragma_update(None, "defer_foreign_keys", "ON")?;
+            tx.execute(
+                "DELETE FROM app_settings WHERE tenant_id=?1 AND key IN (?2,?3)",
+                params![
+                    tenant,
+                    format!("production_setup:{build}"),
+                    format!("role_filaments_{build}")
+                ],
+            )?;
+            ensure!(
+                tx.execute(
+                    "DELETE FROM build_profiles WHERE tenant_id=?1 AND id=?2",
+                    params![tenant, build],
+                )? == 1,
+                "Build changed concurrently"
+            );
+            Ok(BuildOutcome::Deleted)
+        }
+        BuildCommand::List | BuildCommand::Read { .. } | BuildCommand::ListLayers { .. } => {
+            unreachable!("read command in mutation transaction")
+        }
+    }
 }
 
 fn read(
@@ -267,6 +569,7 @@ fn read(
                 layers: layers(tx, tenant, build, cancelled)?,
             })
         }
+        _ => unreachable!("mutation command in read transaction"),
     }
 }
 
@@ -275,9 +578,19 @@ pub(super) fn execute(connection: &mut Connection, command: Command) -> Result<B
         !command.cancelled.load(Ordering::Acquire),
         Failure::Cancelled
     );
-    let tx = connection.transaction()?;
+    let read_only = matches!(
+        command.command,
+        BuildCommand::List | BuildCommand::Read { .. } | BuildCommand::ListLayers { .. }
+    );
+    let behavior = if read_only {
+        TransactionBehavior::Deferred
+    } else {
+        TransactionBehavior::Immediate
+    };
+    let tx = connection.transaction_with_behavior(behavior)?;
     let tenant = tenant(&tx, &command)?;
-    let outcome = read(
+    let operation = if read_only { read } else { mutation };
+    let outcome = operation(
         &tx,
         &tenant,
         &command.command,

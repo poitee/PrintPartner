@@ -389,3 +389,637 @@ fn review_layers_allow_1024_and_reject_1025() {
         .unwrap_err();
     assert!(matches!(error.downcast_ref(), Some(Failure::TooManyLayers)));
 }
+
+fn name(value: &str) -> pp_storage::build_graph::BuildName {
+    pp_storage::build_graph::BuildName::parse(value.into()).unwrap()
+}
+fn create(
+    f: &Fixture,
+    value: &str,
+    source: Option<PositiveId>,
+) -> (PositiveId, Vec<pp_storage::build_graph::ProfileLayer>) {
+    let BuildOutcome::Created { profile, layers } = f
+        .run(BuildCommand::Create {
+            name: name(value),
+            base_source: source,
+        })
+        .unwrap()
+    else {
+        panic!("create")
+    };
+    (id(profile.id as u64), layers)
+}
+fn read_build(f: &Fixture, build: PositiveId) -> ProfileSummary {
+    let BuildOutcome::Read { profile } = f.run(BuildCommand::Read { build }).unwrap() else {
+        panic!("read")
+    };
+    *profile
+}
+fn layer_result(f: &Fixture, command: BuildCommand) -> Vec<pp_storage::build_graph::ProfileLayer> {
+    let BuildOutcome::Layers { layers, .. } = f.run(command).unwrap() else {
+        panic!("layers")
+    };
+    layers
+}
+fn sources(f: &Fixture) {
+    f.raw().execute_batch("INSERT INTO projects(id,tenant_id,name,url) VALUES(2,'default','Addon','addon'),(3,'default','Replacement','replacement'),(50,'other','Foreign','foreign');").unwrap();
+}
+
+#[test]
+fn mutation_create_touch_attachments_and_delete() {
+    let f = Fixture::new();
+    sources(&f);
+    let (build, initial) = create(&f, "\u{feff} New build \u{a0}", Some(id(1)));
+    assert_eq!(read_build(&f, build).name, "New build");
+    assert_eq!(initial.len(), 1);
+    assert_eq!(
+        (
+            initial[0].layer_order,
+            initial[0].layer_type.as_str(),
+            initial[0].project_id
+        ),
+        (0, "base", Some(1))
+    );
+    let layers = layer_result(
+        &f,
+        BuildCommand::AttachAddon {
+            build,
+            source: id(2),
+        },
+    );
+    assert_eq!(
+        layers
+            .iter()
+            .map(|l| (l.layer_order, l.project_id))
+            .collect::<Vec<_>>(),
+        vec![(0, Some(1)), (1, Some(2))]
+    );
+    let addon = id(layers[1].id as u64);
+    let layers = layer_result(
+        &f,
+        BuildCommand::ReplaceAttachment {
+            build,
+            layer: addon,
+            source: id(3),
+        },
+    );
+    assert_eq!(layers[1].project_id, Some(3));
+    assert_eq!(layers[1].layer_type, "addon");
+    let layers = layer_result(
+        &f,
+        BuildCommand::SetBase {
+            build,
+            source: id(2),
+        },
+    );
+    assert_eq!(layers[0].id, initial[0].id);
+    assert_eq!(layers[0].project_id, Some(2));
+    f.raw()
+        .execute(
+            "UPDATE build_profiles SET config_modified_at='old',last_used_at='old' WHERE id=?1",
+            [build.get() as i64],
+        )
+        .unwrap();
+    let BuildOutcome::Touched { profile } = f.run(BuildCommand::Touch { build }).unwrap() else {
+        panic!("touch")
+    };
+    assert_ne!(profile.last_used_at.as_deref(), Some("old"));
+    let config: String = f
+        .raw()
+        .query_row(
+            "SELECT config_modified_at FROM build_profiles WHERE id=?1",
+            [build.get() as i64],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(config, "old");
+    assert!(matches!(
+        f.run(BuildCommand::Detach {
+            build,
+            layer: addon
+        })
+        .unwrap(),
+        BuildOutcome::Deleted
+    ));
+    let config: String = f
+        .raw()
+        .query_row(
+            "SELECT config_modified_at FROM build_profiles WHERE id=?1",
+            [build.get() as i64],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_ne!(config, "old");
+    assert_eq!(
+        layer_result(&f, BuildCommand::ListLayers { build }).len(),
+        1
+    );
+    assert!(matches!(
+        f.run(BuildCommand::Delete { build }).unwrap(),
+        BuildOutcome::Deleted
+    ));
+    assert!(matches!(
+        f.run(BuildCommand::Read { build }).unwrap(),
+        BuildOutcome::MissingBuild
+    ));
+    let (empty, layers) = create(&f, "Empty", None);
+    assert_eq!(layers.len(), 0);
+    assert_eq!(
+        layer_result(
+            &f,
+            BuildCommand::SetBase {
+                build: empty,
+                source: id(1)
+            }
+        )[0]
+        .layer_type,
+        "base"
+    );
+    assert_eq!(read_build(&f, id(1)).id, 1);
+}
+
+#[test]
+fn mutation_duplicate_missing_membership_and_tenant_cases() {
+    let f = Fixture::new();
+    sources(&f);
+    let (build, initial) = create(&f, "Owned", Some(id(1)));
+    let layer = id(initial[0].id as u64);
+    assert!(
+        matches!(f.run(BuildCommand::Create { name: name("Owned"), base_source: None }).unwrap(), BuildOutcome::DuplicateName { name } if name == "Owned")
+    );
+    for source in [50, 999] {
+        assert!(matches!(
+            f.run(BuildCommand::Create {
+                name: name("Invalid"),
+                base_source: Some(id(source))
+            })
+            .unwrap(),
+            BuildOutcome::InvalidBaseSource
+        ));
+        for command in [
+            BuildCommand::SetBase {
+                build,
+                source: id(source),
+            },
+            BuildCommand::AttachAddon {
+                build,
+                source: id(source),
+            },
+            BuildCommand::ReplaceAttachment {
+                build,
+                layer,
+                source: id(source),
+            },
+        ] {
+            assert!(matches!(
+                f.run(command).unwrap(),
+                BuildOutcome::MissingSource
+            ));
+        }
+    }
+    for command in [
+        BuildCommand::AttachAddon {
+            build,
+            source: id(1),
+        },
+        BuildCommand::ReplaceAttachment {
+            build,
+            layer: id(1),
+            source: id(2),
+        },
+        BuildCommand::Detach {
+            build,
+            layer: id(1),
+        },
+    ] {
+        match command {
+            BuildCommand::AttachAddon { .. } => assert!(matches!(
+                f.run(command).unwrap(),
+                BuildOutcome::DuplicateAttachment { .. }
+            )),
+            _ => assert!(matches!(
+                f.run(command).unwrap(),
+                BuildOutcome::MissingLayer
+            )),
+        }
+    }
+    layer_result(
+        &f,
+        BuildCommand::AttachAddon {
+            build,
+            source: id(2),
+        },
+    );
+    for command in [
+        BuildCommand::SetBase {
+            build,
+            source: id(2),
+        },
+        BuildCommand::ReplaceAttachment {
+            build,
+            layer,
+            source: id(2),
+        },
+    ] {
+        assert!(
+            matches!(f.run(command).unwrap(), BuildOutcome::DuplicateAttachment { source_name } if source_name == "Addon")
+        );
+    }
+    assert_eq!(
+        layer_result(
+            &f,
+            BuildCommand::ReplaceAttachment {
+                build,
+                layer,
+                source: id(1)
+            }
+        )[0]
+        .project_id,
+        Some(1)
+    );
+    f.raw().execute_batch("INSERT INTO build_profiles(id,tenant_id,name) VALUES(50,'other','Owned'); INSERT INTO profile_layers(id,tenant_id,profile_id,layer_type,project_id) VALUES(50,'other',50,'base',50);").unwrap();
+    for build in [id(50), id(999)] {
+        for command in [
+            BuildCommand::Touch { build },
+            BuildCommand::SetBase {
+                build,
+                source: id(1),
+            },
+            BuildCommand::AttachAddon {
+                build,
+                source: id(1),
+            },
+            BuildCommand::ReplaceAttachment {
+                build,
+                layer: id(50),
+                source: id(1),
+            },
+            BuildCommand::Detach {
+                build,
+                layer: id(50),
+            },
+            BuildCommand::Delete { build },
+        ] {
+            assert!(matches!(
+                f.run(command).unwrap(),
+                BuildOutcome::MissingBuild
+            ));
+        }
+    }
+    for command in [
+        BuildCommand::ReplaceAttachment {
+            build,
+            layer: id(50),
+            source: id(1),
+        },
+        BuildCommand::Detach {
+            build,
+            layer: id(50),
+        },
+    ] {
+        assert!(matches!(
+            f.run(command).unwrap(),
+            BuildOutcome::MissingLayer
+        ));
+    }
+    let foreign: String = f
+        .raw()
+        .query_row("SELECT name FROM build_profiles WHERE id=50", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(foreign, "Owned");
+    assert_eq!(
+        layer_result(&f, BuildCommand::ListLayers { build })
+            .iter()
+            .map(|l| l.project_id)
+            .collect::<Vec<_>>(),
+        vec![Some(1), Some(2)]
+    );
+}
+
+#[test]
+fn mutation_delete_cascades_accepted_graph_and_scoped_settings() {
+    let f = Fixture::new();
+    f.raw().execute_batch("INSERT INTO app_settings(tenant_id,key,value) VALUES('default','production_setup:1','{}'),('default','role_filaments_1','{}'),('other','production_setup:1','keep'),('default','production_setup:2','keep');").unwrap();
+    assert!(matches!(
+        f.run(BuildCommand::Delete { build: id(1) }).unwrap(),
+        BuildOutcome::Deleted
+    ));
+    let c = f.raw();
+    for table in [
+        "build_profiles",
+        "profile_layers",
+        "parts",
+        "print_progress",
+        "plan_revisions",
+        "plan_revision_parts",
+        "required_units",
+        "plan_revision_required_units",
+        "plan_revision_input_sets",
+        "plan_accepted_input_sets",
+    ] {
+        let count: i64 = c
+            .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0, "{table}");
+    }
+    let settings: Vec<(String, String)> = c
+        .prepare("SELECT tenant_id,key FROM app_settings WHERE value='keep' ORDER BY tenant_id")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        settings,
+        vec![
+            ("default".into(), "production_setup:2".into()),
+            ("other".into(), "production_setup:1".into())
+        ]
+    );
+    let removed: i64 = c.query_row("SELECT count(*) FROM app_settings WHERE tenant_id='default' AND key IN ('production_setup:1','role_filaments_1')", [], |r| r.get(0)).unwrap();
+    assert_eq!(removed, 0);
+    assert!(
+        c.prepare("PRAGMA foreign_key_check")
+            .unwrap()
+            .query([])
+            .unwrap()
+            .next()
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn mutation_rolls_back_when_returning_layers_or_freshness_update_fails() {
+    let f = Fixture::new();
+    sources(&f);
+    f.raw().execute_batch("CREATE TRIGGER reject_config BEFORE UPDATE OF config_modified_at ON build_profiles BEGIN SELECT RAISE(ABORT,'reject config'); END;").unwrap();
+    assert!(
+        f.run(BuildCommand::AttachAddon {
+            build: id(1),
+            source: id(2)
+        })
+        .is_err()
+    );
+    assert_eq!(
+        layer_result(&f, BuildCommand::ListLayers { build: id(1) }).len(),
+        1
+    );
+    f.raw()
+        .execute_batch("DROP TRIGGER reject_config;")
+        .unwrap();
+    f.mutate("WITH RECURSIVE n(id) AS (SELECT 2 UNION ALL SELECT id+1 FROM n WHERE id<1024) INSERT INTO profile_layers(id,tenant_id,profile_id,layer_order,layer_type) SELECT id,'default',1,id,'addon' FROM n;");
+    let before: Option<String> = f
+        .raw()
+        .query_row(
+            "SELECT config_modified_at FROM build_profiles WHERE id=1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let error = f
+        .run(BuildCommand::AttachAddon {
+            build: id(1),
+            source: id(2),
+        })
+        .unwrap_err();
+    assert!(matches!(error.downcast_ref(), Some(Failure::TooManyLayers)));
+    assert_eq!(
+        layer_result(&f, BuildCommand::ListLayers { build: id(1) }).len(),
+        1024
+    );
+    let after: Option<String> = f
+        .raw()
+        .query_row(
+            "SELECT config_modified_at FROM build_profiles WHERE id=1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(after, before);
+}
+
+#[test]
+fn mutation_graph_budget_is_distinct_and_touch_rolls_back() {
+    use pp_storage::build_graph::BudgetResource;
+    for (sql, resource) in [
+        (
+            "WITH RECURSIVE n(id) AS (SELECT 2 UNION ALL SELECT id+1 FROM n WHERE id<200001) INSERT INTO profile_layers(id,tenant_id,profile_id,layer_type) SELECT id,'default',1,'addon' FROM n;",
+            BudgetResource::GraphRows,
+        ),
+        (
+            "WITH RECURSIVE n(id) AS (SELECT 2 UNION ALL SELECT id+1 FROM n WHERE id<1100) INSERT INTO profile_layers(id,tenant_id,profile_id,layer_type) SELECT id,'default',1,replace(hex(zeroblob(32500)),'0','a') FROM n;",
+            BudgetResource::GraphBytes,
+        ),
+    ] {
+        let f = Fixture::new();
+        f.mutate(sql);
+        f.raw()
+            .execute_batch("UPDATE build_profiles SET last_used_at='before';")
+            .unwrap();
+        for command in [
+            BuildCommand::Read { build: id(1) },
+            BuildCommand::List,
+            BuildCommand::Touch { build: id(1) },
+        ] {
+            let error = f.run(command).unwrap_err();
+            assert!(
+                matches!(error.downcast_ref(), Some(Failure::BudgetExhausted { resource: actual }) if *actual == resource),
+                "{error:?}"
+            );
+        }
+        let error = f
+            .owner
+            .as_ref()
+            .unwrap()
+            .accepted_reads_with_policy(policy())
+            .unwrap()
+            .read(
+                credential(),
+                &[1],
+                &AtomicBool::new(false),
+                Duration::from_secs(2),
+            )
+            .unwrap_err();
+        assert!(
+            matches!(error.downcast_ref(), Some(Failure::BudgetExhausted { resource: actual }) if *actual == resource),
+            "{error:?}"
+        );
+        let last: String = f
+            .raw()
+            .query_row(
+                "SELECT last_used_at FROM build_profiles WHERE id=1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(last, "before");
+    }
+    let f = Fixture::new();
+    f.mutate("UPDATE plan_revisions SET snapshot_digest='broken';");
+    assert!(matches!(
+        f.read().accepted_progress,
+        AcceptedProgress::Unavailable(AcceptedProgressUnavailable::Integrity)
+    ));
+}
+
+#[test]
+fn mutation_name_validation_matches_reference() {
+    use pp_storage::build_graph::BuildName;
+    assert_eq!(
+        BuildName::parse("\u{feff} Build \u{2029}".into())
+            .unwrap()
+            .as_str(),
+        "Build"
+    );
+    assert_eq!(
+        BuildName::parse(" \u{a0}".into()).unwrap_err(),
+        "Profile name is required"
+    );
+    assert!(BuildName::parse("a".repeat(4096)).is_ok());
+    assert_eq!(
+        BuildName::parse("a".repeat(4097)).unwrap_err(),
+        "Profile name is too long"
+    );
+}
+
+#[test]
+fn mutation_cancellation_after_transaction_starts_rolls_back_touch() {
+    use std::sync::atomic::Ordering;
+    let f = Fixture::new();
+    f.raw().execute_batch("UPDATE build_profiles SET last_used_at='before'; CREATE TRIGGER slow_touch AFTER UPDATE OF last_used_at ON build_profiles BEGIN SELECT sum(n) FROM (WITH RECURSIVE n(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM n WHERE n<1000000) SELECT n FROM n); END;").unwrap();
+    let client = f.client.clone();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let worker_cancelled = cancelled.clone();
+    let worker = std::thread::spawn(move || {
+        client.execute(
+            credential(),
+            BuildCommand::Touch { build: id(1) },
+            worker_cancelled,
+            Duration::from_secs(2),
+        )
+    });
+    let probe = f.raw();
+    probe.busy_timeout(Duration::ZERO).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        match probe.execute_batch("BEGIN IMMEDIATE") {
+            Ok(()) => probe.execute_batch("ROLLBACK").unwrap(),
+            Err(rusqlite::Error::SqliteFailure(error, _))
+                if error.code == rusqlite::ErrorCode::DatabaseBusy =>
+            {
+                break;
+            }
+            Err(error) => panic!("{error}"),
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "mutation never started"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    cancelled.store(true, Ordering::Release);
+    let error = worker.join().unwrap().unwrap_err();
+    assert!(
+        matches!(error.downcast_ref(), Some(Failure::Cancelled)),
+        "{error:?}"
+    );
+    let last: String = f
+        .raw()
+        .query_row(
+            "SELECT last_used_at FROM build_profiles WHERE id=1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(last, "before");
+}
+
+#[test]
+fn mutation_create_and_delete_rollback_include_dependent_writes() {
+    let f = Fixture::new();
+    f.raw().execute_batch("CREATE TRIGGER reject_layer BEFORE INSERT ON profile_layers BEGIN SELECT RAISE(ABORT,'reject layer'); END;").unwrap();
+    assert!(
+        f.run(BuildCommand::Create {
+            name: name("Rolled back"),
+            base_source: Some(id(1))
+        })
+        .is_err()
+    );
+    let count: i64 = f
+        .raw()
+        .query_row(
+            "SELECT count(*) FROM build_profiles WHERE name='Rolled back'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 0);
+    f.raw().execute_batch("DROP TRIGGER reject_layer; INSERT INTO app_settings(tenant_id,key,value) VALUES('default','production_setup:1','keep'); CREATE TRIGGER reject_delete BEFORE DELETE ON build_profiles BEGIN SELECT RAISE(ABORT,'reject delete'); END;").unwrap();
+    assert!(f.run(BuildCommand::Delete { build: id(1) }).is_err());
+    assert_eq!(f.read().id, 1);
+    let setting: String = f
+        .raw()
+        .query_row(
+            "SELECT value FROM app_settings WHERE tenant_id='default' AND key='production_setup:1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(setting, "keep");
+    assert_eq!(
+        layer_result(&f, BuildCommand::ListLayers { build: id(1) }).len(),
+        1
+    );
+}
+
+#[test]
+fn mutation_requires_valid_credentials_before_writing() {
+    let f = Fixture::new();
+    for command in [
+        BuildCommand::Create {
+            name: name("Unauthorized"),
+            base_source: None,
+        },
+        BuildCommand::Delete { build: id(1) },
+    ] {
+        assert!(
+            f.client
+                .execute(
+                    Credential::Session(Secret::new("invalid".into())),
+                    command,
+                    Arc::new(AtomicBool::new(false)),
+                    Duration::from_secs(2)
+                )
+                .is_err()
+        );
+    }
+    assert_eq!(f.read().id, 1);
+    let count: i64 = f
+        .raw()
+        .query_row("SELECT count(*) FROM build_profiles", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 1);
+}
+
+#[test]
+fn mutation_list_budget_is_shared_between_build_summaries() {
+    use pp_storage::build_graph::BudgetResource;
+    let f = Fixture::new();
+    f.mutate("INSERT INTO build_profiles(id,tenant_id,name) VALUES(2,'default','Second'); WITH RECURSIVE n(id) AS (SELECT 2 UNION ALL SELECT id+1 FROM n WHERE id<200000) INSERT INTO profile_layers(id,tenant_id,profile_id,layer_type) SELECT id,'default',CASE WHEN id<=100000 THEN 1 ELSE 2 END,'addon' FROM n;");
+    for build in [id(1), id(2)] {
+        assert_eq!(read_build(&f, build).id, build.get() as i64);
+    }
+    let error = f.run(BuildCommand::List).unwrap_err();
+    assert!(
+        matches!(
+            error.downcast_ref(),
+            Some(Failure::BudgetExhausted {
+                resource: BudgetResource::GraphRows
+            })
+        ),
+        "{error:?}"
+    );
+}
