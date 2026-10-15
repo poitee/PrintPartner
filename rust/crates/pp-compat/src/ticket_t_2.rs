@@ -426,6 +426,38 @@ fn diagnostic_rows(scratch: &Scratch) -> Vec<serde_json::Value> {
         .collect()
 }
 
+#[test]
+fn ticket_t_2_diagnostic_rows_include_rotated_raw_records_chronologically() {
+    let scratch = Scratch::new("rotated-diagnostics");
+    let directory = scratch.root.join("data/logs");
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(
+        directory.join("desktop.6.jsonl"),
+        "{\"time\":1,\"event\":\"compat_starting\",\"unknown_private_field\":\"must_remain_visible\"}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        directory.join("desktop.1.jsonl"),
+        "{\"time\":2,\"event\":\"compat_ready\"}\n{\"time\":3,\"event\":\"compat_failure\"}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        directory.join("desktop.jsonl"),
+        "{\"time\":4,\"event\":\"compat_crash_guard\"}\n",
+    )
+    .unwrap();
+
+    assert_eq!(
+        diagnostic_rows(&scratch),
+        vec![
+            serde_json::json!({"time":1,"event":"compat_starting","unknown_private_field":"must_remain_visible"}),
+            serde_json::json!({"time":2,"event":"compat_ready"}),
+            serde_json::json!({"time":3,"event":"compat_failure"}),
+            serde_json::json!({"time":4,"event":"compat_crash_guard"}),
+        ]
+    );
+}
+
 #[tokio::test]
 async fn ticket_t_2_crash_diagnostics_preserve_exit_without_backend_secrets() {
     let scratch = Scratch::new("crash-facts");
