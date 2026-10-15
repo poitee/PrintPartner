@@ -110,6 +110,9 @@ jobs:
       - name: Prove built backend repeated EOF cleanup
         run: |
           python3 rust/tests/built_backend_lifecycle.py --node /usr/bin/node --negative-control --evidence "$PP_EVIDENCE/built-backend-lifecycle" 2>&1 | tee "$PP_EVIDENCE/built-backend-lifecycle.log"
+      - name: Prove built backend interrupted upload never resends
+        run: |
+          python3 rust/tests/built_backend_upload.py --node /usr/bin/node --negative-control --evidence "$PP_EVIDENCE/built-backend-upload" 2>&1 | tee "$PP_EVIDENCE/built-backend-upload.log"
       - name: Prove full built backend startup parent-death cleanup
         run: |
           python3 rust/scripts/prove-built-startup-death.py --node /usr/bin/node --negative-control --evidence "$PP_EVIDENCE/built-startup" 2>&1 | tee "$PP_EVIDENCE/built-startup-driver.log"
@@ -149,6 +152,8 @@ jobs:
           path: |
             ${{ runner.temp }}/desktop-runtime-evidence/
             !${{ runner.temp }}/desktop-runtime-evidence/built-startup/run-*/stage/**
+            !${{ runner.temp }}/desktop-runtime-evidence/built-backend-upload/run-*/stage/**
+            !${{ runner.temp }}/desktop-runtime-evidence/built-backend-upload/run-*/**/*.gcode
           if-no-files-found: error
           retention-days: 14
 

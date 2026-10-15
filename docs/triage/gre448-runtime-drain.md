@@ -546,3 +546,92 @@ after the private fault was written. SIGTERM and SIGKILL each bypassed
 `finally` and left the private copy mutated, while tracked source remained
 byte-for-byte unchanged. Receipts are in
 `/tmp/gre448-parent-death-owner/interruption/receipts.json`.
+
+## Full built backend interrupted upload recovery
+
+`rust/tests/built_backend_upload.py` runs the full built desktop entry with native
+Node 24.21.0, real SQLite, and signed Unix HTTP. It reuses the lifecycle proof's
+inherited lock, owner identity, setup protocol, health check, observer, and process
+guard. The proof creates its integration, fleet printer, and plan through public
+HTTP. The public multipart queue route stages a 64 MiB G-code file. SQLite is
+opened read-only for independent persistence and integrity assertions. No fixture
+state is seeded into the database, and no production module is imported by the
+Python proof.
+
+A local Moonraker HTTP peer reports an idle printer. The real queue drain creates
+a running `printer-upload` job and sends a multipart POST to
+`/server/files/upload` with `start=true` requested by the queued item. The peer
+sets `SO_RCVBUF` to 4096, reads exactly 65,536 bytes, and then stops reading and
+withholds its response. The received prefix must include the G-code filename and
+fixture content. The measured receive buffer must be at most 65,536 bytes, while
+the received `Content-Length` must exceed 67,108,864 bytes. These checks establish
+an unfinished body transfer, rather than a completed upload waiting for a reply.
+
+Two cases reuse each case's own data directory across a restart:
+
+- SIGKILL terminates the backend process group while SQLite still records
+  `sending`. The abrupt crash can leave the Unix socket pathname. The fixture
+  removes that temporary runtime directory after proving the old process and
+  group are absent. It does not claim graceful crash cleanup.
+- Closing stdin reaches the production EOF shutdown path. Observer events must
+  record stdin EOF before the application's own group SIGKILL. Production
+  shutdown records the unknown-outcome error and removes its Unix socket.
+
+Before any queue HTTP read after restart, the SQLite row must contain the exact
+unknown-outcome error from `interruptSendingItem`. This directly checks startup
+reconciliation. A real queue GET and missing-job GET then exercise HTTP recovery.
+Four real HTTP drains must return empty results. The peer must still have one
+upload attempt, the queue and upload job IDs must match their original values,
+and the restarted job list must stay empty. The staged file must retain its
+original length and SHA-256. The proof never requests an explicit retry.
+
+Run after `npm --prefix web ci` and `npm --prefix web run build`:
+
+```sh
+python3 rust/tests/built_backend_upload.py --node /absolute/path/to/native/node --negative-control --evidence /absolute/path/to/evidence
+```
+
+The optional negative control copies the complete web tree, including built
+artifacts and dependencies, under its evidence directory. It rejects copied
+symlinks that escape that private tree. It changes only the private built
+`selectPrinterSendQueueDrainItems` predicate to admit `error` rows as well as
+`queued` rows. The ordinary recovery error remains intact. The next drain must
+produce a second real multipart POST and a different job ID, then fail
+`interrupted upload was resent automatically`. A state or message assertion
+cannot satisfy this control. Two further pristine cases must pass afterward.
+Shared production source, built files, dependency files, and symlink targets are
+measured before and after the run. The control never edits the shared tree.
+
+Each run creates a fresh `run-*` evidence directory. It retains artifact identity,
+per-file hashes, signed HTTP response logs, SQLite snapshots, network attempt
+records, child stdout and stderr, stop events, and cleanup receipts. Local runs
+also retain the staged G-code and private faulty bundle. Use a filesystem with
+space for the copied web tree and five staged files. Desktop runtime CI runs the
+full negative-control command and excludes the copied tree and G-code bodies
+from its uploaded evidence.
+
+Process guards kill and reap remaining backend groups on failures. Peer cleanup
+stops admission, releases held uploads, closes accepted sockets, and joins its
+listener and request threads. Socket and HTTP waits have deadlines. SIGTERM and
+KeyboardInterrupt unwind these guards. Successful cases require no fallback
+process kill. The intended negative assertion uses the fallback guard to remove
+its deliberately active second upload.
+
+This is unsigned Linux headless evidence for the full built backend's persisted
+no-resend policy after interrupted transfers. It does not prove a physical
+printer's final outcome, an explicit retry, the Rust supervisor's upload path,
+packaged launch, platform signing, macOS logout, or release manifest verification.
+
+The owner independently ran the full command on 2026-10-15. Evidence is in
+`/persist/home/poitee/.local/state/gre448-upload-owner/run-7gv8lip2`.
+All four positive cases passed. The private negative control recorded exactly
+two uploads and a different job ID. Its output included:
+
+```text
+EXPECTED FAILURE: interrupted upload was resent automatically; actual network uploads=2
+PASS: built backend interrupted uploads retain unknown outcome without automatic resend
+```
+
+All ten backend PIDs and groups were absent afterward. All five peer cleanup
+receipts passed. All 39,276 measured source, artifact, dependency, and link entries
+remained unchanged. The final run emitted no transport traceback.
