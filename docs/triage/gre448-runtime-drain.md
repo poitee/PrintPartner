@@ -236,3 +236,23 @@ cargo fmt --all --manifest-path rust/Cargo.toml --check
 node --check rust/crates/pp-compat/tests/fixtures/measured-startup-entry.cjs
 node --check rust/crates/pp-compat/tests/fixtures/measured-startup-preload.cjs
 ```
+
+The review follow-up validates Node v24.21.0, ABI 137, host OS, and host
+architecture before creating evidence or simulator directories. Native binary
+validation still precedes execution. `node-identity.json` records the queried
+identity. Negative cleanup checks every owner, Node, and peer tuple in the log.
+
+The rerun with `--negative-control --evidence /tmp/gre448-proof-review1` passed
+baseline and restored tests with two cycles each. The negative test exited 101
+at `startup group outlived force-killed owner`; all three recorded PIDs were
+absent afterward. An independent byte comparison confirmed unchanged `lib.rs`.
+The focused script tests passed four cases, including a synthetic two-cycle log
+and real `ps` rejection of a live second-cycle PID in each role. Mocked identity
+queries against a native executable proved wrong version, ABI, OS, and
+architecture fail before evidence or stage creation. Dispatcher rejection,
+Python compilation, and all seven existing stager self-tests also passed.
+Focused results are in `/tmp/gre448-proof-review1/script-tests.log`.
+
+```sh
+python3 -m unittest discover -s rust/scripts -p test_prove_measured_startup_death.py -v
+```
