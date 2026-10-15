@@ -53,6 +53,20 @@ Clients that support streamable HTTP MCP can use:
 
 Replace the URL and key with values for your host. Keep the key out of source control.
 
+## Move the production connector to apps VM 111
+
+Print Partner production runs on apps VM 111 at `192.168.200.81:8080`. The server-side MCP route is `/api/v1/mcp`. The old `.80:8080` address is a temporary forwarder, not the production target. Mac Docker is not the live server.
+
+1. Open the saved `print-partner` connector in the client that owns it.
+2. Retarget its HTTPS proxy or authenticated tunnel to `192.168.200.81:8080`, preserving `/api/v1/mcp`.
+3. Save the connector URL for that protected connection. Keep its existing API key unchanged. Do not send the key over raw LAN HTTP.
+4. Reconnect the client and run the read-only `list_sources` tool. Confirm a successful tool result, including an empty list if no sources exist.
+5. Record the target host, tool name, and outcome without the API key, authorization headers, or source data.
+
+For the Cursor plugin, set `PRINT_PARTNER_MCP_URL` to that protected connection's full MCP URL. Keep `PRINT_PARTNER_API_KEY` unchanged. No production HTTPS hostname or tunnel configuration is established by this guide.
+
+A successful `/health` request proves reachability only. A `401 Valid API key required` response from MCP does not verify the saved connector. If the owning client's registration or existing credential is unavailable, record that blocker and leave the connector migration open. Do not create a replacement key to complete this check.
+
 ## Cursor plugin
 
 The repository includes a plugin in [`cursor-plugin/print-partner`](../cursor-plugin/print-partner).
