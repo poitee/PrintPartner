@@ -1,45 +1,25 @@
 # GRE-498 Plan-aware Spoolman workflows
 
-The selected Plan now governs Spoolman inventory, assignment, Review enrichment, and best-effort deduction. Defaults remain off behind `PP_DESKTOP_REBUILD`. Gate-off engines retain legacy behavior.
+The selected Plan governs Spoolman inventory, assignment, Review enrichment, and best-effort deduction. Defaults remain off behind exact `PP_DESKTOP_REBUILD=1` or `true`; gate-off engines retain legacy behavior. Explicit owned Plan scope follows the existing Bambu pattern. Settings remain account-wide.
 
-Codex gpt-6.1-sol authored the backend, access guards, and final verification through T3 Code on fleet VM 136. Antigravity gemini-3.8-flash-high implemented the UI. Verification used Node 22.23.3, disposable SQLite data, and a local mock Spoolman service. No physical printer or production inventory was contacted.
-
-Explicit Plan scope won over a new inventory facade because it follows the Bambu pattern and keeps feature resolution authoritative. Inventory endpoints validate optional owned `profile_id`. Omission retains account semantics. Client caches separate Plan and account data and mask denied inventory.
-
-The throughput checkpoint ran ownership and base checks first. Backend and frontend had separate file ownership with a fixed HTTP contract. Existing settings and query caches own shared state. Each layer had one writer.
+Codex gpt-6.1-sol authored backend/access guards and verification through T3 Code on fleet VM 136. Antigravity gemini-3.8-flash-high authored UI changes. Tests use Node 22.23.3, disposable SQLite, and local mock Spoolman. No production inventory or physical printer was contacted.
 
 ## Verification
 
-Run from `web/` with Node 22.
+Run from `web/` with Node 22:
 
 ```sh
-npm run test -w @print-partner/server -- src/routes/spoolman-workflow-access.test.ts src/routes/spoolman-feature-access.test.ts src/routes/filament-catalog-feature-access.test.ts src/services/filament-resolve.test.ts src/services/spoolman-deduct.test.ts src/services/farm-filament.test.ts src/assistant/tools.test.ts src/mcp/product-mcp.test.ts
-npm run test -w @print-partner/web -- src/components/RoleFilamentPicker.features.test.tsx src/hooks/useSpoolmanWorkflowAccess.test.tsx src/hooks/useSpoolmanEnabled.test.ts src/lib/colorPresets.test.ts src/api/endpoints/filaments.test.ts src/components/review/ReviewPartsSheet.accessibility.test.tsx src/components/review/ReviewPartsSheet.remove.test.tsx
+npm exec -w @print-partner/server -- vitest run src/routes/spoolman-workflow-access.test.ts src/routes/spoolman-feature-access.test.ts src/routes/filament-catalog-feature-access.test.ts src/services/filament-resolve.test.ts src/services/spoolman-deduct.test.ts src/lib/farm-access.test.ts src/db/plan-save.test.ts src/routes/plan-drafts-routes.test.ts
+npm exec -w @print-partner/web -- vitest run src/hooks/useSpoolmanWorkflowAccess.test.tsx src/components/RoleFilamentPicker.features.test.tsx src/hooks/useSpoolmanEnabled.test.ts src/lib/colorPresets.test.ts src/api/endpoints/filaments.test.ts src/components/review/ReviewPartsSheet.accessibility.test.tsx src/components/review/ReviewPartsSheet.remove.test.tsx
 npm run build
 ```
 
-The independent runs passed 234 backend and 47 frontend tests. The production build, focused ESLint, dead-code check, and diff check passed. Tests cover both HTTP aliases, ownership, corruption, tenant isolation, all account/Plan combinations, legacy behavior, real MCP confirmation, cached access, and revocation across asynchronous work.
+Coverage includes both inventory/assignment HTTP aliases, all account/Plan choices, ownership, corruption, tenant isolation, legacy behavior, MCP confirmation, farm unknown inventory, publication rollback, and deduction revocation before writes. Disabled reads preserve bundled/custom data and stored assignments. Plan-draft save has no `/api/v1` alias. Unused role defaults cannot block ordinary assignment.
 
-PR review added post-fetch inventory admission and regression coverage for revocation/corruption during both HTTP aliases. All 144 tests in the catalog, proxy, and farm-access suites passed. The prior farm fixture now explicitly opts into Spoolman and verifies unknown inventory without that opt-in.
+Mounted-query tests exercise Review, role and catalog caches together across off/on, failed refreshes, cancelled responses, and multiple consumers. Component tests cover Plan switches, imports, dialogs and ordinary colors. The isolated browser preserved 252 bundled colors while off, exposed stock with Plan-on/account-off, selected a 480 g proof spool, and retained clearing/custom colors after revocation. Its fixture Source has no Git revision; the unrelated sync failure is outside this proof.
 
-The revised UI passed 51 tests, including mounted inventory queries with 30-second freshness, synchronous off/on, delayed refresh, and desktop/mobile cached Review masking. Shared preset fixtures retain all five mutation cases with less setup. The production build, focused lint, server typecheck, and dead-code check passed again. In the running app, switching off removed the cached Review filament heading while preserving the saved role reference and Remove control.
+![Default-off controls retain saved references](gre498-spoolman-workflows/default-off.png)
+![Plan-on/account-off exposes stock](gre498-spoolman-workflows/plan-on-account-off.png)
+![Custom color remains usable while off](gre498-spoolman-workflows/custom-color-off.png)
 
-The isolated live server preserved 252 bundled colors while off and denied spool reads with `FEATURE_DISABLED`. Plan-on/account-off and both-on returned inventory. Plan-off/account-on remained denied. The browser saved a Spoolman color and selected a 480 g proof spool. Switching off hid inventory choices, preserved the assignment, and kept custom colors and clearing available. The fixture Source has no Git revision; its unrelated sync failure is outside this proof.
-
-![Default-off Plan controls retain saved references](gre498-spoolman-workflows/default-off.png)
-![Plan-on with account off exposes the stock picker](gre498-spoolman-workflows/plan-on-account-off.png)
-![Custom color remains available with Spoolman off](gre498-spoolman-workflows/custom-color-off.png)
-
-Connector configuration remains account-wide. Denied preset imports leave assignments intact. Farm inventory becomes unknown while denied. Deduction checks access before telemetry and every write. Plan publication filters inaccessible defaults for new parts and atomically rejects optional assignments from drafts prepared before revocation; accepted assignments remain. Broader Orders and farm visibility remain follow-up GRE-498 work.
-
-Publication follow-up passed 22 Plan-save tests and 20 route tests across focused runs, plus server typecheck and lint. Tests cover invalid settings, legacy behavior, catalog/custom defaults, retained accepted assignments, rollback, and the actual `/plans/:id/save` 403 response. Plan-draft routes have no `/api/v1` alias.
-
-The second UI follow-up passed 55 tests across seven suites. Denial cancels pending Review reads and clears live enrichment in both cached variants; re-enable refetches with that enrichment still absent. Real mounted queries cover multiple consumers, failed refreshes, and cancelled late responses. A keyed picker resets local import state when Plans change. The full production build, focused lint, dead-code check, and another live-browser off/on check passed.
-
-Role-cache follow-up extends the same cancellation/masking/refetch boundary to role filaments. Disabled rows retain raw saved IDs and custom hex; catalog/custom rows and other Plans remain intact. Four focused suites passed 46 tests, then all 18 hook tests passed with the final raw-ID fallback. Web typecheck, lint, and live role-label off/on checks passed. Review regressions brought the slice to approximately 1.9k changed text lines, including tests, above the original 1.5k target.
-
-Saved-default admission now checks the same canonical roles with included targets and color defaults that the apply loop processes. The workflow suite's 22 cases passed across focused runs, including unused canonical/unknown roles and excluded parts through both aliases. Server typecheck and lint passed.
-
-Catalog follow-up passed 50 focused UI tests, web typecheck, and lint. Denial clears optional choices while retaining bundled/custom colors; restoration refetches before choices return. Cancellation runs at access transitions so ordinary pending startup reads finish. Tests include failed refresh, cancelled late responses, and account/Plan cache isolation. The complete diff is approximately 2k changed text lines, including regression coverage.
-
-Runtime CI on `a3192a3f` failed in unchanged Rust test `ticket_t_2_process_exit_obeys_every_backoff_deadline_and_cap`: its eight-second fuse reported “crash 2 stalled at Starting.” Qwen triage classified it deterministic, but repeatability is unproven. No Rust files changed. The merge gate still requires green runtime CI on the final head.
+All 22 CI checks settled successfully at `a406a80a`, including runtime after an earlier unchanged Rust supervisor timeout. Opus could not score: “Claude API rate limit reached. Try again later.” The authorized gpt-6-astra fallback scored that head 7.8/10 and requested dialog/mutation fixes. Those require a fresh exact-head gate. The diff exceeded the original 1.5k-line target; redundant hook tests were removed in favor of combined behavioral coverage. Broader Orders and farm visibility remain follow-up GRE-498 work.

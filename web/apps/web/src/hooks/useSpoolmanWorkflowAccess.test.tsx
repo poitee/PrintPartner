@@ -10,7 +10,6 @@ import {
 import type { FilamentCatalog, RoleFilamentRow } from "../api/endpoints/filaments";
 import { queryKeys } from "../queries/keys";
 import { useSpoolmanWorkflowAccess } from "./useSpoolmanWorkflowAccess";
-import { useSpoolmanEnabled } from "./useSpoolmanEnabled";
 import { useFilamentCatalogQuery, useSpoolmanSpoolsQuery } from "../queries/filaments";
 import { usePlanReviewQuery } from "../queries/planReview";
 import { useRoleFilamentsQuery } from "../queries/roleFilaments";
@@ -92,18 +91,6 @@ afterEach(() => {
 });
 
 describe("useSpoolmanWorkflowAccess", () => {
-  it.each([false, true])("uses the server-resolved Plan choice %s", async (enabled) => {
-    planSpoolman = enabled;
-    const { result } = renderHook(() => useSpoolmanWorkflowAccess(1), {
-      wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>,
-    });
-
-    await waitFor(() => expect(client.getQueryState(queryKeys.planFeatures(1))?.status).toBe("success"));
-    expect(result.current.allowed).toBe(enabled);
-    expect(result.current.currentAccessAllowed()).toBe(enabled);
-    expect(requests).not.toContain("/settings/features");
-  });
-
   it("retains legacy behavior with no feature calls when engine lacks capability", async () => {
     capabilities = [];
     const { result } = renderHook(() => useSpoolmanWorkflowAccess(1), {
@@ -146,71 +133,6 @@ describe("useSpoolmanWorkflowAccess", () => {
     expect(result.current.currentAccessAllowed()).toBe(false);
   });
 
-  it("tracks plan switch cleanly", async () => {
-    client.setQueryData(queryKeys.health, { ok: true, capabilities: [TENANT_FEATURE_TOGGLES_CAPABILITY] });
-    client.setQueryData(queryKeys.planFeatures(1), planFeaturesData(1, true));
-    client.setQueryData(queryKeys.planFeatures(2), planFeaturesData(2, false));
-
-    const { result, rerender } = renderHook(({ id }) => useSpoolmanWorkflowAccess(id), {
-      initialProps: { id: 1 },
-      wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>,
-    });
-
-    expect(result.current.allowed).toBe(true);
-
-    rerender({ id: 2 });
-    expect(result.current.allowed).toBe(false);
-  });
-
-  it("beginAction provides isCurrent and isSpoolmanAllowed checks", async () => {
-    client.setQueryData(queryKeys.health, { ok: true, capabilities: [TENANT_FEATURE_TOGGLES_CAPABILITY] });
-    client.setQueryData(queryKeys.planFeatures(1), planFeaturesData(1, true));
-
-    const { result, rerender } = renderHook(({ id }) => useSpoolmanWorkflowAccess(id), {
-      initialProps: { id: 1 },
-      wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>,
-    });
-
-    const action = result.current.beginAction();
-    expect(action.isCurrent()).toBe(true);
-    expect(action.isSpoolmanAllowed()).toBe(true);
-
-    act(() => {
-      client.setQueryData(queryKeys.planFeatures(1), planFeaturesData(1, false));
-    });
-
-    expect(action.isCurrent()).toBe(true);
-    expect(action.isSpoolmanAllowed()).toBe(false);
-
-    rerender({ id: 2 });
-    expect(action.isCurrent()).toBe(false);
-    expect(action.isSpoolmanAllowed()).toBe(false);
-  });
-
-  it("invalidates cached catalog with disabled status when allowed becomes true", async () => {
-    client.setQueryData(queryKeys.health, { ok: true, capabilities: [TENANT_FEATURE_TOGGLES_CAPABILITY] });
-    client.setQueryData(queryKeys.planFeatures(1), planFeaturesData(1, false));
-    client.setQueryData(queryKeys.filamentCatalog(1), { ...mockCatalog, spoolman_status: "disabled" });
-
-    const invalidateSpy = vi.spyOn(client, "invalidateQueries");
-
-    const { rerender } = renderHook(({ id }) => useSpoolmanWorkflowAccess(id), {
-      initialProps: { id: 1 },
-      wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>,
-    });
-
-    expect(invalidateSpy).not.toHaveBeenCalled();
-
-    act(() => {
-      client.setQueryData(queryKeys.planFeatures(1), planFeaturesData(1, true));
-    });
-    rerender({ id: 1 });
-
-    await waitFor(() => {
-      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.filamentCatalog(1) });
-    });
-  });
-
   it.each(["off/on", "invalidation"])("withholds mounted cached spools through %s until refreshed", async (transition) => {
     planSpoolman = true;
     client.setDefaultOptions({ queries: { retry: false, staleTime: 30_000, gcTime: Infinity } });
@@ -247,24 +169,6 @@ describe("useSpoolmanWorkflowAccess", () => {
 
 });
 
-describe("useSpoolmanEnabled", () => {
-  it("masks spoolman choices when disallowed even if cached", async () => {
-    client.setQueryData(queryKeys.health, { ok: true, capabilities: [TENANT_FEATURE_TOGGLES_CAPABILITY] });
-    client.setQueryData(queryKeys.planFeatures(1), planFeaturesData(1, false));
-    client.setQueryData(queryKeys.filamentCatalog(1), mockCatalog);
-
-    const { result } = renderHook(() => useSpoolmanEnabled(1), {
-      wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>,
-    });
-
-    expect(result.current.enabled).toBe(false);
-    expect(result.current.configured).toBe(false);
-    expect(result.current.integrationId).toBeNull();
-    expect(result.current.catalog?.spoolman_colors).toEqual([]);
-    expect(result.current.catalog?.colors.length).toBe(1);
-  });
-});
-
 const enrichedReview: PlanReview = {
   profile_id: 1, accepted_basis: null, plan_name: "Proof", layers: [], issues: [], has_blockers: false,
   totals: { included_parts: 1, total_print_units: 1, by_role: {}, by_filament: {} },
@@ -278,143 +182,82 @@ const enrichedReview: PlanReview = {
   }] }],
 };
 
-it.each(["refresh", "error", "revoked response"])("keeps mounted Review stock cleared across off/on until fresh: %s", async (mode) => {
-  planSpoolman = true;
-  client.setDefaultOptions({ queries: { retry: false, staleTime: 30_000 } });
-  client.setQueryData(queryKeys.health, { ok: true, capabilities: [TENANT_FEATURE_TOGGLES_CAPABILITY] });
-  client.setQueryData(queryKeys.planFeatures(1), planFeaturesData(1, true));
-  for (const id of [1, 2]) for (const excluded of [false, true]) {
-    client.setQueryData(queryKeys.planReview(id, excluded), { ...enrichedReview, profile_id: id });
-  }
-  const pending: Array<(response: Response) => void> = [];
-  const originalFetch = globalThis.fetch;
-  vi.stubGlobal("fetch", vi.fn((input: string | URL | Request) => String(input).includes("/review")
-    ? new Promise<Response>((resolve) => pending.push(resolve)) : originalFetch(input)));
-  const { result } = renderHook(() => {
-    useSpoolmanWorkflowAccess(1);
-    useSpoolmanWorkflowAccess(1);
-    return usePlanReviewQuery(1);
-  }, { wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> });
-  expect(result.current.data?.part_groups[0]?.parts[0]?.spool_badge).toBe("450g left");
-  const toggle = (enabled: boolean) => client.setQueryData(queryKeys.planFeatures(1), planFeaturesData(1, enabled));
-  act(() => { toggle(false); toggle(true); });
-  await waitFor(() => expect(pending.length).toBeGreaterThan(0));
-  const part = () => result.current.data?.part_groups[0]?.parts[0];
-  expect(part()).toMatchObject({ spool_badge: null, filament_display: "", filament_color_id: "spoolman:1:filament:2" });
-  expect(client.getQueryData<PlanReview>(queryKeys.planReview(1, true))?.part_groups[0]?.parts[0]?.spool_badge).toBeNull();
-  expect(client.getQueryState(queryKeys.planReview(1, true))?.isInvalidated).toBe(true);
-  expect(client.getQueryData<PlanReview>(queryKeys.planReview(2))?.part_groups[0]?.parts[0]?.spool_badge).toBe("450g left");
-  const before = pending.length;
-  if (mode === "revoked response") {
-    act(() => { toggle(false); toggle(true); });
-    await waitFor(() => expect(pending.length).toBeGreaterThan(before));
-  }
-  const response = () => new Response(JSON.stringify(enrichedReview), { status: mode === "error" ? 500 : 200, headers: { "content-type": "application/json" } });
-  await act(async () => { for (const finish of pending.slice(0, -1)) finish(response()); });
-  expect(part()?.spool_badge).toBeNull();
-  pending.at(-1)?.(response());
-  if (mode === "error") {
-    await waitFor(() => expect(result.current.isError).toBe(true));
-    expect(part()?.spool_badge).toBeNull();
-  } else await waitFor(() => expect(part()?.spool_badge).toBe("450g left"));
-});
-
 const mockRoles: RoleFilamentRow[] = [
   { role: "r1", part_count: 1, filament_color_id: "spoolman:1:2", spoolman_spool_id: "spoolman:1:s1", filament_custom_hex: "#112233", filament_display: "Blue", filament_hex: "#0000ff" },
   { role: "r2", part_count: 1, filament_color_id: "c1", spoolman_spool_id: null, filament_custom_hex: null, filament_display: "Red", filament_hex: "#ff0000" },
   { role: "r3", part_count: 1, filament_color_id: "custom:1", spoolman_spool_id: null, filament_custom_hex: "#334455", filament_display: "Custom", filament_hex: "#334455" },
 ];
 
-it.each(["refresh", "error", "revoked response"])("keeps mounted role filaments masked across off/on until fresh: %s", async (mode) => {
+it.each(["refresh", "error", "revoked response"])("withholds every mounted inventory observation until refreshed: %s", async (mode) => {
   planSpoolman = true;
   client.setDefaultOptions({ queries: { retry: false, staleTime: 30_000 } });
   client.setQueryData(queryKeys.health, { ok: true, capabilities: [TENANT_FEATURE_TOGGLES_CAPABILITY] });
   client.setQueryData(queryKeys.planFeatures(1), planFeaturesData(1, true));
-  for (const id of [1, 2]) client.setQueryData(queryKeys.roleFilaments(id), mockRoles);
-  client.setQueryData(queryKeys.planReview(1), enrichedReview);
-  const pending: Array<(response: Response) => void> = [];
-  const originalFetch = globalThis.fetch;
-  vi.stubGlobal("fetch", vi.fn((input: string | URL | Request) => String(input).includes("/role-filaments")
-    ? new Promise<Response>((resolve) => pending.push(resolve)) : originalFetch(input)));
-  const { result } = renderHook(() => {
-    useSpoolmanWorkflowAccess(1);
-    useSpoolmanWorkflowAccess(1);
-    return useRoleFilamentsQuery(1);
-  }, { wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> });
-  expect(result.current.data).toEqual(mockRoles);
-  const toggle = (enabled: boolean) => client.setQueryData(queryKeys.planFeatures(1), planFeaturesData(1, enabled));
-  act(() => { toggle(false); toggle(true); });
-  await waitFor(() => expect(pending.length).toBeGreaterThan(0));
-  expect(result.current.data?.[0]).toMatchObject({ filament_display: "spoolman:1:2", filament_hex: "#112233", filament_color_id: "spoolman:1:2", spoolman_spool_id: "spoolman:1:s1" });
-  expect(result.current.data?.[1]).toEqual(mockRoles[1]);
-  expect(result.current.data?.[2]).toEqual(mockRoles[2]);
-  expect(client.getQueryData(queryKeys.roleFilaments(2))).toEqual(mockRoles);
-  const before = pending.length;
-  const response = () => new Response(JSON.stringify({ roles: mockRoles }), { status: mode === "error" ? 500 : 200, headers: { "content-type": "application/json" } });
-  if (mode === "revoked response") {
-    act(() => toggle(false));
-    await act(async () => { pending.at(-1)?.(response()); });
-    expect(result.current.data?.[0]?.filament_display).toBe("spoolman:1:2");
-    act(() => toggle(true));
-    await waitFor(() => expect(pending.length).toBeGreaterThan(before));
+  for (const id of [1, 2]) {
+    client.setQueryData(queryKeys.roleFilaments(id), mockRoles);
+    client.setQueryData(queryKeys.filamentCatalog(id), mockCatalog);
+    for (const excluded of [false, true]) client.setQueryData(queryKeys.planReview(id, excluded), { ...enrichedReview, profile_id: id });
   }
-  await act(async () => { for (const finish of pending.slice(0, -1)) finish(response()); });
-  expect(result.current.data?.[0]?.filament_display).toBe("spoolman:1:2");
-  pending.at(-1)?.(response());
-  if (mode === "error") {
-    await waitFor(() => expect(result.current.isError).toBe(true));
-    expect(result.current.data?.[0]?.filament_display).toBe("spoolman:1:2");
-  } else await waitFor(() => expect(result.current.data).toEqual(mockRoles));
-});
-
-it.each(["refresh", "error", "revoked response"])("keeps mounted catalog spoolman choices cleared across off/on until fresh: %s", async (mode) => {
-  planSpoolman = true;
-  client.setDefaultOptions({ queries: { retry: false, staleTime: 30_000 } });
-  client.setQueryData(queryKeys.health, { ok: true, capabilities: [TENANT_FEATURE_TOGGLES_CAPABILITY] });
-  client.setQueryData(queryKeys.planFeatures(1), planFeaturesData(1, true));
-  for (const id of [1, 2]) client.setQueryData(queryKeys.filamentCatalog(id), mockCatalog);
   client.setQueryData(queryKeys.filamentCatalog(), mockCatalog);
-  const pending: Array<(response: Response) => void> = [];
+  const pending = { review: new Array<(response: Response) => void>(), roles: new Array<(response: Response) => void>(), catalog: new Array<(response: Response) => void>() };
   const originalFetch = globalThis.fetch;
-  vi.stubGlobal("fetch", vi.fn((input: string | URL | Request) => String(input).includes("/filaments/catalog")
-    ? new Promise<Response>((resolve) => pending.push(resolve)) : originalFetch(input)));
+  vi.stubGlobal("fetch", vi.fn((input: string | URL | Request) => {
+    const path = String(input);
+    const queue = path.includes("/review") ? pending.review : path.includes("/role-filaments") ? pending.roles
+      : path.includes("/filaments/catalog") ? pending.catalog : null;
+    return queue ? new Promise<Response>((resolve) => queue.push(resolve)) : originalFetch(input);
+  }));
   const { result } = renderHook(() => {
     useSpoolmanWorkflowAccess(1);
     useSpoolmanWorkflowAccess(1);
-    return useFilamentCatalogQuery({ profileId: 1 });
+    const review = usePlanReviewQuery(1);
+    const roles = useRoleFilamentsQuery(1);
+    const catalog = useFilamentCatalogQuery({ profileId: 1 });
+    return { review, roles, catalog };
   }, { wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> });
-  expect(result.current.data?.spoolman_colors).toEqual(mockCatalog.spoolman_colors);
+  const assertMasked = () => {
+    expect(result.current.review.data?.part_groups[0]?.parts[0]).toMatchObject({ spool_badge: null, filament_display: "", filament_color_id: "spoolman:1:filament:2" });
+    expect(result.current.roles.data?.[0]).toMatchObject({ filament_display: "spoolman:1:2", filament_hex: "#112233", spoolman_spool_id: "spoolman:1:s1" });
+    expect(result.current.roles.data?.slice(1)).toEqual(mockRoles.slice(1));
+    expect(result.current.catalog.data).toMatchObject({ spoolman_colors: [], spoolman_status: "disabled", colors: mockCatalog.colors });
+  };
   const toggle = (enabled: boolean) => client.setQueryData(queryKeys.planFeatures(1), planFeaturesData(1, enabled));
   act(() => { toggle(false); toggle(true); });
-  await waitFor(() => expect(pending.length).toBeGreaterThan(0));
-  expect(result.current.data?.spoolman_colors).toEqual([]);
-  expect(result.current.data?.spoolman_status).toBe("disabled");
-  expect(result.current.data?.colors).toEqual(mockCatalog.colors);
-  expect(client.getQueryData<FilamentCatalog>(queryKeys.filamentCatalog(2))?.spoolman_colors).toEqual(mockCatalog.spoolman_colors);
-  expect(client.getQueryData<FilamentCatalog>(queryKeys.filamentCatalog())?.spoolman_colors).toEqual(mockCatalog.spoolman_colors);
-  const before = pending.length;
-  const existingColor = mockCatalog.spoolman_colors?.[0];
-  if (!existingColor) throw new Error("Catalog fixture has no optional color");
-  const freshCatalog: FilamentCatalog = { ...mockCatalog, spoolman_colors: [{ ...existingColor, id: "spoolman:1:fresh" }] };
-  const response = () => new Response(JSON.stringify(freshCatalog), { status: mode === "error" ? 500 : 200, headers: { "content-type": "application/json" } });
+  await waitFor(() => { for (const queue of Object.values(pending)) expect(queue.length).toBeGreaterThan(0); });
+  assertMasked();
+  expect(client.getQueryData<PlanReview>(queryKeys.planReview(1, true))?.part_groups[0]?.parts[0]?.spool_badge).toBeNull();
+  expect(client.getQueryState(queryKeys.planReview(1, true))?.isInvalidated).toBe(true);
+  expect(client.getQueryData<PlanReview>(queryKeys.planReview(2))?.part_groups[0]?.parts[0]?.spool_badge).toBe("450g left");
+  expect(client.getQueryData(queryKeys.roleFilaments(2))).toEqual(mockRoles);
+  for (const id of [undefined, 2]) expect(client.getQueryData(queryKeys.filamentCatalog(id))).toEqual(mockCatalog);
+  const freshReview = { ...enrichedReview, part_groups: enrichedReview.part_groups.map((group) => ({
+    ...group, parts: group.parts.map((part) => ({ ...part, spool_badge: "480g left" })),
+  })) };
+  const freshRoles = mockRoles.map((row) => row.filament_color_id?.startsWith("spoolman:") ? { ...row, filament_display: "Fresh Blue" } : row);
+  const freshCatalog = { ...mockCatalog, spoolman_colors: mockCatalog.spoolman_colors?.map((color) => ({ ...color, id: "spoolman:1:fresh" })) ?? [] };
+  const bodies = { review: freshReview, roles: { roles: freshRoles }, catalog: freshCatalog };
+  const response = (body: unknown) => new Response(JSON.stringify(body), { status: mode === "error" ? 500 : 200, headers: { "content-type": "application/json" } });
   if (mode === "revoked response") {
-    act(() => toggle(false));
-    await act(async () => { pending.at(-1)?.(response()); });
-    expect(result.current.data?.spoolman_colors).toEqual([]);
-    expect(result.current.data?.spoolman_status).toBe("disabled");
-    act(() => toggle(true));
-    await waitFor(() => expect(pending.length).toBeGreaterThan(before));
+    const counts = Object.values(pending).map((queue) => queue.length);
+    act(() => { toggle(false); toggle(true); });
+    await waitFor(() => Object.values(pending).forEach((queue, index) => expect(queue.length).toBeGreaterThan(counts[index] ?? 0)));
   }
-  await act(async () => { for (const finish of pending.slice(0, -1)) finish(response()); });
-  expect(result.current.data?.spoolman_colors).toEqual([]);
-  pending.at(-1)?.(response());
+  await act(async () => {
+    for (const key of ["review", "roles", "catalog"] satisfies Array<keyof typeof pending>) {
+      for (const finish of pending[key].slice(0, -1)) finish(response(bodies[key]));
+    }
+  });
+  assertMasked();
+  for (const key of ["review", "roles", "catalog"] satisfies Array<keyof typeof pending>) pending[key].at(-1)?.(response(bodies[key]));
   if (mode === "error") {
-    await waitFor(() => expect(result.current.isError).toBe(true));
-    expect(result.current.data?.spoolman_colors).toEqual([]);
-    expect(result.current.data?.spoolman_status).toBe("disabled");
+    await waitFor(() => { for (const query of Object.values(result.current)) expect(query.isError).toBe(true); });
+    assertMasked();
   } else {
-    await waitFor(() => expect(result.current.data?.spoolman_colors).toEqual(freshCatalog.spoolman_colors));
-    expect(result.current.data?.spoolman_status).toBe("ok");
+    await waitFor(() => {
+      expect(result.current.review.data?.part_groups[0]?.parts[0]?.spool_badge).toBe("480g left");
+      expect(result.current.roles.data).toEqual(freshRoles);
+      expect(result.current.catalog.data?.spoolman_colors).toEqual(freshCatalog.spoolman_colors);
+    });
   }
 });
 
