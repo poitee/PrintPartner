@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import {
   DATE_FORMAT_PRESETS,
+  TENANT_FEATURE_TOGGLES_CAPABILITY,
   externalApiAccessEnabled,
   isHostedPlanning,
   type DateFormatId,
@@ -56,6 +57,7 @@ import AccountPasswordCard from "../components/settings/AccountPasswordCard";
 import BackupManagementCard from "../components/settings/BackupManagementCard";
 import ApiKeyManagementCard from "../components/settings/ApiKeyManagementCard";
 import ExternalToolsSettingsCard from "../components/settings/ExternalToolsSettingsCard";
+import TenantFeaturesSettingsCard from "../components/settings/TenantFeaturesSettingsCard";
 import LoggingManagementCard from "../components/settings/LoggingManagementCard";
 import ThemePreferenceControl from "../components/ThemePreferenceControl";
 import SourceCategoryManager from "../components/sources/SourceCategoryManager";
@@ -108,6 +110,11 @@ export default function SettingsPage() {
   const showApiKeys = externalAccessQuery.data
     ? externalApiAccessEnabled(externalAccessQuery.data.mode)
     : false;
+  const featureTogglesReady = Boolean(
+    engineReady &&
+    health?.capabilities &&
+    health.capabilities.includes(TENANT_FEATURE_TOGGLES_CAPABILITY),
+  );
   const { user, authRequired } = useAuth();
   const { format: dateFormat, setFormat: setDateFormat } = useDateFormat();
   const { updateCheck, refresh: refreshUpdateCheck } = useAppUpdateCheck(engineReady);
@@ -393,6 +400,7 @@ export default function SettingsPage() {
 
       {hostedPlanning ? null : (
       <SettingsSection id="features" title="Optional features">
+        {featureTogglesReady && <TenantFeaturesSettingsCard engineReady={engineReady} />}
         <ExternalToolsSettingsCard engineReady={engineReady} />
       </SettingsSection>
       )}
