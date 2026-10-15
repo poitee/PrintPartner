@@ -343,7 +343,7 @@ or Mac logout. GRE-448 remains open. The next release-level slice is to prove
 these lifecycle observations against the full built backend with its real
 storage ownership and interrupted request behavior.
 
-Local verification used native Node v24.21.0, ABI 137, Linux x64. The measured
+Initial local verification used native Node v24.21.0, ABI 137, Linux x64. The measured
 simulator manifest identifies source baseline
 `c65dee177c5b1e0c4754d474d5c6b7b9917997b7`. Its SHA-256 is
 `498537e8eec435a4f9bc4258ef3e43ab32edc307b72a490e6ca3cbed729096c7`.

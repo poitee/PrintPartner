@@ -38,7 +38,6 @@ input.once("line", (line) => {
     request.on("data", (chunk) => { body += chunk.toString(); });
     request.on("end", () => {
       record(`${request.method} ${request.url} ${body} ${process.pid}`);
-      // Record the accepted effect and withhold its response.
     });
   }).listen(setup.socket_path);
 });

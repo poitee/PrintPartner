@@ -2203,7 +2203,6 @@ async fn ticket_t_3_drain_measured_release_repeated_eof_cleanup() {
             super::Status::Ready { pid, .. } => pid,
             _ => unreachable!(),
         };
-        // Scratch owns failure cleanup for every PID recorded before setup delivery.
         assert_eq!(recorded_pids(&scratch.pidfile()), vec![pid]);
         assert_eq!(live_pids(&scratch.pidfile()), vec![pid]);
         for previous in &completed {
