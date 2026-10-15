@@ -21,7 +21,7 @@ function fixture(t, mutate = () => {}) {
   mkdirSync(join(directory, 'web/scripts'), { recursive: true });
   copyFileSync(join(root, cli), join(directory, cli));
   const stateCLI = 'web/scripts/check-desktop-workflow-state.mjs';
-  if (existsSync(join(root, stateCLI))) copyFileSync(join(root, stateCLI), join(directory, stateCLI));
+  copyFileSync(join(root, stateCLI), join(directory, stateCLI));
   mkdirSync(join(directory, 'bin'));
   writeFileSync(join(directory, 'bin/gh'), `#!/usr/bin/env node
 if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(['api', '--hostname', 'github.com', 'repos/poitee/PrintPartner/actions/workflows/desktop-contracts.yml'])) process.exit(9);
@@ -227,7 +227,9 @@ for (const job of ['web', 'web-build']) {
       }));
       const lock = spawnSync('npm', ['install', '--package-lock-only', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: web, encoding: 'utf8' });
       assert.equal(lock.status, 0, lock.stderr);
+      assert.equal(webCI.jobs[job].permissions.actions, 'read');
       const steps = webCI.jobs[job].steps;
+      assert.equal(steps.find(step => step.run?.includes('check-desktop-workflow-state.mjs')).env.GH_TOKEN, '${{ github.token }}');
       const start = steps.findIndex(step => step.run?.startsWith('npm ci'));
       const commands = [];
       for (const step of steps.slice(start)) {
@@ -245,3 +247,9 @@ for (const job of ['web', 'web-build']) {
     });
   }
 }
+
+test('Release grants its reusable Web CI caller permission to read workflow state', () => {
+  const release = YAML.parse(readFileSync(join(root, '.github/workflows/release.yml'), 'utf8'));
+  assert.equal(release.jobs.quality.uses, './.github/workflows/web-ci.yml');
+  assert.equal(release.jobs.quality.permissions.actions, 'read');
+});
