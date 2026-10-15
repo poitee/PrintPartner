@@ -873,12 +873,9 @@ fn mutation_graph_budget_is_distinct_and_touch_rolls_back() {
 #[test]
 fn mutation_name_validation_matches_reference() {
     use pp_storage::build_graph::BuildName;
-    assert_eq!(
-        BuildName::parse("\u{feff} Build \u{2029}".into())
-            .unwrap()
-            .as_str(),
-        "Build"
-    );
+    let name: pp_domain::build_identity::BuildName =
+        BuildName::parse("\u{feff} Build \u{2029}".into()).unwrap();
+    assert_eq!(name.as_str(), "Build");
     assert_eq!(
         BuildName::parse(" \u{a0}".into()).unwrap_err(),
         "Profile name is required"

@@ -8,7 +8,7 @@ publish = false
 
 [features]
 default = []
-desktop_rebuild = []
+desktop_rebuild = ["pp-api-types/desktop_rebuild"]
 
 [dependencies]
 serde.workspace = true

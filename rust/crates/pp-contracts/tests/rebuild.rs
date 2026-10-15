@@ -16,6 +16,15 @@ fn build_names_trim_and_enforce_character_bounds() {
 }
 
 #[test]
+fn build_names_share_the_domain_type_and_wire_format() {
+    let name: BuildName = serde_json::from_value(json!("\u{feff} Kit \u{2029}")).unwrap();
+    let name: pp_api_types::build_identity::BuildName = name;
+    assert_eq!(name.as_str(), "Kit");
+    assert_eq!(serde_json::to_value(name).unwrap(), json!("Kit"));
+    assert!(serde_json::from_value::<BuildName>(json!(" \u{a0}")).is_err());
+}
+
+#[test]
 fn reconciliation_preserves_decisions_and_rejects_duplicate_targets() {
     let decision = json!({"kind":"replace","target_draft_part_id":1});
     let valid = json!({"expected_snapshot_digest":"a".repeat(64),"decisions":[decision.clone()]});

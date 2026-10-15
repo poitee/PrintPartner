@@ -3465,7 +3465,6 @@ dependencies = [
  "hmac",
  "icu_collator",
  "libc",
- "pp-contracts",
  "pp-domain",
  "rand 0.9.5",
  "regress 0.11.1",

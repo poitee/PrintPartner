@@ -3,8 +3,8 @@ pub(crate) mod projection;
 use crate::{Envelope, Shared, WriterOwner, auth, read_model};
 use anyhow::{Result, anyhow, ensure};
 pub use model::*;
-pub use pp_contracts::build_identity::BuildName;
 use pp_domain::PositiveId;
+pub use pp_domain::build_identity::BuildName;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use std::{
     path::PathBuf,
