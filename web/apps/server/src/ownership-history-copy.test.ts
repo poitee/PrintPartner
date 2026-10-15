@@ -374,6 +374,24 @@ it.each(["inspect", "apply"].flatMap(mode => ["missing-parent", "non-immediate-p
     else await refused(paths, input);
   },
 );
+it.each(["inspect", "apply"].flatMap(mode => ["current", "historical"].map(kind => ({ mode, kind }))))(
+  "$mode refuses post-initial legacy provenance on the $kind dirty revision", async ({ mode, kind }) => {
+    const paths = fixture(); appendAcceptedRevision(paths.sourceDir);
+    if (kind === "historical") appendAcceptedRevision(paths.sourceDir);
+    edit(paths.sourceDir, db => { db.exec("UPDATE parts SET notes='working edit' WHERE id=1"); });
+    const input = manifest(paths.sourceDir);
+    edit(paths.sourceDir, db => {
+      const trigger = z.object({ sql: z.string() }).parse(db.prepare("SELECT sql FROM sqlite_schema WHERE name='trg_plan_revisions_immutable_update'").get());
+      db.exec("DROP TRIGGER trg_plan_revisions_immutable_update; UPDATE plan_revisions SET provenance_kind='legacy',input_set_id=NULL WHERE profile_id=1 AND revision_number=2");
+      db.exec(trigger.sql);
+      if (kind === "current") db.exec("DELETE FROM plan_accepted_input_sets WHERE profile_id=1");
+      input.source_digest = hash(db.serialize());
+    });
+    if (kind === "current") input.claims = input.claims.filter(claim => claim.table !== "plan_accepted_input_sets" || claim.rowid !== 1);
+    if (mode === "inspect") expect(() => inspectOwnershipCopy(paths)).toThrow(/provenance/);
+    else await refused(paths, input);
+  },
+);
 it.each(["inspect", "apply"].flatMap(mode => ["completed", "assembled", "assembled-without-completed"].map(kind => ({ mode, kind }))))(
   "$mode refuses dirty current-coordinate progress with invalid $kind", async ({ mode, kind }) => {
     const paths = fixture();

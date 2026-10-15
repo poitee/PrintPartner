@@ -112,6 +112,7 @@ export function validateOwnershipHistory(database: Database.Database): void {
       if (profile.acceptedPlanVersion !== accepted.revisionNumber) fail("accepted Plan version disagrees with history");
       if (history.length !== profile.acceptedPlanVersion || history.some((revision, index) => revision.revisionNumber !== profile.acceptedPlanVersion - index)) fail("incomplete accepted Plan history");
       if (history.some((revision, index) => revision.parentRevisionId !== (history[index + 1]?.id ?? null))) fail("revision lineage");
+      if (history.some(revision => revision.revisionNumber > 1 && revision.provenanceKind !== "tracked")) fail("post-initial revision provenance");
     }
     acceptedPlans.set(profile.id, { kind: profile.acceptedPlanRevisionId == null ? "compatibility_dirty" : "ready", revision: accepted });
     validateAcceptedPlanInputHeaderRows({ tenantId: profile.tenantId, profileId: profile.id, revision: accepted,
