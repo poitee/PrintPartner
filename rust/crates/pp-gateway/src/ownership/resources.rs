@@ -75,6 +75,8 @@ enum ReviewedEntry {
     PreviewSourceNaming { resources: Vec<ResourceId> },
     #[serde(rename = "tool.list_plan_snapshots")]
     ListPlanSnapshots { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.ui_open_source")]
+    UiOpenSource { resources: Vec<ResourceId> },
     #[serde(rename = "tool.ui_navigate")]
     UiNavigate { resources: Vec<ResourceId> },
     #[serde(rename = "tool.ui_focus_stl_search")]
@@ -160,6 +162,16 @@ impl ReviewedEntry {
                 "tool.list_plan_snapshots",
                 resources,
                 BTreeSet::from([Table(BuildProfiles), Table(PlanSnapshots)]),
+            ),
+            Self::UiOpenSource { resources } => (
+                "tool.ui_open_source",
+                resources,
+                BTreeSet::from([
+                    Table(BuildProfiles),
+                    Table(Projects),
+                    Table(SourceDocs),
+                    File(FileFamily::SourceWorkspace),
+                ]),
             ),
             Self::UiNavigate { resources } => (
                 "tool.ui_navigate",
@@ -259,6 +271,7 @@ impl Declarations {
             "tool.ui_highlight_part",
             "tool.ui_focus_stl_search",
             "tool.ui_navigate",
+            "tool.ui_open_source",
             "tool.list_sources",
             "tool.list_source_categories",
         ] {
