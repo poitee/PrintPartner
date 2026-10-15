@@ -72,6 +72,34 @@ const modify = change => directory => {
   writeFileSync(join(directory, contracts), YAML.stringify(workflow));
 };
 
+test('event tree rejects unpinned actions in tabbed workflow filename', t => {
+  const f = fixture(t, directory => {
+    writeFileSync(join(directory, '.github/workflows/probe\t.yml'),
+      'jobs: {probe: {steps: [{uses: actions/checkout@main}]}}');
+  });
+  const result = f.run();
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stderr, /UNPINNED_ACTION/);
+});
+
+test('event tree does not mistake tabbed filename for required contracts workflow', t => {
+  const f = fixture(t, directory => {
+    renameSync(join(directory, contracts), join(directory, `${contracts}\tother.yml`));
+  });
+  const result = f.run();
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stderr, /INVALID_EVENT_DESKTOP_CONTRACTS/);
+});
+
+test('event tree accepts pinned actions in tabbed workflow filename', t => {
+  const f = fixture(t, directory => {
+    writeFileSync(join(directory, '.github/workflows/probe\t.yml'),
+      `jobs: {probe: {steps: [{uses: actions/checkout@${'a'.repeat(40)}}]}}`);
+  });
+  const result = f.run();
+  assert.equal(result.status, 0, result.stderr);
+});
+
 for (const [name, change] of [
   ['manual only', w => { w.on = { workflow_dispatch: null }; }],
   ['trigger list', w => { w.on = ['push', 'pull_request']; }],

@@ -205,7 +205,9 @@ function checkEventTree() {
   if (git(['cat-file', '-t', eventSha]).trim() !== 'commit') throw new Error('event SHA must identify a commit');
   const entries = git(['ls-tree', '-z', eventSha, '--', '.github/workflows/']).split('\0')
     .filter(Boolean).map(entry => {
-      const [metadata, path] = entry.split('\t');
+      const separator = entry.indexOf('\t');
+      const metadata = entry.slice(0, separator);
+      const path = entry.slice(separator + 1);
       const [mode, type, oid] = metadata.split(' ');
       return { mode, type, oid, path };
     });
