@@ -88,7 +88,7 @@ impl Admission {
     }
 }
 pub(super) fn available(status: &CoreStatus) -> bool {
-    matches!(status, CoreStatus::Guarded | CoreStatus::Failed)
+    matches!(status, CoreStatus::Guarded)
 }
 
 struct QuiescedStorage<'a>(&'a StorageLease);
@@ -152,7 +152,11 @@ mod tests {
         assert!(StorageLease::acquire(&data).is_err());
         assert_eq!(
             state
-                .prepare(&owner, &CoreStatus::Guarded, std::path::Path::new("missing"))
+                .prepare(
+                    &owner,
+                    &CoreStatus::Guarded,
+                    std::path::Path::new("missing")
+                )
                 .unwrap_err()
                 .to_string(),
             "Pending restore requires recovery before preparing another backup"

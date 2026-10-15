@@ -179,10 +179,7 @@ fn run() -> Result<u8> {
         let app_handle = app.handle().clone();
         tauri::async_runtime::spawn(async move {
             let mut status = handle.subscribe();
-            while !matches!(
-                *status.borrow_and_update(),
-                CoreStatus::Guarded | CoreStatus::Failed
-            ) {
+            while !matches!(*status.borrow_and_update(), CoreStatus::Guarded) {
                 if status.changed().await.is_err() {
                     return;
                 }

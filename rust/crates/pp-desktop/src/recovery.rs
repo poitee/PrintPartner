@@ -138,7 +138,7 @@ pub(crate) fn restart(app: &AppHandle, handle: CoreHandle, gate: Arc<RecoveryGat
 }
 
 fn restore_available(status: &CoreStatus) -> bool {
-    matches!(status, CoreStatus::Guarded | CoreStatus::Failed)
+    matches!(status, CoreStatus::Guarded)
 }
 
 pub(crate) fn restore_backup(app: &AppHandle, handle: CoreHandle, gate: Arc<RecoveryGate>) {
