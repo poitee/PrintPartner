@@ -540,6 +540,8 @@ fn path_matches(
     b: &mut PreparationBudget<'_>,
 ) -> ReadResult<bool> {
     b.visit(0)?;
+    // Normalization scans the raw text before trimming, so charge it up front.
+    b.comparison(pattern.units().len().saturating_add(key.len()))?;
     let (matched, work) = compare(pattern, key);
     b.comparison(work)?;
     Ok(matched)

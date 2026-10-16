@@ -24,6 +24,7 @@ mutants = [
     ('freshness always current', context, 'FreshnessFacts::Current { .. }\n    ))', 'FreshnessFacts::Current { .. } | FreshnessFacts::Untracked { .. }\n    ))'),
     ('path entry budget omitted', manifest, '        b.entry(0, key.len())?;', ''),
     ('comparison work uncharged', manifest, '    b.comparison(work)?;', ''),
+    ('raw comparison input uncharged', manifest, '    b.comparison(pattern.units().len().saturating_add(key.len()))?;', ''),
     ('matcher steps uncounted', manifest, '        *work += 1;', ''),
     ('comparisons charged to document bytes', manifest, '    b.comparison(work)?;', '    b.comparison(work)?;\n    b.expansion(work.saturating_mul(2))?;'),
 ]

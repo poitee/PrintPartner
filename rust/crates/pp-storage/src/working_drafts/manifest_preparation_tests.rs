@@ -214,9 +214,9 @@ fn preparation_manifest_helpers_propagate_budget_and_cancellation() {
         )
         .unwrap()
     };
-    let mut b = comparison_work(16);
+    let mut b = comparison_work(26);
     apply(&mut parts, &docs, vec![], vec![], &mut b).unwrap();
-    let mut b = comparison_work(15);
+    let mut b = comparison_work(25);
     assert!(matches!(
         apply(&mut parts, &docs, vec![], vec![], &mut b),
         Err(ReadFailure::LimitExceeded(Resource::ComparisonWork))

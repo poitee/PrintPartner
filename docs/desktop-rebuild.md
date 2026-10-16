@@ -317,14 +317,16 @@ defaults, explicit group membership, group bounds, and exclusion precedence.
 It accepts the shared `PreparationBudget`, charges each Part as an entry, and
 charges each pattern comparison as a visit. A comparison keeps no memory after it
 returns, so it does not charge the document-byte cap. It charges the separate
-`comparison_work` counter instead, in normalized UTF-16 units plus glob matcher
-steps. The default and maximum is 2^28 units, so comparisons at the
-100,000-visit limit can average about 2,680 units each. One comparison costs
-O(P + K²) units for a pattern of P units and a key of K units, with K at most
-4,096. The counter is charged after each comparison, so an attempt can exceed
-the limit by one comparison. Kit JSON passes through the budgeted document
-reader before the stored-kit parser, so UTF-16 selection text uses the existing
-codec.
+`comparison_work` counter instead. Before a comparison it charges the raw
+pattern UTF-16 units plus the key's UTF-8 bytes, because normalization scans
+the raw text before trimming. After the comparison it charges the normalized
+UTF-16 units plus glob matcher steps. The default and maximum is 2^28 units, so
+comparisons at the 100,000-visit limit can average about 2,680 units each. One
+comparison costs O(P + K²) units for a pattern of P units and a key of K units,
+with K at most 4,096. Only the post-comparison charge can pass the limit, so an
+attempt can exceed it by one comparison's normalized and matcher work. Kit JSON
+passes through the budgeted document reader before the stored-kit parser, so
+UTF-16 selection text uses the existing codec.
 
 `read_model::reusable_draft_base` checks current freshness before validating the
 complete accepted snapshot with the existing bounded readers. It propagates
