@@ -1,7 +1,7 @@
-#[cfg(test)]
-mod fixture_tests;
 pub(crate) mod model;
 mod storage;
+#[cfg(test)]
+mod tests;
 mod view;
 
 use pp_domain::PositiveId;
