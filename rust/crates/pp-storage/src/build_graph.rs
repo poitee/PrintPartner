@@ -1,4 +1,6 @@
+pub mod manifest_options;
 mod model;
+pub use manifest_options::{ManifestOptionsCommand, ManifestOptionsOutcome};
 pub(crate) mod projection;
 use crate::{Envelope, Shared, WriterOwner, auth, read_model};
 use anyhow::{Result, anyhow, ensure};
@@ -44,6 +46,7 @@ impl std::error::Error for Failure {}
 
 #[derive(Clone)]
 pub enum BuildCommand {
+    Manifest(ManifestOptionsCommand),
     List,
     Read {
         build: PositiveId,
@@ -81,6 +84,7 @@ pub enum BuildCommand {
 }
 #[derive(Debug)]
 pub enum BuildOutcome {
+    Manifest(ManifestOptionsOutcome),
     Listed {
         profiles: Vec<ProfileSummary>,
     },
@@ -112,11 +116,15 @@ pub enum BuildOutcome {
 }
 #[derive(Clone)]
 pub struct BuildGraphClient {
+    settings: crate::SettingsClient,
+    manifest_reads: Option<Arc<dyn crate::working_drafts::observation::DraftReads>>,
+    manifest_limits: crate::working_drafts::observation::PreparationLimits,
     shared: Arc<Shared>,
     policy: auth::AuthPolicy,
     repos: PathBuf,
 }
 pub(super) struct Command {
+    prepared_manifest: Option<Box<manifest_options::PreparedManifestCommand>>,
     credential: read_model::Credential,
     policy: auth::AuthPolicy,
     command: BuildCommand,
@@ -143,6 +151,9 @@ impl WriterOwner {
     pub fn build_graph_with_policy(&self, policy: auth::AuthPolicy) -> Result<BuildGraphClient> {
         auth::validate_policy(policy)?;
         Ok(BuildGraphClient {
+            settings: self.client.clone(),
+            manifest_reads: None,
+            manifest_limits: crate::working_drafts::observation::PreparationLimits::default(),
             shared: self.client.shared.clone(),
             policy,
             repos: self
@@ -153,6 +164,19 @@ impl WriterOwner {
                 .join("repos"),
         })
     }
+
+    pub fn build_graph_with_observations(
+        &self,
+        policy: auth::AuthPolicy,
+        reads: Arc<dyn crate::working_drafts::observation::DraftReads>,
+        limits: crate::working_drafts::observation::PreparationLimits,
+    ) -> Result<BuildGraphClient> {
+        limits.validate()?;
+        let mut client = self.build_graph_with_policy(policy)?;
+        client.manifest_reads = Some(reads);
+        client.manifest_limits = limits;
+        Ok(client)
+    }
 }
 impl BuildGraphClient {
     pub fn execute(
@@ -162,12 +186,18 @@ impl BuildGraphClient {
         cancelled: Arc<AtomicBool>,
         wait: Duration,
     ) -> Result<BuildOutcome> {
-        self.execute_with_reply(credential, command, cancelled, wait, false)
+        if let BuildCommand::Manifest(manifest) = &command
+            && !manifest.is_read()
+        {
+            return self.execute_observed_manifest(credential, manifest.clone(), cancelled, wait);
+        }
+        self.execute_with_reply(credential, command, None, cancelled, wait, false)
     }
     fn execute_with_reply(
         &self,
         credential: read_model::Credential,
         command: BuildCommand,
+        prepared_manifest: Option<manifest_options::PreparedManifestCommand>,
         cancelled: Arc<AtomicBool>,
         wait: Duration,
         discard_reply: bool,
@@ -197,6 +227,7 @@ impl BuildGraphClient {
         let (reply, receiver) = mpsc::channel();
         queue.pending.push_back(Envelope::BuildGraph {
             command: Command {
+                prepared_manifest: prepared_manifest.map(Box::new),
                 credential,
                 policy: self.policy,
                 command,
@@ -511,7 +542,10 @@ fn mutation(
             );
             Ok(BuildOutcome::Deleted)
         }
-        BuildCommand::List | BuildCommand::Read { .. } | BuildCommand::ListLayers { .. } => {
+        BuildCommand::Manifest(_)
+        | BuildCommand::List
+        | BuildCommand::Read { .. }
+        | BuildCommand::ListLayers { .. } => {
             unreachable!("read command in mutation transaction")
         }
     }
@@ -526,6 +560,9 @@ fn read(
 ) -> Result<BuildOutcome> {
     let mut budget = read_model::graph::Budget::default();
     match command {
+        BuildCommand::Manifest(command) => Ok(BuildOutcome::Manifest(manifest_options::read(
+            tx, tenant, command,
+        )?)),
         BuildCommand::List => {
             let ids = {
                 let mut statement = tx.prepare(
@@ -576,7 +613,7 @@ fn read(
 
 pub(super) fn execute(
     connection: &mut Connection,
-    command: Command,
+    mut command: Command,
     admission: crate::writer_admission::Deadline,
 ) -> Result<BuildOutcome> {
     ensure!(
@@ -586,21 +623,25 @@ pub(super) fn execute(
     let read_only = matches!(
         command.command,
         BuildCommand::List | BuildCommand::Read { .. } | BuildCommand::ListLayers { .. }
-    );
+    ) || matches!(&command.command, BuildCommand::Manifest(command) if command.is_read());
     let tx = if read_only {
         connection.transaction()?
     } else {
         crate::writer_admission::begin_immediate(connection, admission)?
     };
     let tenant = tenant(&tx, &command)?;
-    let operation = if read_only { read } else { mutation };
-    let outcome = operation(
-        &tx,
-        &tenant,
-        &command.command,
-        &command.repos,
-        &command.cancelled,
-    )?;
+    let outcome = if let Some(prepared) = command.prepared_manifest.take() {
+        BuildOutcome::Manifest(manifest_options::finish(&tx, &tenant, *prepared)?)
+    } else {
+        let operation = if read_only { read } else { mutation };
+        operation(
+            &tx,
+            &tenant,
+            &command.command,
+            &command.repos,
+            &command.cancelled,
+        )?
+    };
     ensure!(
         !command.cancelled.load(Ordering::Acquire),
         Failure::Cancelled
@@ -615,6 +656,7 @@ mod tests {
 
     fn command(command: BuildCommand, repos: PathBuf) -> Command {
         Command {
+            prepared_manifest: None,
             credential: read_model::Credential::Session(auth::Secret::new(
                 "read-fixture-secret".into(),
             )),
@@ -788,6 +830,7 @@ mod tests {
             .execute_with_reply(
                 read_model::Credential::Session(auth::Secret::new("missing".into())),
                 BuildCommand::List,
+                None,
                 Arc::new(AtomicBool::new(false)),
                 Duration::from_secs(2),
                 true,

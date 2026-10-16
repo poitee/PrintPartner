@@ -1,20 +1,6 @@
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "GRE-604 manifest observation has no runtime caller yet"
-    )
-)]
 mod builder;
 mod json;
 mod model;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "GRE-604 manifest observation has no runtime caller yet"
-    )
-)]
 pub(crate) mod observation;
 #[cfg(test)]
 mod observation_tests;
@@ -48,7 +34,8 @@ impl ManifestInputDetail {
     }
 }
 
-pub struct ManifestJsonBody(Vec<u8>);
+#[derive(Debug)]
+pub struct ManifestJsonBody(pub(crate) Vec<u8>);
 
 impl ManifestJsonBody {
     pub fn into_bytes(self) -> Vec<u8> {

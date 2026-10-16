@@ -5,10 +5,6 @@ pub(crate) use super::manifest::{
     Variant as BuilderVariant,
 };
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "GRE-604 D10b imports this helper")
-)]
 pub(crate) fn parse_builder_manifest(
     bytes: &[u8],
     budget: &mut PreparationBudget<'_>,
@@ -16,18 +12,10 @@ pub(crate) fn parse_builder_manifest(
     super::manifest::parse(bytes, budget)
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "GRE-604 D10b imports this helper")
-)]
 pub(crate) fn merge_builder_groups(target: &mut BuilderGroups, incoming: BuilderGroups) {
     super::manifest::merge(target, incoming)
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "GRE-604 D10b imports this helper")
-)]
 pub(crate) fn builder_path_matches(
     pattern: &crate::manifest_text::ManifestText,
     path: &str,
@@ -37,10 +25,6 @@ pub(crate) fn builder_path_matches(
 
 pub(crate) type BuilderHint = super::manifest::HintRule;
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "GRE-604 D10b imports this helper")
-)]
 pub(crate) fn parse_builder_hints(
     bytes: &[u8],
     budget: &mut PreparationBudget<'_>,
@@ -48,10 +32,6 @@ pub(crate) fn parse_builder_hints(
     super::manifest::hints(bytes, budget)
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "GRE-604 D10b imports this helper")
-)]
 pub(crate) fn infer_builder_siblings(
     paths: &[String],
     budget: &mut PreparationBudget<'_>,
