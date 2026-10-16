@@ -97,7 +97,12 @@ pub(crate) fn manifest() -> Result<ReleaseManifest> {
 
 pub fn verify_bundle(bundle: &Bundle, assets: &Path) -> Result<()> {
     let release = manifest()?;
+    let started = std::time::Instant::now();
     verify_files(assets, &release.frontend, true)?;
+    eprintln!(
+        "GRE645 verify frontend {:.3}s",
+        started.elapsed().as_secs_f64()
+    );
     verify_backend(bundle)
 }
 
@@ -107,10 +112,12 @@ pub(crate) fn verify_backend(bundle: &Bundle) -> Result<()> {
         release.runtime_version == bundle.runtime_version && release.commit == bundle.commit,
         "Requested release differs from embedded identity"
     );
+    let started = std::time::Instant::now();
     ensure!(
         measure(&bundle.node)? == release.node_sha256,
         "Node executable content mismatch"
     );
+    eprintln!("GRE645 verify node {:.3}s", started.elapsed().as_secs_f64());
     ensure!(
         bundle.entry.file_name().and_then(|name| name.to_str()) == Some("desktop.js"),
         "Unexpected compatibility entry"
@@ -145,7 +152,16 @@ pub(crate) fn verify_backend(bundle: &Bundle) -> Result<()> {
         true,
     )?;
     verify_files(&bundle.web_root, &release.metadata, false)?;
+    eprintln!(
+        "GRE645 verify backend+contracts+domain+metadata {:.3}s",
+        started.elapsed().as_secs_f64()
+    );
+    let deps = std::time::Instant::now();
     verify_dependencies(&bundle.web_root, &release.dependencies)?;
+    eprintln!(
+        "GRE645 verify dependencies {:.3}s",
+        deps.elapsed().as_secs_f64()
+    );
     Ok(())
 }
 

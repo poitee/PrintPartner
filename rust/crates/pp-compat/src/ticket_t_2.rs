@@ -2371,3 +2371,17 @@ fn ticket_t_3_drain_rate_limit_debits_require_current_generation_signature() {
         assert_eq!(endpoint.rate_limit_bucket(&encoded, &signature), None);
     }
 }
+
+// GRE-645 diagnostic only; this branch is never merged.
+#[test]
+fn gre645_diag_verify_bundle_timing() {
+    let bundle = measured_startup_bundle();
+    for round in 0..3 {
+        let started = std::time::Instant::now();
+        super::release::verify_bundle(&bundle, &bundle.web_root.join("apps/web/dist")).unwrap();
+        eprintln!(
+            "GRE645 verify_bundle round={round} total={:.3}s",
+            started.elapsed().as_secs_f64()
+        );
+    }
+}

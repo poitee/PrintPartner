@@ -32,24 +32,9 @@ jobs:
       matrix:
         # Runner labels, per-OS package scope and per-OS test filters live only here.
         include:
-          - os: linux
-            runner: ubuntu-latest
-            scope: [--workspace]
-            tests: all()
           - os: macos
             runner: macos-26
             scope: [--workspace]
-            tests: all()
-          # These crates still use Unix-only APIs or depend on one that does.
-          # Each port ticket deletes its line (docs/development/ci.md#windows-exclusions).
-          - os: windows
-            runner: windows-latest
-            scope:
-              - --workspace
-              - --exclude pp-storage --exclude pp-source # GRE-653
-              - --exclude pp-compat --exclude pp-core # GRE-654
-              - --exclude pp-api --exclude pp-gateway --exclude pp-server # GRE-655
-              - --exclude pp-desktop # GRE-656
             tests: all()
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
@@ -123,11 +108,12 @@ jobs:
           /bin/sh -c 'exec /usr/bin/node -v' || echo "exec-missing-node rc=$?"
           mount | grep pptmp || true
           diskutil info /Volumes/pptmp | grep -iE 'owners|file system personality|mount point|read-only' || true
-      - name: GRE-645 runtime_m0 with stack samples of hot test processes
+      - name: GRE-645 verification timing on an idle runner
+        if: ${{ !cancelled() && steps.assets.outcome == 'success' }}
+        run: cargo nextest run --manifest-path rust/Cargo.toml --locked -p pp-compat --no-capture -E 'test(gre645_diag_verify_bundle_timing)'
+      - name: GRE-645 affected tests fully serialized
         if: ${{ !cancelled() && steps.assets.outcome == 'success' }}
         run: |
-          rust/scripts/gre645-sample.sh > "$RUNNER_TEMP/gre645-hot.txt" 2>&1 &
-          sampler=$!
-          cargo nextest run --manifest-path rust/Cargo.toml --locked -p pp-core --no-fail-fast -E 'binary_id(pp-core::runtime_m0)' || echo "RUNTIME_M0_FAILED"
-          kill "$sampler" || true
-          cat "$RUNNER_TEMP/gre645-hot.txt"
+          cargo nextest run --manifest-path rust/Cargo.toml --locked --workspace --no-fail-fast --test-threads 1 \
+            -E 'binary_id(pp-core::runtime_m0) | (package(pp-compat) & test(/^ticket_t_2::/)) | test(=origin_tests::ticket_t_12_missing_config_persists_private_port_and_reuses_it)' \
+            || echo "SERIAL_FAILED"
