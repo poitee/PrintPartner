@@ -311,3 +311,30 @@ fn apply_refuses_quadratic_comparisons_by_work_not_bytes() {
         Err(ReadFailure::LimitExceeded(Resource::ComparisonWork))
     ));
 }
+
+#[test]
+fn apply_charges_raw_pattern_units_before_trimming() {
+    let cancelled = AtomicBool::new(false);
+    let limits = PreparationLimits {
+        comparison_work: 1 << 22,
+        ..PreparationLimits::default()
+    };
+    let mut b = PreparationBudget::new(&cancelled, limits).unwrap();
+    let yaml =
+        serde_json::to_vec(&json!({"parts": [format!("{}b", " ".repeat(960_000))]})).unwrap();
+    let docs: Vec<_> = (0..2)
+        .map(|_| ("F".into(), "repo".into(), parse(&yaml, &mut b).unwrap()))
+        .collect();
+    let mut parts: Vec<_> = (0..10)
+        .map(|_| {
+            DraftPart::new(
+                json!({"partKey": "a.stl", "included": true, "sourceLayer": "0:F"}),
+                PartManifestMetadata::default(),
+            )
+        })
+        .collect();
+    assert!(matches!(
+        apply(&mut parts, &docs, vec![], vec![], &mut b),
+        Err(ReadFailure::LimitExceeded(Resource::ComparisonWork))
+    ));
+}
