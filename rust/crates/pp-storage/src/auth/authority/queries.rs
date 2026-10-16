@@ -60,6 +60,13 @@ pub(crate) fn resolve_stream_authority(
         crate::jobs::Credential::PhysicalOwner(_) => Err(anyhow!(AuthFailure::SessionRequired)),
     }
 }
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "GRE-610 (D14) capture preflight resolves routed keys by reference"
+    )
+)]
 pub(crate) fn job_key_actor_ref(
     tx: &Transaction<'_>,
     tenant: &str,
@@ -74,6 +81,13 @@ pub(crate) fn job_key_actor_ref(
     }
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "GRE-612 (D19) plan publication reconciliation calls this"
+    )
+)]
 pub(crate) fn reconciliation_actor(
     tx: &Transaction<'_>,
     credential: crate::read_model::Credential,

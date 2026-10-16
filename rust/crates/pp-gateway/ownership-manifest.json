@@ -552,6 +552,15 @@
         ]
       },
       {
+        "operation": "tool.get_kit_catalog",
+        "resources": [
+          {
+            "kind": "file",
+            "name": "kit-catalog"
+          }
+        ]
+      },
+      {
         "operation": "tool.get_plan_snapshot",
         "resources": [
           {
@@ -973,7 +982,6 @@
       "tool.get_build_workflow",
       "tool.get_farm_status",
       "tool.get_interaction_graph",
-      "tool.get_kit_catalog",
       "tool.get_plan_checkoff",
       "tool.get_plan_draft",
       "tool.get_plan_option_groups",
@@ -1036,11 +1044,11 @@
     },
     "source-covers": {
       "node_reads": 1,
-      "rust_writes": null
+      "rust_writes": "none"
     },
     "kit-catalog": {
       "node_reads": 1,
-      "rust_writes": null
+      "rust_writes": "none"
     }
   }
 }

@@ -272,6 +272,7 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.list_plans",
         "tool.list_plan_snapshots",
         "tool.get_plan_snapshot",
+        "tool.get_kit_catalog",
         "tool.ui_highlight_part",
         "tool.ui_focus_stl_search",
         "tool.ui_navigate",
@@ -288,8 +289,8 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.audit_source_provenance",
         "tool.analyze_stl_mesh",
     ]);
-    assert_eq!(reviewed.len(), 22);
-    assert_eq!(unresolved.len(), 421);
+    assert_eq!(reviewed.len(), 23);
+    assert_eq!(unresolved.len(), 420);
     let resolved: BTreeSet<_> = index
         .claims()
         .values()
@@ -556,6 +557,7 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
         "tool.list_plans",
         "tool.list_plan_snapshots",
         "tool.get_plan_snapshot",
+        "tool.get_kit_catalog",
         "tool.ui_highlight_part",
         "tool.ui_focus_stl_search",
         "tool.ui_navigate",
@@ -2065,7 +2067,15 @@ fn ticket_t_7_ownership_analyze_stl_mesh_refuses_invalid_admission_before_effect
 
 #[test]
 fn ticket_t_7_ownership_get_plan_snapshot_refuses_invalid_admission_before_effects() {
-    let id = "tool.get_plan_snapshot";
+    assert_catalog_tool_invalid_admission("tool.get_plan_snapshot");
+}
+
+#[test]
+fn ticket_t_7_ownership_get_kit_catalog_refuses_invalid_admission_before_effects() {
+    assert_catalog_tool_invalid_admission("tool.get_kit_catalog");
+}
+
+fn assert_catalog_tool_invalid_admission(id: &str) {
     let mut original = manifest();
     original["live_formats"]["sqlite-schema"]["rust_writes"] = json!(34);
     original["live_formats"]["kit-catalog"]["rust_writes"] = json!(1);
@@ -2133,21 +2143,21 @@ fn ticket_t_7_ownership_get_plan_snapshot_refuses_invalid_admission_before_effec
                         .unwrap()
                         .push(json!(id));
                 }
-                malformed("missing reviewed resources for tool.get_plan_snapshot")
+                malformed(&format!("missing reviewed resources for {id}"))
             }
             4 => {
                 value["resources"]["reviewed"]
                     .as_array_mut()
                     .unwrap()
                     .push(original["resources"]["reviewed"][entry].clone());
-                malformed("duplicate resource state for tool.get_plan_snapshot")
+                malformed(&format!("duplicate resource state for {id}"))
             }
             5 => {
                 value["resources"]["unresolved"]
                     .as_array_mut()
                     .unwrap()
                     .push(json!(id));
-                malformed("duplicate resource state for tool.get_plan_snapshot")
+                malformed(&format!("duplicate resource state for {id}"))
             }
             6 | 7 => {
                 regroup(&mut value, id, &[id]);
@@ -2268,17 +2278,18 @@ fn ticket_t_7_ownership_get_plan_snapshot_has_complete_node_owned_resources() {
             assert!(!effect);
         }
     }
-    let mut value = manifest();
-    value["live_formats"]["sqlite-schema"]["rust_writes"] = json!(34);
     assert_eq!(
-        admit(&value).unwrap().admit_rollback(id),
+        index.admit_rollback(id),
         Err(AdmissionError::IncompatibleLiveFormat {
             operation: id.into(),
-            format: "kit-catalog".into(),
-            node_reads: 1,
-            rust_writes: None,
+            format: "sqlite-schema".into(),
+            node_reads: 34,
+            rust_writes: Some(35),
         })
     );
+    let mut value = manifest();
+    value["live_formats"]["sqlite-schema"]["rust_writes"] = json!(34);
+    assert_eq!(admit(&value).unwrap().admit_rollback(id), Ok(&expected));
     value["live_formats"]["kit-catalog"]["rust_writes"] = json!(1);
     assert_eq!(admit(&value).unwrap().admit_rollback(id), Ok(&expected));
     value["live_formats"]["kit-catalog"]["node_reads"] = json!(2);
@@ -2310,4 +2321,43 @@ fn ticket_t_7_ownership_get_plan_snapshot_requires_valid_catalog_format() {
     assert!(
         matches!(admit(&value), Err(AdmissionError::Malformed(detail)) if detail.contains("missing field `kit-catalog`"))
     );
+}
+
+#[test]
+fn ticket_t_7_ownership_get_kit_catalog_has_complete_node_owned_resources() {
+    use pp_gateway::ownership::{Owner, manifest::Disposition};
+    let id = "tool.get_kit_catalog";
+    let index = admit_bundled_manifest().unwrap();
+    let expected: ResourceSet = serde_json::from_value(json!([
+        {"kind":"file","name":"kit-catalog"}
+    ]))
+    .unwrap();
+    assert_eq!(index.resources_for(id), Ok(&expected));
+    assert_eq!(
+        index.lookup(id).unwrap().disposition,
+        Disposition::Owned(Owner::Node)
+    );
+    assert_eq!(index.admit_rollback(id), Ok(&expected));
+    for rust_writes in [None, Some(2)] {
+        let mut value = manifest();
+        value["live_formats"]["kit-catalog"]["rust_writes"] = json!(rust_writes);
+        let mut effect = false;
+        assert_eq!(
+            admit(&value).and_then(|index| {
+                index.admit_rollback(id)?;
+                effect = true;
+                Ok(())
+            }),
+            Err(AdmissionError::IncompatibleLiveFormat {
+                operation: id.into(),
+                format: "kit-catalog".into(),
+                node_reads: 1,
+                rust_writes,
+            })
+        );
+        assert!(!effect);
+    }
+    let mut value = manifest();
+    value["live_formats"]["kit-catalog"]["rust_writes"] = json!(1);
+    assert_eq!(admit(&value).unwrap().admit_rollback(id), Ok(&expected));
 }

@@ -77,6 +77,8 @@ enum ReviewedEntry {
     PreviewSourceNaming { resources: Vec<ResourceId> },
     #[serde(rename = "tool.list_plan_snapshots")]
     ListPlanSnapshots { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_kit_catalog")]
+    GetKitCatalog { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_snapshot")]
     GetPlanSnapshot { resources: Vec<ResourceId> },
     #[serde(rename = "tool.ui_open_source")]
@@ -178,6 +180,11 @@ impl ReviewedEntry {
                 "tool.list_plan_snapshots",
                 resources,
                 BTreeSet::from([Table(BuildProfiles), Table(PlanSnapshots)]),
+            ),
+            Self::GetKitCatalog { resources } => (
+                "tool.get_kit_catalog",
+                resources,
+                BTreeSet::from([File(FileFamily::KitCatalog)]),
             ),
             Self::GetPlanSnapshot { resources } => (
                 "tool.get_plan_snapshot",
@@ -365,6 +372,7 @@ impl Declarations {
             "tool.list_plans",
             "tool.list_plan_snapshots",
             "tool.get_plan_snapshot",
+            "tool.get_kit_catalog",
             "tool.ui_highlight_part",
             "tool.ui_focus_stl_search",
             "tool.ui_navigate",

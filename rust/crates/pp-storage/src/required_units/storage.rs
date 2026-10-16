@@ -144,7 +144,7 @@ pub(crate) fn one(
     Ok(rows(tx, sql, args)?.into_iter().next())
 }
 
-pub(super) fn text<'a>(v: &'a Value, k: &str) -> Result<&'a str> {
+pub(crate) fn text<'a>(v: &'a Value, k: &str) -> Result<&'a str> {
     v[k].as_str().ok_or_else(|| anyhow!("Invalid stored {k}"))
 }
 

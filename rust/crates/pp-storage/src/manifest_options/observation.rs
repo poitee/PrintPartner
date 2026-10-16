@@ -4,11 +4,10 @@ use super::json::{self, JsonError, JsonLimit, JsonValue};
 use super::model::KitManifest;
 use crate::manifest_text::{JsText, ManifestText, OptionGroupId, VariantId};
 use crate::working_drafts::observation::{
-    BuilderGroup, BuilderGroups, BuilderVariant, CatalogPurpose, CheckoutManifestUse, DocumentRead,
-    DraftReads, InventoryPath, OwnedCatalogReadRequest, OwnedCheckoutReadRequest,
+    BuilderGlob, BuilderGroup, BuilderGroups, BuilderVariant, CatalogPurpose, CheckoutManifestUse,
+    DocumentRead, DraftReads, InventoryPath, OwnedCatalogReadRequest, OwnedCheckoutReadRequest,
     OwnedStlReadRequest, PreparationBudget, ReadFailure, ReadResult, Resource, StlPurpose,
-    builder_path_matches, infer_builder_siblings, merge_builder_groups, parse_builder_hints,
-    parse_builder_manifest,
+    infer_builder_siblings, merge_builder_groups, parse_builder_hints, parse_builder_manifest,
 };
 use rusqlite::{OptionalExtension, Transaction, params};
 use sha2::{Digest, Sha256};
@@ -117,6 +116,7 @@ pub(crate) fn observe(
     reads: Option<&dyn DraftReads>,
     budget: &mut PreparationBudget<'_>,
 ) -> ReadResult<ObservedBuilder> {
+    budget.check()?;
     let mut resolved_selections = match captured.stored_kit.as_deref() {
         Some(raw) => {
             budget.document(raw.len(), raw.len())?;
@@ -363,9 +363,12 @@ fn any_pattern_matches(
     budget: &PreparationBudget<'_>,
 ) -> ReadResult<bool> {
     for pattern in patterns {
-        budget.check()?;
-        if paths.iter().any(|path| builder_path_matches(pattern, path)) {
-            return Ok(true);
+        let glob = BuilderGlob::new(pattern);
+        for path in paths {
+            budget.check()?;
+            if glob.matches(path) {
+                return Ok(true);
+            }
         }
     }
     Ok(false)

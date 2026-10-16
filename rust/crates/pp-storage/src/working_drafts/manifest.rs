@@ -418,38 +418,49 @@ fn wildcard_matches(pattern: &[u16], key: &[u16], work: &mut usize) -> bool {
     pattern[pat..].iter().all(|unit| *unit == 0x2a)
 }
 
-pub(crate) fn matches(pattern: &ManifestText, key: &str) -> bool {
-    compare(pattern, key).0
+pub(crate) struct Glob {
+    text: JsText,
+    units: Vec<u16>,
 }
 
-/// Counts normalized units plus matcher steps as the work done.
-fn compare(pattern: &ManifestText, key: &str) -> (bool, usize) {
-    let pattern = normalize_glob(pattern);
-    let key = normalize_glob(&JsText::scalar(key));
-    let mut work = pattern.units().len() + key.units().len();
-    if pattern == key {
-        return (true, work);
+impl Glob {
+    pub(crate) fn new(pattern: &ManifestText) -> Self {
+        let text = normalize_glob(pattern);
+        let units = text
+            .units()
+            .iter()
+            .copied()
+            .map(canonicalize_regex_unit)
+            .collect();
+        Self { text, units }
     }
-    let pattern: Vec<_> = pattern
-        .units()
-        .iter()
-        .copied()
-        .map(canonicalize_regex_unit)
-        .collect();
-    let key: Vec<_> = key
-        .units()
-        .iter()
-        .copied()
-        .map(canonicalize_regex_unit)
-        .collect();
-    let matched = wildcard_matches(&pattern, &key, &mut work)
-        || (!pattern.contains(&0x2f)
-            && key.contains(&0x2f)
-            && key
-                .rsplit(|unit| *unit == 0x2f)
-                .next()
-                .is_some_and(|basename| wildcard_matches(&pattern, basename, &mut work)));
-    (matched, work)
+
+    pub(crate) fn matches(&self, key: &str) -> bool {
+        self.counted_matches(key).0
+    }
+
+    /// Counts normalized units plus matcher steps as the work done.
+    fn counted_matches(&self, key: &str) -> (bool, usize) {
+        let key = normalize_glob(&JsText::scalar(key));
+        let mut work = self.text.units().len() + key.units().len();
+        if self.text == key {
+            return (true, work);
+        }
+        let key: Vec<_> = key
+            .units()
+            .iter()
+            .copied()
+            .map(canonicalize_regex_unit)
+            .collect();
+        let matched = wildcard_matches(&self.units, &key, &mut work)
+            || (!self.units.contains(&0x2f)
+                && key.contains(&0x2f)
+                && key
+                    .rsplit(|unit| *unit == 0x2f)
+                    .next()
+                    .is_some_and(|basename| wildcard_matches(&self.units, basename, &mut work)));
+        (matched, work)
+    }
 }
 pub(crate) fn hints(bytes: &[u8], b: &mut PreparationBudget<'_>) -> ReadResult<Vec<HintRule>> {
     b.document(bytes.len(), 0)?;
@@ -542,7 +553,7 @@ fn path_matches(
     b.visit(0)?;
     // Normalization scans the raw text before trimming, so charge it up front.
     b.comparison(pattern.units().len().saturating_add(key.len()))?;
-    let (matched, work) = compare(pattern, key);
+    let (matched, work) = Glob::new(pattern).counted_matches(key);
     b.comparison(work)?;
     Ok(matched)
 }

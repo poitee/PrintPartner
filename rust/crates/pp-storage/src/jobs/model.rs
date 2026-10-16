@@ -203,7 +203,7 @@ pub enum GroupBy {
     #[default]
     ColorDir,
 }
-fn id(value: u64) -> Result<()> {
+pub(super) fn id(value: u64) -> Result<()> {
     ensure!(
         value > 0 && value <= 9_007_199_254_740_991,
         "Invalid identifier"
@@ -462,6 +462,9 @@ pub struct EffectReceipt {
     #[serde(default, skip_serializing_if = "is_false")]
     pub no_effect: bool,
     pub receipt: Option<ResultArtifact>,
+    #[cfg(feature = "desktop_rebuild")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) checklist_completion: Option<Box<super::checklist::ChecklistCompletionClaim>>,
 }
 fn is_false(value: &bool) -> bool {
     !*value
@@ -512,6 +515,45 @@ impl ResultArtifact {
         text(&self.target, 1024)
     }
 }
+/// How a durable document records who enqueued it. Documents written before
+/// authority persistence decode as `LegacyMissing` and are never upgraded.
+#[cfg(feature = "desktop_rebuild")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum AuthorityDisposition {
+    Original,
+    PhysicalOwner,
+    #[default]
+    LegacyMissing,
+}
+#[cfg(feature = "desktop_rebuild")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AuthorityRefusalReason {
+    MissingOriginal,
+    CredentialInvalid,
+    PolicyChanged,
+    TenantChanged,
+    SubjectChanged,
+}
+#[cfg(feature = "desktop_rebuild")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AuthorityRefusalPhase {
+    Claim,
+    TargetedClaim,
+    WorkerAdvance,
+    SourceWriter,
+}
+#[cfg(feature = "desktop_rebuild")]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AuthorityRefusalObservation {
+    pub(crate) version: u8,
+    pub(crate) reason: AuthorityRefusalReason,
+    pub(crate) phase: AuthorityRefusalPhase,
+    pub(crate) observed_at: i64,
+    pub(crate) generation: i64,
+}
 #[derive(Clone, Serialize, Deserialize)]
 pub struct JobRecord {
     pub job_id: String,
@@ -531,7 +573,19 @@ pub struct JobRecord {
     pub progress: Option<u8>,
     pub effects: Vec<EffectReceipt>,
     pub result: Option<ResultArtifact>,
+    #[cfg(feature = "desktop_rebuild")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_result: Option<super::CompletedResult>,
     pub recovery: Option<String>,
+    #[cfg(feature = "desktop_rebuild")]
+    #[serde(skip)]
+    pub(crate) authority: Option<crate::auth::authority::AuthorityBasis>,
+    #[cfg(feature = "desktop_rebuild")]
+    #[serde(skip)]
+    pub(crate) authority_disposition: AuthorityDisposition,
+    #[cfg(feature = "desktop_rebuild")]
+    #[serde(skip)]
+    pub(crate) authority_refusal: Option<AuthorityRefusalObservation>,
     #[serde(skip)]
     pub(crate) fence: Option<String>,
     #[serde(skip)]
@@ -539,6 +593,13 @@ pub struct JobRecord {
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct JobSnapshot {
+    #[cfg(feature = "desktop_rebuild")]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "Job engine wiring lands in GRE-609 (D16)")
+    )]
+    #[serde(skip)]
+    pub(crate) version: i64,
     pub job_id: String,
     pub kind: JobKind,
     pub status: &'static str,
@@ -573,6 +634,8 @@ impl JobRecord {
             self.state != PersistentState::UploadedOnly || self.uploaded_only_proof().is_some(),
             "Invalid uploaded-only job"
         );
+        #[cfg(feature = "desktop_rebuild")]
+        super::checklist::validate_claims(self)?;
         Ok(())
     }
     pub(super) fn uploaded_only_proof(&self) -> Option<UploadedProof<'_>> {
@@ -647,10 +710,19 @@ impl JobRecord {
             PersistentState::Cancelled => ("cancelled", "Cancelled before effects"),
         };
         JobSnapshot {
+            #[cfg(feature = "desktop_rebuild")]
+            version: self.state_version,
             job_id: self.job_id.clone(),
             kind: self.kind,
             status,
             message,
+            #[cfg(feature = "desktop_rebuild")]
+            progress: if self.state == PersistentState::Queued {
+                Some(0)
+            } else {
+                self.progress
+            },
+            #[cfg(not(feature = "desktop_rebuild"))]
             progress: self.progress,
             result: self.result.clone(),
             error: (status == "error").then_some(message),
