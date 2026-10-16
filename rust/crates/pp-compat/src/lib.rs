@@ -46,18 +46,22 @@ pub struct Bundle {
     pub commit: String,
 }
 
-pub type RecordChild = Box<dyn Fn(&Path, u32) -> Result<()> + Send + Sync>;
+#[cfg(test)]
+pub type BeforeSetup = Box<dyn Fn(&Path, u32) -> Result<()> + Send + Sync>;
 
 pub struct SpawnSpec {
     pub account_pin: DesktopAccountPin,
     pub bundle: Bundle,
     pub data_dir: PathBuf,
     pub runtime_dir: PathBuf,
-    pub lease: String,
-    pub lease_file: std::fs::File,
+    #[cfg(test)]
+    pub setup_padding: String,
+    /// The exclusive printpartner.lock descriptor, inherited by the supervised child.
+    pub storage_lock: std::fs::File,
     pub port: u16,
     pub gateway_rate_limit: bool,
-    pub record_child: RecordChild,
+    #[cfg(test)]
+    pub before_setup: BeforeSetup,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -503,40 +507,27 @@ impl Process {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
         let (parent_read, parent_death) =
-            configure_child(&mut command, spec.lease_file.as_raw_fd())
+            configure_child(&mut command, spec.storage_lock.as_raw_fd())
                 .context("Could not arm parent-death watcher")?;
         let mut child = command.spawn().context("Could not start bundled Node")?;
         drop(parent_read);
-        // Persist ownership before the child can receive setup or open storage.
+        #[cfg(test)]
         if let Err(error) =
-            (spec.record_child)(&spec.data_dir, child.id().context("Missing child PID")?)
+            (spec.before_setup)(&spec.data_dir, child.id().context("Missing child PID")?)
         {
             let _ = child.kill().await;
             let _ = child.wait().await;
-            return Err(error.context("Could not record child ownership"));
+            return Err(error);
         }
-        let child_identity = (|| -> Result<String> {
-            let marker: serde_json::Value =
-                serde_json::from_slice(&std::fs::read(spec.data_dir.join(".desktop-owner.json"))?)?;
-            marker["child_process_identity"]
-                .as_str()
-                .filter(|identity| !identity.is_empty())
-                .map(str::to_string)
-                .context("Recorded child identity missing")
-        })();
-        let child_identity = match child_identity {
-            Ok(identity) => identity,
-            Err(error) => {
-                let _ = child.kill().await;
-                let _ = child.wait().await;
-                return Err(error.context("Could not read recorded child ownership"));
-            }
-        };
         let mut stdin = child.stdin.take().context("Missing parent-liveness pipe")?;
         let mut setup = serde_json::json!({ "version":1, "data_dir":spec.data_dir, "socket_path":endpoint.socket,
-            "generation":endpoint.generation, "key":hex::encode(key), "lease":spec.lease, "parent_pid":std::process::id(),
-            "port":spec.port, "gateway_rate_limit":spec.gateway_rate_limit, "child_process_identity":child_identity });
+            "generation":endpoint.generation, "key":hex::encode(key), "parent_pid":std::process::id(),
+            "port":spec.port, "gateway_rate_limit":spec.gateway_rate_limit });
         spec.account_pin.apply(&mut setup);
+        #[cfg(test)]
+        if !spec.setup_padding.is_empty() {
+            setup["test_padding"] = spec.setup_padding.clone().into();
+        }
         if write_setup_or_cancel(&mut stdin, setup, cancelled)
             .await
             .is_err()
@@ -606,7 +597,7 @@ impl Process {
             "socket_path": endpoint.socket,
             "generation": endpoint.generation,
             "key": hex::encode(key),
-            "lease": spec.lease,
+            "test_padding": spec.setup_padding,
             "parent_pid": std::process::id(),
             "port": spec.port
         });
@@ -817,7 +808,7 @@ pub(crate) struct ShellSpec {
     pub data_dir: PathBuf,
     pub runtime_dir: PathBuf,
     pub pidfile: PathBuf,
-    pub lease: String,
+    pub setup_padding: String,
     pub port: u16,
 }
 

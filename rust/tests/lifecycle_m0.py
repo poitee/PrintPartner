@@ -29,10 +29,12 @@ def main():
         assert select.select([runtime.stdout], [], [], SERVER_STARTUP_SECONDS)[0]
         origin = runtime.stdout.readline().strip()
         assert origin.startswith("http://127.0.0.1:")
-        marker_path = fixture / "data/.desktop-owner.json"
-        marker_bytes = marker_path.read_bytes()
-        marker = json.loads(marker_bytes)
-        sockets = list(Path(marker["runtime_dir"]).glob("*.sock"))
+        receipt = json.loads(credentials.read_text())
+        reservation = fixture / "data/.desktop-lease"
+        reservation_bytes = reservation.read_bytes()
+        reservation_inode = reservation.stat().st_ino
+        lock_inode = (fixture / "data/printpartner.lock").stat().st_ino
+        sockets = list(Path(receipt["runtime_dir"]).glob("*.sock"))
         assert len(sockets) == 1
         assert sockets[0].stat().st_mode & 0o777 == 0o600
         assert sockets[0].parent.stat().st_mode & 0o777 == 0o700
@@ -51,9 +53,9 @@ def main():
             env = dict(os.environ, PRINT_PARTNER_DATA_DIR=str(fixture / "data"), HOST="127.0.0.1", PORT="0")
             child = subprocess.run(["/usr/bin/node", str(ROOT / "web/apps/server/dist/current" / entry)], env=env, cwd=ROOT / "web", capture_output=True, timeout=15)
             assert child.returncode != 0, entry
-            assert b"already owned" in child.stderr or b"owned by the desktop runtime" in child.stderr, (entry, child.stderr[:200])
-        child_pid = marker["child_pid"]
-        assert marker["pid"] == runtime.pid
+            assert b"already owned" in child.stderr or b"owned by the desktop runtime" in child.stderr or b"storage_lease_marker_invalid: Data directory lease is malformed or unreadable" in child.stderr, (entry, child.stderr[:200])
+        child_pid = receipt["child_pid"]
+        assert int(Path(f"/proc/{child_pid}/stat").read_text().split()[3]) == runtime.pid
         assert child_pid != runtime.pid
         child_environment = Path(f"/proc/{child_pid}/environ").read_bytes().split(b"\0")
         for name in (b"NODE_OPTIONS", b"NODE_PATH", b"PP_PARENT_ONLY_SECRET"):
@@ -71,9 +73,9 @@ def main():
             time.sleep(.05)
         assert child_dead, "Node survived parent death"
         assert descendant.poll() is not None, "descendant survived parent death"
-        assert marker_path.read_bytes() == marker_bytes, "crash altered the ownership marker"
+        assert reservation.read_bytes() == reservation_bytes, "crash altered the compatibility reservation"
         import fcntl
-        with (fixture / "data/.desktop.lock").open("rb") as lock:
+        with (fixture / "data/printpartner.lock").open("rb") as lock:
             while True:
                 try:
                     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -91,19 +93,26 @@ def main():
         assert select.select([runtime.stdout], [], [], SERVER_STARTUP_SECONDS)[0], "recovery readiness timed out"
         recovered_origin = runtime.stdout.readline().strip()
         assert recovered_origin == origin, "recovery changed the persisted origin"
-        recovered_marker = json.loads(marker_path.read_text())
-        assert recovered_marker["child_pid"] != child_pid
-        assert (fixture / "data/.desktop-lease/previous-marker.json").read_bytes() == marker_bytes
+        recovered = json.loads(credentials.read_text())
+        assert recovered["child_pid"] != child_pid
+        assert reservation.read_bytes() == reservation_bytes and reservation.stat().st_ino == reservation_inode
+        assert (fixture / "data/printpartner.lock").stat().st_ino == lock_inode
+        with (fixture / "data/printpartner.lock").open("rb") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                raise AssertionError("recovered runtime did not hold the OS lock")
+            except BlockingIOError:
+                pass
         runtime.terminate()
         _, stderr = runtime.communicate(timeout=17)
         assert runtime.returncode == 0, stderr
-        assert not marker_path.exists(), "ownership marker survived clean recovery shutdown"
+        assert not reservation.exists(), "compatibility reservation survived clean recovery shutdown"
         print(json.dumps({"proof_class": "headless_unsigned", "case": "parent_death_and_private_boundary", "fixture": str(fixture),
                           "parent_pid": parent_pid, "child_pid": child_pid, "descendant_pid": descendant.pid,
                           "direct_uds_denied": True, "forged_principal_denied": True, "standalone_writers_denied": 3,
                           "child_terminated": child_dead, "descendant_reaped": descendant.poll() is not None, "lock_reacquired": True,
                           "bootstrap_absent_from_logs": True, "parent_environment_injection_denied": True,
-                          "crash_marker_preserved": True, "recovery_shutdown_clean": True}))
+                          "crash_reservation_preserved": True, "recovery_shutdown_clean": True}))
     finally:
         if runtime.poll() is None:
             runtime.terminate()

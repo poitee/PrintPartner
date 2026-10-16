@@ -64,7 +64,8 @@ def main():
         origin = process.stdout.readline().strip()
         assert origin.startswith("http://127.0.0.1:"), "runtime did not emit a clean origin"
         assert credentials.stat().st_mode & 0o777 == 0o600
-        launch = json.loads(credentials.read_text())["bootstrap_url"]
+        launch_receipt = json.loads(credentials.read_text())
+        launch = launch_receipt["bootstrap_url"]
         _, headers = request(launch.removeprefix(origin), allowed=(303,))
         cookie = headers["Set-Cookie"].split(";", 1)[0]
         html, document_headers = request("/builds", headers={"Accept": "text/html"})
@@ -232,8 +233,7 @@ def main():
             slow, response = slow_download()
             active, _ = request("/__runtime")
             assert active["gateway"]["active_requests"] >= 2 and active["gateway"]["active_upgrades"] == 1, active
-            marker = json.loads((fixture / "data/.desktop-owner.json").read_text())
-            runtime_dir = Path(marker["runtime_dir"])
+            runtime_dir = Path(launch_receipt["runtime_dir"])
             started = time.monotonic()
             expected_exit = 1
             process.terminate()
@@ -254,7 +254,7 @@ def main():
             assert 5 <= elapsed < 17, elapsed
             assert not Path(f"/proc/{child_pid}").exists(), "Node child was not reaped"
             assert not runtime_dir.exists(), "runtime directory survived shutdown"
-            with (fixture / "data/.desktop.lock").open("rb") as lock:
+            with (fixture / "data/printpartner.lock").open("rb") as lock:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 fcntl.flock(lock, fcntl.LOCK_UN)
             assert live_ws.wait(timeout=3) == 0, live_ws.stderr.read()
@@ -272,8 +272,7 @@ def main():
                        "runtime_removed": True, "storage_lock_reacquired": True}
         else:
             live_ws = hold_websocket()
-            marker = json.loads((fixture / "data/.desktop-owner.json").read_text())
-            runtime_dir = Path(marker["runtime_dir"])
+            runtime_dir = Path(launch_receipt["runtime_dir"])
             child_pid = state["compat"]["pid"]
             request("/auth/logout", "POST", allowed=(200,))
             assert live_ws.wait(timeout=3) == 0, live_ws.stderr.read()
@@ -281,15 +280,15 @@ def main():
             process.wait(timeout=17)
             assert process.returncode == 0, process.stderr.read()
             assert not Path(f"/proc/{child_pid}").exists(), "Node child was not reaped"
-            assert not (fixture / "data/.desktop-owner.json").exists(), "owner marker survived shutdown"
+            assert not (fixture / "data/.desktop-lease").exists(), "compatibility reservation survived shutdown"
             assert not runtime_dir.exists(), "runtime directory survived shutdown"
-            with (fixture / "data/.desktop.lock").open("rb") as lock:
+            with (fixture / "data/printpartner.lock").open("rb") as lock:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 fcntl.flock(lock, fcntl.LOCK_UN)
             websocket["logout_closed_active_upgrade"] = True
             websocket["logout_runtime_exit"] = 0
             websocket["logout_node_reaped"] = True
-            websocket["logout_marker_removed"] = True
+            websocket["logout_reservation_removed"] = True
             websocket["logout_runtime_removed"] = True
             websocket["logout_storage_lock_reacquired"] = True
         result = {"proof_class": "headless_unsigned", "case": "gateway_product_coverage", "origin": origin,
@@ -306,7 +305,7 @@ def main():
             process.wait(timeout=17)
         assert process.returncode == expected_exit, process.stderr.read()
         credentials.unlink(missing_ok=True)
-        assert not (fixture / "data/.desktop-owner.json").exists(), "owner marker survived shutdown"
+        assert not (fixture / "data/.desktop-lease").exists(), "compatibility reservation survived shutdown"
 
 
 if __name__ == "__main__":

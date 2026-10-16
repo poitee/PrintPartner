@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { presentDesktopChildCredential } from "../desktop-child-credential.js";
+import { admitDesktopDataDirectory } from "../desktop-child-credential.js";
 import { acquireDataDirectory } from "../desktop-context.js";
 import { processIdentity } from "../storage-lease.js";
 import { SqliteDatabase } from "./client.js";
@@ -13,7 +13,7 @@ import { rustOwnedCopy } from "./rust-owned.js";
 const roots: string[] = [];
 
 afterEach(() => {
-  presentDesktopChildCredential(null);
+  admitDesktopDataDirectory(null);
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -75,42 +75,19 @@ describe("rust owner marker", () => {
     expect(rustOwnedCopy(dir)).toEqual({ kind: "absent" });
   });
 
-  it("admits an unmatched instance token only after this process presents it", () => {
-    const token = `instance:${"ab".repeat(16)}`;
-    const dir = markerDir({
-      storage_protocol_version: 1,
-      pid: deadPid(),
-      process_identity: "prior",
-      child_pid: process.pid,
-      child_process_identity: token,
-    });
-    expect(rustOwnedCopy(dir)).toEqual({ kind: "absent" });
-    presentDesktopChildCredential(`instance:${"ff".repeat(16)}`);
-    expect(rustOwnedCopy(dir)).toEqual({ kind: "absent" });
-    presentDesktopChildCredential(token);
+  it("admits only the copy validated by desktop setup without an owner marker", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pp-core-owned-"));
+    roots.push(dir);
+    writeFileSync(join(dir, ".desktop-lease"), "");
+    expect(rustOwnedCopy(dir)).toEqual({ kind: "foreign" });
+    admitDesktopDataDirectory(dir);
     expect(rustOwnedCopy(dir)).toEqual({ kind: "child" });
-  });
-
-  it("refuses a recycled child pid while the owner is alive until the credential is presented", () => {
-    const owner = spawn("sleep", ["30"]);
-    if (typeof owner.pid !== "number") throw new Error("live owner unavailable");
-    const token = `instance:${"cd".repeat(16)}`;
-    try {
-      const dir = markerDir({
-        storage_protocol_version: 1,
-        pid: owner.pid,
-        process_identity: foreignProcessIdentity(owner.pid),
-        child_pid: process.pid,
-        child_process_identity: token,
-      });
-      expect(rustOwnedCopy(dir)).toEqual({ kind: "foreign" });
-      expect(() => new SqliteDatabase(dir).connect()).toThrow(/will not migrate or write/);
-      expect(existsSync(join(dir, "print-partner.db"))).toBe(false);
-      presentDesktopChildCredential(token);
-      expect(rustOwnedCopy(dir)).toEqual({ kind: "child" });
-    } finally {
-      owner.kill();
-    }
+    expect(rustOwnedCopy(`${dir}-other`)).toEqual({ kind: "absent" });
+    const database = new SqliteDatabase(dir);
+    database.connect();
+    database.close();
+    expect(existsSync(join(dir, "print-partner.db"))).toBe(true);
+    expect(existsSync(join(dir, ".desktop-owner.json"))).toBe(false);
   });
 
   it("keeps an unknown protocol marker blocking after its owner dies", () => {

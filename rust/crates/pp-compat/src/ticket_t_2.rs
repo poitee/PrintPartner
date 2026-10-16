@@ -81,7 +81,7 @@ fn bundle(scratch: &Scratch) -> super::Bundle {
 }
 
 fn release_spec(scratch: &Scratch) -> super::SpawnSpec {
-    let lease_file = std::fs::OpenOptions::new()
+    let storage_lock = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .create_new(true)
@@ -92,11 +92,11 @@ fn release_spec(scratch: &Scratch) -> super::SpawnSpec {
         bundle: bundle(scratch),
         data_dir: scratch.root.join("data"),
         runtime_dir: scratch.root.join("runtime"),
-        lease: "lease".into(),
-        lease_file,
+        setup_padding: String::new(),
+        storage_lock,
         port: 0,
         gateway_rate_limit: false,
-        record_child: Box::new(ignore_child),
+        before_setup: Box::new(ignore_child),
     }
 }
 
@@ -107,7 +107,7 @@ fn shell_spec(scratch: &Scratch) -> super::ShellSpec {
         data_dir: scratch.root.join("data"),
         runtime_dir: scratch.root.join("runtime"),
         pidfile: scratch.pidfile(),
-        lease: "test".into(),
+        setup_padding: "test".into(),
         port: 0,
     }
 }
@@ -1686,7 +1686,7 @@ async fn ticket_t_3_drain_shutdown_cancels_backpressured_startup_setup() {
     let supervisor = super::Supervisor::launch_shell(
         super::ShellSpec {
             script: "exec /usr/bin/node -e 'setInterval(() => {}, 1e9)'",
-            lease: "x".repeat(1024 * 1024),
+            setup_padding: "x".repeat(1024 * 1024),
             ..shell_spec(&scratch)
         },
         super::SupervisorConfig::default(),
@@ -1791,7 +1791,7 @@ async fn startup_owner_death_fixture() {
     let supervisor = super::Supervisor::launch_shell(
         super::ShellSpec {
             script,
-            lease: "x".repeat(1024 * 1024),
+            setup_padding: "x".repeat(1024 * 1024),
             ..shell_spec(&scratch)
         },
         super::SupervisorConfig::default(),
@@ -1827,7 +1827,7 @@ async fn startup_owner_death_fixture() {
 
 const MEASURED_STARTUP_STAGE: &str = "PP_COMPAT_MEASURED_STARTUP_STAGE";
 
-fn measured_startup_record_child(data: &Path, pid: u32) -> anyhow::Result<()> {
+fn measured_startup_before_setup(data: &Path, pid: u32) -> anyhow::Result<()> {
     let root = data.parent().unwrap();
     super::record_test_pid(&root.join("pids"), pid)?;
     if let Some(stage) = std::env::var_os(MEASURED_STARTUP_STAGE) {
@@ -1846,10 +1846,6 @@ fn measured_startup_record_child(data: &Path, pid: u32) -> anyhow::Result<()> {
     startup_wait(Duration::from_secs(5), "measured Node did not stop", || {
         startup_process_state(pid) == Some('T')
     });
-    std::fs::write(
-        data.join(".desktop-owner.json"),
-        br#"{"child_process_identity":"gre448-startup-fixture"}"#,
-    )?;
     Ok(())
 }
 
@@ -1869,8 +1865,8 @@ async fn measured_startup_owner_death_fixture() {
     let spec = super::SpawnSpec {
         bundle,
         gateway_rate_limit: false,
-        record_child: Box::new(measured_startup_record_child),
-        lease: "x".repeat(1024 * 1024),
+        before_setup: Box::new(measured_startup_before_setup),
+        setup_padding: "x".repeat(1024 * 1024),
         ..release_spec(&scratch)
     };
     super::release::verify_bundle(&spec.bundle, &spec.bundle.web_root.join("apps/web/dist"))
@@ -1884,7 +1880,7 @@ async fn measured_startup_owner_death_fixture() {
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    // On this current-thread runtime, reaching here means spawn yielded after record_child returned.
+    // On this current-thread runtime, reaching here means spawn yielded after before_setup returned.
     tokio::task::yield_now().await;
     let pid = recorded_pids(&scratch.pidfile());
     assert_eq!(pid.len(), 1);
@@ -2164,12 +2160,8 @@ impl MeasuredLifecycleCycle {
         assert_eq!(recorded_pids(&self.scratch.pidfile()), vec![self.pid]);
     }
 
-    fn record_child(data: &Path, pid: u32) -> anyhow::Result<()> {
+    fn before_setup(data: &Path, pid: u32) -> anyhow::Result<()> {
         super::record_test_pid(&data.parent().unwrap().join("pids"), pid)?;
-        std::fs::write(
-            data.join(".desktop-owner.json"),
-            br#"{"child_process_identity":"gre448-lifecycle-fixture"}"#,
-        )?;
         Ok(())
     }
 }
@@ -2192,7 +2184,7 @@ async fn ticket_t_3_drain_measured_release_repeated_eof_cleanup() {
         let supervisor = super::Supervisor::start(super::SpawnSpec {
             bundle: bundle.clone(),
             gateway_rate_limit: false,
-            record_child: Box::new(MeasuredLifecycleCycle::record_child),
+            before_setup: Box::new(MeasuredLifecycleCycle::before_setup),
             ..release_spec(&scratch)
         })
         .unwrap();

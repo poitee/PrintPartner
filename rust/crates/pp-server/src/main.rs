@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use pp_core::{CoreRuntime, DesktopLaunch, VerifiedBundle};
+use pp_core::{CoreRuntime, CoreStatus, DesktopLaunch, VerifiedBundle};
 use std::{io::Write, os::unix::fs::OpenOptionsExt, path::PathBuf};
 
 #[tokio::main]
@@ -42,6 +42,10 @@ async fn main() -> Result<()> {
     .await?;
     if let Some(path) = credential_file {
         let url = runtime.take_launch_target()?.into_url();
+        let CoreStatus::Ready { pid: child_pid, .. } = *runtime.handle().subscribe().borrow()
+        else {
+            bail!("Compatibility child is not ready for the test receipt");
+        };
         let result = (|| -> Result<()> {
             let mut file = std::fs::OpenOptions::new()
                 .write(true)
@@ -49,7 +53,7 @@ async fn main() -> Result<()> {
                 .mode(0o600)
                 .open(path)?;
             file.write_all(
-                serde_json::json!({"bootstrap_url":url})
+                serde_json::json!({"bootstrap_url":url, "child_pid":child_pid, "runtime_dir":runtime.runtime_dir()})
                     .to_string()
                     .as_bytes(),
             )?;

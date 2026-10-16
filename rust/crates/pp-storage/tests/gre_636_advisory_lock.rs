@@ -48,15 +48,47 @@ struct Process {
 
 impl Process {
     fn spawn(path: &Path, mode: &str) -> Self {
-        let mut child = child_process::command(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "gre_636_lock_subprocess",
-                "--nocapture",
-                "--test-threads=1",
-            ])
-            .env(MODE, mode)
-            .env(DATA, path)
+        let mut command = if mode == "node" {
+            let web = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../web");
+            let module = web
+                .join("apps/server/src/desktop-context.ts")
+                .canonicalize()
+                .unwrap();
+            let source = format!(
+                r#"
+                import {{ acquireDataDirectory }} from {};
+                import {{ createInterface }} from 'node:readline';
+                const input = createInterface({{ input: process.stdin }});
+                console.log('gre636 ready');
+                let release;
+                input.on('line', line => {{
+                    if (line === 'stop') {{ release?.(); process.exit(0); }}
+                    try {{ release = acquireDataDirectory(process.argv[1]); console.log('gre636 owned'); }}
+                    catch (error) {{ console.log('gre636 refused ' + error.message); process.exit(0); }}
+                }});
+            "#,
+                serde_json::to_string(&format!("file://{}", module.display())).unwrap()
+            );
+            let mut command = child_process::command("/usr/bin/node");
+            command
+                .current_dir(web)
+                .args(["--import", "tsx", "--input-type=module", "-e", &source])
+                .arg(path);
+            command
+        } else {
+            let mut command = child_process::command(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "gre_636_lock_subprocess",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(MODE, mode)
+                .env(DATA, path);
+            command
+        };
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
@@ -275,4 +307,68 @@ fn gre_636_runtime_and_standalone_writer_share_the_advisory_lock() {
     successor.start();
     assert_eq!(successor.event(), "owned");
     successor.stop();
+}
+
+#[test]
+fn gre_636_rust_owner_blocks_standalone_node() {
+    let fixture = Fixture::new();
+    let mut rust = Process::spawn(&fixture.0, "lease");
+    rust.start();
+    assert_eq!(rust.event(), "owned");
+    let mut node = Process::spawn(&fixture.0, "node");
+    node.start();
+    assert_eq!(
+        node.event(),
+        "refused storage_lease_marker_invalid: Data directory lease is malformed or unreadable"
+    );
+    assert!(node.wait().success());
+    rust.stop();
+    let mut successor = Process::spawn(&fixture.0, "node");
+    successor.start();
+    assert_eq!(successor.event(), "owned");
+    successor.stop();
+}
+
+#[test]
+fn gre_636_standalone_node_blocks_rust_before_database_preflight() {
+    let fixture = Fixture::new();
+    let mut node = Process::spawn(&fixture.0, "node");
+    node.start();
+    assert_eq!(node.event(), "owned");
+    std::fs::write(fixture.0.join("print-partner.db"), b"never open").unwrap();
+    let mut rust = Process::spawn(&fixture.0, "writer");
+    rust.start();
+    assert_eq!(
+        rust.event(),
+        "refused Data directory already owned by standalone Node; stop it before starting Rust"
+    );
+    assert!(rust.wait().success());
+    assert_eq!(
+        std::fs::read(fixture.0.join("print-partner.db")).unwrap(),
+        b"never open"
+    );
+    node.stop();
+    let mut successor = Process::spawn(&fixture.0, "lease");
+    successor.start();
+    assert_eq!(successor.event(), "owned");
+    successor.stop();
+}
+
+#[test]
+fn gre_636_legacy_markers_and_old_lock_do_not_control_rust_admission() {
+    let fixture = Fixture::new();
+    let marker = fixture.0.join(".desktop-owner.json");
+    let old_lock = fixture.0.join(".desktop.lock");
+    std::fs::write(&marker, b"malformed legacy marker").unwrap();
+    std::os::unix::fs::symlink("missing-legacy-target", &old_lock).unwrap();
+    let owner = StorageLease::acquire(&fixture.0).unwrap();
+    assert!(fixture.0.join(".desktop-lease").is_file());
+    assert!(StorageLease::acquire(&fixture.0).is_err());
+    assert!(owner.release().lock_released);
+    assert_eq!(std::fs::read(&marker).unwrap(), b"malformed legacy marker");
+    assert_eq!(
+        std::fs::read_link(old_lock).unwrap(),
+        Path::new("missing-legacy-target")
+    );
+    assert!(!fixture.0.join(".desktop-lease").exists());
 }
