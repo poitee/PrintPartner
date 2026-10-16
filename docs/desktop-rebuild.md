@@ -140,14 +140,17 @@ it.
 `Document::parse` charges the shared `PreparationBudget` for nodes, depth,
 visits, and expansion, and checks cancellation. Each parsed node is charged once,
 array separators count as two UTF-16 bytes, and each mapping tracks seen keys
-in a hash set. Text coercions, including primitives and mappings, charge their
+in a hash set. Each mapping key charges the UTF-16 bytes of its entry copy and
+its seen-key copy. Text coercions, including primitives and mappings, charge their
 UTF-16 output bytes. The float matcher is compiled once. It accepts one document with
 core-schema tags, `!`, anchors, and aliases. Duplicate keys, extra documents,
 other tags, and tag/value mismatches return `InvalidDocument`. Scalars keep
 JavaScript UTF-16 semantics: lone surrogate escapes such as `"\uD800"` survive
 parsing, the private-use sentinel `U+E000` round-trips in every scalar style,
 and keys follow JavaScript property order. `text`, `optional_text`, and
-`truthy` apply JavaScript string and truthiness coercion.
+`truthy` apply JavaScript string and truthiness coercion. As with JavaScript
+`join`, an array that reaches itself through an alias contributes an empty
+string, so `project: &a [*a]` coerces to `""`.
 
 The remaining D12 units are builder manifest helpers, the executor after D11,
 and preparation.
