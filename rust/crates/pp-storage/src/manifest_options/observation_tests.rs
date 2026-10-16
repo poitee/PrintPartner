@@ -200,7 +200,9 @@ impl DraftReads for Reads {
             request.stored_path().unwrap()
         ));
         Ok(Box::new(Root(
-            self.allowed_roots.get(&request.source_id()).cloned(),
+            self.allowed_roots
+                .get(&request.source_id())
+                .map(|paths| paths.iter().map(|path| path.to_string()).collect()),
         )))
     }
 
@@ -234,7 +236,7 @@ impl DraftReads for Reads {
     }
 }
 
-struct Root(Option<Vec<&'static str>>);
+struct Root(Option<Vec<String>>);
 
 impl StlRootRead for Root {
     fn logical_resolved_path(&self) -> Option<&str> {
@@ -249,7 +251,7 @@ impl StlRootRead for Root {
         for (traversal_ordinal, path) in self.0.take().unwrap_or_default().into_iter().enumerate() {
             budget.entry(path.matches('/').count() + 1, path.len())?;
             entries.push(InventoryPath {
-                physical_relative_path: path.into(),
+                physical_relative_path: path,
                 traversal_ordinal,
             });
         }
@@ -412,6 +414,66 @@ fn cancelled_observation_without_checkouts_refuses() {
             Err(ReadFailure::Cancelled)
         ));
     }
+}
+
+struct LongPaths {
+    manifest: Vec<u8>,
+    paths: Vec<String>,
+}
+
+impl DraftReads for LongPaths {
+    fn resolve_stl_root(
+        &self,
+        _request: &OwnedStlReadRequest,
+        _budget: &mut PreparationBudget<'_>,
+    ) -> ReadResult<Box<dyn StlRootRead>> {
+        Ok(Box::new(Root(Some(self.paths.clone()))))
+    }
+
+    fn read_checkout_manifest(
+        &self,
+        _request: &OwnedCheckoutReadRequest,
+        _occurrence: crate::working_drafts::observation::CheckoutManifestUse,
+        budget: &mut PreparationBudget<'_>,
+    ) -> ReadResult<DocumentRead> {
+        document(Some(&Ok(self.manifest.clone())), budget)
+    }
+
+    fn read_catalog_document(
+        &self,
+        request: &OwnedCatalogReadRequest,
+        budget: &mut PreparationBudget<'_>,
+    ) -> ReadResult<DocumentRead> {
+        // The community read is the last one before declared parts are matched.
+        // Cancel once the first path has been checked.
+        assert!(matches!(request.purpose(), CatalogPurpose::Community(_)));
+        budget.cancel_after_checks(1);
+        Ok(DocumentRead::Missing)
+    }
+}
+
+#[test]
+fn cancellation_while_matching_long_paths_refuses() {
+    let mut database = Database::oracle();
+    database
+        .connection
+        .execute_batch(
+            "DELETE FROM profile_layers WHERE project_id<>1; UPDATE projects SET imported_paths=NULL, manifest_community_slug='slow-kit' WHERE id=1",
+        )
+        .unwrap();
+    let captured = database.capture(TENANT, 1).unwrap();
+    let reads = LongPaths {
+        manifest: format!(
+            "option_groups:\n  slow:\n    variants:\n      - id: crafted\n        parts: [\"*{}b\"]\n",
+            "a".repeat(2048)
+        )
+        .into_bytes(),
+        paths: vec!["a".repeat(4096); 256],
+    };
+    assert!(matches!(
+        observe(&captured, Some(&reads), PreparationLimits::default(), false),
+        Err(ReadFailure::Cancelled)
+    ));
 }
 
 fn import_only_source(imported_paths: &str) -> Database {
