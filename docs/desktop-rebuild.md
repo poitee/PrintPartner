@@ -495,7 +495,7 @@ Import rules also charge every JSON node and one rule per accepted path.
 Import rules over the JSON byte, depth, or node limit refuse the observation.
 Malformed or non-array import rules give an empty rule set, as in Node.
 A malformed stored kit falls back to an empty kit, as in Node.
-A stored kit over the JSON limits also falls back to an empty kit, where Node keeps it.
+A stored kit over the JSON byte, depth, or node limit refuses the observation.
 Path filtering and pattern matching check cancellation.
 Each source returns a SHA-256 stamp of its reads, so a caller can compare two observations.
 `validate_known_selections` returns the `manifestSelectionsInputError` messages for a kit save.

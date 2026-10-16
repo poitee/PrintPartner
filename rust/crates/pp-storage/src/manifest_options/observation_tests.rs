@@ -534,7 +534,10 @@ fn stored_kits_over_the_json_limits_refuse_instead_of_dropping_selections() {
     assert_eq!(observed(nested(62)), kept);
     assert_eq!(observed(nested(63)), Err("LimitExceeded(Depth)".to_owned()));
     assert_eq!(observed(many(99_992)), kept);
-    assert_eq!(observed(many(99_993)), Err("LimitExceeded(Nodes)".to_owned()));
+    assert_eq!(
+        observed(many(99_993)),
+        Err("LimitExceeded(Nodes)".to_owned())
+    );
 }
 
 #[test]

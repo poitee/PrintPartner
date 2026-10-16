@@ -120,7 +120,7 @@ pub(crate) fn observe(
     let mut resolved_selections = match captured.stored_kit.as_deref() {
         Some(raw) => {
             budget.document(raw.len(), raw.len())?;
-            KitManifest::from_stored(raw).unwrap_or_default()
+            KitManifest::from_stored_or_empty(raw).map_err(limit_exceeded)?
         }
         None => KitManifest::default(),
     };
@@ -396,13 +396,7 @@ fn import_rules(raw: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<Vec
     let parsed = match json::parse(js_trim(raw).as_bytes()) {
         Ok(parsed) => parsed,
         Err(JsonError::Syntax) => return Ok(Vec::new()),
-        Err(JsonError::Limit(limit)) => {
-            return Err(ReadFailure::LimitExceeded(match limit {
-                JsonLimit::Bytes => Resource::DocumentBytes,
-                JsonLimit::Depth => Resource::Depth,
-                JsonLimit::Nodes => Resource::Nodes,
-            }));
-        }
+        Err(JsonError::Limit(limit)) => return Err(limit_exceeded(limit)),
     };
     charge_nodes(&parsed, 0, budget)?;
     let JsonValue::Array(values) = parsed else {
@@ -426,6 +420,14 @@ fn import_rules(raw: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<Vec
             )
         })
         .collect()
+}
+
+fn limit_exceeded(limit: JsonLimit) -> ReadFailure {
+    ReadFailure::LimitExceeded(match limit {
+        JsonLimit::Bytes => Resource::DocumentBytes,
+        JsonLimit::Depth => Resource::Depth,
+        JsonLimit::Nodes => Resource::Nodes,
+    })
 }
 
 fn charge_nodes(
