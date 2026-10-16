@@ -306,6 +306,46 @@ read and write mutants against both test files. It copies the Rust workspace
 and builds in its own temporary target directory, so it never changes
 `rust/target`.
 
+### D12 preparation prerequisites
+
+GRE-607 adds the remaining manifest helpers and the accepted-base reuse check
+behind `desktop_rebuild`. `optional_document` ignores missing, skipped, and
+invalid optional manifests. `kit` projects stored kit selections through the
+existing `KitManifest` parser. Both propagate preparation budget and cancellation
+failures. `apply` preserves Node's document order, project filtering, selection
+defaults, explicit group membership, group bounds, and exclusion precedence.
+It accepts the shared `PreparationBudget` and accounts for each Part and pattern
+comparison. Kit JSON passes through the budgeted document reader before the
+stored-kit parser, so UTF-16 selection text uses the existing codec.
+
+`read_model::reusable_draft_base` checks current freshness before validating the
+complete accepted snapshot with the existing bounded readers. It propagates
+integrity errors and checks preparation cancellation around those reads.
+`catalog::naming::get` is crate-visible for the next preparation port's
+transactional effective naming profile and digest. Its behavior is unchanged.
+These helpers have no runtime caller yet. Preparation and recompute remain
+separate GRE-607 slices.
+
+The committed Node generator covers manifest application, optional documents,
+stored kit selections, freshness, and accepted-base integrity. Regenerate its
+literal outputs twice and compare them before replacing the fixture:
+
+```sh
+node --import ./web/node_modules/tsx/dist/loader.mjs --conditions=development \
+  rust/crates/pp-storage/tests/fixtures/preparation-prereqs-node.mjs web/apps/server \
+  > rust/target/preparation-first.jsonl
+node --import ./web/node_modules/tsx/dist/loader.mjs --conditions=development \
+  rust/crates/pp-storage/tests/fixtures/preparation-prereqs-node.mjs web/apps/server \
+  > rust/target/preparation-second.jsonl
+cmp rust/target/preparation-first.jsonl rust/target/preparation-second.jsonl
+cmp rust/target/preparation-first.jsonl rust/crates/pp-storage/tests/fixtures/preparation-prereqs-node.jsonl
+cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib -E 'test(preparation_tests)' --test-threads=2
+python3 rust/crates/pp-storage/tests/fixtures/mutate-preparation-prereqs.py
+```
+
+The mutation runner copies the workspace and uses a separate `CARGO_TARGET_DIR`.
+It requires a passing baseline and counts only executed test failures as kills.
+
 ### D4 media reconciliation
 
 GRE-599 reconciles media already shipped in #131. The `pp-source` media library, the `pp-source-media` CLI, and all unconditional #131 exports remain available in the default build. This slice adds a historical audit and documentation. It adds no feature behavior, host, runtime API, or dependency.

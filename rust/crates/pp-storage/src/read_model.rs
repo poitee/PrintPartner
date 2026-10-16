@@ -208,3 +208,30 @@ pub(super) fn execute(connection: &mut Connection, command: Command) -> Result<B
     tx.commit()?;
     Ok(Batch { builds })
 }
+
+#[cfg(feature = "desktop_rebuild")]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "GRE-607 preparation lands next")
+)]
+pub(crate) fn reusable_draft_base(
+    tx: &rusqlite::Transaction<'_>,
+    tenant: &str,
+    profile: i64,
+    repos: &std::path::Path,
+    preparation: &mut crate::working_drafts::observation::PreparationBudget<'_>,
+) -> Result<bool> {
+    preparation.check()?;
+    let mut budget = graph::Budget::default();
+    if !context::draft_freshness_current(tx, tenant, profile, &mut budget)? {
+        preparation.check()?;
+        return Ok(false);
+    }
+    let accepted = graph::read(tx, tenant, profile, repos, &mut budget)?;
+    preparation.check()?;
+    Ok(matches!(accepted, AcceptedRead::Ready { .. }))
+}
+
+#[cfg(all(test, feature = "desktop_rebuild"))]
+#[path = "read_model/preparation_tests.rs"]
+mod preparation_tests;
