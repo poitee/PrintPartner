@@ -1,9 +1,9 @@
 pub(crate) mod model;
 mod reconcile;
-mod storage;
+pub(crate) mod storage;
 #[cfg(test)]
 mod tests;
-mod view;
+pub(crate) mod view;
 
 use crate::{Envelope, Shared, WriterOwner, auth, manifest_text::JsText, read_model::Credential};
 use anyhow::{Result, anyhow, ensure};

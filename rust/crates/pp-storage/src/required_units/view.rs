@@ -274,7 +274,7 @@ fn diff(previous: &[DraftPart], parts: &[DraftPart], base_is_current: bool) -> R
 
 /// Builds the draft workspace and its diff against the base revision, as
 /// Node's `PlanDraftWorkspaceService.workspace` and `diffPlanDraftSnapshot` do.
-pub(super) fn workspace(
+pub(crate) fn workspace(
     tx: &Transaction<'_>,
     tenant: &str,
     profile: &Value,

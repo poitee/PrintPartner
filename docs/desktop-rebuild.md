@@ -125,10 +125,10 @@ Depth checks precede node and visit charges, matching entry accounting.
 Read requests retain storage-private fields. External adapters can inspect them
 but cannot create grants. This unit does not itself admit or perform any reads.
 
-The working-draft executor still needs D11's `required_units`. The observation
+The read-only executor below uses D11's `required_units`. The observation
 contract alone does not unblock GRE-604 D10b. The YAML parser and builder manifest
 helpers are separate D12 units described below. The remaining D12 units are the
-executor after D11 and preparation. Those stay open on GRE-607.
+mutating executor and preparation. Those stay open on GRE-607.
 
 Run its boundary and accounting proofs with:
 
@@ -160,7 +160,7 @@ and keys follow JavaScript property order. `text`, `optional_text`, and
 `join`, an array that reaches itself through an alias contributes an empty
 string, so `project: &a [*a]` coerces to `""`.
 
-The remaining D12 units are the executor after D11 and preparation.
+The remaining D12 units are the mutating executor and preparation.
 
 ```sh
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib working_drafts::yaml
@@ -197,6 +197,53 @@ Run the helper tests through the same imports D10b uses:
 
 ```sh
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib working_drafts::manifest_tests
+```
+
+### D12 working-draft read executor
+
+GRE-607 adds `WriterOwner::working_drafts_with_policy` behind the default-off
+`desktop_rebuild` feature. The factory takes an explicit `AuthPolicy` and
+returns `WorkingDraftClient`. Its `execute` method accepts a credential, profile
+`PositiveId`, typed `Request`, cancellation flag, and queue wait. The requests
+are `List`, `Read`, `Diff`, and `Workspace`.
+They use the existing writer queue and one deferred transaction. Authentication
+observes the actor without updating usage timestamps.
+
+`Read` returns a `DraftDocument` with a validated `DraftIdentity`. `List` orders
+identities by creation time and then ID. Missing or unowned profiles and drafts
+return `NotFound`. Draft loading reuses the required-units reader, including its
+snapshot digest and selected reconciliation validation. Document, diff, and
+workspace reads reject incomplete rebase origins. `Workspace` reuses the
+required-units workspace builder. No required-units reader logic changes.
+
+`Diff` returns the complete input and Part diff against the draft's base
+revision. Both the revision ID and Plan version determine `baseIsCurrent`.
+Part rows sort by serialized ID as Node does. `DraftDocument` and `DraftDiff`
+retain manifest strings as UTF-16 and serialize lone surrogates as JSON escapes.
+Use their `into_json_body().into_bytes()` methods. The complete outcome uses
+`Outcome::into_json_body()?.into_bytes()`.
+
+This first core unit ports the read-only seam. Edit, lifecycle transitions,
+recompute, and preparation remain on GRE-607. Save and rebase remain GRE-608.
+There is no HTTP route or default-feature change.
+
+The operation tests call the public client against Node-written databases.
+Their literal expected JSON comes from `getPlanDraft`, `listPlanDraftIdentities`,
+`diffPlanDraft`, and `PlanDraftWorkspaceService.read`. The UTF-16 case uses
+`digestPlanDraft` and `diffPlanDraftSnapshot` directly because Node's SQLite
+adapter cannot read the Rust PPJS blob encoding. The generator records the SQL
+setup for each temporary database. It changes immutable identity or lineage
+fields only after dropping the corresponding trigger in that temporary copy.
+
+Regenerate the fixtures from the repository root with Node 22 and installed web
+dependencies. The generator writes databases in the system temporary directory
+and removes them when it finishes.
+
+```sh
+node --conditions=development --import ./web/node_modules/tsx/dist/loader.mjs \
+  rust/crates/pp-storage/tests/fixtures/working-drafts-node.mjs web/apps/server \
+  > rust/crates/pp-storage/tests/fixtures/working-drafts-node.jsonl
+cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test working_draft_core
 ```
 
 ### D4 media reconciliation
