@@ -370,27 +370,21 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             continue;
         }
         if node && matches!(c, '!' | '&' | '*') {
-            let mut end = i + 1;
+            // saphyr gives verbatim tags an empty handle, so `!<!>` would pass as
+            // a bare `!`, which js-yaml rejects. No other verbatim tag passes
+            // `tag_name`.
             if c == '!' && next == Some('<') {
-                while end < chars.len() && chars[end] != '>' {
-                    if (end - i) % 1024 == 0 {
-                        budget.check()?;
-                    }
-                    end += 1;
+                return invalid();
+            }
+            let mut end = i + 1;
+            while end < chars.len()
+                && !yaml_blank_break(chars[end])
+                && !matches!(chars[end], ',' | '[' | ']' | '{' | '}')
+            {
+                if (end - i) % 1024 == 0 {
+                    budget.check()?;
                 }
-                if end < chars.len() {
-                    end += 1;
-                }
-            } else {
-                while end < chars.len()
-                    && !yaml_blank_break(chars[end])
-                    && !matches!(chars[end], ',' | '[' | ']' | '{' | '}')
-                {
-                    if (end - i) % 1024 == 0 {
-                        budget.check()?;
-                    }
-                    end += 1;
-                }
+                end += 1;
             }
             for c in &chars[i..end] {
                 output.push(*c);
@@ -1008,6 +1002,16 @@ mod tests {
         let groups = doc.get(doc.root, "groups", &mut budget).unwrap().unwrap();
         let a = doc.get(groups, "a", &mut budget).unwrap().unwrap();
         assert!(matches!(doc.node(a, &mut budget).unwrap(), Node::Number(n) if *n == 1.0));
+        for source in ["project: !<!> 123", "parts: !<%21> [a]"] {
+            let mut budget = PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
+            assert!(
+                matches!(
+                    Document::parse(source.as_bytes(), &mut budget),
+                    Err(ReadFailure::InvalidDocument)
+                ),
+                "{source}"
+            );
+        }
     }
 
     #[test]
