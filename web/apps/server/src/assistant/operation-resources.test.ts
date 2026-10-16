@@ -54,7 +54,7 @@ const TABLES = ["table:app_settings", "table:projects", "table:source_docs"];
 const FILE_RESOURCES = ["file:source-workspace", "table:projects", "table:source_docs"];
 const manifest = z.object({ resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -1662,5 +1662,116 @@ it.each(["trusted", "isolated"])("traces audit_source_provenance %s SQL, provena
   expect(entry, "Missing audit_source_provenance declaration").toEqual({ operation: "tool.audit_source_provenance", resources: [
     { kind: "table", name: "projects" }, { kind: "table", name: "source_docs" },
     { kind: "table", name: "source_revisions" }, { kind: "file", name: "source-workspace" },
+  ] });
+});
+
+it.each(["trusted", "isolated"])("traces analyze_stl_mesh %s SQL, real meshes and workspace refusals", async (policy) => {
+  const repos = join(dataDir, "repos");
+  const workspace = join(repos, String(sourceId));
+  fs.mkdirSync(workspace, { recursive: true });
+  const meshRoot = policy === "isolated" ? workspace : root;
+  const db = drizzle(sqlite, { schema });
+  const meshRepo = policy === "isolated" ? new AppRepository(db, undefined, repos, schema, { sourceFilesystemPolicy: ISOLATED_SOURCE_FILESYSTEM }) : repo;
+  repo.updateSource(sourceId, { local_path: meshRoot });
+  const faces = [
+    [[0, 0, 0], [2, 0, 0], [0, 3, 0]],
+    [[0, 0, 0], [0, 0, 4], [2, 0, 0]],
+    [[0, 0, 0], [0, 3, 0], [0, 0, 4]],
+    [[2, 0, 0], [0, 0, 4], [0, 3, 0]],
+  ];
+  const ascii = `solid tetrahedron\n${faces.map((face) => `facet normal 0 0 0\nouter loop\n${face.map((vertex) => `vertex ${vertex.join(" ")}`).join("\n")}\nendloop\nendfacet`).join("\n")}\nendsolid tetrahedron\n`;
+  const binary = Buffer.alloc(134);
+  binary.writeUInt32LE(1, 80);
+  [0, 0, 0, 2, 0, 0, 0, 3, 4].forEach((coordinate, index) => binary.writeFloatLE(coordinate, 96 + index * 4));
+  fs.writeFileSync(join(meshRoot, "closed.stl"), ascii);
+  fs.writeFileSync(join(meshRoot, "open.stl"), binary);
+  fs.writeFileSync(join(meshRoot, "invalid.stl"), "not an STL");
+  fs.mkdirSync(join(meshRoot, "mesh-directory"));
+  fs.writeFileSync(join(userRoot, "outside.stl"), ascii);
+  fs.symlinkSync(join(meshRoot, "closed.stl"), join(meshRoot, "inside.stl"));
+  fs.symlinkSync(join(userRoot, "outside.stl"), join(meshRoot, "escape.stl"));
+  fs.symlinkSync(userRoot, join(meshRoot, "escape-directory"));
+  db.update(schema.projects).set({ localPath: null }).where(eq(schema.projects.id, unsyncedId)).run();
+  const foreign = tenantStorage.run("other", () => {
+    const source = repo.createSource({ name: "Other mesh", source_kind: "local" });
+    db.update(schema.projects).set({ localPath: null }).where(eq(schema.projects.id, source.id)).run();
+    return source;
+  });
+  const tables = ["table:projects", "table:source_docs"];
+  const resources = ["file:source-workspace", ...tables];
+  const union = new Set<string>();
+  async function trace(input: Record<string, unknown>, expected: string[], reads: string[] = [], tenantId = "default") {
+    statements = [];
+    observer.state.files = [];
+    observer.state.active = true;
+    let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+    try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("analyze_stl_mesh", input, { repo: meshRepo })); }
+    finally { observer.state.active = false; }
+    const observed = new Set(statements.map((sql) => tableForObservedSelect(sql, tenantId)));
+    for (const { api, args } of observer.state.files) {
+      expect(["realpathSync", "lstatSync", "statSync", "existsSync", "readFileSync"], api).toContain(api);
+      const path = z.string().parse(args[0]);
+      expect(args).toEqual([path]);
+      expect(path === repos || under(meshRoot, path) || (policy === "trusted" && under(userRoot, path)), `${api} ${path}`).toBe(true);
+      observed.add("file:source-workspace");
+    }
+    expect(observer.state.files.filter(({ api }) => api === "readFileSync").map(({ args }) => args[0])).toEqual(reads);
+    expect([...observed].sort()).toEqual(expected);
+    for (const resource of observed) union.add(resource);
+    expect(output.proposedAction).toBeUndefined();
+    return z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
+  }
+  const closed = (path: string) => ({
+    path, valid: true, triangles: 4, vertices: 12,
+    bounds_mm: { minX: 0, minY: 0, minZ: 0, maxX: 2, maxY: 3, maxZ: 4, widthMm: 2, depthMm: 3, heightMm: 4 },
+    dimensions_um: { widthUm: 2000, depthUm: 3000, heightUm: 4000 },
+    shells_estimate: 1, watertight: true, boundary_edges: 0,
+  });
+  for (const input of [{}, { source_id: sourceId, path: " \n " }]) {
+    expect(await trace(input, [])).toEqual({ error: "path required" });
+  }
+  for (const input of [{ path: "closed.stl" }, { source_id: "invalid", path: "closed.stl" }, { source_name: "Fixture", path: "closed.stl" }]) {
+    expect(await trace(input, [])).toEqual({ error: "STL path not found" });
+  }
+  for (const id of [999999, foreign.id]) {
+    expect(await trace({ source_id: id, path: "closed.stl" }, ["table:projects"])).toEqual({ error: "Source is not synchronized" });
+  }
+  expect(await trace({ source_id: unsyncedId, path: "closed.stl" }, tables)).toEqual({ error: "Source is not synchronized" });
+  expect(await trace({ source_id: sourceId, path: "closed.stl" }, ["table:projects"], [], "other")).toEqual({ error: "Source is not synchronized" });
+  expect(await trace({ source_id: foreign.id, path: "closed.stl" }, tables, [], "other")).toEqual({ error: "Source is not synchronized" });
+  for (const id of [sourceId, String(sourceId)]) {
+    expect(await trace({ source_id: id, source_name: "Ignored", path: " closed.stl\n" }, resources, [join(meshRoot, "closed.stl")])).toEqual(closed("closed.stl"));
+  }
+  expect(await trace({ source_id: sourceId, path: "inside.stl" }, resources, [join(meshRoot, "closed.stl")])).toEqual(closed("inside.stl"));
+  expect(await trace({ source_id: sourceId, path: join(meshRoot, "closed.stl") }, resources, [join(meshRoot, "closed.stl")])).toEqual(closed(join(meshRoot, "closed.stl")));
+  expect(await trace({ source_id: sourceId, path: "open.stl" }, resources, [join(meshRoot, "open.stl")])).toEqual({
+    ...closed("open.stl"), triangles: 1, vertices: 3, shells_estimate: null, watertight: false, boundary_edges: 3,
+  });
+  expect(await trace({ source_id: sourceId, path: "invalid.stl" }, resources, [join(meshRoot, "invalid.stl")])).toEqual({ path: "invalid.stl", valid: false, error: "STL mesh could not be parsed" });
+  for (const path of ["missing.stl", "mesh-directory", "escape.stl", "escape-directory/outside.stl"]) {
+    expect(await trace({ source_id: sourceId, path }, resources)).toEqual({ error: "STL path not found" });
+  }
+  for (const path of [join(userRoot, "outside.stl"), "../outside.stl"]) {
+    expect(await trace({ source_id: sourceId, path }, policy === "isolated" ? resources : tables)).toEqual({ error: "STL path not found" });
+    expect(observer.state.files.some(({ args }) => args[0] === join(userRoot, "outside.stl"))).toBe(false);
+  }
+  repo.updateSource(sourceId, { local_path: userRoot });
+  const outsideRoot = await trace({ source_id: sourceId, path: "outside.stl" }, resources, policy === "trusted" ? [join(userRoot, "outside.stl")] : []);
+  expect(outsideRoot).toEqual(policy === "trusted" ? closed("outside.stl") : { error: "Source is not synchronized" });
+  if (policy === "isolated") {
+    expect(observer.state.files.map(({ api, args }) => [api, args[0]])).toEqual([["realpathSync", repos]]);
+    repo.updateSource(sourceId, { local_path: join(workspace, "escape-root") });
+    fs.symlinkSync(userRoot, join(workspace, "escape-root"));
+    expect(await trace({ source_id: sourceId, path: "outside.stl" }, resources)).toEqual({ error: "Source is not synchronized" });
+    repo.updateSource(sourceId, { local_path: workspace });
+    fs.rmSync(workspace, { recursive: true });
+    fs.symlinkSync(userRoot, workspace);
+    expect(await trace({ source_id: sourceId, path: "outside.stl" }, resources)).toEqual({ error: "Source is not synchronized" });
+    expect(observer.state.files.map(({ api, args }) => [api, args[0]])).toEqual([["realpathSync", repos], ["lstatSync", workspace]]);
+  }
+  expect([...union].sort()).toEqual(resources);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.analyze_stl_mesh");
+  expect(entry, "Missing analyze_stl_mesh declaration").toEqual({ operation: "tool.analyze_stl_mesh", resources: [
+    { kind: "table", name: "projects" }, { kind: "table", name: "source_docs" }, { kind: "file", name: "source-workspace" },
   ] });
 });
