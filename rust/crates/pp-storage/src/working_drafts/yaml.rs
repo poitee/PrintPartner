@@ -917,6 +917,89 @@ mod tests {
     }
 
     #[test]
+    fn yaml_mapping_key_copies_charge_expansion() {
+        let cancel = AtomicBool::new(false);
+        let long = "k".repeat(1000);
+        for (source, key, bytes) in [
+            (format!("{long}: v"), long.as_str(), 6002),
+            ("1e21: v".into(), "1e+21", 30),
+        ] {
+            for limit in [bytes - 1, bytes] {
+                let mut budget = PreparationBudget::new(
+                    &cancel,
+                    PreparationLimits {
+                        total_document_bytes: limit,
+                        ..PreparationLimits::default()
+                    },
+                )
+                .unwrap();
+                let result = Document::parse(source.as_bytes(), &mut budget);
+                if limit == bytes {
+                    let doc = result.unwrap();
+                    let Node::Mapping(entries) = doc.node(doc.root, &mut budget).unwrap() else {
+                        panic!("mapping");
+                    };
+                    assert_eq!(entries.len(), 1);
+                    assert_eq!(entries[0].0.as_scalar().as_deref(), Some(key));
+                } else {
+                    assert!(
+                        matches!(
+                            result,
+                            Err(ReadFailure::LimitExceeded(
+                                super::super::observation::Resource::DocumentBytes
+                            ))
+                        ),
+                        "{}-unit key under {limit} bytes",
+                        key.len()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn yaml_cyclic_array_aliases_coerce_like_js_join() {
+        let cancel = AtomicBool::new(false);
+        for (source, expected) in [
+            ("project: &a [*a]", ""),
+            ("project: &a [x, *a, y]", "x,,y"),
+            ("project: &a [x, &b [y, *a, *b], *b]", "x,y,,,y,,"),
+            ("project: &a [&b [*a]]", ""),
+        ] {
+            let mut budget = PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
+            let doc = Document::parse(source.as_bytes(), &mut budget).unwrap();
+            let text = doc.optional_text(doc.root, "project", &mut budget);
+            assert_eq!(
+                text.unwrap().and_then(|t| t.as_scalar()).as_deref(),
+                Some(expected),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn yaml_bare_non_specific_tag_matches_js_yaml() {
+        let cancel = AtomicBool::new(false);
+        let mut budget = PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
+        let doc = Document::parse(
+            b"project: ! 123\nparts: ! [a]\ngroups: ! {a: 1}\n",
+            &mut budget,
+        )
+        .unwrap();
+        let project = doc.get(doc.root, "project", &mut budget).unwrap().unwrap();
+        assert!(matches!(
+            doc.node(project, &mut budget).unwrap(),
+            Node::String(s) if s.as_scalar().as_deref() == Some("123")
+        ));
+        let parts = doc.get(doc.root, "parts", &mut budget).unwrap().unwrap();
+        assert!(matches!(doc.node(parts, &mut budget).unwrap(), Node::Sequence(v) if v.len() == 1));
+        assert_eq!(units(&doc, "parts", &mut budget), [0x61]);
+        let groups = doc.get(doc.root, "groups", &mut budget).unwrap().unwrap();
+        let a = doc.get(groups, "a", &mut budget).unwrap().unwrap();
+        assert!(matches!(doc.node(a, &mut budget).unwrap(), Node::Number(n) if *n == 1.0));
+    }
+
+    #[test]
     fn r7_yaml_percent_plain_continuation_preserves_literal_sentinel() {
         let cancel = AtomicBool::new(false);
         let mut budget = PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
