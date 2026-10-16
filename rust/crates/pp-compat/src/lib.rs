@@ -585,6 +585,7 @@ impl Process {
             .arg(spec.script)
             .env_clear()
             .env("PATH", "/usr/bin:/bin")
+            .env("NODE", crate::tests::node_binary())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -1129,13 +1130,17 @@ mod ticket_t_2;
 #[cfg(test)]
 mod tests {
     pub(crate) fn node_binary() -> std::path::PathBuf {
-        let configured = std::env::var_os("PP_TEST_NODE").unwrap_or_else(|| "node".into());
-        let output = std::process::Command::new(configured)
-            .args(["-p", "process.execPath"])
-            .output()
-            .expect("Node must report its native executable");
-        assert!(output.status.success());
-        std::path::PathBuf::from(String::from_utf8(output.stdout).unwrap().trim())
+        static NODE: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+        NODE.get_or_init(|| {
+            let configured = std::env::var_os("PP_TEST_NODE").unwrap_or_else(|| "node".into());
+            let output = std::process::Command::new(configured)
+                .args(["-p", "process.execPath"])
+                .output()
+                .expect("Node must report its native executable");
+            assert!(output.status.success());
+            std::path::PathBuf::from(String::from_utf8(output.stdout).unwrap().trim())
+        })
+        .clone()
     }
 
     fn pid_has_exited(pid: i32) -> bool {

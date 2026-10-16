@@ -566,7 +566,7 @@ The same D6 foundation ports durable authority receipts for sessions and routed
 API keys. Receipts retain credential digests, tenant, subject and authentication
 policy, and revalidation rejects changed policy or revoked credentials. Physical
 owner admission checks the storage identity. These internal APIs compile behind
-the feature; D15/D16 will wire them into jobs. The current job engine is unchanged.
+the feature, and the D16 jobs engine stores and revalidates them (see below).
 
 ### D15 jobs model and subscriptions
 
@@ -596,6 +596,48 @@ npm --prefix web ci --ignore-scripts
 node fixtures/parity/jobs-model/generate.mjs --check
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib jobs::
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test jobs_model_parity
+```
+
+### D16 jobs engine: enqueue and claim
+
+GRE-609's first PR wires original authority into the job engine behind
+`desktop_rebuild`. With the feature off, the engine is unchanged. No runtime caller
+uses it yet; future callers must also check `PP_DESKTOP_REBUILD`.
+
+Enqueue records who asked. A session or routed-key job stores a sealed reference to
+that credential as `_authority`: the session digest or key id and hash, the admitted
+tenant and subject, and the policy. The raw secret is never stored. A physical-owner
+job stores `_authority: null`. Documents written before this change have no
+`_authority` field. They stay that way and are never upgraded.
+
+Claims check that authority. `WriterOwner::job_worker_with_policy(policy, admission)`
+returns a worker that revalidates each job's original credential under `policy`.
+A revoked or expired credential, a changed policy, tenant or subject, or a missing
+legacy authority fails the job with `_authority_refusal` (reason, phase `claim`,
+time and generation). The refusal commits and the claim continues with the next job,
+so a refused entry never blocks healthy work. A plain `job_worker` claims
+physical-owner jobs. When it reaches a job with an original credential, it returns
+`AuthorityFailure::PolicyRequired` after committing the refusals and expiry
+recovery already done in that transaction. `claim_kind(kind)` claims only one
+admitted kind. `authorize(lease)` returns the live attempt's revalidated tenant and
+subject without changing the job. A queued job's snapshot reports progress `0`, and
+another tenant's read returns `JobAccessFailure::NotFound`.
+
+Worker progress, effects and finish do not yet revalidate authority, and claims do
+not yet reserve the job's Source. Those land in the next two D16 PRs. Upload, local
+scan and Source Sync paths arrive with D14, D17 and D18.
+
+`fixtures/parity/jobs-engine/generate.mjs` starts jobs in Node's
+`InProcessJobRunner` under web's tsx loader and records the enqueued snapshot and the
+other-tenant read. The durable engine's queued message, "Waiting for a compatible
+worker", deliberately differs from Node's "Queued". Node keeps no queue across restarts
+and never revalidates the enqueuing credential, so the claim tests follow the reference
+engine's `job_authority_recovery.rs`:
+
+```sh
+npm --prefix web ci --ignore-scripts
+node fixtures/parity/jobs-engine/generate.mjs --check
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test jobs_engine_parity --test job_authority_claims
 ```
 
 ## D9 build graph receipt
