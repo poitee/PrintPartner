@@ -152,6 +152,11 @@ jobs:
         run: |
           set -euo pipefail
           bash rust/scripts/workflow-smoke.sh rust/target/debug/pp-server "$(command -v node)" 2>&1 | tee "$PP_EVIDENCE/workflow-smoke.log"
+      - name: Prove built backend listens only on its private socket
+        if: needs.changes.outputs.macos != 'false'
+        run: |
+          set -euo pipefail
+          python3 rust/tests/built_backend_listeners.py --node "$(command -v node)" --evidence "$PP_EVIDENCE/built-backend-listeners" 2>&1 | tee "$PP_EVIDENCE/built-backend-listeners.log"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ always() && needs.changes.outputs.macos != 'false' }}
         with:
