@@ -30,7 +30,6 @@ import {
 } from "../../lib/reviewPartsFilter";
 import {
   flattenReviewParts,
-  maskSpoolmanReviewPart,
   sourceLabelFromLayer,
   workingPlanReviewParts,
 } from "../../lib/reviewParts";
@@ -369,10 +368,7 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
     savePersistedReviewPartsUi(ui);
   }, [ui]);
 
-  const acceptedParts = useMemo(() => {
-    const parts = flattenReviewParts(review.part_groups);
-    return spoolmanAccess.allowed ? parts : parts.map(maskSpoolmanReviewPart);
-  }, [review.part_groups, spoolmanAccess.allowed]);
+  const acceptedParts = useMemo(() => flattenReviewParts(review.part_groups), [review.part_groups]);
   const acceptedPartById = useMemo(
     () => new Map(acceptedParts.map((part) => [part.id, part])),
     [acceptedParts],

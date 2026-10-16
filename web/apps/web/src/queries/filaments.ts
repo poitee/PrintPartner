@@ -11,7 +11,7 @@ export function useFilamentCatalogQuery(options: {
   const access = useSpoolmanWorkflowAccess(profileId);
   return useQuery({
     queryKey: queryKeys.filamentCatalog(profileId, access.queryAllowed),
-    staleTime: 0,
+    ...(access.gated ? { staleTime: 0 } : {}),
     queryFn: () => fetchFilamentCatalog(profileId),
     enabled,
     placeholderData: (previous, query) => query?.queryKey[1] === profileId ? previous : undefined,
@@ -34,7 +34,7 @@ export function useSpoolmanSpoolsQuery(
   const access = useSpoolmanWorkflowAccess(profileId);
   return useQuery({
     queryKey: queryKeys.spoolmanSpools(integrationId ?? "", profileId, access.queryAllowed),
-    staleTime: 0,
+    ...(access.gated ? { staleTime: 0 } : {}),
     queryFn: () => fetchSpoolmanSpools(integrationId!, profileId),
     enabled: enabled && Boolean(integrationId) && access.queryAllowed,
     select: (spools) => access.allowed ? spools : [],

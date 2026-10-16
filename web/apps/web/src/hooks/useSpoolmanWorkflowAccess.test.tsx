@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TENANT_FEATURE_TOGGLES_CAPABILITY, type PlanFeatures } from "@print-partner/contracts";
@@ -88,9 +88,31 @@ beforeEach(() => {
     throw new Error(`Unexpected request: ${path}`);
   }));
 });
-afterEach(() => { cleanup(); client.clear(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); client.clear(); focusManager.setFocused(undefined); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("Spoolman workflow access", () => {
+  it("keeps gate-off reads fresh across a second observer and window focus within 30 seconds", async () => {
+    capabilities = [];
+    healthState = "unhealthy";
+    const first = renderHook(() => useObservations(), { wrapper });
+    await waitFor(() => expect(first.result.current.reviewQuery.isSuccess && first.result.current.rolesQuery.isSuccess
+      && first.result.current.catalogQuery.isSuccess && first.result.current.spoolsQuery.isSuccess).toBe(true));
+    const second = renderHook(() => useObservations(), { wrapper });
+    await waitFor(() => expect(second.result.current.reviewQuery.fetchStatus === "idle" && second.result.current.rolesQuery.fetchStatus === "idle"
+      && second.result.current.catalogQuery.fetchStatus === "idle" && second.result.current.spoolsQuery.fetchStatus === "idle").toBe(true));
+    await act(async () => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+    });
+    await waitFor(() => expect(client.isFetching()).toBe(0));
+    expect({
+      review: requests.filter((path) => path === "/plans/1/review").length,
+      roles: requests.filter((path) => path === "/plans/1/role-filaments").length,
+      catalog: requests.filter((path) => path === "/filaments/catalog?profile_id=1").length,
+      spools: requests.filter((path) => path === "/api/v1/integrations/int-1/spoolman/spools?profile_id=1").length,
+    }).toEqual({ review: 1, roles: 1, catalog: 1, spools: 1 });
+  });
+
   it.each(["error", "unhealthy"] as const)("preserves gate-off UI through a health %s, including a cold load", async (state) => {
     capabilities = [];
     healthState = state;
@@ -225,7 +247,6 @@ describe("Spoolman workflow access", () => {
     expect(hook.result.current.access.allowed).toBe(false);
     expect(hook.result.current.reviewQuery.data).toBeUndefined();
     expect(action.isCurrent()).toBe(false);
-    expect(action.isSpoolmanAllowed()).toBe(false);
     hook.unmount();
   });
 });

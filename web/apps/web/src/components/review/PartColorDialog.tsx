@@ -36,11 +36,10 @@ export default function PartColorDialog({ part, profileId, onClose }: {
   const [enteredHex, setEnteredHex] = useState<string | null>(null);
 
   const isSpoolmanAssigned = Boolean(part.filament_color_id?.trim().startsWith("spoolman:"));
-  const liveColor = spoolmanAccess.allowed
-    ? catalogQuery.data?.spoolman_colors?.find((color) => color.id === part.filament_color_id)
-    : undefined;
+  const liveColor = catalogQuery.data?.spoolman_colors?.find((color) => color.id === part.filament_color_id);
   const currentDisplay = isSpoolmanAssigned
-    ? (part.filament_custom_hex || liveColor?.combo_label || liveColor?.display_name || part.filament_color_id)
+    ? (part.filament_custom_hex || liveColor?.combo_label || liveColor?.display_name
+      || (!spoolmanAccess.gated && part.filament_display) || part.filament_color_id)
     : (part.filament_display || part.filament_hex || "Unassigned");
   const defaultHex = part.filament_custom_hex
     ?? (isSpoolmanAssigned ? liveColor?.hex : part.filament_hex) ?? "#808080";
@@ -52,7 +51,7 @@ export default function PartColorDialog({ part, profileId, onClose }: {
 
   const choices = new Map<string, ColorChoice>();
   allowedRoles.forEach((role) => choices.set(`build:${role.role}`, { colorId: role.filament_color_id, hex: role.filament_custom_hex ?? role.filament_hex }));
-  const groups = catalogColorGroups(options?.catalog ?? null).filter((group) => spoolmanAccess.allowed || group.label !== "Spoolman");
+  const groups = catalogColorGroups(options?.catalog ?? null);
   groups.forEach((group) => group.colors.forEach((color) => choices.set(`catalog:${color.id}`, { colorId: color.id, hex: null })));
   const selected = choices.get(selection);
   const customValid = /^#?[0-9a-fA-F]{6}$/.test(hex.trim());

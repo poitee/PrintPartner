@@ -7,7 +7,7 @@ export function useRoleFilamentsQuery(profileId: number | null, enabled = true) 
   const access = useSpoolmanWorkflowAccess(profileId);
   return useQuery({
     queryKey: queryKeys.roleFilaments(profileId ?? 0, access.queryAllowed),
-    staleTime: 0,
+    ...(access.gated ? { staleTime: 0 } : {}),
     queryFn: () => fetchRoleFilaments(profileId!),
     enabled: enabled && profileId != null && profileId > 0,
     placeholderData: (previous, query) => query?.queryKey[1] === profileId ? previous : undefined,

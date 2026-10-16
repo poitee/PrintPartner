@@ -7,6 +7,7 @@ import { MemoryRouter } from "react-router-dom";
 import { TENANT_FEATURE_TOGGLES_CAPABILITY, type PlanFeatures } from "@print-partner/contracts";
 import type { PlanReview, ReviewPart } from "../../api/endpoints/planManifests";
 import { queryKeys } from "../../queries/keys";
+import { usePlanReviewQuery } from "../../queries/planReview";
 import { REVIEW_PARTS_UI_STORAGE_KEY } from "../../lib/persistedReviewPartsUi";
 import PartColorDialog from "./PartColorDialog";
 import ReviewPartsSheet from "./ReviewPartsSheet";
@@ -15,7 +16,8 @@ vi.mock("../../context/ProfileContext", () => ({ useProfileSelection: () => ({ p
 vi.mock("../../context/PlanWorkspaceContext", () => ({ usePlanWorkspace: () => ({
   draftWorkspace: null, setQuantity: vi.fn(), setIncluded: vi.fn(), setSpoolmanSpool: vi.fn(), toggleUnit: vi.fn(), busyPartId: null,
 }) }));
-vi.mock("../../hooks/useMediaQuery", () => ({ useMediaQuery: () => false }));
+const layout = vi.hoisted(() => ({ mobile: false }));
+vi.mock("../../hooks/useMediaQuery", () => ({ useMediaQuery: () => layout.mobile }));
 vi.mock("../parts/PartThumb", () => ({ default: () => null }));
 vi.mock("../Preview3D", () => ({ default: ({ meshColor }: { meshColor?: string }) => <output aria-label="Preview color">{meshColor ?? "default"}</output> }));
 
@@ -48,7 +50,13 @@ function features(enabled: boolean): PlanFeatures {
   } };
 }
 const wrapper = ({ children }: { children: React.ReactNode }) => <QueryClientProvider client={client}><MemoryRouter>{children}</MemoryRouter></QueryClientProvider>;
+function ObservedReviewSheet({ profileId }: { profileId: number }) {
+  const query = usePlanReviewQuery(profileId, { enabled: false });
+  return query.data ? <ReviewPartsSheet review={query.data} planName={query.data.plan_name} /> : null;
+}
+
 beforeEach(() => {
+  layout.mobile = false;
   localStorage.clear();
   localStorage.setItem(REVIEW_PARTS_UI_STORAGE_KEY, JSON.stringify({ layoutMode: "table", viewMode: "edit" }));
   client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity }, mutations: { retry: false } } });
@@ -77,13 +85,15 @@ beforeEach(() => {
 afterEach(() => { cleanup(); client.clear(); vi.unstubAllGlobals(); });
 
 it("updates an open preview from current masked Review data on revocation", async () => {
-  const view = render(<ReviewPartsSheet review={review} planName="Test" />, { wrapper });
+  client.setQueryData(queryKeys.planReview(1), review);
+  client.setQueryData(queryKeys.planReview(2), { ...review, profile_id: 2 });
+  const view = render(<ObservedReviewSheet profileId={1} />, { wrapper });
   await userEvent.click(screen.getAllByRole("button", { name: "Preview 3D model of a.stl" })[0]!);
   await waitFor(() => expect(screen.getByLabelText("Preview color").textContent).toBe("#0000ff"));
   act(() => { client.setQueryData(queryKeys.planFeatures(1), features(false)); });
   await waitFor(() => expect(screen.getByLabelText("Preview color").textContent).toBe("default"));
   expect(screen.queryByText("450g left")).toBeNull();
-  view.rerender(<ReviewPartsSheet review={{ ...review, profile_id: 2 }} planName="Another Plan" />);
+  view.rerender(<ObservedReviewSheet profileId={2} />);
   expect(screen.queryByLabelText("Preview color")).toBeNull();
 });
 
@@ -120,4 +130,63 @@ it.each([false, true])("keeps the part-color Spoolman choices with a gate-off un
   render(<PartColorDialog part={part} profileId={1} onClose={vi.fn()} />, { wrapper });
   expect(screen.getByRole("option", { name: "Blue" })).toBeDefined();
   expect(featureReads).toBe(0);
+});
+
+it.each(["empty", "loading"] as const)("keeps the gate-off current color label when the live catalog is %s", async (state) => {
+  client.setQueryData(queryKeys.health, { ok: false, capabilities: [] });
+  client.removeQueries({ queryKey: queryKeys.filamentCatalog(1) });
+  const fetch = globalThis.fetch;
+  vi.stubGlobal("fetch", vi.fn((input: string | URL | Request, init?: RequestInit) => {
+    if (!String(input).includes("/filaments/catalog")) return fetch(input, init);
+    return state === "loading" ? new Promise<Response>(() => {}) : Promise.resolve(new Response(JSON.stringify({
+      ...catalog, spoolman_colors: [],
+    }), { headers: { "content-type": "application/json" } }));
+  }));
+  render(<PartColorDialog part={{ ...part, filament_display: "Blue PLA" }} profileId={1} onClose={vi.fn()} />, { wrapper });
+  if (state === "empty") {
+    await waitFor(() => expect(client.getQueryState(queryKeys.filamentCatalog(1))?.status).toBe("success"));
+  } else {
+    expect(screen.getByRole("status").textContent).toBe("Loading colors…");
+  }
+  expect(screen.getByText("Current color: Blue PLA")).toBeDefined();
+});
+
+it.each([false, true])("masks cached enrichment in sheet when access is denied (isMobileLayout: %s)", async (isMobile) => {
+  layout.mobile = isMobile;
+  localStorage.setItem(REVIEW_PARTS_UI_STORAGE_KEY, JSON.stringify({ layoutMode: "table" }));
+
+  const enrichedReview: PlanReview = {
+    ...review,
+    totals: { ...review.totals, included_parts: 2, total_print_units: 2 },
+    part_groups: [{
+      folder: "parts",
+      source_layer: null,
+      parts: [
+        {
+          id: 1, match_key: "a.stl", relative_path: "parts/a.stl", filename: "a.stl",
+          source_layer: null, status: "ok", role: "primary", requirement: null, option_group_id: null,
+          included: true, filament_color_id: "spoolman:int-1:filament:2", spoolman_spool_id: "spoolman:int-1:spool:5",
+          quantity_auto: 1, quantity_override: null, quantity_effective: 1, printed_count: 0,
+          print_units: [false], missing: true, filament_display: "Spoolman Blue", filament_hex: "#0000ff",
+          spool_badge: "450g left", spool_summary: [{ remaining_g: 450, spool_id: 5 }],
+        },
+        {
+          id: 2, match_key: "b.stl", relative_path: "parts/b.stl", filename: "b.stl",
+          source_layer: null, status: "ok", role: "accent", requirement: null, option_group_id: null,
+          included: true, filament_color_id: "c1", spoolman_spool_id: null,
+          quantity_auto: 1, quantity_override: null, quantity_effective: 1, printed_count: 0,
+          print_units: [false], missing: true, filament_display: "Catalog Red", filament_hex: "#ff0000",
+        },
+      ],
+    }],
+  };
+
+  client.setQueryData(queryKeys.planReview(1), enrichedReview);
+  render(<ObservedReviewSheet profileId={1} />, { wrapper });
+  expect(screen.getAllByText("450g left").length).toBeGreaterThan(0);
+  act(() => { client.setQueryData(queryKeys.planFeatures(1), features(false)); });
+  await waitFor(() => expect(screen.queryByText("450g left")).toBeNull());
+  expect(screen.queryByText("Spoolman Blue")).toBeNull();
+  expect(screen.getAllByText("Catalog Red").length).toBeGreaterThan(0);
+  expect(screen.getAllByRole("button", { name: "Remove" }).length).toBe(isMobile ? 4 : 2);
 });

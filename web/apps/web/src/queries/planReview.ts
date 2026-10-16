@@ -22,7 +22,7 @@ export function usePlanReviewQuery(
   const access = useSpoolmanWorkflowAccess(profileId);
   return useQuery({
     queryKey: queryKeys.planReview(profileId ?? 0, includeExcluded, access.queryAllowed),
-    staleTime: 0,
+    ...(access.gated ? { staleTime: 0 } : {}),
     queryFn: () => fetchPlanReview(profileId!, { includeExcluded }),
     enabled: (options?.enabled ?? true) && profileId != null && profileId > 0,
     placeholderData: (previous, query) => query?.queryKey[1] === profileId && query.queryKey[2] === includeExcluded ? previous : undefined,

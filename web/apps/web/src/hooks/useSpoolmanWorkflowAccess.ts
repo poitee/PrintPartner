@@ -38,11 +38,8 @@ export function useSpoolmanWorkflowAccess(profileId: number | null | undefined) 
   const beginAction = useCallback(() => {
     const target = scope.current;
     const isCurrent = () => target !== null && scope.current === target;
-    return {
-      isCurrent,
-      isSpoolmanAllowed: () => isCurrent() && currentAccessAllowed(),
-    };
-  }, [currentAccessAllowed]);
+    return { isCurrent };
+  }, []);
 
-  return { allowed, queryAllowed, currentAccessAllowed, beginAction };
+  return { gated, allowed, queryAllowed, currentAccessAllowed, beginAction };
 }

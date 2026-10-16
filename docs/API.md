@@ -165,8 +165,10 @@ and Spoolman inventory reads. Their query keys separate Plans and Spoolman acces
 states. When the engine advertises `tenant_feature_toggles`, these views mask
 Spoolman enrichment during access refresh or denial and refetch when access
 returns. An open 3D preview uses the same masked part data. Without that
-capability, health failures do not hide Spoolman. Settings retains account scope
-by omitting `profile_id`.
+capability, health failures do not hide Spoolman, queries retain the default
+30-second freshness window, and the part-color dialog keeps the saved display
+label when the live catalog has no match. Settings retains account scope by
+omitting `profile_id`.
 
 See [Printer setup](integrations/PRINTER_SETUP.md).
 
