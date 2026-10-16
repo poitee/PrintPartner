@@ -73,6 +73,7 @@ fn declared_versions_match_the_node_and_rust_sources() {
             "sqlite-schema": {"node_reads": node_schema, "rust_writes": rust_schema},
             "source-revision-workspace": {"node_reads": node_snapshot, "rust_writes": rust_snapshot},
             "source-covers": {"node_reads": 1, "rust_writes": null},
+            "kit-catalog": {"node_reads": 1, "rust_writes": null},
         })
     );
 }
