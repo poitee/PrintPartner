@@ -1,11 +1,3 @@
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Builder manifest helpers consume the YAML parser in the next D12 unit"
-    )
-)]
-
 use super::observation::{PreparationBudget, ReadFailure, ReadResult};
 use crate::manifest_text::JsText;
 use saphyr_parser::{Event, Parser, ScalarStyle, Tag};

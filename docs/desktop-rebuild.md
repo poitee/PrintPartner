@@ -142,9 +142,8 @@ cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features des
 
 The second GRE-607 unit ports `pp-storage::working_drafts::yaml`, the manifest
 YAML reader, compiled only with `desktop_rebuild`. The module is crate-private
-and has no callers yet. It expects `dead_code` until the builder manifest
-helpers use it. The optional `saphyr-parser` dependency (pinned `=0.1.0`, with
-`arraydeque`) is enabled only by the feature, so default builds do not compile
+and feeds the builder manifest helpers. The optional `saphyr-parser` dependency
+(pinned `=0.1.0`, with `arraydeque`) is enabled only by the feature, so default builds do not compile
 it.
 
 `Document::parse` charges the shared `PreparationBudget` for nodes, depth,
@@ -162,11 +161,43 @@ and keys follow JavaScript property order. `text`, `optional_text`, and
 `join`, an array that reaches itself through an alias contributes an empty
 string, so `project: &a [*a]` coerces to `""`.
 
-The remaining D12 units are builder manifest helpers, the executor after D11,
-and preparation.
+The remaining D12 units are the executor after D11 and preparation.
 
 ```sh
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib working_drafts::yaml
+```
+
+### D12 builder manifest helpers
+
+GRE-607 exposes five crate-private helpers through `working_drafts::observation`
+for GRE-604 D10b. `parse_builder_manifest` reads part rules, option groups,
+repository defaults, and their scalar or array shapes. `merge_builder_groups`
+preserves earlier metadata, unions patterns, and preserves JavaScript property
+order. `builder_path_matches` applies the Node glob and basename rules.
+`parse_builder_hints` validates version 1 path hints and rejects unknown fields.
+`infer_builder_siblings` delegates to the sibling inference already on main.
+
+The model retains UTF-16 identifiers and the existing sibling group types.
+Parsing uses the shared `PreparationBudget`, including rule and expansion
+accounting. Both parsers check the document size before decoding. The sibling
+wrapper takes the same budget and returns `ReadResult<BuilderGroups>`, matching
+the landed inference rather than the reference branch's unbudgeted signature.
+These helpers compile only with the default-off `desktop_rebuild` feature.
+D10b integration, draft application, the executor, and preparation remain separate
+units. No user-visible behavior changes in this slice.
+
+The contract is `loadManifestYaml`, `mergeOptionGroups`, and `matchKeyMatches` in
+`web/apps/server/src/services/manifest-apply.ts`, hint validation in
+`path-hints.ts`, and `inferSiblingFolderOptionGroups` in `repo-tree-summary.ts`.
+Supplementary Unicode wildcard parity and lone surrogate patterns remain in
+[GRE-641](https://linear.app/greetz/issue/GRE-641/align-builder-path-globs-with-node-utf-16-wildcard-semantics).
+The current regex API matches UTF-8 input. That follow-up enables the maintained
+UTF-16 matcher through Cargo configuration outside this helper slice.
+
+Run the helper tests through the same imports D10b uses:
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib working_drafts::manifest_tests
 ```
 
 ### D4 media reconciliation
