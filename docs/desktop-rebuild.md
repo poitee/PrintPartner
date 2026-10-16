@@ -619,3 +619,36 @@ Plate admission also caps each history validation pass at 1,000,000 potential ov
 Inspect runs one history validation pass and one set of production head reads, for at most 2,000,000 overlap comparisons. Apply runs three history validation passes, on the source, the source with owner claims, and the staged copy. It also reads production heads once on the source and once on the stage, for at most 5,000,000 overlap comparisons. Each head set is a subset of the validated history, so each contributes at most one additional history budget. These bounds cover the pairwise overlap loops, not total runtime, memory, row counts or other validation work. An oversized source fails before staging. A refusal leaves no published destination, removes any private stage and preserves source product bytes. Keep the source intact if it exceeds this limit; the ownership copy does not prune history or raise the budget.
 
 The source digest is rechecked after reservation, after the SQLite backup and before publication. Product file hashes and export inventory are rechecked after copying. Any database change requires a new inventory and reviewed manifest. The command exits with status 1 on refusal and status 0 with a JSON receipt on success. Both inspect and apply require `PP_DESKTOP_REBUILD` to be exactly `1` or `true`.
+
+## D11 required-unit model (GRE-606)
+
+The first D11 slice compiles `required_units::model` only with `desktop_rebuild`.
+It provides planning and selection digests, canonical decisions, exact predecessor
+matching, required-unit assignments, conflicts, surplus tokens, and selection basis
+rows. The module has no storage writer or HTTP entry point.
+
+The model keeps `DraftPart` manifest metadata separate from scalar JSON. Planning
+hashes preserve UTF-16 ordering and lone surrogates in manifest fields. Malformed
+JSON target and source rows return parse errors. Decision IDs use `pp_domain::PositiveId`, and
+invalid quantities, duplicate IDs or tokens, and corrupt progress return errors.
+Predecessor units are sorted by prior index before validation, as in Node.
+
+Unit tests assert literal results observed from
+`web/apps/server/src/services/required-unit-reconciliation.ts` and literal hashes
+from that module and `web/apps/server/src/services/plan-drafts.ts`. They cover
+creation, growth, shrink selection, prior completion, ambiguous or unsafe
+predecessors, duplicate source layers, malformed input, and manifest text hashing.
+
+The minimal module root owns a local `Decision` enum with the existing snake-case
+request fields because `pp-storage` has no dependency on `pp-contracts`.
+The operations slice can adapt the request contract at its boundary. `planning`
+returns `Result<String>` so JSON byte conversion errors propagate to that caller.
+
+The second D11 slice ports the reconciliation storage operations and writer admission.
+It adds the required-unit fixture runner and database tests, then connects working-draft consumers.
+GRE-606 remains open until that slice lands. GRE-607's executor and GRE-608 still
+need the operations slice.
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib required_units -- --test-threads=2
+```

@@ -19,6 +19,12 @@ pub mod native_secrets;
 #[cfg(feature = "desktop_rebuild")]
 pub mod profiles;
 pub mod read_model;
+#[cfg(feature = "desktop_rebuild")]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "GRE-606 operations land in the second D11 slice")
+)]
+mod required_units;
 mod schema;
 #[cfg(feature = "desktop_rebuild")]
 pub mod working_drafts;
