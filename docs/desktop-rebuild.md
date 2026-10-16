@@ -793,8 +793,6 @@ npx tsx --conditions=development ../rust/crates/pp-storage/tests/fixtures/manife
 
 No HTTP route or runtime caller is added. GRE-644 still needs its HTTP slice
 with D25/GRE-620 build routes, including `PP_DESKTOP_REBUILD` admission.
-[Verification commands and outputs](desktop-rebuild-gre-644-evidence.md) record
-the local checks and failing-before evidence.
 
 ## D11 required units (GRE-606)
 
