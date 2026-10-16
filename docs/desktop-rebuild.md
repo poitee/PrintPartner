@@ -489,7 +489,14 @@ As in Node, an unreadable or invalid manifest reports `exists: false` with the f
 Invalid UTF-8 decodes with replacement characters. An invalid or unreadable custom hints file fails the observation.
 A source without a checkout path is skipped. A source whose checkout root the adapter refuses is omitted.
 
-All reads and parsing charge the caller's `PreparationBudget`, and pattern matching checks cancellation.
+Adapter reads, manifest and hint parsing, and STL scans charge the caller's `PreparationBudget`.
+The stored kit and each source's import rules charge their bytes as documents.
+Import rules also charge every JSON node and one rule per accepted path.
+Import rules over the JSON byte, depth, or node limit refuse the observation.
+Malformed or non-array import rules give an empty rule set, as in Node.
+A malformed stored kit falls back to an empty kit, as in Node.
+A stored kit over the JSON limits also falls back to an empty kit, where Node keeps it.
+Path filtering and pattern matching check cancellation.
 Each source returns a SHA-256 stamp of its reads, so a caller can compare two observations.
 `validate_known_selections` returns the `manifestSelectionsInputError` messages for a kit save.
 

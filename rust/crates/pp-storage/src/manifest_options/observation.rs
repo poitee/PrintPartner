@@ -1,12 +1,12 @@
 use super::ManifestInputDetail;
 use super::builder::{ManifestBuilder, ManifestSource, VariantSource, VariantSources};
-use super::json::{self, JsonValue};
+use super::json::{self, JsonError, JsonLimit, JsonValue};
 use super::model::KitManifest;
 use crate::manifest_text::{JsText, ManifestText, OptionGroupId, VariantId};
 use crate::working_drafts::observation::{
     BuilderGroup, BuilderGroups, BuilderVariant, CatalogPurpose, CheckoutManifestUse, DocumentRead,
     DraftReads, InventoryPath, OwnedCatalogReadRequest, OwnedCheckoutReadRequest,
-    OwnedStlReadRequest, PreparationBudget, ReadFailure, ReadResult, StlPurpose,
+    OwnedStlReadRequest, PreparationBudget, ReadFailure, ReadResult, Resource, StlPurpose,
     builder_path_matches, infer_builder_siblings, merge_builder_groups, parse_builder_hints,
     parse_builder_manifest,
 };
@@ -117,11 +117,13 @@ pub(crate) fn observe(
     reads: Option<&dyn DraftReads>,
     budget: &mut PreparationBudget<'_>,
 ) -> ReadResult<ObservedBuilder> {
-    let mut resolved_selections = captured
-        .stored_kit
-        .as_deref()
-        .and_then(|raw| KitManifest::from_stored(raw).ok())
-        .unwrap_or_default();
+    let mut resolved_selections = match captured.stored_kit.as_deref() {
+        Some(raw) => {
+            budget.document(raw.len(), raw.len())?;
+            KitManifest::from_stored(raw).unwrap_or_default()
+        }
+        None => KitManifest::default(),
+    };
     let mut sources = Vec::new();
     let mut merged_option_groups = BuilderGroups::new();
     let mut variant_sources = VariantSources::new();
@@ -212,7 +214,11 @@ fn observe_source(
         return Ok(None);
     }
     let inventory = root.scan_stls(budget)?;
-    let scanned_parts = scanned_paths(inventory.entries(), source.imported_paths.as_deref());
+    let scanned_parts = scanned_paths(
+        inventory.entries(),
+        source.imported_paths.as_deref(),
+        budget,
+    )?;
     for part in &scanned_parts {
         stamp_text(&mut stamp, part);
     }
@@ -365,21 +371,42 @@ fn any_pattern_matches(
     Ok(false)
 }
 
-fn scanned_paths(entries: &[InventoryPath], imported_paths: Option<&str>) -> Vec<String> {
-    let rules = imported_paths.map(import_rules);
-    let mut paths: Vec<_> = entries
-        .iter()
-        .map(|entry| entry.physical_relative_path.replace('\\', "/"))
-        .filter(|path| rules.as_ref().is_none_or(|rules| imported(path, rules)))
-        .map(|path| (path.to_lowercase(), path))
-        .collect();
+fn scanned_paths(
+    entries: &[InventoryPath],
+    imported_paths: Option<&str>,
+    budget: &mut PreparationBudget<'_>,
+) -> ReadResult<Vec<String>> {
+    let rules = imported_paths
+        .map(|raw| import_rules(raw, budget))
+        .transpose()?;
+    let mut paths = Vec::new();
+    for entry in entries {
+        budget.check()?;
+        let path = entry.physical_relative_path.replace('\\', "/");
+        if rules.as_ref().is_none_or(|rules| imported(&path, rules)) {
+            paths.push((path.to_lowercase(), path));
+        }
+    }
     paths.sort_by(|left, right| crate::read_model::views::folder_compare(&left.0, &right.0));
-    paths.into_iter().map(|(_, path)| path).collect()
+    Ok(paths.into_iter().map(|(_, path)| path).collect())
 }
 
-fn import_rules(raw: &str) -> Vec<String> {
-    let Ok(JsonValue::Array(values)) = json::parse(js_trim(raw).as_bytes()) else {
-        return Vec::new();
+fn import_rules(raw: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<Vec<String>> {
+    budget.document(raw.len(), raw.len())?;
+    let parsed = match json::parse(js_trim(raw).as_bytes()) {
+        Ok(parsed) => parsed,
+        Err(JsonError::Syntax) => return Ok(Vec::new()),
+        Err(JsonError::Limit(limit)) => {
+            return Err(ReadFailure::LimitExceeded(match limit {
+                JsonLimit::Bytes => Resource::DocumentBytes,
+                JsonLimit::Depth => Resource::Depth,
+                JsonLimit::Nodes => Resource::Nodes,
+            }));
+        }
+    };
+    charge_nodes(&parsed, 0, budget)?;
+    let JsonValue::Array(values) = parsed else {
+        return Ok(Vec::new());
     };
     values
         .into_iter()
@@ -388,14 +415,40 @@ fn import_rules(raw: &str) -> Vec<String> {
             _ => None,
         })
         .map(|rule| {
+            budget.rule()?;
             let rule = relative_path(&rule);
-            if rule.is_empty() || rule.ends_with('/') || rule.to_lowercase().ends_with(".stl") {
-                rule
-            } else {
-                format!("{rule}/")
-            }
+            Ok(
+                if rule.is_empty() || rule.ends_with('/') || rule.to_lowercase().ends_with(".stl") {
+                    rule
+                } else {
+                    format!("{rule}/")
+                },
+            )
         })
         .collect()
+}
+
+fn charge_nodes(
+    value: &JsonValue,
+    depth: usize,
+    budget: &mut PreparationBudget<'_>,
+) -> ReadResult<()> {
+    budget.node(depth)?;
+    match value {
+        JsonValue::Array(values) => {
+            for value in values {
+                charge_nodes(value, depth + 1, budget)?;
+            }
+        }
+        JsonValue::Object(object) => {
+            for (_, value) in object.iter() {
+                budget.node(depth + 1)?;
+                charge_nodes(value, depth + 1, budget)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn imported(path: &str, rules: &[String]) -> bool {
