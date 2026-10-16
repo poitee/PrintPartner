@@ -306,6 +306,46 @@ read and write mutants against both test files. It copies the Rust workspace
 and builds in its own temporary target directory, so it never changes
 `rust/target`.
 
+### D12 preparation prerequisites
+
+GRE-607 adds the remaining manifest helpers and the accepted-base reuse check
+behind `desktop_rebuild`. `optional_document` ignores missing, skipped, and
+invalid optional manifests. `kit` projects stored kit selections through the
+existing `KitManifest` parser. Both propagate preparation budget and cancellation
+failures. `apply` preserves Node's document order, project filtering, selection
+defaults, explicit group membership, group bounds, and exclusion precedence.
+It accepts the shared `PreparationBudget` and accounts for each Part and pattern
+comparison. Kit JSON passes through the budgeted document reader before the
+stored-kit parser, so UTF-16 selection text uses the existing codec.
+
+`read_model::reusable_draft_base` checks current freshness before validating the
+complete accepted snapshot with the existing bounded readers. It propagates
+integrity errors and checks preparation cancellation around those reads.
+`catalog::naming::get` is crate-visible for the next preparation port's
+transactional effective naming profile and digest. Its behavior is unchanged.
+These helpers have no runtime caller yet. Preparation and recompute remain
+separate GRE-607 slices.
+
+The committed Node generator covers manifest application, optional documents,
+stored kit selections, freshness, and accepted-base integrity. Regenerate its
+literal outputs twice and compare them before replacing the fixture:
+
+```sh
+node --import ./web/node_modules/tsx/dist/loader.mjs --conditions=development \
+  rust/crates/pp-storage/tests/fixtures/preparation-prereqs-node.mjs web/apps/server \
+  > rust/target/preparation-first.jsonl
+node --import ./web/node_modules/tsx/dist/loader.mjs --conditions=development \
+  rust/crates/pp-storage/tests/fixtures/preparation-prereqs-node.mjs web/apps/server \
+  > rust/target/preparation-second.jsonl
+cmp rust/target/preparation-first.jsonl rust/target/preparation-second.jsonl
+cmp rust/target/preparation-first.jsonl rust/crates/pp-storage/tests/fixtures/preparation-prereqs-node.jsonl
+cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib -E 'test(preparation_tests)' --test-threads=2
+python3 rust/crates/pp-storage/tests/fixtures/mutate-preparation-prereqs.py
+```
+
+The mutation runner copies the workspace and uses a separate `CARGO_TARGET_DIR`.
+It requires a passing baseline and counts only executed test failures as kills.
+
 ### D4 media reconciliation
 
 GRE-599 reconciles media already shipped in #131. The `pp-source` media library, the `pp-source-media` CLI, and all unconditional #131 exports remain available in the default build. This slice adds a historical audit and documentation. It adds no feature behavior, host, runtime API, or dependency.
@@ -890,3 +930,40 @@ Run the tests with:
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib required_units -- --test-threads=2
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test required_unit_operations -- --test-threads=2
 ```
+
+## D19 publication model and production links, GRE-612 PR 1
+
+`pp-storage::plan_publication` is internal and requires `desktop_rebuild`.
+The feature remains off by default. This slice ports publication assignments,
+preparation, revision digests, accepted projection validation, production setting
+validation, and Required-unit token remapping from the source-sync reference.
+The optional `pp-contracts` dependency supplies `UnmappableLink`; the boundary
+check rejects this dependency if it becomes required or reachable by default.
+
+PR 2 adds `publish_in_transaction`, receipts, inputs, admission schema, and job
+publication conflicts. PR 3 adds `PublicationClient`, admission, and writer
+`Envelope` dispatch. PR 1 exposes no publication command and writes no schema.
+Temporary `expect(dead_code)` annotations identify the PR 2 integration point.
+
+`node fixtures/parity/plan-publication/generate.mjs` regenerates literal Node
+results in `fixtures/parity/plan-publication/node.json`; `--check` detects drift.
+It requires Node 22.18 or newer with built-in type stripping and no npm install.
+The fixture header records the generating Node version. The generator imports
+`preparePlanPublication`, `digestPlanRevisionParts`, `assessCheckoffRemap`, and
+`requiredUnitObjectName`. It extracts and executes the repository's inline
+accepted revision check, `projectionPlanningFieldsMatch`, and private
+`applyCheckoffRemap` and `strictProductionState` methods with row and setting
+adapters. It does not copy their implementations. Later slices can add cases to
+the same generator.
+
+Rust tests compare literal digests, progress, assignment coordinates, object
+names, remap mappings, and persisted settings. Shared projection cases compare
+acceptance and rejection. Production validation accepts Checkoff coordinates
+owned by another profile, matching Node. Remapping treats an ownerless queue item
+as related when any part belongs to the profile or no referenced parts still exist,
+even when its state is `done`. Node's exact error messages are retained in the
+fixture; tests separately assert the Rust reference's more specific diagnostics.
+Node's inline projection check has no progress-validation counterpart, and its
+match-key remap cannot represent token identity, excluded targets, resolved-only
+coordinates, or changed unit indexes. Direct Rust tests cover progress corruption,
+excluded or missing tokens, and changed indexes against the reference behavior.

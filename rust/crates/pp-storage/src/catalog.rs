@@ -14,7 +14,7 @@ pub use rebuild::{
 
 mod categories;
 mod json;
-mod naming;
+pub(crate) mod naming;
 
 use crate::{Envelope, SettingsClient, WriterOwner, auth};
 use anyhow::{Result, anyhow, ensure};

@@ -110,12 +110,11 @@ The `tests` value of the macOS entry skips these tests. The comment above the ma
 
 The macOS job skips two lifecycle groups as a whole. They are every test in the `pp-core` `runtime_m0` binary and every `pp-compat` test under `ticket_t_2::`. On the hosted runner, a different subset of them fails on each run, with "Compatibility readiness/release verification failed" or with Node and shell children that exit with status 126. Linux still runs both groups in full, and **Native macOS bundle** still runs its own selected macOS lifecycle tests. GRE-645 tracks the root cause, including whether the mounted `TMPDIR` volume is involved, and removes the group skip.
 
-The filter also skips two tests by name, outside those groups:
+The filter also skips one test by name, outside those groups:
 
 | Crate | Test | Ticket | Failure |
 |-------|------|--------|---------|
 | `pp-core` | `origin_tests::ticket_t_12_missing_config_persists_private_port_and_reuses_it` | GRE-645 | The Node child does not reach readiness, the same symptom as the `runtime_m0` group. |
-| `pp-source` | `acquisition_labels::raw_long_labels_contract_to_valid_file_and_directory_paths` | GRE-658 | The extracted directory is missing on APFS. This test exists only with `desktop_rebuild` on. |
 
 ## Other Rust workflows
 
