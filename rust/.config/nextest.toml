@@ -2,14 +2,3 @@
 # rust/target/nextest/ci/junit.xml. Used by .github/workflows/desktop-fleet-rust.yml.
 [profile.ci.junit]
 path = "junit.xml"
-
-# Every runtime start walks and hashes the whole measured release, about 43,500 files.
-# On the 3-CPU macOS runner, three such tests at once starve the Node child past its
-# 32-second readiness budget, so macOS runs them one at a time (GRE-645).
-[test-groups]
-release-runtime = { max-threads = 1 }
-
-[[profile.default.overrides]]
-platform = 'cfg(target_os = "macos")'
-filter = 'binary_id(pp-core::runtime_m0) | (package(pp-compat) & test(/measured_release|built_release/))'
-test-group = 'release-runtime'

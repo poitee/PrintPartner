@@ -11,7 +11,7 @@ The workflow has one job per OS. Each job uses the toolchain pinned in `rust-too
 | Check name | Runner | Packages | Tests |
 |------------|--------|----------|-------|
 | `rust (linux)` | `ubuntu-latest` | The whole workspace | All |
-| `rust (macos)` | `macos-26` | The whole workspace | All |
+| `rust (macos)` | `macos-26` | The whole workspace | All except [macOS exclusions](#macos-exclusions) |
 | `rust (windows)` | `windows-latest` | The workspace without [Windows exclusions](#windows-exclusions) | All in those packages |
 
 Each job runs these steps in order:
@@ -53,7 +53,7 @@ cargo nextest run --manifest-path rust/Cargo.toml --locked --workspace --no-fail
 cargo nextest run --manifest-path rust/Cargo.toml --locked --workspace --no-fail-fast --features desktop_rebuild
 ```
 
-On macOS, set `TMPDIR` to a short directory on a case-sensitive volume before you run the tests. The workflow step `Mount a short case-sensitive TMPDIR` has the commands. Also set `PP_TEST_NODE` to the Node executable, as CI does. Without it the runtime tests fall back to `/usr/bin/node`, which macOS does not have. On Windows, replace `--workspace` with the items of the Windows entry's `scope` list, separated by spaces. On Linux, the Tauri shell also needs the GTK and WebKit packages that the workflow installs with `apt-get`.
+On macOS, set `TMPDIR` to a short directory on a case-sensitive volume before you run the tests. The workflow step `Mount a short case-sensitive TMPDIR` has the commands. Also set `PP_TEST_NODE` to the Node executable, as CI does. Without it the runtime tests fall back to `/usr/bin/node`, which macOS does not have. To skip the same tests as CI, add `-E` with the `tests` value of the macOS entry. On Windows, replace `--workspace` with the items of the Windows entry's `scope` list, separated by spaces. On Linux, the Tauri shell also needs the GTK and WebKit packages that the workflow installs with `apt-get`.
 
 Clippy and fmt do not read the manifest contents. For a lint-only run, `echo '{}' > rust/bundle-manifest.json` is enough. The tests need the real manifest.
 
@@ -104,11 +104,17 @@ These crates do not build on Windows yet. The Windows job excludes them with `--
 
 `rust (windows)` therefore does not compile the Tauri shell yet. When a port ticket's crates build and pass their tests on Windows, delete its `scope` item in the same pull request.
 
-## macOS test concurrency
+## macOS exclusions
 
-Every compatibility runtime start walks and hashes the whole measured release: the Node executable, the backend and about 42,000 dependency files. The second of its two checks runs inside the 32-second readiness budget. The hosted macOS runner has three CPUs, and three of these tests at once kept Node from reaching readiness in time (GRE-645).
+The `tests` value of the macOS entry skips these tests. The comment above the macOS entry names the ticket for each skipped term. When a test passes on macOS, delete it from that filter in the same pull request.
 
-`rust/.config/nextest.toml` therefore puts these tests in the `release-runtime` test group, which runs one test at a time on macOS. The group holds every `pp-core` `runtime_m0` test and the `pp-compat` measured and built release startup tests. Other tests still run in parallel beside them. Linux and Windows are unchanged.
+The macOS job skips two lifecycle groups as a whole. They are every test in the `pp-core` `runtime_m0` binary and every `pp-compat` test under `ticket_t_2::`. Linux still runs both groups in full, and **Native macOS bundle** still runs its own selected macOS lifecycle tests. GRE-645 owns the skip. On the hosted runner, one release verification takes 10 to 20 seconds, almost all of it spent walking and hashing about 42,000 dependency files. Every runtime start verifies twice, once inside the 32-second readiness budget, and every supervisor restart verifies again. GRE-661 tracks that cost. The skip stays until it is fixed.
+
+The filter also skips one test by name, outside those groups:
+
+| Crate | Test | Ticket | Failure |
+|-------|------|--------|---------|
+| `pp-core` | `origin_tests::ticket_t_12_missing_config_persists_private_port_and_reuses_it` | GRE-645 | It reruns the test binary with a 3-second deadline, which it misses while release verification in other tests saturates the runner. |
 
 ## Other Rust workflows
 
