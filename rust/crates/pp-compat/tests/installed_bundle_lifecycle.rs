@@ -82,7 +82,7 @@ impl TestOwnership {
             .write(true)
             .create_new(true)
             .mode(0o600)
-            .open(data_dir.join(".desktop.lock"))?;
+            .open(data_dir.join("printpartner.lock"))?;
         let locked = unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
         ensure!(locked == 0, "Could not lock test data directory");
         let lease = hex::encode(rand::random::<[u8; 32]>());
