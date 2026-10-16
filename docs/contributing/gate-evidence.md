@@ -51,9 +51,10 @@ On an evidence-enabled Linux development environment:
    - Trigger **Show Print Partner**: it restores the same window. Record the
      window identity before closing and after restoring it.
    - Trigger **Quit Print Partner**: the app exits with status `0`; verify that
-     the marker, lease, runtime folder, and socket have been removed.
+     the `.desktop-lease` compatibility file, runtime folder, and socket have
+     been removed.
 
-   `.desktop.lock` stays on disk after Quit. Verify that its exclusive lock has
+   `printpartner.lock` stays on disk after Quit. Verify that its exclusive lock has
    been released by re-locking the existing file, then release that check lock;
    file deletion is not the cleanup check.
 

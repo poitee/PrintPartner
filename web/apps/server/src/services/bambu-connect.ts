@@ -1,5 +1,5 @@
-import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { openSync, closeSync, existsSync } from "node:fs";
+import { spawn, type StdioOptions } from "node:child_process";
 import { basename } from "node:path";
 import { platform } from "node:os";
 
@@ -120,11 +120,17 @@ export function tryLaunchBambuConnectUrl(
   return new Promise((resolve) => {
     const { cmd, args } = bambuConnectLaunchCommand(url);
     try {
-      const child = spawn(cmd, args, {
-        detached: true,
-        stdio: "ignore",
-        shell: false,
-      });
+      const nullFd = process.env.PP_STORAGE_CORE_LOCK === "1" && platform() !== "win32"
+        ? openSync("/dev/null", "r") : null;
+      let child;
+      try {
+        // Ignored extra stdio entries leave inherited descriptors open in libuv.
+        const stdio: StdioOptions = nullFd === null ? "ignore"
+          : Array.from({ length: 199 }, (_, fd) => fd === 198 ? nullFd : "ignore");
+        child = spawn(cmd, args, { detached: true, stdio, shell: false });
+      } finally {
+        if (nullFd !== null) closeSync(nullFd);
+      }
       child.unref();
       child.on("error", (err) => {
         resolve({ launched: false, error: err.message || String(err) });

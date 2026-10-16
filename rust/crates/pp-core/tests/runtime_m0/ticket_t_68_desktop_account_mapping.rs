@@ -972,10 +972,11 @@ async fn fresh_store_stays_synthetic_when_enabled() {
 }
 
 #[cfg(feature = "desktop_rebuild")]
-async fn crash_child(runtime: &CoreRuntime, data: &Path) {
-    let marker: Value =
-        serde_json::from_slice(&fs::read(data.join(".desktop-owner.json")).unwrap()).unwrap();
-    let pid = u32::try_from(marker["child_pid"].as_u64().unwrap()).unwrap();
+async fn crash_child(runtime: &CoreRuntime) {
+    let state = runtime.handle().subscribe().borrow().clone();
+    let pp_core::CoreStatus::Ready { pid, .. } = state else {
+        panic!("not ready")
+    };
     let mut states = runtime.handle().subscribe();
     assert_eq!(
         unsafe { libc::kill(i32::try_from(pid).unwrap(), libc::SIGKILL) },
@@ -1017,7 +1018,7 @@ async fn mapping_pin_survives_compat_crash_and_full_restart() {
         &data,
         json!({"version":1,"kind":"existing-account","user_id":"account-b","tenant_id":"account-b"}),
     );
-    crash_child(&runtime, &data).await;
+    crash_child(&runtime).await;
     let (status, me) = api(&runtime, &cookie, "/auth/me", "GET", None).await;
     println!(
         "{}",
@@ -1065,7 +1066,7 @@ async fn missing_mapping_pin_rejects_later_account_after_crash() {
     );
     node(&data, "const db = new Database(data + '/print-partner.db'); db.exec(\"INSERT INTO users (id,display_name,is_admin,created_at) VALUES ('account-a','Selected account',0,'2026-10-14')\"); db.close(); console.log('{}');").await;
     mapping(&data, selected());
-    crash_child(&runtime, &data).await;
+    crash_child(&runtime).await;
     let (status, me) = api(&runtime, &cookie, "/auth/me", "GET", None).await;
     println!(
         "{}",
@@ -1093,7 +1094,7 @@ async fn present_mapping_pin_rejects_removal_after_crash() {
     let mut runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
     let cookie = bootstrap(&mut runtime).await;
     fs::remove_file(data.join("desktop-account.json")).unwrap();
-    crash_child(&runtime, &data).await;
+    crash_child(&runtime).await;
     let (status, me) = api(&runtime, &cookie, "/auth/me", "GET", None).await;
     println!(
         "{}",
