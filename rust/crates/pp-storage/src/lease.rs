@@ -48,6 +48,8 @@ impl CompatibilityReservation {
 
     fn release(&mut self) -> std::io::Result<()> {
         if self.held {
+            #[cfg(test)]
+            tests::assert_lock_held_during_reservation_release();
             let removed = unsafe {
                 libc::unlinkat(self.directory.as_raw_fd(), c".desktop-lease".as_ptr(), 0)
             };
@@ -756,6 +758,65 @@ mod tests {
         let (owner, _) = crate::WriterOwner::open(&path, crate::Limits::default()).unwrap();
         assert_eq!(crate::schema::PREFLIGHT_CALLS.get(), 2);
         owner.shutdown().unwrap();
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    thread_local! {
+        static CHECK_LOCK_DURING_RESERVATION_RELEASE: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+    }
+
+    pub(super) fn assert_lock_held_during_reservation_release() {
+        if let Some(path) = CHECK_LOCK_DURING_RESERVATION_RELEASE.take() {
+            assert!(path.join(".desktop-lease").is_file());
+            let contender = File::open(path.join("printpartner.lock")).unwrap();
+            assert!(
+                matches!(
+                    fs4::FileExt::try_lock(&contender),
+                    Err(fs4::TryLockError::WouldBlock)
+                ),
+                "advisory lock released before compatibility reservation cleanup"
+            );
+        }
+    }
+
+    #[test]
+    fn gre_636_failed_writer_preflight_cleans_reservation_before_unlock() {
+        let path = directory();
+        std::fs::create_dir(path.join("print-partner.db")).unwrap();
+        CHECK_LOCK_DURING_RESERVATION_RELEASE.set(Some(path.clone()));
+        let error = crate::WriterOwner::open(&path, crate::Limits::default())
+            .err()
+            .unwrap();
+        assert!(format!("{error:#}").contains("Is a directory"), "{error:#}");
+        assert!(CHECK_LOCK_DURING_RESERVATION_RELEASE.take().is_none());
+        assert!(!path.join(".desktop-lease").exists());
+        let contender = File::open(path.join("printpartner.lock")).unwrap();
+        fs4::FileExt::try_lock(&contender).unwrap();
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn gre_636_shutdown_preserves_replaced_compatibility_reservation() {
+        let path = directory();
+        let owner = StorageLease::acquire(&path).unwrap();
+        let reservation = path.join(".desktop-lease");
+        let acquired = std::fs::symlink_metadata(&reservation).unwrap();
+        std::fs::rename(&reservation, path.join("previous-reservation")).unwrap();
+        std::fs::write(&reservation, b"replacement reservation").unwrap();
+        let replacement = std::fs::symlink_metadata(&reservation).unwrap();
+        assert_ne!(acquired.ino(), replacement.ino());
+        let released = owner.release();
+        assert!(released.lock_released);
+        assert!(!released.ownership_retained);
+        assert_eq!(
+            std::fs::read(&reservation).unwrap(),
+            b"replacement reservation"
+        );
+        assert_eq!(
+            std::fs::symlink_metadata(&reservation).unwrap().ino(),
+            replacement.ino()
+        );
+        fs4::FileExt::try_lock(&File::open(path.join("printpartner.lock")).unwrap()).unwrap();
         std::fs::remove_dir_all(path).unwrap();
     }
 
