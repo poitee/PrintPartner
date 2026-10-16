@@ -28,6 +28,7 @@ pub enum TableId {
 pub enum FileFamily {
     SourceWorkspace,
     SourceCovers,
+    KitCatalog,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -76,6 +77,8 @@ enum ReviewedEntry {
     PreviewSourceNaming { resources: Vec<ResourceId> },
     #[serde(rename = "tool.list_plan_snapshots")]
     ListPlanSnapshots { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_plan_snapshot")]
+    GetPlanSnapshot { resources: Vec<ResourceId> },
     #[serde(rename = "tool.ui_open_source")]
     UiOpenSource { resources: Vec<ResourceId> },
     #[serde(rename = "tool.analyze_stl_mesh")]
@@ -175,6 +178,23 @@ impl ReviewedEntry {
                 "tool.list_plan_snapshots",
                 resources,
                 BTreeSet::from([Table(BuildProfiles), Table(PlanSnapshots)]),
+            ),
+            Self::GetPlanSnapshot { resources } => (
+                "tool.get_plan_snapshot",
+                resources,
+                BTreeSet::from([
+                    Table(BuildProfiles),
+                    Table(Parts),
+                    Table(ProfileLayers),
+                    Table(Projects),
+                    Table(SourceRevisions),
+                    Table(AppSettings),
+                    Table(PlanAcceptedInputSets),
+                    Table(PlanRevisionInputSets),
+                    Table(PlanRevisionInputs),
+                    File(FileFamily::SourceWorkspace),
+                    File(FileFamily::KitCatalog),
+                ]),
             ),
             Self::UiOpenSource { resources } => (
                 "tool.ui_open_source",
@@ -344,6 +364,7 @@ impl Declarations {
             "tool.preview_source_naming",
             "tool.list_plans",
             "tool.list_plan_snapshots",
+            "tool.get_plan_snapshot",
             "tool.ui_highlight_part",
             "tool.ui_focus_stl_search",
             "tool.ui_navigate",
