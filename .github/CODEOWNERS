@@ -1,0 +1,10 @@
+/.github/CODEOWNERS @poitee
+/.github/workflows/ @poitee
+/.github/actions/ @poitee
+/.github/dependabot.yml @poitee
+/.github/zizmor.yml @poitee
+/rust/scripts/check-* @poitee
+/rust/deny.toml @poitee
+/rust/ast-grep-baseline.json @poitee
+/scripts/workaround-baseline.json @poitee
+/rust/crates/**/snapshots/ @poitee
