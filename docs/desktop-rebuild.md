@@ -319,8 +319,9 @@ charges each pattern comparison as a visit. A comparison keeps no memory after i
 returns, so it does not charge the document-byte cap. It charges the separate
 `comparison_work` counter instead. Before a comparison it charges the raw
 pattern UTF-16 units plus the key's UTF-8 bytes, because normalization scans
-the raw text before trimming. After the comparison it charges the normalized
-UTF-16 units plus glob matcher steps. The default and maximum is 2^28 units, so
+the raw text before trimming. Each comparison builds its own `Glob`, so after
+the comparison it charges the normalized pattern and key UTF-16 units plus the
+glob matcher steps that `Glob` counted. The default and maximum is 2^28 units, so
 comparisons at the 100,000-visit limit can average about 2,680 units each. One
 comparison costs O(P + K²) units for a pattern of P units and a key of K units,
 with K at most 4,096. Only the post-comparison charge can pass the limit, so an
