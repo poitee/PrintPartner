@@ -1084,6 +1084,7 @@ The feature installs and validates the admission table and immutable triggers
 at schema 37. Version 36 remains reserved for the reference branch's separate
 migration. Reopening checks schema text and orphan admissions. Without the
 feature, storage remains at schema 35 and refuses a schema-37 database.
+The publication schema uses the reference's version 37, and the uploads port (GRE-610) must install its v36 tables when a database is already at 37 without them.
 
 D13 save, GRE-608, can call `AuthenticatedPublicationContext::resolve` and
 `publish_in_transaction` on its own transaction, using `PublicationRequests::new`

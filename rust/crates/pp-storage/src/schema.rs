@@ -271,8 +271,11 @@ pub(crate) fn initialize(
     now: &str,
 ) -> Result<(Connection, SchemaReady)> {
     let mut conn = Connection::open(path)?;
-    let backup_path = if version < 35 && path.metadata()?.len() > 0 {
-        let target = path.parent().unwrap().join("backups/pre-schema35.db");
+    let backup_path = if version < CURRENT_VERSION && path.metadata()?.len() > 0 {
+        let target = path
+            .parent()
+            .unwrap()
+            .join(format!("backups/pre-schema{CURRENT_VERSION}.db"));
         if !target.exists() {
             backup(&conn, &target, true)?;
         }

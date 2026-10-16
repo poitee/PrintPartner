@@ -118,7 +118,13 @@ fn client_matches_node_apply_route_keys_replay_context_and_error_text() {
         let mut tokens = Tokens(0);
         let outcome = run(&client, command.unwrap(), &mut c, &mut tokens);
         if case["status"] == 500 {
-            assert_eq!(outcome.err().unwrap().to_string(), case["body"]["detail"]);
+            let error = outcome.err().unwrap();
+            assert_eq!(error.to_string(), case["body"]["detail"]);
+            assert!(
+                error
+                    .chain()
+                    .any(|cause| cause.to_string().contains("Rust-only probe detail"))
+            );
             assert_eq!(
                 c.query_row("SELECT count(*) FROM plan_revisions", [], |r| r
                     .get::<_, i64>(0))
@@ -169,7 +175,7 @@ fn client_matches_node_apply_route_keys_replay_context_and_error_text() {
 fn admission_matches_reference_cancel_full_stop_and_unknown_outcome() {
     let data = fixture();
     let case = &data["clients"][0];
-    let client = client(1);
+    let cancelled = client(0);
     let failure = |result: Result<Outcome>| {
         result
             .err()
@@ -177,11 +183,11 @@ fn admission_matches_reference_cancel_full_stop_and_unknown_outcome() {
             .downcast::<AdmissionFailure>()
             .unwrap()
     };
-    assert!(matches!(
-        failure(client.apply(input(case).unwrap(), &AtomicBool::new(true), Duration::ZERO)),
-        AdmissionFailure::Cancelled
-    ));
-    assert!(client.shared.queue.lock().unwrap().pending.is_empty());
+    let result =
+        failure(cancelled.apply(input(case).unwrap(), &AtomicBool::new(true), Duration::ZERO));
+    assert!(matches!(result, AdmissionFailure::Cancelled), "{result:?}");
+    assert!(cancelled.shared.queue.lock().unwrap().pending.is_empty());
+    let client = client(1);
     let (reply, _receiver) = mpsc::channel();
     client
         .shared
@@ -263,8 +269,33 @@ fn owner_installs_schema_dispatches_random_tokens_and_drains_before_stop() {
     let dir = crate::tests::directory("publication-owner");
     c.backup("main", dir.join("print-partner.db"), None)
         .unwrap();
+    let before = std::fs::read(dir.join("print-partner.db")).unwrap();
     let (owner, ready) = WriterOwner::open(&dir, crate::Limits::default()).unwrap();
     assert_eq!(ready.version, 37);
+    assert_eq!(ready.previous_version, 35);
+    let backup = dir.join("backups/pre-schema37.db");
+    assert_eq!(ready.backup.as_ref(), Some(&backup));
+    assert_eq!(std::fs::read(&backup).unwrap(), before);
+    let saved =
+        Connection::open_with_flags(&backup, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    assert_eq!(
+        saved
+            .query_row("PRAGMA integrity_check", [], |r| r.get::<_, String>(0))
+            .unwrap(),
+        "ok"
+    );
+    assert_eq!(
+        saved
+            .query_row(
+                "SELECT value FROM app_settings WHERE tenant_id='default' AND key='schema_version'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        "35"
+    );
+    validate_schema(&saved, 35).unwrap();
+    drop(saved);
     let client = owner.publication();
     let outcome = serde_json::to_value(
         client
@@ -299,6 +330,8 @@ fn owner_installs_schema_dispatches_random_tokens_and_drains_before_stop() {
     ru::model::validate_token(&token).unwrap();
     let (owner, ready) = WriterOwner::open(&dir, crate::Limits::default()).unwrap();
     assert_eq!(ready.previous_version, 37);
+    assert!(ready.backup.is_none());
+    assert_eq!(std::fs::read(&backup).unwrap(), before);
     let replay = serde_json::to_value(
         owner
             .publication()

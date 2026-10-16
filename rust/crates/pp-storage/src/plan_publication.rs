@@ -197,7 +197,7 @@ impl PublicationClient {
                 if error.downcast_ref::<auth::AuthFailure>().is_some() {
                     error
                 } else {
-                    anyhow!("Plan draft update failed")
+                    error.context("Plan draft update failed")
                 }
             })
     }
