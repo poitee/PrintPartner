@@ -125,11 +125,10 @@ Depth checks precede node and visit charges, matching entry accounting.
 Read requests retain storage-private fields. External adapters can inspect them
 but cannot create grants. This unit does not itself admit or perform any reads.
 
-The working-draft executor still needs D11's `required_units`. GRE-604 D10b also
-needs the builder manifest helpers, which depend on the YAML parser. The remaining
-D12 units are YAML, builder manifest helpers, the executor after D11, and
-preparation. Those stay open on GRE-607. This first unit alone does not unblock
-all of D10b.
+The working-draft executor still needs D11's `required_units`. The observation
+contract alone does not unblock GRE-604 D10b. The YAML parser and builder manifest
+helpers are separate D12 units described below. The remaining D12 units are the
+executor after D11 and preparation. Those stay open on GRE-607.
 
 Run its boundary and accounting proofs with:
 
