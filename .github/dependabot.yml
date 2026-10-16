@@ -71,3 +71,8 @@ updates:
         update-types:
           - minor
           - patch
+    # Direct crates are pinned with "=", so a lockfile-only major bump cannot build.
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
