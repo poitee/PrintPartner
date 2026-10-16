@@ -70,6 +70,7 @@ pub enum Resource {
     Nodes,
     Visits,
     Rules,
+    ComparisonWork,
 }
 #[derive(Debug)]
 pub enum ReadFailure {
@@ -100,6 +101,7 @@ pub struct PreparationLimits {
     pub nodes: usize,
     pub visits: usize,
     pub rules: usize,
+    pub comparison_work: usize,
 }
 impl Default for PreparationLimits {
     fn default() -> Self {
@@ -114,6 +116,7 @@ impl Default for PreparationLimits {
             nodes: 100000,
             visits: 100000,
             rules: 10000,
+            comparison_work: 1 << 28,
         }
     }
 }
@@ -130,6 +133,7 @@ impl PreparationLimits {
             || self.nodes > max.nodes
             || self.visits > max.visits
             || self.rules > max.rules
+            || self.comparison_work > max.comparison_work
         {
             Err(ReadFailure::InvalidGrant)
         } else {
@@ -151,6 +155,7 @@ pub struct PreparationBudget<'a> {
     expanded: usize,
     nodes: usize,
     rules: usize,
+    compared: usize,
 }
 impl<'a> PreparationBudget<'a> {
     pub fn new(cancelled: &'a AtomicBool, limits: PreparationLimits) -> ReadResult<Self> {
@@ -166,6 +171,7 @@ impl<'a> PreparationBudget<'a> {
             expanded: 0,
             nodes: 0,
             rules: 0,
+            compared: 0,
         })
     }
     pub fn check(&self) -> ReadResult<()> {
@@ -254,6 +260,16 @@ impl<'a> PreparationBudget<'a> {
         self.rules = self.rules.saturating_add(1);
         if self.rules > self.limits.rules {
             Err(ReadFailure::LimitExceeded(Resource::Rules))
+        } else {
+            Ok(())
+        }
+    }
+    /// Charges transient path-comparison work, which the byte caps do not cover.
+    pub fn comparison(&mut self, work: usize) -> ReadResult<()> {
+        self.check()?;
+        self.compared = self.compared.saturating_add(work);
+        if self.compared > self.limits.comparison_work {
+            Err(ReadFailure::LimitExceeded(Resource::ComparisonWork))
         } else {
             Ok(())
         }

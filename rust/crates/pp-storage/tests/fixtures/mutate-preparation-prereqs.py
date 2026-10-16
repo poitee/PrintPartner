@@ -23,6 +23,9 @@ mutants = [
     ('accepted validation bypassed', read_model, 'let accepted = graph::read(tx, tenant, profile, repos, &mut budget)?;', 'let accepted = AcceptedRead::Empty { profile: Profile { id: profile, name: String::new(), order_number: None, special_request: None, archived_at: None } };'),
     ('freshness always current', context, 'FreshnessFacts::Current { .. }\n    ))', 'FreshnessFacts::Current { .. } | FreshnessFacts::Untracked { .. }\n    ))'),
     ('path entry budget omitted', manifest, '        b.entry(0, key.len())?;', ''),
+    ('comparison work uncharged', manifest, '    b.comparison(work)?;', ''),
+    ('matcher steps uncounted', manifest, '        *work += 1;', ''),
+    ('comparisons charged to document bytes', manifest, '    b.comparison(work)?;', '    b.comparison(work)?;\n    b.expansion(work.saturating_mul(2))?;'),
 ]
 with tempfile.TemporaryDirectory(prefix='pp-preparation-mutants-', dir=rust / 'target') as directory:
     scratch = Path(directory) / 'rust'

@@ -384,10 +384,11 @@ fn dot_matches(unit: u16) -> bool {
     !matches!(unit, 0x000a | 0x000d | 0x2028 | 0x2029)
 }
 
-fn wildcard_matches(pattern: &[u16], key: &[u16]) -> bool {
+fn wildcard_matches(pattern: &[u16], key: &[u16], work: &mut usize) -> bool {
     let (mut pat, mut path) = (0, 0);
     let mut star = None;
     while path < key.len() {
+        *work += 1;
         match pattern.get(pat).copied() {
             Some(0x2a) => {
                 pat += 1;
@@ -413,14 +414,21 @@ fn wildcard_matches(pattern: &[u16], key: &[u16]) -> bool {
             }
         }
     }
+    *work += pattern.len() - pat;
     pattern[pat..].iter().all(|unit| *unit == 0x2a)
 }
 
 pub(crate) fn matches(pattern: &ManifestText, key: &str) -> bool {
+    compare(pattern, key).0
+}
+
+/// Counts normalized units plus matcher steps as the work done.
+fn compare(pattern: &ManifestText, key: &str) -> (bool, usize) {
     let pattern = normalize_glob(pattern);
     let key = normalize_glob(&JsText::scalar(key));
+    let mut work = pattern.units().len() + key.units().len();
     if pattern == key {
-        return true;
+        return (true, work);
     }
     let pattern: Vec<_> = pattern
         .units()
@@ -434,13 +442,14 @@ pub(crate) fn matches(pattern: &ManifestText, key: &str) -> bool {
         .copied()
         .map(canonicalize_regex_unit)
         .collect();
-    wildcard_matches(&pattern, &key)
+    let matched = wildcard_matches(&pattern, &key, &mut work)
         || (!pattern.contains(&0x2f)
             && key.contains(&0x2f)
             && key
                 .rsplit(|unit| *unit == 0x2f)
                 .next()
-                .is_some_and(|basename| wildcard_matches(&pattern, basename)))
+                .is_some_and(|basename| wildcard_matches(&pattern, basename, &mut work)));
+    (matched, work)
 }
 pub(crate) fn hints(bytes: &[u8], b: &mut PreparationBudget<'_>) -> ReadResult<Vec<HintRule>> {
     b.document(bytes.len(), 0)?;
@@ -531,14 +540,9 @@ fn path_matches(
     b: &mut PreparationBudget<'_>,
 ) -> ReadResult<bool> {
     b.visit(0)?;
-    b.expansion(
-        pattern
-            .units()
-            .len()
-            .saturating_add(key.len())
-            .saturating_mul(2),
-    )?;
-    Ok(matches(pattern, key))
+    let (matched, work) = compare(pattern, key);
+    b.comparison(work)?;
+    Ok(matched)
 }
 
 pub(super) fn apply(
