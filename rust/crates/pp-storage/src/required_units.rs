@@ -1,4 +1,8 @@
 pub(crate) mod model;
+mod storage;
+#[cfg(test)]
+mod tests;
+mod view;
 
 use pp_domain::PositiveId;
 use serde::Deserialize;

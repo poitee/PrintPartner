@@ -632,6 +632,7 @@ hashes preserve UTF-16 ordering and lone surrogates in manifest fields. Malforme
 JSON target and source rows return parse errors. Decision IDs use `pp_domain::PositiveId`, and
 invalid quantities, duplicate IDs or tokens, and corrupt progress return errors.
 Predecessor units are sorted by prior index before validation, as in Node.
+Target, predecessor, and token errors use Node's messages and validation order.
 
 Unit tests assert literal results observed from
 `web/apps/server/src/services/required-unit-reconciliation.ts` and literal hashes
@@ -644,10 +645,30 @@ request fields because `pp-storage` has no dependency on `pp-contracts`.
 The operations slice can adapt the request contract at its boundary. `planning`
 returns `Result<String>` so JSON byte conversion errors propagate to that caller.
 
-The second D11 slice ports the reconciliation storage operations and writer admission.
-It adds the required-unit fixture runner and database tests, then connects working-draft consumers.
-GRE-606 remains open until that slice lands. GRE-607's executor and GRE-608 still
-need the operations slice.
+The second D11 slice adds the crate-private readers that the reconcile operation
+uses. They verify stored data on every read, as Node's repository does:
+
+- `storage::draft` loads a Plan draft and checks its snapshot digest, including a
+  selected reconciliation.
+- `storage::saved` checks a finalized reconciliation's canonical JSON, digests,
+  decision rows, and assignment rows.
+- `storage::base` reads the accepted revision's Required-unit set and checks its
+  coordinates, Object names, progress, orphan units, and mapping digest.
+- `view::workspace` builds the draft workspace and its diff against the base
+  revision. Diff rows sort by their serialized ID, as in Node.
+
+Corrupt rows return Node's messages for the same checks. Selection basis rows
+share one message, "Required-unit selection basis is invalid". The readers have
+no writer or HTTP entry point yet.
+
+Tests read Node-written databases in
+`rust/crates/pp-storage/tests/fixtures/required-units/`. They assert Node's stored
+planning, selection, and mapping digests, the Node workspace in `unchanged.json`,
+and the error message for each corrupt row.
+
+The third D11 slice adds writer admission, the reconcile transaction, the
+fixture runner, and the database operation tests. GRE-606 remains open until it
+lands. GRE-607's executor and GRE-608 need that slice.
 
 ```sh
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib required_units -- --test-threads=2

@@ -268,18 +268,17 @@ pub(super) fn reconcile(
     base: &[BasePart],
     decisions: &[Decision],
 ) -> Result<Reconciled> {
-    self::decisions(decisions)?;
-    let mut base = base.to_vec();
-    for part in &mut base {
-        part.units.sort_by_key(|unit| unit.prior_index);
-    }
-    base.sort_by_key(|part| part.id);
     let mut targets = parts
         .iter()
         .map(|part| part.scalar.clone())
         .map(serde_json::from_value::<Target>)
         .collect::<serde_json::Result<Vec<_>>>()?;
     targets.sort_by_key(|p| p.id);
+    let mut base = base.to_vec();
+    for part in &mut base {
+        part.units.sort_by_key(|unit| unit.prior_index);
+    }
+    base.sort_by_key(|part| part.id);
     let inputs = inputs
         .iter()
         .cloned()
@@ -295,31 +294,40 @@ pub(super) fn reconcile(
         sources.insert(i.source_layer, id);
     }
     let mut ids = HashSet::new();
+    for p in &targets {
+        ensure!(
+            (1..=pp_domain::MAX_SAFE_INTEGER as i64).contains(&p.id) && ids.insert(p.id),
+            "Required-unit target Part ID is invalid"
+        );
+        ensure!(
+            (1..=10_000).contains(&p.quantity_effective),
+            "Required-unit target quantity is invalid"
+        );
+    }
+    let mut base_ids = HashSet::new();
     let mut tokens = HashSet::new();
     for p in &base {
         ensure!(
-            (1..=pp_domain::MAX_SAFE_INTEGER as i64).contains(&p.id) && ids.insert(p.id),
-            "Invalid predecessor ID"
+            (1..=pp_domain::MAX_SAFE_INTEGER as i64).contains(&p.id) && base_ids.insert(p.id),
+            "Required-unit predecessor Part ID is invalid"
         );
         for (i, u) in p.units.iter().enumerate() {
-            ensure!(
-                u.prior_index == i as i64
-                    && tokens.insert(&u.token)
-                    && !(u.assembled && !u.completed),
-                "Invalid predecessor mapping"
-            );
             validate_token(&u.token)?;
+            ensure!(
+                u.prior_index >= 0,
+                "Required-unit predecessor index is invalid"
+            );
+            ensure!(
+                !(u.assembled && !u.completed),
+                "Required-unit predecessor progress is corrupt"
+            );
+            ensure!(
+                u.prior_index == i as i64 && tokens.insert(&u.token),
+                "Required-unit predecessor mapping is invalid"
+            );
         }
     }
-    ids.clear();
-    for p in &targets {
-        ensure!(
-            (1..=pp_domain::MAX_SAFE_INTEGER as i64).contains(&p.id)
-                && ids.insert(p.id)
-                && (1..=10_000).contains(&p.quantity_effective),
-            "Invalid target Part"
-        );
-    }
+    self::decisions(decisions)?;
     for d in decisions {
         ensure!(
             ids.contains(&(d.target().get() as i64)),
@@ -513,7 +521,7 @@ pub(crate) fn validate_token(t: &str) -> Result<()> {
             && t.bytes()
                 .skip(4)
                 .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
-        "Invalid Required-unit token"
+        "Required-unit token is invalid"
     );
     Ok(())
 }
@@ -933,14 +941,30 @@ mod tests {
 
     #[test]
     fn corrupt_predecessor_mappings_return_errors() {
-        for units in [
-            vec![unit(1, 1, false)],
-            vec![unit(1, 0, false), unit(1, 1, false)],
-            vec![unit(1, 0, false), unit(2, 0, false)],
-            vec![Unit {
-                assembled: true,
-                ..unit(1, 0, false)
-            }],
+        for (units, expected) in [
+            (
+                vec![unit(1, 1, false)],
+                "Required-unit predecessor mapping is invalid",
+            ),
+            (
+                vec![unit(1, 0, false), unit(1, 1, false)],
+                "Required-unit predecessor mapping is invalid",
+            ),
+            (
+                vec![unit(1, 0, false), unit(2, 0, false)],
+                "Required-unit predecessor mapping is invalid",
+            ),
+            (
+                vec![unit(1, -1, false)],
+                "Required-unit predecessor index is invalid",
+            ),
+            (
+                vec![Unit {
+                    assembled: true,
+                    ..unit(1, 0, false)
+                }],
+                "Required-unit predecessor progress is corrupt",
+            ),
         ] {
             let mut prior = base(10);
             prior.units = units;
@@ -949,7 +973,7 @@ mod tests {
                     .err()
                     .unwrap()
                     .to_string(),
-                "Invalid predecessor mapping"
+                expected
             );
         }
         for bases in [
@@ -959,7 +983,7 @@ mod tests {
         ] {
             assert_eq!(
                 reconcile(&[], &[], &bases, &[]).err().unwrap().to_string(),
-                "Invalid predecessor ID"
+                "Required-unit predecessor Part ID is invalid"
             );
         }
         let mut prior = base(11);
@@ -969,7 +993,7 @@ mod tests {
                 .err()
                 .unwrap()
                 .to_string(),
-            "Invalid predecessor mapping"
+            "Required-unit predecessor mapping is invalid"
         );
     }
 
@@ -985,7 +1009,7 @@ mod tests {
         ] {
             assert_eq!(
                 validate_token(invalid).unwrap_err().to_string(),
-                "Invalid Required-unit token"
+                "Required-unit token is invalid"
             );
             let mut prior = base(10);
             prior.units[0].token = invalid.into();
@@ -994,26 +1018,41 @@ mod tests {
                     .err()
                     .unwrap()
                     .to_string(),
-                "Invalid Required-unit token"
+                "Required-unit token is invalid"
             );
         }
     }
 
     #[test]
     fn invalid_targets_and_source_json_return_errors() {
-        for parts in [
-            vec![part(0, None, 1)],
-            vec![part(21, None, 0)],
-            vec![part(21, None, 10_001)],
-            vec![part(21, None, 1), part(21, None, 1)],
-            vec![part(9_007_199_254_740_992, None, 1)],
+        for (parts, expected) in [
+            (
+                vec![part(0, None, 1)],
+                "Required-unit target Part ID is invalid",
+            ),
+            (
+                vec![part(21, None, 0)],
+                "Required-unit target quantity is invalid",
+            ),
+            (
+                vec![part(21, None, 10_001)],
+                "Required-unit target quantity is invalid",
+            ),
+            (
+                vec![part(21, None, 1), part(21, None, 1)],
+                "Required-unit target Part ID is invalid",
+            ),
+            (
+                vec![part(9_007_199_254_740_992, None, 1)],
+                "Required-unit target Part ID is invalid",
+            ),
         ] {
             assert_eq!(
                 reconcile(&parts, &[input()], &[], &[])
                     .err()
                     .unwrap()
                     .to_string(),
-                "Invalid target Part"
+                expected
             );
         }
         for raw in [
