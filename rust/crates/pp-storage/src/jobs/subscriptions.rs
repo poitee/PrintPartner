@@ -399,16 +399,21 @@ impl JobSubscription {
         if !Arc::ptr_eq(&self.cell, &frame.cell) {
             return FrameAdmission::Superseded;
         }
-        let _gate = self
-            .cell
-            .authority_gate
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        // A poisoned gate means an authority change panicked before revalidation
+        // could revoke this stream, so delivery fails closed.
+        let (_gate, poisoned) = match self.cell.authority_gate.lock() {
+            Ok(gate) => (gate, false),
+            Err(poison) => (poison.into_inner(), true),
+        };
         let mut slot = self
             .cell
             .slot
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
+        if poisoned {
+            slot.queue.clear();
+            slot.close = Some(StreamClose::Revoked);
+        }
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         if slot.expires_at.is_some_and(|expiry| expiry <= now) {
             slot.queue.clear();
@@ -631,6 +636,29 @@ mod tests {
         let gate_held =
             subscriptions.authority_change(|| subscription.cell.authority_gate.try_lock().is_err());
         assert!(gate_held);
+    }
+
+    #[test]
+    fn admission_fails_closed_after_an_authority_change_panics() {
+        let subscriptions = JobSubscriptions::new();
+        let subscription = subscribe(&subscriptions).unwrap();
+        let PreparedEvent::Frame(frame) = subscription
+            .prepare(Duration::ZERO, |snapshot| {
+                Ok::<_, Infallible>(snapshot.version)
+            })
+            .unwrap()
+        else {
+            panic!("frame expected")
+        };
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            subscriptions.authority_change(|| panic!("logout committed, revalidation lost"))
+        }));
+        assert!(panicked.is_err());
+        assert_eq!(
+            subscription.admit(frame, |_| NonblockingSend::Accepted),
+            FrameAdmission::Closed(StreamClose::Revoked)
+        );
+        assert_eq!(drain(&subscription), (vec![], Some(StreamClose::Revoked)));
     }
 
     #[test]
