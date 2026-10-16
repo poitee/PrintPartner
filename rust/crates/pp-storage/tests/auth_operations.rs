@@ -1,5 +1,5 @@
 use pp_storage::{
-    Limits, Setting, SettingCommand, SettingSnapshot, WriterOwner,
+    Limits, WriterOwner,
     auth::{AuthClient, FirstUserTenant, Outcome, Provider, Request, Secret},
 };
 use rusqlite::{Connection, params};
@@ -931,8 +931,10 @@ fn legacy_base64_key_migration_preserves_access_after_reopen() {
     owner.shutdown().unwrap();
 }
 
+#[cfg(feature = "desktop_rebuild")]
 #[test]
 fn generic_settings_refuse_auth_owned_keys_and_write_others() {
+    use pp_storage::{Setting, SettingCommand, SettingSnapshot};
     let path = directory();
     let owner = open(&path);
     let client = owner.auth(FirstUserTenant::NewUser);
