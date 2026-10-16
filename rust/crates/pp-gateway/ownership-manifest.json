@@ -1044,11 +1044,11 @@
     },
     "source-covers": {
       "node_reads": 1,
-      "rust_writes": null
+      "rust_writes": "none"
     },
     "kit-catalog": {
       "node_reads": 1,
-      "rust_writes": null
+      "rust_writes": "none"
     }
   }
 }

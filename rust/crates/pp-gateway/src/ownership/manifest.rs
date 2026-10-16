@@ -78,7 +78,7 @@ impl OwnershipIndex {
 
     /// Admit returning `participant`'s operation from Rust to Node.
     ///
-    /// Every resource of the operation must have a Rust writer whose format
+    /// Every resource must declare that Rust never writes its format, or a Rust
     /// version Node reads. Unresolved resources refuse, as does any format
     /// Node cannot read. Tables sort first, so the database schema reports
     /// before file formats.
@@ -92,7 +92,7 @@ impl OwnershipIndex {
                     operation: self.claims[participant].operation.clone(),
                     format: id.as_str().to_string(),
                     node_reads: format.node_reads,
-                    rust_writes: format.rust_writes,
+                    rust_writes: format.rust_writes.version(),
                 });
             }
         }
