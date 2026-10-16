@@ -290,6 +290,7 @@ try {
   const probe = `
 import fcntl, os, subprocess, sys, tempfile
 with tempfile.TemporaryDirectory() as directory:
+    directory = os.path.realpath(directory)
     os.mkfifo(directory + "/.desktop-owner.json")
     for flag, name in [("1", "printpartner.lock"), ("0", "printpartner.lock"), ("1", "wrong.lock")]:
         with open(directory + "/printpartner.lock", "w+b") as lock, open(directory + "/" + name, "r+b" if name == "printpartner.lock" else "w+b") as inherited:
