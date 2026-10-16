@@ -300,7 +300,9 @@ pub(crate) fn merge(target: &mut Groups, incoming: Groups) {
                 if let Some(p) = prior.variants.iter_mut().find(|p| p.id == v.id) {
                     union(&mut p.parts, &v.parts);
                     union(&mut p.excludes, &v.excludes);
-                    if p.label.as_ref().is_none_or(|s| s.is_empty()) {
+                    if p.label.as_ref().is_none_or(|s| s.is_empty())
+                        && v.label.as_ref().is_some_and(|s| !s.is_empty())
+                    {
                         p.label = v.label
                     }
                 } else {

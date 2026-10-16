@@ -229,6 +229,8 @@ fn builder_groups_merge_node_precedence_duplicates_and_property_order() {
       - { id: a, label: old, parts: [discarded.stl] }
       - { id: a, label: '', parts: [a.stl, a.stl], excludes: [x.stl, x.stl] }
       - { id: b, label: Existing, parts: [b.stl] }
+      - { id: blank, label: '' }
+      - { id: absent }
   '10': {}"#,
         &mut budget,
     )
@@ -246,6 +248,8 @@ fn builder_groups_merge_node_precedence_duplicates_and_property_order() {
       - { id: a, label: A, parts: [a.stl, next.stl], excludes: [x.stl, y.stl] }
       - { id: b, label: Replaced, parts: [b2.stl] }
       - { id: c, parts: [c.stl] }
+      - { id: blank }
+      - { id: absent, label: '' }
   '2': {}
   extra: {}"#,
         &mut budget,
@@ -267,7 +271,9 @@ fn builder_groups_merge_node_precedence_duplicates_and_property_order() {
             "min":0, "max":3, "variants":[
                 {"id":"a", "label":"A", "parts":["a.stl", "next.stl"], "excludes":["x.stl", "y.stl"]},
                 {"id":"b", "label":"Existing", "parts":["b.stl", "b2.stl"], "excludes":[]},
-                {"id":"c", "label":null, "parts":["c.stl"], "excludes":[]}
+                {"id":"blank", "label":"", "parts":[], "excludes":[]},
+            {"id":"absent", "label":null, "parts":[], "excludes":[]},
+            {"id":"c", "label":null, "parts":["c.stl"], "excludes":[]}
             ]
         })
     );
