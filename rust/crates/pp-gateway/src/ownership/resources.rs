@@ -78,6 +78,8 @@ enum ReviewedEntry {
     ListPlanSnapshots { resources: Vec<ResourceId> },
     #[serde(rename = "tool.ui_open_source")]
     UiOpenSource { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.analyze_stl_mesh")]
+    AnalyzeStlMesh { resources: Vec<ResourceId> },
     #[serde(rename = "tool.audit_source_provenance")]
     AuditSourceProvenance { resources: Vec<ResourceId> },
     #[serde(rename = "tool.compare_source_revisions")]
@@ -193,6 +195,15 @@ impl ReviewedEntry {
                     Table(SourceNotes),
                     Table(SourceRevisions),
                     Table(AppSettings),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
+            Self::AnalyzeStlMesh { resources } => (
+                "tool.analyze_stl_mesh",
+                resources,
+                BTreeSet::from([
+                    Table(Projects),
+                    Table(SourceDocs),
                     File(FileFamily::SourceWorkspace),
                 ]),
             ),
@@ -344,6 +355,7 @@ impl Declarations {
             "tool.get_source_inventory",
             "tool.compare_source_revisions",
             "tool.audit_source_provenance",
+            "tool.analyze_stl_mesh",
         ] {
             if !states.contains_key(id) {
                 return Err(AdmissionError::Malformed(format!(

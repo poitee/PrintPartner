@@ -533,6 +533,23 @@
             "name": "source-workspace"
           }
         ]
+      },
+      {
+        "operation": "tool.analyze_stl_mesh",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "projects"
+          },
+          {
+            "kind": "table",
+            "name": "source_docs"
+          },
+          {
+            "kind": "file",
+            "name": "source-workspace"
+          }
+        ]
       }
     ],
     "unresolved": [
@@ -890,7 +907,6 @@
       "startup.sweepExpiredTransferArtifacts",
       "tool.add_addon",
       "tool.analyze_build_request",
-      "tool.analyze_stl_mesh",
       "tool.apply_build_recipe",
       "tool.apply_stack_preset",
       "tool.archive_plan",
