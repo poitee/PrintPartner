@@ -1,158 +1,91 @@
 # Architecture
 
-Print Partner is a TypeScript web application for planning and tracking layered STL kit builds. The supported self-host deployment serves the API and browser app from one container and stores state in SQLite.
+Print Partner plans and tracks layered STL kit builds. The project is moving its backend from Node to one Rust core. This page describes the target, the current state and the Rust crates.
 
-## Repository layout
+## Target
 
-```text
-PrintPartner/
-├── Dockerfile
-├── docker-compose.yml
-├── docker-compose.hosted.yml
-├── docker-compose.saas.yml
-├── docs/
-├── manifests/
-├── scripts/
-├── slicer-sidecar/
-└── web/
-    ├── apps/
-    │   ├── server/       Fastify API and static file server
-    │   └── web/          React and Vite browser app
-    └── packages/
-        ├── contracts/    Shared request and response types
-        └── domain/       Planning, packing, and export rules
-```
+One Rust core runs in two products:
 
-The root Docker image builds all four workspaces, copies the browser bundle into the server image, and exposes one HTTP port.
+- **Desktop app.** `pp-desktop` opens the web UI in a native window. Its "Share on network" setting serves the same UI to phones, tablets and other computers on the local network. Sharing is off by default and requires login or device pairing. See [Desktop app](desktop.md) and [Network sharing](network-sharing.md).
+- **Docker image.** `pp-server` runs the core headless for one user. Docker is the only headless mode. There is no launchd, systemd or Windows Service mode. See [Docker image](docker.md).
 
-## Runtime shape
+The React web UI stays. The Rust core serves it to the desktop window and to browsers.
+
+Only one process writes to a data directory at a time. An OS advisory file lock will enforce this (GRE-636). See [Storage](storage.md).
+
+Platforms ship in this order: macOS first, then Windows and Linux before 1.0. CI will build and test the Rust workspace on all three (GRE-632).
+
+These are out of scope:
+
+- Multi-user accounts, a hosted SaaS mode and Postgres.
+- West3D order and farm features. They come after the Rust core reaches parity with the Node server.
+
+## Current state
+
+The Rust gateway runs on loopback in front of the existing Node server. Node runs as a supervised child process and listens on a private Unix socket.
 
 ```text
-Browser
+Desktop window or browser
    |
-   | HTTP and WebSocket
+   | HTTP and WebSocket (loopback)
    v
-Fastify server
-   |-- route handlers
-   |-- background jobs
-   |-- integration adapters
-   |-- SQLite repository
-   `-- local file storage
+pp-gateway (Rust)
+   |-- web UI assets
+   |-- session and route admission
+   `-- proxy
+         |
+         | private Unix socket
+         v
+      Node compatibility server (web/apps/server)
+         `-- SQLite and files in the data directory
 ```
 
-The browser app owns presentation state and client-side STL rendering. The server owns persistence, filesystem access, source synchronization, exports, background jobs, and external integrations.
+Rust owns the data directory lock, the gateway and the Node process lifetime. Node still owns the domain operations, the SQL, migrations and jobs. The desktop rebuild slices move these operations into Rust behind the default-off `desktop_rebuild` feature. See [Desktop rebuild flag](desktop-rebuild.md).
 
-## Workspaces
+The Node server also has multi-user, hosted planning and experimental Postgres modes. The Rust core does not carry them over. When Rust reaches parity, Node leaves the shipped artifacts. npm and Vite stay as the build tools for the React UI.
 
-### `@print-partner/web`
+## Crate map
 
-The React app uses React Router for browser routes and TanStack Query for server state. Three.js renders STL previews in the browser. An IndexedDB cache reduces repeated mesh work.
+The workspace is `rust/Cargo.toml`. A dependency marked "flagged" compiles only with `desktop_rebuild`.
 
-The main routes are:
+| Crate | Role | Depends on |
+| --- | --- | --- |
+| `pp-domain` | Pure domain values and rules. No Tokio, SQLite, HTTP or Tauri. | none |
+| `pp-api-types` | Wire DTOs, validation and parsers, such as autosave and printer status. | `pp-domain` |
+| `pp-contracts` | Contract facade over `pp-api-types` for parity tooling and external consumers. | `pp-api-types` |
+| `pp-net` | Checked outbound connections and target canonicalization. | none |
+| `pp-drivers` | Printer adapters. Moonraker status today. | `pp-net`, `pp-api-types` |
+| `pp-services` | Native Orca and Bambu slicer discovery. | none |
+| `pp-storage` | SQLite owner: migrations, settings, read model, jobs, catalog, storage lease and backups. | `pp-domain` (flagged) |
+| `pp-source` | Immutable Source snapshots and bounded ZIP extraction. | none |
+| `pp-api` | Rust HTTP API. Holds the auth module today. | `pp-storage` |
+| `pp-gateway` | Loopback listener, sessions, route ownership, web UI assets and the proxy to Node. | `pp-compat`, `pp-drivers`, `pp-net` |
+| `pp-compat` | Supervises the Node compatibility server and its private socket. Goes away with Node. | none |
+| `pp-core` | Composition root for the storage lease, gateway and supervisor lifetimes. | `pp-gateway`, `pp-compat`, `pp-storage`, `pp-source` (flagged), `pp-net` (flagged) |
+| `pp-desktop` | Tauri window and tray around `pp-core`. | `pp-core` |
+| `pp-server` | Headless launcher around `pp-core`. | `pp-core` |
 
-| Route | Screen |
-|-------|--------|
-| `/library` | Shared source library |
-| `/builds` | Build list |
-| `/sources?profile=<id>` | Sources for one build |
-| `/plan?profile=<id>` | Draft and accepted Plan |
-| `/progress?profile=<id>` | Checkoff |
-| `/export?profile=<id>` | Production workspace for one build |
-| `/production` | Cross-build production overview |
-| `/printers` | Printer fleet |
-| `/settings` | Printer hosts, slicers, library, build tracking, appearance, account, and system settings |
+`rust/scripts/check-boundaries.py` rejects any crate dependency that its allow list does not name. [ADR 0007](adr/0007-rust-crate-layout.md) records the allowed edges and the planned ones.
 
-### `@print-partner/server`
+## Web UI
 
-The Fastify server provides:
+`web/` is an npm workspace with four packages:
 
-- browser and JSON routes
-- SQLite and experimental Postgres adapters
-- source sync and archive ingestion
-- job execution with WebSocket progress
-- STL, 3MF, and bundle exports
-- Moonraker, PrusaLink, Bambu, and Spoolman adapters
-- streamable HTTP MCP
-- authentication and tenant boundaries when multi-user mode is enabled
+| Package | Role |
+| --- | --- |
+| `@print-partner/web` | React and Vite UI. Renders STL previews in the browser with Three.js. |
+| `@print-partner/server` | Fastify API and static file server. The Rust core replaces it. |
+| `@print-partner/contracts` | Shared request and response types. |
+| `@print-partner/domain` | Framework-independent rules for manifests, Plan state, quantities, plate packing and 3MF output. |
 
-Source upload and local manifest publication require a native atomic transaction. Experimental Postgres rejects these operations before staging or mutation because its synchronous bridge opens a separate connection for each statement. SQLite uses an immediate transaction for publication.
-
-Upload staging directories include an encoded tenant identifier. Quota scans count retained staging for that tenant and ignore symlinks. Older unscoped `.upload-*` directories have no ownership metadata and require operator attribution before their bytes can enter a tenant quota.
-
-Long-running work returns a job id. The job runner persists state and publishes progress to connected clients.
-
-### `@print-partner/contracts`
-
-This package defines shared data contracts. Browser code should call the typed endpoint layer instead of duplicating request or response shapes.
-
-### `@print-partner/domain`
-
-This package contains framework-independent rules for manifests, Plan state, quantities, plate packing, and 3MF output. It does not depend on React, Fastify, or a database driver.
-
-## Core model
-
-A **Library Source** points to a Git repository, local directory, or uploaded archive. Syncing creates a source revision and records the STL files and metadata available at that revision.
-
-A **Build** selects one or more sources. Its draft records file choices, quantities, roles, colors, and manifest options. Applying the draft creates the accepted Plan used by Checkoff and Production.
-
-An accepted Plan revision owns:
-
-- required units
-- checkoff state
-- plate arrangements
-- exported artifacts
-- printer handoff records
-
-Changing source inputs invalidates dependent draft or accepted state through explicit revision checks. The UI does not infer freshness from timestamps alone.
-
-## Storage
-
-Self-host mode uses SQLite and local files under `PRINT_PARTNER_DATA_DIR`. The Docker image maps this directory to `/data`.
-
-A Postgres adapter exists for multi-user deployment. It uses a synchronous compatibility bridge and does not provide the same transaction model as SQLite. Production startup requires `POSTGRES_EXPERIMENTAL=1`. SQLite remains the supported database.
-
-Both database dialects maintain a `schema_version`. Migrations run during startup before the server accepts traffic.
-
-## Source synchronization
-
-Source sync prepares a new revision away from the active path, validates it, then publishes it. Readers continue using the previous revision until the new one is ready. This prevents partial clones or extracted archives from becoming active source data.
-
-Import rules, source naming rules, and manifest metadata determine which files appear in the Library and Build workflow.
-
-## Exports and slicers
-
-Print Partner packs accepted units against enabled printer bed dimensions. It writes 3MF archives with Core and Materials XML and can also create STL bundles. Slicing remains the responsibility of OrcaSlicer, PrusaSlicer, Bambu Studio, or another slicer.
-
-Each accepted Plate revision is immutable. A new arrangement creates a new revision, which keeps downloaded files and printer handoffs tied to the Plan state that produced them.
-
-## Printer integrations
-
-Printer fleet entries store planning geometry. Optional host integrations provide live status and send capabilities.
-
-- Moonraker supports status, upload, and optional start.
-- PrusaLink supports status, upload, and optional start.
-- Bambu LAN MQTT supports status.
-- Bambu Connect provides a file handoff URL.
-- Spoolman provides filament inventory and optional usage deduction.
-
-Every outbound printer URL passes the server's outbound URL guard. Secrets are stored separately from public integration configuration and are redacted from API responses and logs.
-
-See [Printer setup](integrations/PRINTER_SETUP.md) and [Spoolman](integrations/SPOOLMAN.md).
-
-## MCP boundary
-
-The server exposes product operations over streamable HTTP MCP at `/api/v1/mcp`. Read operations return current application data. Write operations return a proposal and require `confirm_apply` before mutation.
-
-Remote MCP access requires `PRINT_PARTNER_API_KEY`. The optional stdio transport is intended for an offline copy of the data directory, not a live SQLite volume already owned by the server.
-
-See [MCP setup](assistant-mcp.md).
+The UI owns presentation state. The server owns persistence, filesystem access, source sync, exports, jobs and integrations. [Domain](domain/README.md) describes the core model and each product area.
 
 ## Security boundaries
 
-- Validate network, filesystem, archive, and user input at route or adapter boundaries.
-- Keep tenant ids on persisted records in multi-user mode.
+- Validate network, filesystem, archive and user input at route or adapter boundaries.
 - Block cloud metadata addresses in outbound URL checks.
-- Require explicit credentials for remote API and MCP access.
-- Keep the app process non-root after the container entrypoint prepares `/data`.
+- Require credentials for remote API and MCP access.
+- Keep secrets out of API responses and logs.
+- Run the app process as a non-root user in the container.
 
 See [Security](../SECURITY.md) and [Operations](../OPERATIONS.md).

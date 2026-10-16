@@ -1,0 +1,41 @@
+# Contributing
+
+This page describes how work moves from a ticket to a merged pull request. [Building](building.md) covers the local toolchain.
+
+## Sources of truth
+
+- **Goals and decisions.** The Notion page "Goals and decisions (2026-10-15)" under Print Partner Roadmap. Where an older document disagrees, that page wins.
+- **Execution.** The Linear project "Print Partner Desktop (Rust core)". Milestones 1 to 9 are the delivery chunks. The desktop rebuild slices (D-slices) are sub-issues of GRE-595.
+- **Code and evidence.** The `main` branch of `poitee/PrintPartner`.
+
+## Pick a ticket
+
+1. Take the highest-priority unblocked ticket in the lowest-numbered milestone.
+2. Check the ticket's blocking relations in Linear before you start.
+3. Move the ticket to In Progress.
+
+Open one PR per ticket. If you find work that belongs to another ticket, add a comment to that ticket instead of changing it in your PR.
+
+## Keep rebuild code behind the flag
+
+New Rust rebuild code compiles only with the `desktop_rebuild` Cargo feature, which is off by default. Code that a user can see also checks the `PP_DESKTOP_REBUILD` environment variable. Do not turn `desktop_rebuild` on by default; that is the maintainer's decision. [Desktop rebuild flag](../desktop-rebuild.md) describes the flag and the slice plan.
+
+## Open the pull request
+
+1. Meet the [definition of done](definition-of-done.md).
+2. Fill in every section of the [pull request template](../../.github/pull_request_template.md). Put verification output under `## Evidence`.
+3. Start the PR description with `Refs GRE-xxx` for a partial slice or `Fixes GRE-xxx` for the PR that completes the ticket.
+4. Move the ticket to In Review only when the PR is ready for review. If the PR is blocked or escalated, keep the ticket In Progress and add a comment.
+
+## After the merge
+
+- Add a comment to the ticket that says what landed and what remains.
+- Do not mark a parent ticket Done because one child merged.
+
+## Changes that need the maintainer
+
+Prepare the files and ask the maintainer for changes to:
+
+- GitHub repository settings and branch protection.
+- Releases and deployments.
+- The production instance.
