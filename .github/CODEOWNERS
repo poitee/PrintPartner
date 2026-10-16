@@ -8,3 +8,17 @@
 /rust/ast-grep-baseline.json @poitee
 /scripts/workaround-baseline.json @poitee
 /rust/crates/**/snapshots/ @poitee
+/scripts/check-github-actions-pinned.sh @poitee
+/web/scripts/check-ci-tool-pins.mjs @poitee
+/web/scripts/check-ci-tool-pins.test.mjs @poitee
+/web/scripts/check-desktop-workflow-state.mjs @poitee
+/web/scripts/check-desktop-workflow-state.test.mjs @poitee
+/web/scripts/check-ci-event-tree.test.mjs @poitee
+/scripts/workaround-ratchet.mjs @poitee
+/scripts/workaround-ratchet.test.mjs @poitee
+/scripts/lint-pr-evidence.mjs @poitee
+/scripts/lint-pr-evidence.test.mjs @poitee
+/scripts/linear/pr_status_sync.py @poitee
+/scripts/macos-bundle-path-filter.py @poitee
+/scripts/release.mjs @poitee
+/web/scripts/atomic-package-build.mjs @poitee

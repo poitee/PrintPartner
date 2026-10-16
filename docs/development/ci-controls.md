@@ -22,6 +22,9 @@ CODEOWNERS assigns these paths to `@poitee`:
 - `.github/CODEOWNERS`, `.github/workflows/`, and `.github/actions/`.
 - `.github/dependabot.yml` and `.github/zizmor.yml`.
 - `rust/scripts/check-*` and `rust/deny.toml`.
+- The action pin, CI tool pin, desktop workflow, and workaround checks and their tests.
+- The PR evidence checker and its test, Linear PR sync, and the macOS bundle path filter.
+- `scripts/release.mjs` and `web/scripts/atomic-package-build.mjs`, which the release workflow runs directly or through the Docker build.
 - `rust/ast-grep-baseline.json`, `scripts/workaround-baseline.json`, and Rust snapshot directories under `rust/crates/`.
 
 The `actionlint` and `zizmor` jobs in `.github/workflows/actionlint.yml` run on every `pull_request`.
@@ -74,39 +77,26 @@ To update a pin manually:
 4. To update actionlint itself, update the exact download version and checksum together.
    To update zizmor, change its exact `version` input and review the changed audits.
 
-Run this pin check from the repository root.
-A passing run prints nothing and exits with status zero.
+Run [`scripts/check-github-actions-pinned.sh`](../../scripts/check-github-actions-pinned.sh) from the repository root.
+Web CI runs the same script. It exits with status zero when `unpinned=0`.
 
 ```sh
-python3 - <<'PY'
-from pathlib import Path
-import re
-
-failed = False
-for directory in (Path('.github/workflows'), Path('.github/actions')):
-    for path in sorted(directory.rglob('*')):
-        if path.suffix not in ('.yml', '.yaml'):
-            continue
-        for number, line in enumerate(path.read_text().splitlines(), 1):
-            match = re.match(r'''\s*(?:-\s*)?uses:\s*["']?([^\s"'#]+)''', line)
-            if not match or match[1].startswith('./'):
-                continue
-            if not re.fullmatch(r'[^@]+@[0-9a-fA-F]{40}', match[1]):
-                print(f'{path}:{number}: {line.strip()}')
-                failed = True
-raise SystemExit(failed)
-PY
+bash scripts/check-github-actions-pinned.sh
 ```
 
 ## Settings for Chad
 
 CODEOWNERS requests review. GitHub enforces that review only after Chad enables the main-branch ruleset.
-The GRE-635 PR contains a proposed ruleset JSON payload and the matching UI steps.
+Before applying the proposed ruleset, agents must open and push PRs through a bot identity distinct from `poitee`, so Chad can approve them.
+With `poitee` as the only collaborator, the unchanged rules block every PR he authors or last pushes. GitHub forbids self-approval.
+Alternatively, Chad must add a bypass actor or relax the approval requirements before applying the ruleset. Either option changes its protections.
+
+The GRE-635 PR contains the proposed ruleset JSON payload and the matching UI steps.
 The intended required check names are `actionlint`, `zizmor`, `rust (linux)`, `rust (macos)`, and `rust (windows)`.
 
 Apply that ruleset after this PR and GRE-632's three-OS CI land and report all five checks on `main`.
 Require a PR with an approving review, code owner approval, dismissal of stale approvals, and approval of the latest push.
-Block force pushes and branch deletion, restrict merges to squash, and leave the bypass list empty, including for bots.
+For the separate bot identity option, block force pushes and branch deletion, restrict merges to squash, and leave the bypass list empty, including for bots.
 Keep other existing protections when adding these rules.
 
 After applying the ruleset, use a bot-authored workflow PR to verify that GitHub blocks merging without Chad's approval.
