@@ -32,10 +32,6 @@ jobs:
       matrix:
         # Runner labels, per-OS package scope and per-OS test filters live only here.
         include:
-          - os: linux
-            runner: ubuntu-latest
-            scope: [--workspace]
-            tests: all()
           # These tests fail on macOS. Each skipped term names the ticket that removes it
           # (docs/development/ci.md#macos-exclusions):
           #   GRE-645: the runtime_m0 binary, ticket_t_2:: and ticket_t_12_missing_config_...
@@ -50,17 +46,6 @@ jobs:
               | test(=origin_tests::ticket_t_12_missing_config_persists_private_port_and_reuses_it)
               | test(=acquisition_labels::raw_long_labels_contract_to_valid_file_and_directory_paths)
               )
-          # These crates still use Unix-only APIs or depend on one that does.
-          # Each port ticket deletes its line (docs/development/ci.md#windows-exclusions).
-          - os: windows
-            runner: windows-latest
-            scope:
-              - --workspace
-              - --exclude pp-storage --exclude pp-source # GRE-653
-              - --exclude pp-compat --exclude pp-core # GRE-654
-              - --exclude pp-api --exclude pp-gateway --exclude pp-server # GRE-655
-              - --exclude pp-desktop # GRE-656
-            tests: all()
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     steps:
@@ -122,19 +107,35 @@ jobs:
           hdiutil attach -nobrowse -owners on "$RUNNER_TEMP/pptmp.sparseimage"
           mkdir /Volumes/pptmp/tmp
           echo 'TMPDIR=/Volumes/pptmp/tmp' >> "$GITHUB_ENV"
-      # Each check below runs even when an earlier one failed, so one run reports every failure.
-      - name: cargo fmt
-        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
-        run: cargo fmt --manifest-path rust/Cargo.toml --all --check
-      - name: clippy (desktop_rebuild off)
+      - name: GRE-645 facts
+        run: |
+          set -x
+          sw_vers; sysctl hw.ncpu hw.memsize kern.maxfiles kern.maxfilesperproc
+          launchctl limit maxfiles || true
+          ulimit -Sn; ulimit -Hn
+          ls -l /bin/sh /usr/bin/node || true
+          /bin/sh --version || true
+          /bin/sh -c 'exec /usr/bin/node -v'; echo "exec-missing-node rc=$?"
+          mount | grep pptmp || true
+          diskutil info /Volumes/pptmp | grep -iE 'owners|file system personality|mount point|read-only' || true
+      - name: GRE-645 watcher close-loop cost
         if: ${{ !cancelled() && steps.assets.outcome == 'success' }}
-        run: cargo clippy --manifest-path rust/Cargo.toml --locked ${{ join(matrix.scope, ' ') }} --all-targets --keep-going -- -D warnings
-      - name: clippy (desktop_rebuild on)
+        run: cargo nextest run --manifest-path rust/Cargo.toml --locked -p pp-compat --no-capture -E 'test(gre645_diag)'
+      - name: GRE-645 group with RLIMIT_NOFILE capped at 4096
         if: ${{ !cancelled() && steps.assets.outcome == 'success' }}
-        run: cargo clippy --manifest-path rust/Cargo.toml --locked ${{ join(matrix.scope, ' ') }} --all-targets --keep-going --features desktop_rebuild -- -D warnings
-      - name: nextest (desktop_rebuild off)
+        run: |
+          ulimit -n 4096
+          cargo nextest run --manifest-path rust/Cargo.toml --locked -p pp-compat --no-capture -E 'test(gre645_diag)'
+          rust/scripts/gre645-sample.sh capped &
+          sampler=$!
+          cargo nextest run --manifest-path rust/Cargo.toml --locked --workspace --no-fail-fast -E 'binary_id(pp-core::runtime_m0) | (package(pp-compat) & test(/^ticket_t_2::/)) | test(=origin_tests::ticket_t_12_missing_config_persists_private_port_and_reuses_it)' || echo "GROUP_CAPPED_FAILED"
+          kill "$sampler" || true
+          rust/scripts/gre645-sample.sh summary capped
+      - name: GRE-645 group with default RLIMIT_NOFILE
         if: ${{ !cancelled() && steps.assets.outcome == 'success' }}
-        run: cargo nextest run --manifest-path rust/Cargo.toml --locked ${{ join(matrix.scope, ' ') }} --no-fail-fast -E '${{ matrix.tests }}'
-      - name: nextest (desktop_rebuild on)
-        if: ${{ !cancelled() && steps.assets.outcome == 'success' }}
-        run: cargo nextest run --manifest-path rust/Cargo.toml --locked ${{ join(matrix.scope, ' ') }} --no-fail-fast -E '${{ matrix.tests }}' --features desktop_rebuild
+        run: |
+          rust/scripts/gre645-sample.sh default &
+          sampler=$!
+          cargo nextest run --manifest-path rust/Cargo.toml --locked --workspace --no-fail-fast -E 'binary_id(pp-core::runtime_m0) | (package(pp-compat) & test(/^ticket_t_2::/)) | test(=origin_tests::ticket_t_12_missing_config_persists_private_port_and_reuses_it)' || echo "GROUP_DEFAULT_FAILED"
+          kill "$sampler" || true
+          rust/scripts/gre645-sample.sh summary default

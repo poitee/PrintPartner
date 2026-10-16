@@ -206,3 +206,53 @@ pub(super) fn configure_child(
     }
     Ok((read_end, guard))
 }
+
+// GRE-645 diagnostic only; this branch is never merged.
+#[cfg(test)]
+mod gre645_diag {
+    fn children_cpu() -> f64 {
+        let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+        unsafe { libc::getrusage(libc::RUSAGE_CHILDREN, &mut usage) };
+        let tv = |t: libc::timeval| t.tv_sec as f64 + t.tv_usec as f64 / 1e6;
+        tv(usage.ru_utime) + tv(usage.ru_stime)
+    }
+
+    #[tokio::test]
+    async fn gre645_diag_watcher_close_cost() {
+        let mut limit = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) };
+        println!(
+            "GRE645 RLIMIT_NOFILE cur={} max={} infinity={}",
+            limit.rlim_cur,
+            limit.rlim_max,
+            limit.rlim_max == libc::RLIM_INFINITY
+        );
+        for round in 0..3 {
+            let lease = std::fs::File::open("/dev/null").unwrap();
+            let mut command = tokio::process::Command::new("/usr/bin/true");
+            let before = children_cpu();
+            let started = std::time::Instant::now();
+            let (parent_read, mut guard) =
+                super::configure_child(&mut command, std::os::fd::AsRawFd::as_raw_fd(&lease))
+                    .unwrap();
+            let armed = started.elapsed();
+            let mut child = command.spawn().unwrap();
+            drop(parent_read);
+            child.wait().await.unwrap();
+            let child_done = started.elapsed();
+            guard.release();
+            let released = started.elapsed();
+            println!(
+                "GRE645 round={round} arm={:.3}s child_exit={:.3}s release_returned={:.3}s release_blocked={:.3}s children_cpu={:.3}s",
+                armed.as_secs_f64(),
+                child_done.as_secs_f64(),
+                released.as_secs_f64(),
+                (released - child_done).as_secs_f64(),
+                children_cpu() - before
+            );
+        }
+    }
+}
