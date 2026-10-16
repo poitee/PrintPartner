@@ -148,7 +148,7 @@ fn validate_target(target: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::jobs::model::ResultArtifact;
+    use crate::jobs::model::{AuthorityDisposition, ResultArtifact};
 
     const LEGACY_CHECKLIST_DOCUMENT: &str = r#"{"job_id":"legacy-checklist","tenant":"default","kind":"export-checklist-html","payload_version":1,"payload":{"kind":"export-checklist-html","payload":{"profile_id":7}},"state":"succeeded","state_version":3,"attempt":1,"generation":1,"lease_until":null,"created_at":1,"updated_at":3,"finished_at":3,"cancel_requested":false,"progress":100,"effects":[{"intent":{"operation":"local_artifact","basis_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","content_hash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","target":"checklists/7/legacy.html"},"attempt":1,"generation":1,"confirmed":true,"receipt":{"receipt_id":"legacy-receipt","content_hash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","target":"checklists/7/legacy.html"}}],"result":{"receipt_id":"legacy-receipt","content_hash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","target":"checklists/7/legacy.html"},"public_result":{"path":"checklists/7/legacy.html","download_url":null,"part_count":4,"thumb_count":2},"recovery":null,"_attempt_worker":null,"_attempt_fence":null}"#;
     const LEGACY_UNRELATED_EFFECT_DOCUMENT: &str = r#"{"job_id":"legacy-kit","tenant":"default","kind":"export-kit-bundle","payload_version":1,"payload":{"kind":"export-kit-bundle","payload":{"profile_id":7,"include_print_progress":false}},"state":"effect_admitted","state_version":2,"attempt":1,"generation":1,"lease_until":100,"created_at":1,"updated_at":2,"finished_at":null,"cancel_requested":false,"progress":null,"effects":[{"intent":{"operation":"local_artifact","basis_hash":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","content_hash":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","target":"exports/legacy-kit.zip"},"attempt":1,"generation":1,"confirmed":false,"receipt":null}],"result":null,"recovery":null,"_attempt_worker":"legacy-worker","_attempt_fence":"legacy-fence"}"#;
@@ -221,6 +221,9 @@ mod tests {
             result: None,
             public_result: None,
             recovery: None,
+            authority: None,
+            authority_disposition: AuthorityDisposition::PhysicalOwner,
+            authority_refusal: None,
             fence: Some("fence".into()),
             worker: Some("worker".into()),
         }

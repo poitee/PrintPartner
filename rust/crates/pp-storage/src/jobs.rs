@@ -61,6 +61,8 @@ pub struct ServerWorkerClient {
     storage: SettingsClient,
     identity: String,
     admission: Arc<WorkerAdmission>,
+    #[cfg(feature = "desktop_rebuild")]
+    policy: Option<AuthPolicy>,
 }
 #[derive(Clone)]
 pub struct AttemptLease {
@@ -74,6 +76,28 @@ pub struct AttemptLease {
 impl AttemptLease {
     pub fn job_id(&self) -> &str {
         &self.job_id
+    }
+}
+#[cfg(feature = "desktop_rebuild")]
+#[expect(
+    dead_code,
+    reason = "GRE-610/613/614 (D14/D17/D18) fence their journals with these"
+)]
+impl AttemptLease {
+    pub(crate) fn generation(&self) -> i64 {
+        self.generation
+    }
+    pub(crate) fn version(&self) -> i64 {
+        self.version
+    }
+    pub(crate) fn tenant(&self) -> &str {
+        &self.tenant
+    }
+    pub(crate) fn worker(&self) -> &str {
+        &self.worker
+    }
+    pub(crate) fn fence(&self) -> &str {
+        &self.fence
     }
 }
 #[derive(Clone, PartialEq, Eq)]
@@ -166,6 +190,39 @@ pub enum Outcome {
     Reconciliations(Vec<ReconciliationRecord>),
     Claimed(Option<(JobRecord, AttemptLease)>),
     Retained(usize),
+    #[cfg(feature = "desktop_rebuild")]
+    Authorized(ValidatedAuthority),
+}
+/// What the writer does once the transaction commits.
+#[cfg_attr(
+    feature = "desktop_rebuild",
+    expect(
+        clippy::large_enum_variant,
+        reason = "The writer holds one decision per transaction"
+    )
+)]
+enum TransactionDecision {
+    Outcome(Outcome),
+    /// Report this error only after committing the refusals recorded before it.
+    #[cfg(feature = "desktop_rebuild")]
+    ErrorAfterCommit(anyhow::Error),
+}
+/// The original credential of a claimed attempt, revalidated under the
+/// current policy.
+#[cfg(feature = "desktop_rebuild")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ValidatedAuthority {
+    tenant: String,
+    subject: String,
+}
+#[cfg(feature = "desktop_rebuild")]
+impl ValidatedAuthority {
+    pub fn tenant(&self) -> &str {
+        &self.tenant
+    }
+    pub fn subject(&self) -> &str {
+        &self.subject
+    }
 }
 pub(crate) enum Command {
     User {
@@ -177,11 +234,20 @@ pub(crate) enum Command {
     Claim {
         worker: String,
         admission: Arc<WorkerAdmission>,
+        #[cfg(feature = "desktop_rebuild")]
+        kind: Option<JobKind>,
+        #[cfg(feature = "desktop_rebuild")]
+        policy: Option<AuthPolicy>,
     },
     Worker {
         lease: AttemptLease,
         operation: WorkerOperation,
         admission: Arc<WorkerAdmission>,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    Authorize {
+        lease: AttemptLease,
+        policy: AuthPolicy,
     },
     Retain {
         per_tenant: usize,
@@ -300,6 +366,31 @@ impl WriterOwner {
         }
     }
     pub fn job_worker(&self, admission: WorkerAdmission) -> Result<ServerWorkerClient> {
+        Ok(ServerWorkerClient {
+            storage: self.client(),
+            identity: random(),
+            admission: self.worker_admission(admission)?,
+            #[cfg(feature = "desktop_rebuild")]
+            policy: None,
+        })
+    }
+    /// A worker that can claim jobs carrying an original credential. Each
+    /// claim revalidates that credential under `policy`.
+    #[cfg(feature = "desktop_rebuild")]
+    pub fn job_worker_with_policy(
+        &self,
+        policy: AuthPolicy,
+        admission: WorkerAdmission,
+    ) -> Result<ServerWorkerClient> {
+        self.auth_with_policy(policy)?;
+        Ok(ServerWorkerClient {
+            storage: self.client(),
+            identity: random(),
+            admission: self.worker_admission(admission)?,
+            policy: Some(policy),
+        })
+    }
+    fn worker_admission(&self, admission: WorkerAdmission) -> Result<Arc<WorkerAdmission>> {
         admission.validate()?;
         let mut configured = self
             .client
@@ -313,14 +404,9 @@ impl WriterOwner {
                 "Worker admission already configured"
             );
         }
-        let admission = configured
+        Ok(configured
             .get_or_insert_with(|| Arc::new(admission))
-            .clone();
-        Ok(ServerWorkerClient {
-            storage: self.client(),
-            identity: random(),
-            admission,
-        })
+            .clone())
     }
     pub fn retain_jobs(&self, per_tenant: usize, global: usize) -> Result<usize> {
         ensure!(
@@ -396,6 +482,10 @@ impl ServerWorkerClient {
             Command::Claim {
                 worker: self.identity.clone(),
                 admission: self.admission.clone(),
+                #[cfg(feature = "desktop_rebuild")]
+                kind: None,
+                #[cfg(feature = "desktop_rebuild")]
+                policy: self.policy,
             },
             cancelled,
             wait,
@@ -404,6 +494,50 @@ impl ServerWorkerClient {
     pub fn claim(&self) -> Result<Option<(JobRecord, AttemptLease)>> {
         self.claim_pending(&AtomicBool::new(false), Duration::from_secs(5))?
             .receive()
+    }
+    /// Claims the oldest admissible job of one admitted kind.
+    #[cfg(feature = "desktop_rebuild")]
+    pub fn claim_kind(&self, kind: JobKind) -> Result<Option<(JobRecord, AttemptLease)>> {
+        ensure!(
+            self.admission
+                .kinds
+                .iter()
+                .any(|(admitted, _)| *admitted == kind),
+            "Job kind is not admitted"
+        );
+        PendingClaim(submit(
+            &self.storage,
+            Command::Claim {
+                worker: self.identity.clone(),
+                admission: self.admission.clone(),
+                kind: Some(kind),
+                policy: self.policy,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?)
+        .receive()
+    }
+    /// Revalidates the original credential of a live attempt. The check does
+    /// not change the job.
+    #[cfg(feature = "desktop_rebuild")]
+    pub fn authorize(&self, lease: &AttemptLease) -> Result<ValidatedAuthority> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
+        match submit(
+            &self.storage,
+            Command::Authorize {
+                lease: lease.clone(),
+                policy,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::Authorized(authority) => Ok(authority),
+            _ => unreachable!(),
+        }
     }
     pub fn update(
         &self,
@@ -503,6 +637,25 @@ fn encode(job: &JobRecord) -> Result<String> {
     let mut document = serde_json::to_value(job)?;
     document["_attempt_worker"] = serde_json::to_value(&job.worker)?;
     document["_attempt_fence"] = serde_json::to_value(&job.fence)?;
+    #[cfg(feature = "desktop_rebuild")]
+    {
+        match job.authority_disposition {
+            AuthorityDisposition::Original => {
+                document["_authority"] = auth::authority::encode(
+                    job.authority
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("Missing durable authority"))?,
+                )?;
+            }
+            AuthorityDisposition::PhysicalOwner => {
+                document["_authority"] = serde_json::Value::Null;
+            }
+            AuthorityDisposition::LegacyMissing => {}
+        }
+        if let Some(observation) = &job.authority_refusal {
+            document["_authority_refusal"] = serde_json::to_value(observation)?;
+        }
+    }
     let document = serde_json::to_string(&document)?;
     check_document_size(document.len())?;
     Ok(document)
@@ -523,6 +676,22 @@ fn decode(document: &str) -> Result<JobRecord> {
             .cloned()
             .unwrap_or(serde_json::Value::Null),
     )?;
+    #[cfg(feature = "desktop_rebuild")]
+    {
+        (job.authority, job.authority_disposition) = match value.get("_authority") {
+            Some(serde_json::Value::Null) => (None, AuthorityDisposition::PhysicalOwner),
+            Some(authority) => (
+                Some(auth::authority::decode(authority.clone())?),
+                AuthorityDisposition::Original,
+            ),
+            None => (None, AuthorityDisposition::LegacyMissing),
+        };
+        job.authority_refusal = value
+            .get("_authority_refusal")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()?;
+    }
     for timestamp in [
         Some(job.created_at),
         Some(job.updated_at),
@@ -541,7 +710,7 @@ fn decode(document: &str) -> Result<JobRecord> {
     job.validate_state()?;
     Ok(job)
 }
-fn load(tx: &Transaction<'_>, id: &str) -> Result<Option<JobRecord>> {
+pub(crate) fn load(tx: &Transaction<'_>, id: &str) -> Result<Option<JobRecord>> {
     let document: Option<String> = tx
         .query_row(
             "SELECT document FROM durable_jobs WHERE id=?1 AND state!='quarantined'",
@@ -549,12 +718,23 @@ fn load(tx: &Transaction<'_>, id: &str) -> Result<Option<JobRecord>> {
             |r| r.get(0),
         )
         .optional()?;
-    document.map(|v| decode(&v)).transpose()
+    document
+        .map(|document| {
+            let job = decode(&document)?;
+            #[cfg(feature = "desktop_rebuild")]
+            ensure!(job.job_id == id, "Stored Job identity mismatch");
+            Ok(job)
+        })
+        .transpose()
 }
 fn owned(tx: &Transaction<'_>, id: &str, tenant: &str) -> Result<JobRecord> {
-    let record = load(tx, id)?.ok_or_else(|| anyhow!("Job not found"))?;
-    ensure!(record.tenant == tenant, "Job not found");
-    Ok(record)
+    #[cfg(not(feature = "desktop_rebuild"))]
+    let missing = || anyhow!("Job not found");
+    #[cfg(feature = "desktop_rebuild")]
+    let missing = || anyhow!(JobAccessFailure::NotFound);
+    load(tx, id)?
+        .filter(|record| record.tenant == tenant)
+        .ok_or_else(missing)
 }
 fn retained_owned(tx: &Transaction<'_>, id: &str, tenant: &str) -> Result<JobRecord> {
     if let Some(record) = load(tx, id)? {
@@ -622,7 +802,7 @@ fn bind_printer_start(tx: &Transaction<'_>, tenant: &str, mut payload: Payload) 
     payload.bind_printer_start(printer_id, upload)?;
     Ok(payload)
 }
-fn save(tx: &Transaction<'_>, job: &mut JobRecord, event: &str) -> Result<()> {
+pub(crate) fn save(tx: &Transaction<'_>, job: &mut JobRecord, event: &str) -> Result<()> {
     job.payload.validate_stored()?;
     job.state_version += 1;
     job.updated_at = now();
@@ -726,7 +906,7 @@ pub(crate) fn execute(
     admission: crate::writer_admission::Deadline,
 ) -> Result<Outcome> {
     let tx = crate::writer_admission::begin_immediate(connection, admission)?;
-    let outcome = match command {
+    let decision = match command {
         Command::User {
             credential,
             policy,
@@ -734,39 +914,81 @@ pub(crate) fn execute(
             storage,
         } => {
             let auth_committed = matches!(&credential, Credential::RoutedKey { .. });
-            let (tenant, subject) = match credential {
-                Credential::Session(token) => auth::job_session_actor(&tx, token.expose(), policy)?,
-                Credential::RoutedKey { tenant, key } => auth::job_key_actor(&tx, &tenant, key)?,
-                Credential::PhysicalOwner(owner) => {
-                    ensure!(
-                        Arc::ptr_eq(&storage, &owner.storage),
-                        "Foreign physical owner"
-                    );
-                    ("default".into(), "physical-owner".into())
-                }
+            #[cfg(not(feature = "desktop_rebuild"))]
+            let mut outcome = {
+                let (tenant, subject) = actor(&tx, credential, policy, &storage)?;
+                user(&tx, &tenant, &subject, operation)?
             };
-            let mut outcome = user(&tx, &tenant, &subject, operation)?;
+            #[cfg(feature = "desktop_rebuild")]
+            let mut outcome = if matches!(operation, UserOperation::Enqueue { .. }) {
+                let (tenant, subject, authority) =
+                    auth::authority::admit(&tx, credential, policy, &storage)?;
+                user(&tx, &tenant, &subject, authority, operation)?
+            } else {
+                let (tenant, subject) = actor(&tx, credential, policy, &storage)?;
+                user(&tx, &tenant, &subject, None, operation)?
+            };
             if auth_committed && let Outcome::Job(_, commit) = &mut outcome {
                 *commit = LocalCommit::Committed;
             }
-            outcome
+            TransactionDecision::Outcome(outcome)
         }
+        #[cfg(not(feature = "desktop_rebuild"))]
         Command::Claim { worker, admission } => claim(&tx, &worker, &admission)?,
+        #[cfg(feature = "desktop_rebuild")]
+        Command::Claim {
+            worker,
+            admission,
+            kind,
+            policy,
+        } => claim(&tx, &worker, &admission, kind, policy)?,
         Command::Worker {
             lease,
             operation,
             admission,
-        } => advance(&tx, lease, operation, &admission, effect_policy)?,
+        } => {
+            TransactionDecision::Outcome(advance(&tx, lease, operation, &admission, effect_policy)?)
+        }
+        #[cfg(feature = "desktop_rebuild")]
+        Command::Authorize { lease, policy } => {
+            let job = claimed_job(&tx, &lease)?;
+            TransactionDecision::Outcome(Outcome::Authorized(require_original_authority(
+                &tx, &job, policy,
+            )?))
+        }
         Command::Retain { per_tenant, global } => {
-            Outcome::Retained(prune(&tx, per_tenant, global)?)
+            TransactionDecision::Outcome(Outcome::Retained(prune(&tx, per_tenant, global)?))
         }
     };
-    if matches!(&outcome,Outcome::Job(job,LocalCommit::Committed) if job.state.terminal()) {
+    if matches!(&decision, TransactionDecision::Outcome(Outcome::Job(job, LocalCommit::Committed)) if job.state.terminal())
+    {
         prune(&tx, 1000, 10000)?;
     }
     tx.commit()
         .map_err(|_| anyhow!(JobFailure::CommitUnknown))?;
-    Ok(outcome)
+    match decision {
+        TransactionDecision::Outcome(outcome) => Ok(outcome),
+        #[cfg(feature = "desktop_rebuild")]
+        TransactionDecision::ErrorAfterCommit(error) => Err(error),
+    }
+}
+fn actor(
+    tx: &Transaction<'_>,
+    credential: Credential,
+    policy: AuthPolicy,
+    storage: &Arc<crate::Shared>,
+) -> Result<(String, String)> {
+    match credential {
+        Credential::Session(token) => auth::job_session_actor(tx, token.expose(), policy),
+        Credential::RoutedKey { tenant, key } => auth::job_key_actor(tx, &tenant, key),
+        Credential::PhysicalOwner(owner) => {
+            ensure!(
+                Arc::ptr_eq(storage, &owner.storage),
+                "Foreign physical owner"
+            );
+            Ok(("default".into(), "physical-owner".into()))
+        }
+    }
 }
 fn prune(tx: &Transaction<'_>, per_tenant: usize, global: usize) -> Result<usize> {
     let mut statement=tx.prepare(
@@ -799,6 +1021,7 @@ fn user(
     tx: &Transaction<'_>,
     tenant: &str,
     subject: &str,
+    #[cfg(feature = "desktop_rebuild")] authority: Option<auth::authority::AuthorityBasis>,
     operation: UserOperation,
 ) -> Result<Outcome> {
     match operation {
@@ -852,6 +1075,16 @@ fn user(
                 #[cfg(feature = "desktop_rebuild")]
                 public_result: None,
                 recovery: None,
+                #[cfg(feature = "desktop_rebuild")]
+                authority_disposition: if authority.is_some() {
+                    AuthorityDisposition::Original
+                } else {
+                    AuthorityDisposition::PhysicalOwner
+                },
+                #[cfg(feature = "desktop_rebuild")]
+                authority,
+                #[cfg(feature = "desktop_rebuild")]
+                authority_refusal: None,
                 fence: None,
                 worker: None,
             };
@@ -1110,7 +1343,13 @@ fn user(
         }
     }
 }
-fn claim(tx: &Transaction<'_>, worker: &str, admission: &WorkerAdmission) -> Result<Outcome> {
+fn claim(
+    tx: &Transaction<'_>,
+    worker: &str,
+    admission: &WorkerAdmission,
+    #[cfg(feature = "desktop_rebuild")] requested: Option<JobKind>,
+    #[cfg(feature = "desktop_rebuild")] policy: Option<AuthPolicy>,
+) -> Result<TransactionDecision> {
     let mut diagnostics = DocumentDiagnostics::default();
     recover_in(tx, false)?;
     let active: i64 = tx.query_row(
@@ -1119,9 +1358,15 @@ fn claim(tx: &Transaction<'_>, worker: &str, admission: &WorkerAdmission) -> Res
         |r| r.get(0),
     )?;
     if active >= admission.total as i64 {
-        return Ok(Outcome::Claimed(None));
+        return Ok(TransactionDecision::Outcome(Outcome::Claimed(None)));
     }
+    #[cfg(feature = "desktop_rebuild")]
+    let mut refused = false;
     for (kind, capacity) in &admission.kinds {
+        #[cfg(feature = "desktop_rebuild")]
+        if requested.is_some_and(|requested| requested != *kind) {
+            continue;
+        }
         let count:i64=tx.query_row("SELECT COUNT(*) FROM durable_jobs WHERE kind=?1 AND state IN ('running','effect_admitted')",[kind.name()],|r|r.get(0))?;
         if count >= *capacity as i64 {
             continue;
@@ -1142,6 +1387,31 @@ fn claim(tx: &Transaction<'_>, worker: &str, admission: &WorkerAdmission) -> Res
                 }
             }
             ensure!(job.attempt < 100, "Job attempt limit reached");
+            #[cfg(feature = "desktop_rebuild")]
+            {
+                let refusal = match job.authority_disposition {
+                    AuthorityDisposition::PhysicalOwner => None,
+                    AuthorityDisposition::LegacyMissing => {
+                        Some(AuthorityRefusalReason::MissingOriginal)
+                    }
+                    AuthorityDisposition::Original => {
+                        let Some(policy) = policy else {
+                            if refused {
+                                prune(tx, 1000, 10000)?;
+                            }
+                            return Ok(TransactionDecision::ErrorAfterCommit(
+                                auth::AuthorityFailure::PolicyRequired.into(),
+                            ));
+                        };
+                        refusal_reason(tx, &job, policy)?
+                    }
+                };
+                if let Some(reason) = refusal {
+                    record_refusal(tx, &mut job, reason, AuthorityRefusalPhase::Claim)?;
+                    refused |= job.state.terminal();
+                    continue;
+                }
+            }
             job.state = PersistentState::Running;
             job.attempt += 1;
             job.generation += 1;
@@ -1158,10 +1428,20 @@ fn claim(tx: &Transaction<'_>, worker: &str, admission: &WorkerAdmission) -> Res
                 fence,
                 worker: worker.into(),
             };
-            return Ok(Outcome::Claimed(Some((job, lease))));
+            #[cfg(feature = "desktop_rebuild")]
+            if refused {
+                prune(tx, 1000, 10000)?;
+            }
+            return Ok(TransactionDecision::Outcome(Outcome::Claimed(Some((
+                job, lease,
+            )))));
         }
     }
-    Ok(Outcome::Claimed(None))
+    #[cfg(feature = "desktop_rebuild")]
+    if refused {
+        prune(tx, 1000, 10000)?;
+    }
+    Ok(TransactionDecision::Outcome(Outcome::Claimed(None)))
 }
 fn proven_primary_printer_receipt(job: &JobRecord) -> Option<&ResultArtifact> {
     if let Payload::PrinterStart(request) = &job.payload {
@@ -1270,7 +1550,7 @@ fn resolved_printer_failure(job: &JobRecord) -> bool {
                 )
         })
 }
-fn claimed_job(tx: &Transaction<'_>, lease: &AttemptLease) -> Result<JobRecord> {
+pub(crate) fn claimed_job(tx: &Transaction<'_>, lease: &AttemptLease) -> Result<JobRecord> {
     let job = owned(tx, &lease.job_id, &lease.tenant)?;
     ensure!(
         job.worker.as_deref() == Some(lease.worker.as_str())
@@ -1585,6 +1865,83 @@ fn require_spoolman(tx: &Transaction<'_>, job: &JobRecord) -> Result<()> {
     Ok(())
 }
 
+/// Revalidates the credential that enqueued `job` under the current policy.
+#[cfg(feature = "desktop_rebuild")]
+pub(crate) fn require_original_authority(
+    tx: &Transaction<'_>,
+    job: &JobRecord,
+    policy: AuthPolicy,
+) -> Result<ValidatedAuthority> {
+    ensure!(
+        job.authority_disposition == AuthorityDisposition::Original,
+        auth::AuthorityFailure::Missing
+    );
+    let basis = job
+        .authority
+        .as_ref()
+        .ok_or(auth::AuthorityFailure::Missing)?;
+    let (tenant, subject) = auth::authority::resolve(tx, basis, policy)?;
+    ensure!(tenant == job.tenant, auth::AuthorityFailure::TenantChanged);
+    Ok(ValidatedAuthority { tenant, subject })
+}
+
+#[cfg(feature = "desktop_rebuild")]
+impl AuthorityRefusalReason {
+    /// The refusal to record for a failed revalidation. Other failures stay
+    /// hard errors and change nothing.
+    fn of(error: &anyhow::Error) -> Option<Self> {
+        match error.downcast_ref::<auth::AuthorityFailure>()? {
+            auth::AuthorityFailure::CredentialInvalid => Some(Self::CredentialInvalid),
+            auth::AuthorityFailure::PolicyChanged => Some(Self::PolicyChanged),
+            auth::AuthorityFailure::TenantChanged => Some(Self::TenantChanged),
+            auth::AuthorityFailure::SubjectChanged => Some(Self::SubjectChanged),
+            auth::AuthorityFailure::Missing | auth::AuthorityFailure::PolicyRequired => None,
+        }
+    }
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn refusal_reason(
+    tx: &Transaction<'_>,
+    job: &JobRecord,
+    policy: AuthPolicy,
+) -> Result<Option<AuthorityRefusalReason>> {
+    match require_original_authority(tx, job, policy) {
+        Ok(_) => Ok(None),
+        Err(error) => AuthorityRefusalReason::of(&error).ok_or(error).map(Some),
+    }
+}
+
+/// Records why the original authority was refused and fences the attempt. A job
+/// without effects fails; one with effects waits for reconciliation.
+#[cfg(feature = "desktop_rebuild")]
+fn record_refusal(
+    tx: &Transaction<'_>,
+    job: &mut JobRecord,
+    reason: AuthorityRefusalReason,
+    phase: AuthorityRefusalPhase,
+) -> Result<()> {
+    job.authority_refusal = Some(AuthorityRefusalObservation {
+        version: 1,
+        reason,
+        phase,
+        observed_at: now(),
+        generation: job.generation,
+    });
+    job.generation += 1;
+    job.fence = None;
+    job.worker = None;
+    job.lease_until = None;
+    if job.effects.is_empty() {
+        job.state = PersistentState::Failed;
+        job.recovery = Some("Original authority is no longer valid".into());
+    } else {
+        job.state = PersistentState::ReconciliationRequired;
+        job.recovery = Some("Inspect retained effect evidence and reconcile explicitly".into());
+    }
+    save(tx, job, "authority_refused")
+}
+
 pub(crate) fn validate_schema(connection: &Connection, version: u64) -> Result<()> {
     let objects = |connection: &Connection| -> Result<Vec<(String, Option<String>)>> {
         Ok(connection.prepare("SELECT name,sql FROM sqlite_master WHERE name LIKE 'durable_job%' OR name LIKE 'sqlite_autoindex_durable_job%' ORDER BY name")?.query_map([],|r|Ok((r.get(0)?,r.get(1)?)))?.collect::<rusqlite::Result<_>>()?)
@@ -1682,9 +2039,32 @@ mod tests {
             #[cfg(feature = "desktop_rebuild")]
             public_result: None,
             recovery: Some(String::new()),
+            #[cfg(feature = "desktop_rebuild")]
+            authority: None,
+            #[cfg(feature = "desktop_rebuild")]
+            authority_disposition: AuthorityDisposition::PhysicalOwner,
+            #[cfg(feature = "desktop_rebuild")]
+            authority_refusal: None,
             fence: None,
             worker: None,
         }
+    }
+
+    #[cfg(not(feature = "desktop_rebuild"))]
+    fn owner_user(
+        tx: &Transaction<'_>,
+        subject: &str,
+        operation: UserOperation,
+    ) -> Result<Outcome> {
+        user(tx, "default", subject, operation)
+    }
+    #[cfg(feature = "desktop_rebuild")]
+    fn owner_user(
+        tx: &Transaction<'_>,
+        subject: &str,
+        operation: UserOperation,
+    ) -> Result<Outcome> {
+        user(tx, "default", subject, None, operation)
     }
 
     fn sized_record(size: usize) -> JobRecord {
@@ -1720,7 +2100,7 @@ mod tests {
                 let tx = connection
                     .transaction_with_behavior(TransactionBehavior::Immediate)
                     .unwrap();
-                match user(&tx, "default", "disk-full-test", enqueue(&key)) {
+                match owner_user(&tx, "disk-full-test", enqueue(&key)) {
                     Ok(outcome) => tx.commit().map(|()| outcome).map_err(anyhow::Error::from),
                     Err(error) => Err(error),
                 }
@@ -1763,7 +2143,7 @@ mod tests {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .unwrap();
         let Outcome::Job(retried, LocalCommit::Committed) =
-            user(&tx, "default", "disk-full-test", enqueue(&failed_key)).unwrap()
+            owner_user(&tx, "disk-full-test", enqueue(&failed_key)).unwrap()
         else {
             panic!("retry must commit one job");
         };
@@ -1772,7 +2152,7 @@ mod tests {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .unwrap();
         let Outcome::Job(duplicate, LocalCommit::ReadOnly) =
-            user(&tx, "default", "disk-full-test", enqueue(&failed_key)).unwrap()
+            owner_user(&tx, "disk-full-test", enqueue(&failed_key)).unwrap()
         else {
             panic!("duplicate must replay the committed job");
         };
@@ -1798,9 +2178,8 @@ mod tests {
         let tx = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .unwrap();
-        let Outcome::Job(job, LocalCommit::Committed) = user(
+        let Outcome::Job(job, LocalCommit::Committed) = owner_user(
             &tx,
-            "default",
             "disk-full-claim",
             UserOperation::Enqueue {
                 key: key.into(),
@@ -1824,6 +2203,10 @@ mod tests {
                 per_resource: 4,
                 lease_seconds: 60,
             }),
+            #[cfg(feature = "desktop_rebuild")]
+            kind: None,
+            #[cfg(feature = "desktop_rebuild")]
+            policy: None,
         }
     }
 

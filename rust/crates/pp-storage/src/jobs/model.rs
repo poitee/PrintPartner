@@ -515,6 +515,45 @@ impl ResultArtifact {
         text(&self.target, 1024)
     }
 }
+/// How a durable document records who enqueued it. Documents written before
+/// authority persistence decode as `LegacyMissing` and are never upgraded.
+#[cfg(feature = "desktop_rebuild")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum AuthorityDisposition {
+    Original,
+    PhysicalOwner,
+    #[default]
+    LegacyMissing,
+}
+#[cfg(feature = "desktop_rebuild")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AuthorityRefusalReason {
+    MissingOriginal,
+    CredentialInvalid,
+    PolicyChanged,
+    TenantChanged,
+    SubjectChanged,
+}
+#[cfg(feature = "desktop_rebuild")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AuthorityRefusalPhase {
+    Claim,
+    TargetedClaim,
+    WorkerAdvance,
+    SourceWriter,
+}
+#[cfg(feature = "desktop_rebuild")]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AuthorityRefusalObservation {
+    pub(crate) version: u8,
+    pub(crate) reason: AuthorityRefusalReason,
+    pub(crate) phase: AuthorityRefusalPhase,
+    pub(crate) observed_at: i64,
+    pub(crate) generation: i64,
+}
 #[derive(Clone, Serialize, Deserialize)]
 pub struct JobRecord {
     pub job_id: String,
@@ -538,6 +577,15 @@ pub struct JobRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub public_result: Option<super::CompletedResult>,
     pub recovery: Option<String>,
+    #[cfg(feature = "desktop_rebuild")]
+    #[serde(skip)]
+    pub(crate) authority: Option<crate::auth::authority::AuthorityBasis>,
+    #[cfg(feature = "desktop_rebuild")]
+    #[serde(skip)]
+    pub(crate) authority_disposition: AuthorityDisposition,
+    #[cfg(feature = "desktop_rebuild")]
+    #[serde(skip)]
+    pub(crate) authority_refusal: Option<AuthorityRefusalObservation>,
     #[serde(skip)]
     pub(crate) fence: Option<String>,
     #[serde(skip)]
@@ -668,6 +716,13 @@ impl JobRecord {
             kind: self.kind,
             status,
             message,
+            #[cfg(feature = "desktop_rebuild")]
+            progress: if self.state == PersistentState::Queued {
+                Some(0)
+            } else {
+                self.progress
+            },
+            #[cfg(not(feature = "desktop_rebuild"))]
             progress: self.progress,
             result: self.result.clone(),
             error: (status == "error").then_some(message),

@@ -48,6 +48,16 @@ fn admission() -> WorkerAdmission {
         lease_seconds: 60,
     }
 }
+/// A worker for session-enqueued jobs. With `desktop_rebuild` those jobs keep
+/// their original credential, and claiming one needs the current policy.
+#[cfg(feature = "desktop_rebuild")]
+fn session_worker(owner: &WriterOwner) -> ServerWorkerClient {
+    owner.job_worker_with_policy(policy(), admission()).unwrap()
+}
+#[cfg(not(feature = "desktop_rebuild"))]
+fn session_worker(owner: &WriterOwner) -> ServerWorkerClient {
+    owner.job_worker(admission()).unwrap()
+}
 fn call(owner: &WriterOwner, operation: UserOperation) -> Result<Outcome> {
     owner
         .jobs(policy())?
@@ -1568,7 +1578,7 @@ fn ticket_t_28_recovery_reconciliation_records_authenticated_subject() {
         },
     )
     .unwrap());
-    let worker = owner.job_worker(admission()).unwrap();
+    let worker = session_worker(&owner);
     let (_, mut lease) = worker.claim().unwrap().unwrap();
     worker
         .update(
@@ -3844,7 +3854,7 @@ fn ticket_t_28_recovery_global_and_per_tenant_history_limits() {
     let (_, owner) = fixture();
     let (_, a) = register(&owner, "history-a@example.com");
     let (_, b) = register(&owner, "history-b@example.com");
-    let worker = owner.job_worker(admission()).unwrap();
+    let worker = session_worker(&owner);
     for token in [&a, &b] {
         for index in 0..3 {
             session_call(
@@ -4169,7 +4179,7 @@ fn integration_wildcard_lookup_and_reservations_are_tenant_owned() {
         },
     )
     .unwrap());
-    let worker = owner.job_worker(admission()).unwrap();
+    let worker = session_worker(&owner);
     let (_, lease) = worker.claim().unwrap().unwrap();
     assert!(source_lease(&worker, &lease, Some(local_id)).is_err());
     let mut live = source_lease(&worker, &lease, Some(tenant_id)).unwrap();
