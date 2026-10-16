@@ -5,7 +5,7 @@
 //! engine's behavior instead of a Node result. Authority changes go through
 //! both writer paths: `auth_with_policy` and `rebuild_auth_with_policy`.
 use pp_storage::{
-    Limits, WriterOwner,
+    Limits, Setting, SettingCommand, WriterOwner,
     auth::{
         self, AuthPolicy, FirstUserTenant, RegistrationPolicy, Secret, SessionTenantPolicy,
         rebuild::AuthLifetimes,
@@ -502,6 +502,56 @@ fn persisted_key_expiry_blocks_prepared_frame_without_writer_traffic() {
     assert_eq!(
         subscription.admit(initial, |_| NonblockingSend::Accepted),
         FrameAdmission::Closed(StreamClose::Expired)
+    );
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+/// Generic settings writes skip `authority_change`, so they must not replace
+/// the key collection a live stream was admitted under.
+#[test]
+fn generic_settings_write_cannot_replace_key_collection() {
+    let path = directory();
+    let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
+    let token = register(&owner);
+    let id = enqueue(&owner, &token, "settings-key-collection");
+    let (tenant, _, key_text) = key(&owner, &token);
+    let routed = || Credential::RoutedKey {
+        tenant: tenant.clone(),
+        key: Secret::new(key_text.clone()),
+    };
+    let subscription = subscribe(&owner, routed(), id.clone());
+    let initial = prepared(&subscription);
+    let stored = || {
+        owner
+            .client()
+            .reader(WAIT)
+            .unwrap()
+            .get_setting(&tenant, "api_keys_v1", None)
+            .unwrap()
+    };
+    let before = stored();
+    let refused = owner
+        .client()
+        .submit(
+            SettingCommand::Set(Setting {
+                tenant: tenant.clone(),
+                key: "api_keys_v1".into(),
+                value: "[]".into(),
+            }),
+            &AtomicBool::new(false),
+            WAIT,
+        )
+        .expect_err("generic settings must not write the key collection");
+    assert_eq!(
+        refused.to_string(),
+        "Setting api_keys_v1 is owned by auth and changes only through auth requests"
+    );
+    assert_eq!(stored(), before);
+    drop(subscribe(&owner, routed(), id));
+    assert_eq!(
+        subscription.admit(initial, |_| NonblockingSend::Accepted),
+        FrameAdmission::Admitted
     );
     owner.shutdown().unwrap();
     std::fs::remove_dir_all(path).unwrap();
