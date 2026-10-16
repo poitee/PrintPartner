@@ -9,6 +9,10 @@ license.workspace = true
 default = []
 desktop_rebuild = ["serde_json/raw_value", "dep:pp-domain", "pp-domain/desktop_rebuild", "dep:saphyr-parser"]
 
+[[bin]]
+name = "required-unit-fixture"
+required-features = ["desktop_rebuild"]
+
 [dependencies]
 pp-domain = { path = "../pp-domain", optional = true }
 anyhow.workspace = true

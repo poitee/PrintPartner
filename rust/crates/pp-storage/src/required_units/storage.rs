@@ -254,6 +254,7 @@ impl StoredConflict {
 
 pub(super) struct Draft {
     pub(super) header: Value,
+    pub(super) inputs: Vec<Value>,
     pub(super) parts: Vec<DraftPart>,
     pub(super) planning: String,
     pub(super) selected: Option<Saved>,
@@ -526,7 +527,18 @@ pub(super) fn draft(
     normalize_parts(&mut parts)?;
     let planning = model::planning(&header, &inputs, &parts)?;
     let selected = optional_num(&header, "currentRequiredUnitReconciliationId")?
-        .map(|rid| saved(tx, tenant, profile, id, rid))
+        .map(|rid| {
+            ensure!(
+                one(
+                    tx,
+                    "SELECT id FROM plan_draft_required_unit_reconciliations WHERE tenant_id=? AND id=? AND profile_id=? AND draft_id=? AND finalized_at IS NOT NULL",
+                    &[&tenant, &rid, &profile, &id],
+                )?
+                .is_some(),
+                "Plan draft Required-unit selection is corrupt"
+            );
+            saved(tx, tenant, profile, id, rid)
+        })
         .transpose()?;
     let expected = match text(&header, "digestFormat")? {
         "plan-draft-v1" => {
@@ -551,6 +563,7 @@ pub(super) fn draft(
     );
     Ok(Some(Draft {
         header,
+        inputs,
         parts,
         planning,
         selected,

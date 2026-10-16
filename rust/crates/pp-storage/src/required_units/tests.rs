@@ -172,7 +172,7 @@ fn corrupt_rows_return_node_messages() {
         (
             format!("{reconciliation} finalized_at=NULL"),
             1,
-            "Required-unit reconciliation is not finalized",
+            "Plan draft Required-unit selection is corrupt",
         ),
         (
             format!("{reconciliation} format='v0'"),

@@ -12,6 +12,39 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashSet;
 
+/// The result of a reconcile request, serialized as Node's
+/// `PlanDraftWorkspaceResult`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Outcome {
+    Ready {
+        workspace: Box<Workspace>,
+    },
+    ProfileNotFound,
+    DraftNotFound,
+    DraftChanged {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        workspace: Option<Box<Workspace>>,
+    },
+    BaseChanged {
+        workspace: Box<Workspace>,
+    },
+    NotOpen {
+        workspace: Box<Workspace>,
+    },
+    AcceptedBaselineRequired,
+    IdempotencyConflict,
+    DomainError {
+        code: DomainCode,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DomainCode {
+    RequiredUnitSetUnavailable,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Workspace {
     pub profile_id: i64,
@@ -337,6 +370,25 @@ mod tests {
                 ["partKey", "relativePath", "filename"],
                 ["partKey", "relativePath", "filename", "quantityEffective"]
             ])
+        );
+    }
+
+    #[test]
+    fn outcomes_serialize_with_node_kinds_and_optional_workspaces() {
+        assert_eq!(
+            serde_json::to_value(Outcome::DraftChanged { workspace: None }).unwrap(),
+            json!({"kind":"draft_changed"})
+        );
+        assert_eq!(
+            serde_json::to_value(Outcome::DomainError {
+                code: DomainCode::RequiredUnitSetUnavailable
+            })
+            .unwrap(),
+            json!({"kind":"domain_error","code":"required_unit_set_unavailable"})
+        );
+        assert_eq!(
+            serde_json::to_value(Outcome::AcceptedBaselineRequired).unwrap(),
+            json!({"kind":"accepted_baseline_required"})
         );
     }
 }
