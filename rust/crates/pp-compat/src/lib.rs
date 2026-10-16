@@ -1144,6 +1144,21 @@ mod tests {
             || matches!(linux_proc_state(pid as u32), Some('Z' | 'X'))
     }
 
+    fn group_snapshot(group: u32) -> String {
+        let output = std::process::Command::new("ps")
+            .args(["-e", "-o", "pid,ppid,pgid,sid,stat,comm"])
+            .output()
+            .unwrap();
+        let group = group.to_string();
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter(|line| {
+                line.contains("PID") || line.split_whitespace().nth(2) == Some(group.as_str())
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     /// `kill(pid, 0)` is true for a zombie. A preserved peer has to still be
     /// running: `try_wait` has not reaped it, and Linux does not report `Z`.
     fn peer_is_running(peer: &mut std::process::Child) -> bool {
@@ -1176,7 +1191,7 @@ mod tests {
         let mut command = tokio::process::Command::new(&node);
         command
             .arg("-e")
-            .arg("const {spawn}=require('node:child_process'); const fs=require('node:fs'); const child=spawn(process.execPath,['-e','setInterval(() => {}, 1e9)'],{stdio:'ignore'}); fs.writeFileSync(process.env.PP_COMPAT_DEATH_PIDFILE+'.desc',String(child.pid)); setInterval(() => {}, 1e9)")
+            .arg("const {spawn}=require('node:child_process'); const fs=require('node:fs'); const child=spawn(process.execPath,['-e','setInterval(() => {}, 1e9)'],{stdio:'ignore'}); const pidfile=process.env.PP_COMPAT_DEATH_PIDFILE+'.desc'; fs.writeFileSync(pidfile+'.tmp',String(child.pid)); fs.renameSync(pidfile+'.tmp',pidfile); setInterval(() => {}, 1e9)")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
@@ -1211,6 +1226,7 @@ mod tests {
                 }
                 let _ = std::fs::remove_file(&self.pidfile);
                 let _ = std::fs::remove_file(self.pidfile.with_extension("desc"));
+                let _ = std::fs::remove_file(self.pidfile.with_extension("desc.tmp"));
             }
         }
         let node = node_binary();
@@ -1292,19 +1308,17 @@ mod tests {
         }
         owner.wait().unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while !pid_has_exited(pid) && std::time::Instant::now() < deadline {
+        let mut node_gone = pid_has_exited(pid);
+        while !node_gone && std::time::Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
+            node_gone = pid_has_exited(pid);
         }
         let descendant_deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while !pid_has_exited(descendant as i32)
-            && linux_proc_state(descendant) != Some('Z')
-            && std::time::Instant::now() < descendant_deadline
-        {
+        let mut descendant_gone = pid_has_exited(descendant as i32);
+        while !descendant_gone && std::time::Instant::now() < descendant_deadline {
             std::thread::sleep(Duration::from_millis(10));
+            descendant_gone = pid_has_exited(descendant as i32);
         }
-        let descendant_gone =
-            pid_has_exited(descendant as i32) || linux_proc_state(descendant) == Some('Z');
-        let node_gone = pid_has_exited(pid);
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while peer_is_running(&mut peer) && std::time::Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
@@ -1706,18 +1720,22 @@ mod tests {
     async fn ticket_t_3_drain_leader_exit_with_forced_descendant_reports_forced() {
         use tokio::io::{AsyncBufReadExt, BufReader};
 
-        struct Subreaper(libc::c_int);
-        impl Drop for Subreaper {
-            fn drop(&mut self) {
-                unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, self.0) };
-            }
+        if std::env::var_os("PP_COMPAT_SUBREAPER_FIXTURE").is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "tests::ticket_t_3_drain_leader_exit_with_forced_descendant_reports_forced",
+                    "--nocapture",
+                ])
+                .env("PP_COMPAT_SUBREAPER_FIXTURE", "1")
+                .status()
+                .unwrap();
+            assert!(
+                status.success(),
+                "isolated subreaper fixture failed: {status}"
+            );
+            return;
         }
-        let mut previous = 0;
-        assert_eq!(
-            unsafe { libc::prctl(libc::PR_GET_CHILD_SUBREAPER, &mut previous) },
-            0
-        );
-        let _restore = Subreaper(previous);
         assert_eq!(unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1) }, 0);
 
         for (planned, already_exited, cancel_on_eof) in [
@@ -1744,7 +1762,7 @@ if pid == 0:
 os.close(write)
 os.read(read, 1)
 os.close(read)
-signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+signal.signal(signal.SIGTERM, signal.SIG_DFL)
 print(pid, flush=True)
 sys.stdin.buffer.read()
 if sys.argv[1] == "wait":
@@ -1993,9 +2011,14 @@ if sys.argv[1] == "wait":
         );
         assert!(
             !super::drain::process_alive(grand),
-            "grandchild survived a failed leader wait"
+            "grandchild survived a failed leader wait\n{}",
+            group_snapshot(pid)
         );
-        assert!(super::drain::process_group_absent(pid));
+        assert!(
+            super::drain::process_group_absent(pid),
+            "group survived a failed leader wait\n{}",
+            group_snapshot(pid)
+        );
         assert!(
             started.elapsed() < Duration::from_secs(2),
             "{:?}",
