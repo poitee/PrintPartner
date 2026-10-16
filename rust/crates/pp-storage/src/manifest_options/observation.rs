@@ -117,6 +117,7 @@ pub(crate) fn observe(
     reads: Option<&dyn DraftReads>,
     budget: &mut PreparationBudget<'_>,
 ) -> ReadResult<ObservedBuilder> {
+    budget.check()?;
     let mut resolved_selections = match captured.stored_kit.as_deref() {
         Some(raw) => {
             budget.document(raw.len(), raw.len())?;

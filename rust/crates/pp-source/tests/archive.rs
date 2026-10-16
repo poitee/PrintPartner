@@ -471,7 +471,9 @@ fn decomposed_archive_names_reject_without_normalizing_published_paths() {
 mod acquisition_labels {
     use super::*;
     use pp_source::archive::ArchiveLabelPolicy;
+    use rustix::fs::{Mode, OFlags, openat};
     use sha2::{Digest, Sha256};
+    use std::io::Read;
     use unicode_normalization::UnicodeNormalization;
 
     fn write_members(fixture: &Fixture, members: &[(&str, &[u8])]) {
@@ -536,6 +538,24 @@ mod acquisition_labels {
             .unwrap();
     }
 
+    // The contracted paths are longer than macOS PATH_MAX (1024 bytes), so open them one
+    // component at a time, as the extractor writes them, instead of by absolute path.
+    fn open_beneath(root: &Path, relative: &str) -> File {
+        relative
+            .split('/')
+            .fold(File::open(root).unwrap(), |dir, name| {
+                File::from(
+                    openat(
+                        &dir,
+                        name,
+                        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                        Mode::empty(),
+                    )
+                    .unwrap(),
+                )
+            })
+    }
+
     #[test]
     fn raw_long_labels_contract_to_valid_file_and_directory_paths() {
         let raw_dir = vec!["e\u{301}".repeat(70); 20].join("/");
@@ -582,7 +602,7 @@ mod acquisition_labels {
                     &AtomicBool::new(false),
                 )
                 .unwrap();
-            let destination = fixture.candidate().join("files").join(&expected);
+            let mut destination = open_beneath(&fixture.candidate().join("files"), &expected);
             if suffix.is_empty() {
                 assert!(
                     ready
@@ -591,12 +611,14 @@ mod acquisition_labels {
                         .iter()
                         .any(|path| path.as_str() == expected)
                 );
-                assert!(destination.is_dir());
+                assert!(destination.metadata().unwrap().is_dir());
                 assert!(ready.receipt().files.is_empty());
             } else {
                 assert_eq!(ready.receipt().files.len(), 1);
                 assert_eq!(ready.receipt().files[0].path.as_str(), expected);
-                assert_eq!(fs::read(destination).unwrap(), b"x");
+                let mut payload = Vec::new();
+                destination.read_to_end(&mut payload).unwrap();
+                assert_eq!(payload, b"x");
             }
             ready.discard().unwrap();
             assert!(!fixture.candidate().exists());

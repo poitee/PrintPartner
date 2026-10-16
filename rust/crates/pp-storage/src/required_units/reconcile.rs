@@ -288,7 +288,7 @@ impl Scope<'_> {
 
 /// Saves and selects a Required-unit reconciliation inside the caller's
 /// write transaction, as Node's `savePlanDraftRequiredUnitReconciliation` does.
-pub(super) fn run(
+pub(crate) fn run(
     tx: &Transaction<'_>,
     command: &ReconciliationCommand,
     policy: auth::AuthPolicy,

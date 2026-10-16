@@ -48,6 +48,7 @@ import {
   saveRoleFilamentDefault,
 } from "../services/role-filament-store.js";
 import { getColorById } from "../services/filament-catalog.js";
+import { hasSpoolmanAssignment, readSpoolmanAccess, spoolmanAccessProblem } from "../lib/spoolman-access.js";
 import type { EditableKitRecipe } from "../services/export-kit.js";
 import { REMOTE_CHECKED_AT_KEY, REMOTE_UPDATE_STATUS_KEY } from "../services/source-update-check.js";
 import {
@@ -300,6 +301,13 @@ import { sourceNamingResponse } from "./source-naming-model.js";
 import { sourceRevision } from "./source-revision-model.js";
 import { sourceSummary } from "./source-summary-model.js";
 import { requiredText, sha256Digest } from "./write-validation.js";
+
+function withoutSpoolmanReferences(filamentColorId: string | null) {
+  return {
+    filament_color_id: filamentColorId?.trim().startsWith("spoolman:") ? null : filamentColorId,
+    spoolman_spool_id: null,
+  };
+}
 
 function filamentAssignmentFromRecord(row: Record<string, unknown>): FilamentAssignment {
   const colorId = typeof row.filament_color_id === "string" ? row.filament_color_id : null;
@@ -710,6 +718,7 @@ export type ApplyPlanChangesResult =
       readonly unmappable: readonly UnmappableCheckoffLink[];
     }
   | { readonly kind: "token_allocation_failed" }
+  | { readonly kind: "spoolman_unavailable"; readonly problem: ReturnType<typeof spoolmanAccessProblem> }
   | { readonly kind: "transaction_unavailable" };
 
 export type RecomputePlanDraftResult =
@@ -4399,6 +4408,11 @@ export class AppRepository {
       throw error;
     }
     const roleDefaults = loadRoleFilamentDefaults(this, profileId);
+    if (readSpoolmanAccess(this, profileId).kind !== "allowed") {
+      for (const defaults of Object.values(roleDefaults)) {
+        Object.assign(defaults, withoutSpoolmanReferences(defaults.filament_color_id));
+      }
+    }
     const trackingBySourceLayer = new Map(draftInputs.map((captured) => [captured.sourceLayer, captured.trackingKind]));
     const scannedDraftParts = merged.parts.map(
       (
@@ -6266,6 +6280,13 @@ export class AppRepository {
       }
       const draft = this.getPlanDraft(profileId, draftId);
       if (!draft) return { kind: "not_found" };
+      const spoolmanAccess = readSpoolmanAccess(this, profileId);
+      if (spoolmanAccess.kind !== "allowed" && draft.parts.some((part) =>
+        part.baseRevisionPartId == null && hasSpoolmanAssignment({
+          filament_color_id: part.filamentColorId, spoolman_spool_id: part.spoolmanSpoolId,
+        }))) {
+        return { kind: "spoolman_unavailable", problem: spoolmanAccessProblem(spoolmanAccess) };
+      }
       const draftInputs = canonicalPlanInputs(
         draft.inputs.map((input) => ({
           source_id: input.sourceId,
@@ -7491,9 +7512,15 @@ export class AppRepository {
       }
 
       for (const { source, target } of resolved.parts) {
+        const assignment = filamentAssignmentColumns(source.assignment);
+        if (readSpoolmanAccess(this, profileId).kind !== "allowed") {
+          const refs = withoutSpoolmanReferences(assignment.filamentColorId);
+          assignment.filamentColorId = refs.filament_color_id;
+          assignment.spoolmanSpoolId = refs.spoolman_spool_id;
+        }
         const written = this.db
           .update(this.schema.parts)
-          .set(filamentAssignmentColumns(source.assignment))
+          .set(assignment)
           .where(and(eq(this.schema.parts.tenantId, this.tenantId), eq(this.schema.parts.id, target.projectionPartId)))
           .run();
         if (written.changes !== 1) throw new Error("Accepted Part copy failed");
@@ -7580,7 +7607,15 @@ export class AppRepository {
       }
       const roleFilaments = this.getSetting(roleFilamentSettingKey(id));
       if (roleFilaments) {
-        this.setSetting(roleFilamentSettingKey(newProfile.id), roleFilaments);
+        if (readSpoolmanAccess(this, newProfile.id).kind === "allowed") {
+          this.setSetting(roleFilamentSettingKey(newProfile.id), roleFilaments);
+        } else {
+          const defaults = loadRoleFilamentDefaults(this, id);
+          for (const row of Object.values(defaults)) {
+            Object.assign(row, withoutSpoolmanReferences(row.filament_color_id));
+          }
+          this.setSetting(roleFilamentSettingKey(newProfile.id), JSON.stringify(defaults));
+        }
       }
       copyProductionSetup(this, {
         sourceProfileId: id,

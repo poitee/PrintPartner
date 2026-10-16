@@ -271,6 +271,8 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.list_plan_snapshots",
+        "tool.get_plan_snapshot",
+        "tool.get_kit_catalog",
         "tool.ui_highlight_part",
         "tool.ui_focus_stl_search",
         "tool.ui_navigate",
@@ -285,9 +287,10 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.get_source_inventory",
         "tool.compare_source_revisions",
         "tool.audit_source_provenance",
+        "tool.analyze_stl_mesh",
     ]);
-    assert_eq!(reviewed.len(), 20);
-    assert_eq!(unresolved.len(), 423);
+    assert_eq!(reviewed.len(), 23);
+    assert_eq!(unresolved.len(), 420);
     let resolved: BTreeSet<_> = index
         .claims()
         .values()
@@ -553,6 +556,8 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.list_plan_snapshots",
+        "tool.get_plan_snapshot",
+        "tool.get_kit_catalog",
         "tool.ui_highlight_part",
         "tool.ui_focus_stl_search",
         "tool.ui_navigate",
@@ -567,6 +572,7 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
         "tool.get_source_inventory",
         "tool.compare_source_revisions",
         "tool.audit_source_provenance",
+        "tool.analyze_stl_mesh",
     ] {
         for participants in [vec![id], vec![]] {
             let mut value = manifest();
@@ -597,6 +603,7 @@ fn reviewed_participants_cannot_swap_operations() {
     for (first, second) in [
         ("tool.get_workflow_help", "tool.get_plan_decisions"),
         ("tool.list_plans", "tool.list_plan_snapshots"),
+        ("tool.list_plan_snapshots", "tool.get_plan_snapshot"),
         ("tool.get_job_status", "tool.ui_highlight_part"),
         ("tool.ui_highlight_part", "tool.ui_focus_stl_search"),
         ("tool.ui_focus_stl_search", "tool.ui_navigate"),
@@ -609,6 +616,7 @@ fn reviewed_participants_cannot_swap_operations() {
             "tool.compare_source_revisions",
             "tool.audit_source_provenance",
         ),
+        ("tool.read_source_file", "tool.analyze_stl_mesh"),
         ("tool.get_workflow_help", "tool.get_job_status"),
         ("tool.get_job_status", "tool.list_plans"),
         ("tool.get_workflow_help", "tool.list_plans"),
@@ -641,13 +649,13 @@ fn unresolved_participants_can_share_a_regrouped_operation() {
     regroup(
         &mut value,
         "tool.source_queries",
-        &["tool.get_build_workflow", "tool.analyze_stl_mesh"],
+        &["tool.get_build_workflow", "tool.audit_build_coverage"],
     );
     let unresolved = value["resources"]["unresolved"].as_array_mut().unwrap();
-    unresolved.retain(|id| id != "tool.get_build_workflow" && id != "tool.analyze_stl_mesh");
+    unresolved.retain(|id| id != "tool.get_build_workflow" && id != "tool.audit_build_coverage");
     unresolved.push(json!("tool.source_queries"));
     let index = admit(&value).unwrap();
-    for id in ["tool.get_build_workflow", "tool.analyze_stl_mesh"] {
+    for id in ["tool.get_build_workflow", "tool.audit_build_coverage"] {
         assert_eq!(index.lookup(id).unwrap().operation, "tool.source_queries");
         assert_eq!(
             index.resources_for(id),
@@ -1743,35 +1751,39 @@ fn assert_workspace_tool_resources(id: &str) {
     let resources = index
         .resources_for(id)
         .expect("Workspace tool resources must be reviewed");
-    let expected: ResourceSet = serde_json::from_value(
-        if matches!(
-            id,
-            "tool.compare_source_revisions" | "tool.audit_source_provenance"
-        ) {
-            json!([
-                {"kind": "table", "name": "projects"},
-                {"kind": "table", "name": "source_docs"},
-                {"kind": "table", "name": "source_revisions"},
-                {"kind": "file", "name": "source-workspace"}
-            ])
-        } else if matches!(id, "tool.get_source_docs" | "tool.get_source_inventory") {
-            json!([
-                {"kind": "table", "name": "projects"},
-                {"kind": "table", "name": "source_docs"},
-                {"kind": "table", "name": "source_notes"},
-                {"kind": "table", "name": "source_revisions"},
-                {"kind": "table", "name": "app_settings"},
-                {"kind": "file", "name": "source-workspace"}
-            ])
-        } else {
-            json!([
-                {"kind": "table", "name": "build_profiles"},
-                {"kind": "table", "name": "projects"},
-                {"kind": "table", "name": "source_docs"},
-                {"kind": "file", "name": "source-workspace"}
-            ])
-        },
-    )
+    let expected: ResourceSet = serde_json::from_value(if id == "tool.analyze_stl_mesh" {
+        json!([
+            {"kind": "table", "name": "projects"},
+            {"kind": "table", "name": "source_docs"},
+            {"kind": "file", "name": "source-workspace"}
+        ])
+    } else if matches!(
+        id,
+        "tool.compare_source_revisions" | "tool.audit_source_provenance"
+    ) {
+        json!([
+            {"kind": "table", "name": "projects"},
+            {"kind": "table", "name": "source_docs"},
+            {"kind": "table", "name": "source_revisions"},
+            {"kind": "file", "name": "source-workspace"}
+        ])
+    } else if matches!(id, "tool.get_source_docs" | "tool.get_source_inventory") {
+        json!([
+            {"kind": "table", "name": "projects"},
+            {"kind": "table", "name": "source_docs"},
+            {"kind": "table", "name": "source_notes"},
+            {"kind": "table", "name": "source_revisions"},
+            {"kind": "table", "name": "app_settings"},
+            {"kind": "file", "name": "source-workspace"}
+        ])
+    } else {
+        json!([
+            {"kind": "table", "name": "build_profiles"},
+            {"kind": "table", "name": "projects"},
+            {"kind": "table", "name": "source_docs"},
+            {"kind": "file", "name": "source-workspace"}
+        ])
+    })
     .unwrap();
     assert_eq!(resources, &expected);
     assert_eq!(
@@ -2041,4 +2053,309 @@ fn ticket_t_7_ownership_audit_source_provenance_has_complete_node_owned_resource
 #[test]
 fn ticket_t_7_ownership_audit_source_provenance_refuses_invalid_admission_before_effects() {
     assert_workspace_tool_invalid_admission("tool.audit_source_provenance");
+}
+
+#[test]
+fn ticket_t_7_ownership_analyze_stl_mesh_has_complete_node_owned_resources() {
+    assert_workspace_tool_resources("tool.analyze_stl_mesh");
+}
+
+#[test]
+fn ticket_t_7_ownership_analyze_stl_mesh_refuses_invalid_admission_before_effects() {
+    assert_workspace_tool_invalid_admission("tool.analyze_stl_mesh");
+}
+
+#[test]
+fn ticket_t_7_ownership_get_plan_snapshot_refuses_invalid_admission_before_effects() {
+    assert_catalog_tool_invalid_admission("tool.get_plan_snapshot");
+}
+
+#[test]
+fn ticket_t_7_ownership_get_kit_catalog_refuses_invalid_admission_before_effects() {
+    assert_catalog_tool_invalid_admission("tool.get_kit_catalog");
+}
+
+fn assert_catalog_tool_invalid_admission(id: &str) {
+    let mut original = manifest();
+    original["live_formats"]["sqlite-schema"]["rust_writes"] = json!(34);
+    original["live_formats"]["kit-catalog"]["rust_writes"] = json!(1);
+    let mut baseline_effect = false;
+    admit(&original)
+        .and_then(|index| {
+            index.admit_rollback(id)?;
+            baseline_effect = true;
+            Ok(())
+        })
+        .unwrap();
+    assert!(baseline_effect);
+    let entry = original["resources"]["reviewed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|entry| entry["operation"] == id)
+        .unwrap();
+    for resource_index in 0..original["resources"]["reviewed"][entry]["resources"]
+        .as_array()
+        .unwrap()
+        .len()
+    {
+        for duplicate in [false, true] {
+            let mut value = original.clone();
+            let resources = value["resources"]["reviewed"][entry]["resources"]
+                .as_array_mut()
+                .unwrap();
+            if duplicate {
+                resources.push(resources[resource_index].clone());
+            } else {
+                resources.remove(resource_index);
+            }
+            let mut effect = false;
+            assert_eq!(
+                admit(&value).and_then(|index| {
+                    index.admit_rollback(id)?;
+                    effect = true;
+                    Ok(())
+                }),
+                Err(AdmissionError::ResourceSetMismatch { id: id.into() })
+            );
+            assert!(!effect);
+        }
+    }
+    for edit in 0..13 {
+        let mut value = original.clone();
+        let expected = match edit {
+            0 | 1 => {
+                value["resources"]["reviewed"][entry]["resources"] = if edit == 0 {
+                    json!([{"kind":"table","name":"projects"}])
+                } else {
+                    json!([{"kind":"file","name":"source-workspace"}])
+                };
+                AdmissionError::ResourceSetMismatch { id: id.into() }
+            }
+            2 | 3 => {
+                value["resources"]["reviewed"]
+                    .as_array_mut()
+                    .unwrap()
+                    .remove(entry);
+                if edit == 3 {
+                    value["resources"]["unresolved"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(json!(id));
+                }
+                malformed(&format!("missing reviewed resources for {id}"))
+            }
+            4 => {
+                value["resources"]["reviewed"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(original["resources"]["reviewed"][entry].clone());
+                malformed(&format!("duplicate resource state for {id}"))
+            }
+            5 => {
+                value["resources"]["unresolved"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!(id));
+                malformed(&format!("duplicate resource state for {id}"))
+            }
+            6 | 7 => {
+                regroup(&mut value, id, &[id]);
+                value["operations"]
+                    .as_array_mut()
+                    .unwrap()
+                    .last_mut()
+                    .unwrap()["owner"] = json!(if edit == 6 { "rust" } else { "python" });
+                if edit == 6 {
+                    AdmissionError::UnsupportedRustOwner {
+                        participant: id.into(),
+                    }
+                } else {
+                    AdmissionError::UnknownOwner {
+                        value: "python".into(),
+                    }
+                }
+            }
+            8 => {
+                value["operations"].as_array_mut().unwrap().push(
+                    json!({"operation":"tool.conflict", "owner":"node", "participants":[id]}),
+                );
+                AdmissionError::ConflictingParticipant {
+                    operation: id.into(),
+                    left: "tool.conflict".into(),
+                    right: id.into(),
+                }
+            }
+            12 => {
+                value["resources"]["reviewed"][entry]["resources"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({"kind":"table","name":"plan_snapshots"}));
+                AdmissionError::ResourceSetMismatch { id: id.into() }
+            }
+            9..=11 => {
+                let resources = value["resources"]["reviewed"][entry]["resources"]
+                    .as_array_mut()
+                    .unwrap();
+                match edit {
+                    9 => {
+                        resources.remove(0);
+                    }
+                    10 => {
+                        resources.push(resources[0].clone());
+                    }
+                    11 => {
+                        resources.clear();
+                    }
+                    _ => unreachable!(),
+                }
+                AdmissionError::ResourceSetMismatch { id: id.into() }
+            }
+            _ => unreachable!(),
+        };
+        let mut effect = false;
+        let result = admit(&value).and_then(|index| {
+            index.admit_rollback(id)?;
+            effect = true;
+            Ok(())
+        });
+        assert_eq!(result, Err(expected), "edit {edit}");
+        assert!(!effect, "edit {edit}");
+    }
+}
+
+#[test]
+fn ticket_t_7_ownership_get_plan_snapshot_has_complete_node_owned_resources() {
+    use pp_gateway::ownership::{Owner, manifest::Disposition};
+    let id = "tool.get_plan_snapshot";
+    let index = admit_bundled_manifest().unwrap();
+    let resources = index
+        .resources_for(id)
+        .expect("snapshot resources must be reviewed");
+    let expected: ResourceSet = serde_json::from_value(json!([
+        {"kind":"table","name":"build_profiles"},
+        {"kind":"table","name":"parts"},
+        {"kind":"table","name":"profile_layers"},
+        {"kind":"table","name":"projects"},
+        {"kind":"table","name":"source_revisions"},
+        {"kind":"table","name":"app_settings"},
+        {"kind":"table","name":"plan_accepted_input_sets"},
+        {"kind":"table","name":"plan_revision_input_sets"},
+        {"kind":"table","name":"plan_revision_inputs"},
+        {"kind":"file","name":"source-workspace"},
+        {"kind":"file","name":"kit-catalog"}
+    ]))
+    .unwrap();
+    assert_eq!(resources, &expected);
+    assert_eq!(
+        index.lookup(id).unwrap().disposition,
+        Disposition::Owned(Owner::Node)
+    );
+    for (format, node_reads, writers) in [
+        ("sqlite-schema", 34, vec![Some(35), None]),
+        ("source-revision-workspace", 1, vec![Some(2), None]),
+        ("kit-catalog", 1, vec![Some(2), None]),
+    ] {
+        for rust_writes in writers {
+            let mut value = manifest();
+            value["live_formats"]["sqlite-schema"]["rust_writes"] = json!(34);
+            value["live_formats"]["kit-catalog"]["rust_writes"] = json!(1);
+            value["live_formats"][format]["rust_writes"] = json!(rust_writes);
+            let mut effect = false;
+            assert_eq!(
+                admit(&value).and_then(|index| {
+                    index.admit_rollback(id)?;
+                    effect = true;
+                    Ok(())
+                }),
+                Err(AdmissionError::IncompatibleLiveFormat {
+                    operation: id.into(),
+                    format: format.into(),
+                    node_reads,
+                    rust_writes,
+                })
+            );
+            assert!(!effect);
+        }
+    }
+    let mut value = manifest();
+    value["live_formats"]["sqlite-schema"]["rust_writes"] = json!(34);
+    assert_eq!(
+        admit(&value).unwrap().admit_rollback(id),
+        Err(AdmissionError::IncompatibleLiveFormat {
+            operation: id.into(),
+            format: "kit-catalog".into(),
+            node_reads: 1,
+            rust_writes: None,
+        })
+    );
+    value["live_formats"]["kit-catalog"]["rust_writes"] = json!(1);
+    assert_eq!(admit(&value).unwrap().admit_rollback(id), Ok(&expected));
+    value["live_formats"]["kit-catalog"]["node_reads"] = json!(2);
+    assert_eq!(admit(&value).unwrap().admit_rollback(id), Ok(&expected));
+}
+
+#[test]
+fn ticket_t_7_ownership_get_plan_snapshot_requires_valid_catalog_format() {
+    for field in ["node_reads", "rust_writes"] {
+        let mut value = manifest();
+        value["live_formats"]["kit-catalog"]
+            .as_object_mut()
+            .unwrap()
+            .remove(field);
+        assert!(
+            matches!(admit(&value), Err(AdmissionError::Malformed(detail)) if detail.contains(&format!("missing field `{field}`")))
+        );
+        value["live_formats"]["kit-catalog"][field] = json!(0);
+        assert_eq!(
+            admit(&value).unwrap_err(),
+            malformed("live format kit-catalog has version 0")
+        );
+    }
+    let mut value = manifest();
+    value["live_formats"]
+        .as_object_mut()
+        .unwrap()
+        .remove("kit-catalog");
+    assert!(
+        matches!(admit(&value), Err(AdmissionError::Malformed(detail)) if detail.contains("missing field `kit-catalog`"))
+    );
+}
+
+#[test]
+fn ticket_t_7_ownership_get_kit_catalog_has_complete_node_owned_resources() {
+    use pp_gateway::ownership::{Owner, manifest::Disposition};
+    let id = "tool.get_kit_catalog";
+    let index = admit_bundled_manifest().unwrap();
+    let expected: ResourceSet = serde_json::from_value(json!([
+        {"kind":"file","name":"kit-catalog"}
+    ]))
+    .unwrap();
+    assert_eq!(index.resources_for(id), Ok(&expected));
+    assert_eq!(
+        index.lookup(id).unwrap().disposition,
+        Disposition::Owned(Owner::Node)
+    );
+    for rust_writes in [None, Some(2)] {
+        let mut value = manifest();
+        value["live_formats"]["kit-catalog"]["rust_writes"] = json!(rust_writes);
+        let mut effect = false;
+        assert_eq!(
+            admit(&value).and_then(|index| {
+                index.admit_rollback(id)?;
+                effect = true;
+                Ok(())
+            }),
+            Err(AdmissionError::IncompatibleLiveFormat {
+                operation: id.into(),
+                format: "kit-catalog".into(),
+                node_reads: 1,
+                rust_writes,
+            })
+        );
+        assert!(!effect);
+    }
+    let mut value = manifest();
+    value["live_formats"]["kit-catalog"]["rust_writes"] = json!(1);
+    assert_eq!(admit(&value).unwrap().admit_rollback(id), Ok(&expected));
 }

@@ -62,13 +62,6 @@ impl KitManifest {
         parse_kit(&kit).map_err(|_| "stored kit is malformed".into())
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "GRE-604 manifest observation has no runtime caller yet"
-        )
-    )]
     pub(super) fn from_stored_or_empty(raw: &str) -> Result<KitManifest, JsonLimit> {
         match json::parse(raw.as_bytes()) {
             Ok(JsonValue::Object(kit)) => Ok(parse_kit(&kit).unwrap_or_default()),
@@ -235,13 +228,6 @@ impl KitManifest {
             .collect()
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "GRE-604 manifest observation has no runtime caller yet"
-        )
-    )]
     pub(super) fn insert_default_selection(
         &mut self,
         group: OptionGroupId,

@@ -13,6 +13,7 @@ pub enum LiveFormatId {
     SqliteSchema,
     SourceRevisionWorkspace,
     SourceCovers,
+    KitCatalog,
 }
 
 impl LiveFormatId {
@@ -21,6 +22,7 @@ impl LiveFormatId {
             Self::SqliteSchema => "sqlite-schema",
             Self::SourceRevisionWorkspace => "source-revision-workspace",
             Self::SourceCovers => "source-covers",
+            Self::KitCatalog => "kit-catalog",
         }
     }
 }
@@ -32,6 +34,7 @@ impl ResourceId {
             Self::Table(_) => LiveFormatId::SqliteSchema,
             Self::File(FileFamily::SourceWorkspace) => LiveFormatId::SourceRevisionWorkspace,
             Self::File(FileFamily::SourceCovers) => LiveFormatId::SourceCovers,
+            Self::File(FileFamily::KitCatalog) => LiveFormatId::KitCatalog,
         }
     }
 }
@@ -62,6 +65,8 @@ pub(super) struct LiveFormats {
     source_revision_workspace: LiveFormat,
     #[serde(rename = "source-covers")]
     source_covers: LiveFormat,
+    #[serde(rename = "kit-catalog")]
+    kit_catalog: LiveFormat,
 }
 
 impl LiveFormats {
@@ -70,6 +75,7 @@ impl LiveFormats {
             LiveFormatId::SqliteSchema => self.sqlite_schema,
             LiveFormatId::SourceRevisionWorkspace => self.source_revision_workspace,
             LiveFormatId::SourceCovers => self.source_covers,
+            LiveFormatId::KitCatalog => self.kit_catalog,
         }
     }
 
@@ -78,6 +84,7 @@ impl LiveFormats {
             LiveFormatId::SqliteSchema,
             LiveFormatId::SourceRevisionWorkspace,
             LiveFormatId::SourceCovers,
+            LiveFormatId::KitCatalog,
         ] {
             let format = self.get(id);
             if format.node_reads == 0 || format.rust_writes == Some(0) {

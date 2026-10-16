@@ -169,7 +169,7 @@ async fn ticket_t_3_drain_supervisor_shutdown_reports_graceful_exit() {
     assert!(live_pids(&scratch.pidfile()).is_empty());
 }
 
-const READY: &str = r#"exec /usr/bin/node -e 'const http=require("node:http"); const input=require("node:readline").createInterface({input:process.stdin}); input.on("close",()=>process.exit(0)); input.once("line",line=>{const setup=JSON.parse(line); http.createServer((req,res)=>{res.setHeader("Content-Type","application/json"); res.end(JSON.stringify({ok:true,version:"ticket-t-2-unreleased",release:{commit:"ticket-t-2-unreleased"}}));}).listen(setup.socket_path);});'"#;
+const READY: &str = r#"exec "$NODE" -e 'const http=require("node:http"); const input=require("node:readline").createInterface({input:process.stdin}); input.on("close",()=>process.exit(0)); input.once("line",line=>{const setup=JSON.parse(line); http.createServer((req,res)=>{res.setHeader("Content-Type","application/json"); res.end(JSON.stringify({ok:true,version:"ticket-t-2-unreleased",release:{commit:"ticket-t-2-unreleased"}}));}).listen(setup.socket_path);});'"#;
 
 #[tokio::test]
 async fn ticket_t_3_drain_supervisor_crash_after_disarm_is_not_graceful() {
@@ -582,7 +582,7 @@ async fn ticket_t_2_crash_signal_is_distinct_from_parent_cleanup() {
 async fn health_failure_shutdown(disarm_while_ready: bool) {
     let scratch = Scratch::new("health-facts");
     let mut spec = shell_spec(&scratch);
-    spec.script = r#"exec /usr/bin/node -e 'const http=require("node:http"); const input=require("node:readline").createInterface({input:process.stdin}); input.on("close",()=>process.exit(0)); input.once("line",line=>{const setup=JSON.parse(line); let checks=0; http.createServer((req,res)=>{checks++; res.setHeader("Content-Type","application/json"); res.end(JSON.stringify({ok:checks===1,version:"ticket-t-2-unreleased",release:{commit:"ticket-t-2-unreleased"}}));}).listen(setup.socket_path);});'"#;
+    spec.script = r#"exec "$NODE" -e 'const http=require("node:http"); const input=require("node:readline").createInterface({input:process.stdin}); input.on("close",()=>process.exit(0)); input.once("line",line=>{const setup=JSON.parse(line); let checks=0; http.createServer((req,res)=>{checks++; res.setHeader("Content-Type","application/json"); res.end(JSON.stringify({ok:checks===1,version:"ticket-t-2-unreleased",release:{commit:"ticket-t-2-unreleased"}}));}).listen(setup.socket_path);});'"#;
     let supervisor =
         super::Supervisor::launch_shell(spec, super::SupervisorConfig::default()).unwrap();
     let mut status = supervisor.handle.status.clone();
@@ -1221,7 +1221,7 @@ async fn ticket_t_3_drain_repeated_eof_interrupts_mutation_without_resend() {
         let supervisor = super::Supervisor::launch_shell(
             super::ShellSpec {
                 script: concat!(
-                    "exec /usr/bin/node -e '",
+                    "exec \"$NODE\" -e '",
                     include_str!("fixtures/drain-upload.cjs"),
                     "'"
                 ),
@@ -1685,7 +1685,7 @@ async fn ticket_t_3_drain_shutdown_cancels_backpressured_startup_setup() {
     let scratch = Scratch::new("blocked-startup-setup");
     let supervisor = super::Supervisor::launch_shell(
         super::ShellSpec {
-            script: "exec /usr/bin/node -e 'setInterval(() => {}, 1e9)'",
+            script: "exec \"$NODE\" -e 'setInterval(() => {}, 1e9)'",
             setup_padding: "x".repeat(1024 * 1024),
             ..shell_spec(&scratch)
         },
@@ -1782,7 +1782,7 @@ async fn startup_owner_death_fixture() {
     let quote = |path: &Path| format!("'{}'", path.to_str().unwrap().replace('\'', "'\"'\"'"));
     let script = Box::leak(
         format!(
-            "exec /usr/bin/node {} {}",
+            "exec \"$NODE\" {} {}",
             quote(&node_fixture),
             quote(&scratch.root.join("node-execed"))
         )
@@ -2060,7 +2060,7 @@ async fn ticket_t_3_drain_repeated_eof_joins_unread_response_body() {
         let supervisor = super::Supervisor::launch_shell(
             super::ShellSpec {
                 script: concat!(
-                    "exec /usr/bin/node -e '",
+                    "exec \"$NODE\" -e '",
                     include_str!("fixtures/drain-stream.cjs"),
                     "'"
                 ),

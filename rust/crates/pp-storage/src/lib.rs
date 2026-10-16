@@ -17,6 +17,15 @@ pub mod manifest_text;
 #[cfg(feature = "desktop_rebuild")]
 pub mod native_secrets;
 #[cfg(feature = "desktop_rebuild")]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "GRE-612 PR 2 calls this from publish_in_transaction"
+    )
+)]
+mod plan_publication;
+#[cfg(feature = "desktop_rebuild")]
 pub mod profiles;
 pub mod read_model;
 #[cfg(feature = "desktop_rebuild")]
@@ -91,6 +100,8 @@ enum Envelope {
         command: working_drafts::Command,
         reply: mpsc::Sender<Result<working_drafts::Outcome>>,
     },
+    #[cfg(feature = "desktop_rebuild")]
+    WorkingDraftWrite { command: working_drafts::Write },
     #[cfg(feature = "desktop_rebuild")]
     BuildGraph {
         command: build_graph::Command,
@@ -591,6 +602,10 @@ impl WriterOwner {
                     #[cfg(feature = "desktop_rebuild")]
                     Envelope::WorkingDraft { command, reply } => {
                         let _ = reply.send(working_drafts::execute(&mut connection, command));
+                    }
+                    #[cfg(feature = "desktop_rebuild")]
+                    Envelope::WorkingDraftWrite { command } => {
+                        working_drafts::write(&mut connection, command, admission);
                     }
                     Envelope::Read { command, reply } => {
                         let _ = reply.send(read_model::execute(&mut connection, command));
