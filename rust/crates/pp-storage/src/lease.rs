@@ -137,32 +137,44 @@ pub(crate) fn admit_directory(path: &Path) -> Result<AdmittedDirectory> {
     let path = if path.is_absolute() {
         path.to_path_buf()
     } else {
-        std::env::current_dir()?.join(path)
+        std::env::current_dir()
+            .context("admit_directory: current_dir")?
+            .join(path)
     };
     validate_input_ancestors(&path)?;
     std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
-        .create(&path)?;
+        .create(&path)
+        .with_context(|| format!("admit_directory: create data directory {}", path.display()))?;
     let opened = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_DIRECTORY | libc::O_NONBLOCK)
         .open(&path)
-        .map_err(|error| match error.raw_os_error() {
-            Some(libc::EACCES | libc::EPERM) => {
-                anyhow::Error::new(error).context("Unsafe data directory permissions")
+        .map_err(|error| {
+            let errno = error.raw_os_error();
+            let error = anyhow::Error::new(error).context(format!(
+                "admit_directory: open data directory {}",
+                path.display()
+            ));
+            match errno {
+                Some(libc::EACCES | libc::EPERM) => {
+                    error.context("Unsafe data directory permissions")
+                }
+                Some(libc::ENOTDIR) => error.context("Data directory is not a directory"),
+                _ => error,
             }
-            Some(libc::ENOTDIR) => {
-                anyhow::Error::new(error).context("Data directory is not a directory")
-            }
-            _ => error.into(),
         })?;
-    let metadata = opened.metadata()?;
+    let metadata = opened
+        .metadata()
+        .context("admit_directory: fstat opened data directory")?;
     ensure!(metadata.is_dir(), "Data directory is not a directory");
     validate_directory_permissions(&metadata)?;
     #[cfg(test)]
     tests::replace_directory_before_canonicalization(&path)?;
-    let directory = path.canonicalize()?;
+    let directory = path
+        .canonicalize()
+        .with_context(|| format!("admit_directory: canonicalize {}", path.display()))?;
     let admitted = AdmittedDirectory {
         path: directory,
         directory: opened,
@@ -173,7 +185,14 @@ pub(crate) fn admit_directory(path: &Path) -> Result<AdmittedDirectory> {
     match std::fs::symlink_metadata(directory.join("printpartner.lock")) {
         Ok(metadata) => validate_lock_metadata(&metadata)?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "admit_directory: lstat {}/printpartner.lock",
+                    directory.display()
+                )
+            });
+        }
     }
     #[cfg(test)]
     tests::replace_directory_before_writer_preflight(directory)?;
@@ -204,7 +223,7 @@ impl AdmittedDirectory {
                 "Data directory already owned; stop the other Print Partner process before starting another instance"
             ),
             Err(fs4::TryLockError::Error(error)) => {
-                return Err(error).context("Could not lock printpartner.lock");
+                return Err(error).context("AdmittedDirectory::lock: try_lock printpartner.lock");
             }
         }
         self.validate_identity()?;
@@ -232,11 +251,26 @@ impl AdmittedDirectory {
             |name| self.open_preflight_file(name),
             || self.validate_identity(),
         )
+        .map_err(|error| {
+            if error.downcast_ref::<std::io::Error>().is_some() {
+                error.context(format!(
+                    "AdmittedDirectory::preflight_schema: database preflight in {} (owned={_owned})",
+                    self.path.display()
+                ))
+            } else {
+                error
+            }
+        })
     }
 
     fn validate_identity(&self) -> Result<()> {
-        let opened = self.directory.metadata()?;
-        let named = std::fs::symlink_metadata(&self.path).context("Data directory was replaced")?;
+        let opened = self
+            .directory
+            .metadata()
+            .context("validate_identity: fstat admitted data directory")?;
+        let named = std::fs::symlink_metadata(&self.path)
+            .with_context(|| format!("validate_identity: lstat {}", self.path.display()))
+            .context("Data directory was replaced")?;
         ensure!(
             named.is_dir() && opened.dev() == named.dev() && opened.ino() == named.ino(),
             "Data directory was replaced"
@@ -246,7 +280,13 @@ impl AdmittedDirectory {
     }
 
     fn open_preflight_file(&self, name: &str) -> std::io::Result<File> {
-        let name = CString::new(name)?;
+        let at_stage = |stage: &str, error: std::io::Error| {
+            std::io::Error::new(
+                error.kind(),
+                format!("open_preflight_file: {stage} {name}: {error}"),
+            )
+        };
+        let name = CString::new(name).map_err(|error| at_stage("encode name", error.into()))?;
         let fd = unsafe {
             libc::openat(
                 self.directory.as_raw_fd(),
@@ -259,16 +299,22 @@ impl AdmittedDirectory {
             )
         };
         if fd < 0 {
-            return Err(std::io::Error::last_os_error());
+            return Err(at_stage(
+                "openat O_RDONLY|O_NOFOLLOW",
+                std::io::Error::last_os_error(),
+            ));
         }
         let file = unsafe { File::from_raw_fd(fd) };
-        let metadata = file.metadata()?;
+        let metadata = file.metadata().map_err(|error| at_stage("fstat", error))?;
         if !metadata.is_file() {
-            return Err(std::io::Error::from_raw_os_error(if metadata.is_dir() {
-                libc::EISDIR
-            } else {
-                libc::EINVAL
-            }));
+            return Err(at_stage(
+                "require regular file",
+                std::io::Error::from_raw_os_error(if metadata.is_dir() {
+                    libc::EISDIR
+                } else {
+                    libc::EINVAL
+                }),
+            ));
         }
         Ok(file)
     }
@@ -287,7 +333,12 @@ impl AdmittedDirectory {
             )
         };
         if fd < 0 {
-            return Err(std::io::Error::last_os_error().into());
+            return Err(std::io::Error::last_os_error()).with_context(|| {
+                format!(
+                    "open_lock: openat O_RDWR|O_CREAT|O_NOFOLLOW {}",
+                    name.to_string_lossy()
+                )
+            });
         }
         Ok(unsafe { File::from_raw_fd(fd) })
     }
@@ -299,10 +350,20 @@ fn validate_input_ancestors(path: &Path) -> Result<()> {
             Ok(_) => {
                 // Resolve every existing prefix before mkdir, including aliases whose
                 // target has unsafe parents hidden by the input spelling.
-                validate_resolved_ancestors(&prefix.canonicalize()?, prefix != path)?;
+                let resolved = prefix.canonicalize().with_context(|| {
+                    format!(
+                        "validate_input_ancestors: canonicalize {}",
+                        prefix.display()
+                    )
+                })?;
+                validate_resolved_ancestors(&resolved, prefix != path)?;
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("validate_input_ancestors: lstat {}", prefix.display())
+                });
+            }
         }
     }
     Ok(())
@@ -311,7 +372,8 @@ fn validate_input_ancestors(path: &Path) -> Result<()> {
 fn validate_resolved_ancestors(path: &Path, include_self: bool) -> Result<()> {
     let euid = unsafe { libc::geteuid() };
     for ancestor in path.ancestors().skip(usize::from(!include_self)) {
-        let metadata = std::fs::metadata(ancestor)?;
+        let metadata = std::fs::metadata(ancestor)
+            .with_context(|| format!("validate_resolved_ancestors: stat {}", ancestor.display()))?;
         ensure!(
             metadata.is_dir()
                 && (metadata.uid() == 0 || metadata.uid() == euid)
@@ -334,8 +396,11 @@ fn validate_lock_metadata(metadata: &std::fs::Metadata) -> Result<()> {
 }
 
 fn validate_open_lock_identity(file: &File, path: &Path) -> Result<()> {
-    let opened = file.metadata()?;
-    let named = std::fs::symlink_metadata(path)?;
+    let opened = file
+        .metadata()
+        .with_context(|| format!("validate_open_lock_identity: fstat {}", path.display()))?;
+    let named = std::fs::symlink_metadata(path)
+        .with_context(|| format!("validate_open_lock_identity: lstat {}", path.display()))?;
     validate_lock_metadata(&opened)?;
     validate_lock_metadata(&named)?;
     ensure!(
@@ -374,7 +439,13 @@ impl StorageLease {
         ));
         std::fs::DirBuilder::new()
             .mode(0o700)
-            .create(&runtime_dir)?;
+            .create(&runtime_dir)
+            .with_context(|| {
+                format!(
+                    "StorageLease::acquire_locked: create runtime directory {}",
+                    runtime_dir.display()
+                )
+            })?;
         Ok(Self {
             advisory_lock: Some(lock),
             compatibility: Some(compatibility),
@@ -393,11 +464,11 @@ impl StorageLease {
         &self.runtime_dir
     }
     pub fn clone_file(&self) -> Result<File> {
-        Ok(self
-            .advisory_lock
+        self.advisory_lock
             .as_ref()
             .expect("active storage owner")
-            .try_clone()?)
+            .try_clone()
+            .context("StorageLease::clone_file: duplicate advisory lock descriptor")
     }
     pub fn retain_on_drop(&mut self) {
         self.release_allowed = false;
@@ -777,7 +848,10 @@ mod tests {
             assert!(diagnostic.contains("open_lock: openat"), "{diagnostic}");
             assert!(diagnostic.contains(name.to_str().unwrap()), "{diagnostic}");
             assert_eq!(
-                error.downcast_ref::<std::io::Error>().unwrap().raw_os_error(),
+                error
+                    .downcast_ref::<std::io::Error>()
+                    .unwrap()
+                    .raw_os_error(),
                 Some(libc::ENOENT)
             );
         }
@@ -792,7 +866,10 @@ mod tests {
             "{diagnostic}"
         );
         assert_eq!(
-            error.downcast_ref::<std::io::Error>().unwrap().raw_os_error(),
+            error
+                .downcast_ref::<std::io::Error>()
+                .unwrap()
+                .raw_os_error(),
             Some(libc::ENOENT)
         );
         std::fs::remove_dir(path).unwrap();

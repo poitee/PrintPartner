@@ -181,7 +181,10 @@ fn gre_636_lock_subprocess() {
                 instruction("stop");
                 owner.shutdown().unwrap();
             }
-            Err(error) => report(&format!("refused {error}")),
+            Err(error) => {
+                eprintln!("{error:?}");
+                report(&format!("refused {error:#}").replace('\n', " | "));
+            }
         },
         "lease" => {
             let owner = StorageLease::acquire(&data).unwrap();
@@ -303,7 +306,10 @@ fn gre_636_lock_refusal_precedes_database_preflight() {
     owner.stop();
     let mut uncontended = Process::spawn(&fixture.0, "writer");
     uncontended.start();
-    assert_eq!(uncontended.event(), "refused file is not a database");
+    assert_eq!(
+        uncontended.event(),
+        "refused file is not a database: Error code 26: file is not a database"
+    );
     assert!(uncontended.wait().success());
 }
 
@@ -355,7 +361,7 @@ fn gre_636_standalone_node_blocks_rust_before_database_preflight() {
     rust.start();
     assert_eq!(
         rust.event(),
-        "refused Data directory already owned by standalone Node; stop it before starting Rust"
+        "refused Data directory already owned by standalone Node; stop it before starting Rust: open_lock: openat O_RDWR|O_CREAT|O_NOFOLLOW .desktop-lease: Is a directory (os error 21)"
     );
     assert!(rust.wait().success());
     assert_eq!(

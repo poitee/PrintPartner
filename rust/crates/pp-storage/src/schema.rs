@@ -1,4 +1,4 @@
-use anyhow::{Result, bail, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, types::Value};
 use serde::Deserialize;
 use std::{
@@ -60,7 +60,14 @@ pub(crate) fn preflight(
     }
     #[cfg(test)]
     capture_tests::transient_swap(path, 0, false)?;
-    let metadata = open_file("print-partner.db").and_then(|file| file.metadata());
+    let metadata = open_file("print-partner.db").and_then(|file| {
+        file.metadata().map_err(|error| {
+            std::io::Error::new(
+                error.kind(),
+                format!("schema::preflight: fstat print-partner.db: {error}"),
+            )
+        })
+    });
     #[cfg(test)]
     capture_tests::transient_swap(path, 0, true)?;
     #[cfg(test)]
@@ -89,7 +96,12 @@ pub(crate) fn preflight(
                 capture_tests::transient_swap(path, checkpoint, false)?;
                 let read = open_file(&name).and_then(|mut file| {
                     let mut bytes = Vec::new();
-                    file.read_to_end(&mut bytes)?;
+                    file.read_to_end(&mut bytes).map_err(|error| {
+                        std::io::Error::new(
+                            error.kind(),
+                            format!("schema::preflight: read {name}: {error}"),
+                        )
+                    })?;
                     Ok(bytes)
                 });
                 #[cfg(test)]
@@ -123,10 +135,20 @@ pub(crate) fn preflight(
     )));
     #[cfg(test)]
     PREFLIGHT_COPIES.update(|copies| copies + 1);
-    std::fs::DirBuilder::new().mode(0o700).create(&copy.0)?;
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&copy.0)
+        .with_context(|| {
+            format!(
+                "schema::preflight: create temporary directory {}",
+                copy.0.display()
+            )
+        })?;
     for (suffix, bytes) in &source {
         if let Some(bytes) = bytes {
-            std::fs::write(copy.0.join(format!("print-partner.db{suffix}")), bytes)?;
+            std::fs::write(copy.0.join(format!("print-partner.db{suffix}")), bytes).with_context(
+                || format!("schema::preflight: write captured print-partner.db{suffix}"),
+            )?;
         }
     }
     ensure!(
@@ -205,14 +227,23 @@ pub(crate) fn backup(conn: &Connection, path: &Path, replace: bool) -> Result<()
         && let Some(source) = conn.path()
     {
         ensure!(
-            path.canonicalize()? != Path::new(source).canonicalize()?,
+            path.canonicalize()
+                .context("schema::backup: canonicalize destination")?
+                != Path::new(source)
+                    .canonicalize()
+                    .context("schema::backup: canonicalize source")?,
             "Backup cannot replace the open database"
         );
     }
     let parent = path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("Backup parent missing"))?;
-    std::fs::create_dir_all(parent)?;
+    std::fs::create_dir_all(parent).with_context(|| {
+        format!(
+            "schema::backup: create parent directory {}",
+            parent.display()
+        )
+    })?;
     let temp = parent.join(format!(
         ".backup-{}.db",
         hex::encode(rand::random::<[u8; 16]>())
@@ -223,14 +254,20 @@ pub(crate) fn backup(conn: &Connection, path: &Path, replace: bool) -> Result<()
         let integrity: String = check.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
         ensure!(integrity == "ok", "Backup integrity failed");
         drop(check);
-        File::open(&temp)?.sync_all()?;
+        File::open(&temp)
+            .context("schema::backup: open temporary backup")?
+            .sync_all()
+            .context("schema::backup: sync temporary backup")?;
         if replace {
-            std::fs::rename(&temp, path)?;
+            std::fs::rename(&temp, path).context("schema::backup: rename temporary backup")?;
         } else {
-            std::fs::hard_link(&temp, path)?;
-            std::fs::remove_file(&temp)?;
+            std::fs::hard_link(&temp, path).context("schema::backup: link temporary backup")?;
+            std::fs::remove_file(&temp).context("schema::backup: unlink temporary backup")?;
         }
-        File::open(parent)?.sync_all()?;
+        File::open(parent)
+            .context("schema::backup: open parent directory")?
+            .sync_all()
+            .context("schema::backup: sync parent directory")?;
         Ok(())
     })();
     if temp.exists() {
@@ -245,7 +282,18 @@ pub(crate) fn initialize(
     now: &str,
 ) -> Result<(Connection, SchemaReady)> {
     let mut conn = Connection::open(path)?;
-    let backup_path = if version < 35 && path.metadata()?.len() > 0 {
+    let backup_path = if version < 35
+        && path
+            .metadata()
+            .with_context(|| {
+                format!(
+                    "schema::initialize: stat {} after SQLite open",
+                    path.display()
+                )
+            })?
+            .len()
+            > 0
+    {
         let target = path.parent().unwrap().join("backups/pre-schema35.db");
         if !target.exists() {
             backup(&conn, &target, true)?;
