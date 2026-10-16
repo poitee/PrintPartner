@@ -37,7 +37,7 @@ fn invalid<T>() -> ReadResult<T> {
 fn tag_name(tag: Option<&Tag>) -> ReadResult<Option<&str>> {
     match tag {
         None => Ok(None),
-        Some(t) if t.handle == "!" && t.suffix.is_empty() => Ok(Some("!")),
+        Some(t) if t.handle.is_empty() && t.suffix == "!" => Ok(Some("!")),
         Some(t) if t.is_yaml_core_schema() => Ok(Some(t.suffix.as_str())),
         _ => invalid(),
     }
