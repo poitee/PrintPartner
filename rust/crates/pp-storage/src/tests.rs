@@ -404,7 +404,7 @@ fn ahead_and_old_versions_reject_before_side_effects() {
             WriterOwner::open_at(&path, Limits::default(), "2026-10-02T00:00:00.000Z").is_err()
         );
         assert_eq!(std::fs::read(&database).unwrap(), before);
-        assert_eq!(std::fs::read_dir(&path).unwrap().count(), 1);
+        assert_eq!(std::fs::read_dir(&path).unwrap().count(), 2);
     }
 }
 
@@ -775,6 +775,7 @@ fn wal_only_unsupported_versions_preserve_every_input_file() {
                     )
                     .unwrap();
                 }
+                std::fs::write(target.join("printpartner.lock"), b"").unwrap();
                 let before = tree(&target);
                 let error = WriterOwner::open(&target, Limits::default())
                     .err()
@@ -864,14 +865,14 @@ fn unowned_preflight_rejects_live_and_invalid_markers_without_changes() {
             std::fs::read_to_string(path.join(".desktop-owner.json")).unwrap(),
             contents
         );
-        assert_eq!(std::fs::read_dir(&path).unwrap().count(), 1);
+        assert_eq!(std::fs::read_dir(&path).unwrap().count(), 2);
         std::fs::remove_dir_all(path).unwrap();
     }
     let path = directory("unreadable-marker");
     std::fs::create_dir(path.join(".desktop-owner.json")).unwrap();
     assert!(WriterOwner::open(&path, Limits::default()).is_err());
     assert!(path.join(".desktop-owner.json").is_dir());
-    assert_eq!(std::fs::read_dir(&path).unwrap().count(), 1);
+    assert_eq!(std::fs::read_dir(&path).unwrap().count(), 2);
     std::fs::remove_dir_all(path).unwrap();
 }
 
@@ -1887,6 +1888,11 @@ fn refused_wal_input(version: &str) -> PathBuf {
 }
 
 fn assert_refused(path: &Path, message: &str) {
+    std::fs::write(
+        path.join("printpartner.lock"),
+        b"keep existing lock contents",
+    )
+    .unwrap();
     let before = tree_hashes(path);
     assert!(
         before.iter().any(|(file, _)| file == "print-partner.db")
@@ -1913,6 +1919,11 @@ fn ticket_t_7_migrations_preserves_refused_inputs() {
     std::fs::write(corrupt.join("print-partner.db-wal"), b"wal-bytes").unwrap();
     std::fs::write(corrupt.join("print-partner.db-shm"), b"shm-bytes").unwrap();
     std::fs::write(corrupt.join("retain-user-file"), b"untouched").unwrap();
+    std::fs::write(
+        corrupt.join("printpartner.lock"),
+        b"keep existing lock contents",
+    )
+    .unwrap();
     let before = tree_hashes(&corrupt);
     let error = WriterOwner::open(&corrupt, Limits::default())
         .err()

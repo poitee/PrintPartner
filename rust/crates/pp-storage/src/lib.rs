@@ -19,6 +19,8 @@ pub mod native_secrets;
 #[cfg(feature = "desktop_rebuild")]
 pub mod profiles;
 pub mod read_model;
+#[cfg(feature = "desktop_rebuild")]
+pub mod required_units;
 mod schema;
 #[cfg(feature = "desktop_rebuild")]
 pub mod working_drafts;
@@ -85,6 +87,11 @@ enum WriterControl {
 }
 enum Envelope {
     #[cfg(feature = "desktop_rebuild")]
+    WorkingDraft {
+        command: working_drafts::Command,
+        reply: mpsc::Sender<Result<working_drafts::Outcome>>,
+    },
+    #[cfg(feature = "desktop_rebuild")]
     BuildGraph {
         command: build_graph::Command,
         reply: build_graph::Reply,
@@ -98,6 +105,11 @@ enum Envelope {
     Features {
         command: features::Command,
         reply: mpsc::Sender<Result<features::View>>,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    RequiredUnits {
+        command: required_units::Command,
+        reply: mpsc::Sender<Result<required_units::Outcome>>,
     },
     Read {
         command: read_model::Command,
@@ -435,9 +447,9 @@ impl WriterOwner {
             limits.queued_writes > 0 && limits.readers > 0,
             "Storage limits must be positive"
         );
-        let admitted = lease::admit_directory(directory)?;
-        admitted.preflight()?;
-        let lease = lease::StorageLease::acquire_admitted(admitted)?;
+        let locked = lease::admit_directory(directory)?.lock()?;
+        locked.preflight()?;
+        let lease = lease::StorageLease::acquire_locked(locked)?;
         let path = lease.data_dir().join("print-partner.db");
         let version = lease.preflight()?;
         for name in ["repos", "sources", "exports", "thumbs", "covers"] {
@@ -567,6 +579,18 @@ impl WriterOwner {
                     #[cfg(feature = "desktop_rebuild")]
                     Envelope::BuildGraph { command, reply } => {
                         reply.send(build_graph::execute(&mut connection, command, admission));
+                    }
+                    #[cfg(feature = "desktop_rebuild")]
+                    Envelope::RequiredUnits { command, reply } => {
+                        let _ = reply.send(required_units::execute(
+                            &mut connection,
+                            command,
+                            admission,
+                        ));
+                    }
+                    #[cfg(feature = "desktop_rebuild")]
+                    Envelope::WorkingDraft { command, reply } => {
+                        let _ = reply.send(working_drafts::execute(&mut connection, command));
                     }
                     Envelope::Read { command, reply } => {
                         let _ = reply.send(read_model::execute(&mut connection, command));

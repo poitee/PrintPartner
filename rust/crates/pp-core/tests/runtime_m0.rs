@@ -1047,7 +1047,7 @@ async fn same_process_restart_retries_failed_storage_release_without_double_owne
     std::fs::write(&blocker, b"must not delete").unwrap();
     let lease = data.join(".desktop-lease/owner.json");
     let owner = std::fs::read(&lease).unwrap();
-    let lock = std::fs::File::open(data.join(".desktop.lock")).unwrap();
+    let lock = std::fs::File::open(data.join("printpartner.lock")).unwrap();
 
     let receipt = runtime.shutdown().await;
     assert!(receipt.compat_reaped && receipt.gateway_stopped && receipt.runtime_removed);
@@ -1106,7 +1106,7 @@ fn drop_after_caller_runtime_teardown_reaps_writer_and_descendant() {
     let lock = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
-        .open(data.join(".desktop.lock"))
+        .open(data.join("printpartner.lock"))
         .unwrap();
     assert!(lock.try_lock_exclusive().is_err());
     drop(runtime);

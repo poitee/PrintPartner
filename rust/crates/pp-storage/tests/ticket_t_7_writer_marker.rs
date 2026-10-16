@@ -45,7 +45,7 @@ impl Fixture {
             assert!(!self.0.join(".desktop-owner.json").exists());
             assert!(std::fs::read_dir(&self.0).unwrap().all(|entry| {
                 let name = entry.unwrap().file_name();
-                name == ".desktop-lease" || name == ".desktop.lock"
+                name == ".desktop-lease" || name == ".desktop.lock" || name == "printpartner.lock"
             }));
         }
     }
@@ -212,7 +212,10 @@ fn refuses_desktop_marker(fixture: &Fixture) {
             assert!(!fixture.0.join("print-partner.db").exists());
             assert!(std::fs::read_dir(&fixture.0).unwrap().all(|entry| {
                 let name = entry.unwrap().file_name();
-                name == ".desktop-owner.json" || name == ".desktop.lock" || name == ".desktop-lease"
+                name == ".desktop-owner.json"
+                    || name == ".desktop.lock"
+                    || name == ".desktop-lease"
+                    || name == "printpartner.lock"
             }));
         }
     }

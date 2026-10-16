@@ -63,6 +63,19 @@ it("copies shared default Plans to explicit separate owners and admits the selec
   expect(account.kind).toBe("existing");
   if (account.kind === "existing") { expect(account.principal().tenant_id).toBe("account-a"); account.close(); }
 });
+it("excludes printpartner.lock from ownership inspection, copying, and artifact digests", async () => {
+  const paths = fixture();
+  const inventory = inspectOwnershipCopy(paths);
+  const lock = join(paths.sourceDir, "printpartner.lock");
+  writeFileSync(lock, "before copy");
+  expect(inspectOwnershipCopy(paths)).toEqual(inventory);
+  const pending = executeOwnershipCopy({ ...paths, manifest: manifest(paths.sourceDir) });
+  writeFileSync(lock, "during copy");
+  expect(await pending).toEqual({ destinationDir: paths.destinationDir, user_id: "account-a" });
+  expect(readFileSync(lock, "utf8")).toBe("during copy");
+  expect(existsSync(join(paths.destinationDir, "printpartner.lock"))).toBe(false);
+  expect(readFileSync(join(paths.destinationDir, "repos/1/a.stl"), "utf8")).toBe("source bytes");
+});
 it("assigns a whole unclaimed source to one existing user", async () => {
   const paths = fixture(); await executeOwnershipCopy({ ...paths, manifest: manifest(paths.sourceDir, false) });
   const db = new Database(join(paths.destinationDir, "print-partner.db"));

@@ -125,17 +125,125 @@ Depth checks precede node and visit charges, matching entry accounting.
 Read requests retain storage-private fields. External adapters can inspect them
 but cannot create grants. This unit does not itself admit or perform any reads.
 
-The working-draft executor still needs D11's `required_units`. GRE-604 D10b also
-needs the builder manifest helpers, which depend on the YAML parser. The remaining
-D12 units are YAML, builder manifest helpers, the executor after D11, and
-preparation. Those stay open on GRE-607. This first unit alone does not unblock
-all of D10b.
+The read-only executor below uses D11's `required_units`. The observation
+contract alone does not unblock GRE-604 D10b. The YAML parser and builder manifest
+helpers are separate D12 units described below. The remaining D12 units are the
+mutating executor and preparation. Those stay open on GRE-607.
 
 Run its boundary and accounting proofs with:
 
 ```sh
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test working_draft_observation
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --doc
+```
+
+### D12 YAML parser
+
+The second GRE-607 unit ports `pp-storage::working_drafts::yaml`, the manifest
+YAML reader, compiled only with `desktop_rebuild`. The module is crate-private
+and feeds the builder manifest helpers. The optional `saphyr-parser` dependency
+(pinned `=0.1.0`, with `arraydeque`) is enabled only by the feature, so default builds do not compile
+it.
+
+`Document::parse` charges the shared `PreparationBudget` for nodes, depth,
+visits, and expansion, and checks cancellation. Each parsed node is charged once,
+array separators count as two UTF-16 bytes, and each mapping tracks seen keys
+in a hash set. Each mapping key charges the UTF-16 bytes of its entry copy and
+its seen-key copy. Text coercions, including primitives and mappings, charge their
+UTF-16 output bytes. The float matcher is compiled once. It accepts one document with
+core-schema tags, `!`, anchors, and aliases. Duplicate keys, extra documents,
+other tags, and tag/value mismatches return `InvalidDocument`. Scalars keep
+JavaScript UTF-16 semantics: lone surrogate escapes such as `"\uD800"` survive
+parsing, the private-use sentinel `U+E000` round-trips in every scalar style,
+and keys follow JavaScript property order. `text`, `optional_text`, and
+`truthy` apply JavaScript string and truthiness coercion. As with JavaScript
+`join`, an array that reaches itself through an alias contributes an empty
+string, so `project: &a [*a]` coerces to `""`.
+
+The remaining D12 units are the mutating executor and preparation.
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib working_drafts::yaml
+```
+
+### D12 builder manifest helpers
+
+GRE-607 exposes five crate-private helpers through `working_drafts::observation`
+for GRE-604 D10b. `parse_builder_manifest` reads part rules, option groups,
+repository defaults, and their scalar or array shapes. `merge_builder_groups`
+preserves earlier metadata, unions patterns, and preserves JavaScript property
+order. `builder_path_matches` applies the Node glob and basename rules.
+`parse_builder_hints` validates version 1 path hints and rejects unknown fields.
+`infer_builder_siblings` delegates to the sibling inference already on main.
+
+The model retains UTF-16 identifiers and the existing sibling group types.
+Parsing uses the shared `PreparationBudget`, including rule and expansion
+accounting. Both parsers check the document size before decoding. The sibling
+wrapper takes the same budget and returns `ReadResult<BuilderGroups>`, matching
+the landed inference rather than the reference branch's unbudgeted signature.
+These helpers compile only with the default-off `desktop_rebuild` feature.
+Draft application, the executor, and preparation remain separate
+units. No user-visible behavior changes in this slice.
+
+The contract is `loadManifestYaml`, `mergeOptionGroups`, and `matchKeyMatches` in
+`web/apps/server/src/services/manifest-apply.ts`, hint validation in
+`path-hints.ts`, and `inferSiblingFolderOptionGroups` in `repo-tree-summary.ts`.
+Supplementary Unicode wildcard parity and lone surrogate patterns remain in
+[GRE-641](https://linear.app/greetz/issue/GRE-641/align-builder-path-globs-with-node-utf-16-wildcard-semantics).
+The current regex API matches UTF-8 input. That follow-up enables the maintained
+UTF-16 matcher through Cargo configuration outside this helper slice.
+
+Run the helper tests through the same imports D10b uses:
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib working_drafts::manifest_tests
+```
+
+### D12 working-draft read executor
+
+GRE-607 adds `WriterOwner::working_drafts_with_policy` behind the default-off
+`desktop_rebuild` feature. The factory takes an explicit `AuthPolicy` and
+returns `WorkingDraftClient`. Its `execute` method accepts a credential, profile
+`PositiveId`, typed `Request`, cancellation flag, and queue wait. The requests
+are `List`, `Read`, `Diff`, and `Workspace`.
+They use the existing writer queue and one deferred transaction. Authentication
+observes the actor without updating usage timestamps.
+
+`Read` returns a `DraftDocument` with a validated `DraftIdentity`. `List` orders
+identities by creation time and then ID. Missing or unowned profiles and drafts
+return `NotFound`. Draft loading reuses the required-units reader, including its
+snapshot digest and selected reconciliation validation. Document, diff, and
+workspace reads reject incomplete rebase origins. `Workspace` reuses the
+required-units workspace builder. No required-units reader logic changes.
+
+`Diff` returns the complete input and Part diff against the draft's base
+revision. Both the revision ID and Plan version determine `baseIsCurrent`.
+Part rows sort by serialized ID as Node does. `DraftDocument` and `DraftDiff`
+retain manifest strings as UTF-16 and serialize lone surrogates as JSON escapes.
+Use their `into_json_body().into_bytes()` methods. The complete outcome uses
+`Outcome::into_json_body()?.into_bytes()`.
+
+This first core unit ports the read-only seam. Edit, lifecycle transitions,
+recompute, and preparation remain on GRE-607. Save and rebase remain GRE-608.
+There is no HTTP route or default-feature change.
+
+The operation tests call the public client against Node-written databases.
+Their literal expected JSON comes from `getPlanDraft`, `listPlanDraftIdentities`,
+`diffPlanDraft`, and `PlanDraftWorkspaceService.read`. The UTF-16 case uses
+`digestPlanDraft` and `diffPlanDraftSnapshot` directly because Node's SQLite
+adapter cannot read the Rust PPJS blob encoding. The generator records the SQL
+setup for each temporary database. It changes immutable identity or lineage
+fields only after dropping the corresponding trigger in that temporary copy.
+
+Regenerate the fixtures from the repository root with Node 22 and installed web
+dependencies. The generator writes databases in the system temporary directory
+and removes them when it finishes.
+
+```sh
+node --conditions=development --import ./web/node_modules/tsx/dist/loader.mjs \
+  rust/crates/pp-storage/tests/fixtures/working-drafts-node.mjs web/apps/server \
+  > rust/crates/pp-storage/tests/fixtures/working-drafts-node.jsonl
+cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test working_draft_core
 ```
 
 ### D4 media reconciliation
@@ -305,9 +413,9 @@ Before recursive creation, admission checks existing input prefixes and their re
 
 Store admission checks permissions on an open directory descriptor and holds it while it resolves the canonical path. It compares that descriptor's device and inode with the canonical directory, then rechecks the canonical leaf's owner and permissions. Replacement at this checkpoint fails with `Data directory was replaced` before lock creation, ownership cleanup or database preflight. Existing aliases remain supported.
 
-Lease acquisition keeps that descriptor through OS-lock acquisition and opens `.desktop.lock` relative to it. It rechecks directory identity and permissions before opening the lock, before locking, and after locking, before ownership marker access. An observed replacement fails with `Data directory was replaced`. A lock created during a replacement race belongs to the admitted directory; refusal closes the lock without path-based cleanup.
+Writer admission keeps that descriptor through OS-lock acquisition and opens `printpartner.lock` relative to it before database preflight. Lease acquisition then opens the retained `.desktop.lock` relative to the same directory descriptor. It rechecks directory identity and permissions before opening the lock, before locking, and after locking, before ownership marker access. An observed replacement fails with `Data directory was replaced`. A lock created during a replacement race belongs to the admitted directory; refusal closes the lock without path-based cleanup.
 
-The standalone Rust writer retains the same admitted descriptor through its first read-only database preflight and into lease acquisition. It rechecks identity and permissions immediately before preflight, refusing an observed replacement before database capture, temporary-copy creation or SQLite open. It rechecks resolved ancestor permissions after preflight, before lock creation.
+The standalone Rust writer acquires `printpartner.lock` before its first read-only database preflight and retains the same admitted directory descriptor into lease acquisition. It rechecks identity and permissions immediately before preflight, refusing an observed replacement before database capture, temporary-copy creation or SQLite open. It checks resolved ancestor permissions before each lock acquisition. `PP_STORAGE_CORE_LOCK=1` tells the supervised Node child to validate its inherited descriptor against `printpartner.lock`. The standalone Node lease protocol remains unchanged. See [Storage](storage.md) for shutdown, crash recovery, and unsupported directory operations.
 
 These Unix checks remain snapshots, not path confinement. Replacement during preflight capture or after the OS-lock checkpoints, transient replacement restored between checks, ancestor replacement, ACL policy, standalone Node admission, and Windows runtime permission policy remain open.
 
@@ -395,11 +503,8 @@ propagate resource exhaustion instead of embedding it in context errors. The
 feature-off reader retains its existing error classification.
 
 D9 is complete with the [final coverage and integration audit](desktop-rebuild-d9-audit.md).
-D10b remains blocked on GRE-607 working-draft observation and #450.
-Required-unit planning integration belongs to GRE-606 D11. Main now contains the observation
-contracts and budgets. The bounded YAML parser, builder manifest helpers, group merging, hints,
-and STL inference remain prerequisites for D10b integration. The existing
-`manifest_options` JSON model stays in place for later integration.
+Required-unit planning integration belongs to GRE-606 D11. Manifest option observation is
+GRE-604 D10b, described below.
 No runtime caller is added. Future user-visible callers must also check
 `PP_DESKTOP_REBUILD` for exactly `1` or `true`.
 
@@ -412,8 +517,64 @@ and ordered objects. Input errors emit lossless JSON detail bodies.
 The codec enforces 8 MiB, 64 levels, and 100,000 nodes.
 Focused codec unit tests and public model integration tests run in the desktop gates.
 
-ManifestBuilder, graph observation, known-group validation, default selection
-insertion, storage commands, and runtime wiring remain deferred.
+## D10b manifest observation receipt
+
+GRE-604 D10b adds `pp_storage::manifest_options::observation` behind `desktop_rebuild`.
+It has no runtime caller yet. Build graph manifest commands and HTTP routes remain deferred.
+
+`capture` reads the build, its stored kit, and its ordered source layers in one transaction.
+`basis_matches` repeats the capture, so a later transaction can reject a stale observation.
+`observe` builds the response of Node's `buildPlanManifestBuilder` in
+`web/apps/server/src/services/plan-manifest-builder.ts` through storage-issued `DraftReads` requests:
+
+- It reads each checkout manifest and STL inventory. It filters paths with the source's import rules and sorts them as `listStlRelativePaths` does.
+- A source without declared option groups infers groups from shipped and custom path hints, then from sibling folders.
+- Groups merge in layer order and keep JavaScript property order. Each variant names the sources whose scanned parts it matches.
+- Stored kit selections take precedence. Repository and community manifest defaults fill the other groups in layer order.
+
+As in Node, an unreadable or invalid manifest reports `exists: false` with the fallback YAML.
+Invalid UTF-8 decodes with replacement characters. An invalid or unreadable custom hints file fails the observation.
+A source without a checkout path is skipped. A source whose checkout root the adapter refuses is omitted.
+
+Adapter reads, manifest and hint parsing, and STL scans charge the caller's `PreparationBudget`.
+The stored kit and each source's import rules charge their bytes as documents.
+Import rules also charge every JSON node and one rule per accepted path.
+Import rules over the JSON byte, depth, or node limit refuse the observation.
+Malformed or non-array import rules give an empty rule set, as in Node.
+A malformed stored kit falls back to an empty kit, as in Node.
+A stored kit over the JSON byte, depth, or node limit refuses the observation.
+Path filtering and pattern matching check cancellation.
+Each source returns a SHA-256 stamp of its reads, so a caller can compare two observations.
+`validate_known_selections` returns the `manifestSelectionsInputError` messages for a kit save.
+
+The tests compare the response bytes with `rust/crates/pp-storage/tests/fixtures/manifest-builder-node.json`.
+`manifest-builder-node.mts` in the same directory regenerates that file from the Node services.
+Builder globs normalize backslashes to slashes, lowercase both inputs, and trim
+ECMAScript whitespace. They check normalized equality, then match the entire path.
+A pattern without a slash also matches against the basename.
+Only `*` and `?` are wildcards. They consume zero or more UTF-16 code units and
+exactly one unit, respectively, excluding LF, CR, U+2028 and U+2029.
+Slashes have no special wildcard restrictions. All regex punctuation is literal.
+Literal comparison follows ECMAScript non-Unicode `/i` canonicalization after
+lowercasing. Uppercase expansions and non-ASCII-to-ASCII uppercase mappings do
+not fold. Lowercasing still maps Kelvin sign to `k` before comparison.
+Lone surrogate pattern units are preserved, and `?` consumes half a supplementary character.
+
+The matcher uses two indices and one saved `*` retry point instead of a regex.
+It has O(path units × pattern units) worst-case work and O(path units + pattern
+units) normalization storage. The helper has no `PreparationBudget` parameter;
+callers retain their existing cancellation checks between matches.
+This resolves the backtracking and UTF-16 parity defects in GRE-642 and GRE-641.
+
+Regenerate or verify the Node differential corpus with
+`node rust/crates/pp-storage/tests/fixtures/manifest-globs-node.mjs` or append `--check`.
+The generator reads the actual `matchKeyMatches` and `globToRegExp` functions.
+Run the ignored `builder_glob_backtracking_probe` test in an exclusive landing slot
+with `--release -- --ignored --nocapture` to check the 10 ms release bound.
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib manifest_options
+```
 
 ## Map one existing account
 
@@ -514,7 +675,7 @@ The copy supports default rows in `build_profiles`, `projects`, `profile_layers`
 
 The tool refuses default settings other than `schema_version`, drafts, printer queues, opaque project metadata and imported-path lists, nonempty decision parameters other than `{}`, and populated decision result JSON. It also refuses stored sessions, password reset tokens, and Plan share capabilities. Share bundles contain ownership references outside the supported row graph. No startup path or HTTP endpoint invokes it.
 
-Filesystem support covers regular files in `repos/<project id>` and `sources/<project id>` for known projects. Symlinks and special files cause refusal. A nonempty `projects.local_path` must be an absolute path inside `repos/<its project id>`; external paths are refused. Every Source revision must have a safe `<its project id>/revisions/...` locator and an existing regular snapshot tree. Relative part and document paths must contain no parent segments, empty segments, backslashes, or external locators. Unknown top-level artifacts and native storage cause refusal. Standard `uploads`, `upload-staging`, `staging`, `backups`, `thumbnails`, `previews`, `thumbs`, and `covers` directories are accepted only when empty. Exports support the existing `profile-<Plan id>-<slug>/checklist/checklist-<sha256>.html`, `profile-<Plan id>-<slug>/direct-3mf/direct-<16 hex digest>.3mf`, and `profile-<Plan id>-<slug>/kit/<slug>-<timestamp>-<sha256>.print-partner-kit.zip` layouts. Files can be directly under `exports` for legacy default data or under the existing tenant directory. Each file needs an `exports` manifest claim with its exact path, digest, Plan ID and named owner. The owner must agree with the Plan's explicit row claim or existing tenant; foreign exports cannot be reassigned. Omitting `exports` remains valid when no export files exist. Unmapped files, wrong scopes, unsupported layouts and target collisions fail closed. Default exports move into `tenantExportDirectory` for their mapped owner; foreign exports keep their tenant scope. There is no copied `tenant-default` fallback. The tool preserves bytes and validates content-addressed filenames, without rewriting embedded export content. Accepted STL and Plate export trees, older export layouts and temporary publications remain unsupported. Ownership markers, leases, the desktop lock, and the source desktop mapping are excluded from the copy. Socket files outside those excluded ownership paths cause refusal.
+Filesystem support covers regular files in `repos/<project id>` and `sources/<project id>` for known projects. Symlinks and special files cause refusal. A nonempty `projects.local_path` must be an absolute path inside `repos/<its project id>`; external paths are refused. Every Source revision must have a safe `<its project id>/revisions/...` locator and an existing regular snapshot tree. Relative part and document paths must contain no parent segments, empty segments, backslashes, or external locators. Unknown top-level artifacts and native storage cause refusal. Standard `uploads`, `upload-staging`, `staging`, `backups`, `thumbnails`, `previews`, `thumbs`, and `covers` directories are accepted only when empty. Exports support the existing `profile-<Plan id>-<slug>/checklist/checklist-<sha256>.html`, `profile-<Plan id>-<slug>/direct-3mf/direct-<16 hex digest>.3mf`, and `profile-<Plan id>-<slug>/kit/<slug>-<timestamp>-<sha256>.print-partner-kit.zip` layouts. Files can be directly under `exports` for legacy default data or under the existing tenant directory. Each file needs an `exports` manifest claim with its exact path, digest, Plan ID and named owner. The owner must agree with the Plan's explicit row claim or existing tenant; foreign exports cannot be reassigned. Omitting `exports` remains valid when no export files exist. Unmapped files, wrong scopes, unsupported layouts and target collisions fail closed. Default exports move into `tenantExportDirectory` for their mapped owner; foreign exports keep their tenant scope. There is no copied `tenant-default` fallback. The tool preserves bytes and validates content-addressed filenames, without rewriting embedded export content. Accepted STL and Plate export trees, older export layouts and temporary publications remain unsupported. Ownership markers, leases, `.desktop.lock`, `printpartner.lock`, and the source desktop mapping are excluded from the copy. Socket files outside those excluded ownership paths cause refusal.
 
 The staged copy suspends ten known triggers inside its transaction after checking their definitions against the current migrations. These cover Part acceptance invalidation, immutable updates for Plan revisions, Plan revision Parts, Required units, Required-unit maps and map headers, plus immutable updates for Plate revisions, Plates and Plate units and Plate head ownership updates. It restores them before validation and verifies that the complete schema matches the source. All historical revision and input digests, existing Required-unit maps and owner relationships are checked. Every supported history row must fit the production operational limit of 64 KiB across its stored text columns, measured as UTF-8 bytes in SQLite. Builds with accepted history also receive the operational text budget check for their tenant ID, name, order number, special request and archive timestamp. Ordinary mutable Builds without accepted history retain their existing supported text values. These limits are checked again after owner reassignment in staging. Current revisions require complete Required-unit maps. Retained older revisions may lack maps only when no partial mapping or created-unit state exists. Current accepted Plans must pass the production operational reader and tracked Part byte verification in both source and stage. Valid format-1 input history retains its existing `uninitialized` operational result; it is not promoted to format 2. Plans whose working Part edits or deletions cleared the accepted revision pointer are also supported when their positive Plan version and validated history remain. The retained revision numbers must form the complete sequence from 1 through the Plan version, with each revision after the first pointing to its immediate predecessor and retaining tracked publication provenance with format-2 inputs. The inferred current revision must have a complete Required-unit map, positive unique projection IDs, valid stored Part booleans and consistent quantities between 1 and 10,000. Retained progress at inferred-current Part/unit coordinates must pass the production raw-boolean and assembly/completion checks. Other historical unit coordinates retain their existing ignored status. Historical projection IDs may refer to deleted working Parts for these dirty Plans; any surviving projection must still belong to the same Plan and owner. Their retained accepted-input pointer must match the latest historical revision, including its acceptance timestamp; legacy revisions must have no input pointer. The copy preserves their null pointer, working edits and `compatibility_dirty` operational result across restart. It does not select a historical revision or repair acceptance. A zero version with history or a positive version without history causes refusal. IDs, digests, tokens, actor identities and timestamps are preserved.
 
@@ -525,3 +686,75 @@ Plate admission also caps each history validation pass at 1,000,000 potential ov
 Inspect runs one history validation pass and one set of production head reads, for at most 2,000,000 overlap comparisons. Apply runs three history validation passes, on the source, the source with owner claims, and the staged copy. It also reads production heads once on the source and once on the stage, for at most 5,000,000 overlap comparisons. Each head set is a subset of the validated history, so each contributes at most one additional history budget. These bounds cover the pairwise overlap loops, not total runtime, memory, row counts or other validation work. An oversized source fails before staging. A refusal leaves no published destination, removes any private stage and preserves source product bytes. Keep the source intact if it exceeds this limit; the ownership copy does not prune history or raise the budget.
 
 The source digest is rechecked after reservation, after the SQLite backup and before publication. Product file hashes and export inventory are rechecked after copying. Any database change requires a new inventory and reviewed manifest. The command exits with status 1 on refusal and status 0 with a JSON receipt on success. Both inspect and apply require `PP_DESKTOP_REBUILD` to be exactly `1` or `true`.
+
+## D11 required units (GRE-606)
+
+`required_units` compiles only with `desktop_rebuild`. It has a model, readers,
+and one write operation.
+
+The model provides planning and selection digests, canonical decisions, exact
+predecessor matching, required-unit assignments, conflicts, surplus tokens, and
+selection basis rows. It keeps `DraftPart` manifest metadata separate from scalar
+JSON. Planning hashes preserve UTF-16 ordering and lone surrogates in manifest
+fields. Predecessor units are sorted by prior index before validation, as in Node.
+Target, predecessor, token, and decision errors use Node's messages and order.
+
+The readers verify stored data on every read, as Node's repository does:
+
+- `storage::draft` loads a Plan draft and checks its snapshot digest. A selected
+  reconciliation must exist for the same draft and be finalized, or the read
+  fails with "Plan draft Required-unit selection is corrupt".
+- `storage::saved` checks a finalized reconciliation's canonical JSON, digests,
+  decision rows, and assignment rows.
+- `storage::base` reads the accepted revision's Required-unit set and checks its
+  coordinates, Object names, progress, orphan units, and mapping digest.
+- `view::workspace` builds the draft workspace and its diff against the base
+  revision. Diff rows sort by their serialized ID, as in Node.
+
+Corrupt rows return Node's messages for the same checks, with two known gaps.
+Selection basis rows share one message, "Required-unit selection basis is
+invalid". Some malformed stored result JSON returns a different message than
+Node, although both refuse the row. GRE-648 tracks both gaps.
+
+The operation ports Node's `savePlanDraftRequiredUnitReconciliation` and the
+`reconcile` path of `PlanDraftWorkspaceService`. Get a client with
+`WriterOwner::required_units_with_policy`. `ReconciliationClient::reconcile`
+queues one command on the single writer, as `build_graph` does. The writer runs
+it in one immediate transaction. It checks cancellation before the transaction
+starts and again before it commits, so a cancelled request writes nothing.
+
+- `ReconciliationRequest` has the contract's snake-case fields. It rejects
+  unknown fields, a snapshot digest that is not 64 lowercase hex characters,
+  more than 10,000 decisions, and two decisions for the same draft Part.
+- `ReconciliationCommand::new` trims the idempotency key as JavaScript `trim`
+  does and requires 1 to 160 UTF-16 units, as the Node route does.
+- A session records the user ID as the actor. An API key records `tenant:<id>`
+  and updates the key's last use time.
+- `Outcome` serializes with Node's `kind` values and workspace shape.
+- A retry with the same actor, key, and payload returns the saved selection,
+  including rows Node wrote. If the draft is still at the expected v1 digest
+  with no selection, the retry selects the saved reconciliation again. A retry
+  with a different payload returns `idempotency_conflict`.
+
+The operation has no HTTP route. GRE-619 adds it. The local `Decision` and
+request types exist because `pp-storage` has no dependency on `pp-contracts`.
+
+Tests open Node-written databases in
+`rust/crates/pp-storage/tests/fixtures/required-units/`. Each operation test
+compares the outcome with the Node result in the matching JSON file, or with
+literal digests from Node's service, and checks the stored rows. The
+`required-unit-fixture` binary runs one request twice, with a restart between
+runs, and prints both outcomes and the database before and after:
+
+```sh
+PP_RECONCILIATION_SESSION=required-unit-fixture-secret \
+  cargo run --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild \
+  --bin required-unit-fixture -- DIRECTORY PROFILE_ID DRAFT_ID IDEMPOTENCY_KEY REQUEST_JSON
+```
+
+Run the tests with:
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib required_units -- --test-threads=2
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test required_unit_operations -- --test-threads=2
+```

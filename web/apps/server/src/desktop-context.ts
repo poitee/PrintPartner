@@ -77,7 +77,7 @@ export function installDesktopContext(input: unknown): void {
   const marker = markerSchema.parse(JSON.parse(readOwnershipRecord(markerPath)));
   const mode = statSync(markerPath).mode & 0o777;
   const inherited = fstatSync(198);
-  const ownerLock = statSync(join(dataDir, ".desktop.lock"));
+  const ownerLock = statSync(join(dataDir, process.env.PP_STORAGE_CORE_LOCK === "1" ? "printpartner.lock" : ".desktop.lock"));
   if (inherited.dev !== ownerLock.dev || inherited.ino !== ownerLock.ino) throw new Error("Inherited storage lock rejected");
   const leaseHash = createHash("sha256").update(parsed.lease).digest("hex");
   if (marker.pid !== process.ppid || parsed.parent_pid !== process.ppid ||

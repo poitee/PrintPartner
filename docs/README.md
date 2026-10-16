@@ -46,6 +46,7 @@ Print Partner is moving its backend from Node to one Rust core. The core runs as
 - [Building](development/building.md)
 - [Continuous integration](development/ci.md)
 - [Contributing](development/contributing.md)
+- [Change a CI workflow](development/ci-controls.md)
 - [Definition of done](development/definition-of-done.md)
 - [Gate evidence](contributing/gate-evidence.md)
 
