@@ -601,6 +601,8 @@ impl Document {
                         Node::String(s) => s.clone(),
                         _ => return invalid(),
                     };
+                    // The entry and the seen-key set each store a UTF-16 copy.
+                    budget.expansion(key.units().len() * 4)?;
                     if let Node::Mapping(v) = &mut doc.nodes[frame_id] {
                         if !frame.keys.insert(key.clone()) {
                             return invalid();
