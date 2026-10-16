@@ -62,7 +62,7 @@ Each slice is done when:
 - the existing suites pass with the feature off and on, and the default build is unchanged;
 - a reviewer engine other than the author's scores it above 8 on the exact head, with all checks green.
 
-Slices land in this order. Linear tracks each one under GRE-595. A slice is one Linear item and may ship as several PRs (D16 is planned as three). Some modules already exist on main from earlier PRs (for example #129 to #131); a slice ports only the delta from the reference branch.
+Slices land in this order. Linear tracks each one under GRE-595. A slice is one Linear item and may ship as several PRs (D16 ships as four). Some modules already exist on main from earlier PRs (for example #129 to #131); a slice ports only the delta from the reference branch.
 
 | Slice | Linear | Scope |
 | --- | --- | --- |
@@ -81,7 +81,7 @@ Slices land in this order. Linear tracks each one under GRE-595. A slice is one 
 | D13 | GRE-608 | pp-storage working_drafts save, manifest, rebase and siblings |
 | D14 | GRE-610 | pp-storage uploads and capture_manifest |
 | D15 | GRE-611 | pp-storage jobs model and subscriptions |
-| D16 | GRE-609 | pp-storage jobs engine (3 PRs) |
+| D16 | GRE-609 | pp-storage jobs engine (4 PRs) |
 | D17 | GRE-613 | pp-storage source_scan |
 | D18 | GRE-614 | pp-storage source_sync |
 | D19 | GRE-612 | pp-storage plan_publication |
@@ -582,9 +582,8 @@ an error count.
 The job stream registry starts each stream with its job's snapshot and queues newer
 committed versions for the same tenant and job. A stream closes when the job finishes,
 its 16-frame mailbox overflows, its credential expires or is revoked, or the owner stops.
-At most 128 streams are live. Nothing calls the registry yet. The snapshot changes
-that expose `public_result` landed with D16 (b); the engine and auth revalidation calls
-land with D16 (c).
+At most 128 streams are live. The snapshot changes that expose `public_result` landed
+with D16 (b); the engine and auth revalidation calls landed with D16 (c).
 
 `fixtures/parity/jobs-model/generate.mjs` records Node's parsed accepted-plate and
 direct-3mf results and its verdict on accepted-basis seals. Node builds its other job
@@ -623,7 +622,7 @@ admitted kind. `authorize(lease)` returns the live attempt's revalidated tenant 
 subject without changing the job. A queued job's snapshot reports progress `0`, and
 another tenant's read returns `JobAccessFailure::NotFound`.
 
-Claims do not yet reserve the job's Source; that lands in D16 (c). Upload, local scan
+Claims do not yet reserve the job's Source; that lands in D16 (d). Upload, local scan
 and Source Sync paths arrive with D14, D17 and D18.
 
 `fixtures/parity/jobs-engine/generate.mjs` starts jobs in Node's
@@ -681,6 +680,48 @@ never revalidates a running job:
 node fixtures/parity/jobs-engine/generate.mjs --check
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test jobs_engine_parity --test job_authority_claims
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib jobs::
+```
+
+### D16 jobs engine: streams, shutdown and Source work
+
+GRE-609's third PR wires the D15 stream registry into the engine and gives the catalog
+the Source-work state that later slices settle, behind `desktop_rebuild`. With the
+feature off, the engine and catalog behave as before.
+
+`AtomicJobClient::subscribe(credential, job_id)` resolves the credential, reads the
+tenant's job and, once that transaction commits, opens a stream that starts with the
+job's snapshot. Another tenant's job returns `JobAccessFailure::NotFound`. Every job
+save inside a jobs transaction is collected, and the last committed version of each
+job is published after the commit. If the commit outcome is unknown, every live stream
+closes. Each auth write, through either `auth_with_policy` or
+`rebuild_auth_with_policy`, runs under the registry's admission gate and then
+revalidates every live stream. A stream whose credential no longer resolves to the
+same tenant and subject closes as revoked before it can deliver a queued frame. If
+revalidation itself fails, every stream closes. `WriterOwner` shutdown stops the
+registry first: live streams close as `OwnerStopped`, and a subscription that commits
+during shutdown returns `JobAccessFailure::Stopped`.
+
+The catalog's Source-work state now has a random incarnation and an issued high-water
+mark, and each lease carries a `SourceWorkProof` (incarnation and token). A second
+lease on a Source that already has live work fails with `SourceBusy`. A lease that is
+dropped while the writer queue is full is recorded as orphaned, and the writer frees
+its Source before the next envelope. `classify_issued` and `retire_issued` tell
+active, retired, never-issued and other-incarnation tokens apart; D17 and D18 call
+them when a scan or Sync settles its reservation. Claim-time Source reservation
+(`ClaimedAttempt`) is D16 (d).
+
+`fixtures/parity/jobs-engine/generate.mjs` now also records the events a tenant
+listener receives while each Node job runs. The Rust test subscribes before the claim
+and asserts that the stream ends with Node's events. Node's running event says
+"Running…" where the durable model says "Running". On failure, Node reports progress
+100 and the handler's error, and the durable worker keeps the last progress and
+reports "Job failed". Node never revalidates a listener, so the stream authority and
+shutdown tests port the reference `job_transport.rs`:
+
+```sh
+node fixtures/parity/jobs-engine/generate.mjs --check
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test jobs_engine_parity --test job_transport
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib catalog::
 ```
 
 ## D9 build graph receipt
