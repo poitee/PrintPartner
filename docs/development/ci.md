@@ -100,12 +100,15 @@ When a crate builds and passes its tests on Windows, delete its `--exclude` in t
 
 ## macOS exclusions
 
-These tests fail on the macOS runner. The `tests` value of the macOS entry skips them by exact name. When a test passes on macOS, delete it from that filter in the same pull request.
+The `tests` value of the macOS entry skips these tests. When a test passes on macOS, delete it from that filter in the same pull request.
 
-| Crate | Tests | Failure |
-|-------|-------|---------|
-| `pp-compat` | Ten `ticket_t_2::` supervisor tests | Health, backoff and drain states do not change within the wall-time limits. One of them, `ticket_t_2_process_exit_obeys_every_backoff_deadline_and_cap`, fails only on some runs. Two owner-death tests report that the fixture never executed Node. |
-| `pp-core` | Four `runtime_m0` lifecycle tests, and `origin_tests::ticket_t_12_missing_config_persists_private_port_and_reuses_it` | The Node child does not reach readiness, and some shell children exit with status 126. These tests passed with the default macOS `TMPDIR`, so the mounted volume is a suspect. |
+The macOS job skips two lifecycle groups as a whole. They are every test in the `pp-core` `runtime_m0` binary and every `pp-compat` test under `ticket_t_2::`. On the hosted runner, a different subset of them fails on each run, with "Compatibility readiness/release verification failed" or with Node and shell children that exit with status 126. Linux still runs both groups in full, and **Native macOS bundle** still runs its own selected macOS lifecycle tests. GRE-645 tracks the root cause, including whether the mounted `TMPDIR` volume is involved, and removes the group skip.
+
+The filter also skips two tests by name, outside those groups:
+
+| Crate | Test | Failure |
+|-------|------|---------|
+| `pp-core` | `origin_tests::ticket_t_12_missing_config_persists_private_port_and_reuses_it` | The Node child does not reach readiness, the same symptom as the `runtime_m0` group. |
 | `pp-source` | `acquisition_labels::raw_long_labels_contract_to_valid_file_and_directory_paths` | The extracted directory is missing on APFS. This test exists only with `desktop_rebuild` on. |
 
 ## Other Rust workflows
