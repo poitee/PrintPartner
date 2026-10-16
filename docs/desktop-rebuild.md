@@ -1040,24 +1040,24 @@ skipped. An active deferred start bound to an uploaded-only parent still blocks
 publication and validates the parent upload binding. The supplied-source import
 arm waits for GRE-610's payload variant.
 
-The generator records twelve real SQLite publication cases, including receipt
-replay, a changed draft, two pinned Source inputs, all three reconciliation
-reasons, and safe and unsafe remapping. The mapped cases retain Required units
-and exercise Checkoff links, resolved units, and an ownerless send-queue item.
-One shrinks quantity and moves retained units to new indexes. Rust restores
-each recorded database on Node's schema and compares literal outcomes, receipts,
-revision, Part, input, mapping, progress, draft, and setting rows. The comparison normalizes only the generated
-publication timestamp and receipt field casing.
+The generator records fifteen real SQLite transactions covering receipt replay,
+changed drafts, pinned Source inputs, reconciliation reasons, and Checkoff links,
+resolved units, and ownerless queues. Rust restores each database on Node's
+schema and compares literal outcomes and publication rows, normalizing only
+publication time and receipt field casing.
 
-Three reference differences remain explicit. Node `applyPlanChanges` does not
-check durable jobs, so its running-export case publishes. Rust returns the
-exact job conflict list and leaves publication rows unchanged. Both runtimes
-publish with a terminal uploaded-only upload.
-For an unsafe remap, both runtimes return the same link and filename. Rust keeps
-the token-based reason from PR 1, while Node reports a match-key quantity reason.
-When quantity shrinks and retained units change indexes, Node remaps Checkoff
-links, resolved units, and queue items to a different Required-unit token than
-its own persisted rows assign to the original unit. Rust preserves the original
-token, and the test checks both literal settings and token identity against the
-shared Required-unit rows. The fixture retains Node's literal output so changes
-to either runtime fail the comparison.
+Node `applyPlanChanges` does not check durable jobs, so its running-export case
+publishes. Rust returns the exact job conflict list and leaves publication rows
+unchanged. Both runtimes publish with a terminal uploaded-only upload.
+
+Rust never publishes where Node's Checkoff remap assessment refuses. It preserves
+Node's refusal reasons for deleted Parts, missing match keys, and indexes at or
+past the new quantity. Where both would publish, Rust writes coordinates by
+Required-unit token and refuses if the referenced token was dropped.
+
+This rule applies whenever a kept token's index changes. `Selection::PriorCompletion`
+renumbers units with no quantity change. The index-1 fixture proves that Rust
+preserves the token where Node's coordinate resolves to a different token. At
+index 0, Rust refuses the dropped token and writes nothing where Node publishes.
+Index 2 and a cross-Part filename rename match Node's refusal literally. Fixtures
+retain Node's literal outcomes and compare Checkoff coordinates to Required-unit rows.

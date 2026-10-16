@@ -308,7 +308,7 @@ fn settings(tx: &Transaction<'_>, links: &Value, queue: &Value) {
         )
         .unwrap();
     }
-    tx.execute_batch("INSERT INTO parts(id,tenant_id,profile_id) VALUES(11,'tenant',1),(99,'tenant',2),(11,'other',2)").unwrap();
+    tx.execute_batch("INSERT INTO parts(id,tenant_id,profile_id,match_key) VALUES(11,'tenant',1,'bracket'),(99,'tenant',2,'other'),(11,'other',2,'other')").unwrap();
 }
 
 #[test]
@@ -382,13 +382,9 @@ fn ownerless_queue_with_deleted_parts_is_unmappable_like_node() {
         panic!("expected unmappable deleted queue part")
     };
     assert_eq!(missing.len(), 1);
-    let actual = serde_json::to_value(&missing[0]).unwrap();
-    for field in ["linkId", "filename"] {
-        assert_eq!(actual[field], case["expected"]["unmappable"][0][field]);
-    }
     assert_eq!(
-        actual["reason"],
-        "Required unit at Part 500 index 0 is absent or excluded in the selected Plan"
+        serde_json::to_value(missing).unwrap(),
+        case["expected"]["unmappable"]
     );
 }
 
@@ -671,7 +667,13 @@ mod transaction {
     fn transaction_replays_node_outcomes_receipts_and_persisted_rows() {
         let fixture = fixture();
         let cases = fixture["cases"].as_array().unwrap();
-        for id in ["mapped-remap", "mapped-remap-index-change"] {
+        for id in [
+            "mapped-remap",
+            "mapped-remap-index-change",
+            "mapped-remap-index-0",
+            "mapped-remap-index-2",
+            "renamed-part",
+        ] {
             assert!(
                 cases.iter().any(|case| case["id"] == id),
                 "Missing Node {id} transaction"
@@ -697,25 +699,18 @@ mod transaction {
                 assert_eq!(expected["kind"], "applied");
                 let job = &case["before"]["durable_jobs"][0];
                 expected = json!({"kind":"execution_conflict","operations":[{"operation_id":job["id"],"kind":job["kind"],"state":job["state"]}]});
-            } else if case["id"] == "unsafe-remap" {
-                assert_eq!(
-                    actual["unmappable"][0]["linkId"],
-                    expected["unmappable"][0]["linkId"]
-                );
-                assert_eq!(
-                    actual["unmappable"][0]["filename"],
-                    expected["unmappable"][0]["filename"]
-                );
-                expected["unmappable"][0]["reason"] = json!(
-                    "Required unit at Part 1 index 9 is absent or excluded in the selected Plan"
-                );
+            } else if case["id"] == "mapped-remap-index-0" {
+                assert_eq!(expected["kind"], "applied");
+                assert_token_consistent_remap(case, None);
+                expected = json!({"kind":"checkoff_remap_unsafe","unmappable":[{"linkId":"kept-slot","filename":"bracket.stl","reason":"Required unit at Part 1 index 0 is absent or excluded in the selected Plan"}]});
             }
             assert_eq!(actual, expected, "{}", case["id"]);
-            let state = if actual["kind"] == "execution_conflict" {
-                &case["before"]
-            } else {
-                &case["after"]
-            };
+            let state =
+                if actual["kind"] == "execution_conflict" || case["id"] == "mapped-remap-index-0" {
+                    &case["before"]
+                } else {
+                    &case["after"]
+                };
             for table in [
                 "build_profiles",
                 "parts",
@@ -735,7 +730,7 @@ mod transaction {
                 let mut actual = snapshot(&c, table);
                 replace_time(&mut actual, &at, &fixture["at"]);
                 if case["id"] == "mapped-remap-index-change" && table == "app_settings" {
-                    assert_token_consistent_remap(case, &actual);
+                    assert_token_consistent_remap(case, Some(&actual));
                 } else {
                     assert_eq!(
                         actual,
@@ -744,6 +739,9 @@ mod transaction {
                         case["id"]
                     );
                 }
+            }
+            if actual["kind"] == "checkoff_remap_unsafe" {
+                assert_eq!(snapshot(&c, "plan_apply_admissions"), json!([]));
             }
             if actual["kind"] == "applied" {
                 let tx = c.transaction().unwrap();
@@ -772,23 +770,7 @@ mod transaction {
         }
     }
 
-    fn assert_token_consistent_remap(case: &Value, actual: &Value) {
-        assert_eq!(
-            actual,
-            &json!([
-                {"tenant_id":"default","key":"schema_version","value":"34"},
-                {"tenant_id":"default","key":"printer.checkoff_links","value":r#"[{"id":"kept-slot","filename":"bracket.stl","profile_id":1,"state":"watching","units":[{"part_id":2,"unit_index":0}],"resolved_units":[{"part_id":2,"unit_index":0,"result":"printed"}]}]"#},
-                {"tenant_id":"default","key":"printer.send_queue","value":r#"[{"id":"kept-queue","profile_id":null,"state":"error","checkoff_units":[{"part_id":2,"unit_index":0}]}]"#}
-            ])
-        );
-        assert_eq!(
-            case["after"]["app_settings"],
-            json!([
-                {"tenant_id":"default","key":"schema_version","value":"34"},
-                {"tenant_id":"default","key":"printer.checkoff_links","value":r#"[{"id":"kept-slot","filename":"bracket.stl","profile_id":1,"state":"watching","units":[{"part_id":2,"unit_index":1}],"resolved_units":[{"part_id":2,"unit_index":1,"result":"printed"}]}]"#},
-                {"tenant_id":"default","key":"printer.send_queue","value":r#"[{"id":"kept-queue","profile_id":null,"state":"error","checkoff_units":[{"part_id":2,"unit_index":1}]}]"#}
-            ])
-        );
+    fn assert_token_consistent_remap(case: &Value, actual: Option<&Value>) {
         let token = |state: &Value, coordinate: &Value| {
             let part = state["plan_revision_parts"]
                 .as_array()
@@ -808,6 +790,7 @@ mod transaction {
                 .unwrap()["required_unit_token"]
                 .clone()
         };
+        let mut expected_settings = case["after"]["app_settings"].clone();
         for (key, field) in [
             ("printer.checkoff_links", "units"),
             ("printer.checkoff_links", "resolved_units"),
@@ -827,12 +810,41 @@ mod transaction {
                 &case["before"],
                 &coordinate(&case["before"]["app_settings"]),
             );
-            let rust = token(&case["after"], &coordinate(actual));
             let node = token(&case["after"], &coordinate(&case["after"]["app_settings"]));
-            assert_eq!(before, "ppu_00000000000000000000000000000002");
-            assert_eq!(rust, before, "{key} {field}");
-            assert_eq!(node, "ppu_00000000000000000000000000000003");
             assert_ne!(node, before, "{key} {field}");
+            if let Some(actual) = actual {
+                assert_eq!(before, "ppu_00000000000000000000000000000002");
+                assert_eq!(node, "ppu_00000000000000000000000000000003");
+                assert_eq!(
+                    token(&case["after"], &coordinate(actual)),
+                    before,
+                    "{key} {field}"
+                );
+                let setting = expected_settings
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|setting| setting["key"] == key)
+                    .unwrap();
+                let mut rows: Value =
+                    serde_json::from_str(setting["value"].as_str().unwrap()).unwrap();
+                rows[0][field][0]["unit_index"] = json!(0);
+                setting["value"] = json!(rows.to_string());
+            } else {
+                assert_eq!(before, "ppu_00000000000000000000000000000001");
+                assert_eq!(node, "ppu_00000000000000000000000000000002");
+                assert!(
+                    case["after"]["plan_revision_required_units"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .filter(|unit| unit["revision_id"] == 2)
+                        .all(|unit| unit["required_unit_token"] != before)
+                );
+            }
+        }
+        if let Some(actual) = actual {
+            assert_eq!(*actual, expected_settings);
         }
     }
 

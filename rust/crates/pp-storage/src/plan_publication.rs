@@ -113,6 +113,7 @@ struct Production {
     link_count: usize,
     queue_count: usize,
     owners: HashMap<i64, i64>,
+    match_keys: HashMap<i64, String>,
 }
 fn setting(tx: &Transaction<'_>, tenant: &str, key: &str) -> Result<Option<Vec<Value>>> {
     let Some(row) = one(
@@ -141,14 +142,20 @@ fn coordinate(unit: &Value) -> Result<(i64, i64)> {
 fn production(tx: &Transaction<'_>, tenant: &str, profile: i64) -> Result<Production> {
     let links = setting(tx, tenant, "printer.checkoff_links")?;
     let queue = setting(tx, tenant, "printer.send_queue")?;
-    let owners: HashMap<_, _> = rows(
+    let parts = rows(
         tx,
-        "SELECT id,profile_id FROM parts WHERE tenant_id=?",
+        "SELECT id,profile_id,match_key FROM parts WHERE tenant_id=?",
         &[&tenant],
-    )?
-    .iter()
-    .map(|p| Ok((num(p, "id")?, num(p, "profileId")?)))
-    .collect::<Result<_>>()?;
+    )?;
+    let match_keys = parts
+        .iter()
+        .filter(|p| p["profileId"] == profile)
+        .map(|p| Ok((num(p, "id")?, text(p, "matchKey")?.to_owned())))
+        .collect::<Result<_>>()?;
+    let owners: HashMap<_, _> = parts
+        .iter()
+        .map(|p| Ok((num(p, "id")?, num(p, "profileId")?)))
+        .collect::<Result<_>>()?;
     let mut link_count = 0;
     let mut queue_count = 0;
     if let Some(v) = &links {
@@ -219,6 +226,7 @@ fn production(tx: &Transaction<'_>, tenant: &str, profile: i64) -> Result<Produc
         link_count,
         queue_count,
         owners,
+        match_keys,
     })
 }
 enum Remap {
@@ -248,7 +256,9 @@ fn remap(
     let mut mapped = HashMap::new();
     let mut missing = Vec::new();
     let mut seen = HashSet::new();
-    let mut resolve = |row: &Value, units: &Value| -> Result<()> {
+    let mut gate_missing = Vec::new();
+    let mut gate_seen = HashSet::new();
+    let mut resolve = |row: &Value, units: &Value, node_gate: bool| -> Result<()> {
         if units.is_null() {
             return Ok(());
         }
@@ -257,6 +267,36 @@ fn remap(
             .ok_or_else(|| anyhow!("Invalid production coordinates"))?
         {
             let slot = coordinate(u)?;
+            let link_id = row["id"].as_str().unwrap_or("unknown");
+            let filename = row["filename"].as_str().unwrap_or("unknown file");
+            if node_gate && gate_seen.insert(slot) {
+                let reason = match production
+                    .match_keys
+                    .get(&slot.0)
+                    .filter(|key| !key.is_empty())
+                {
+                    None => Some(format!(
+                        "Checked-off part id {} no longer exists in this Plan's parts",
+                        slot.0
+                    )),
+                    Some(key) => match prepared.parts.iter().rfind(|p| p["partKey"] == *key) {
+                        None => Some(format!(
+                            "STL for \"{filename}\" (match_key {key}) is no longer part of the reconciled Plan"
+                        )),
+                        Some(p) => {
+                            let quantity = num(p, "quantityEffective")?;
+                            (slot.1 >= quantity).then(|| format!("Checked-off unit index {} exceeds the new quantity ({quantity}) for \"{filename}\"", slot.1))
+                        }
+                    },
+                };
+                if let Some(reason) = reason {
+                    gate_missing.push(UnmappableLink {
+                        link_id: link_id.into(),
+                        filename: filename.into(),
+                        reason,
+                    });
+                }
+            }
             if !seen.insert(slot) {
                 continue;
             }
@@ -271,8 +311,8 @@ fn remap(
     if let Some(v) = &production.links {
         for row in v {
             if row["profile_id"] == profile {
-                resolve(row, &row["units"])?;
-                resolve(row, &row["resolved_units"])?;
+                resolve(row, &row["units"], true)?;
+                resolve(row, &row["resolved_units"], false)?;
             }
         }
     }
@@ -295,11 +335,13 @@ fn remap(
                         })
                     }));
             if related {
-                resolve(row, &row["checkoff_units"])?;
+                resolve(row, &row["checkoff_units"], true)?;
             }
         }
     }
-    Ok(if missing.is_empty() {
+    Ok(if !gate_missing.is_empty() {
+        Remap::Unmappable(gate_missing)
+    } else if missing.is_empty() {
         Remap::Mapped(mapped)
     } else {
         Remap::Unmappable(missing)
