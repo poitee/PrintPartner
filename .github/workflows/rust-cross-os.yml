@@ -36,16 +36,10 @@ jobs:
             runner: ubuntu-latest
             scope: [--workspace]
             tests: all()
-          # These tests fail on macOS. Each skipped term names the ticket that removes it
-          # (docs/development/ci.md#macos-exclusions):
-          #   GRE-658: raw_long_labels_contract_to_valid_file_and_directory_paths
           - os: macos
             runner: macos-26
             scope: [--workspace]
-            tests: >-
-              not (
-              test(=acquisition_labels::raw_long_labels_contract_to_valid_file_and_directory_paths)
-              )
+            tests: all()
           # These crates still use Unix-only APIs or depend on one that does.
           # Each port ticket deletes its line (docs/development/ci.md#windows-exclusions).
           - os: windows

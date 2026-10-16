@@ -3,16 +3,19 @@ use crate::{
     manifest_text::{DraftPart, JsText},
     read_model::Credential,
     required_units::{
-        self, model,
-        storage::{Draft, draft, one, rows},
+        self, Outcome as WorkspaceOutcome, ReconciliationCommand, model,
+        storage::{Draft, draft, num, one, rows},
+        view::workspace,
     },
+    writer_admission,
 };
 use anyhow::{Result, anyhow, ensure};
-pub use pp_domain::{Digest, PositiveId, Version};
-use rusqlite::{Connection, TransactionBehavior};
+pub use pp_domain::{Digest, PositiveId, Quantity, Version};
+use rusqlite::{Connection, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::{
+    collections::{HashMap, HashSet},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -46,6 +49,121 @@ pub enum Request {
     Read { draft_id: PositiveId },
     Diff { draft_id: PositiveId },
     Workspace { draft_id: PositiveId },
+}
+
+/// The JSON body of Node's draft Part edit route. It accepts what
+/// `parseEditPlanDraftPartsRequest` accepts: one `decision` or a batch of 1 to
+/// 10,000 `decisions`, each Part field edited at most once.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(try_from = "EditWire")]
+pub struct EditRequest {
+    expected_snapshot_digest: Digest,
+    decisions: Vec<PartDecision>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum PartDecision {
+    SetIncluded {
+        draft_part_ids: Vec<PositiveId>,
+        value: bool,
+    },
+    SetQuantityOverride {
+        draft_part_ids: Vec<PositiveId>,
+        #[serde(deserialize_with = "Option::deserialize")]
+        value: Option<Quantity>,
+    },
+}
+impl PartDecision {
+    fn ids(&self) -> &[PositiveId] {
+        match self {
+            Self::SetIncluded { draft_part_ids, .. }
+            | Self::SetQuantityOverride { draft_part_ids, .. } => draft_part_ids,
+        }
+    }
+    fn apply(&self, part: &mut DraftPart) {
+        match self {
+            Self::SetIncluded { value, .. } => part["included"] = json!(value),
+            Self::SetQuantityOverride { value, .. } => {
+                part["quantityOverride"] = json!(value);
+                part["quantityEffective"] = match value {
+                    Some(value) => json!(value),
+                    None => part["quantityInferred"].clone(),
+                };
+            }
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum EditWire {
+    One(OneEdit),
+    Batch(BatchEdit),
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OneEdit {
+    expected_snapshot_digest: Digest,
+    decision: PartDecision,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BatchEdit {
+    expected_snapshot_digest: Digest,
+    decisions: Vec<PartDecision>,
+}
+impl TryFrom<EditWire> for EditRequest {
+    type Error = &'static str;
+    fn try_from(wire: EditWire) -> Result<Self, Self::Error> {
+        let (expected_snapshot_digest, decisions) = match wire {
+            EditWire::One(one) => (one.expected_snapshot_digest, vec![one.decision]),
+            EditWire::Batch(batch) if (1..=10_000).contains(&batch.decisions.len()) => {
+                (batch.expected_snapshot_digest, batch.decisions)
+            }
+            EditWire::Batch(_) => return Err("A Plan draft edit allows 1 to 10000 decisions"),
+        };
+        let mut targets = HashSet::new();
+        for decision in &decisions {
+            let field = std::mem::discriminant(decision);
+            if decision.ids().is_empty()
+                || !decision
+                    .ids()
+                    .iter()
+                    .all(|id| targets.insert((field, id.get())))
+            {
+                return Err("A Plan draft Part field may be edited only once per batch");
+            }
+        }
+        Ok(Self {
+            expected_snapshot_digest,
+            decisions,
+        })
+    }
+}
+
+/// The JSON body of Node's draft abandon route.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AbandonRequest {
+    expected_lifecycle_version: Version,
+}
+
+/// Node's `PlanDraftWorkspaceService.abandon` result.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AbandonOutcome {
+    Ready {
+        draft: required_units::DraftIdentity,
+    },
+    ProfileNotFound,
+    DraftNotFound,
+    DraftChanged {
+        workspace: Box<required_units::Workspace>,
+    },
+    NotOpen {
+        workspace: Box<required_units::Workspace>,
+    },
 }
 
 #[derive(Debug)]
@@ -130,6 +248,21 @@ impl DraftIdentity {
     }
     pub fn base_plan_version(&self) -> Version {
         self.base_plan_version
+    }
+    fn workspace_identity(&self) -> Result<required_units::DraftIdentity> {
+        Ok(required_units::DraftIdentity {
+            draft_id: i64::try_from(self.draft_id.get())?,
+            state: self.state.as_str().into(),
+            lifecycle_version: self.lifecycle_version.into(),
+            snapshot_digest: self.snapshot_digest.as_str().into(),
+            base: required_units::DraftBase {
+                revision_id: self
+                    .base_revision_id
+                    .map(|id| i64::try_from(id.get()))
+                    .transpose()?,
+                plan_version: i64::try_from(self.base_plan_version.get())?,
+            },
+        })
     }
 }
 
@@ -292,6 +425,24 @@ pub(super) struct Command {
     policy: auth::AuthPolicy,
     cancelled: Arc<AtomicBool>,
 }
+pub(super) struct Write {
+    credential: Credential,
+    profile: PositiveId,
+    draft_id: PositiveId,
+    policy: auth::AuthPolicy,
+    cancelled: Arc<AtomicBool>,
+    operation: Operation,
+}
+enum Operation {
+    Edit {
+        request: EditRequest,
+        reply: mpsc::Sender<Result<WorkspaceOutcome>>,
+    },
+    Abandon {
+        request: AbandonRequest,
+        reply: mpsc::Sender<Result<AbandonOutcome>>,
+    },
+}
 impl WriterOwner {
     pub fn working_drafts_with_policy(
         &self,
@@ -313,6 +464,72 @@ impl WorkingDraftClient {
         cancelled: Arc<AtomicBool>,
         wait: Duration,
     ) -> Result<Outcome> {
+        self.enqueue(cancelled, wait, |reply, cancelled| Envelope::WorkingDraft {
+            command: Command {
+                credential,
+                profile,
+                request,
+                policy: self.policy,
+                cancelled,
+            },
+            reply,
+        })
+    }
+    /// Edits draft Parts as Node's `PlanDraftWorkspaceService.editParts` does,
+    /// including its automatic Required-unit selection. The edit commits before
+    /// the selection starts, so a selection error or cancellation keeps it.
+    pub fn edit(
+        &self,
+        credential: Credential,
+        profile: PositiveId,
+        draft_id: PositiveId,
+        request: EditRequest,
+        cancelled: Arc<AtomicBool>,
+        wait: Duration,
+    ) -> Result<WorkspaceOutcome> {
+        self.enqueue(cancelled, wait, |reply, cancelled| {
+            Envelope::WorkingDraftWrite {
+                command: Write {
+                    credential,
+                    profile,
+                    draft_id,
+                    policy: self.policy,
+                    cancelled,
+                    operation: Operation::Edit { request, reply },
+                },
+            }
+        })
+    }
+    /// Abandons an open draft as Node's `PlanDraftWorkspaceService.abandon`
+    /// does.
+    pub fn abandon(
+        &self,
+        credential: Credential,
+        profile: PositiveId,
+        draft_id: PositiveId,
+        request: AbandonRequest,
+        cancelled: Arc<AtomicBool>,
+        wait: Duration,
+    ) -> Result<AbandonOutcome> {
+        self.enqueue(cancelled, wait, |reply, cancelled| {
+            Envelope::WorkingDraftWrite {
+                command: Write {
+                    credential,
+                    profile,
+                    draft_id,
+                    policy: self.policy,
+                    cancelled,
+                    operation: Operation::Abandon { request, reply },
+                },
+            }
+        })
+    }
+    fn enqueue<T>(
+        &self,
+        cancelled: Arc<AtomicBool>,
+        wait: Duration,
+        envelope: impl FnOnce(mpsc::Sender<Result<T>>, Arc<AtomicBool>) -> Envelope,
+    ) -> Result<T> {
         let deadline = Instant::now()
             .checked_add(wait)
             .ok_or_else(|| anyhow!("Invalid queue wait"))?;
@@ -336,16 +553,7 @@ impl WorkingDraftClient {
                 .0;
         }
         let (reply, receiver) = mpsc::channel();
-        queue.pending.push_back(Envelope::WorkingDraft {
-            command: Command {
-                credential,
-                profile,
-                request,
-                policy: self.policy,
-                cancelled,
-            },
-            reply,
-        });
+        queue.pending.push_back(envelope(reply, cancelled));
         self.shared.changed.notify_all();
         drop(queue);
         receiver
@@ -399,6 +607,263 @@ pub(super) fn execute(connection: &mut Connection, command: Command) -> Result<O
     );
     tx.commit()?;
     Ok(outcome)
+}
+
+pub(super) fn write(
+    connection: &mut Connection,
+    command: Write,
+    admission: writer_admission::Deadline,
+) {
+    let Write {
+        credential,
+        profile,
+        draft_id,
+        policy,
+        cancelled,
+        operation,
+    } = command;
+    match operation {
+        Operation::Edit { request, reply } => {
+            let edited = transact(connection, admission, &cancelled, |tx| {
+                edit(tx, &credential, policy, profile, draft_id, &request)
+            });
+            let _ = reply.send(edited.and_then(|edited| match edited {
+                Edited::Done(outcome) => Ok(outcome),
+                Edited::Unselected(digest) => {
+                    let command = ReconciliationCommand::new(
+                        profile,
+                        draft_id,
+                        serde_json::from_value(
+                            json!({"expected_snapshot_digest":digest, "decisions":[]}),
+                        )?,
+                        &format!("auto-{}", digest.as_str()),
+                        credential,
+                    )?;
+                    // Node's selection is a separate transaction with its own busy wait.
+                    let admission = writer_admission::Deadline::at_dequeue();
+                    transact(connection, admission, &cancelled, |tx| {
+                        required_units::reconcile::run(tx, &command, policy)
+                    })
+                }
+            }));
+        }
+        Operation::Abandon { request, reply } => {
+            let _ = reply.send(transact(connection, admission, &cancelled, |tx| {
+                abandon(tx, &credential, policy, profile, draft_id, &request)
+            }));
+        }
+    }
+}
+fn transact<T>(
+    connection: &mut Connection,
+    admission: writer_admission::Deadline,
+    cancelled: &AtomicBool,
+    body: impl FnOnce(&Transaction<'_>) -> Result<T>,
+) -> Result<T> {
+    ensure!(!cancelled.load(Ordering::Acquire), Failure::Cancelled);
+    let tx = writer_admission::begin_immediate(connection, admission)?;
+    let outcome = body(&tx)?;
+    ensure!(!cancelled.load(Ordering::Acquire), Failure::Cancelled);
+    tx.commit()?;
+    Ok(outcome)
+}
+
+fn baseline_required(tx: &Transaction<'_>, tenant: &str, profile: &Value) -> Result<bool> {
+    let version = num(profile, "acceptedPlanVersion")?;
+    Ok(if profile["acceptedPlanRevisionId"].is_null() {
+        version != 0
+            || one(
+                tx,
+                "SELECT id FROM parts WHERE tenant_id=? AND profile_id=? LIMIT 1",
+                &[&tenant, &num(profile, "id")?],
+            )?
+            .is_some()
+    } else {
+        version <= 0
+    })
+}
+
+enum Edited {
+    Done(WorkspaceOutcome),
+    Unselected(Digest),
+}
+
+fn edit(
+    tx: &Transaction<'_>,
+    credential: &Credential,
+    policy: auth::AuthPolicy,
+    profile_id: PositiveId,
+    draft_id: PositiveId,
+    request: &EditRequest,
+) -> Result<Edited> {
+    let (tenant, _) = auth::authority::queries::reconciliation_actor_ref(tx, credential, policy)?;
+    let profile = i64::try_from(profile_id.get())?;
+    let Some(profile_row) = one(
+        tx,
+        "SELECT * FROM build_profiles WHERE tenant_id=? AND id=?",
+        &[&tenant, &profile],
+    )?
+    else {
+        return Ok(Edited::Done(WorkspaceOutcome::ProfileNotFound));
+    };
+    let id = i64::try_from(draft_id.get())?;
+    let Some(current) = draft(tx, &tenant, profile, id)? else {
+        return Ok(Edited::Done(WorkspaceOutcome::DraftNotFound));
+    };
+    let current_view = || workspace(tx, &tenant, &profile_row, &current);
+    if current.header["state"] != "open" {
+        return Ok(Edited::Done(WorkspaceOutcome::NotOpen {
+            workspace: current_view()?,
+        }));
+    }
+    if baseline_required(tx, &tenant, &profile_row)? {
+        return Ok(Edited::Done(WorkspaceOutcome::AcceptedBaselineRequired));
+    }
+    if profile_row["acceptedPlanRevisionId"] != current.header["baseRevisionId"]
+        || profile_row["acceptedPlanVersion"] != current.header["basePlanVersion"]
+    {
+        return Ok(Edited::Done(WorkspaceOutcome::BaseChanged {
+            workspace: current_view()?,
+        }));
+    }
+    let mut parts = current.parts.clone();
+    let mut by_id = HashMap::new();
+    for part in &mut parts {
+        by_id.insert(num(part, "id")?, part);
+    }
+    for decision in &request.decisions {
+        for part_id in decision.ids() {
+            let Some(part) = by_id.get_mut(&i64::try_from(part_id.get())?) else {
+                return Ok(Edited::Done(WorkspaceOutcome::DraftNotFound));
+            };
+            decision.apply(part);
+        }
+    }
+    let selected = if parts == current.parts {
+        current
+    } else {
+        let expected = request.expected_snapshot_digest.as_str();
+        if current.header["snapshotDigest"] != expected {
+            return Ok(Edited::Done(WorkspaceOutcome::DraftChanged {
+                workspace: Some(current_view()?),
+            }));
+        }
+        let planning = model::planning(&current.header, &current.inputs, &parts)?;
+        let next = if current.header["digestFormat"] == "plan-draft-v2" {
+            model::selection(&planning, None)
+        } else {
+            planning
+        };
+        ensure!(
+            tx.execute(
+                "UPDATE plan_drafts SET current_required_unit_reconciliation_id=NULL,snapshot_digest=? WHERE tenant_id=? AND profile_id=? AND id=? AND state='open' AND snapshot_digest=?",
+                params![next, tenant, profile, id, expected],
+            )? == 1,
+            "Plan draft edit lost its draft"
+        );
+        for decision in &request.decisions {
+            for part_id in decision.ids() {
+                let part_id = i64::try_from(part_id.get())?;
+                let changed = match decision {
+                    PartDecision::SetIncluded { value, .. } => tx.execute(
+                        "UPDATE plan_draft_parts SET included=? WHERE tenant_id=? AND draft_id=? AND id=?",
+                        params![value, tenant, id, part_id],
+                    )?,
+                    PartDecision::SetQuantityOverride { value, .. } => tx.execute(
+                        "UPDATE plan_draft_parts SET quantity_override=?1,quantity_effective=COALESCE(?1,quantity_inferred) WHERE tenant_id=?2 AND draft_id=?3 AND id=?4",
+                        params![value.map(|value| i64::try_from(value.get())).transpose()?, tenant, id, part_id],
+                    )?,
+                };
+                ensure!(
+                    changed == 1,
+                    "Plan draft Part edit did not update every selected row"
+                );
+            }
+        }
+        draft(tx, &tenant, profile, id)?
+            .filter(|d| d.header["snapshotDigest"] == next.as_str() && d.selected.is_none())
+            .ok_or_else(|| anyhow!("Edited Plan draft could not be verified"))?
+    };
+    if selected.selected.is_some() {
+        return Ok(Edited::Done(WorkspaceOutcome::Ready {
+            workspace: workspace(tx, &tenant, &profile_row, &selected)?,
+        }));
+    }
+    Ok(Edited::Unselected(
+        DraftIdentity::from_header(&selected.header)?.snapshot_digest,
+    ))
+}
+
+fn abandon(
+    tx: &Transaction<'_>,
+    credential: &Credential,
+    policy: auth::AuthPolicy,
+    profile_id: PositiveId,
+    draft_id: PositiveId,
+    request: &AbandonRequest,
+) -> Result<AbandonOutcome> {
+    let (tenant, _) = auth::authority::queries::reconciliation_actor_ref(tx, credential, policy)?;
+    let profile = i64::try_from(profile_id.get())?;
+    let Some(profile_row) = one(
+        tx,
+        "SELECT * FROM build_profiles WHERE tenant_id=? AND id=?",
+        &[&tenant, &profile],
+    )?
+    else {
+        return Ok(AbandonOutcome::ProfileNotFound);
+    };
+    let expected = u32::try_from(request.expected_lifecycle_version.get())
+        .ok()
+        .filter(|version| *version < 2_147_483_647)
+        .ok_or_else(|| anyhow!("Expected Plan draft lifecycle version must be a nonnegative safe integer below 2147483647"))?;
+    let id = i64::try_from(draft_id.get())?;
+    let Some(current) = draft(tx, &tenant, profile, id)? else {
+        return Ok(AbandonOutcome::DraftNotFound);
+    };
+    let identity = DraftIdentity::from_header(&current.header)?;
+    let current_view = || workspace(tx, &tenant, &profile_row, &current);
+    match identity.state {
+        DraftState::Consumed => {
+            return Ok(AbandonOutcome::NotOpen {
+                workspace: current_view()?,
+            });
+        }
+        DraftState::Abandoned if identity.lifecycle_version == expected + 1 => {
+            return Ok(AbandonOutcome::Ready {
+                draft: identity.workspace_identity()?,
+            });
+        }
+        _ if identity.lifecycle_version != expected => {
+            return Ok(AbandonOutcome::DraftChanged {
+                workspace: current_view()?,
+            });
+        }
+        DraftState::Abandoned => {
+            return Ok(AbandonOutcome::NotOpen {
+                workspace: current_view()?,
+            });
+        }
+        DraftState::Open => {}
+    }
+    ensure!(
+        tx.execute(
+            "UPDATE plan_drafts SET state='abandoned',lifecycle_version=lifecycle_version+1 WHERE tenant_id=? AND profile_id=? AND id=? AND state='open' AND lifecycle_version=?",
+            params![tenant, profile, id, expected],
+        )? == 1,
+        "Plan draft transition lost its draft"
+    );
+    let after = draft(tx, &tenant, profile, id)?
+        .ok_or_else(|| anyhow!("Transitioned Plan draft is missing"))?;
+    let after = DraftIdentity::from_header(&after.header)?;
+    ensure!(
+        after.state == DraftState::Abandoned
+            && after.lifecycle_version == expected + 1
+            && after.snapshot_digest == identity.snapshot_digest,
+        "Transitioned Plan draft is invalid"
+    );
+    Ok(AbandonOutcome::Ready {
+        draft: after.workspace_identity()?,
+    })
 }
 
 impl Outcome {
