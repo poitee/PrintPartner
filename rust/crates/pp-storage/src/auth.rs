@@ -2,6 +2,10 @@
 pub(crate) mod authority;
 #[cfg(feature = "desktop_rebuild")]
 pub use authority::AuthorityFailure;
+#[cfg(feature = "desktop_rebuild")]
+pub(crate) use authority::queries::{
+    StreamAuthority, StreamAuthorityIdentity, resolve_stream_authority,
+};
 mod crypto;
 mod keys;
 mod policy;

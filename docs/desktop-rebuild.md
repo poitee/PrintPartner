@@ -568,6 +568,36 @@ policy, and revalidation rejects changed policy or revoked credentials. Physical
 owner admission checks the storage identity. These internal APIs compile behind
 the feature; D15/D16 will wire them into jobs. The current job engine is unchanged.
 
+### D15 jobs model and subscriptions
+
+GRE-611 adds the reference job model behind `desktop_rebuild`. `CompletedResult` holds
+each job kind's public result. A job document can carry `public_result`, and a checklist
+export effect can carry a completion claim. Decoding checks each claim against the
+payload, effect intent, tenant binding, accepted Plan basis and, once the job succeeds,
+its confirmed receipt and public result. Empty fields are omitted, so existing documents
+encode unchanged. Two deliberate differences from the reference follow Node: basis
+identifiers must be positive safe integers, and the `extract-source-docs` result stores
+an error count.
+
+The job stream registry starts each stream with its job's snapshot and queues newer
+committed versions for the same tenant and job. A stream closes when the job finishes,
+its 16-frame mailbox overflows, its credential expires or is revoked, or the owner stops.
+At most 128 streams are live. Nothing calls the registry yet: the engine, the auth
+revalidation calls and the snapshot changes that expose `public_result` belong to
+GRE-609 (D16).
+
+`fixtures/parity/jobs-model/generate.mjs` records Node's parsed accepted-plate and
+direct-3mf results and its verdict on accepted-basis seals. Node builds its other job
+results inside `InProcessJobRunner`, which built-in type stripping cannot load, so Rust
+tests check those shapes as literals. The generator imports zod:
+
+```sh
+npm --prefix web ci --ignore-scripts
+node fixtures/parity/jobs-model/generate.mjs --check
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib jobs::
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test jobs_model_parity
+```
+
 ## D9 build graph receipt
 
 GRE-602 adds the read-only first half of `pp_storage::build_graph` behind
