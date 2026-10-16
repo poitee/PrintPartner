@@ -4,7 +4,7 @@ use pp_storage::{
     auth::{self, Secret},
     read_model::Credential,
     required_units::ReconciliationCommand,
-    working_drafts::{AbandonRequest, EditRequest, Failure, PositiveId, WorkingDraftClient},
+    working_drafts::{AbandonRequest, EditRequest, Failure, PositiveId},
 };
 use rusqlite::Connection;
 use serde_json::{Value, json};
@@ -118,18 +118,6 @@ impl Drop for Fixture {
     }
 }
 
-fn edit(client: &WorkingDraftClient, draft: u64, request: EditRequest) -> anyhow::Result<Value> {
-    let outcome = client.edit(
-        session(),
-        id(1),
-        id(draft),
-        request,
-        Arc::new(AtomicBool::new(false)),
-        Duration::from_secs(2),
-    )?;
-    Ok(serde_json::to_value(outcome)?)
-}
-
 fn compare_node(name: &str) {
     let case = node(name);
     let f = Fixture::new();
@@ -158,6 +146,12 @@ fn compare_node(name: &str) {
     let results = case["results"].as_array().unwrap();
     assert_eq!(calls.len(), results.len());
     for (index, (call, expected)) in calls.iter().zip(results).enumerate() {
+        if call["op"] == "sql" {
+            f.sql()
+                .execute_batch(call["sql"].as_str().unwrap())
+                .unwrap();
+            continue;
+        }
         let owner = f.open();
         let client = owner.working_drafts_with_policy(policy()).unwrap();
         let profile = id(call["profile"].as_u64().unwrap());
@@ -237,6 +231,18 @@ node_case!(
     "edit-baseline-required"
 );
 node_case!(
+    failed_selection_errors_and_its_retry_selects,
+    "edit-selection-fails-then-retried"
+);
+node_case!(
+    failed_selection_keeps_the_edit_after_the_base_changes,
+    "edit-selection-fails-then-base-changes"
+);
+node_case!(
+    clearing_to_an_unselectable_inferred_quantity_keeps_the_edit,
+    "edit-clears-to-an-unselectable-inferred-quantity"
+);
+node_case!(
     edit_of_a_selected_draft_replaces_its_selection,
     "edit-selected"
 );
@@ -287,27 +293,9 @@ fn requests_accept_what_node_contracts_accept() {
     }
 }
 
-#[test]
-fn failed_selection_rolls_back_the_edit() {
-    let f = Fixture::new();
-    f.sql().execute_batch("CREATE TRIGGER fixture_late_constraint BEFORE INSERT ON plan_draft_required_unit_reconciliations BEGIN SELECT RAISE(ABORT,'fixture late constraint'); END").unwrap();
-    let before = f.recorded_rows();
-    let owner = f.open();
-    let client = owner.working_drafts_with_policy(policy()).unwrap();
-    let error = edit(&client, 2, updated()).unwrap_err();
-    assert!(
-        error.to_string().contains("fixture late constraint"),
-        "{error:#}"
-    );
-    assert_eq!(f.recorded_rows(), before);
-    owner.shutdown().unwrap();
-}
-
-#[test]
-fn cancellation_after_the_transaction_starts_rolls_back_the_edit() {
-    let f = Fixture::new();
-    f.sql().execute_batch("CREATE TRIGGER slow_reconciliation AFTER INSERT ON plan_draft_required_unit_reconciliations BEGIN SELECT sum(n) FROM (WITH RECURSIVE n(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM n WHERE n<1000000) SELECT n FROM n); END").unwrap();
-    let before = f.recorded_rows();
+fn cancel_while_writing(f: &Fixture, slow_event: &str, edit_committed: bool) -> Value {
+    f.sql().execute_batch(&format!("CREATE TRIGGER slow_write AFTER {slow_event} BEGIN SELECT sum(n) FROM (WITH RECURSIVE n(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM n WHERE n<1000000) SELECT n FROM n); END")).unwrap();
+    let request = node("edit-selection-fails-then-base-changes")["calls"][0]["request"].clone();
     let owner = f.open();
     let client = owner.working_drafts_with_policy(policy()).unwrap();
     let cancelled = Arc::new(AtomicBool::new(false));
@@ -318,7 +306,7 @@ fn cancellation_after_the_transaction_starts_rolls_back_the_edit() {
                 session(),
                 id(1),
                 id(2),
-                updated(),
+                serde_json::from_value(request).unwrap(),
                 cancelled,
                 Duration::from_secs(2),
             )
@@ -328,16 +316,20 @@ fn cancellation_after_the_transaction_starts_rolls_back_the_edit() {
     probe.busy_timeout(Duration::ZERO).unwrap();
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
-        match probe.execute_batch("BEGIN IMMEDIATE") {
-            Ok(()) => probe.execute_batch("ROLLBACK").unwrap(),
-            Err(rusqlite::Error::SqliteFailure(error, _))
-                if error.code == rusqlite::ErrorCode::DatabaseBusy =>
-            {
-                break;
+        let committed = f.rows("SELECT quantity_override FROM plan_draft_parts WHERE id=4")
+            == json!([{"quantity_override":10_000}]);
+        if committed == edit_committed {
+            match probe.execute_batch("BEGIN IMMEDIATE") {
+                Ok(()) => probe.execute_batch("ROLLBACK").unwrap(),
+                Err(rusqlite::Error::SqliteFailure(error, _))
+                    if error.code == rusqlite::ErrorCode::DatabaseBusy =>
+                {
+                    break;
+                }
+                Err(error) => panic!("{error}"),
             }
-            Err(error) => panic!("{error}"),
         }
-        assert!(Instant::now() < deadline, "edit never started");
+        assert!(Instant::now() < deadline, "edit never reached {slow_event}");
         std::thread::sleep(Duration::from_millis(1));
     }
     cancelled.store(true, Ordering::Release);
@@ -346,8 +338,32 @@ fn cancellation_after_the_transaction_starts_rolls_back_the_edit() {
         matches!(error.downcast_ref(), Some(Failure::Cancelled)),
         "{error:?}"
     );
-    assert_eq!(f.recorded_rows(), before);
     owner.shutdown().unwrap();
+    f.recorded_rows()
+}
+
+#[test]
+fn cancellation_before_the_edit_commits_rolls_it_back() {
+    let f = Fixture::new();
+    let before = f.recorded_rows();
+    assert_eq!(
+        cancel_while_writing(&f, "UPDATE ON plan_draft_parts", false),
+        before
+    );
+}
+
+#[test]
+fn cancellation_during_selection_keeps_the_committed_edit() {
+    let f = Fixture::new();
+    let rows = cancel_while_writing(
+        &f,
+        "INSERT ON plan_draft_required_unit_reconciliations",
+        true,
+    );
+    let failed = node("edit-selection-fails-then-base-changes");
+    for table in ["drafts", "parts", "reconciliations", "assignments"] {
+        assert_eq!(rows[table], failed[table], "{table}");
+    }
 }
 
 #[test]

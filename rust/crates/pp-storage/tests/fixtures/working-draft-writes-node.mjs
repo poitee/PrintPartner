@@ -9,6 +9,7 @@ const server = resolve(process.argv[2]);
 const { createSelfHostPorts } = await import(join(server, 'src/adapters/self-host/index.ts'));
 const { PlanDraftWorkspaceService } = await import(join(server, 'src/services/plan-draft-workspace.ts'));
 const { parseAbandonPlanDraftRequest, parseEditPlanDraftPartsRequest } = await import(join(server, '../../packages/contracts/src/index.ts'));
+const { parseQuantity } = await import(join(server, '../../packages/domain/src/parsers.ts'));
 
 const stale = '0'.repeat(64);
 const opened = 'ae11e670337e3e5eab736b29b4e294edbea8b564661cf15972625783f8930ee3';
@@ -16,7 +17,14 @@ const include = (ids, value) => ({ kind: 'set_included', draft_part_ids: ids, va
 const quantity = (ids, value) => ({ kind: 'set_quantity_override', draft_part_ids: ids, value });
 const edit = (draft, request, profile = 1) => ({ op: 'edit', profile, draft, request });
 const abandon = (draft, version, profile = 1) => ({ op: 'abandon', profile, draft, request: { expected_lifecycle_version: version } });
+const sql = (statement) => ({ op: 'sql', sql: statement });
 const updated = edit(2, { expected_snapshot_digest: opened, decisions: [include([5], true), quantity([4], null)] });
+const failSelection = "CREATE TRIGGER injected_selection_failure BEFORE INSERT ON plan_draft_required_unit_reconciliations BEGIN SELECT RAISE(ABORT,'injected selection write failure'); END";
+const recoverWrites = sql('DROP TRIGGER injected_selection_failure');
+const advanceBase = sql('UPDATE build_profiles SET accepted_plan_version=2 WHERE id=1');
+const overridden = edit(2, { expected_snapshot_digest: opened, decision: quantity([4], 10_000) });
+const inferredDigest = '7b6f5fce3cfb74bde178d8036ac7c6014569f76d3fb355bfe85ac600ff1151f2';
+const clearToInferred = edit(2, { expected_snapshot_digest: inferredDigest, decision: quantity([4], null) });
 const cases = [
   { name: 'edit-updated-and-retried', calls: [updated, updated] },
   { name: 'edit-unchanged-with-stale-digest', calls: [edit(2, { expected_snapshot_digest: stale, decisions: [include([4], true)] })] },
@@ -30,6 +38,12 @@ const cases = [
   { name: 'edit-consumed', calls: [edit(1, { expected_snapshot_digest: stale, decisions: [include([1], false)] })] },
   { name: 'edit-base-changed', setup: ['UPDATE build_profiles SET accepted_plan_version=2 WHERE id=1'], calls: [updated] },
   { name: 'edit-baseline-required', setup: ['UPDATE build_profiles SET accepted_plan_revision_id=NULL,accepted_plan_version=0 WHERE id=1'], calls: [updated] },
+  { name: 'edit-selection-fails-then-retried', setup: [failSelection], calls: [updated, recoverWrites, updated] },
+  { name: 'edit-selection-fails-then-base-changes', setup: [failSelection], calls: [overridden, recoverWrites, advanceBase, overridden] },
+  { name: 'edit-clears-to-an-unselectable-inferred-quantity', setup: [
+    `UPDATE plan_draft_parts SET quantity_inferred=${parseQuantity('widget x10001.stl')} WHERE id=4`,
+    `UPDATE plan_drafts SET snapshot_digest='${inferredDigest}' WHERE id=2`,
+  ], calls: [clearToInferred, clearToInferred, advanceBase, clearToInferred] },
   { name: 'edit-selected', select: true, calls: [edit(2, { expected_snapshot_digest: '7aede566782b7712a7cc113a0706829a501ba98b2f3d9e6a5cd645ff20048f8f', decision: quantity([6], 7) })] },
   { name: 'abandon-retried-then-not-open', calls: [abandon(2, 0), abandon(2, 0), abandon(2, 1), edit(2, updated.request)] },
   { name: 'abandon-conflict', calls: [abandon(2, 3)] },
@@ -51,7 +65,11 @@ for (const { name, setup = [], select = false, calls } of cases) {
       const result = service.reconcile({ profileId: 1, draftId: 2, actorId: 'default', idempotencyKey: 'core-selection', request: { expected_snapshot_digest: opened, decisions: [] } });
       if (result.kind !== 'ready') throw new Error(JSON.stringify(result));
     }
-    const results = calls.map(({ op, profile, draft, request }) => {
+    const results = calls.map(({ op, profile, draft, request, sql: statement }) => {
+      if (op === 'sql') {
+        raw.exec(statement);
+        return null;
+      }
       try {
         return op === 'edit'
           ? service.editParts({ profileId: profile, draftId: draft, actorId: 'default', request: parseEditPlanDraftPartsRequest(request) })
