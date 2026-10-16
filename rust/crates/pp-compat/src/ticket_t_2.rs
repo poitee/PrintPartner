@@ -1912,7 +1912,7 @@ async fn measured_startup_owner_death_fixture() {
 fn ticket_t_3_drain_force_killed_owner_during_startup_kills_group() {
     startup_owner_death_cycles(
         "ticket_t_2::startup_owner_death_fixture",
-        Path::new("/usr/bin/node"),
+        &crate::tests::node_binary(),
         Duration::from_secs(8),
     );
 }
@@ -1929,7 +1929,7 @@ fn measured_startup_bundle() -> super::Bundle {
             (stage.join("node"), stage.join("web"))
         }
         None => (
-            PathBuf::from("/usr/bin/node"),
+            crate::tests::node_binary(),
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../web"),
         ),
     };

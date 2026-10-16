@@ -1354,6 +1354,7 @@ fn linux_proc_state(pid: u32) -> Option<char> {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn canonical_node(node: &Path) -> PathBuf {
     let candidate = if node.is_absolute() || node.components().count() > 1 {
         node.to_path_buf()
@@ -1446,8 +1447,6 @@ fn core_death_terminates_stopped_node_and_allows_recovery() {
             "Node group member outlived its owner"
         );
         assert_eq!(std::fs::read(&marker_path).unwrap(), contents);
-        let input = launch(data.clone());
-        let node = canonical_node(&input.bundle.node);
         let caller = tokio::runtime::Runtime::new().unwrap();
         let runtime = caller
             .block_on(CoreRuntime::start(launch(data.clone())))
@@ -1462,6 +1461,7 @@ fn core_death_terminates_stopped_node_and_allows_recovery() {
         assert_ne!(new_pid, pid);
         #[cfg(target_os = "linux")]
         {
+            let node = canonical_node(&launch(data.clone()).bundle.node);
             let exe = std::fs::read_link(format!("/proc/{new_pid}/exe")).unwrap();
             assert_eq!(
                 std::fs::canonicalize(&exe).unwrap_or(exe),

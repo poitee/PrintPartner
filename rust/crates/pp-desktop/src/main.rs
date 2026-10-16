@@ -304,6 +304,6 @@ fn build_tray(
 mod automation_boundary {
     #[test]
     fn desktop_e2e_is_opt_in() {
-        assert!(!cfg!(feature = "desktop-e2e"));
+        const { assert!(!cfg!(feature = "desktop-e2e")) };
     }
 }

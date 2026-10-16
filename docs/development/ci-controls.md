@@ -1,5 +1,8 @@
 # Change a CI workflow
 
+This page covers review, linters, action pins and required checks for every workflow.
+[Continuous integration](ci.md) describes the Rust cross-OS jobs, their exclusions and how to run them locally.
+
 1. Open a pull request against `main` with the workflow change and its verification evidence.
 2. Request review from Chad, `@poitee`, for any path listed in `.github/CODEOWNERS`.
 3. Run actionlint 1.7.12 with ShellCheck and zizmor 1.31.1 before pushing.

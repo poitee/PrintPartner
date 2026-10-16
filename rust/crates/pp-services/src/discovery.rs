@@ -111,7 +111,7 @@ pub struct DiscoveredSlicer {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Discovery {
-    Present(DiscoveredSlicer),
+    Present(Box<DiscoveredSlicer>),
     Absent,
     /// The requested kind is not Orca or Bambu.
     Unsupported,
@@ -141,12 +141,12 @@ pub fn discover(kind: SlicerKind, roots: &DiscoveryRoots) -> io::Result<Discover
         process: list_json(&dirs.process)?,
         filament: list_json(&dirs.filament)?,
     };
-    Ok(Discovery::Present(DiscoveredSlicer {
+    Ok(Discovery::Present(Box::new(DiscoveredSlicer {
         kind,
         app_dir,
         dirs,
         profiles,
-    }))
+    })))
 }
 
 /// Discover every supported slicer, in Orca, Bambu order.
@@ -154,7 +154,7 @@ pub fn discover_all(roots: &DiscoveryRoots) -> io::Result<Vec<DiscoveredSlicer>>
     let mut found = Vec::new();
     for kind in [SlicerKind::Orca, SlicerKind::Bambu] {
         if let Discovery::Present(slicer) = discover(kind, roots)? {
-            found.push(slicer);
+            found.push(*slicer);
         }
     }
     Ok(found)
