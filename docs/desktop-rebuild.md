@@ -172,7 +172,7 @@ GRE-607 exposes five crate-private helpers through `working_drafts::observation`
 for GRE-604 D10b. `parse_builder_manifest` reads part rules, option groups,
 repository defaults, and their scalar or array shapes. `merge_builder_groups`
 preserves earlier metadata, unions patterns, and preserves JavaScript property
-order. `builder_path_matches` applies the Node glob and basename rules.
+order. `BuilderGlob` applies the Node glob and basename rules.
 `parse_builder_hints` validates version 1 path hints and rejects unknown fields.
 `infer_builder_siblings` delegates to the sibling inference already on main.
 
@@ -734,8 +734,10 @@ Lone surrogate pattern units are preserved, and `?` consumes half a supplementar
 
 The matcher uses two indices and one saved `*` retry point instead of a regex.
 It has O(path units × pattern units) worst-case work and O(path units + pattern
-units) normalization storage. The helper has no `PreparationBudget` parameter;
-callers retain their existing cancellation checks between matches.
+units) normalization storage. `BuilderGlob::new` normalizes a pattern once for
+all paths. The matcher has no `PreparationBudget` parameter; the observation
+checks cancellation before each path, so cancellation waits for at most one
+path's match.
 This resolves the backtracking and UTF-16 parity defects in GRE-642 and GRE-641.
 
 Regenerate or verify the Node differential corpus with
