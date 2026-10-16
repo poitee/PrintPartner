@@ -1,5 +1,68 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
+#[cfg_attr(
+    not(test),
+    expect(unused_imports, reason = "GRE-604 D10b imports the builder model")
+)]
+pub(crate) use super::manifest::{
+    Group as BuilderGroup, Groups as BuilderGroups, Manifest as BuilderManifest,
+    Variant as BuilderVariant,
+};
+
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "GRE-604 D10b imports this helper")
+)]
+pub(crate) fn parse_builder_manifest(
+    bytes: &[u8],
+    budget: &mut PreparationBudget<'_>,
+) -> ReadResult<BuilderManifest> {
+    super::manifest::parse(bytes, budget)
+}
+
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "GRE-604 D10b imports this helper")
+)]
+pub(crate) fn merge_builder_groups(target: &mut BuilderGroups, incoming: BuilderGroups) {
+    super::manifest::merge(target, incoming)
+}
+
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "GRE-604 D10b imports this helper")
+)]
+pub(crate) fn builder_path_matches(
+    pattern: &crate::manifest_text::ManifestText,
+    path: &str,
+) -> bool {
+    super::manifest::matches(pattern, path)
+}
+
+pub(crate) type BuilderHint = super::manifest::HintRule;
+
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "GRE-604 D10b imports this helper")
+)]
+pub(crate) fn parse_builder_hints(
+    bytes: &[u8],
+    budget: &mut PreparationBudget<'_>,
+) -> ReadResult<Vec<BuilderHint>> {
+    super::manifest::hints(bytes, budget)
+}
+
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "GRE-604 D10b imports this helper")
+)]
+pub(crate) fn infer_builder_siblings(
+    paths: &[String],
+    budget: &mut PreparationBudget<'_>,
+) -> ReadResult<BuilderGroups> {
+    super::manifest::infer_siblings(paths, budget)
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum Resource {
     Entries,

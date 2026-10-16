@@ -14,3 +14,6 @@ mod yaml;
 
 #[cfg(test)]
 mod siblings_tests;
+
+#[cfg(test)]
+mod manifest_tests;
