@@ -446,7 +446,9 @@ fn import_arrays_over_the_node_limit_refuse_instead_of_dropping_parts() {
             .map(|observed| observed.builder.sources[0].scanned_parts.clone())
             .map_err(|error| format!("{error:?}"))
     };
-    assert_eq!(scanned(99_998), Ok(vec!["part.stl".to_owned()]));
+    // The stored kit charges 5 of the shared nodes before the import rules.
+    assert_eq!(scanned(99_993), Ok(vec!["part.stl".to_owned()]));
+    assert_eq!(scanned(99_994), Err("LimitExceeded(Nodes)".to_owned()));
     assert_eq!(scanned(100_000), Err("LimitExceeded(Nodes)".to_owned()));
 }
 
@@ -484,6 +486,24 @@ fn zero_budgets_refuse_the_stored_kit_and_import_rules() {
         outcome(&kit_only, no_documents),
         "LimitExceeded(DocumentBytes)"
     );
+    for (limits, expected) in [
+        (
+            PreparationLimits {
+                nodes: 0,
+                ..PreparationLimits::default()
+            },
+            "LimitExceeded(Nodes)",
+        ),
+        (
+            PreparationLimits {
+                depth: 0,
+                ..PreparationLimits::default()
+            },
+            "LimitExceeded(Depth)",
+        ),
+    ] {
+        assert_eq!(outcome(&kit_only, limits), expected);
+    }
     for (limits, expected) in [
         (no_documents, "LimitExceeded(DocumentBytes)"),
         (
@@ -689,4 +709,33 @@ fn kit_validation_reports_node_messages_for_merged_groups() {
         detail(r#"{"kit":{"selections":{"toolhead":"retired","extras":[],"open":["a","b","c"]}}}"#),
         None
     );
+}
+
+#[test]
+fn the_stored_kit_shares_the_node_allowance_with_import_rules() {
+    let mut database = import_only_source(r#"["part.stl"]"#);
+    let both = database.capture(TENANT, 1).unwrap();
+    database
+        .connection
+        .execute("DELETE FROM app_settings WHERE key='kit_manifest_1'", [])
+        .unwrap();
+    let imports_only = database.capture(TENANT, 1).unwrap();
+    let reads = part_reads();
+    let outcome = |captured, nodes| {
+        let limits = PreparationLimits {
+            nodes,
+            ..PreparationLimits::default()
+        };
+        observe(captured, Some(&reads), limits, false)
+            .map(|_| ())
+            .map_err(|error| format!("{error:?}"))
+    };
+    assert_eq!(outcome(&imports_only, 2), Ok(()));
+    assert_eq!(
+        outcome(&imports_only, 1),
+        Err("LimitExceeded(Nodes)".to_owned())
+    );
+    // {"selections":{"zeta":"z1"}} charges its root, two keys, the inner object and one value.
+    assert_eq!(outcome(&both, 7), Ok(()));
+    assert_eq!(outcome(&both, 6), Err("LimitExceeded(Nodes)".to_owned()));
 }
