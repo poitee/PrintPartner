@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
@@ -19,13 +19,18 @@ describe("Spoolman deduction connector ownership", () => {
   let profileId: number;
   let deductions: Array<{ path: string; body: unknown }>;
   let printerReads: number;
+  let onPrinterRead: (() => void) | undefined;
+  let onDeduction: (() => void) | undefined;
 
   beforeEach(async () => {
+    onPrinterRead = undefined;
+    onDeduction = undefined;
     deductions = [];
     printerReads = 0;
     server = createServer(async (req, res) => {
       if (req.method === "GET" && req.url === "/printer/printer/objects/query?print_stats") {
         printerReads += 1;
+        onPrinterRead?.();
         res.setHeader("content-type", "application/json");
         res.end(JSON.stringify({ result: { status: { print_stats: { filament_used: 1200 } } } }));
         return;
@@ -35,6 +40,7 @@ describe("Spoolman deduction connector ownership", () => {
         let body = "";
         for await (const chunk of req) body += chunk;
         deductions.push({ path: req.url, body: JSON.parse(body) });
+        onDeduction?.();
         res.writeHead(204);
         res.end();
         return;
@@ -66,6 +72,7 @@ describe("Spoolman deduction connector ownership", () => {
   });
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     sqlite?.close();
     if (dir) rmSync(dir, { recursive: true, force: true });
     if (server?.listening) {
@@ -165,4 +172,42 @@ describe("Spoolman deduction connector ownership", () => {
       { path: "/enabled/api/v1/spool/7/use", body: { use_length: 300 } },
     ]);
   });
+  it.each(["default", "disabled", "invalid", "foreign"])("skips %s Plan access before printer telemetry", async (mode) => {
+    vi.stubEnv("PP_DESKTOP_REBUILD", "1");
+    saveIntegrations([integration("enabled", "spoolman", "2026-09-01T00:00:00Z")]);
+    const decisions = assignSpools(["enabled"]);
+    if (mode === "disabled") repo.setSetting("feature_toggles", '{"spoolman":false}');
+    if (mode === "invalid") repo.setSetting(`feature_toggles:plan:${profileId}`, "{");
+    if (mode === "foreign") repo.setSetting("feature_toggles", '{"spoolman":true}');
+    await deductSpoolmanFilamentAfterVerify(repo, "printer", mode === "foreign" ? 999999 : profileId, decisions, 1);
+    expect(printerReads).toBe(0);
+    expect(deductions).toEqual([]);
+  });
+
+  it("rechecks Plan access after awaiting printer telemetry", async () => {
+    vi.stubEnv("PP_DESKTOP_REBUILD", "1");
+    repo.setSetting("feature_toggles", '{"spoolman":false}');
+    repo.setSetting(`feature_toggles:plan:${profileId}`, '{"spoolman":true}');
+    saveIntegrations([integration("enabled", "spoolman", "2026-09-01T00:00:00Z")]);
+    const decisions = assignSpools(["enabled"]);
+    onPrinterRead = () => repo.setSetting(`feature_toggles:plan:${profileId}`, '{"spoolman":false}');
+    await deductSpoolmanFilamentAfterVerify(repo, "printer", profileId, decisions, 1);
+    expect(printerReads).toBe(1);
+    expect(deductions).toEqual([]);
+  });
+
+  it("rechecks access before every deduction write", async () => {
+    vi.stubEnv("PP_DESKTOP_REBUILD", "1");
+    repo.setSetting("feature_toggles", '{"spoolman":true}');
+    saveIntegrations([
+      integration("first", "spoolman", "2026-09-01T00:00:00Z"),
+      integration("second", "spoolman", "2026-09-01T00:00:00Z"),
+    ]);
+    const decisions = assignSpools(["first", "second"]);
+    onDeduction = () => repo.setSetting(`feature_toggles:plan:${profileId}`, '{"spoolman":false}');
+    await deductSpoolmanFilamentAfterVerify(repo, "printer", profileId, decisions, 2);
+    expect(printerReads).toBe(1);
+    expect(deductions).toEqual([{ path: "/first/api/v1/spool/7/use", body: { use_length: 600 } }]);
+  });
+
 });

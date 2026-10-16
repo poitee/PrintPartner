@@ -108,9 +108,26 @@ describe("filament catalog feature admission", () => {
 
   for (const prefix of ["", "/api/v1"]) {
     const url = `${prefix}/filaments/catalog`;
+    it.each(['{"spoolman":false}', '{"spoolman":"invalid"}'])(`${prefix} withholds an in-flight catalog after Plan access changes to %s`, async (value) => {
+      const profileId = repo.createProfile("Revoked catalog").id;
+      repo.setSetting(`feature_toggles:plan:${profileId}`, '{"spoolman":true}');
+      network.mockImplementationOnce(async () => {
+        repo.setSetting(`feature_toggles:plan:${profileId}`, value);
+        return new Response('[{"id":7,"name":"Secret stock"}]', { headers: { "content-type": "application/json" } });
+      });
+      const response = await app.inject(`${url}?profile_id=${profileId}`);
+      if (value.includes("invalid")) expect(response.json()).toEqual(invalid);
+      else {
+        expect(response.statusCode).toBe(200);
+        expect(response.json()).toMatchObject(disabled);
+        expect(response.json()).not.toHaveProperty("default_spoolman_integration_id");
+        expectBaseAndCustom(response.json());
+      }
+      expect(network).toHaveBeenCalledTimes(1);
+    });
 
     it.each([undefined, "{}", '{"spoolman":false}'])(
-      `${prefix || "root"} preserves base, custom and default for disabled choices %j without connector lookup`, async (value) => {
+      `${prefix || "root"} preserves base and custom colors but omits the default for disabled choices %j without connector lookup`, async (value) => {
         if (value !== undefined) repo.setSetting("feature_toggles", value);
         const lookup = vi.spyOn(integrationStore, "getIntegrationConfig");
         const cachedBefore = structuredClone(loadFilamentCatalog());
@@ -119,7 +136,8 @@ describe("filament catalog feature admission", () => {
           expect(response.statusCode).toBe(200);
           const body = response.json<ReturnType<typeof loadFilamentCatalog>>();
           expectBaseAndCustom(body);
-          expect(body).toMatchObject({ ...disabled, default_spoolman_integration_id: connectorId });
+          expect(body).toMatchObject(disabled);
+          expect(body).not.toHaveProperty("default_spoolman_integration_id");
           expect(body.colors).toEqual(cachedBefore.colors);
         }
         expect(lookup.mock.calls).toEqual([]);
@@ -135,7 +153,8 @@ describe("filament catalog feature admission", () => {
       const response = await app.inject(url);
       expect(response.statusCode).toBe(200);
       expectBaseAndCustom(response.json());
-      expect(response.json()).toMatchObject({ ...disabled, default_spoolman_integration_id: null });
+      expect(response.json()).toMatchObject(disabled);
+      expect(response.json()).not.toHaveProperty("default_spoolman_integration_id");
       expect(lookup.mock.calls).toEqual([]);
       expect(network.mock.calls).toEqual([]);
     });
@@ -172,7 +191,8 @@ describe("filament catalog feature admission", () => {
         expect(response.json()).toMatchObject(enabled
           ? { spoolman_colors: expectedColors(connectorId), spoolman_status: "ok",
             default_spoolman_integration_id: connectorId }
-          : { ...disabled, default_spoolman_integration_id: connectorId });
+          : disabled);
+        if (!enabled) expect(response.json()).not.toHaveProperty("default_spoolman_integration_id");
         expect(network).toHaveBeenCalledTimes(enabled ? 1 : 0);
         expect(lookup).toHaveBeenCalledTimes(enabled ? 1 : 0);
         expect(loadFilamentCatalog()).toEqual(cachedBefore);
@@ -248,7 +268,8 @@ describe("filament catalog feature admission", () => {
     const denied = await app.inject(url);
     expect(denied.statusCode).toBe(200);
     expectBaseAndCustom(denied.json());
-    expect(denied.json()).toMatchObject({ ...disabled, default_spoolman_integration_id: connectorId });
+    expect(denied.json()).toMatchObject(disabled);
+    expect(denied.json()).not.toHaveProperty("default_spoolman_integration_id");
     expect(network.mock.calls).toEqual([]);
     repo.setSetting("feature_toggles", '{"spoolman":true}');
     repo.setSetting(`feature_toggles:plan:${plan}`, '{"spoolman":false}');
@@ -265,7 +286,8 @@ describe("filament catalog feature admission", () => {
     const other = await app.inject({ url, headers: { "x-test-tenant": "other" } });
     expect(other.statusCode).toBe(200);
     expectBaseAndCustom(other.json());
-    expect(other.json()).toMatchObject({ ...disabled, default_spoolman_integration_id: "other-default" });
+    expect(other.json()).toMatchObject(disabled);
+    expect(other.json()).not.toHaveProperty("default_spoolman_integration_id");
     expect(lookup.mock.calls).toEqual([]);
     expect(network.mock.calls).toEqual([]);
   });
@@ -332,8 +354,8 @@ describe("filament catalog feature admission", () => {
             cookies: { pp_session: session.value } });
           expect(response.statusCode).toBe(toggles === "{" ? 500 : 200);
           expect(response.json()).toMatchObject(toggles === "{" ? invalid
-            : { ...disabled, source: "west3d_shopify", status: "ok", custom_colors: [],
-              default_spoolman_integration_id: null });
+            : { ...disabled, source: "west3d_shopify", status: "ok", custom_colors: [] });
+          expect(response.json()).not.toHaveProperty("default_spoolman_integration_id");
         }
       }
       expect(network.mock.calls).toEqual([]);
@@ -343,4 +365,38 @@ describe("filament catalog feature admission", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+  for (const prefix of ["", "/api/v1"]) {
+    for (const resource of ["catalog"]) {
+      it.each([[false, false], [false, true], [true, false], [true, true]])(
+        `${prefix} ${resource} uses the owned Plan override over account %s with Plan %s`,
+        async (account, plan) => {
+          const profileId = repo.createProfile("Scoped inventory").id;
+          repo.setSetting("feature_toggles", JSON.stringify({ spoolman: account }));
+          repo.setSetting(`feature_toggles:plan:${profileId}`, JSON.stringify({ spoolman: plan }));
+          const response = await app.inject(`${prefix}/filaments/catalog?profile_id=${profileId}`);
+          expect(response.statusCode).toBe(200);
+          expectBaseAndCustom(response.json());
+          expect(response.json().spoolman_status).toBe(plan ? "ok" : "disabled");
+          expect(network).toHaveBeenCalledTimes(plan ? 1 : 0);
+        },
+      );
+      it(`${prefix} ${resource} validates scope before inventory and rejects foreign Plans`, async () => {
+        repo.setSetting("feature_toggles", '{"spoolman":true}');
+        const foreign = tenantStorage.run("other", () => repo.createProfile("Foreign"));
+        for (const profileId of ["", "0", "-1", "1.5", "1e2", "9007199254740992", "1&profile_id=2"]) {
+          expect((await app.inject(`${prefix}/filaments/catalog?profile_id=${profileId}`)).statusCode).toBe(400);
+        }
+        for (const profileId of [String(foreign.id), "999999"]) {
+          expect((await app.inject(`${prefix}/filaments/catalog?profile_id=${profileId}`)).statusCode).toBe(404);
+        }
+        const profileId = repo.createProfile("Corrupt Plan").id;
+        repo.setSetting(`feature_toggles:plan:${profileId}`, '{"spoolman":"yes"}');
+        expect((await app.inject(`${prefix}/filaments/catalog?profile_id=${profileId}`)).json()).toEqual(invalid);
+        expect(network).not.toHaveBeenCalled();
+        vi.stubEnv("PP_DESKTOP_REBUILD", "0");
+        expect((await app.inject(`${prefix}/filaments/catalog?profile_id=${profileId}`)).statusCode).toBe(200);
+      });
+    }
+  }
+
 });

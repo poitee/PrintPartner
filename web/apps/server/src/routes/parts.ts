@@ -1,3 +1,4 @@
+import { hasSpoolmanAssignment, readSpoolmanAccess, spoolmanAccessProblem } from "../lib/spoolman-access.js";
 import { basename } from "node:path";
 import { z } from "zod";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
@@ -216,6 +217,16 @@ export async function registerPartRoutes(app: FastifyInstance, deps: RouteDeps):
         return reply.status(409).send({ detail: acceptedStateDetail(accepted.reason) });
       }
       profileId = accepted.profileId;
+      if (hasSpoolmanAssignment(fields, {
+        filament_color_id: accepted.part.filamentColorId,
+        spoolman_spool_id: accepted.part.spoolmanSpoolId,
+      })) {
+        const access = readSpoolmanAccess(deps.repo, profileId);
+        if (access.kind !== "allowed") {
+          const problem = spoolmanAccessProblem(access);
+          return reply.status(problem.status).send(problem);
+        }
+      }
       const result = deps.repo.assignAcceptedFilament({
         expected: acceptedPlanBasis(accepted.snapshot),
         target: { kind: "part", projectionPartId: id },

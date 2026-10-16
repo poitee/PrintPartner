@@ -393,6 +393,27 @@ fn builder_without_checkouts_needs_no_reader_and_keeps_the_stored_kit() {
     assert!(observed.stamps.is_empty());
 }
 
+#[test]
+fn cancelled_observation_without_checkouts_refuses() {
+    let mut database = Database::oracle();
+    database
+        .connection
+        .execute("UPDATE projects SET local_path=NULL", [])
+        .unwrap();
+    let with_kit = database.capture(TENANT, 1).unwrap();
+    database
+        .connection
+        .execute("DELETE FROM app_settings WHERE key='kit_manifest_1'", [])
+        .unwrap();
+    let without_kit = database.capture(TENANT, 1).unwrap();
+    for captured in [with_kit, without_kit] {
+        assert!(matches!(
+            observe(&captured, None, PreparationLimits::default(), true),
+            Err(ReadFailure::Cancelled)
+        ));
+    }
+}
+
 fn import_only_source(imported_paths: &str) -> Database {
     let database = Database::oracle();
     database

@@ -650,7 +650,7 @@ Focused codec unit tests and public model integration tests run in the desktop g
 ## D10b manifest observation receipt
 
 GRE-604 D10b adds `pp_storage::manifest_options::observation` behind `desktop_rebuild`.
-It has no runtime caller yet. Build graph manifest commands and HTTP routes remain deferred.
+GRE-644 slice 1 wires its build graph manifest commands, described below. HTTP routes remain deferred.
 
 `capture` reads the build, its stored kit, and its ordered source layers in one transaction.
 `basis_matches` repeats the capture, so a later transaction can reject a stale observation.
@@ -816,6 +816,53 @@ Plate admission also caps each history validation pass at 1,000,000 potential ov
 Inspect runs one history validation pass and one set of production head reads, for at most 2,000,000 overlap comparisons. Apply runs three history validation passes, on the source, the source with owner claims, and the staged copy. It also reads production heads once on the source and once on the stage, for at most 5,000,000 overlap comparisons. Each head set is a subset of the validated history, so each contributes at most one additional history budget. These bounds cover the pairwise overlap loops, not total runtime, memory, row counts or other validation work. An oversized source fails before staging. A refusal leaves no published destination, removes any private stage and preserves source product bytes. Keep the source intact if it exceeds this limit; the ownership copy does not prune history or raise the budget.
 
 The source digest is rechecked after reservation, after the SQLite backup and before publication. Product file hashes and export inventory are rechecked after copying. Any database change requires a new inventory and reviewed manifest. The command exits with status 1 on refusal and status 0 with a JSON receipt on success. Both inspect and apply require `PP_DESKTOP_REBUILD` to be exactly `1` or `true`.
+
+## GRE-644 manifest commands, slice 1
+
+`build_graph::ManifestOptionsCommand` adds `ReadKit`, `SaveKit`, and
+`ReadBuilder` through `BuildCommand::Manifest`, behind `desktop_rebuild`.
+`BuildOutcome::Manifest` returns typed outcomes. Use `into_success_body()` for
+lossless JSON bytes, including UTF-16 selection IDs.
+
+`WriterOwner::build_graph_with_observations` accepts the existing `DraftReads`
+adapter and `PreparationLimits`. Capture authenticates and reads the graph in
+a reader transaction, then releases that reader before adapter calls. Two
+observations share one preparation budget and must have equal source stamps.
+The queued command authenticates again and checks `basis_matches` inside its
+immediate write transaction. Save validates selections in that transaction,
+then writes the kit setting and configuration timestamp together. Cancellation
+before commit rolls both back. Save refuses stale inputs without retrying;
+builder reads retry once. Kit reads need no filesystem adapter.
+
+This adapts the reference's command location to main's separate
+`manifest_options` model. The builder outcome holds serialized bytes because
+main keeps its builder model internal. Stored malformed kits read as empty,
+missing Plans win over invalid save input, and omitted save fields reset to
+empty defaults, as Node does. SQL read errors propagate instead of becoming
+empty kits as in the reference.
+
+Unlike the reference, selection validation runs inside the write transaction.
+Unlike both Node and the reference, save rejects unknown group and variant IDs,
+as required by this slice. D10b's validator continues to check cardinality;
+the command adds unknown-ID checks without changing `observation.rs`.
+Save observes attached checkouts even when selections are omitted, as the
+reference does, so source failures and stale stamps still refuse that save.
+Node only builds option groups when the update supplies selections.
+Two observations share a budget instead of receiving separate budgets as in
+the reference.
+
+The public command tests cover Node response parity, save/read persistence,
+stamp changes, database changes before writer admission, bounded builder retry,
+unknown selections, cancellation, missing and foreign Plans, adapter failures,
+and rollback when the freshness update fails. The Node fixture follows D10b's
+JSON and generator pattern. Regenerate it from `web`:
+
+```sh
+npx tsx --conditions=development ../rust/crates/pp-storage/tests/fixtures/manifest-commands-node.mts apps/server > ../rust/crates/pp-storage/tests/fixtures/manifest-commands-node.json
+```
+
+No HTTP route or runtime caller is added. GRE-644 still needs its HTTP slice
+with D25/GRE-620 build routes, including `PP_DESKTOP_REBUILD` admission.
 
 ## D11 required units (GRE-606)
 
