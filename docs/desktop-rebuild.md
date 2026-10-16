@@ -549,8 +549,28 @@ Each source returns a SHA-256 stamp of its reads, so a caller can compare two ob
 
 The tests compare the response bytes with `rust/crates/pp-storage/tests/fixtures/manifest-builder-node.json`.
 `manifest-builder-node.mts` in the same directory regenerates that file from the Node services.
-Pattern matching still uses the unbudgeted glob matcher tracked in
-[GRE-642](https://linear.app/greetz/issue/GRE-642/builder-glob-matcher-exponential-backtracking-with-no-budget-replace).
+Builder globs normalize backslashes to slashes, lowercase both inputs, and trim
+ECMAScript whitespace. They check normalized equality, then match the entire path.
+A pattern without a slash also matches against the basename.
+Only `*` and `?` are wildcards. They consume zero or more UTF-16 code units and
+exactly one unit, respectively, excluding LF, CR, U+2028 and U+2029.
+Slashes have no special wildcard restrictions. All regex punctuation is literal.
+Literal comparison follows ECMAScript non-Unicode `/i` canonicalization after
+lowercasing. Uppercase expansions and non-ASCII-to-ASCII uppercase mappings do
+not fold. Lowercasing still maps Kelvin sign to `k` before comparison.
+Lone surrogate pattern units are preserved, and `?` consumes half a supplementary character.
+
+The matcher uses two indices and one saved `*` retry point instead of a regex.
+It has O(path units × pattern units) worst-case work and O(path units + pattern
+units) normalization storage. The helper has no `PreparationBudget` parameter;
+callers retain their existing cancellation checks between matches.
+This resolves the backtracking and UTF-16 parity defects in GRE-642 and GRE-641.
+
+Regenerate or verify the Node differential corpus with
+`node rust/crates/pp-storage/tests/fixtures/manifest-globs-node.mjs` or append `--check`.
+The generator reads the actual `matchKeyMatches` and `globToRegExp` functions.
+Run the ignored `builder_glob_backtracking_probe` test in an exclusive landing slot
+with `--release -- --ignored --nocapture` to check the 10 ms release bound.
 
 ```sh
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib manifest_options
