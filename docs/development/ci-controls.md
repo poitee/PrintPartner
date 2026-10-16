@@ -26,8 +26,9 @@ CODEOWNERS assigns these paths to `@poitee`:
 - `.github/dependabot.yml` and `.github/zizmor.yml`.
 - `rust/scripts/check-*` and `rust/deny.toml`.
 - The action pin, CI tool pin, desktop workflow, and workaround checks and their tests.
-- The PR evidence checker and its test, Linear PR sync, and the macOS bundle path filter.
-- `scripts/release.mjs` and `web/scripts/atomic-package-build.mjs`, which the release workflow runs directly or through the Docker build.
+- The PR evidence checker and its test, the `scripts/linear/` directory, and the macOS bundle path filter.
+  Linear PR sync runs a script from that directory with the Linear secret. Python imports files next to that script before the standard library.
+- `scripts/release.mjs`, `web/scripts/atomic-package-build.mjs`, `Dockerfile`, and `docker-entrypoint.sh`, which the release workflow runs directly or builds into the published image.
 - `rust/ast-grep-baseline.json`, `scripts/workaround-baseline.json`, and Rust snapshot directories under `rust/crates/`.
 
 The `actionlint` and `zizmor` jobs in `.github/workflows/actionlint.yml` run on every `pull_request`.
@@ -60,7 +61,7 @@ The workflow and configuration changes handle them as follows:
 | Two `self-repository` notices in Release | Allow only the two local reusable-workflow lines. They resolve at the caller's commit. Actionlint 1.7.12 rejects zizmor's suggested `$/` replacement syntax. |
 | Mismatched action version comment in Chain tip gate | Replace the moving `# v2` comment with the verified `# v2.87.27` tag. Keep the existing commit SHA. |
 | `dependabot-cooldown` for GitHub Actions | Set a seven-day cooldown for action version updates. |
-| Five other `dependabot-cooldown` notices | Keep the existing npm, pip, Docker, and Cargo update policies. Their cooldown policy needs separate review. Each ecosystem entry has a line-specific exception. |
+| Two other `dependabot-cooldown` notices | Keep the existing npm and pip update policies. Their cooldown policy needs separate review. Each entry has a line-specific exception. Zizmor 1.31.1 stops at the first entry with a cooldown, so it reports nothing for the Docker and Cargo entries after it. A zizmor upgrade that audits them needs the same review. |
 
 Every exception has its reason in `.github/zizmor.yml` and requires the owner's review.
 No audit rule is disabled.
