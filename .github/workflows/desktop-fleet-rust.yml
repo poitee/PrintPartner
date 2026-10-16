@@ -180,6 +180,7 @@ jobs:
           cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test required_unit_operations -- --test-threads=2
           cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib read_model::context::tests::plate_overlap_budget_is_distinct_from_integrity -- --exact --test-threads=2
           cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test working_draft_core -- --test-threads=2
+          cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test working_draft_writes -- --test-threads=2
           cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test working_draft_observation
           cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib working_drafts:: -- --test-threads=2
           cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --doc
