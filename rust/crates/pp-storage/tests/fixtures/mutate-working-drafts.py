@@ -1,4 +1,4 @@
-"""Run seven single-edit mutants against the public working-draft client tests."""
+"""Run single-edit mutants against the public working-draft client tests."""
 import os
 from pathlib import Path
 import shutil
@@ -16,12 +16,27 @@ mutants = [
     ("diff drops changed fields", diff, '.filter(|f| !before.same_field(after, f))', '.filter(|_| false)'),
     ("diff sorts added IDs numerically", diff, 'added.sort_by(|a, b| js_cmp(&a["id"], &b["id"]));', 'added.sort_by_key(|part| part["id"].as_i64());'),
     ("diff ignores manifest requirement", diff, '.filter(|f| !before.same_field(after, f))', '.filter(|f| **f != "requirement" && !before.same_field(after, f))'),
+    ("edit accepts a stale digest", source, 'if current.header["snapshotDigest"] != expected {', "if false {"),
+    ("edit keeps the prior selection", source, "current_required_unit_reconciliation_id=NULL,snapshot_digest=?", "snapshot_digest=?"),
+    ("edit keeps the selection digest format", source, "model::selection(&planning, None)", "planning"),
+    ("edit resets to the effective quantity", source, "COALESCE(?1,quantity_inferred)", "COALESCE(?1,quantity_effective)"),
+    ("edit model resets to the effective quantity", source, 'None => part["quantityInferred"].clone(),', 'None => part["quantityEffective"].clone(),'),
+    ("edit skips automatic selection", source, "if selected.selected.is_some() {", "if true {"),
+    ("unchanged edit checks the digest", source, "let selected = if parts == current.parts {", "let selected = if false {"),
+    ("edit allows a closed draft", source, 'if current.header["state"] != "open" {', "if false {"),
+    ("baseline ignores existing Parts", source, "version != 0\n            || one(", "version != 0\n            && one("),
+    ("edit base ignores Plan version", source, '|| profile_row["acceptedPlanVersion"] != current.header["basePlanVersion"]', "|| false"),
+    ("abandon of consumed is draft_changed", source, "DraftState::Consumed => {\n            return Ok(AbandonOutcome::NotOpen {", "DraftState::Consumed => {\n            return Ok(AbandonOutcome::DraftChanged {"),
+    ("abandon retry is not idempotent", source, "DraftState::Abandoned if identity.lifecycle_version == expected + 1 =>", "DraftState::Abandoned if false =>"),
+    ("write skips the commit cancellation check", source, "    let outcome = body(&tx)?;\n    ensure!(!cancelled.load(Ordering::Acquire), Failure::Cancelled);", "    let outcome = body(&tx)?;"),
+    ("edit allows 10001 decisions", source, "(1..=10_000).contains", "(1..=10_001).contains"),
+    ("edit allows an empty Part list", source, "if decision.ids().is_empty()", "if false"),
 ]
 with tempfile.TemporaryDirectory(prefix="pp-working-draft-mutants-") as directory:
     scratch = Path(directory) / "rust"
     shutil.copytree(rust, scratch, ignore=shutil.ignore_patterns("target"))
-    env = {**os.environ, "CARGO_TARGET_DIR": str(rust / "target")}
-    command = ["cargo", "nextest", "run", "--locked", "--manifest-path", str(scratch / "Cargo.toml"), "-p", "pp-storage", "--features", "desktop_rebuild", "--test", "working_draft_core", "--test-threads=2"]
+    env = {**os.environ, "CARGO_TARGET_DIR": str(Path(directory) / "target")}
+    command = ["cargo", "nextest", "run", "--locked", "--manifest-path", str(scratch / "Cargo.toml"), "-p", "pp-storage", "--features", "desktop_rebuild", "--test", "working_draft_core", "--test", "working_draft_writes", "--test-threads=2"]
     baseline = subprocess.run(command, env=env, capture_output=True, text=True)
     if baseline.returncode:
         raise SystemExit(baseline.stdout + baseline.stderr)

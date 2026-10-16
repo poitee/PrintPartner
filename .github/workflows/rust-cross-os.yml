@@ -32,16 +32,10 @@ jobs:
       matrix:
         # Runner labels, per-OS package scope and per-OS test filters live only here.
         include:
-          # These tests fail on macOS. Each skipped term names the ticket that removes it
-          # (docs/development/ci.md#macos-exclusions):
-          #   GRE-658: raw_long_labels_contract_to_valid_file_and_directory_paths
           - os: macos
             runner: macos-26
             scope: [--workspace]
-            tests: >-
-              not (
-              test(=acquisition_labels::raw_long_labels_contract_to_valid_file_and_directory_paths)
-              )
+            tests: all()
         shard: [a, b]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 360

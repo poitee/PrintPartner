@@ -11,7 +11,7 @@ The workflow has one job per OS. Each job uses the toolchain pinned in `rust-too
 | Check name | Runner | Packages | Tests |
 |------------|--------|----------|-------|
 | `rust (linux)` | `ubuntu-latest` | The whole workspace | All |
-| `rust (macos)` | `macos-26` | The whole workspace | All except [macOS exclusions](#macos-exclusions) |
+| `rust (macos)` | `macos-26` | The whole workspace | All |
 | `rust (windows)` | `windows-latest` | The workspace without [Windows exclusions](#windows-exclusions) | All in those packages |
 
 Each job runs these steps in order:
@@ -53,7 +53,7 @@ cargo nextest run --manifest-path rust/Cargo.toml --locked --workspace --no-fail
 cargo nextest run --manifest-path rust/Cargo.toml --locked --workspace --no-fail-fast --features desktop_rebuild
 ```
 
-On macOS, set `TMPDIR` to a short directory on a case-sensitive volume before you run the tests. The workflow step `Mount a short case-sensitive TMPDIR` has the commands. Also set `PP_TEST_NODE` to the Node executable, as CI does. Without it the runtime tests fall back to `/usr/bin/node`, which macOS does not have. To skip the same tests as CI, add `-E` with the `tests` value of the macOS entry. On Windows, replace `--workspace` with the items of the Windows entry's `scope` list, separated by spaces. On Linux, the Tauri shell also needs the GTK and WebKit packages that the workflow installs with `apt-get`.
+On macOS, set `TMPDIR` to a short directory on a case-sensitive volume before you run the tests. The workflow step `Mount a short case-sensitive TMPDIR` has the commands. Also set `PP_TEST_NODE` to the Node executable, as CI does. Without it the runtime tests fall back to `/usr/bin/node`, which macOS does not have. On Windows, replace `--workspace` with the items of the Windows entry's `scope` list, separated by spaces. On Linux, the Tauri shell also needs the GTK and WebKit packages that the workflow installs with `apt-get`.
 
 Clippy and fmt do not read the manifest contents. For a lint-only run, `echo '{}' > rust/bundle-manifest.json` is enough. The tests need the real manifest.
 
@@ -103,16 +103,6 @@ These crates do not build on Windows yet. The Windows job excludes them with `--
 | `pp-desktop` | GRE-656 | It is the Tauri shell and depends on an excluded crate. GRE-656 ends with the Windows job building the whole workspace. |
 
 `rust (windows)` therefore does not compile the Tauri shell yet. When a port ticket's crates build and pass their tests on Windows, delete its `scope` item in the same pull request.
-
-## macOS exclusions
-
-The `tests` value of the macOS entry skips these tests. The comment above the macOS entry names the ticket for each skipped term. When a test passes on macOS, delete it from that filter in the same pull request.
-
-The filter skips one test by name:
-
-| Crate | Test | Ticket | Failure |
-|-------|------|--------|---------|
-| `pp-source` | `acquisition_labels::raw_long_labels_contract_to_valid_file_and_directory_paths` | GRE-658 | The extracted directory is missing on APFS. This test exists only with `desktop_rebuild` on. |
 
 ## macOS test concurrency
 
