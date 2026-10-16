@@ -6,10 +6,12 @@ export function sendProblem(
   status: number,
   title: string,
   detail?: string,
+  code?: string,
 ): FastifyReply {
   return reply.status(status).send({
     detail: detail ?? title,
     title,
     status,
+    ...(code ? { code } : {}),
   });
 }

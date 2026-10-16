@@ -24,6 +24,7 @@ const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
   vi.restoreAllMocks();
   for (const cleanup of cleanups.splice(0)) await cleanup();
+  vi.unstubAllEnvs();
 });
 
 async function fixture(options: { tracked?: boolean } = {}) {
@@ -60,6 +61,26 @@ async function fixture(options: { tracked?: boolean } = {}) {
 }
 
 describe("Plan draft routes", () => {
+  it("rejects publication of optional defaults prepared before revocation", async () => {
+    vi.stubEnv("PP_DESKTOP_REBUILD", "1");
+    const { app, repo, profile } = await fixture({ tracked: true });
+    repo.setSetting(`feature_toggles:plan:${profile.id}`, '{"spoolman":true}');
+    repo.setSetting(`role_filaments_${profile.id}`, JSON.stringify({ primary: { filament_color_id: "spoolman:proof:filament:7" } }));
+    const result = repo.recomputePlanDraft({ profileId: profile.id, actor: "test", idempotencyKey: "draft", applyManifest: false });
+    if (result.kind !== "created" || !result.draft.parts[0]) throw new Error("Draft missing");
+    const part = result.draft.parts[0];
+    repo.setSetting(`feature_toggles:plan:${profile.id}`, '{"spoolman":false}');
+    const response = await app.inject({ method: "POST", url: `/plans/${profile.id}/save`,
+      headers: { "idempotency-key": "denied-save" }, payload: {
+        expected_base: { revision_id: null, plan_version: 0 }, remap_checkoff_links: true,
+        expected_draft: { draft_id: result.draft.id, state: "open", base: { revision_id: null, plan_version: 0 }, lifecycle_version: result.draft.lifecycleVersion, snapshot_digest: result.draft.snapshotDigest },
+        decisions: [{ kind: "set_included", value: false, target: { part_key: part.partKey, relative_path: part.relativePath, source_layer: part.sourceLayer } }],
+      } });
+    expect(response.statusCode, response.body).toBe(403);
+    expect(response.json().code).toBe("FEATURE_DISABLED");
+    expect(repo.getAcceptedPlanRevision(profile.id)).toBeNull();
+  });
+
   it("rejects invalid save requests before running the command", async () => {
     const { app, repo, profile } = await fixture();
     const save = vi.spyOn(repo, "savePlanChoices");
