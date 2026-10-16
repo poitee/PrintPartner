@@ -20,11 +20,7 @@ pub mod native_secrets;
 pub mod profiles;
 pub mod read_model;
 #[cfg(feature = "desktop_rebuild")]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "GRE-606 operations land in the second D11 slice")
-)]
-mod required_units;
+pub mod required_units;
 mod schema;
 #[cfg(feature = "desktop_rebuild")]
 pub mod working_drafts;
@@ -104,6 +100,11 @@ enum Envelope {
     Features {
         command: features::Command,
         reply: mpsc::Sender<Result<features::View>>,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    RequiredUnits {
+        command: required_units::Command,
+        reply: mpsc::Sender<Result<required_units::Outcome>>,
     },
     Read {
         command: read_model::Command,
@@ -573,6 +574,14 @@ impl WriterOwner {
                     #[cfg(feature = "desktop_rebuild")]
                     Envelope::BuildGraph { command, reply } => {
                         reply.send(build_graph::execute(&mut connection, command, admission));
+                    }
+                    #[cfg(feature = "desktop_rebuild")]
+                    Envelope::RequiredUnits { command, reply } => {
+                        let _ = reply.send(required_units::execute(
+                            &mut connection,
+                            command,
+                            admission,
+                        ));
                     }
                     Envelope::Read { command, reply } => {
                         let _ = reply.send(read_model::execute(&mut connection, command));

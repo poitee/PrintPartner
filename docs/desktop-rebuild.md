@@ -620,35 +620,57 @@ Inspect runs one history validation pass and one set of production head reads, f
 
 The source digest is rechecked after reservation, after the SQLite backup and before publication. Product file hashes and export inventory are rechecked after copying. Any database change requires a new inventory and reviewed manifest. The command exits with status 1 on refusal and status 0 with a JSON receipt on success. Both inspect and apply require `PP_DESKTOP_REBUILD` to be exactly `1` or `true`.
 
-## D11 required-unit model (GRE-606)
+## D11 required units (GRE-606)
 
-The first D11 slice compiles `required_units::model` only with `desktop_rebuild`.
-It provides planning and selection digests, canonical decisions, exact predecessor
-matching, required-unit assignments, conflicts, surplus tokens, and selection basis
-rows. The module has no storage writer or HTTP entry point.
+`required_units` compiles only with `desktop_rebuild`. It has two parts.
 
-The model keeps `DraftPart` manifest metadata separate from scalar JSON. Planning
-hashes preserve UTF-16 ordering and lone surrogates in manifest fields. Malformed
-JSON target and source rows return parse errors. Decision IDs use `pp_domain::PositiveId`, and
-invalid quantities, duplicate IDs or tokens, and corrupt progress return errors.
-Predecessor units are sorted by prior index before validation, as in Node.
+The model provides planning and selection digests, canonical decisions, exact
+predecessor matching, required-unit assignments, conflicts, surplus tokens, and
+selection basis rows. It keeps `DraftPart` manifest metadata separate from scalar
+JSON. Planning hashes preserve UTF-16 ordering and lone surrogates in manifest
+fields. Predecessor units are sorted by prior index before validation, as in Node.
 
-Unit tests assert literal results observed from
-`web/apps/server/src/services/required-unit-reconciliation.ts` and literal hashes
-from that module and `web/apps/server/src/services/plan-drafts.ts`. They cover
-creation, growth, shrink selection, prior completion, ambiguous or unsafe
-predecessors, duplicate source layers, malformed input, and manifest text hashing.
+The operation ports Node's `savePlanDraftRequiredUnitReconciliation` and the
+`reconcile` path of `PlanDraftWorkspaceService`. Get a client with
+`WriterOwner::required_units_with_policy`. `ReconciliationClient::reconcile`
+queues one command on the single writer, as `build_graph` does. The writer runs it
+in one immediate transaction and checks cancellation before it commits.
 
-The minimal module root owns a local `Decision` enum with the existing snake-case
-request fields because `pp-storage` has no dependency on `pp-contracts`.
-The operations slice can adapt the request contract at its boundary. `planning`
-returns `Result<String>` so JSON byte conversion errors propagate to that caller.
+- The request body has Node's snake-case fields. `ReconciliationRequest` rejects
+  unknown fields and a snapshot digest that is not 64 lowercase hex characters.
+- `ReconciliationCommand::new` trims the idempotency key as JavaScript `trim` does
+  and requires 1 to 160 UTF-16 units.
+- A session records the user ID as the actor. An API key records `tenant:<id>`
+  and updates the key's last use time.
+- `Outcome` serializes with Node's `kind` values and workspace shape. A replay
+  with the same key and payload returns the saved selection. A replay with a
+  different payload returns `idempotency_conflict`.
+- Every read verifies stored reconciliations, decisions, assignments, and
+  Required-unit sets. Corrupt rows return Node's messages for the same checks.
+  Selection basis rows share one message, "Required-unit selection basis is invalid".
 
-The second D11 slice ports the reconciliation storage operations and writer admission.
-It adds the required-unit fixture runner and database tests, then connects working-draft consumers.
-GRE-606 remains open until that slice lands. GRE-607's executor and GRE-608 still
-need the operations slice.
+The operation has no HTTP route. GRE-619 adds it.
+
+The local `Decision` and request types exist because `pp-storage` has no
+dependency on `pp-contracts`. Both use the same snake-case fields as the contract.
+
+Database tests open Node-written fixtures in
+`rust/crates/pp-storage/tests/fixtures/required-units/`. Each test compares the
+outcome with the Node result in the matching JSON file and checks the stored
+rows. The `required-unit-fixture` binary runs one request twice, with a restart
+between runs, and prints both outcomes and the database before and after:
+
+```sh
+PP_RECONCILIATION_SESSION=required-unit-fixture-secret \
+  cargo run --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild \
+  --bin required-unit-fixture -- DIRECTORY PROFILE_ID DRAFT_ID IDEMPOTENCY_KEY REQUEST_JSON
+```
+
+Run the tests with:
 
 ```sh
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib required_units -- --test-threads=2
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test required_unit_operations -- --test-threads=2
 ```
+
+GRE-607's working-draft executor and GRE-608 call this operation in later slices.
