@@ -31,6 +31,9 @@ mutants = [
 with tempfile.TemporaryDirectory(prefix='pp-preparation-mutants-', dir=rust / 'target') as directory:
     scratch = Path(directory) / 'rust'
     shutil.copytree(rust, scratch, ignore=shutil.ignore_patterns('target'))
+    for sibling in rust.parent.iterdir():
+        if sibling.name not in ('rust', '.git'):
+            (scratch.parent / sibling.name).symlink_to(sibling)
     env = {**os.environ, 'CARGO_TARGET_DIR': str(rust / 'target/preparation-mutants-target')}
     command = ['cargo', 'nextest', 'run', '--locked', '--manifest-path', str(scratch / 'Cargo.toml'), '-p', 'pp-storage', '--features', 'desktop_rebuild', '--lib', '-E', 'test(preparation_tests)', '--test-threads=2']
     def run():
