@@ -993,20 +993,29 @@ The default build remains unchanged.
 `jobs::publication_conflicts` and `printer_upload_conflicts` move here from D16
 because publication must check execution jobs inside the same transaction.
 Exports use their profile ID. Uploads and deferred starts also resolve Checkoff
-coordinate ownership. Uploaded-only jobs retain their conflict even though job
-history treats that state as terminal. The supplied-source import arm waits for
-GRE-610's payload variant.
+coordinate ownership. All terminal jobs, including uploaded-only uploads, are
+skipped. An active deferred start bound to an uploaded-only parent still blocks
+publication and validates the parent upload binding. The supplied-source import
+arm waits for GRE-610's payload variant.
 
-The generator records ten real SQLite publication cases, including receipt
+The generator records twelve real SQLite publication cases, including receipt
 replay, a changed draft, two pinned Source inputs, all three reconciliation
-reasons, and unsafe remapping. Rust restores each recorded database on Node's
-schema and compares literal outcomes, receipts, revision, Part, input, mapping,
-progress, draft, and setting rows. The comparison normalizes only the generated
+reasons, and safe and unsafe remapping. The mapped cases retain Required units
+and exercise Checkoff links, resolved units, and an ownerless send-queue item.
+One shrinks quantity and moves retained units to new indexes. Rust restores
+each recorded database on Node's schema and compares literal outcomes, receipts,
+revision, Part, input, mapping, progress, draft, and setting rows. The comparison normalizes only the generated
 publication timestamp and receipt field casing.
 
-Two reference differences remain explicit. Node `applyPlanChanges` does not
-check durable jobs, so its running-export and uploaded-only cases publish.
-Rust returns the exact job conflict list and leaves publication rows unchanged.
+Three reference differences remain explicit. Node `applyPlanChanges` does not
+check durable jobs, so its running-export case publishes. Rust returns the
+exact job conflict list and leaves publication rows unchanged. Both runtimes
+publish with a terminal uploaded-only upload.
 For an unsafe remap, both runtimes return the same link and filename. Rust keeps
 the token-based reason from PR 1, while Node reports a match-key quantity reason.
-The fixture retains both Node outcomes without rewriting them as Rust results.
+When quantity shrinks and retained units change indexes, Node remaps Checkoff
+links, resolved units, and queue items to a different Required-unit token than
+its own persisted rows assign to the original unit. Rust preserves the original
+token, and the test checks both literal settings and token identity against the
+shared Required-unit rows. The fixture retains Node's literal output so changes
+to either runtime fail the comparison.

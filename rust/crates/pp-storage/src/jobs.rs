@@ -1716,7 +1716,7 @@ pub(crate) fn publication_conflicts(
                 && record.state.name() == state,
             "Job identity mismatch"
         );
-        if record.state.terminal() && record.state != PersistentState::UploadedOnly {
+        if record.state.terminal() {
             continue;
         }
         let affected = match &record.payload {

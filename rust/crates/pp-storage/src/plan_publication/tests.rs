@@ -670,7 +670,14 @@ mod transaction {
     #[test]
     fn transaction_replays_node_outcomes_receipts_and_persisted_rows() {
         let fixture = fixture();
-        for case in fixture["cases"].as_array().unwrap() {
+        let cases = fixture["cases"].as_array().unwrap();
+        for id in ["mapped-remap", "mapped-remap-index-change"] {
+            assert!(
+                cases.iter().any(|case| case["id"] == id),
+                "Missing Node {id} transaction"
+            );
+        }
+        for case in cases {
             let mut c = database(&fixture, case);
             let tx = c.transaction().unwrap();
             let mut actual = publish(
@@ -685,7 +692,7 @@ mod transaction {
                 .to_string();
             replace_time(&mut actual, &at, &fixture["at"]);
             let mut expected = node_outcome(&case["outcome"]);
-            if ["running-export", "uploaded-only"].contains(&case["id"].as_str().unwrap()) {
+            if case["id"] == "running-export" {
                 // Node has no durable-job publication guard. Its literal outcome is applied.
                 assert_eq!(expected["kind"], "applied");
                 let job = &case["before"]["durable_jobs"][0];
@@ -727,12 +734,16 @@ mod transaction {
             ] {
                 let mut actual = snapshot(&c, table);
                 replace_time(&mut actual, &at, &fixture["at"]);
-                assert_eq!(
-                    actual,
-                    state.get(table).cloned().unwrap_or(json!([])),
-                    "{} {table}",
-                    case["id"]
-                );
+                if case["id"] == "mapped-remap-index-change" && table == "app_settings" {
+                    assert_token_consistent_remap(case, &actual);
+                } else {
+                    assert_eq!(
+                        actual,
+                        state.get(table).cloned().unwrap_or(json!([])),
+                        "{} {table}",
+                        case["id"]
+                    );
+                }
             }
             if actual["kind"] == "applied" {
                 let tx = c.transaction().unwrap();
@@ -758,6 +769,70 @@ mod transaction {
                 .unwrap(),
                 0
             );
+        }
+    }
+
+    fn assert_token_consistent_remap(case: &Value, actual: &Value) {
+        assert_eq!(
+            actual,
+            &json!([
+                {"tenant_id":"default","key":"schema_version","value":"34"},
+                {"tenant_id":"default","key":"printer.checkoff_links","value":r#"[{"id":"kept-slot","filename":"bracket.stl","profile_id":1,"state":"watching","units":[{"part_id":2,"unit_index":0}],"resolved_units":[{"part_id":2,"unit_index":0,"result":"printed"}]}]"#},
+                {"tenant_id":"default","key":"printer.send_queue","value":r#"[{"id":"kept-queue","profile_id":null,"state":"error","checkoff_units":[{"part_id":2,"unit_index":0}]}]"#}
+            ])
+        );
+        assert_eq!(
+            case["after"]["app_settings"],
+            json!([
+                {"tenant_id":"default","key":"schema_version","value":"34"},
+                {"tenant_id":"default","key":"printer.checkoff_links","value":r#"[{"id":"kept-slot","filename":"bracket.stl","profile_id":1,"state":"watching","units":[{"part_id":2,"unit_index":1}],"resolved_units":[{"part_id":2,"unit_index":1,"result":"printed"}]}]"#},
+                {"tenant_id":"default","key":"printer.send_queue","value":r#"[{"id":"kept-queue","profile_id":null,"state":"error","checkoff_units":[{"part_id":2,"unit_index":1}]}]"#}
+            ])
+        );
+        let token = |state: &Value, coordinate: &Value| {
+            let part = state["plan_revision_parts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|part| part["projection_part_id"] == coordinate["part_id"])
+                .unwrap();
+            state["plan_revision_required_units"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|unit| {
+                    unit["revision_part_id"] == part["id"]
+                        && unit["revision_id"] == part["revision_id"]
+                        && unit["unit_index"] == coordinate["unit_index"]
+                })
+                .unwrap()["required_unit_token"]
+                .clone()
+        };
+        for (key, field) in [
+            ("printer.checkoff_links", "units"),
+            ("printer.checkoff_links", "resolved_units"),
+            ("printer.send_queue", "checkoff_units"),
+        ] {
+            let coordinate = |settings: &Value| {
+                let setting = settings
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|setting| setting["key"] == key)
+                    .unwrap();
+                let rows: Value = serde_json::from_str(setting["value"].as_str().unwrap()).unwrap();
+                rows[0][field][0].clone()
+            };
+            let before = token(
+                &case["before"],
+                &coordinate(&case["before"]["app_settings"]),
+            );
+            let rust = token(&case["after"], &coordinate(actual));
+            let node = token(&case["after"], &coordinate(&case["after"]["app_settings"]));
+            assert_eq!(before, "ppu_00000000000000000000000000000002");
+            assert_eq!(rust, before, "{key} {field}");
+            assert_eq!(node, "ppu_00000000000000000000000000000003");
+            assert_ne!(node, before, "{key} {field}");
         }
     }
 
@@ -848,6 +923,11 @@ fn publication_job_scope_terminal_states_and_deferred_start_bindings() {
             .unwrap(),
     )
     .unwrap();
+    assert!(
+        crate::jobs::publication_conflicts(&tx, "default", 1)
+            .unwrap()
+            .is_empty()
+    );
     let mut start = parent.clone();
     start["job_id"] = json!("start");
     start["payload"] = json!({"kind":"printer-start","payload":{"uploaded_job_id":"uploaded-only","binding":{"printer_id":"printer","upload_effect":parent["effects"][0]}}});
@@ -862,7 +942,7 @@ fn publication_job_scope_terminal_states_and_deferred_start_bindings() {
             .iter()
             .map(|c| c.operation_id.as_str())
             .collect::<Vec<_>>(),
-        ["start", "uploaded-only"]
+        ["start"]
     );
     assert!(
         crate::jobs::publication_conflicts(&tx, "other", 1)
@@ -876,8 +956,12 @@ fn publication_job_scope_terminal_states_and_deferred_start_bindings() {
     )
     .unwrap();
     assert!(crate::jobs::publication_conflicts(&tx, "default", 1).is_err());
-    tx.execute("DELETE FROM durable_jobs WHERE id='start'", [])
-        .unwrap();
+    start["payload"]["payload"]["binding"]["printer_id"] = json!("printer");
+    tx.execute(
+        "UPDATE durable_jobs SET document=? WHERE id='start'",
+        [start.to_string()],
+    )
+    .unwrap();
     parent["payload"]["payload"]["profile_id"] = Value::Null;
     parent["payload"]["payload"]["checkoff_units"] = json!([{"part_id":999,"unit_index":0}]);
     tx.execute(

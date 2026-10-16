@@ -19,7 +19,7 @@ export async function transactions(root) {
   const cases = [];
   let definitions;
   try {
-    for (const id of ["first", "idempotent", "changed", "running-export", "uploaded-only", "unsafe-remap", "inputs", "missing-reconciliation", "unresolved-reconciliation", "stale-reconciliation"]) {
+    for (const id of ["first", "idempotent", "changed", "running-export", "uploaded-only", "mapped-remap", "mapped-remap-index-change", "unsafe-remap", "inputs", "missing-reconciliation", "unresolved-reconciliation", "stale-reconciliation"]) {
       const dir = mkdtempSync(join(tmpdir(), "pp-publication-"));
       const database = new SqliteDatabase(dir);
       let raw;
@@ -63,16 +63,23 @@ export async function transactions(root) {
           return reconciled.draft;
         };
         const command = (d) => ({ profileId: profile.id, draftId: d.id, expectedSnapshotDigest: d.snapshotDigest, expectedLifecycleVersion: d.lifecycleVersion, expectedBase: d.baseRevisionId == null ? { kind: "empty", planVersion: 0 } : { kind: "revision", revisionId: d.baseRevisionId, planVersion: d.basePlanVersion }, actorId: "test:publication", idempotencyKey: `apply-${sequence}`, remapCheckoffLinks: true });
-        let d = draft(id === "stale-reconciliation" ? (partId) => ({ kind: "set_quantity_override", partIds: [partId], value: 2 }) : null, id !== "missing-reconciliation");
+        let d = draft(["stale-reconciliation", "mapped-remap-index-change"].includes(id) ? (partId) => ({ kind: "set_quantity_override", partIds: [partId], value: id === "mapped-remap-index-change" ? 3 : 2 }) : null, id !== "missing-reconciliation");
         let input = command(d);
-        if (["idempotent", "changed", "unsafe-remap", "unresolved-reconciliation", "stale-reconciliation"].includes(id)) {
+        if (["idempotent", "changed", "mapped-remap", "mapped-remap-index-change", "unsafe-remap", "unresolved-reconciliation", "stale-reconciliation"].includes(id)) {
           assert.equal(repo.applyPlanChanges(input).kind, "applied");
           if (id !== "idempotent") {
+            if (id === "mapped-remap-index-change") raw.prepare("UPDATE print_progress SET completed=1 WHERE unit_index IN (1,2)").run();
             if (["unresolved-reconciliation", "stale-reconciliation"].includes(id)) raw.prepare("UPDATE print_progress SET completed=1").run();
             if (id === "unresolved-reconciliation") writeFileSync(join(database.reposDir, locator, "bracket.stl"), "solid changed bracket");
             d = draft((partId) => ({ kind: "set_quantity_override", partIds: [partId], value: id === "stale-reconciliation" ? 1 : 2 }));
             input = command(d);
           }
+        }
+        if (["mapped-remap", "mapped-remap-index-change"].includes(id)) {
+          const p = raw.prepare("SELECT id FROM parts WHERE profile_id=?").get(profile.id);
+          const unit = { part_id: p.id, unit_index: id === "mapped-remap-index-change" ? 1 : 0 };
+          repo.setSetting("printer.checkoff_links", JSON.stringify([{ id: "kept-slot", filename: "bracket.stl", profile_id: profile.id, state: "watching", units: [unit], resolved_units: [{ ...unit, result: "printed" }] }]));
+          repo.setSetting("printer.send_queue", JSON.stringify([{ id: "kept-queue", profile_id: null, state: "error", checkoff_units: [unit] }]));
         }
         if (id === "unsafe-remap") {
           const p = raw.prepare("SELECT id FROM parts WHERE profile_id=?").get(profile.id);
