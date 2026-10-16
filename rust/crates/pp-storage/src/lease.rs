@@ -29,6 +29,7 @@ pub struct StorageLease {
 
 struct CompatibilityReservation {
     directory: File,
+    file: File,
     held: bool,
 }
 
@@ -39,9 +40,13 @@ impl CompatibilityReservation {
         let file = admitted.open_lock(c".desktop-lease").context(
             "Data directory already owned by standalone Node; stop it before starting Rust",
         )?;
-        validate_open_lock_identity(&file, &admitted.path.join(".desktop-lease"))?;
+        validate_open_lock_identity(&file, &admitted.path.join(".desktop-lease"))
+            .context("Could not validate .desktop-lease compatibility reservation identity")?;
         Ok(Self {
-            directory: admitted.directory.try_clone()?,
+            directory: admitted.directory.try_clone().context(
+                "Could not retain directory for .desktop-lease compatibility reservation",
+            )?,
+            file,
             held: true,
         })
     }
@@ -50,6 +55,33 @@ impl CompatibilityReservation {
         if self.held {
             #[cfg(test)]
             tests::assert_lock_held_during_reservation_release();
+            let mut named = std::mem::MaybeUninit::<libc::stat>::uninit();
+            let inspected = unsafe {
+                libc::fstatat(
+                    self.directory.as_raw_fd(),
+                    c".desktop-lease".as_ptr(),
+                    named.as_mut_ptr(),
+                    libc::AT_SYMLINK_NOFOLLOW,
+                )
+            };
+            if inspected < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    self.held = false;
+                    return Ok(());
+                }
+                return Err(error);
+            }
+            let named = unsafe { named.assume_init() };
+            let mut acquired = std::mem::MaybeUninit::<libc::stat>::uninit();
+            if unsafe { libc::fstat(self.file.as_raw_fd(), acquired.as_mut_ptr()) } < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let acquired = unsafe { acquired.assume_init() };
+            if named.st_dev != acquired.st_dev || named.st_ino != acquired.st_ino {
+                self.held = false;
+                return Ok(());
+            }
             let removed = unsafe {
                 libc::unlinkat(self.directory.as_raw_fd(), c".desktop-lease".as_ptr(), 0)
             };
@@ -89,8 +121,8 @@ pub(crate) struct AdmittedDirectory {
 
 pub(crate) struct LockedDirectory {
     admitted: AdmittedDirectory,
-    lock: File,
     compatibility: CompatibilityReservation,
+    lock: File,
 }
 
 impl LockedDirectory {
