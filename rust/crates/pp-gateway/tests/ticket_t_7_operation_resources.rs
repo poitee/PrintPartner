@@ -285,9 +285,10 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.get_source_inventory",
         "tool.compare_source_revisions",
         "tool.audit_source_provenance",
+        "tool.analyze_stl_mesh",
     ]);
-    assert_eq!(reviewed.len(), 20);
-    assert_eq!(unresolved.len(), 423);
+    assert_eq!(reviewed.len(), 21);
+    assert_eq!(unresolved.len(), 422);
     let resolved: BTreeSet<_> = index
         .claims()
         .values()
@@ -567,6 +568,7 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
         "tool.get_source_inventory",
         "tool.compare_source_revisions",
         "tool.audit_source_provenance",
+        "tool.analyze_stl_mesh",
     ] {
         for participants in [vec![id], vec![]] {
             let mut value = manifest();
@@ -609,6 +611,7 @@ fn reviewed_participants_cannot_swap_operations() {
             "tool.compare_source_revisions",
             "tool.audit_source_provenance",
         ),
+        ("tool.read_source_file", "tool.analyze_stl_mesh"),
         ("tool.get_workflow_help", "tool.get_job_status"),
         ("tool.get_job_status", "tool.list_plans"),
         ("tool.get_workflow_help", "tool.list_plans"),
@@ -641,13 +644,13 @@ fn unresolved_participants_can_share_a_regrouped_operation() {
     regroup(
         &mut value,
         "tool.source_queries",
-        &["tool.get_build_workflow", "tool.analyze_stl_mesh"],
+        &["tool.get_build_workflow", "tool.audit_build_coverage"],
     );
     let unresolved = value["resources"]["unresolved"].as_array_mut().unwrap();
-    unresolved.retain(|id| id != "tool.get_build_workflow" && id != "tool.analyze_stl_mesh");
+    unresolved.retain(|id| id != "tool.get_build_workflow" && id != "tool.audit_build_coverage");
     unresolved.push(json!("tool.source_queries"));
     let index = admit(&value).unwrap();
-    for id in ["tool.get_build_workflow", "tool.analyze_stl_mesh"] {
+    for id in ["tool.get_build_workflow", "tool.audit_build_coverage"] {
         assert_eq!(index.lookup(id).unwrap().operation, "tool.source_queries");
         assert_eq!(
             index.resources_for(id),
@@ -1743,35 +1746,39 @@ fn assert_workspace_tool_resources(id: &str) {
     let resources = index
         .resources_for(id)
         .expect("Workspace tool resources must be reviewed");
-    let expected: ResourceSet = serde_json::from_value(
-        if matches!(
-            id,
-            "tool.compare_source_revisions" | "tool.audit_source_provenance"
-        ) {
-            json!([
-                {"kind": "table", "name": "projects"},
-                {"kind": "table", "name": "source_docs"},
-                {"kind": "table", "name": "source_revisions"},
-                {"kind": "file", "name": "source-workspace"}
-            ])
-        } else if matches!(id, "tool.get_source_docs" | "tool.get_source_inventory") {
-            json!([
-                {"kind": "table", "name": "projects"},
-                {"kind": "table", "name": "source_docs"},
-                {"kind": "table", "name": "source_notes"},
-                {"kind": "table", "name": "source_revisions"},
-                {"kind": "table", "name": "app_settings"},
-                {"kind": "file", "name": "source-workspace"}
-            ])
-        } else {
-            json!([
-                {"kind": "table", "name": "build_profiles"},
-                {"kind": "table", "name": "projects"},
-                {"kind": "table", "name": "source_docs"},
-                {"kind": "file", "name": "source-workspace"}
-            ])
-        },
-    )
+    let expected: ResourceSet = serde_json::from_value(if id == "tool.analyze_stl_mesh" {
+        json!([
+            {"kind": "table", "name": "projects"},
+            {"kind": "table", "name": "source_docs"},
+            {"kind": "file", "name": "source-workspace"}
+        ])
+    } else if matches!(
+        id,
+        "tool.compare_source_revisions" | "tool.audit_source_provenance"
+    ) {
+        json!([
+            {"kind": "table", "name": "projects"},
+            {"kind": "table", "name": "source_docs"},
+            {"kind": "table", "name": "source_revisions"},
+            {"kind": "file", "name": "source-workspace"}
+        ])
+    } else if matches!(id, "tool.get_source_docs" | "tool.get_source_inventory") {
+        json!([
+            {"kind": "table", "name": "projects"},
+            {"kind": "table", "name": "source_docs"},
+            {"kind": "table", "name": "source_notes"},
+            {"kind": "table", "name": "source_revisions"},
+            {"kind": "table", "name": "app_settings"},
+            {"kind": "file", "name": "source-workspace"}
+        ])
+    } else {
+        json!([
+            {"kind": "table", "name": "build_profiles"},
+            {"kind": "table", "name": "projects"},
+            {"kind": "table", "name": "source_docs"},
+            {"kind": "file", "name": "source-workspace"}
+        ])
+    })
     .unwrap();
     assert_eq!(resources, &expected);
     assert_eq!(
@@ -2041,4 +2048,14 @@ fn ticket_t_7_ownership_audit_source_provenance_has_complete_node_owned_resource
 #[test]
 fn ticket_t_7_ownership_audit_source_provenance_refuses_invalid_admission_before_effects() {
     assert_workspace_tool_invalid_admission("tool.audit_source_provenance");
+}
+
+#[test]
+fn ticket_t_7_ownership_analyze_stl_mesh_has_complete_node_owned_resources() {
+    assert_workspace_tool_resources("tool.analyze_stl_mesh");
+}
+
+#[test]
+fn ticket_t_7_ownership_analyze_stl_mesh_refuses_invalid_admission_before_effects() {
+    assert_workspace_tool_invalid_admission("tool.analyze_stl_mesh");
 }

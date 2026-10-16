@@ -7,6 +7,9 @@ use pp_gateway::ownership::cutover::{CUTOVER_FILE, CutoverRefusal};
 use serde_json::json;
 use std::{fs, path::PathBuf, time::Duration};
 
+#[path = "ticket_t_3_drain_compression.rs"]
+mod compression;
+
 async fn isolated_case(name: &str, rebuild: bool) -> Option<PathBuf> {
     if std::env::var("PP_DRAIN_CASE").ok().as_deref() == Some(name) {
         return Some(PathBuf::from(std::env::var_os("PP_DRAIN_DATA").unwrap()));
