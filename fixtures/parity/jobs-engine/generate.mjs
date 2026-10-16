@@ -22,15 +22,31 @@ const starts = [
   { id: "export-checklist-html", kind: "export-checklist-html", payload: { profile_id: 7 } },
 ];
 
+// Retained cases run each job to its end, one after another, so the later job
+// finishes later. With no Sources the update check succeeds with an empty
+// result; the checklist export fails because the probe repository has no plan.
+const lists = {
+  all: {},
+  done: { status: "done" },
+  unknown_status: { status: "bogus" },
+  profile_7: { profile_id: 7 },
+  profile_8: { profile_id: 8 },
+  non_numeric_profile: { profile_id: Number.NaN },
+  since_epoch: { since: "1970-01-01T00:00:00.000Z" },
+  since_future: { since: "2100-01-01T00:00:00.000Z" },
+};
+
 if (process.argv.includes("--probe")) {
   const { InProcessJobRunner } = await import(pathToFileURL(join(root, runnerSource)).href);
-  const repo = { getSetting: () => null };
-  const runner = new InProcessJobRunner({
-    getRepo: () => repo,
-    reposDir: "/nonexistent/repos",
-    exportsDir: "/nonexistent/exports",
-    dataDir: "/nonexistent",
-  });
+  const repo = { getSetting: () => null, setSetting: () => undefined, listSources: () => [] };
+  const newRunner = () =>
+    new InProcessJobRunner({
+      getRepo: () => repo,
+      reposDir: "/nonexistent/repos",
+      exportsDir: "/nonexistent/exports",
+      dataDir: "/nonexistent",
+    });
+  const runner = newRunner();
   const cases = [];
   for (const { id, kind, payload } of starts) {
     const jobId = await runner.start(kind, payload, "tenant-a");
@@ -43,7 +59,29 @@ if (process.argv.includes("--probe")) {
       other_tenant_stream: runner.subscribe(jobId, "tenant-b", () => undefined),
     });
   }
-  process.stdout.write(JSON.stringify({ node: process.version, cases }));
+  const retainedRunner = newRunner();
+  const settled = async (jobId) => {
+    for (;;) {
+      const snapshot = await retainedRunner.get(jobId, "tenant-a");
+      if (snapshot.status !== "pending" && snapshot.status !== "running") return snapshot;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  };
+  const finished = [];
+  for (const { id, kind, payload } of starts) {
+    const { job_id: _random, finished_at: _at, ...snapshot } = await settled(
+      await retainedRunner.start(kind, payload, "tenant-a"),
+    );
+    finished.push({ id, kind, status: snapshot.status, ...(snapshot.status === "done" && { snapshot }) });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  const retained = Object.entries(lists).map(([id, filters]) => ({
+    id,
+    jobs: retainedRunner.listJobs(filters, "tenant-a").map(({ kind, status }) => ({ kind, status })),
+  }));
+  retained.push({ id: "other_tenant", jobs: retainedRunner.listJobs({}, "tenant-b") });
+  // The failing export logs to stdout, so the probe result is the last line.
+  process.stdout.write(`\n${JSON.stringify({ node: process.version, cases, finished, retained })}`);
   process.exit(0);
 }
 
@@ -53,7 +91,9 @@ const probe = JSON.parse(
     process.execPath,
     ["--conditions=development", "--import", pathToFileURL(tsx).href, fileURLToPath(import.meta.url), "--probe"],
     { cwd: join(root, "web/apps/server"), encoding: "utf8" },
-  ),
+  )
+    .split("\n")
+    .at(-1),
 );
 
 // One case per line keeps the golden reviewable.
@@ -63,6 +103,12 @@ const text = `{
   "source": ${JSON.stringify(runnerSource)},
   "cases": [
 ${probe.cases.map((item) => `    ${JSON.stringify(item)}`).join(",\n")}
+  ],
+  "finished": [
+${probe.finished.map((item) => `    ${JSON.stringify(item)}`).join(",\n")}
+  ],
+  "retained": [
+${probe.retained.map((item) => `    ${JSON.stringify(item)}`).join(",\n")}
   ]
 }
 `;
@@ -78,4 +124,11 @@ if (current !== text) {
   }
   writeFileSync(goldenPath, text);
 }
-console.log(JSON.stringify({ cases: probe.cases.length, check }));
+console.log(
+  JSON.stringify({
+    cases: probe.cases.length,
+    finished: probe.finished.length,
+    retained: probe.retained.length,
+    check,
+  }),
+);

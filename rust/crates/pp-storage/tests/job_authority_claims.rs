@@ -1,5 +1,5 @@
 #![cfg(feature = "desktop_rebuild")]
-//! Claim-time original authority, ported from the reference
+//! Claim and worker-advance original authority, ported from the reference
 //! `job_authority_recovery.rs`. Node's in-process runner keeps no queue across
 //! restarts and never revalidates the enqueuing session, so these cases test
 //! the reference engine's behavior instead of a Node result.
@@ -11,8 +11,8 @@ use pp_storage::{
         Secret, SessionTenantPolicy,
     },
     jobs::{
-        Credential, JobKind, JobRecord, Outcome, Payload, PersistentState, UserOperation,
-        WorkerAdmission, WorkerOperation,
+        Credential, Decision, EffectIntent, EffectOperation, JobKind, JobRecord, Outcome, Payload,
+        PersistentState, ResultArtifact, UserOperation, WorkerAdmission, WorkerOperation,
     },
 };
 use rusqlite::Connection;
@@ -146,6 +146,37 @@ fn enqueue(owner: &WriterOwner, credential: Credential, key: &str, payload: Payl
         panic!("job expected")
     };
     job
+}
+
+fn get(owner: &WriterOwner, token: &str, job_id: &str) -> JobRecord {
+    let Outcome::Job(job, _) = submit(
+        owner,
+        session(token),
+        UserOperation::Get {
+            job_id: job_id.into(),
+        },
+    )
+    .unwrap() else {
+        panic!("job expected")
+    };
+    job
+}
+
+fn effect(target: &str) -> EffectIntent {
+    EffectIntent {
+        operation: EffectOperation::SourceRefresh,
+        basis_hash: "a".repeat(64),
+        content_hash: "b".repeat(64),
+        target: target.into(),
+    }
+}
+
+fn receipt(target: &str) -> ResultArtifact {
+    ResultArtifact {
+        receipt_id: "authority-receipt".into(),
+        content_hash: "b".repeat(64),
+        target: target.into(),
+    }
 }
 
 fn session(token: &str) -> Credential {
@@ -680,5 +711,232 @@ fn kind_claims_skip_other_kinds_and_require_admission() {
         .unwrap()
         .unwrap();
     assert_eq!(claimed.job_id, updates.job_id);
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn revoked_attempt_refuses_new_effects_and_success_without_applying_them() {
+    let path = directory();
+    let owner = open(&path);
+    let (_, token) = register(&owner, "revoked-operations@example.com");
+    let effect_job = enqueue(
+        &owner,
+        session(&token),
+        "revoked-effect",
+        Payload::ExportChecklistHtml { profile_id: 1 },
+    );
+    let finish_job = enqueue(
+        &owner,
+        session(&token),
+        "revoked-finish",
+        Payload::ExportChecklistHtml { profile_id: 2 },
+    );
+    let mut worker_admission = admission();
+    worker_admission
+        .kinds
+        .iter_mut()
+        .find(|(kind, _)| *kind == JobKind::ExportChecklistHtml)
+        .unwrap()
+        .1 = 2;
+    let worker = owner
+        .job_worker_with_policy(policy(), worker_admission)
+        .unwrap();
+    let (first, first_lease) = worker.claim().unwrap().unwrap();
+    let (second, second_lease) = worker.claim().unwrap().unwrap();
+    let (mut effect_lease, mut finish_lease) = if first.job_id == effect_job.job_id {
+        assert_eq!(second.job_id, finish_job.job_id);
+        (first_lease, second_lease)
+    } else {
+        assert_eq!(first.job_id, finish_job.job_id);
+        assert_eq!(second.job_id, effect_job.job_id);
+        (second_lease, first_lease)
+    };
+    logout(&owner, &token);
+
+    let error = worker
+        .update(
+            &mut effect_lease,
+            WorkerOperation::BeginEffect(EffectIntent {
+                operation: EffectOperation::LocalArtifact,
+                ..effect("result")
+            }),
+        )
+        .unwrap_err();
+    assert_authority(&error, AuthorityFailure::CredentialInvalid);
+    let error = worker
+        .update(
+            &mut finish_lease,
+            WorkerOperation::Finish(Some(receipt("result"))),
+        )
+        .unwrap_err();
+    assert_authority(&error, AuthorityFailure::CredentialInvalid);
+
+    let replacement = login(&owner, "revoked-operations@example.com");
+    let refused_effect = get(&owner, &replacement, &effect_job.job_id);
+    assert_eq!(refused_effect.state, PersistentState::Failed);
+    assert!(refused_effect.effects.is_empty());
+    let refused_finish = get(&owner, &replacement, &finish_job.job_id);
+    assert_eq!(refused_finish.state, PersistentState::Failed);
+    assert!(refused_finish.result.is_none());
+    let document = stored(&path, &finish_job.job_id);
+    assert_eq!(document["_authority_refusal"]["phase"], "worker_advance");
+    assert_eq!(
+        document["_authority_refusal"]["reason"],
+        "credential_invalid"
+    );
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn authority_loss_fences_the_attempt_and_preserves_only_matching_evidence() {
+    let path = directory();
+    let owner = open(&path);
+    let (user, token) = register(&owner, "effect-refusal@example.com");
+    let queued = enqueue(
+        &owner,
+        session(&token),
+        "effect-refusal",
+        Payload::CheckSourceUpdates {},
+    );
+    let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
+    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    assert_eq!(worker.authorize(&lease).unwrap().tenant(), user.tenant_id);
+    worker
+        .update(
+            &mut lease,
+            WorkerOperation::BeginEffect(effect("source:all")),
+        )
+        .unwrap();
+    logout(&owner, &token);
+
+    let error = worker
+        .update(
+            &mut lease,
+            WorkerOperation::ConfirmEffect(receipt("source:all")),
+        )
+        .unwrap_err();
+    assert_authority(&error, AuthorityFailure::CredentialInvalid);
+    assert!(worker.authorize(&lease).is_err());
+
+    let replacement = login(&owner, "effect-refusal@example.com");
+    let refused = get(&owner, &replacement, &queued.job_id);
+    assert_eq!(refused.state, PersistentState::ReconciliationRequired);
+    assert_eq!(refused.effects[0].receipt, Some(receipt("source:all")));
+    assert!(!refused.effects[0].confirmed);
+    let blocked = enqueue(
+        &owner,
+        session(&replacement),
+        "resource-blocked",
+        Payload::CheckSourceUpdates {},
+    );
+    assert_ne!(blocked.job_id, queued.job_id);
+    assert!(worker.claim().unwrap().is_none());
+    owner.shutdown().unwrap();
+
+    let owner = open(&path);
+    let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
+    assert!(worker.claim().unwrap().is_none());
+    let replacement = login(&owner, "effect-refusal@example.com");
+    let observed = get(&owner, &replacement, &queued.job_id);
+    let matching = observed.effects[0].receipt.clone().unwrap();
+    let before = stored(&path, &queued.job_id);
+    let reconcile = |decision, receipt| UserOperation::Reconcile {
+        job_id: observed.job_id.clone(),
+        expected_version: observed.state_version,
+        expected_generation: observed.generation,
+        effect_hash: observed.effects[0].intent.content_hash.clone(),
+        decision,
+        receipt,
+    };
+    let changed = ResultArtifact {
+        receipt_id: "changed-observed-receipt".into(),
+        ..matching.clone()
+    };
+    assert!(
+        submit(
+            &owner,
+            session(&replacement),
+            reconcile(Decision::ConfirmSucceeded, Some(changed)),
+        )
+        .is_err()
+    );
+    assert_eq!(stored(&path, &queued.job_id), before);
+    assert!(
+        submit(
+            &owner,
+            session(&replacement),
+            reconcile(Decision::ConfirmNoEffect, None),
+        )
+        .is_err()
+    );
+    assert_eq!(stored(&path, &queued.job_id), before);
+    let Outcome::Job(confirmed, _) = submit(
+        &owner,
+        session(&replacement),
+        reconcile(Decision::ConfirmSucceeded, Some(matching.clone())),
+    )
+    .unwrap() else {
+        panic!("job expected")
+    };
+    assert_eq!(confirmed.state, PersistentState::Succeeded);
+    assert!(confirmed.effects[0].confirmed);
+    assert_eq!(confirmed.effects[0].receipt, Some(matching));
+    owner.shutdown().unwrap();
+
+    let path = directory();
+    let owner = open(&path);
+    let (_, token) = register(&owner, "mismatch-refusal@example.com");
+    let queued = enqueue(
+        &owner,
+        session(&token),
+        "mismatch-refusal",
+        Payload::CheckSourceUpdates {},
+    );
+    let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
+    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    worker
+        .update(
+            &mut lease,
+            WorkerOperation::BeginEffect(effect("source:all")),
+        )
+        .unwrap();
+    logout(&owner, &token);
+    let error = worker
+        .update(&mut lease, WorkerOperation::ConfirmEffect(receipt("wrong")))
+        .unwrap_err();
+    assert!(error.to_string().contains("Receipt mismatch"));
+    let document = stored(&path, &queued.job_id);
+    assert_eq!(document["state"], "effect_admitted");
+    assert!(document["effects"][0]["receipt"].is_null());
+    owner.shutdown().unwrap();
+}
+
+/// Not in the reference: an attempt whose stored authority is lost mid-run
+/// refuses its next operation as a missing original.
+#[test]
+fn attempt_without_stored_authority_refuses_its_next_operation() {
+    let path = directory();
+    let owner = open(&path);
+    let (_, token) = register(&owner, "missing-mid-run@example.com");
+    let job = enqueue(
+        &owner,
+        session(&token),
+        "missing-mid-run",
+        Payload::CheckSourceUpdates {},
+    );
+    let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
+    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    replace_document(&path, &job.job_id, |document| {
+        document.as_object_mut().unwrap().remove("_authority");
+    });
+    let error = worker
+        .update(&mut lease, WorkerOperation::Progress(5))
+        .unwrap_err();
+    assert_authority(&error, AuthorityFailure::Missing);
+    let document = stored(&path, &job.job_id);
+    assert_eq!(document["state"], "failed");
+    assert!(document["progress"].is_null());
+    assert_eq!(document["_authority_refusal"]["reason"], "missing_original");
+    assert_eq!(document["_authority_refusal"]["phase"], "worker_advance");
     owner.shutdown().unwrap();
 }

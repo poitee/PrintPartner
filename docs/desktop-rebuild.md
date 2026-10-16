@@ -582,9 +582,9 @@ an error count.
 The job stream registry starts each stream with its job's snapshot and queues newer
 committed versions for the same tenant and job. A stream closes when the job finishes,
 its 16-frame mailbox overflows, its credential expires or is revoked, or the owner stops.
-At most 128 streams are live. Nothing calls the registry yet: the engine, the auth
-revalidation calls and the snapshot changes that expose `public_result` belong to
-GRE-609 (D16).
+At most 128 streams are live. Nothing calls the registry yet. The snapshot changes
+that expose `public_result` landed with D16 (b); the engine and auth revalidation calls
+land with D16 (c).
 
 `fixtures/parity/jobs-model/generate.mjs` records Node's parsed accepted-plate and
 direct-3mf results and its verdict on accepted-basis seals. Node builds its other job
@@ -623,9 +623,8 @@ admitted kind. `authorize(lease)` returns the live attempt's revalidated tenant 
 subject without changing the job. A queued job's snapshot reports progress `0`, and
 another tenant's read returns `JobAccessFailure::NotFound`.
 
-Worker progress, effects and finish do not yet revalidate authority, and claims do
-not yet reserve the job's Source. Those land in the next two D16 PRs. Upload, local
-scan and Source Sync paths arrive with D14, D17 and D18.
+Claims do not yet reserve the job's Source; that lands in D16 (c). Upload, local scan
+and Source Sync paths arrive with D14, D17 and D18.
 
 `fixtures/parity/jobs-engine/generate.mjs` starts jobs in Node's
 `InProcessJobRunner` under web's tsx loader and records the enqueued snapshot and the
@@ -638,6 +637,50 @@ engine's `job_authority_recovery.rs`:
 npm --prefix web ci --ignore-scripts
 node fixtures/parity/jobs-engine/generate.mjs --check
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test jobs_engine_parity --test job_authority_claims
+```
+
+### D16 jobs engine: recovery and public results
+
+GRE-609's second PR revalidates authority on every worker operation, behind
+`desktop_rebuild`. Heartbeat, progress, effect admission, effect confirmation, finish
+and fail all check the attempt's original credential first, under the worker's policy.
+A refusal records `_authority_refusal` with phase `worker_advance`, fences the
+attempt, commits, and then returns the typed `AuthorityFailure`. An attempt with no
+effects fails. An attempt with effects waits for reconciliation. Physical-owner
+attempts are not checked, and an attempt whose document lost its `_authority` is
+refused as a missing original.
+
+A refused `ConfirmEffect` whose receipt matches the admitted effect keeps that
+receipt as observed evidence. The effect stays unconfirmed, and a document may hold an
+observed receipt only while the job is waiting for reconciliation after a refusal. A
+receipt that does not match is rejected and nothing is written. Reconciliation can
+confirm the observed receipt only with the same receipt. It cannot deny the effect, and
+an observed receipt never proves an uploaded-only print or a resolved printer failure.
+`ConfirmSucceeded` reconciliation and `Finish` refuse jobs that carry a checklist
+completion claim, which only the checklist finalizer settles.
+
+`WorkerOperation::FinishPublic { artifact, result }` finishes like `Finish` and stores
+`result` as the job's `public_result`. The result kind must match the job's kind.
+Snapshots now report `public_result` as `result`, never the internal receipt, and add
+`created_at`. `AtomicJobClient::read_public` returns one snapshot.
+`AtomicJobClient::list_retained` returns the tenant's retained snapshots with Node's
+filters (`LegacyListFilter`: status, `since` in milliseconds against finish time or
+else update time, and profile) and Node's newest-first order. Ties keep enqueue order.
+Quarantined and unreadable rows are skipped. Turning HTTP query strings into
+`LegacyListFilter` belongs to D25.
+
+`fixtures/parity/jobs-engine/generate.mjs` now also runs Node jobs to the end and
+records the finished snapshot and `listJobs` under each filter. The Rust test finishes
+the update check with Node's literal result and asserts the public read and each list.
+Stored times have whole-second precision, so the test waits one second between the two
+finishes. Node's snapshots have no `created_at`. The worker-advance and
+observed-evidence tests port the reference `job_authority_recovery.rs`, because Node
+never revalidates a running job:
+
+```sh
+node fixtures/parity/jobs-engine/generate.mjs --check
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test jobs_engine_parity --test job_authority_claims
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib jobs::
 ```
 
 ## D9 build graph receipt
