@@ -9,6 +9,8 @@ import {
   useState,
 } from "react";
 import type { StlNamingFolderRule } from "@print-partner/contracts";
+import { useQueryClient } from "@tanstack/react-query";
+import { queryKeys } from "../../queries/keys";
 import { toast } from "sonner";
 import type { PlanReview, ReviewPart } from "../../api/endpoints/planManifests";
 import type { RoleFilamentRow, SpoolmanSpoolRow } from "../../api/endpoints/filaments";
@@ -17,6 +19,7 @@ import {
   type QuantityUpdate,
 } from "../../context/PlanWorkspaceContext";
 import { useSpoolmanEnabled } from "../../hooks/useSpoolmanEnabled";
+import { useSpoolmanWorkflowAccess } from "../../hooks/useSpoolmanWorkflowAccess";
 import { groupCheckoffParts } from "../../lib/checkoffGroups";
 import { formatCheckoffSummary } from "../../lib/checkoffProgress";
 import { countPartWarnings, partWarningNote } from "../../lib/partWarnings";
@@ -27,6 +30,7 @@ import {
 } from "../../lib/reviewPartsFilter";
 import {
   flattenReviewParts,
+  maskSpoolmanReviewPart,
   sourceLabelFromLayer,
   workingPlanReviewParts,
 } from "../../lib/reviewParts";
@@ -292,8 +296,14 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
     toggleUnit,
     busyPartId,
   } = usePlanWorkspace();
-  const { configured: spoolmanConfigured, integrationId } = useSpoolmanEnabled();
-  const spoolsQuery = useSpoolmanSpoolsQuery(spoolmanConfigured ? integrationId : null);
+  const queryClient = useQueryClient();
+  const profileId = includedReview.profile_id;
+  const spoolmanAccess = useSpoolmanWorkflowAccess(profileId);
+  const { configured: spoolmanConfigured, integrationId } = useSpoolmanEnabled(profileId);
+  const spoolsQuery = useSpoolmanSpoolsQuery(spoolmanConfigured ? integrationId : null, {
+    profileId,
+    enabled: spoolmanConfigured,
+  });
   const spools = spoolsQuery.data ?? NO_SPOOLS;
   const spoolsLoading = spoolsQuery.isLoading;
   const persisted = useMemo(() => loadPersistedReviewPartsUi(), []);
@@ -311,7 +321,8 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
     spoolmanConfigured && Boolean(integrationId),
   );
   const roleFilaments = roleFilamentsQuery.data ?? [];
-  const [previewPart, setPreviewPart] = useState<ReviewPart | null>(null);
+  const [previewId, setPreviewId] = useState<{ profileId: number; partId: number } | null>(null);
+  const showPreview = (part: ReviewPart) => setPreviewId({ profileId, partId: part.id });
   const [colorPart, setColorPart] = useState<ReviewPart | null>(null);
   const [printPrep, setPrintPrep] = useState(false);
   const sheetArticleRef = useRef<HTMLElement>(null);
@@ -358,7 +369,10 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
     savePersistedReviewPartsUi(ui);
   }, [ui]);
 
-  const acceptedParts = useMemo(() => flattenReviewParts(review.part_groups), [review.part_groups]);
+  const acceptedParts = useMemo(() => {
+    const parts = flattenReviewParts(review.part_groups);
+    return spoolmanAccess.allowed ? parts : parts.map(maskSpoolmanReviewPart);
+  }, [review.part_groups, spoolmanAccess.allowed]);
   const acceptedPartById = useMemo(
     () => new Map(acceptedParts.map((part) => [part.id, part])),
     [acceptedParts],
@@ -412,9 +426,21 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
     void setIncluded(part, true).catch(() => {});
   };
 
-  const onSpoolChange = (partId: number, spoolman_spool_id: string | null) => {
-    void setSpoolmanSpool(partId, spoolman_spool_id);
-  };
+  const onSpoolChange = useCallback(
+    (partId: number, spoolman_spool_id: string | null) => {
+      const targetProfileId = profileId;
+      const action = spoolmanAccess.beginAction();
+      void setSpoolmanSpool(partId, spoolman_spool_id).catch((err: unknown) => {
+        void queryClient.invalidateQueries({
+          queryKey: queryKeys.planFeatures(targetProfileId),
+        });
+        if (!action.isCurrent()) return;
+        const msg = err instanceof Error ? err.message : (typeof err === "string" ? err : "");
+        toast.error(msg || "Could not update spool assignment.");
+      });
+    },
+    [profileId, queryClient, setSpoolmanSpool, spoolmanAccess],
+  );
 
   const onToggleUnit = useCallback(
     (part: ReviewPart, unitIndex: number) => {
@@ -476,7 +502,7 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
               onSpoolChange={onSpoolChange}
               onToggleUnit={onToggleUnit}
               onSetAllPrinted={onSetAllPrinted}
-              onPreview={setPreviewPart}
+              onPreview={showPreview}
               onColor={setColorPart}
             />
           ))}
@@ -532,7 +558,7 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
                   onSpoolChange={onSpoolChange}
                   onToggleUnit={onToggleUnit}
                   onSetAllPrinted={onSetAllPrinted}
-                  onPreview={setPreviewPart}
+                  onPreview={showPreview}
                   onColor={setColorPart}
                 />
               );
@@ -555,7 +581,7 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
           onQtyChange={onQtyChange}
           onRemove={onRemove}
           onRestore={onRestore}
-          onPreview={setPreviewPart}
+          onPreview={showPreview}
           onColor={setColorPart}
         />
       ))}
@@ -853,7 +879,7 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
         </article>
       )}
 
-      <PartPreviewDialog part={previewPart} onClose={() => setPreviewPart(null)} />
+      <PartPreviewDialog part={previewId?.profileId === profileId ? allParts.find((part) => part.id === previewId.partId) ?? null : null} onClose={() => setPreviewId(null)} />
       {colorPart && <PartColorDialog key={`${review.profile_id}:${colorPart.id}`} part={colorPart} profileId={review.profile_id} onClose={() => setColorPart(null)} />}
     </section>
   );

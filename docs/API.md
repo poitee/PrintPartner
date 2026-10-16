@@ -160,6 +160,14 @@ POST   /printer-send-queue
 
 Printer fleet entries describe planning geometry. Integration records hold the host connection and capability configuration. Link the two instead of placing secrets on a fleet entry.
 
+The Review sheet and part-color dialog send `profile_id` on filament catalog
+and Spoolman inventory reads. Their query keys separate Plans and Spoolman access
+states. When the engine advertises `tenant_feature_toggles`, these views mask
+Spoolman enrichment during access refresh or denial and refetch when access
+returns. An open 3D preview uses the same masked part data. Without that
+capability, health failures do not hide Spoolman. Settings retains account scope
+by omitting `profile_id`.
+
 See [Printer setup](integrations/PRINTER_SETUP.md).
 
 ### Backups and storage
