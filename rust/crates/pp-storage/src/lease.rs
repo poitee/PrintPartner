@@ -6,7 +6,7 @@ use fs2::FileExt;
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
-    ffi::CString,
+    ffi::{CStr, CString},
     fs::{File, OpenOptions},
     io::Write,
     os::{
@@ -25,6 +25,7 @@ pub struct LeaseRelease {
 }
 
 pub struct StorageLease {
+    advisory_lock: Option<File>,
     lock: Option<File>,
     lease_guard: Option<guard::StorageLease>,
     admitted: Arc<AdmittedDirectory>,
@@ -53,6 +54,17 @@ pub fn prepare_directory(path: &Path) -> Result<PathBuf> {
 pub(crate) struct AdmittedDirectory {
     path: PathBuf,
     directory: Directory,
+}
+
+pub(crate) struct LockedDirectory {
+    admitted: AdmittedDirectory,
+    lock: File,
+}
+
+impl LockedDirectory {
+    pub(crate) fn preflight(&self) -> Result<()> {
+        self.admitted.preflight()
+    }
 }
 
 enum DirectoryCreation {
@@ -104,10 +116,12 @@ fn admit_directory_with(path: &Path, creation: DirectoryCreation) -> Result<Admi
     admitted.validate_identity()?;
     let directory = &admitted.path;
     validate_resolved_ancestors(directory, false)?;
-    match std::fs::symlink_metadata(directory.join(".desktop.lock")) {
-        Ok(metadata) => validate_lock_metadata(&metadata)?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
+    for name in [".desktop.lock", "printpartner.lock"] {
+        match std::fs::symlink_metadata(directory.join(name)) {
+            Ok(metadata) => validate_lock_metadata(&metadata)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
     }
     #[cfg(test)]
     tests::replace_directory_before_writer_preflight(directory)?;
@@ -125,6 +139,30 @@ fn validate_directory_permissions(metadata: &std::fs::Metadata) -> Result<()> {
 }
 
 impl AdmittedDirectory {
+    pub(crate) fn lock(self) -> Result<LockedDirectory> {
+        self.validate_identity()?;
+        validate_resolved_ancestors(&self.path, false)?;
+        let path = self.path.join("printpartner.lock");
+        let lock = self.open_lock(c"printpartner.lock")?;
+        self.validate_identity()?;
+        validate_open_lock_identity(&lock, &path)?;
+        match fs4::FileExt::try_lock(&lock) {
+            Ok(()) => {}
+            Err(fs4::TryLockError::WouldBlock) => anyhow::bail!(
+                "Data directory already owned; stop the other Print Partner process before starting another instance"
+            ),
+            Err(fs4::TryLockError::Error(error)) => {
+                return Err(error).context("Could not lock printpartner.lock");
+            }
+        }
+        self.validate_identity()?;
+        validate_open_lock_identity(&lock, &path)?;
+        Ok(LockedDirectory {
+            admitted: self,
+            lock,
+        })
+    }
+
     pub(crate) fn preflight(&self) -> Result<()> {
         self.preflight_schema(false).map(|_| ())
     }
@@ -192,11 +230,11 @@ impl AdmittedDirectory {
         Ok(file)
     }
 
-    fn open_lock(&self) -> Result<File> {
+    fn open_lock(&self, name: &CStr) -> Result<File> {
         let fd = unsafe {
             libc::openat(
                 self.directory.as_raw_fd(),
-                c".desktop.lock".as_ptr(),
+                name.as_ptr(),
                 libc::O_RDWR
                     | libc::O_CREAT
                     | libc::O_CLOEXEC
@@ -266,6 +304,10 @@ fn validate_lock_identity(file: &File, path: &Path) -> Result<()> {
             .mode(0o600)
             .open(path)?;
     }
+    validate_open_lock_identity(file, path)
+}
+
+fn validate_open_lock_identity(file: &File, path: &Path) -> Result<()> {
     let opened = file.metadata()?;
     let named = std::fs::symlink_metadata(path)?;
     validate_lock_metadata(&opened)?;
@@ -369,6 +411,14 @@ impl StorageLease {
     }
 
     pub(crate) fn acquire_admitted(admitted: AdmittedDirectory) -> Result<Self> {
+        Self::acquire_locked(admitted.lock()?)
+    }
+
+    pub(crate) fn acquire_locked(locked: LockedDirectory) -> Result<Self> {
+        let LockedDirectory {
+            admitted,
+            lock: advisory_lock,
+        } = locked;
         let data_dir = &admitted.path;
         #[cfg(test)]
         tests::replace_directory_during_lock(data_dir, 1)?;
@@ -377,7 +427,7 @@ impl StorageLease {
         let lock_path = data_dir.join(".desktop.lock");
         #[cfg(test)]
         tests::replace_directory_during_lock(data_dir, 4)?;
-        let lock = admitted.open_lock()?;
+        let lock = admitted.open_lock(c".desktop.lock")?;
         #[cfg(test)]
         tests::replace_directory_during_lock(data_dir, 2)?;
         admitted.validate_identity()?;
@@ -465,6 +515,7 @@ impl StorageLease {
             lease_hash: hex::encode(Sha256::digest(lease.as_bytes())),
         })));
         Ok(Self {
+            advisory_lock: Some(advisory_lock),
             lock: Some(lock),
             lease_guard: Some(lease_guard),
             admitted,
@@ -500,7 +551,11 @@ impl StorageLease {
         &self.lease
     }
     pub fn clone_file(&self) -> Result<File> {
-        Ok(self.lock.as_ref().expect("active lease").try_clone()?)
+        Ok(self
+            .advisory_lock
+            .as_ref()
+            .expect("active lease")
+            .try_clone()?)
     }
     pub fn retain_on_drop(&mut self) {
         self.release_allowed = false;
@@ -593,13 +648,19 @@ impl StorageLease {
                 .lease_guard
                 .as_mut()
                 .is_none_or(|guard| guard.detach().is_ok());
-        if !runtime_removed || !marker_removed || !os_unlocked || !guard_detached {
+        let advisory_unlocked = guard_detached
+            && self
+                .advisory_lock
+                .as_ref()
+                .is_none_or(|lock| fs4::FileExt::unlock(lock).is_ok());
+        if !advisory_unlocked {
             if os_unlocked && let Some(lock) = &self.lock {
                 // Failed detachment leaves the shared admission guard in place.
                 // Re-lock when possible, without blocking on another admission.
                 let _ = FileExt::try_lock_exclusive(lock);
             }
             let retained = Self {
+                advisory_lock: self.advisory_lock.take(),
                 lock: self.lock.take(),
                 lease_guard: self.lease_guard.take(),
                 admitted: self.admitted.clone(),
@@ -625,9 +686,9 @@ impl StorageLease {
                 ownership_retained: true,
             };
         }
-        // Detachment commits ownership release; Drop cleans only retired metadata.
         drop(self.lease_guard.take());
         drop(self.lock.take());
+        drop(self.advisory_lock.take());
         LeaseRelease {
             marker_removed,
             runtime_removed,
@@ -705,7 +766,7 @@ mod tests {
                 .unwrap();
         assert_eq!(after["lease_hash"], before["lease_hash"]);
         assert_eq!(after["child_pid"], std::process::id());
-        assert_eq!(std::fs::read_dir(&path).unwrap().count(), 3);
+        assert_eq!(std::fs::read_dir(&path).unwrap().count(), 4);
         assert!(owner.release().lock_released);
         std::fs::remove_file(alias).unwrap();
         std::fs::remove_dir_all(path).unwrap();
@@ -763,7 +824,7 @@ mod tests {
             std::fs::read(path.join(".desktop-owner.json")).unwrap(),
             before
         );
-        assert_eq!(std::fs::read_dir(&path).unwrap().count(), 3);
+        assert_eq!(std::fs::read_dir(&path).unwrap().count(), 4);
         assert!(owner.release().lock_released);
         std::fs::remove_dir_all(path).unwrap();
     }
@@ -782,7 +843,7 @@ mod tests {
             Path::new("private-marker")
         );
         assert_eq!(std::fs::read(path.join("private-marker")).unwrap(), before);
-        assert_eq!(std::fs::read_dir(&path).unwrap().count(), 4);
+        assert_eq!(std::fs::read_dir(&path).unwrap().count(), 5);
         assert!(owner.release().lock_released);
         std::fs::remove_dir_all(path).unwrap();
     }
@@ -1620,6 +1681,34 @@ mod tests {
                 assert_released(owner.release(), &path);
             }
         }
+    }
+
+    #[test]
+    fn gre_636_busy_lock_prevents_all_database_preflight() {
+        let path = directory();
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path.join("printpartner.lock"))
+            .unwrap();
+        fs4::FileExt::try_lock(&lock).unwrap();
+        crate::schema::PREFLIGHT_CALLS.set(0);
+        let error = crate::WriterOwner::open(&path, crate::Limits::default())
+            .err()
+            .unwrap();
+        assert_eq!(
+            error.to_string(),
+            "Data directory already owned; stop the other Print Partner process before starting another instance"
+        );
+        assert_eq!(crate::schema::PREFLIGHT_CALLS.get(), 0);
+        assert!(!path.join("print-partner.db").exists());
+        drop(lock);
+        let (owner, _) = crate::WriterOwner::open(&path, crate::Limits::default()).unwrap();
+        assert_eq!(crate::schema::PREFLIGHT_CALLS.get(), 2);
+        owner.shutdown().unwrap();
+        std::fs::remove_dir_all(path).unwrap();
     }
 
     #[test]

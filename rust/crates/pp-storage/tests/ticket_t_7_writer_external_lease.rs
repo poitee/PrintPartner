@@ -210,7 +210,15 @@ fn assert_contender_refused(path: &Path) {
     let error = StorageLease::acquire(path)
         .err()
         .expect("contender admitted");
-    assert_eq!(error.to_string(), "Data directory already owned");
+    assert_eq!(
+        error.to_string(),
+        "Data directory already owned; stop the other Print Partner process before starting another instance"
+    );
+    let advisory = std::fs::File::open(path.join("printpartner.lock")).unwrap();
+    assert!(matches!(
+        fs4::FileExt::try_lock(&advisory),
+        Err(fs4::TryLockError::WouldBlock)
+    ));
     let lock = std::fs::File::open(path.join(".desktop.lock")).unwrap();
     assert_eq!(
         lock.try_lock_exclusive().unwrap_err().raw_os_error(),
@@ -222,10 +230,15 @@ fn assert_ordinary_admission(path: &Path) {
     let owner = StorageLease::acquire(path).unwrap();
     assert_eq!(
         names(path),
-        [".desktop-lease", ".desktop-owner.json", ".desktop.lock"]
+        [
+            ".desktop-lease",
+            ".desktop-owner.json",
+            ".desktop.lock",
+            "printpartner.lock"
+        ]
     );
     assert_eq!(flags(owner.release()), RELEASED);
-    assert_eq!(names(path), [".desktop.lock"]);
+    assert_eq!(names(path), [".desktop.lock", "printpartner.lock"]);
 }
 
 #[test]
@@ -233,9 +246,9 @@ fn ticket_t_7_writer_removed_lease_retains_failure_until_owner_exits() {
     let fixture = Fixture::new();
     let mut owner = Owner::spawn(External::Removed, &fixture.0);
     owner.expect("retained");
-    assert_eq!(names(&fixture.0), [".desktop.lock"]);
+    assert_eq!(names(&fixture.0), [".desktop.lock", "printpartner.lock"]);
     assert_contender_refused(&fixture.0);
-    assert_eq!(names(&fixture.0), [".desktop.lock"]);
+    assert_eq!(names(&fixture.0), [".desktop.lock", "printpartner.lock"]);
     owner.reap();
     assert_ordinary_admission(&fixture.0);
 }
@@ -245,7 +258,10 @@ fn ticket_t_7_writer_relocated_lease_keeps_owner_bytes_until_restored() {
     let fixture = Fixture::new();
     let mut owner = Owner::spawn(External::Relocated, &fixture.0);
     owner.expect("retained");
-    assert_eq!(names(&fixture.0), [".desktop.lock", "relocated-lease"]);
+    assert_eq!(
+        names(&fixture.0),
+        [".desktop.lock", "printpartner.lock", "relocated-lease"]
+    );
     assert_contender_refused(&fixture.0);
     std::fs::rename(
         fixture.0.join("relocated-lease"),
@@ -254,7 +270,7 @@ fn ticket_t_7_writer_relocated_lease_keeps_owner_bytes_until_restored() {
     .unwrap();
     owner.send("restored");
     owner.expect("released");
-    assert_eq!(names(&fixture.0), [".desktop.lock"]);
+    assert_eq!(names(&fixture.0), [".desktop.lock", "printpartner.lock"]);
     owner.reap();
     assert_ordinary_admission(&fixture.0);
 }
@@ -276,9 +292,12 @@ fn ticket_t_7_writer_external_lease_owner_subprocess() {
         External::Relocated => std::fs::rename(&shared, &relocated).unwrap(),
     }
     let assert_retained = || match external {
-        External::Removed => assert_eq!(names(path), [".desktop.lock"]),
+        External::Removed => assert_eq!(names(path), [".desktop.lock", "printpartner.lock"]),
         External::Relocated => {
-            assert_eq!(names(path), [".desktop.lock", "relocated-lease"]);
+            assert_eq!(
+                names(path),
+                [".desktop.lock", "printpartner.lock", "relocated-lease"]
+            );
             assert_eq!(names(&relocated), ["owner.json"]);
             assert_eq!(Original::read(&relocated), original);
         }
@@ -289,7 +308,7 @@ fn ticket_t_7_writer_external_lease_owner_subprocess() {
     for _ in 0..2 {
         assert_eq!(
             StorageLease::acquire(path).err().unwrap().to_string(),
-            "Data directory already owned"
+            "Data directory already owned; stop the other Print Partner process before starting another instance"
         );
         assert_eq!(
             flags(StorageLease::retry_failed_release(path).unwrap()),
@@ -307,7 +326,7 @@ fn ticket_t_7_writer_external_lease_owner_subprocess() {
             flags(StorageLease::retry_failed_release(path).unwrap()),
             RELEASED
         );
-        assert_eq!(names(path), [".desktop.lock"]);
+        assert_eq!(names(path), [".desktop.lock", "printpartner.lock"]);
         assert_eq!(
             StorageLease::retry_failed_release(path)
                 .err()
