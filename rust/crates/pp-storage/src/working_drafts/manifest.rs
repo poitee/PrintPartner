@@ -4,6 +4,10 @@ use super::{
 };
 use crate::manifest_text::{JsText, ManifestText, OptionGroupId, VariantId};
 
+#[cfg(test)]
+#[path = "manifest_glob_tests.rs"]
+mod glob_tests;
+
 #[derive(Clone, Default)]
 pub(crate) struct Manifest {
     pub project: Option<ManifestText>,
