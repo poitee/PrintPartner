@@ -69,7 +69,7 @@ impl Process {
             "#,
                 serde_json::to_string(&format!("file://{}", module.display())).unwrap()
             );
-            let mut command = child_process::command("/usr/bin/node");
+            let mut command = child_process::command("node");
             command
                 .current_dir(web)
                 .args(["--import", "tsx", "--input-type=module", "-e", &source])
