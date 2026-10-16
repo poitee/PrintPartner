@@ -104,7 +104,7 @@ These tests fail on the macOS runner. The `tests` value of the macOS entry skips
 
 | Crate | Tests | Failure |
 |-------|-------|---------|
-| `pp-compat` | Nine `ticket_t_2::` supervisor tests | Health and drain states do not change within the 8-second wall-time limit. Two owner-death tests report that the fixture never executed Node. |
+| `pp-compat` | Ten `ticket_t_2::` supervisor tests | Health, backoff and drain states do not change within the wall-time limits. One of them, `ticket_t_2_process_exit_obeys_every_backoff_deadline_and_cap`, fails only on some runs. Two owner-death tests report that the fixture never executed Node. |
 | `pp-core` | Four `runtime_m0` lifecycle tests, and `origin_tests::ticket_t_12_missing_config_persists_private_port_and_reuses_it` | The Node child does not reach readiness, and some shell children exit with status 126. These tests passed with the default macOS `TMPDIR`, so the mounted volume is a suspect. |
 | `pp-source` | `acquisition_labels::raw_long_labels_contract_to_valid_file_and_directory_paths` | The extracted directory is missing on APFS. This test exists only with `desktop_rebuild` on. |
 

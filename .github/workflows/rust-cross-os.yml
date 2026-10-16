@@ -43,6 +43,7 @@ jobs:
             tests: >-
               not (
               test(=ticket_t_2::ticket_t_2_three_health_failures_record_cause_without_cleanup_exit)
+              | test(=ticket_t_2::ticket_t_2_process_exit_obeys_every_backoff_deadline_and_cap)
               | test(=ticket_t_2::ticket_t_3_drain_force_killed_owner_during_startup_kills_group)
               | test(=ticket_t_2::ticket_t_3_drain_health_failure_after_disarm_is_interrupted)
               | test(=ticket_t_2::ticket_t_3_drain_measured_release_startup_parent_death)
