@@ -1,0 +1,102 @@
+# Continuous integration
+
+The **Rust cross-OS** workflow (`.github/workflows/rust-cross-os.yml`) builds and tests the Rust workspace on Linux, macOS and Windows. It runs on every pull request and on every push to `main`. Its purpose is to stop code that compiles on one OS only from reaching `main`.
+
+## The matrix
+
+The workflow has one job per OS. Each job uses the toolchain pinned in `rust-toolchain.toml`.
+
+| Check name | Runner | Packages |
+|------------|--------|----------|
+| `rust (linux)` | `ubuntu-latest` | The whole workspace |
+| `rust (macos)` | `macos-26` | The whole workspace |
+| `rust (windows)` | `windows-latest` | The workspace without the crates in [Windows exclusions](#windows-exclusions) |
+
+Each job runs these steps in order:
+
+1. Install the toolchain, nextest 0.9.148, Node 22.23.3 for the storage fixtures, and Node 24.21.0.
+2. Build the desktop web assets and write `rust/bundle-manifest.json`. `pp-compat` embeds this file at compile time.
+3. `cargo fmt --check`.
+4. `cargo clippy -D warnings`, with `desktop_rebuild` off.
+5. `cargo clippy -D warnings`, with `desktop_rebuild` on.
+6. `cargo nextest run`, with `desktop_rebuild` off.
+7. `cargo nextest run`, with `desktop_rebuild` on.
+
+Steps 3 to 7 run even when an earlier one of them fails, so one run reports every failure. Clippy uses `--keep-going`, so it reports errors in every crate whose dependencies compile.
+
+The `include` list in the workflow is the only place that names runner labels and the per-OS package scope. To move a job to a self-hosted runner, change its `runner` value there.
+
+## Run a job locally
+
+To run the same checks on your machine, build the assets and manifest first. From the repository root:
+
+```sh
+npm --prefix web ci
+VITE_PRINT_PARTNER_DESKTOP=1 npm --prefix web run build
+python3 rust/scripts/build-desktop-manifest.py --web web --node "$(command -v node)" --output rust/bundle-manifest.json --commit "$(git rev-parse HEAD)"
+```
+
+Then run the checks:
+
+```sh
+cargo fmt --manifest-path rust/Cargo.toml --all --check
+cargo clippy --manifest-path rust/Cargo.toml --locked --workspace --all-targets --keep-going -- -D warnings
+cargo clippy --manifest-path rust/Cargo.toml --locked --workspace --all-targets --keep-going --features desktop_rebuild -- -D warnings
+cargo nextest run --manifest-path rust/Cargo.toml --locked --workspace --no-fail-fast
+cargo nextest run --manifest-path rust/Cargo.toml --locked --workspace --no-fail-fast --features desktop_rebuild
+```
+
+On Windows, replace `--workspace` with the `scope` value of the Windows entry in the workflow. On Linux, the Tauri shell also needs the GTK and WebKit packages that the workflow installs with `apt-get`.
+
+Clippy and fmt do not read the manifest contents. For a lint-only run, `echo '{}' > rust/bundle-manifest.json` is enough. The tests need the real manifest.
+
+## Read a failure
+
+1. Open the failed check on the pull request, or run `gh pr checks <number>`.
+2. Find the first failed step. The step name says which tool and which feature setting failed.
+3. Run `gh run view <run-id> --log-failed` to print only the failed steps.
+
+These failures are common:
+
+- `error[E0433]: cannot find unix in os`, or `cannot find function ... in crate libc`, on Windows only. Code uses a Unix API outside a platform module. Move it into one, as [Keep platform code in cfg modules](#keep-platform-code-in-cfg-modules) describes.
+- `unused variable` or `function is never used` on one OS only. A value is used only inside a `#[cfg]` block. Compute the value inside that block, or gate the function with the same `#[cfg]`.
+- A test that fails on one OS only. Run that test locally on the same OS with `cargo nextest run -E 'test(<name>)'`.
+
+## Keep platform code in cfg modules
+
+Put code that differs by OS in one module for each platform, and select the module once:
+
+```rust
+#[cfg(unix)]
+mod unix;
+#[cfg(unix)]
+use unix as platform;
+
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+use windows as platform;
+```
+
+Shared code calls `platform::lock_file(...)` and never names an OS. Every platform module defines the same functions. When one module lacks a function, the job for that OS fails to compile.
+
+Do not scatter `#[cfg(...)]` on statements or `if cfg!(...)` checks through shared functions. Tests are the exception: a test, or one block in a test that checks an OS-only fact, may carry its own `#[cfg]`.
+
+## Windows exclusions
+
+These crates do not build on Windows yet. The Windows job excludes them with `--exclude` in its `scope` value.
+
+| Crate | Why it is excluded |
+|-------|--------------------|
+| `pp-storage` | The data-directory lease and schema files use `libc` and `std::os::unix` file APIs. |
+| `pp-compat` | The Node child supervisor uses Unix sockets, process groups, signals and file modes. |
+| `pp-source` | Source directory reads use Unix file modes and no-follow opens. |
+| `pp-api`, `pp-core`, `pp-gateway`, `pp-server`, `pp-desktop` | They depend on an excluded crate. |
+
+When a crate builds and passes its tests on Windows, delete its `--exclude` in the same pull request.
+
+## Other Rust workflows
+
+- **Desktop Rust (hosted)** (`desktop-fleet-rust.yml`) runs the ast-grep lint counts and splits the Linux test suite into two partitions. It runs when Rust or web build inputs change.
+- **Native macOS bundle** (`desktop-native-macos.yml`) builds the unsigned macOS app and runs the macOS storage tests. On pull requests it runs only when macOS inputs change or the PR has the `ci:macos` label.
+- **Desktop runtime** (`desktop-runtime.yml`) runs the Python lifecycle and gateway proofs against the built server on Linux.
