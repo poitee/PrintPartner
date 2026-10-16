@@ -331,38 +331,103 @@ pub(crate) fn merge(target: &mut Groups, incoming: Groups) {
         },
     )
 }
-fn normalize_path(path: &str) -> String {
-    let path = path.replace('\\', "/").to_lowercase();
-    let trimmed = JsText::scalar(&path).trim_ecmascript();
-    String::from_utf16_lossy(trimmed.units())
+fn normalize_glob(text: &JsText) -> JsText {
+    let mut units = Vec::with_capacity(text.units().len());
+    let mut scalar = String::new();
+    for decoded in char::decode_utf16(text.units().iter().copied()) {
+        match decoded {
+            Ok(c) => scalar.push(if c == '\\' { '/' } else { c }),
+            Err(error) => {
+                units.extend(scalar.to_lowercase().encode_utf16());
+                scalar.clear();
+                units.push(error.unpaired_surrogate());
+            }
+        }
+    }
+    units.extend(scalar.to_lowercase().encode_utf16());
+    JsText::from_units(units).trim_ecmascript()
+}
+
+fn canonicalize_regex_unit(unit: u16) -> u16 {
+    let Some(c) = char::from_u32(u32::from(unit)) else {
+        return unit;
+    };
+    let mut uppercase = c.to_uppercase();
+    let Some(upper) = uppercase.next() else {
+        return unit;
+    };
+    if uppercase.next().is_some() || upper.len_utf16() != 1 {
+        return unit;
+    }
+    let upper = upper as u16;
+    if unit >= 0x80 && upper < 0x80 {
+        unit
+    } else {
+        upper
+    }
+}
+
+fn dot_matches(unit: u16) -> bool {
+    !matches!(unit, 0x000a | 0x000d | 0x2028 | 0x2029)
+}
+
+fn wildcard_matches(pattern: &[u16], key: &[u16]) -> bool {
+    let (mut pat, mut path) = (0, 0);
+    let mut star = None;
+    while path < key.len() {
+        match pattern.get(pat).copied() {
+            Some(0x2a) => {
+                pat += 1;
+                star = Some((pat, path));
+            }
+            Some(unit)
+                if (unit == 0x3f && dot_matches(key[path]))
+                    || (unit != 0x3f && unit == key[path]) =>
+            {
+                pat += 1;
+                path += 1;
+            }
+            _ => {
+                let Some((after_star, consumed)) = star else {
+                    return false;
+                };
+                if !key.get(consumed).copied().is_some_and(dot_matches) {
+                    return false;
+                }
+                path = consumed + 1;
+                pat = after_star;
+                star = Some((after_star, path));
+            }
+        }
+    }
+    pattern[pat..].iter().all(|unit| *unit == 0x2a)
 }
 
 pub(crate) fn matches(pattern: &ManifestText, key: &str) -> bool {
-    let Some(pattern) = pattern.as_scalar() else {
-        return false;
-    };
-    let pat = normalize_path(&pattern);
-    let key = normalize_path(key);
-    if pat == key {
+    let pattern = normalize_glob(pattern);
+    let key = normalize_glob(&JsText::scalar(key));
+    if pattern == key {
         return true;
     }
-    let mut expression = "^".to_owned();
-    for c in pat.chars() {
-        match c {
-            '*' => expression.push_str(".*"),
-            '?' => expression.push('.'),
-            '.' | '+' | '^' | '$' | '{' | '}' | '(' | ')' | '|' | '[' | ']' | '\\' => {
-                expression.push('\\');
-                expression.push(c)
-            }
-            c => expression.push(c),
-        }
-    }
-    expression.push('$');
-    regress::Regex::with_flags(&expression, "i").is_ok_and(|r| {
-        r.find(&key).is_some()
-            || (!pat.contains('/') && key.rsplit('/').next().is_some_and(|s| r.find(s).is_some()))
-    })
+    let pattern: Vec<_> = pattern
+        .units()
+        .iter()
+        .copied()
+        .map(canonicalize_regex_unit)
+        .collect();
+    let key: Vec<_> = key
+        .units()
+        .iter()
+        .copied()
+        .map(canonicalize_regex_unit)
+        .collect();
+    wildcard_matches(&pattern, &key)
+        || (!pattern.contains(&0x2f)
+            && key.contains(&0x2f)
+            && key
+                .rsplit(|unit| *unit == 0x2f)
+                .next()
+                .is_some_and(|basename| wildcard_matches(&pattern, basename)))
 }
 pub(crate) fn hints(bytes: &[u8], b: &mut PreparationBudget<'_>) -> ReadResult<Vec<HintRule>> {
     b.document(bytes.len(), 0)?;
