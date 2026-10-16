@@ -79,4 +79,6 @@ jobs:
           if-no-files-found: error
       - name: Link proof artifact
         if: always() && steps.proof.outputs.artifact-url != ''
-        run: echo 'Screenshot and WebGL receipt — ${{ steps.proof.outputs.artifact-url }}' >> "$GITHUB_STEP_SUMMARY"
+        env:
+          ARTIFACT_URL: ${{ steps.proof.outputs.artifact-url }}
+        run: echo "Screenshot and WebGL receipt $ARTIFACT_URL" >> "$GITHUB_STEP_SUMMARY"
