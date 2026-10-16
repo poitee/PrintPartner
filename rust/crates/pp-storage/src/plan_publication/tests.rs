@@ -529,3 +529,366 @@ fn empty_settings_and_model_utilities_preserve_reference_behavior() {
     let empty = production(&tx, "tenant", 1).unwrap();
     write_remap(&tx, "tenant", empty, &HashMap::new(), &HashMap::new()).unwrap();
 }
+
+mod transaction {
+    use super::super::*;
+    use rusqlite::{Connection, types::ValueRef};
+
+    fn fixture() -> Value {
+        let data = super::golden();
+        json!({"definitions":data["transactionSchema"],"at":data["transactionAt"],"cases":data["transactions"]})
+    }
+    fn value(row: &Value) -> rusqlite::types::Value {
+        match row {
+            Value::Number(n) if !n.is_i64() => rusqlite::types::Value::Real(n.as_f64().unwrap()),
+            _ => sql_value(row).unwrap(),
+        }
+    }
+    pub(super) fn database(fixture: &Value, case: &Value) -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
+        let definitions = fixture["definitions"].as_array().unwrap();
+        for d in definitions.iter().filter(|d| d["type"] == "table") {
+            c.execute_batch(d["sql"].as_str().unwrap()).unwrap();
+        }
+        for (table, rows) in case["before"].as_object().unwrap() {
+            for row in rows.as_array().unwrap() {
+                let fields = row.as_object().unwrap();
+                let sql = format!(
+                    "INSERT INTO {table}({}) VALUES({})",
+                    fields.keys().cloned().collect::<Vec<_>>().join(","),
+                    vec!["?"; fields.len()].join(",")
+                );
+                c.execute(&sql, rusqlite::params_from_iter(fields.values().map(value)))
+                    .unwrap();
+            }
+        }
+        for d in definitions.iter().filter(|d| d["type"] != "table") {
+            c.execute_batch(d["sql"].as_str().unwrap()).unwrap();
+        }
+        c.execute_batch(include_str!("schema.sql")).unwrap();
+        c.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+        c
+    }
+    fn snapshot(c: &Connection, table: &str) -> Value {
+        let mut statement = c
+            .prepare(&format!("SELECT * FROM {table} ORDER BY rowid"))
+            .unwrap();
+        let names: Vec<_> = statement
+            .column_names()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let result = statement
+            .query_map([], |row| {
+                let mut result = serde_json::Map::new();
+                for (i, name) in names.iter().enumerate() {
+                    let v = match row.get_ref(i)? {
+                        ValueRef::Null => Value::Null,
+                        ValueRef::Integer(n) => json!(n),
+                        ValueRef::Real(n) => json!(n),
+                        ValueRef::Text(s) => json!(std::str::from_utf8(s).unwrap()),
+                        ValueRef::Blob(_) => panic!("Unexpected blob"),
+                    };
+                    result.insert(name.clone(), v);
+                }
+                Ok(Value::Object(result))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        json!(result)
+    }
+    struct Tokens(u128);
+    impl RequiredUnitTokenAllocator for Tokens {
+        fn allocate(&mut self) -> std::result::Result<[u8; 16], TokenAllocationFailure> {
+            self.0 += 1;
+            Ok(self.0.to_be_bytes())
+        }
+    }
+    fn publish(
+        tx: &Transaction<'_>,
+        case: &Value,
+        tokens: &mut dyn RequiredUnitTokenAllocator,
+    ) -> Value {
+        let input = &case["input"];
+        let request: ApplyRequest = serde_json::from_value(json!({
+        "expected_snapshot_digest": input["expectedSnapshotDigest"],
+        "expected_lifecycle_version": input["expectedLifecycleVersion"],
+        "expected_base": {"revision_id":input["expectedBase"].get("revisionId"),"plan_version":input["expectedBase"]["planVersion"]},
+        "remap_checkoff_links":input["remapCheckoffLinks"]
+    })).unwrap();
+        let outcome = publish_in_transaction(
+            tx,
+            &AuthenticatedPublicationContext {
+                tenant: "default".into(),
+                actor: input["actorId"].as_str().unwrap().into(),
+            },
+            serde_json::from_value(input["profileId"].clone()).unwrap(),
+            serde_json::from_value(input["draftId"].clone()).unwrap(),
+            PublicationRequests::direct(&request),
+            input["idempotencyKey"].as_str().unwrap(),
+            tokens,
+        )
+        .unwrap_or_else(|e| panic!("{}: {e:#}", case["id"]));
+        serde_json::to_value(outcome).unwrap()
+    }
+    fn node_outcome(outcome: &Value) -> Value {
+        let mut result = outcome.clone();
+        if let Some(receipt) = result.get_mut("receipt") {
+            *receipt = model::canonical(
+                receipt,
+                &[
+                    "profileId",
+                    "draftId",
+                    "revisionId",
+                    "planVersion",
+                    "draftLifecycleVersion",
+                    "revisionDigest",
+                    "requiredUnitMappingDigest",
+                    "appliedAt",
+                ],
+            );
+        }
+        result
+    }
+    fn replace_time(value: &mut Value, actual: &str, expected: &Value) {
+        if actual.is_empty() {
+            return;
+        }
+        match value {
+            Value::String(s) if s == actual => *value = expected.clone(),
+            Value::Array(rows) => rows
+                .iter_mut()
+                .for_each(|v| replace_time(v, actual, expected)),
+            Value::Object(row) => row
+                .values_mut()
+                .for_each(|v| replace_time(v, actual, expected)),
+            _ => {}
+        }
+    }
+    #[test]
+    fn transaction_replays_node_outcomes_receipts_and_persisted_rows() {
+        let fixture = fixture();
+        for case in fixture["cases"].as_array().unwrap() {
+            let mut c = database(&fixture, case);
+            let tx = c.transaction().unwrap();
+            let mut actual = publish(
+                &tx,
+                case,
+                &mut Tokens(case["allocationStart"].as_u64().unwrap().into()),
+            );
+            tx.commit().unwrap();
+            let at = actual["receipt"]["applied_at"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            replace_time(&mut actual, &at, &fixture["at"]);
+            let mut expected = node_outcome(&case["outcome"]);
+            if ["running-export", "uploaded-only"].contains(&case["id"].as_str().unwrap()) {
+                // Node has no durable-job publication guard. Its literal outcome is applied.
+                assert_eq!(expected["kind"], "applied");
+                let job = &case["before"]["durable_jobs"][0];
+                expected = json!({"kind":"execution_conflict","operations":[{"operation_id":job["id"],"kind":job["kind"],"state":job["state"]}]});
+            } else if case["id"] == "unsafe-remap" {
+                assert_eq!(
+                    actual["unmappable"][0]["linkId"],
+                    expected["unmappable"][0]["linkId"]
+                );
+                assert_eq!(
+                    actual["unmappable"][0]["filename"],
+                    expected["unmappable"][0]["filename"]
+                );
+                expected["unmappable"][0]["reason"] = json!(
+                    "Required unit at Part 1 index 9 is absent or excluded in the selected Plan"
+                );
+            }
+            assert_eq!(actual, expected, "{}", case["id"]);
+            let state = if actual["kind"] == "execution_conflict" {
+                &case["before"]
+            } else {
+                &case["after"]
+            };
+            for table in [
+                "build_profiles",
+                "parts",
+                "print_progress",
+                "plan_revisions",
+                "plan_revision_parts",
+                "plan_revision_input_sets",
+                "plan_revision_inputs",
+                "plan_accepted_input_sets",
+                "required_units",
+                "plan_revision_required_unit_sets",
+                "plan_revision_required_units",
+                "plan_drafts",
+                "plan_apply_requests",
+                "app_settings",
+            ] {
+                let mut actual = snapshot(&c, table);
+                replace_time(&mut actual, &at, &fixture["at"]);
+                assert_eq!(
+                    actual,
+                    state.get(table).cloned().unwrap_or(json!([])),
+                    "{} {table}",
+                    case["id"]
+                );
+            }
+            if actual["kind"] == "applied" {
+                let tx = c.transaction().unwrap();
+                let mut replay = publish(&tx, case, &mut Tokens(0));
+                tx.commit().unwrap();
+                replace_time(&mut replay, &at, &fixture["at"]);
+                assert_eq!(replay["kind"], "existing");
+                assert_eq!(replay["receipt"], actual["receipt"]);
+                assert!(
+                    c.execute(
+                        "UPDATE plan_apply_admissions SET request_digest='tampered'",
+                        []
+                    )
+                    .is_err()
+                );
+                assert!(c.execute("DELETE FROM plan_apply_admissions", []).is_err());
+            }
+            assert_eq!(
+                c.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| r
+                    .get::<_, i64>(
+                    0
+                ))
+                .unwrap(),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn caller_rollback_and_token_exhaustion_leave_publication_unwritten() {
+        let fixture = fixture();
+        let case = &fixture["cases"][0];
+        let mut c = database(&fixture, case);
+        {
+            let tx = c.transaction().unwrap();
+            assert_eq!(publish(&tx, case, &mut Tokens(0))["kind"], "applied");
+        }
+        struct Unavailable(usize);
+        impl RequiredUnitTokenAllocator for Unavailable {
+            fn allocate(&mut self) -> std::result::Result<[u8; 16], TokenAllocationFailure> {
+                self.0 += 1;
+                Err(TokenAllocationFailure)
+            }
+        }
+        let mut tokens = Unavailable(0);
+        let tx = c.transaction().unwrap();
+        assert_eq!(
+            publish(&tx, case, &mut tokens),
+            json!({"kind":"token_allocation_failed"})
+        );
+        tx.commit().unwrap();
+        assert_eq!(tokens.0, 32);
+        for (table, rows) in case["before"].as_object().unwrap() {
+            assert_eq!(snapshot(&c, table), *rows, "{table}");
+        }
+        for table in [
+            "plan_revisions",
+            "parts",
+            "plan_apply_requests",
+            "plan_apply_admissions",
+            "plan_revision_input_sets",
+            "required_units",
+        ] {
+            assert_eq!(snapshot(&c, table), json!([]), "{table}");
+        }
+    }
+}
+
+#[test]
+fn publication_job_scope_terminal_states_and_deferred_start_bindings() {
+    let golden = golden();
+    let fixture = json!({"definitions":golden["transactionSchema"]});
+    let cases = golden["transactions"].as_array().unwrap();
+    let export = cases.iter().find(|c| c["id"] == "running-export").unwrap();
+    let mut c = transaction::database(&fixture, export);
+    let tx = c.transaction().unwrap();
+    let update = |id: &str, record: &Value| {
+        tx.execute(
+            "UPDATE durable_jobs SET state=?,document=? WHERE id=?",
+            params![record["state"].as_str().unwrap(), record.to_string(), id],
+        )
+        .unwrap();
+    };
+    let mut job: Value = serde_json::from_str(
+        export["before"]["durable_jobs"][0]["document"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    job["state"] = json!("succeeded");
+    update("running-export", &job);
+    assert!(
+        crate::jobs::publication_conflicts(&tx, "default", 1)
+            .unwrap()
+            .is_empty()
+    );
+    job["state"] = json!("running");
+    job["payload"]["payload"]["profile_id"] = json!(2);
+    update("running-export", &job);
+    assert!(
+        crate::jobs::publication_conflicts(&tx, "default", 1)
+            .unwrap()
+            .is_empty()
+    );
+    tx.rollback().unwrap();
+
+    let upload = cases.iter().find(|c| c["id"] == "uploaded-only").unwrap();
+    let mut c = transaction::database(&fixture, upload);
+    let tx = c.transaction().unwrap();
+    let mut parent: Value = serde_json::from_str(
+        upload["before"]["durable_jobs"][0]["document"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    let mut start = parent.clone();
+    start["job_id"] = json!("start");
+    start["payload"] = json!({"kind":"printer-start","payload":{"uploaded_job_id":"uploaded-only","binding":{"printer_id":"printer","upload_effect":parent["effects"][0]}}});
+    start["state"] = json!("running");
+    start["effects"] = json!([]);
+    start["result"] = Value::Null;
+    start["finished_at"] = Value::Null;
+    tx.execute("INSERT INTO durable_jobs VALUES ('start','default','printer-upload','running','fixture',1,1,NULL,1,1,?)", [start.to_string()]).unwrap();
+    let conflicts = crate::jobs::publication_conflicts(&tx, "default", 1).unwrap();
+    assert_eq!(
+        conflicts
+            .iter()
+            .map(|c| c.operation_id.as_str())
+            .collect::<Vec<_>>(),
+        ["start", "uploaded-only"]
+    );
+    assert!(
+        crate::jobs::publication_conflicts(&tx, "other", 1)
+            .unwrap()
+            .is_empty()
+    );
+    start["payload"]["payload"]["binding"]["printer_id"] = json!("different-printer");
+    tx.execute(
+        "UPDATE durable_jobs SET document=? WHERE id='start'",
+        [start.to_string()],
+    )
+    .unwrap();
+    assert!(crate::jobs::publication_conflicts(&tx, "default", 1).is_err());
+    tx.execute("DELETE FROM durable_jobs WHERE id='start'", [])
+        .unwrap();
+    parent["payload"]["payload"]["profile_id"] = Value::Null;
+    parent["payload"]["payload"]["checkoff_units"] = json!([{"part_id":999,"unit_index":0}]);
+    tx.execute(
+        "UPDATE durable_jobs SET document=? WHERE id='uploaded-only'",
+        [parent.to_string()],
+    )
+    .unwrap();
+    assert_eq!(
+        crate::jobs::publication_conflicts(&tx, "default", 1)
+            .unwrap()
+            .len(),
+        1
+    );
+}
