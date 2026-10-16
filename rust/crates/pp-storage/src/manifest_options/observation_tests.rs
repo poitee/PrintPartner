@@ -393,6 +393,101 @@ fn builder_without_checkouts_needs_no_reader_and_keeps_the_stored_kit() {
     assert!(observed.stamps.is_empty());
 }
 
+fn import_only_source(imported_paths: &str) -> Database {
+    let database = Database::oracle();
+    database
+        .connection
+        .execute("DELETE FROM profile_layers WHERE project_id<>1", [])
+        .unwrap();
+    database
+        .connection
+        .execute(
+            "UPDATE projects SET imported_paths=?1 WHERE id=1",
+            [imported_paths],
+        )
+        .unwrap();
+    database
+}
+
+fn part_reads() -> Reads {
+    let mut reads = Reads::default();
+    reads.allowed_roots.insert(1, vec!["part.stl"]);
+    reads
+}
+
+#[test]
+fn import_arrays_over_the_node_limit_refuse_instead_of_dropping_parts() {
+    let reads = part_reads();
+    let scanned = |numbers: usize| {
+        let raw = format!("[{}\"part.stl\"]", "0,".repeat(numbers));
+        let captured = import_only_source(&raw).capture(TENANT, 1).unwrap();
+        observe(&captured, Some(&reads), PreparationLimits::default(), false)
+            .map(|observed| observed.builder.sources[0].scanned_parts.clone())
+            .map_err(|error| format!("{error:?}"))
+    };
+    assert_eq!(scanned(99_998), Ok(vec!["part.stl".to_owned()]));
+    assert_eq!(scanned(100_000), Err("LimitExceeded(Nodes)".to_owned()));
+}
+
+#[test]
+fn zero_budgets_refuse_the_stored_kit_and_import_rules() {
+    let mut database = import_only_source(r#"["part.stl"]"#);
+    let both = database.capture(TENANT, 1).unwrap();
+    let mut capture_after = |change: &str| {
+        database.connection.execute_batch(change).unwrap();
+        database.capture(TENANT, 1).unwrap()
+    };
+    let kit_only = capture_after("UPDATE projects SET local_path=NULL WHERE id=1");
+    let imports_only = capture_after(
+        "UPDATE projects SET local_path='/checkouts/1' WHERE id=1; DELETE FROM app_settings WHERE key='kit_manifest_1'",
+    );
+    let reads = part_reads();
+    let outcome = |captured, limits| match observe(captured, Some(&reads), limits, false) {
+        Ok(observed) => json(&observed),
+        Err(error) => format!("{error:?}"),
+    };
+    let zero = PreparationLimits {
+        document_bytes: 0,
+        total_document_bytes: 0,
+        nodes: 0,
+        visits: 0,
+        rules: 0,
+        ..PreparationLimits::default()
+    };
+    let no_documents = PreparationLimits {
+        document_bytes: 0,
+        ..PreparationLimits::default()
+    };
+    assert_eq!(outcome(&both, zero), "LimitExceeded(DocumentBytes)");
+    assert_eq!(
+        outcome(&kit_only, no_documents),
+        "LimitExceeded(DocumentBytes)"
+    );
+    for (limits, expected) in [
+        (no_documents, "LimitExceeded(DocumentBytes)"),
+        (
+            PreparationLimits {
+                nodes: 0,
+                ..PreparationLimits::default()
+            },
+            "LimitExceeded(Nodes)",
+        ),
+        (
+            PreparationLimits {
+                rules: 0,
+                ..PreparationLimits::default()
+            },
+            "LimitExceeded(Rules)",
+        ),
+    ] {
+        assert_eq!(outcome(&imports_only, limits), expected);
+    }
+    assert_eq!(
+        outcome(&both, PreparationLimits::default()),
+        r#"{"profile_id":1,"sources":[{"source_id":1,"layer_type":"base","name":"Base Frame","role":"unassigned","url":"https://example.test/Base-Frame","exists":false,"path":"print-partner.manifest.yaml","yaml":"format: print-partner-manifest-v2\nversion: 2\nproject: Base Frame\n","document":{"format":"print-partner-manifest-v2","version":2,"project":"Base Frame","option_groups":{}},"scanned_parts":[{"match":"part.stl","relative_path":"part.stl"}]}],"resolved_selections":{"zeta":"z1"},"merged_option_groups":{}}"#
+    );
+}
+
 #[test]
 fn capture_scopes_to_the_tenant_and_detects_graph_changes() {
     let mut database = Database::oracle();
