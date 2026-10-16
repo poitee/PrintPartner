@@ -98,6 +98,16 @@ jobs:
           npm --prefix web ci
           npm --prefix web run build
           python3 rust/scripts/build-desktop-manifest.py --web web --node "$node_path" --output rust/bundle-manifest.json --commit "$GITHUB_SHA"
+      # The default macOS TMPDIR is case-insensitive, sits under the /var symlink and is
+      # too long for Unix socket paths. The tests need a TMPDIR that is none of these.
+      - name: Mount a short case-sensitive TMPDIR
+        if: matrix.os == 'macos'
+        run: |
+          set -euo pipefail
+          hdiutil create -size 8g -type SPARSE -fs 'Case-sensitive APFS' -volname pptmp "$RUNNER_TEMP/pptmp.sparseimage"
+          hdiutil attach -nobrowse -owners on "$RUNNER_TEMP/pptmp.sparseimage"
+          mkdir /Volumes/pptmp/tmp
+          echo 'TMPDIR=/Volumes/pptmp/tmp' >> "$GITHUB_ENV"
       # Each check below runs even when an earlier one failed, so one run reports every failure.
       - name: cargo fmt
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}

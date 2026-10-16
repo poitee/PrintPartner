@@ -16,13 +16,16 @@ Each job runs these steps in order:
 
 1. Install the toolchain, nextest 0.9.148, Node 22.23.3 for the storage fixtures, and Node 24.21.0.
 2. Build the desktop web assets and write `rust/bundle-manifest.json`. `pp-compat` embeds this file at compile time.
-3. `cargo fmt --check`.
-4. `cargo clippy -D warnings`, with `desktop_rebuild` off.
-5. `cargo clippy -D warnings`, with `desktop_rebuild` on.
-6. `cargo nextest run`, with `desktop_rebuild` off.
-7. `cargo nextest run`, with `desktop_rebuild` on.
+3. On macOS only, mount a case-sensitive APFS volume at `/Volumes/pptmp` and set `TMPDIR` to `/Volumes/pptmp/tmp`.
+4. `cargo fmt --check`.
+5. `cargo clippy -D warnings`, with `desktop_rebuild` off.
+6. `cargo clippy -D warnings`, with `desktop_rebuild` on.
+7. `cargo nextest run`, with `desktop_rebuild` off.
+8. `cargo nextest run`, with `desktop_rebuild` on.
 
-Steps 3 to 7 run even when an earlier one of them fails, so one run reports every failure. Clippy uses `--keep-going`, so it reports errors in every crate whose dependencies compile.
+The macOS volume exists because the default macOS `TMPDIR` breaks three kinds of test. Its paths are too long for Unix socket names, it is under the `/var` symbolic link that no-follow opens refuse, and it treats `Straße.stl` and `STRASSE.stl` as one name.
+
+Steps 4 to 8 run even when an earlier one of them fails, so one run reports every failure. Clippy uses `--keep-going`, so it reports errors in every crate whose dependencies compile.
 
 The `include` list in the workflow is the only place that names runner labels and the per-OS package scope. To move a job to a self-hosted runner, change its `runner` value there.
 
@@ -46,7 +49,7 @@ cargo nextest run --manifest-path rust/Cargo.toml --locked --workspace --no-fail
 cargo nextest run --manifest-path rust/Cargo.toml --locked --workspace --no-fail-fast --features desktop_rebuild
 ```
 
-On Windows, replace `--workspace` with the `scope` value of the Windows entry in the workflow. On Linux, the Tauri shell also needs the GTK and WebKit packages that the workflow installs with `apt-get`.
+On macOS, set `TMPDIR` to a short directory on a case-sensitive volume before you run the tests. The workflow step `Mount a short case-sensitive TMPDIR` has the commands. On Windows, replace `--workspace` with the `scope` value of the Windows entry in the workflow. On Linux, the Tauri shell also needs the GTK and WebKit packages that the workflow installs with `apt-get`.
 
 Clippy and fmt do not read the manifest contents. For a lint-only run, `echo '{}' > rust/bundle-manifest.json` is enough. The tests need the real manifest.
 

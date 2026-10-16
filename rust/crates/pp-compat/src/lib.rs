@@ -1127,7 +1127,7 @@ mod ticket_t_2;
 
 #[cfg(test)]
 mod tests {
-    fn node_binary() -> std::path::PathBuf {
+    pub(crate) fn node_binary() -> std::path::PathBuf {
         let configured = std::env::var_os("PP_TEST_NODE").unwrap_or_else(|| "node".into());
         let output = std::process::Command::new(configured)
             .args(["-p", "process.execPath"])
