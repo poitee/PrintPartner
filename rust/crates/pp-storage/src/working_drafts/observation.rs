@@ -1,9 +1,5 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
-#[cfg_attr(
-    not(test),
-    expect(unused_imports, reason = "GRE-604 D10b imports the builder model")
-)]
 pub(crate) use super::manifest::{
     Group as BuilderGroup, Groups as BuilderGroups, Manifest as BuilderManifest,
     Variant as BuilderVariant,

@@ -220,6 +220,34 @@ impl KitManifest {
             .collect()
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "GRE-604 manifest observation has no runtime caller yet"
+        )
+    )]
+    pub(super) fn insert_default_selection(
+        &mut self,
+        group: OptionGroupId,
+        values: Vec<VariantId>,
+        scalar: bool,
+    ) {
+        if self.selections.iter().any(|(key, _)| *key == group.0) {
+            return;
+        }
+        let selection = match values.as_slice() {
+            [value] if scalar => Selection::Scalar(value.0.clone()),
+            _ => Selection::Array(values.into_iter().map(|value| value.0).collect()),
+        };
+        self.selections.insert(group.0, selection);
+    }
+
+    pub(super) fn write_selections_json(&self, output: &mut Vec<u8>) {
+        self.selections
+            .write_json(output, |selection, output| selection.write_json(output));
+    }
+
     pub fn write_json(&self, output: &mut Vec<u8>) {
         output.push(b'{');
         write_key("name", output);
@@ -235,8 +263,7 @@ impl KitManifest {
         write_text_array(&self.addon_source_ids, output);
         output.push(b',');
         write_key("selections", output);
-        self.selections
-            .write_json(output, |selection, output| selection.write_json(output));
+        self.write_selections_json(output);
         output.push(b',');
         write_key("include", output);
         write_text_array(&self.include, output);
