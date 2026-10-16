@@ -115,7 +115,6 @@ The filter also skips two tests by name, outside those groups:
 | Crate | Test | Ticket | Failure |
 |-------|------|--------|---------|
 | `pp-core` | `origin_tests::ticket_t_12_missing_config_persists_private_port_and_reuses_it` | GRE-645 | The Node child does not reach readiness, the same symptom as the `runtime_m0` group. |
-| `pp-source` | `acquisition_labels::raw_long_labels_contract_to_valid_file_and_directory_paths` | GRE-658 | The extracted directory is missing on APFS. This test exists only with `desktop_rebuild` on. |
 
 ## Other Rust workflows
 

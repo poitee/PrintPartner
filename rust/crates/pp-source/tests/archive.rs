@@ -583,6 +583,12 @@ mod acquisition_labels {
                 )
                 .unwrap();
             let destination = fixture.candidate().join("files").join(&expected);
+            if let Err(error) = fs::metadata(&destination) {
+                panic!(
+                    "absolute destination of {} bytes: {error}",
+                    destination.as_os_str().len()
+                );
+            }
             if suffix.is_empty() {
                 assert!(
                     ready
