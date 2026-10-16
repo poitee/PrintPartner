@@ -95,10 +95,10 @@ jobs:
         run: cargo fmt --manifest-path rust/Cargo.toml --all --check
       - name: clippy (desktop_rebuild off)
         if: ${{ !cancelled() && steps.assets.outcome == 'success' }}
-        run: cargo clippy --manifest-path rust/Cargo.toml --locked --workspace --all-targets -- -D warnings
+        run: cargo clippy --manifest-path rust/Cargo.toml --locked --workspace --all-targets --keep-going -- -D warnings
       - name: clippy (desktop_rebuild on)
         if: ${{ !cancelled() && steps.assets.outcome == 'success' }}
-        run: cargo clippy --manifest-path rust/Cargo.toml --locked --workspace --all-targets --features desktop_rebuild -- -D warnings
+        run: cargo clippy --manifest-path rust/Cargo.toml --locked --workspace --all-targets --keep-going --features desktop_rebuild -- -D warnings
       - name: nextest (desktop_rebuild off)
         if: ${{ !cancelled() && steps.assets.outcome == 'success' }}
         run: cargo nextest run --manifest-path rust/Cargo.toml --locked --workspace --no-fail-fast

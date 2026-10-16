@@ -433,9 +433,14 @@ mod tests {
         assert_eq!(calls.get(), expected_calls, "{case}");
     }
 
+    // macOS embeds Info.plist under one global symbol, so the test binary may expand the macro only once.
+    fn generated_context() -> tauri::Context<tauri::Wry> {
+        tauri::generate_context!()
+    }
+
     #[test]
     fn ticket_t_5_generated_context_keeps_the_installed_product_identity() {
-        let context: tauri::Context<tauri::Wry> = tauri::generate_context!();
+        let context = generated_context();
         assert_eq!(context.config().identifier, "com.poitee.printpartner");
         assert_eq!(
             context.config().product_name.as_deref(),
@@ -619,7 +624,7 @@ mod tests {
 
     #[test]
     fn generated_authority_denies_native_commands_for_every_origin() {
-        let mut context: tauri::Context<tauri::Wry> = tauri::generate_context!();
+        let mut context = generated_context();
         let build_config: tauri::Config =
             serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
         assert_eq!(
