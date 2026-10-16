@@ -1414,3 +1414,27 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 }
+
+#[cfg(feature = "desktop_rebuild")]
+pub(super) fn draft_freshness_current(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    id: i64,
+    b: &mut Budget,
+) -> Result<bool> {
+    let p = required(
+        one(
+            tx,
+            "build_profiles",
+            "id=?1 AND tenant_id=?2",
+            &[&id, &tenant],
+            "profile",
+            b,
+        )?,
+        "profile",
+    )?;
+    Ok(matches!(
+        freshness(tx, tenant, id, &p, b)?.0,
+        FreshnessFacts::Current { .. }
+    ))
+}
