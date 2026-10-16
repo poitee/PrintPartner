@@ -288,7 +288,7 @@ def main():
             websocket["logout_closed_active_upgrade"] = True
             websocket["logout_runtime_exit"] = 0
             websocket["logout_node_reaped"] = True
-            websocket["logout_reservation_removed"] = True
+            websocket["logout_marker_removed"] = True
             websocket["logout_runtime_removed"] = True
             websocket["logout_storage_lock_reacquired"] = True
         result = {"proof_class": "headless_unsigned", "case": "gateway_product_coverage", "origin": origin,

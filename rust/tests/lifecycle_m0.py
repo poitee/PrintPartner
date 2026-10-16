@@ -112,7 +112,7 @@ def main():
                           "direct_uds_denied": True, "forged_principal_denied": True, "standalone_writers_denied": 3,
                           "child_terminated": child_dead, "descendant_reaped": descendant.poll() is not None, "lock_reacquired": True,
                           "bootstrap_absent_from_logs": True, "parent_environment_injection_denied": True,
-                          "crash_reservation_preserved": True, "recovery_shutdown_clean": True}))
+                          "crash_marker_preserved": True, "recovery_shutdown_clean": True}))
     finally:
         if runtime.poll() is None:
             runtime.terminate()
