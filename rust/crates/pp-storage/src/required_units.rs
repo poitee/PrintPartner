@@ -1,4 +1,8 @@
+#[cfg(test)]
+mod fixture_tests;
 pub(crate) mod model;
+mod storage;
+mod view;
 
 use pp_domain::PositiveId;
 use serde::Deserialize;
