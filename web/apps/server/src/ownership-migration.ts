@@ -121,7 +121,7 @@ function validateData(db: Database.Database, claims = new Map<string, string>())
   validateOwnershipHistory(db);
   return inventory;
 }
-const excluded = new Set(["print-partner.db", "print-partner.db-wal", "print-partner.db-shm", "desktop-account.json", ".desktop.lock", ".desktop-owner.json", ".desktop-lease"]);
+const excluded = new Set(["print-partner.db", "print-partner.db-wal", "print-partner.db-shm", "desktop-account.json", "printpartner.lock", ".desktop.lock", ".desktop-owner.json", ".desktop-lease"]);
 const emptyDirectories = new Set(["uploads", "upload-staging", "staging", "backups", "thumbnails", "previews", "thumbs", "covers"]);
 function checkTree(path: string, destination?: string): void {
   const stat = lstatSync(path);
