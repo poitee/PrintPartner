@@ -41,7 +41,8 @@ Its default pin policy requires every external action, including `actions/*`, to
 
 ## Existing findings
 
-The first zizmor run reported twelve findings.
+The first offline zizmor run reported twelve findings.
+CI also found a version comment that did not match its pinned action.
 The workflow and configuration changes handle them as follows:
 
 | Finding | Resolution |
@@ -51,6 +52,7 @@ The workflow and configuration changes handle them as follows:
 | `dangerous-triggers` in PR evidence | Allow only the trigger line. Checkout runs trusted default-branch tooling. The PR body enters the checker through an environment variable. |
 | `dangerous-triggers` in Linear PR sync | Allow only the trigger line. PR events run the immutable base commit. Scheduled runs use the default branch. The workflow never runs PR-head code. |
 | Two `self-repository` notices in Release | Allow only the two local reusable-workflow lines. They resolve at the caller's commit. Actionlint 1.7.12 rejects zizmor's suggested `$/` replacement syntax. |
+| Mismatched action version comment in Chain tip gate | Replace the moving `# v2` comment with the verified `# v2.87.27` tag. Keep the existing commit SHA. |
 | `dependabot-cooldown` for GitHub Actions | Set a seven-day cooldown for action version updates. |
 | Five other `dependabot-cooldown` notices | Keep the existing npm, pip, Docker, and Cargo update policies. Their cooldown policy needs separate review. Each ecosystem entry has a line-specific exception. |
 
