@@ -488,6 +488,85 @@ fn zero_budgets_refuse_the_stored_kit_and_import_rules() {
     );
 }
 
+fn selections(observed: &ObservedBuilder) -> String {
+    let mut output = Vec::new();
+    observed
+        .builder
+        .resolved_selections
+        .write_selections_json(&mut output);
+    String::from_utf8(output).unwrap()
+}
+
+#[test]
+fn stored_kits_over_the_json_limits_refuse_instead_of_dropping_selections() {
+    let mut database = Database::oracle();
+    database
+        .connection
+        .execute("UPDATE projects SET local_path=NULL", [])
+        .unwrap();
+    let mut observed = |kit: String| {
+        database
+            .connection
+            .execute(
+                "UPDATE app_settings SET value=?1 WHERE key='kit_manifest_1'",
+                [kit],
+            )
+            .unwrap();
+        let captured = database.capture(TENANT, 1).unwrap();
+        observe(&captured, None, PreparationLimits::default(), false)
+            .map(|observed| selections(&observed))
+            .map_err(|error| format!("{error:?}"))
+    };
+    let nested = |depth| {
+        format!(
+            r#"{{"selections":{{"zeta":"z1"}},"choice_tree":[{}null{}]}}"#,
+            "[".repeat(depth),
+            "]".repeat(depth)
+        )
+    };
+    let many = |count| {
+        format!(
+            r#"{{"selections":{{"zeta":"z1"}},"choice_tree":[{}0]}}"#,
+            "0,".repeat(count)
+        )
+    };
+    let kept = Ok(r#"{"zeta":"z1"}"#.to_owned());
+    assert_eq!(observed(nested(62)), kept);
+    assert_eq!(observed(nested(63)), Err("LimitExceeded(Depth)".to_owned()));
+    assert_eq!(observed(many(99_992)), kept);
+    assert_eq!(observed(many(99_993)), Err("LimitExceeded(Nodes)".to_owned()));
+}
+
+#[test]
+fn malformed_stored_kits_read_as_the_empty_kit_as_in_node() {
+    let mut database = Database::oracle();
+    let reads = Reads::oracle();
+    for kit in [
+        "",
+        "{",
+        "null",
+        "[]",
+        r#"{"selections":{"zeta":"z1"},"name":7}"#,
+        r#"{"selections":{"zeta":["z1"," z1 "]}}"#,
+    ] {
+        database
+            .connection
+            .execute(
+                "UPDATE app_settings SET value=?1 WHERE key='kit_manifest_1'",
+                [kit],
+            )
+            .unwrap();
+        let captured = database.capture(TENANT, 1).unwrap();
+        let observed =
+            observe(&captured, Some(&reads), PreparationLimits::default(), false).unwrap();
+        assert_eq!(
+            selections(&observed),
+            r#"{"7":["skirt"],"toolhead":"stock","alpha":["enabled"],"beta":"x"}"#,
+            "stored kit {kit:?}"
+        );
+    }
+}
+
 #[test]
 fn capture_scopes_to_the_tenant_and_detects_graph_changes() {
     let mut database = Database::oracle();
