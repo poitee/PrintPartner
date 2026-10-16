@@ -715,3 +715,62 @@ describe("importKitBundle accepted publish", () => {
     database.close();
   });
 });
+
+describe("Spoolman copy and import admission", () => {
+  afterEach(() => vi.unstubAllEnvs());
+  it.each(["duplicate", "import"].flatMap((operation) => [
+    { gate: "1", account: false, plan: false },
+    { gate: "1", account: true, plan: false },
+    { gate: "1", account: false, plan: true },
+    { gate: "0", account: false, plan: false },
+  ].map((policy) => ({ operation, ...policy }))))(
+    "$operation scopes copied references with gate=$gate account=$account plan=$plan", ({ operation, gate, account, plan: enabled }) => {
+      const { database, repo, plan } = acceptedPlanFixture("Inventory copy", ["ordinary.stl", "widget.stl"]);
+      try {
+        const source = repo.readAcceptedPlanOperationalSnapshot(plan.id);
+        if (source.kind !== "ready") throw new Error("source Plan is missing");
+        for (const part of source.snapshot.parts) {
+          expect(repo.assignAcceptedFilament({ expected: acceptedPlanBasis(source.snapshot),
+            target: { kind: "part", projectionPartId: part.projectionPartId },
+            assignment: { color: { kind: "catalog", colorId: part.filename === "widget.stl"
+              ? "spoolman:inventory:filament:7" : "pla-black" }, spoolmanSpoolId: "spoolman:inventory:spool:11" },
+          }).kind).toBe("updated");
+        }
+        repo.setSetting(`role_filaments_${plan.id}`, JSON.stringify({
+          primary: { filament_color_id: "spoolman:inventory:filament:7", spoolman_spool_id: "spoolman:inventory:spool:11" },
+          accent: { filament_custom_hex: "#123456" },
+        }));
+        repo.setSetting("feature_toggles", JSON.stringify({ spoolman: account }));
+        repo.setSetting(`feature_toggles:plan:${plan.id}`, JSON.stringify({ spoolman: enabled }));
+        vi.stubEnv("PP_DESKTOP_REBUILD", gate);
+        const captured = captureAcceptedOperationalExport({ repository: repo, profileId: plan.id });
+        if (captured.kind !== "ready") throw new Error("source export is missing");
+        const bundle = buildKitBundleData({ mode: { kind: "accepted_progress",
+          recipe: repo.readEditableKitRecipe(plan.id), accepted: captured.export }, exportedAt: "2026-10-15T19:00:00Z" });
+        if (!Array.isArray(bundle.parts)) throw new Error("exported Parts are missing");
+        for (const part of bundle.parts) {
+          if (!part || typeof part !== "object") throw new Error("exported Part is invalid");
+          Object.assign(part, { spoolman_spool_id: "spoolman:inventory:spool:11" });
+        }
+        const copyId = operation === "duplicate" ? repo.duplicateProfile(plan.id, "Copy").id
+          : repo.importKitBundle(bundle, "Copy").profile_id;
+        const allowed = gate === "0" || (operation === "duplicate" ? enabled : account);
+        const copied = repo.readAcceptedPlanOperationalSnapshot(copyId);
+        if (copied.kind !== "ready") throw new Error("copied Plan is missing");
+        expect(copied.snapshot.parts.map((part) => [part.filename, part.filamentColorId, part.spoolmanSpoolId])).toEqual([
+          ["ordinary.stl", "pla-black", allowed ? "spoolman:inventory:spool:11" : null],
+          ["widget.stl", allowed ? "spoolman:inventory:filament:7" : null, allowed ? "spoolman:inventory:spool:11" : null],
+        ]);
+        if (operation === "duplicate") {
+          expect(loadRoleFilamentDefaults(repo, copyId).primary).toMatchObject({
+            filament_color_id: allowed ? "spoolman:inventory:filament:7" : null,
+            spoolman_spool_id: allowed ? "spoolman:inventory:spool:11" : null,
+          });
+          expect(loadRoleFilamentDefaults(repo, copyId).accent?.filament_custom_hex).toBe("#123456");
+        }
+        expect(repo.getProfilePartRows(plan.id).find((part) => part.filename === "widget.stl")?.filamentColorId)
+          .toBe("spoolman:inventory:filament:7");
+      } finally { database.close(); }
+    },
+  );
+});

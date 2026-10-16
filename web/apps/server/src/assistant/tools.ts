@@ -1,3 +1,4 @@
+import { readSpoolmanAccess, spoolmanAccessProblem } from "../lib/spoolman-access.js";
 import { readFarmAccess } from "../lib/farm-access.js";
 import { chargeTenantDiskBytes, TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
 import {
@@ -1075,6 +1076,16 @@ export async function invokeAssistantTool(
       case "propose_apply_plan_draft": {
         const planId = resolvePlanId(input, ctx, false);
         if (planId == null) return { content: JSON.stringify({ error: "plan_id required" }) };
+        if (
+          name === "propose_assign_role_filament" &&
+          input.assignment && typeof input.assignment === "object" &&
+          "inventory_kind" in input.assignment && input.assignment.inventory_kind === "spoolman"
+        ) {
+          const access = readSpoolmanAccess(ctx.repo, planId);
+          if (access.kind !== "allowed") {
+            return { content: JSON.stringify({ error: access.error, code: access.code }) };
+          }
+        }
         if (!readBuildPlanningBrief(ctx.repo, planId))
           return {
             content: JSON.stringify({
@@ -1560,7 +1571,7 @@ export async function invokeAssistantTool(
               reposDir: ctx.repo.reposDir,
               thumbsDir: ctx.thumbsDir?.trim() || null,
               loadFilamentContext: dataDir
-                ? (colorIds) => preloadSpoolmanForColorIds({ repo: ctx.repo, dataDir }, colorIds)
+                ? (colorIds) => preloadSpoolmanForColorIds({ repo: ctx.repo, dataDir, profileId }, colorIds)
                 : undefined,
             });
           };
@@ -3052,6 +3063,7 @@ export async function applyAssistantAction(
 ): Promise<{
   ok: boolean;
   status?: number;
+  code?: string;
   detail?: string;
   job_id?: string;
   result?: Record<string, unknown>;
@@ -3771,9 +3783,13 @@ export async function applyAssistantAction(
           }
         }
         if (kind === "spoolman") {
+          const access = readSpoolmanAccess(deps.repo, planId);
+          if (access.kind !== "allowed") return { ok: false, ...spoolmanAccessProblem(access) };
           const resolved = inventoryId
-            ? await resolveFilamentDisplay({ repo: deps.repo, dataDir: "" }, inventoryId)
+            ? await resolveFilamentDisplay({ repo: deps.repo, dataDir: "", profileId: planId }, inventoryId)
             : null;
+          const currentAccess = readSpoolmanAccess(deps.repo, planId);
+          if (currentAccess.kind !== "allowed") return { ok: false, ...spoolmanAccessProblem(currentAccess) };
           if (!resolved) return { ok: false, detail: "Spoolman inventory filament could not be verified" };
           if (resolved.hex?.toLowerCase() !== colorHex.toLowerCase()) {
             return { ok: false, detail: "Spoolman inventory filament color does not match" };

@@ -23,6 +23,7 @@ import type { PlanDraftPart, PlanDraftSnapshot } from "./plan-drafts.js";
 import type { RequiredUnitReconciliationDecision } from "./required-unit-reconciliation.js";
 
 export type PlanDraftWorkspaceFailure =
+  | Extract<ApplyPlanChangesResult, { kind: "spoolman_unavailable" }>
   | { readonly kind: "profile_not_found" | "draft_not_found" }
   | {
       readonly kind:
@@ -550,6 +551,7 @@ export class PlanDraftWorkspaceService {
       case "accepted_baseline_required":
       case "inputs_changed":
       case "transaction_unavailable":
+      case "spoolman_unavailable":
         return result;
       case "draft_changed":
       case "base_changed": {
