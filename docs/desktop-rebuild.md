@@ -182,7 +182,7 @@ accounting. Both parsers check the document size before decoding. The sibling
 wrapper takes the same budget and returns `ReadResult<BuilderGroups>`, matching
 the landed inference rather than the reference branch's unbudgeted signature.
 These helpers compile only with the default-off `desktop_rebuild` feature.
-D10b integration, draft application, the executor, and preparation remain separate
+Draft application, the executor, and preparation remain separate
 units. No user-visible behavior changes in this slice.
 
 The contract is `loadManifestYaml`, `mergeOptionGroups`, and `matchKeyMatches` in
@@ -456,11 +456,8 @@ propagate resource exhaustion instead of embedding it in context errors. The
 feature-off reader retains its existing error classification.
 
 D9 is complete with the [final coverage and integration audit](desktop-rebuild-d9-audit.md).
-D10b remains blocked on GRE-607 working-draft observation and #450.
-Required-unit planning integration belongs to GRE-606 D11. Main now contains the observation
-contracts and budgets. The bounded YAML parser, builder manifest helpers, group merging, hints,
-and STL inference remain prerequisites for D10b integration. The existing
-`manifest_options` JSON model stays in place for later integration.
+Required-unit planning integration belongs to GRE-606 D11. Manifest option observation is
+GRE-604 D10b, described below.
 No runtime caller is added. Future user-visible callers must also check
 `PP_DESKTOP_REBUILD` for exactly `1` or `true`.
 
@@ -473,8 +470,44 @@ and ordered objects. Input errors emit lossless JSON detail bodies.
 The codec enforces 8 MiB, 64 levels, and 100,000 nodes.
 Focused codec unit tests and public model integration tests run in the desktop gates.
 
-ManifestBuilder, graph observation, known-group validation, default selection
-insertion, storage commands, and runtime wiring remain deferred.
+## D10b manifest observation receipt
+
+GRE-604 D10b adds `pp_storage::manifest_options::observation` behind `desktop_rebuild`.
+It has no runtime caller yet. Build graph manifest commands and HTTP routes remain deferred.
+
+`capture` reads the build, its stored kit, and its ordered source layers in one transaction.
+`basis_matches` repeats the capture, so a later transaction can reject a stale observation.
+`observe` builds the response of Node's `buildPlanManifestBuilder` in
+`web/apps/server/src/services/plan-manifest-builder.ts` through storage-issued `DraftReads` requests:
+
+- It reads each checkout manifest and STL inventory. It filters paths with the source's import rules and sorts them as `listStlRelativePaths` does.
+- A source without declared option groups infers groups from shipped and custom path hints, then from sibling folders.
+- Groups merge in layer order and keep JavaScript property order. Each variant names the sources whose scanned parts it matches.
+- Stored kit selections take precedence. Repository and community manifest defaults fill the other groups in layer order.
+
+As in Node, an unreadable or invalid manifest reports `exists: false` with the fallback YAML.
+Invalid UTF-8 decodes with replacement characters. An invalid or unreadable custom hints file fails the observation.
+A source without a checkout path is skipped. A source whose checkout root the adapter refuses is omitted.
+
+Adapter reads, manifest and hint parsing, and STL scans charge the caller's `PreparationBudget`.
+The stored kit and each source's import rules charge their bytes as documents.
+Import rules also charge every JSON node and one rule per accepted path.
+Import rules over the JSON byte, depth, or node limit refuse the observation.
+Malformed or non-array import rules give an empty rule set, as in Node.
+A malformed stored kit falls back to an empty kit, as in Node.
+A stored kit over the JSON byte, depth, or node limit refuses the observation.
+Path filtering and pattern matching check cancellation.
+Each source returns a SHA-256 stamp of its reads, so a caller can compare two observations.
+`validate_known_selections` returns the `manifestSelectionsInputError` messages for a kit save.
+
+The tests compare the response bytes with `rust/crates/pp-storage/tests/fixtures/manifest-builder-node.json`.
+`manifest-builder-node.mts` in the same directory regenerates that file from the Node services.
+Pattern matching still uses the unbudgeted glob matcher tracked in
+[GRE-642](https://linear.app/greetz/issue/GRE-642/builder-glob-matcher-exponential-backtracking-with-no-budget-replace).
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib manifest_options
+```
 
 ## Map one existing account
 
