@@ -767,6 +767,38 @@ mod tests {
     }
 
     #[test]
+    fn gre_673_lock_open_and_lstat_errors_name_their_stages() {
+        let path = directory();
+        let admitted = admit_directory(&path).unwrap();
+        std::fs::remove_dir(&path).unwrap();
+        for name in [c"printpartner.lock", c".desktop-lease"] {
+            let error = admitted.open_lock(name).unwrap_err();
+            let diagnostic = format!("{error:?}");
+            assert!(diagnostic.contains("open_lock: openat"), "{diagnostic}");
+            assert!(diagnostic.contains(name.to_str().unwrap()), "{diagnostic}");
+            assert_eq!(
+                error.downcast_ref::<std::io::Error>().unwrap().raw_os_error(),
+                Some(libc::ENOENT)
+            );
+        }
+        let path = directory();
+        let file_path = path.join("printpartner.lock");
+        let file = File::create(&file_path).unwrap();
+        std::fs::remove_file(&file_path).unwrap();
+        let error = validate_open_lock_identity(&file, &file_path).unwrap_err();
+        let diagnostic = format!("{error:?}");
+        assert!(
+            diagnostic.contains("validate_open_lock_identity: lstat"),
+            "{diagnostic}"
+        );
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().raw_os_error(),
+            Some(libc::ENOENT)
+        );
+        std::fs::remove_dir(path).unwrap();
+    }
+
+    #[test]
     fn gre_636_busy_lock_prevents_all_database_preflight() {
         let path = directory();
         let lock = OpenOptions::new()

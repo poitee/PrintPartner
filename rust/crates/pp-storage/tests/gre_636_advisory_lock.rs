@@ -207,6 +207,21 @@ fn gre_636_lock_subprocess() {
 }
 
 #[test]
+fn gre_673_refusal_keeps_preflight_stage_and_io_cause() {
+    let fixture = Fixture::new();
+    std::fs::create_dir(fixture.0.join("print-partner.db")).unwrap();
+    let mut writer = Process::spawn(&fixture.0, "writer");
+    writer.start();
+    let refusal = writer.event();
+    assert!(refusal.starts_with("refused "), "{refusal}");
+    assert!(refusal.contains("preflight_schema"), "{refusal}");
+    assert!(refusal.contains("open_preflight_file"), "{refusal}");
+    assert!(refusal.contains("print-partner.db"), "{refusal}");
+    assert!(refusal.contains("Is a directory"), "{refusal}");
+    assert!(writer.wait().success());
+}
+
+#[test]
 fn gre_636_two_processes_admit_exactly_one_writer() {
     let fixture = Fixture::new();
     let mut first = Process::spawn(&fixture.0, "writer");
