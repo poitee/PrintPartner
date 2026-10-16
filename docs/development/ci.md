@@ -6,11 +6,11 @@ The **Rust cross-OS** workflow (`.github/workflows/rust-cross-os.yml`) builds an
 
 The workflow has one job per OS. Each job uses the toolchain pinned in `rust-toolchain.toml`.
 
-| Check name | Runner | Packages |
-|------------|--------|----------|
-| `rust (linux)` | `ubuntu-latest` | The whole workspace |
-| `rust (macos)` | `macos-26` | The whole workspace |
-| `rust (windows)` | `windows-latest` | The workspace without the crates in [Windows exclusions](#windows-exclusions) |
+| Check name | Runner | Packages | Tests |
+|------------|--------|----------|-------|
+| `rust (linux)` | `ubuntu-latest` | The whole workspace | All |
+| `rust (macos)` | `macos-26` | The whole workspace | All except [macOS exclusions](#macos-exclusions) |
+| `rust (windows)` | `windows-latest` | The workspace without [Windows exclusions](#windows-exclusions) | All in those packages |
 
 Each job runs these steps in order:
 
@@ -27,7 +27,7 @@ The macOS volume exists because the default macOS `TMPDIR` breaks three kinds of
 
 Steps 4 to 8 run even when an earlier one of them fails, so one run reports every failure. Clippy uses `--keep-going`, so it reports errors in every crate whose dependencies compile.
 
-The `include` list in the workflow is the only place that names runner labels and the per-OS package scope. To move a job to a self-hosted runner, change its `runner` value there.
+The `include` list in the workflow is the only place that names runner labels, the per-OS package scope (`scope`) and the per-OS nextest filter (`tests`). To move a job to a self-hosted runner, change its `runner` value there.
 
 ## Run a job locally
 
@@ -49,7 +49,7 @@ cargo nextest run --manifest-path rust/Cargo.toml --locked --workspace --no-fail
 cargo nextest run --manifest-path rust/Cargo.toml --locked --workspace --no-fail-fast --features desktop_rebuild
 ```
 
-On macOS, set `TMPDIR` to a short directory on a case-sensitive volume before you run the tests. The workflow step `Mount a short case-sensitive TMPDIR` has the commands. On Windows, replace `--workspace` with the `scope` value of the Windows entry in the workflow. On Linux, the Tauri shell also needs the GTK and WebKit packages that the workflow installs with `apt-get`.
+On macOS, set `TMPDIR` to a short directory on a case-sensitive volume before you run the tests. The workflow step `Mount a short case-sensitive TMPDIR` has the commands. To skip the same tests as CI, add `-E` with the `tests` value of the macOS entry. On Windows, replace `--workspace` with the `scope` value of the Windows entry. On Linux, the Tauri shell also needs the GTK and WebKit packages that the workflow installs with `apt-get`.
 
 Clippy and fmt do not read the manifest contents. For a lint-only run, `echo '{}' > rust/bundle-manifest.json` is enough. The tests need the real manifest.
 
@@ -97,6 +97,16 @@ These crates do not build on Windows yet. The Windows job excludes them with `--
 | `pp-api`, `pp-core`, `pp-gateway`, `pp-server`, `pp-desktop` | They depend on an excluded crate. |
 
 When a crate builds and passes its tests on Windows, delete its `--exclude` in the same pull request.
+
+## macOS exclusions
+
+These tests fail on the macOS runner. The `tests` value of the macOS entry skips them by exact name. When a test passes on macOS, delete it from that filter in the same pull request.
+
+| Crate | Tests | Failure |
+|-------|-------|---------|
+| `pp-compat` | Nine `ticket_t_2::` supervisor tests | Health and drain states do not change within the 8-second wall-time limit. Two owner-death tests report that the fixture never executed Node. |
+| `pp-core` | Four `runtime_m0` lifecycle tests, and `origin_tests::ticket_t_12_missing_config_persists_private_port_and_reuses_it` | The Node child does not reach readiness, and some shell children exit with status 126. These tests passed with the default macOS `TMPDIR`, so the mounted volume is a suspect. |
+| `pp-source` | `acquisition_labels::raw_long_labels_contract_to_valid_file_and_directory_paths` | The extracted directory is missing on APFS. This test exists only with `desktop_rebuild` on. |
 
 ## Other Rust workflows
 
