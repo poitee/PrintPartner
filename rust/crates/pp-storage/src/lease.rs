@@ -79,8 +79,9 @@ impl CompatibilityReservation {
             }
             let acquired = unsafe { acquired.assume_init() };
             if named.st_dev != acquired.st_dev || named.st_ino != acquired.st_ino {
-                self.held = false;
-                return Ok(());
+                return Err(std::io::Error::other(
+                    ".desktop-lease compatibility reservation was replaced",
+                ));
             }
             let removed = unsafe {
                 libc::unlinkat(self.directory.as_raw_fd(), c".desktop-lease".as_ptr(), 0)
@@ -838,8 +839,13 @@ mod tests {
         let replacement = std::fs::symlink_metadata(&reservation).unwrap();
         assert_ne!(acquired.ino(), replacement.ino());
         let released = owner.release();
-        assert!(released.lock_released);
-        assert!(!released.ownership_retained);
+        assert!(!released.marker_removed);
+        assert!(!released.lock_released);
+        assert!(released.ownership_retained);
+        assert!(matches!(
+            fs4::FileExt::try_lock(&File::open(path.join("printpartner.lock")).unwrap()),
+            Err(fs4::TryLockError::WouldBlock)
+        ));
         assert_eq!(
             std::fs::read(&reservation).unwrap(),
             b"replacement reservation"
@@ -848,6 +854,13 @@ mod tests {
             std::fs::symlink_metadata(&reservation).unwrap().ino(),
             replacement.ino()
         );
+        std::fs::remove_file(&reservation).unwrap();
+        std::fs::rename(path.join("previous-reservation"), &reservation).unwrap();
+        let released = StorageLease::retry_failed_release(&path).unwrap();
+        assert!(released.marker_removed);
+        assert!(released.lock_released);
+        assert!(!released.ownership_retained);
+        assert!(!reservation.exists());
         fs4::FileExt::try_lock(&File::open(path.join("printpartner.lock")).unwrap()).unwrap();
         std::fs::remove_dir_all(path).unwrap();
     }
