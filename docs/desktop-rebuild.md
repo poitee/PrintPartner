@@ -758,3 +758,36 @@ Run the tests with:
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib required_units -- --test-threads=2
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test required_unit_operations -- --test-threads=2
 ```
+
+## D19 publication model and production links, GRE-612 PR 1
+
+`pp-storage::plan_publication` is internal and requires `desktop_rebuild`.
+The feature remains off by default. This slice ports publication assignments,
+preparation, revision digests, accepted projection validation, production setting
+validation, and Required-unit token remapping from the source-sync reference.
+The optional `pp-contracts` dependency supplies `UnmappableLink`; the boundary
+check rejects this dependency if it becomes required or reachable by default.
+
+PR 2 adds `publish_in_transaction`, receipts, inputs, admission schema, and job
+publication conflicts. PR 3 adds `PublicationClient`, admission, and writer
+`Envelope` dispatch. PR 1 exposes no publication command and writes no schema.
+Temporary `expect(dead_code)` annotations identify the PR 2 integration point.
+
+`node fixtures/parity/plan-publication/generate.mjs` regenerates literal Node
+results in `fixtures/parity/plan-publication/node.json`; `--check` detects drift.
+It requires Node 22.18 or newer with built-in type stripping and no npm install.
+The fixture header records the generating Node version. The generator imports
+`preparePlanPublication`, `digestPlanRevisionParts`, `assessCheckoffRemap`, and
+`requiredUnitObjectName`. It extracts and executes the repository's inline
+accepted revision check, `projectionPlanningFieldsMatch`, and private
+`applyCheckoffRemap` method with row and setting adapters. It does not copy their
+implementations. Later slices can add cases to the same generator.
+
+Rust tests compare literal digests, progress, assignment coordinates, object
+names, remap mappings, and persisted settings. Shared projection cases compare
+acceptance and rejection. Node's exact error messages are retained in the
+fixture; tests separately assert the Rust reference's more specific diagnostics.
+Node's inline projection check has no progress-validation counterpart, and its
+match-key remap cannot represent token identity, excluded targets, resolved-only
+coordinates, or changed unit indexes. Direct Rust tests cover progress corruption,
+excluded or missing tokens, and changed indexes against the reference behavior.
