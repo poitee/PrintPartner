@@ -17,7 +17,7 @@ pub mod manifest_text;
 #[cfg(feature = "desktop_rebuild")]
 pub mod native_secrets;
 #[cfg(feature = "desktop_rebuild")]
-mod plan_publication;
+pub mod plan_publication;
 #[cfg(feature = "desktop_rebuild")]
 pub mod profiles;
 pub mod read_model;
@@ -109,6 +109,11 @@ enum Envelope {
     Features {
         command: features::Command,
         reply: mpsc::Sender<Result<features::View>>,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    Publication {
+        command: plan_publication::Command,
+        reply: mpsc::Sender<Result<plan_publication::Outcome>>,
     },
     #[cfg(feature = "desktop_rebuild")]
     RequiredUnits {
@@ -493,6 +498,8 @@ impl WriterOwner {
         });
         let worker = shared.clone();
         let mut catalog_state = catalog::State::new(lease.data_dir().to_owned());
+        #[cfg(feature = "desktop_rebuild")]
+        let mut publication_tokens = plan_publication::random_tokens();
         let join = thread::spawn(move || {
             loop {
                 #[cfg(not(feature = "desktop_rebuild"))]
@@ -583,6 +590,15 @@ impl WriterOwner {
                     #[cfg(feature = "desktop_rebuild")]
                     Envelope::BuildGraph { command, reply } => {
                         reply.send(build_graph::execute(&mut connection, command, admission));
+                    }
+                    #[cfg(feature = "desktop_rebuild")]
+                    Envelope::Publication { command, reply } => {
+                        let _ = reply.send(plan_publication::execute(
+                            &mut connection,
+                            command,
+                            publication_tokens.as_mut(),
+                            admission,
+                        ));
                     }
                     #[cfg(feature = "desktop_rebuild")]
                     Envelope::RequiredUnits { command, reply } => {

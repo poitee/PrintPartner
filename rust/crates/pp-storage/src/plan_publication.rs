@@ -3,7 +3,9 @@ mod model;
 mod tests;
 
 use crate::{
-    manifest_text::DraftPart,
+    Envelope, Shared, WriterOwner, auth,
+    manifest_text::{DraftPart, JsText},
+    read_model::Credential,
     required_units::{
         self as ru,
         storage::{normalize_parts, num, one, part_rows, rows, text},
@@ -11,14 +13,195 @@ use crate::{
 };
 use anyhow::{Result, anyhow, ensure};
 use model::{Assignment, Prepared};
+pub use pp_contracts::publication::Outcome;
 use pp_contracts::{
     autosave::{ApplyPlanDraftReceipt, PositiveId},
-    publication::{ApplyRequest, Outcome, ReconciliationReason, UnmappableLink},
+    publication::{ApplyRequest, ReconciliationReason, UnmappableLink},
 };
-use rusqlite::{Transaction, params};
+use rusqlite::{Connection, Transaction, params};
 use serde_json::{Value, json};
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
+    time::{Duration, Instant},
+};
 
+pub(crate) fn validate_schema(connection: &Connection, version: u64) -> Result<()> {
+    let objects = |connection: &Connection| -> Result<Vec<(String, Option<String>)>> {
+        Ok(connection
+            .prepare(
+                "SELECT name,sql FROM sqlite_master WHERE name='plan_apply_admissions' OR name LIKE 'trg_plan_apply_admissions_%' ORDER BY name",
+            )?
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?)
+    };
+    let actual = objects(connection)?;
+    if version < 37 {
+        ensure!(actual.is_empty(), "Unexpected Plan Apply admission schema");
+        return Ok(());
+    }
+    let expected = Connection::open_in_memory()?;
+    expected.execute_batch(
+        "CREATE TABLE build_profiles(id INTEGER PRIMARY KEY,tenant_id TEXT NOT NULL);
+         CREATE TABLE plan_apply_requests(id INTEGER PRIMARY KEY,tenant_id TEXT NOT NULL,profile_id INTEGER NOT NULL);",
+    )?;
+    expected.execute_batch(include_str!("plan_publication/schema.sql"))?;
+    ensure!(
+        actual == objects(&expected)?,
+        "Plan Apply admission schema mismatch"
+    );
+    let orphans: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM plan_apply_admissions admission LEFT JOIN plan_apply_requests request ON request.id=admission.apply_request_id WHERE request.id IS NULL)",
+        [],
+        |row| row.get(0),
+    )?;
+    ensure!(!orphans, "Orphan Plan Apply admission");
+    Ok(())
+}
+
+struct RandomTokens;
+impl RequiredUnitTokenAllocator for RandomTokens {
+    fn allocate(&mut self) -> std::result::Result<[u8; 16], TokenAllocationFailure> {
+        let mut bytes = [0; 16];
+        getrandom::fill(&mut bytes).map_err(|_| TokenAllocationFailure)?;
+        Ok(bytes)
+    }
+}
+pub(crate) fn random_tokens() -> Box<dyn RequiredUnitTokenAllocator> {
+    Box::new(RandomTokens)
+}
+#[derive(Clone)]
+pub struct PublicationClient {
+    shared: Arc<Shared>,
+    policy: auth::AuthPolicy,
+}
+pub struct PublicationCommand {
+    profile: PositiveId,
+    draft: PositiveId,
+    admitted_request: ApplyRequest,
+    execution_request: ApplyRequest,
+    key: String,
+    credential: Credential,
+}
+impl PublicationCommand {
+    pub fn new(
+        profile: PositiveId,
+        draft: PositiveId,
+        request: ApplyRequest,
+        key: String,
+        credential: Credential,
+    ) -> Result<Self> {
+        let key = JsText::scalar(&key).trim_ecmascript();
+        ensure!(
+            !key.is_empty() && key.units().len() <= 160,
+            "Request is invalid"
+        );
+        let key = key
+            .as_scalar()
+            .ok_or_else(|| anyhow!("Request is invalid"))?;
+        Ok(Self {
+            profile,
+            draft,
+            admitted_request: request.clone(),
+            execution_request: request,
+            key,
+            credential,
+        })
+    }
+
+    pub fn normalized_http(
+        profile: PositiveId,
+        draft: PositiveId,
+        admitted_request: ApplyRequest,
+        execution_request: ApplyRequest,
+        key: String,
+        credential: Credential,
+    ) -> Result<Self> {
+        let mut command = Self::new(profile, draft, execution_request, key, credential)?;
+        command.admitted_request = admitted_request;
+        Ok(command)
+    }
+}
+pub(crate) struct Command {
+    input: PublicationCommand,
+    policy: auth::AuthPolicy,
+}
+impl WriterOwner {
+    pub fn publication(&self) -> PublicationClient {
+        PublicationClient {
+            shared: self.client.shared.clone(),
+            policy: auth::AuthPolicy {
+                registration: auth::RegistrationPolicy::Open,
+                session_tenant: auth::SessionTenantPolicy::AccountTenant,
+                first_user: auth::FirstUserTenant::NewUser,
+            },
+        }
+    }
+    pub fn publication_with_policy(&self, policy: auth::AuthPolicy) -> Result<PublicationClient> {
+        auth::validate_policy(policy)?;
+        Ok(PublicationClient {
+            shared: self.client.shared.clone(),
+            policy,
+        })
+    }
+}
+impl PublicationClient {
+    pub fn apply(
+        &self,
+        input: PublicationCommand,
+        cancelled: &AtomicBool,
+        wait: Duration,
+    ) -> Result<Outcome> {
+        use ru::AdmissionFailure;
+        let deadline = Instant::now() + wait;
+        let mut queue = self
+            .shared
+            .queue
+            .lock()
+            .map_err(|_| anyhow!(AdmissionFailure::Stopped))?;
+        loop {
+            ensure!(!queue.closed, AdmissionFailure::Stopped);
+            ensure!(
+                !cancelled.load(Ordering::Acquire),
+                AdmissionFailure::Cancelled
+            );
+            if queue.pending.len() < self.shared.capacity {
+                break;
+            }
+            ensure!(Instant::now() < deadline, AdmissionFailure::QueueFull);
+            queue = self
+                .shared
+                .changed
+                .wait_timeout(queue, Duration::from_millis(5))
+                .map_err(|_| anyhow!(AdmissionFailure::Stopped))?
+                .0;
+        }
+        let (reply, receiver) = mpsc::channel();
+        queue.pending.push_back(Envelope::Publication {
+            command: Command {
+                input,
+                policy: self.policy,
+            },
+            reply,
+        });
+        self.shared.changed.notify_all();
+        drop(queue);
+        receiver
+            .recv()
+            .map_err(|_| anyhow!(AdmissionFailure::OutcomeUnknown))?
+            .map_err(|error| {
+                if error.downcast_ref::<auth::AuthFailure>().is_some() {
+                    error
+                } else {
+                    anyhow!("Plan draft update failed")
+                }
+            })
+    }
+}
 fn projection(p: &DraftPart) -> Result<DraftPart> {
     let mut row = p.projected(ru::model::PART_FIELDS);
     let o = row.as_object_mut().ok_or_else(|| anyhow!("Invalid Part"))?;
@@ -397,8 +580,8 @@ fn write_remap(
 }
 
 pub(crate) struct AuthenticatedPublicationContext {
-    pub(crate) tenant: String,
-    pub(crate) actor: String,
+    tenant: String,
+    actor: String,
 }
 pub(crate) struct PublicationRequests<'a> {
     admitted: &'a ApplyRequest,
@@ -411,7 +594,7 @@ impl<'a> PublicationRequests<'a> {
             execution,
         }
     }
-    #[cfg_attr(not(test), expect(dead_code, reason = "GRE-612 PR 3 calls this"))]
+    #[cfg(test)]
     pub(crate) fn direct(request: &'a ApplyRequest) -> Self {
         Self::new(request, request)
     }
@@ -422,6 +605,43 @@ pub trait RequiredUnitTokenAllocator: Send {
 #[derive(Debug)]
 pub struct TokenAllocationFailure;
 
+impl AuthenticatedPublicationContext {
+    pub(crate) fn resolve(
+        tx: &Transaction<'_>,
+        credential: Credential,
+        policy: auth::AuthPolicy,
+    ) -> Result<Self> {
+        let (tenant, actor) =
+            auth::authority::queries::reconciliation_actor(tx, credential, policy)?;
+        Ok(Self { tenant, actor })
+    }
+}
+pub(crate) fn execute(
+    connection: &mut Connection,
+    command: Command,
+    tokens: &mut dyn RequiredUnitTokenAllocator,
+    admission: crate::writer_admission::Deadline,
+) -> Result<Outcome> {
+    let tx = crate::writer_admission::begin_immediate(connection, admission)?;
+    let c = command.input;
+    let context = AuthenticatedPublicationContext::resolve(&tx, c.credential, command.policy)?;
+    let result = publish_in_transaction(
+        &tx,
+        &context,
+        c.profile,
+        c.draft,
+        PublicationRequests::new(&c.admitted_request, &c.execution_request),
+        &c.key,
+        tokens,
+    )?;
+    if matches!(
+        result,
+        Outcome::Applied { .. } | Outcome::Existing { .. } | Outcome::AlreadyApplied { .. }
+    ) {
+        tx.commit()?
+    }
+    Ok(result)
+}
 fn request_digest(profile: i64, draft: i64, request: &ApplyRequest) -> String {
     ru::model::digest(
         &json!({"format":model::REQUEST_FORMAT,"profile_id":profile,"draft_id":draft,"expected_snapshot_digest":request.expected_snapshot_digest,"expected_lifecycle_version":request.expected_lifecycle_version,"expected_base_revision_id":request.expected_base.revision_id(),"expected_base_plan_version":request.expected_base.plan_version()}),
@@ -722,7 +942,6 @@ fn publish_inputs(
 }
 
 /// Mirrors Node AppRepository.applyPlanChanges inside the caller-owned transaction.
-#[cfg_attr(not(test), expect(dead_code, reason = "GRE-612 PR 3 calls this"))]
 pub(crate) fn publish_in_transaction(
     tx: &Transaction<'_>,
     context: &AuthenticatedPublicationContext,

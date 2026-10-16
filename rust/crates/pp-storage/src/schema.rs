@@ -9,6 +9,11 @@ use std::{
     time::Duration,
 };
 
+#[cfg(feature = "desktop_rebuild")]
+pub(crate) const CURRENT_VERSION: u64 = 37;
+#[cfg(not(feature = "desktop_rebuild"))]
+pub(crate) const CURRENT_VERSION: u64 = 35;
+
 pub(crate) const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Deserialize)]
@@ -187,14 +192,16 @@ pub(crate) fn preflight(
         }
     };
     ensure!(
-        version <= 35,
-        "Database schema version {version} is newer than supported version 35"
+        version <= CURRENT_VERSION,
+        "Database schema version {version} is newer than supported version {CURRENT_VERSION}"
     );
     ensure!(
         version == 0 || version >= 31,
         "Cannot upgrade database schema version {version}; install Print Partner v3.3.0 first"
     );
     crate::jobs::validate_schema(&conn, version)?;
+    #[cfg(feature = "desktop_rebuild")]
+    crate::plan_publication::validate_schema(&conn, version)?;
     Ok(version)
 }
 
@@ -373,10 +380,20 @@ pub(crate) fn initialize(
         }
         tx.commit()?;
     }
+    #[cfg(feature = "desktop_rebuild")]
+    {
+        if version < CURRENT_VERSION {
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            tx.execute_batch(include_str!("plan_publication/schema.sql"))?;
+            tx.execute("UPDATE app_settings SET value='37' WHERE tenant_id='default' AND key='schema_version'", [])?;
+            tx.commit()?;
+        }
+        crate::plan_publication::validate_schema(&conn, CURRENT_VERSION)?;
+    }
     Ok((
         conn,
         SchemaReady {
-            version: 35,
+            version: CURRENT_VERSION,
             previous_version: version,
             backup: backup_path,
         },
