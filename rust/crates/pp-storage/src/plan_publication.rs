@@ -168,13 +168,7 @@ fn production(tx: &Transaction<'_>, tenant: &str, profile: i64) -> Result<Produc
                 .as_array()
                 .ok_or_else(|| anyhow!("Invalid Checkoff units"))?
             {
-                let (part, _) = coordinate(unit)?;
-                ensure!(
-                    owners
-                        .get(&part)
-                        .is_none_or(|owner| Some(*owner) == row["profile_id"].as_i64()),
-                    "Checkoff coordinate ownership mismatch"
-                );
+                coordinate(unit)?;
             }
             if row["profile_id"] == profile && ["watching", "awaiting_verify"].contains(&state) {
                 link_count += 1;
@@ -291,6 +285,10 @@ fn remap(
                                 .and_then(|id| production.owners.get(&id))
                                 .copied()
                                 == Some(profile)
+                        }) || !u.iter().any(|u| {
+                            u["part_id"]
+                                .as_i64()
+                                .is_some_and(|id| production.owners.contains_key(&id))
                         })
                     }));
             if related {

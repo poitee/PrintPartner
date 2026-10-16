@@ -314,7 +314,12 @@ fn settings(tx: &Transaction<'_>, links: &Value, queue: &Value) {
 #[test]
 fn remapped_settings_match_literal_node_results() {
     let cases = golden();
-    for case in cases["remap"].as_array().unwrap() {
+    for case in cases["remap"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|case| case["expected"]["kind"] != "unsafe")
+    {
         let mut connection = database();
         let tx = connection.transaction().unwrap();
         settings(&tx, &case["input"]["links"], &case["input"]["queue"]);
@@ -350,6 +355,59 @@ fn remapped_settings_match_literal_node_results() {
             );
             assert!(setting(&tx, "other", key).unwrap().is_none());
         }
+    }
+}
+
+#[test]
+fn ownerless_queue_with_deleted_parts_is_unmappable_like_node() {
+    let cases = golden();
+    let case = cases["remap"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["id"] == "ownerless-queue-deleted-part")
+        .unwrap();
+    assert_eq!(case["expected"]["kind"], "unsafe");
+    assert_eq!(
+        case["expected"]["unmappable"][0]["reason"],
+        "Checked-off part id 500 no longer exists in this Plan's parts"
+    );
+    let mut connection = database();
+    let tx = connection.transaction().unwrap();
+    settings(&tx, &case["input"]["links"], &case["input"]["queue"]);
+    let state = production(&tx, "tenant", 1).unwrap();
+    assert_eq!((state.link_count, state.queue_count), (0, 0));
+    let prepared = prepared(&cases["prepare"][2]).unwrap();
+    let Remap::Unmappable(missing) = remap(&state, 1, &HashMap::new(), &prepared).unwrap() else {
+        panic!("expected unmappable deleted queue part")
+    };
+    assert_eq!(missing.len(), 1);
+    let actual = serde_json::to_value(&missing[0]).unwrap();
+    for field in ["linkId", "filename"] {
+        assert_eq!(actual[field], case["expected"]["unmappable"][0][field]);
+    }
+    assert_eq!(
+        actual["reason"],
+        "Required unit at Part 500 index 0 is absent or excluded in the selected Plan"
+    );
+}
+
+#[test]
+fn production_accepts_checkoff_coordinates_owned_by_another_profile_like_node() {
+    for case in golden()["production"].as_array().unwrap() {
+        assert_eq!(
+            case["input"]["parts"],
+            json!([{ "id": 99, "profileId": 2 }])
+        );
+        let mut connection = database();
+        let tx = connection.transaction().unwrap();
+        settings(&tx, &case["input"]["links"], &case["input"]["queue"]);
+        let state = production(&tx, "tenant", 1).unwrap();
+        assert_eq!(
+            json!({ "checkoffLinkCount": state.link_count, "sendQueueItemCount": state.queue_count }),
+            case["expected"]["value"]
+        );
+        assert_eq!((state.link_count, state.queue_count), (1, 0));
     }
 }
 
@@ -411,11 +469,6 @@ fn production_rejects_corrupt_settings_coordinates_and_owners() {
             "printer.checkoff_links",
             r#"[{"profile_id":1,"state":"watching","units":[{"part_id":0,"unit_index":0}]}]"#,
             "Invalid production coordinate",
-        ),
-        (
-            "printer.checkoff_links",
-            r#"[{"profile_id":1,"state":"watching","units":[{"part_id":99,"unit_index":0}]}]"#,
-            "Checkoff coordinate ownership mismatch",
         ),
         (
             "printer.send_queue",

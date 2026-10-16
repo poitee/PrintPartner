@@ -840,12 +840,16 @@ The fixture header records the generating Node version. The generator imports
 `preparePlanPublication`, `digestPlanRevisionParts`, `assessCheckoffRemap`, and
 `requiredUnitObjectName`. It extracts and executes the repository's inline
 accepted revision check, `projectionPlanningFieldsMatch`, and private
-`applyCheckoffRemap` method with row and setting adapters. It does not copy their
-implementations. Later slices can add cases to the same generator.
+`applyCheckoffRemap` and `strictProductionState` methods with row and setting
+adapters. It does not copy their implementations. Later slices can add cases to
+the same generator.
 
 Rust tests compare literal digests, progress, assignment coordinates, object
 names, remap mappings, and persisted settings. Shared projection cases compare
-acceptance and rejection. Node's exact error messages are retained in the
+acceptance and rejection. Production validation accepts Checkoff coordinates
+owned by another profile, matching Node. Remapping treats an ownerless queue item
+as related when any part belongs to the profile or no referenced parts still exist,
+even when its state is `done`. Node's exact error messages are retained in the
 fixture; tests separately assert the Rust reference's more specific diagnostics.
 Node's inline projection check has no progress-validation counterpart, and its
 match-key remap cannot represent token identity, excluded targets, resolved-only

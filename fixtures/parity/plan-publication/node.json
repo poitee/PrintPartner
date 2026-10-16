@@ -35,7 +35,11 @@
   "remap": [
     {"id":"links-queue-resolved","input":{"links":[{"id":"link","profile_id":1,"state":"watching","filename":"bracket.stl","units":[{"part_id":11,"unit_index":0},{"part_id":11,"unit_index":1}],"resolved_units":[{"part_id":11,"unit_index":0,"result":"printed"}]}],"queue":[{"id":"queue","profile_id":null,"state":"error","checkoff_units":[{"part_id":11,"unit_index":1}]}]},"expected":{"mapping":[[[11,0],[21,0]],[[11,1],[21,1]]],"settings":{"printer.checkoff_links":[{"id":"link","profile_id":1,"state":"watching","filename":"bracket.stl","units":[{"part_id":31,"unit_index":0},{"part_id":31,"unit_index":1}],"resolved_units":[{"part_id":31,"unit_index":0,"result":"printed"}]}],"printer.send_queue":[{"id":"queue","profile_id":null,"state":"error","checkoff_units":[{"part_id":31,"unit_index":1}]}]}}},
     {"id":"other-profile","input":{"links":[{"id":"other","profile_id":2,"state":"applied","units":[{"part_id":99,"unit_index":0}]}],"queue":[{"profile_id":2,"state":"done","checkoff_units":[{"part_id":99,"unit_index":0}]}]},"expected":{"mapping":[],"settings":{"printer.checkoff_links":[{"id":"other","profile_id":2,"state":"applied","units":[{"part_id":99,"unit_index":0}]}],"printer.send_queue":[{"profile_id":2,"state":"done","checkoff_units":[{"part_id":99,"unit_index":0}]}]}}},
-    {"id":"empty","input":{"links":[],"queue":[]},"expected":{"mapping":[],"settings":{"printer.checkoff_links":[],"printer.send_queue":[]}}}
+    {"id":"empty","input":{"links":[],"queue":[]},"expected":{"mapping":[],"settings":{"printer.checkoff_links":[],"printer.send_queue":[]}}},
+    {"id":"ownerless-queue-deleted-part","input":{"links":[],"queue":[{"id":"q","profile_id":null,"state":"done","checkoff_units":[{"part_id":500,"unit_index":0}]}]},"expected":{"kind":"unsafe","unmappable":[{"linkId":"q","filename":"unknown file","reason":"Checked-off part id 500 no longer exists in this Plan's parts"}]}}
+  ],
+  "production": [
+    {"id":"checkoff-other-profile-coordinate","input":{"parts":[{"id":99,"profileId":2}],"links":[{"profile_id":1,"state":"watching","units":[{"part_id":99,"unit_index":0}]}],"queue":[]},"expected":{"value":{"checkoffLinkCount":1,"sendQueueItemCount":0}}}
   ],
   "objects": [
     {"filename":"dir/支架😀.STL","token":"ppu_00000000000000000000000000000001","expected":"______ppu_00000000000000000000000000000001"},
