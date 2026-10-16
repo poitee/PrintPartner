@@ -660,18 +660,22 @@ impl Document {
         })
     }
     pub fn text(&self, id: usize, budget: &mut PreparationBudget<'_>) -> ReadResult<JsText> {
-        self.stringify(id, budget, 0, false)
+        self.stringify(id, budget, &mut Vec::new())
     }
-    fn stringify(
-        &self,
+    /// `active` holds the sequences being joined on the current path. Like
+    /// JavaScript's `Array.prototype.join`, a sequence already in it contributes
+    /// an empty string instead of recursing.
+    fn stringify<'a>(
+        &'a self,
         id: usize,
         budget: &mut PreparationBudget<'_>,
-        depth: usize,
-        array: bool,
+        active: &mut Vec<&'a Node>,
     ) -> ReadResult<JsText> {
+        let depth = active.len();
         budget.visit(depth)?;
-        let text = match self.node(id, budget)? {
-            Node::Null => JsText::scalar(if array { "" } else { "null" }),
+        let node = self.node(id, budget)?;
+        let text = match node {
+            Node::Null => JsText::scalar(if depth > 0 { "" } else { "null" }),
             Node::Bool(b) => JsText::scalar(&b.to_string()),
             Node::Number(n) => JsText::scalar(&number_text(*n)),
             Node::String(s) => {
@@ -680,14 +684,18 @@ impl Document {
                 return Ok(s.clone());
             }
             Node::Mapping(_) => JsText::scalar("[object Object]"),
+            Node::Sequence(_) if active.iter().any(|n| std::ptr::eq(*n, node)) => {
+                JsText::scalar("")
+            }
             Node::Sequence(v) => {
+                active.push(node);
                 let mut out = Vec::new();
                 for (i, n) in v.iter().enumerate() {
                     if i > 0 {
                         budget.expansion(2)?;
                         out.push(u16::from(b','))
                     }
-                    let s = self.stringify(*n, budget, depth + 1, true)?;
+                    let s = self.stringify(*n, budget, active)?;
                     if (out.len() + s.units().len()) * 2 > 1024 * 1024 {
                         return Err(ReadFailure::LimitExceeded(
                             super::observation::Resource::DocumentBytes,
@@ -696,6 +704,7 @@ impl Document {
                     budget.expansion(s.units().len() * 2)?;
                     out.extend_from_slice(s.units());
                 }
+                active.pop();
                 return Ok(JsText::from_units(out));
             }
             Node::Alias(_) => unreachable!(),
