@@ -14,6 +14,9 @@ import {
 } from "./manifest-selections.js";
 import { findSourceManifestPath } from "./source-workspace.js";
 import { isRecord } from "../lib/guards.js";
+import { isCommunityManifestSlug } from "../lib/community-manifest-slug.js";
+import { resolvedFileUnderRoot } from "../lib/secure-path.js";
+import { getLogger } from "./logger.js";
 
 export function matchKeyMatches(pattern: string, matchKey: string): boolean {
   const pat = pattern.replace(/\\/g, "/").toLowerCase().trim();
@@ -407,9 +410,15 @@ export function applyOptionGroupSelections<
 }
 
 function loadCommunityManifest(slug: string): ManifestDoc | null {
+  if (!isCommunityManifestSlug(slug)) {
+    getLogger().log("warn", "Ignoring invalid stored community manifest slug", { slug });
+    return null;
+  }
   const dir = join(dirname(fileURLToPath(import.meta.url)), "../data/manifests");
+  const path = resolvedFileUnderRoot(dir, join(dir, `${slug}.yaml`));
+  if (!path) return null;
   try {
-    return loadManifestYaml(readFileSync(join(dir, `${slug}.yaml`), "utf8"));
+    return loadManifestYaml(readFileSync(path, "utf8"));
   } catch {
     return null;
   }

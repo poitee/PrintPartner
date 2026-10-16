@@ -10,6 +10,7 @@ import {
 } from "../services/accepted-operational-export.js";
 import { buildKitBundleData } from "../services/export-kit.js";
 import { getLogger } from "../services/logger.js";
+import { InvalidCommunityManifestSlugError } from "../lib/community-manifest-slug.js";
 
 export function registerShareRoutes(
   app: FastifyInstance,
@@ -128,7 +129,15 @@ export function registerShareRoutes(
     } catch {
       return reply.status(500).send({ detail: "Invalid share bundle" });
     }
-    const result = repo.importKitBundle(data, body.new_name ?? null);
+    let result: ReturnType<AppRepository["importKitBundle"]>;
+    try {
+      result = repo.importKitBundle(data, body.new_name ?? null);
+    } catch (error) {
+      if (error instanceof InvalidCommunityManifestSlugError) {
+        return reply.status(400).send({ detail: error.message });
+      }
+      throw error;
+    }
     authStore.markShareAccepted(share.id);
     return result;
   });
