@@ -306,6 +306,46 @@ read and write mutants against both test files. It copies the Rust workspace
 and builds in its own temporary target directory, so it never changes
 `rust/target`.
 
+### D12 preparation prerequisites
+
+GRE-607 adds the remaining manifest helpers and the accepted-base reuse check
+behind `desktop_rebuild`. `optional_document` ignores missing, skipped, and
+invalid optional manifests. `kit` projects stored kit selections through the
+existing `KitManifest` parser. Both propagate preparation budget and cancellation
+failures. `apply` preserves Node's document order, project filtering, selection
+defaults, explicit group membership, group bounds, and exclusion precedence.
+It accepts the shared `PreparationBudget` and accounts for each Part and pattern
+comparison. Kit JSON passes through the budgeted document reader before the
+stored-kit parser, so UTF-16 selection text uses the existing codec.
+
+`read_model::reusable_draft_base` checks current freshness before validating the
+complete accepted snapshot with the existing bounded readers. It propagates
+integrity errors and checks preparation cancellation around those reads.
+`catalog::naming::get` is crate-visible for the next preparation port's
+transactional effective naming profile and digest. Its behavior is unchanged.
+These helpers have no runtime caller yet. Preparation and recompute remain
+separate GRE-607 slices.
+
+The committed Node generator covers manifest application, optional documents,
+stored kit selections, freshness, and accepted-base integrity. Regenerate its
+literal outputs twice and compare them before replacing the fixture:
+
+```sh
+node --import ./web/node_modules/tsx/dist/loader.mjs --conditions=development \
+  rust/crates/pp-storage/tests/fixtures/preparation-prereqs-node.mjs web/apps/server \
+  > rust/target/preparation-first.jsonl
+node --import ./web/node_modules/tsx/dist/loader.mjs --conditions=development \
+  rust/crates/pp-storage/tests/fixtures/preparation-prereqs-node.mjs web/apps/server \
+  > rust/target/preparation-second.jsonl
+cmp rust/target/preparation-first.jsonl rust/target/preparation-second.jsonl
+cmp rust/target/preparation-first.jsonl rust/crates/pp-storage/tests/fixtures/preparation-prereqs-node.jsonl
+cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib -E 'test(preparation_tests)' --test-threads=2
+python3 rust/crates/pp-storage/tests/fixtures/mutate-preparation-prereqs.py
+```
+
+The mutation runner copies the workspace and uses a separate `CARGO_TARGET_DIR`.
+It requires a passing baseline and counts only executed test failures as kills.
+
 ### D4 media reconciliation
 
 GRE-599 reconciles media already shipped in #131. The `pp-source` media library, the `pp-source-media` CLI, and all unconditional #131 exports remain available in the default build. This slice adds a historical audit and documentation. It adds no feature behavior, host, runtime API, or dependency.
@@ -527,6 +567,36 @@ API keys. Receipts retain credential digests, tenant, subject and authentication
 policy, and revalidation rejects changed policy or revoked credentials. Physical
 owner admission checks the storage identity. These internal APIs compile behind
 the feature; D15/D16 will wire them into jobs. The current job engine is unchanged.
+
+### D15 jobs model and subscriptions
+
+GRE-611 adds the reference job model behind `desktop_rebuild`. `CompletedResult` holds
+each job kind's public result. A job document can carry `public_result`, and a checklist
+export effect can carry a completion claim. Decoding checks each claim against the
+payload, effect intent, tenant binding, accepted Plan basis and, once the job succeeds,
+its confirmed receipt and public result. Empty fields are omitted, so existing documents
+encode unchanged. Two deliberate differences from the reference follow Node: basis
+identifiers must be positive safe integers, and the `extract-source-docs` result stores
+an error count.
+
+The job stream registry starts each stream with its job's snapshot and queues newer
+committed versions for the same tenant and job. A stream closes when the job finishes,
+its 16-frame mailbox overflows, its credential expires or is revoked, or the owner stops.
+At most 128 streams are live. Nothing calls the registry yet: the engine, the auth
+revalidation calls and the snapshot changes that expose `public_result` belong to
+GRE-609 (D16).
+
+`fixtures/parity/jobs-model/generate.mjs` records Node's parsed accepted-plate and
+direct-3mf results and its verdict on accepted-basis seals. Node builds its other job
+results inside `InProcessJobRunner`, which built-in type stripping cannot load, so Rust
+tests check those shapes as literals. The generator imports zod:
+
+```sh
+npm --prefix web ci --ignore-scripts
+node fixtures/parity/jobs-model/generate.mjs --check
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib jobs::
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test jobs_model_parity
+```
 
 ## D9 build graph receipt
 

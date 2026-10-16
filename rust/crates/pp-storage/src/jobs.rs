@@ -1,5 +1,11 @@
+#[cfg(feature = "desktop_rebuild")]
+mod checklist;
 mod filename;
 mod model;
+#[cfg(feature = "desktop_rebuild")]
+mod results;
+#[cfg(feature = "desktop_rebuild")]
+mod subscriptions;
 use crate::{
     Envelope, SettingsClient, WriterOwner,
     auth::{self, AuthPolicy, Secret},
@@ -7,6 +13,8 @@ use crate::{
 use anyhow::{Result, anyhow, ensure};
 pub use filename::*;
 pub use model::*;
+#[cfg(feature = "desktop_rebuild")]
+pub use results::*;
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 use std::{
@@ -16,6 +24,10 @@ use std::{
         mpsc,
     },
     time::{Duration, Instant},
+};
+#[cfg(feature = "desktop_rebuild")]
+pub use subscriptions::{
+    FrameAdmission, JobSubscription, NonblockingSend, PreparedEvent, PreparedFrame, StreamClose,
 };
 
 #[derive(Clone, Copy)]
@@ -204,6 +216,26 @@ impl std::fmt::Display for JobFailure {
     }
 }
 impl std::error::Error for JobFailure {}
+#[cfg(feature = "desktop_rebuild")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JobAccessFailure {
+    NotFound,
+    InternalOnly,
+    Capacity,
+    Stopped,
+}
+#[cfg(feature = "desktop_rebuild")]
+impl std::fmt::Display for JobAccessFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::NotFound | Self::InternalOnly => "Job not found",
+            Self::Capacity => "Job stream capacity reached",
+            Self::Stopped => "Jobs owner stopped",
+        })
+    }
+}
+#[cfg(feature = "desktop_rebuild")]
+impl std::error::Error for JobAccessFailure {}
 pub struct PendingClaim(Pending);
 impl PendingClaim {
     pub fn receive(self) -> Result<Option<(JobRecord, AttemptLease)>> {
@@ -817,6 +849,8 @@ fn user(
                 progress: None,
                 effects: vec![],
                 result: None,
+                #[cfg(feature = "desktop_rebuild")]
+                public_result: None,
                 recovery: None,
                 fence: None,
                 worker: None,
@@ -1451,6 +1485,8 @@ fn advance(
                 confirmed: false,
                 no_effect: false,
                 receipt: None,
+                #[cfg(feature = "desktop_rebuild")]
+                checklist_completion: None,
             });
             job.state = PersistentState::EffectAdmitted;
             "effect_intent"
@@ -1758,6 +1794,8 @@ mod tests {
             progress: None,
             effects: vec![],
             result: None,
+            #[cfg(feature = "desktop_rebuild")]
+            public_result: None,
             recovery: Some(String::new()),
             fence: None,
             worker: None,
