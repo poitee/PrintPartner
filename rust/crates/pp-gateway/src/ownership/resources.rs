@@ -29,6 +29,8 @@ pub enum FileFamily {
     SourceWorkspace,
     SourceCovers,
     KitCatalog,
+    PathHints,
+    CommunityManifests,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -81,6 +83,8 @@ enum ReviewedEntry {
     GetKitCatalog { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_snapshot")]
     GetPlanSnapshot { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_plan_option_groups")]
+    GetPlanOptionGroups { resources: Vec<ResourceId> },
     #[serde(rename = "tool.ui_open_source")]
     UiOpenSource { resources: Vec<ResourceId> },
     #[serde(rename = "tool.analyze_stl_mesh")]
@@ -185,6 +189,19 @@ impl ReviewedEntry {
                 "tool.get_kit_catalog",
                 resources,
                 BTreeSet::from([File(FileFamily::KitCatalog)]),
+            ),
+            Self::GetPlanOptionGroups { resources } => (
+                "tool.get_plan_option_groups",
+                resources,
+                BTreeSet::from([
+                    Table(BuildProfiles),
+                    Table(ProfileLayers),
+                    Table(Projects),
+                    Table(AppSettings),
+                    File(FileFamily::SourceWorkspace),
+                    File(FileFamily::PathHints),
+                    File(FileFamily::CommunityManifests),
+                ]),
             ),
             Self::GetPlanSnapshot { resources } => (
                 "tool.get_plan_snapshot",
@@ -373,6 +390,7 @@ impl Declarations {
             "tool.list_plan_snapshots",
             "tool.get_plan_snapshot",
             "tool.get_kit_catalog",
+            "tool.get_plan_option_groups",
             "tool.ui_highlight_part",
             "tool.ui_focus_stl_search",
             "tool.ui_navigate",

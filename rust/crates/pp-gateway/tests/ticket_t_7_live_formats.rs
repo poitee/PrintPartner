@@ -65,8 +65,17 @@ fn declared_versions_match_the_node_and_rust_sources() {
         include_str!("../../pp-source/src/lib.rs"),
         "manifest.version != ",
     );
+    let node_path_hints = number_after(
+        include_str!("../../../../web/apps/server/src/services/path-hints.ts"),
+        "document.version !== ",
+    );
+    let node_manifest = number_after(
+        include_str!("../../../../web/apps/server/src/services/plan-manifest-builder.ts"),
+        "format: print-partner-manifest-v",
+    );
     assert_eq!((node_schema, rust_schema), (34, 35));
     assert_eq!((node_snapshot, rust_snapshot), (1, 1));
+    assert_eq!((node_path_hints, node_manifest), (1, 2));
     assert_eq!(
         formats,
         &json!({
@@ -74,6 +83,8 @@ fn declared_versions_match_the_node_and_rust_sources() {
             "source-revision-workspace": {"node_reads": node_snapshot, "rust_writes": rust_snapshot},
             "source-covers": {"node_reads": 1, "rust_writes": null},
             "kit-catalog": {"node_reads": 1, "rust_writes": null},
+            "path-hints": {"node_reads": node_path_hints, "rust_writes": null},
+            "community-manifests": {"node_reads": node_manifest, "rust_writes": null},
         })
     );
 }

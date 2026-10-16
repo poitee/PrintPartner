@@ -14,6 +14,8 @@ pub enum LiveFormatId {
     SourceRevisionWorkspace,
     SourceCovers,
     KitCatalog,
+    PathHints,
+    CommunityManifests,
 }
 
 impl LiveFormatId {
@@ -23,6 +25,8 @@ impl LiveFormatId {
             Self::SourceRevisionWorkspace => "source-revision-workspace",
             Self::SourceCovers => "source-covers",
             Self::KitCatalog => "kit-catalog",
+            Self::PathHints => "path-hints",
+            Self::CommunityManifests => "community-manifests",
         }
     }
 }
@@ -35,6 +39,8 @@ impl ResourceId {
             Self::File(FileFamily::SourceWorkspace) => LiveFormatId::SourceRevisionWorkspace,
             Self::File(FileFamily::SourceCovers) => LiveFormatId::SourceCovers,
             Self::File(FileFamily::KitCatalog) => LiveFormatId::KitCatalog,
+            Self::File(FileFamily::PathHints) => LiveFormatId::PathHints,
+            Self::File(FileFamily::CommunityManifests) => LiveFormatId::CommunityManifests,
         }
     }
 }
@@ -67,6 +73,10 @@ pub(super) struct LiveFormats {
     source_covers: LiveFormat,
     #[serde(rename = "kit-catalog")]
     kit_catalog: LiveFormat,
+    #[serde(rename = "path-hints")]
+    path_hints: LiveFormat,
+    #[serde(rename = "community-manifests")]
+    community_manifests: LiveFormat,
 }
 
 impl LiveFormats {
@@ -76,6 +86,8 @@ impl LiveFormats {
             LiveFormatId::SourceRevisionWorkspace => self.source_revision_workspace,
             LiveFormatId::SourceCovers => self.source_covers,
             LiveFormatId::KitCatalog => self.kit_catalog,
+            LiveFormatId::PathHints => self.path_hints,
+            LiveFormatId::CommunityManifests => self.community_manifests,
         }
     }
 
@@ -85,6 +97,8 @@ impl LiveFormats {
             LiveFormatId::SourceRevisionWorkspace,
             LiveFormatId::SourceCovers,
             LiveFormatId::KitCatalog,
+            LiveFormatId::PathHints,
+            LiveFormatId::CommunityManifests,
         ] {
             let format = self.get(id);
             if format.node_reads == 0 || format.rust_writes == Some(0) {

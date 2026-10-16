@@ -608,6 +608,39 @@
             "name": "kit-catalog"
           }
         ]
+      },
+      {
+        "operation": "tool.get_plan_option_groups",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "build_profiles"
+          },
+          {
+            "kind": "table",
+            "name": "profile_layers"
+          },
+          {
+            "kind": "table",
+            "name": "projects"
+          },
+          {
+            "kind": "table",
+            "name": "app_settings"
+          },
+          {
+            "kind": "file",
+            "name": "source-workspace"
+          },
+          {
+            "kind": "file",
+            "name": "path-hints"
+          },
+          {
+            "kind": "file",
+            "name": "community-manifests"
+          }
+        ]
       }
     ],
     "unresolved": [
@@ -984,7 +1017,6 @@
       "tool.get_interaction_graph",
       "tool.get_plan_checkoff",
       "tool.get_plan_draft",
-      "tool.get_plan_option_groups",
       "tool.get_plan_review",
       "tool.get_print_stats",
       "tool.get_printer_checkoff",
@@ -1048,6 +1080,14 @@
     },
     "kit-catalog": {
       "node_reads": 1,
+      "rust_writes": null
+    },
+    "path-hints": {
+      "node_reads": 1,
+      "rust_writes": null
+    },
+    "community-manifests": {
+      "node_reads": 2,
       "rust_writes": null
     }
   }

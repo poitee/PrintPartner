@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { eq } from "drizzle-orm";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -55,7 +56,7 @@ const TABLES = ["table:app_settings", "table:projects", "table:source_docs"];
 const FILE_RESOURCES = ["file:source-workspace", "table:projects", "table:source_docs"];
 const manifest = z.object({ resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -2023,4 +2024,253 @@ it("traces get_kit_catalog real catalogs, fallbacks and tenant independence with
   });
   observer.state.files.push({ api: "readFileSync", args: [join(root, "README.md"), "utf8"] });
   expect(() => kitCatalogResources([...candidates, ...shipped])).toThrow();
+});
+
+const OPTION_GROUP_TABLES = ["table:app_settings", "table:build_profiles", "table:profile_layers", "table:projects"];
+const OPTION_GROUP_UNION = ["file:community-manifests", "file:path-hints", "file:source-workspace", ...OPTION_GROUP_TABLES];
+const SHIPPED_PATH_HINTS = fileURLToPath(new URL("../data/path-hints.yaml", import.meta.url));
+const COMMUNITY_MANIFEST = fileURLToPath(new URL("../data/manifests/registry-index.yaml", import.meta.url));
+type FileCall = [string, ...unknown[]];
+
+function optionGroupSelect(statement: unknown, tenantId: string, planId?: number): string {
+  const sql = z.string().parse(statement);
+  if (planId !== undefined) {
+    if (sql === `select "id" from "build_profiles" where ("build_profiles"."tenant_id" = '${tenantId}' and "build_profiles"."id" = ${planId}.0)`) return "table:build_profiles";
+    if (sql === `select "id", "tenant_id", "profile_id", "layer_order", "layer_type", "project_id" from "profile_layers" where "profile_layers"."profile_id" = ${planId}.0 order by "profile_layers"."layer_order" asc`) return "table:profile_layers";
+  }
+  return tableForObservedSelect(sql, tenantId);
+}
+
+async function traceOptionGroups({ input = {}, repository = repo, tenantId = "default", activePlanId, planId, tables, files = [], hintDir = dataDir }: {
+  input?: Record<string, unknown>; repository?: AppRepository; tenantId?: string; activePlanId?: number;
+  planId?: number; tables: string[]; files?: FileCall[]; hintDir?: string | null;
+}) {
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+  try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("get_plan_option_groups", input, { repo: repository, activePlanId, dataDir: hintDir })); }
+  finally { observer.state.active = false; }
+  const observed = [...new Set(statements.map((sql) => optionGroupSelect(sql, tenantId, planId)))].sort();
+  expect(observed).toEqual(tables);
+  expect(observer.state.files.map(({ api, args }) => [api, ...args])).toEqual(files);
+  const union = unions.get("get_plan_option_groups") ?? new Set<string>();
+  for (const resource of observed) union.add(resource);
+  for (const [, path] of files) {
+    union.add(path === COMMUNITY_MANIFEST ? "file:community-manifests"
+      : path === SHIPPED_PATH_HINTS || path === join(dataDir, "path-hints.yaml") ? "file:path-hints" : "file:source-workspace");
+  }
+  unions.set("get_plan_option_groups", union);
+  return z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
+}
+
+function optionGroupCheckout(name: string, revision = false) {
+  const source = repo.createSource({ name, source_kind: "local" });
+  const workspace = join(dataDir, "repos", String(source.id));
+  const checkout = revision ? join(workspace, "revisions", "a") : workspace;
+  fs.mkdirSync(checkout, { recursive: true });
+  execFileSync("git", ["init", "--quiet", "--separate-git-dir", join(dataDir, `${name}-git`), checkout]);
+  sqlite.prepare("UPDATE projects SET local_path = ?, imported_paths = ? WHERE id = ?").run(checkout, JSON.stringify(["chosen.stl"]), source.id);
+  fs.writeFileSync(join(checkout, "chosen.stl"), "solid fixture\nendsolid fixture\n");
+  fs.writeFileSync(join(checkout, "ignored.stl"), "solid ignored\nendsolid ignored\n");
+  fs.writeFileSync(join(checkout, "import-rules.json"), '["ignored.stl"]');
+  fs.writeFileSync(join(checkout, "print-partner.manifest.yaml"), `format: print-partner-manifest-v2
+version: 2
+option_groups:
+  fixture_mode:
+    rule: pick_one
+    label: Mode
+    variants:
+      - id: chosen
+        parts: [chosen.stl]
+      - id: ignored
+        parts: [ignored.stl]
+`);
+  execFileSync("git", ["-C", checkout, "add", "."]);
+  execFileSync("git", ["-C", checkout, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "Source fixture"]);
+  if (revision) {
+    const recorded = repo.recordSourceRevision({ sourceId: source.id, upstreamRevisionKey: "a", manifestDigest: "a".repeat(64), snapshotLocator: `${source.id}/revisions/a`, syncedAt: "2026-01-01", completeness: "complete" });
+    sqlite.prepare("UPDATE projects SET current_source_revision_id = ? WHERE id = ?").run(recorded.id, source.id);
+  }
+  return { id: source.id, workspace, checkout, name };
+}
+
+function optionGroupManifestCalls(checkout: string): FileCall[] {
+  const path = join(checkout, "print-partner.manifest.yaml");
+  return [["realpathSync", checkout], ["realpathSync", path], ["statSync", path], ["readFileSync", path, "utf8"]];
+}
+function optionGroupScanCalls(checkout: string, entries = [".git", "chosen.stl", "ignored.stl", "import-rules.json", "print-partner.manifest.yaml"]): FileCall[] {
+  return [["lstatSync", checkout], ["readdirSync", checkout], ...entries.map((entry): FileCall => ["lstatSync", join(checkout, entry)])];
+}
+function optionGroupPathProbes(source: ReturnType<typeof optionGroupCheckout>, isolated: boolean): FileCall[] {
+  return isolated ? [["realpathSync", join(dataDir, "repos")], ["lstatSync", source.workspace], ["realpathSync", source.workspace], ["realpathSync", source.checkout], ["statSync", source.checkout]] : [];
+}
+function optionGroupHintCalls(custom = true): FileCall[] {
+  return [["readFileSync", SHIPPED_PATH_HINTS, "utf8"], ...(custom ? [["existsSync", join(dataDir, "path-hints.yaml")], ["readFileSync", join(dataDir, "path-hints.yaml"), "utf8"]] satisfies FileCall[] : [])];
+}
+function assertOptionGroupDeclaration() {
+  expect([...unions.get("get_plan_option_groups") ?? []].sort()).toEqual(OPTION_GROUP_UNION);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.get_plan_option_groups");
+  if (!entry || entry.operation === "source.sync") throw new Error("Missing get_plan_option_groups declaration");
+  expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(OPTION_GROUP_UNION);
+}
+
+for (const isolated of [false, true]) {
+  it(`traces get_plan_option_groups selectors, checkouts, rules and tenants under ${isolated ? "isolated" : "trusted"} policy`, async () => {
+    const declared = optionGroupCheckout("Declared");
+    const inferred = optionGroupCheckout("Inferred", true);
+    fs.writeFileSync(join(inferred.checkout, "print-partner.manifest.yaml"), "format: print-partner-manifest-v2\nversion: 2\n");
+    fs.writeFileSync(join(dataDir, "path-hints.yaml"), "version: 1\nrules:\n  - path: chosen.stl\n    option_group: fixture_hint\n    variant_id: custom\n    label: Custom\n");
+    sqlite.prepare("UPDATE projects SET manifest_community_slug = ? WHERE id = ?").run("registry-index", inferred.id);
+    const plan = repo.createProfile("Options", declared.id);
+    repo.addAddonLayer(plan.id, inferred.id);
+    const empty = repo.createProfile("Empty");
+    const foreign = tenantStorage.run("other", () => repo.createProfile("Foreign"));
+    repo.setSetting(`kit_manifest_${plan.id}`, JSON.stringify({ selections: { fixture_mode: "chosen" } }));
+    tenantStorage.run("other", () => repo.setSetting(`kit_manifest_${plan.id}`, JSON.stringify({ selections: { fixture_mode: "hidden" } })));
+    const repository = isolated ? new AppRepository(drizzle(sqlite, { schema }), undefined, join(dataDir, "repos"), schema, { sourceFilesystemPolicy: ISOLATED_SOURCE_FILESYSTEM }) : repo;
+    const declaredProbes = optionGroupPathProbes(declared, isolated);
+    const inferredProbes = optionGroupPathProbes(inferred, isolated);
+    const files = [...declaredProbes, ...inferredProbes,
+      ...declaredProbes, ...optionGroupManifestCalls(declared.checkout), ...optionGroupScanCalls(declared.checkout),
+      ...inferredProbes, ...optionGroupManifestCalls(inferred.checkout), ...optionGroupScanCalls(inferred.checkout), ...optionGroupHintCalls(),
+      ...declaredProbes, ...inferredProbes,
+      ...declaredProbes, ...optionGroupManifestCalls(declared.checkout),
+      ...inferredProbes, ...optionGroupManifestCalls(inferred.checkout), ["readFileSync", COMMUNITY_MANIFEST, "utf8"] satisfies FileCall];
+    const output = { plan_id: plan.id, selections: { fixture_mode: "chosen" }, option_groups: {
+      fixture_mode: { rule: "pick_one", label: "Mode", parts: [], min: null, max: null, variants: [
+        { id: "chosen", label: null, parts: ["chosen.stl"], excludes: [], source_id: declared.id, source_name: "Declared" },
+        { id: "ignored", label: null, parts: ["ignored.stl"], excludes: [] },
+      ] },
+      fixture_hint: { rule: "pick_one", label: "Custom", parts: [], min: null, max: null, variants: [
+        { id: "custom", label: "Custom", parts: ["chosen.stl"], excludes: [], source_id: inferred.id, source_name: "Inferred" },
+      ] },
+    }, sources: [
+      { source_id: declared.id, name: "Declared", layer_type: "base", exists: true, scanned_part_count: 1 },
+      { source_id: inferred.id, name: "Inferred", layer_type: "addon", exists: true, scanned_part_count: 1 },
+    ] };
+    const options = { repository, planId: plan.id, tables: OPTION_GROUP_TABLES, files };
+    for (const plan_id of [plan.id, String(plan.id), plan.id + 0.9]) {
+      expect(await traceOptionGroups({ ...options, input: { plan_id }, activePlanId: empty.id })).toEqual(output);
+    }
+    for (const input of [{}, { plan_id: "bad" }, { plan_id: null }, { plan_id: false }]) {
+      expect(await traceOptionGroups({ input, repository, tables: [] })).toEqual({ error: "plan_id required" });
+      expect(await traceOptionGroups({ ...options, input, activePlanId: plan.id })).toEqual(output);
+    }
+    for (const plan_id of [999999, foreign.id, 0, -1]) {
+      expect(await traceOptionGroups({ input: { plan_id }, repository, activePlanId: plan.id, tables: ["table:build_profiles"] })).toEqual({ error: "Plan not found" });
+    }
+    expect(await traceOptionGroups({ repository, activePlanId: foreign.id, tables: ["table:build_profiles"] })).toEqual({ error: "Plan not found" });
+    expect(await traceOptionGroups({ repository, input: { plan_id: plan.id }, tenantId: "other", tables: ["table:build_profiles"] })).toEqual({ error: "Plan not found" });
+    expect(await traceOptionGroups({ repository, activePlanId: plan.id, tenantId: "other", tables: ["table:build_profiles"] })).toEqual({ error: "Plan not found" });
+    const noSources = ["table:app_settings", "table:build_profiles", "table:profile_layers"];
+    expect(await traceOptionGroups({ repository, input: { plan_id: empty.id }, planId: empty.id, tables: noSources })).toEqual({ plan_id: empty.id, selections: {}, option_groups: {}, sources: [] });
+    tenantStorage.run("other", () => repo.setSetting(`kit_manifest_${foreign.id}`, JSON.stringify({ selections: { private: "other" } })));
+    expect(await traceOptionGroups({ repository, input: { plan_id: foreign.id }, planId: foreign.id, tenantId: "other", tables: noSources })).toEqual({ plan_id: foreign.id, selections: { private: "other" }, option_groups: {}, sources: [] });
+    sqlite.prepare("INSERT INTO profile_layers (tenant_id, profile_id, layer_order, layer_type, project_id) VALUES (?, ?, ?, ?, ?)").run("other", foreign.id, 0, "base", declared.id);
+    expect(await traceOptionGroups({ repository, input: { plan_id: foreign.id }, planId: foreign.id, tenantId: "other", tables: OPTION_GROUP_TABLES })).toEqual({ plan_id: foreign.id, selections: { private: "other" }, option_groups: {}, sources: [] });
+    repo.setSetting(`kit_manifest_${plan.id}`, "malformed");
+    expect(await traceOptionGroups({ ...options, input: { plan_id: plan.id } })).toEqual({ ...output, selections: {} });
+    assertOptionGroupDeclaration();
+  });
+}
+
+for (const isolated of [false, true]) {
+  it(`traces get_plan_option_groups manifest links and root refusals under ${isolated ? "isolated" : "trusted"} policy`, async () => {
+    const source = optionGroupCheckout("Links");
+    const plan = repo.createProfile("Links", source.id);
+    const repository = isolated ? new AppRepository(drizzle(sqlite, { schema }), undefined, join(dataDir, "repos"), schema, { sourceFilesystemPolicy: ISOLATED_SOURCE_FILESYSTEM }) : repo;
+    const options = { input: { plan_id: plan.id }, planId: plan.id, repository, tables: OPTION_GROUP_TABLES };
+    const probes = optionGroupPathProbes(source, isolated);
+    const sourceFiles = (manifestCalls: FileCall[], scanCalls: FileCall[], hints: FileCall[] = [], pathProbes = probes): FileCall[] => [
+      ...pathProbes, ...pathProbes, ...manifestCalls, ...scanCalls, ...hints, ...pathProbes, ...pathProbes, ...manifestCalls,
+    ];
+    const summary = { source_id: source.id, name: "Links", layer_type: "base", exists: true, scanned_part_count: 1 };
+    const groups = { fixture_mode: { rule: "pick_one", label: "Mode", parts: [], min: null, max: null, variants: [
+      { id: "chosen", label: null, parts: ["chosen.stl"], excludes: [], source_id: source.id, source_name: "Links" },
+      { id: "ignored", label: null, parts: ["ignored.stl"], excludes: [] },
+    ] } };
+    const output = { plan_id: plan.id, selections: {}, option_groups: groups, sources: [summary] };
+    const manifestPath = join(source.checkout, "print-partner.manifest.yaml");
+    const inside = join(source.checkout, "inside.yaml");
+    fs.renameSync(manifestPath, inside);
+    fs.symlinkSync(inside, manifestPath);
+    fs.symlinkSync(join(source.checkout, "chosen.stl"), join(source.checkout, "linked.stl"));
+    fs.symlinkSync(userRoot, join(source.checkout, "linked-directory"));
+    fs.symlinkSync(join(userRoot, "hidden.stl"), join(source.checkout, "outside.stl"));
+    fs.writeFileSync(join(userRoot, "hidden.stl"), "solid hidden\nendsolid hidden\n");
+    const entries = [".git", "chosen.stl", "ignored.stl", "import-rules.json", "inside.yaml", "linked-directory", "linked.stl", "outside.stl", "print-partner.manifest.yaml"];
+    const scan = optionGroupScanCalls(source.checkout, entries);
+    const linkedManifest: FileCall[] = [["realpathSync", source.checkout], ["realpathSync", manifestPath], ["statSync", inside], ["readFileSync", inside, "utf8"]];
+    expect(await traceOptionGroups({ ...options, files: sourceFiles(linkedManifest, scan) })).toEqual(output);
+    const outsideManifest = join(userRoot, "outside.yaml");
+    fs.writeFileSync(outsideManifest, fs.readFileSync(inside));
+    fs.unlinkSync(manifestPath);
+    fs.symlinkSync(outsideManifest, manifestPath);
+    const refusedManifest: FileCall[] = [["realpathSync", source.checkout], ["realpathSync", manifestPath]];
+    const customHints = join(dataDir, "path-hints.yaml");
+    fs.writeFileSync(customHints, "version: 1\nrules: []\n");
+    const noGroups = { ...output, option_groups: {}, sources: [{ ...summary, exists: false }] };
+    expect(await traceOptionGroups({ ...options, files: sourceFiles(refusedManifest, scan, optionGroupHintCalls()) })).toEqual(noGroups);
+    expect(observer.state.files.some(({ api, args }) => api === "readFileSync" && args[0] === outsideManifest)).toBe(false);
+    fs.unlinkSync(manifestPath);
+    fs.writeFileSync(manifestPath, "[invalid");
+    expect(await traceOptionGroups({ ...options, files: sourceFiles(optionGroupManifestCalls(source.checkout), scan, optionGroupHintCalls()) })).toEqual(noGroups);
+    fs.rmSync(customHints);
+    const absentCustom: FileCall[] = [["readFileSync", SHIPPED_PATH_HINTS, "utf8"], ["existsSync", customHints]];
+    expect(await traceOptionGroups({ ...options, files: sourceFiles(optionGroupManifestCalls(source.checkout), scan, absentCustom) })).toEqual(noGroups);
+    expect(await traceOptionGroups({ ...options, hintDir: null, files: sourceFiles(optionGroupManifestCalls(source.checkout), scan, optionGroupHintCalls(false)) })).toEqual(noGroups);
+    fs.writeFileSync(customHints, "version: 2\nrules: []\n");
+    const invalidHintFiles = [...probes, ...probes, ...optionGroupManifestCalls(source.checkout), ...scan, ...optionGroupHintCalls()];
+    const hintError = await traceOptionGroups({ ...options, tables: OPTION_GROUP_TABLES.filter((table) => table !== "table:app_settings"), files: invalidHintFiles });
+    expect(hintError).toEqual({ error: `${customHints}: version must be 1` });
+    fs.writeFileSync(customHints, "version: 1\nrules: []\n");
+    fs.unlinkSync(manifestPath);
+    fs.copyFileSync(inside, manifestPath);
+    sqlite.prepare("UPDATE projects SET local_path = NULL WHERE id = ?").run(source.id);
+    const empty = { plan_id: plan.id, selections: {}, option_groups: {}, sources: [] };
+    expect(await traceOptionGroups(options)).toEqual(empty);
+    sqlite.prepare("UPDATE projects SET local_path = ? WHERE id = ?").run(userRoot, source.id);
+    if (isolated) {
+      const outsideProbe: FileCall[] = [["realpathSync", join(dataDir, "repos")]];
+      expect(await traceOptionGroups({ ...options, files: sourceFiles([], [], [], outsideProbe) })).toEqual(empty);
+      const escape = join(source.workspace, "escape");
+      fs.symlinkSync(userRoot, escape);
+      sqlite.prepare("UPDATE projects SET local_path = ? WHERE id = ?").run(escape, source.id);
+      const escapeProbe: FileCall[] = [...probes.slice(0, 3), ["realpathSync", escape]];
+      expect(await traceOptionGroups({ ...options, files: sourceFiles([], [], [], escapeProbe) })).toEqual(empty);
+    }
+    sqlite.prepare("UPDATE projects SET local_path = ? WHERE id = ?").run(source.workspace, source.id);
+    const moved = join(dataDir, "moved-checkout");
+    fs.renameSync(source.workspace, moved);
+    fs.symlinkSync(moved, source.workspace);
+    if (isolated) {
+      expect(await traceOptionGroups({ ...options, files: sourceFiles([], [], [], probes.slice(0, 2)) })).toEqual(empty);
+    } else {
+      const canonicalManifest = join(moved, "print-partner.manifest.yaml");
+      const manifestCalls: FileCall[] = [["realpathSync", source.workspace], ["realpathSync", manifestPath], ["statSync", canonicalManifest], ["readFileSync", canonicalManifest, "utf8"]];
+      const variants = groups.fixture_mode.variants.map(({ source_id: _id, source_name: _name, ...variant }) => variant);
+      expect(await traceOptionGroups({ ...options, files: sourceFiles(manifestCalls, [["lstatSync", source.workspace]]) })).toEqual({ ...output, option_groups: { fixture_mode: { ...groups.fixture_mode, variants } }, sources: [{ ...summary, scanned_part_count: 0 }] });
+    }
+  });
+}
+
+it("rejects extra real reads against get_plan_option_groups observers", async () => {
+  const plan = repo.createProfile("Control");
+  const original = repo.getSetting.bind(repo);
+  const read = vi.spyOn(repo, "getSetting").mockImplementation((key) => {
+    repo.listSources();
+    fs.readFileSync(join(root, "README.md"), "utf8");
+    return original(key);
+  });
+  try {
+    await expect(traceOptionGroups({ input: { plan_id: plan.id }, planId: plan.id, tables: ["table:app_settings", "table:build_profiles", "table:profile_layers"] })).rejects.toThrow();
+    expect(statements.map((sql) => {
+      try { return optionGroupSelect(sql, "default", plan.id); } catch { return "unsupported"; }
+    })).toContain("table:source_docs");
+    expect(observer.state.files.map(({ api, args }) => [api, ...args])).toEqual([
+      ["readFileSync", join(root, "README.md"), "utf8"], ["readFileSync", join(root, "README.md"), "utf8"],
+    ]);
+    expect(() => optionGroupSelect('select * from "projects"', "default", plan.id)).toThrow("Unsupported SQL:");
+  } finally { read.mockRestore(); }
 });
