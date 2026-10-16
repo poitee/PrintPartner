@@ -3,6 +3,7 @@
 import argparse
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import time
@@ -12,6 +13,7 @@ TESTS = (
     "tests::separate_group_child_dies_with_force_killed_parent",
     "tests::ticket_t_3_drain_reaps_group_when_leader_wait_fails",
 )
+SUBREAPER = "tests::ticket_t_3_drain_leader_exit_with_forced_descendant_reports_forced"
 
 
 def main():
@@ -27,6 +29,15 @@ def main():
     if min(args.runs, args.cpus, args.test_threads) < 1 or args.burners < 0:
         parser.error("runs, cpus and test threads must be positive; burners must be nonnegative")
     binary = args.binary.resolve(strict=True)
+    listing = subprocess.check_output([str(binary), "--list"], text=True)
+    tests = {line.removesuffix(": test") for line in listing.splitlines() if line.endswith(": test")}
+    listing = subprocess.check_output([str(binary), "--list", "--ignored"], text=True)
+    ignored = {line.removesuffix(": test") for line in listing.splitlines() if line.endswith(": test")}
+    required = (*TESTS, SUBREAPER) if args.scope == "pair" else TESTS
+    missing = set(required) - (tests - ignored)
+    if missing:
+        parser.error("required tests are missing or ignored: " + ", ".join(sorted(missing)))
+    expected = {"alone": 1, "pair": 2, "suite": len(tests - ignored)}[args.scope]
     evidence = args.evidence.resolve()
     evidence.mkdir(parents=True, exist_ok=True)
     if hasattr(os, "sched_getaffinity"):
@@ -38,7 +49,7 @@ def main():
     elif args.scope == "pair":
         commands = [[
             str(binary), TESTS[1],
-            "tests::ticket_t_3_drain_leader_exit_with_forced_descendant_reports_forced",
+            SUBREAPER,
             "--nocapture", "--test-threads=2",
         ]]
     else:
@@ -53,19 +64,30 @@ def main():
                 log = evidence / f"{run:03}-{index}.log"
                 with log.open("w") as output:
                     result = subprocess.run(command, stdout=output, stderr=subprocess.STDOUT)
-                expected = [command[2]] if args.scope == "alone" else [TESTS[1]]
-                if args.scope == "suite":
-                    expected = TESTS
-                passed = all(f"test {test} ... ok" in log.read_text() for test in expected)
+                contents = log.read_text()
+                summaries = re.findall(
+                    r"test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored; \d+ measured; (\d+) filtered out;",
+                    contents,
+                )
+                passed = False
+                if summaries:
+                    status, count, failed, skipped, filtered = summaries[-1]
+                    passed = status == "ok" and int(count) == expected and int(failed) == 0
+                    if args.scope == "suite":
+                        passed = passed and int(filtered) == 0 and int(skipped) == len(ignored)
                 if result.returncode != 0 or not passed:
-                    print(log.read_text(), flush=True)
+                    print(contents, flush=True)
                     with (evidence / "failure-processes.log").open("w") as output:
                         subprocess.run(
                             ["ps", "-e", "-o", "pid,ppid,pgid,sid,stat,comm"],
                             stdout=output,
                             check=True,
                         )
-                    print(f"FAIL run={run} command={command} log={log}", flush=True)
+                    print(
+                        f"FAIL run={run} exit={result.returncode} summary_valid={passed} "
+                        f"command={command} log={log}",
+                        flush=True,
+                    )
                     return 1
             if run == 1 or run % 10 == 0 or run == args.runs:
                 print(

@@ -4,7 +4,8 @@ The failure is test interference on Linux. Production group cleanup is unchanged
 `ticket_t_3_drain_leader_exit_with_forced_descendant_reports_forced` enabled
 `PR_SET_CHILD_SUBREAPER` in the shared libtest process. That setting applies to
 every thread. Concurrent tests' orphaned descendants could therefore become
-children of the test runner instead of PID 1. Restoring the setting does not
+children of the test runner instead of the normal ancestor reaper. Restoring
+the setting does not
 release children already adopted. The fixture reaped only its own descendants.
 
 The fix runs that fixture in a dedicated process. Other tests retain their
@@ -130,6 +131,40 @@ python3 rust/crates/pp-compat/tests/stress-group-cleanup.py --binary <binary> --
 
 On Linux, each loop confines itself and its burners to the selected CPUs.
 The suite uses 12 test threads so tests still share a concurrent libtest
-process. Every run must succeed and report the selected tests as passed.
+process. The runner checks that the target tests exist and are not ignored,
+then requires a successful process exit and the expected final libtest summary.
+Suite runs must report every unignored test as passed and zero filtered tests.
 The script stops at the first failure, saves its output and a process snapshot,
 and terminates its CPU burners on exit.
+
+## Interleaved runner output
+
+At acceptance run 182, all 82 tests passed with zero failures. The original
+stress script nevertheless stopped because it searched for contiguous status
+lines. Output from a nested fixture split one passing line into these fragments.
+
+```text
+test tests::separate_group_child_dies_with_force_killed_parent ...
+
+ok
+```
+
+The final summary remained intact.
+
+```text
+test result: ok. 82 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 31.23s
+```
+
+An audit confirmed that all first 182 saved suites had successful unfiltered
+summaries. The remaining 18 suites run in a separate evidence directory; no
+failed test execution is repeated. The corrected validator uses the final
+summary instead of individual status lines. It also checks the binary's test
+inventory, rejects missing or ignored target tests, and retains nonzero-exit
+failures. It cannot accept a nested passing summary over a filtered root suite.
+
+The CLI regressions reproduce the interleaved output and exercise both failure
+guards. They failed before the validator correction and pass afterward.
+
+```sh
+python3 rust/crates/pp-compat/tests/test_stress_group_cleanup.py
+```
