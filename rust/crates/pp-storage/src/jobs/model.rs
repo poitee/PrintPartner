@@ -203,7 +203,7 @@ pub enum GroupBy {
     #[default]
     ColorDir,
 }
-fn id(value: u64) -> Result<()> {
+pub(super) fn id(value: u64) -> Result<()> {
     ensure!(
         value > 0 && value <= 9_007_199_254_740_991,
         "Invalid identifier"
@@ -462,6 +462,9 @@ pub struct EffectReceipt {
     #[serde(default, skip_serializing_if = "is_false")]
     pub no_effect: bool,
     pub receipt: Option<ResultArtifact>,
+    #[cfg(feature = "desktop_rebuild")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) checklist_completion: Option<Box<super::checklist::ChecklistCompletionClaim>>,
 }
 fn is_false(value: &bool) -> bool {
     !*value
@@ -531,6 +534,9 @@ pub struct JobRecord {
     pub progress: Option<u8>,
     pub effects: Vec<EffectReceipt>,
     pub result: Option<ResultArtifact>,
+    #[cfg(feature = "desktop_rebuild")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_result: Option<super::CompletedResult>,
     pub recovery: Option<String>,
     #[serde(skip)]
     pub(crate) fence: Option<String>,
@@ -539,6 +545,13 @@ pub struct JobRecord {
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct JobSnapshot {
+    #[cfg(feature = "desktop_rebuild")]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "Job engine wiring lands in GRE-609 (D16)")
+    )]
+    #[serde(skip)]
+    pub(crate) version: i64,
     pub job_id: String,
     pub kind: JobKind,
     pub status: &'static str,
@@ -573,6 +586,8 @@ impl JobRecord {
             self.state != PersistentState::UploadedOnly || self.uploaded_only_proof().is_some(),
             "Invalid uploaded-only job"
         );
+        #[cfg(feature = "desktop_rebuild")]
+        super::checklist::validate_claims(self)?;
         Ok(())
     }
     pub(super) fn uploaded_only_proof(&self) -> Option<UploadedProof<'_>> {
@@ -647,6 +662,8 @@ impl JobRecord {
             PersistentState::Cancelled => ("cancelled", "Cancelled before effects"),
         };
         JobSnapshot {
+            #[cfg(feature = "desktop_rebuild")]
+            version: self.state_version,
             job_id: self.job_id.clone(),
             kind: self.kind,
             status,
