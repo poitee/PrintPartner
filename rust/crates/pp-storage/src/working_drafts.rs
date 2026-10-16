@@ -476,7 +476,8 @@ impl WorkingDraftClient {
         })
     }
     /// Edits draft Parts as Node's `PlanDraftWorkspaceService.editParts` does,
-    /// including its automatic Required-unit selection.
+    /// including its automatic Required-unit selection. The edit commits before
+    /// the selection starts, so a selection error or cancellation keeps it.
     pub fn edit(
         &self,
         credential: Credential,
@@ -623,8 +624,27 @@ pub(super) fn write(
     } = command;
     match operation {
         Operation::Edit { request, reply } => {
-            let _ = reply.send(transact(connection, admission, &cancelled, |tx| {
-                edit(tx, credential, policy, profile, draft_id, &request)
+            let edited = transact(connection, admission, &cancelled, |tx| {
+                edit(tx, &credential, policy, profile, draft_id, &request)
+            });
+            let _ = reply.send(edited.and_then(|edited| match edited {
+                Edited::Done(outcome) => Ok(outcome),
+                Edited::Unselected(digest) => {
+                    let command = ReconciliationCommand::new(
+                        profile,
+                        draft_id,
+                        serde_json::from_value(
+                            json!({"expected_snapshot_digest":digest, "decisions":[]}),
+                        )?,
+                        &format!("auto-{}", digest.as_str()),
+                        credential,
+                    )?;
+                    // Node's selection is a separate transaction with its own busy wait.
+                    let admission = writer_admission::Deadline::at_dequeue();
+                    transact(connection, admission, &cancelled, |tx| {
+                        required_units::reconcile::run(tx, &command, policy)
+                    })
+                }
             }));
         }
         Operation::Abandon { request, reply } => {
@@ -663,15 +683,20 @@ fn baseline_required(tx: &Transaction<'_>, tenant: &str, profile: &Value) -> Res
     })
 }
 
+enum Edited {
+    Done(WorkspaceOutcome),
+    Unselected(Digest),
+}
+
 fn edit(
     tx: &Transaction<'_>,
-    credential: Credential,
+    credential: &Credential,
     policy: auth::AuthPolicy,
     profile_id: PositiveId,
     draft_id: PositiveId,
     request: &EditRequest,
-) -> Result<WorkspaceOutcome> {
-    let (tenant, _) = auth::authority::queries::reconciliation_actor_ref(tx, &credential, policy)?;
+) -> Result<Edited> {
+    let (tenant, _) = auth::authority::queries::reconciliation_actor_ref(tx, credential, policy)?;
     let profile = i64::try_from(profile_id.get())?;
     let Some(profile_row) = one(
         tx,
@@ -679,27 +704,27 @@ fn edit(
         &[&tenant, &profile],
     )?
     else {
-        return Ok(WorkspaceOutcome::ProfileNotFound);
+        return Ok(Edited::Done(WorkspaceOutcome::ProfileNotFound));
     };
     let id = i64::try_from(draft_id.get())?;
     let Some(current) = draft(tx, &tenant, profile, id)? else {
-        return Ok(WorkspaceOutcome::DraftNotFound);
+        return Ok(Edited::Done(WorkspaceOutcome::DraftNotFound));
     };
     let current_view = || workspace(tx, &tenant, &profile_row, &current);
     if current.header["state"] != "open" {
-        return Ok(WorkspaceOutcome::NotOpen {
+        return Ok(Edited::Done(WorkspaceOutcome::NotOpen {
             workspace: current_view()?,
-        });
+        }));
     }
     if baseline_required(tx, &tenant, &profile_row)? {
-        return Ok(WorkspaceOutcome::AcceptedBaselineRequired);
+        return Ok(Edited::Done(WorkspaceOutcome::AcceptedBaselineRequired));
     }
     if profile_row["acceptedPlanRevisionId"] != current.header["baseRevisionId"]
         || profile_row["acceptedPlanVersion"] != current.header["basePlanVersion"]
     {
-        return Ok(WorkspaceOutcome::BaseChanged {
+        return Ok(Edited::Done(WorkspaceOutcome::BaseChanged {
             workspace: current_view()?,
-        });
+        }));
     }
     let mut parts = current.parts.clone();
     let mut by_id = HashMap::new();
@@ -709,7 +734,7 @@ fn edit(
     for decision in &request.decisions {
         for part_id in decision.ids() {
             let Some(part) = by_id.get_mut(&i64::try_from(part_id.get())?) else {
-                return Ok(WorkspaceOutcome::DraftNotFound);
+                return Ok(Edited::Done(WorkspaceOutcome::DraftNotFound));
             };
             decision.apply(part);
         }
@@ -719,9 +744,9 @@ fn edit(
     } else {
         let expected = request.expected_snapshot_digest.as_str();
         if current.header["snapshotDigest"] != expected {
-            return Ok(WorkspaceOutcome::DraftChanged {
+            return Ok(Edited::Done(WorkspaceOutcome::DraftChanged {
                 workspace: Some(current_view()?),
-            });
+            }));
         }
         let planning = model::planning(&current.header, &current.inputs, &parts)?;
         let next = if current.header["digestFormat"] == "plan-draft-v2" {
@@ -760,19 +785,13 @@ fn edit(
             .ok_or_else(|| anyhow!("Edited Plan draft could not be verified"))?
     };
     if selected.selected.is_some() {
-        return Ok(WorkspaceOutcome::Ready {
+        return Ok(Edited::Done(WorkspaceOutcome::Ready {
             workspace: workspace(tx, &tenant, &profile_row, &selected)?,
-        });
+        }));
     }
-    let digest = DraftIdentity::from_header(&selected.header)?.snapshot_digest;
-    let command = ReconciliationCommand::new(
-        profile_id,
-        draft_id,
-        serde_json::from_value(json!({"expected_snapshot_digest":digest, "decisions":[]}))?,
-        &format!("auto-{}", digest.as_str()),
-        credential,
-    )?;
-    required_units::reconcile::run(tx, &command, policy)
+    Ok(Edited::Unselected(
+        DraftIdentity::from_header(&selected.header)?.snapshot_digest,
+    ))
 }
 
 fn abandon(

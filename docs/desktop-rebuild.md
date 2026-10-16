@@ -249,9 +249,10 @@ cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-storage --featu
 ### D12 working-draft writes
 
 `WorkingDraftClient` has two write methods. Each one queues a `Write` command
-on the existing single writer. The writer runs it in one immediate transaction
-with the writer's admission deadline, and it checks cancellation before the
-transaction starts and again before it commits.
+on the existing single writer. The writer runs `abandon` in one immediate
+transaction and `edit` in up to two. Each transaction has its own admission
+deadline, and the writer checks cancellation before each transaction starts and
+again before it commits.
 
 - `edit` ports `PlanDraftWorkspaceService.editParts` and the repository's
   `editPlanDraftPartsBatch`. It returns the `required_units::Outcome` result.
@@ -259,8 +260,9 @@ transaction starts and again before it commits.
   the new snapshot digest and Part rows. An edit that changes no Part returns
   the current draft, even when the expected digest is stale. Both paths then
   select Required units with no decisions and the key `auto-<snapshot digest>`,
-  as Node's `autoReconcile` does. A retry of the same edit finds the saved
-  selection and writes nothing.
+  as Node's `autoReconcile` does. The selection runs in a second transaction
+  after the edit commits. A retry of the same edit finds the saved selection
+  and writes nothing.
 - `abandon` ports `PlanDraftWorkspaceService.abandon` and the repository's
   `transitionPlanDraft` for `abandon`. It returns `AbandonOutcome`. A retry
   with the same expected lifecycle version returns the abandoned draft and
@@ -276,10 +278,10 @@ An edit body has either one `decision` or 1 to 10,000 `decisions`. Each
 decision names at least one Part, and a batch edits each Part field at most
 once. A quantity override is `null` or an integer from 1 to 10,000.
 
-Node commits a Part edit before its automatic selection. If that selection
-fails, Node keeps the edit and the route returns an error. Here the edit and
-the selection share one transaction, so a failed or cancelled selection also
-rolls back the edit. A retry converges to the same rows in both cases.
+If the selection fails or is cancelled, the edit stays committed and `edit`
+returns the error, as Node does. Node's route answers that error with HTTP 500
+and `internal_error`. A retry of the same edit changes no Part, so it only runs
+the selection again.
 
 Resume has no Node route or service caller, so it is not ported. Recompute
 needs preparation and stays on GRE-607.
@@ -287,6 +289,8 @@ needs preparation and stays on GRE-607.
 The operation tests replay each Node case on a copy of the required-units
 `unchanged` database. They restart the writer between calls and compare every
 outcome and the draft, Part, reconciliation, and assignment rows with Node's.
+Some cases run SQL between calls, for example to remove an injected selection
+failure or to advance the accepted base.
 The generator runs Node's service and contract parsers. Regenerate the
 fixture from the repository root:
 
