@@ -55,7 +55,7 @@ fn scalar(value: ValueRef<'_>) -> Result<Value> {
 
 /// Reads rows as camel-case JSON objects. The two stored JSON documents may
 /// reach the 64 MiB total; every other text column is capped at 64 KiB.
-pub(super) fn rows(
+pub(crate) fn rows(
     tx: &Transaction<'_>,
     sql: &str,
     args: &[&dyn rusqlite::ToSql],
@@ -86,7 +86,7 @@ pub(super) fn rows(
 }
 
 /// Reads Part rows, keeping manifest text columns out of the scalar JSON.
-pub(super) fn part_rows(
+pub(crate) fn part_rows(
     tx: &Transaction<'_>,
     sql: &str,
     args: &[&dyn rusqlite::ToSql],
@@ -136,7 +136,7 @@ pub(super) fn part_rows(
     Ok(parts)
 }
 
-pub(super) fn one(
+pub(crate) fn one(
     tx: &Transaction<'_>,
     sql: &str,
     args: &[&dyn rusqlite::ToSql],
@@ -148,7 +148,7 @@ pub(super) fn text<'a>(v: &'a Value, k: &str) -> Result<&'a str> {
     v[k].as_str().ok_or_else(|| anyhow!("Invalid stored {k}"))
 }
 
-pub(super) fn num(v: &Value, k: &str) -> Result<i64> {
+pub(crate) fn num(v: &Value, k: &str) -> Result<i64> {
     v[k].as_i64().ok_or_else(|| anyhow!("Invalid stored {k}"))
 }
 
@@ -159,7 +159,7 @@ pub(super) fn optional_num(v: &Value, k: &str) -> Result<Option<i64>> {
     num(v, k).map(Some)
 }
 
-pub(super) fn normalize_parts(parts: &mut [DraftPart]) -> Result<()> {
+pub(crate) fn normalize_parts(parts: &mut [DraftPart]) -> Result<()> {
     for part in parts {
         for k in ["included", "geometrySame"] {
             if let Some(n) = optional_num(part, k)? {
@@ -252,16 +252,16 @@ impl StoredConflict {
     }
 }
 
-pub(super) struct Draft {
-    pub(super) header: Value,
-    pub(super) inputs: Vec<Value>,
-    pub(super) parts: Vec<DraftPart>,
+pub(crate) struct Draft {
+    pub(crate) header: Value,
+    pub(crate) inputs: Vec<Value>,
+    pub(crate) parts: Vec<DraftPart>,
     pub(super) planning: String,
-    pub(super) selected: Option<Saved>,
+    pub(crate) selected: Option<Saved>,
 }
 
-pub(super) struct Saved {
-    pub(super) header: Value,
+pub(crate) struct Saved {
+    pub(crate) header: Value,
     pub(super) result: StoredResult,
 }
 
@@ -500,7 +500,7 @@ pub(super) fn saved(
 
 /// Loads a Plan draft and verifies its stored snapshot digest, as Node's
 /// `getPlanDraft` does.
-pub(super) fn draft(
+pub(crate) fn draft(
     tx: &Transaction<'_>,
     tenant: &str,
     profile: i64,

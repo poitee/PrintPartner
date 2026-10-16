@@ -87,6 +87,11 @@ enum WriterControl {
 }
 enum Envelope {
     #[cfg(feature = "desktop_rebuild")]
+    WorkingDraft {
+        command: working_drafts::Command,
+        reply: mpsc::Sender<Result<working_drafts::Outcome>>,
+    },
+    #[cfg(feature = "desktop_rebuild")]
     BuildGraph {
         command: build_graph::Command,
         reply: build_graph::Reply,
@@ -582,6 +587,10 @@ impl WriterOwner {
                             command,
                             admission,
                         ));
+                    }
+                    #[cfg(feature = "desktop_rebuild")]
+                    Envelope::WorkingDraft { command, reply } => {
+                        let _ = reply.send(working_drafts::execute(&mut connection, command));
                     }
                     Envelope::Read { command, reply } => {
                         let _ = reply.send(read_model::execute(&mut connection, command));
