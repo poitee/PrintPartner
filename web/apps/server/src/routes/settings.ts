@@ -50,10 +50,12 @@ import {
 import { hostedPlanningPolicy } from "../lib/hosted-planning.js";
 import { isRecord } from "../lib/guards.js";
 import { readFeatureAccess } from "../lib/feature-access.js";
+import { registerTenantFeatureRoutes } from "./tenant-features.js";
 
 type RouteDeps = { repo: AppRepository; dataDir: string; config?: ServerConfig };
 
 export async function registerSettingsRoutes(app: FastifyInstance, deps: RouteDeps): Promise<void> {
+  await registerTenantFeatureRoutes(app, deps.repo);
   app.get("/settings/update-check", async (request) => {
     if (!deps.config) {
       return {

@@ -34,6 +34,7 @@ vi.mock("../context/PlanWorkspaceContext", () => ({
 }));
 vi.mock("../queries/planLayers", () => ({ usePlanLayersQuery: () => ({ data: [], isLoading: false }) }));
 vi.mock("../api/endpoints/stlNaming", () => ({ fetchStlNaming: async () => ({ folder_rules: [] }) }));
+vi.mock("../components/plan/PlanFeaturesCard", () => ({ default: () => null }));
 
 function renderPlan() {
   return render(<MemoryRouter><PartsPage /></MemoryRouter>);

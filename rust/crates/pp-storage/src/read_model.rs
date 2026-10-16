@@ -1,5 +1,5 @@
 mod context;
-mod graph;
+pub(crate) mod graph;
 pub use context::{CapturedContext, PlateRef, RevisionRef, UnitHistory};
 pub mod views;
 pub mod workflow;
@@ -187,7 +187,16 @@ pub(super) fn execute(connection: &mut Connection, command: Command) -> Result<B
         let (context, context_error) =
             match context::capture(&tx, &tenant, profile_id, &accepted, &mut budget) {
                 Ok(value) => (value, None),
-                Err(error) => (None, Some(error.to_string())),
+                Err(error) => {
+                    #[cfg(feature = "desktop_rebuild")]
+                    if matches!(
+                        error.downcast_ref::<crate::build_graph::Failure>(),
+                        Some(crate::build_graph::Failure::BudgetExhausted { .. })
+                    ) {
+                        return Err(error);
+                    }
+                    (None, Some(error.to_string()))
+                }
             };
         builds.push(BuildRead {
             profile_id,

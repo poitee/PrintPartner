@@ -122,6 +122,56 @@ describe("plan features and aggregate farm suggestions", () => {
     expect((await patch({})).json().overrides).toEqual({ farm: true });
   });
 
+  it("persists every Plan override across restart and restores live tenant inheritance", async () => {
+    const enabled = { farm: true, orders: true, bambu: true, spoolman: true };
+    const disabled = { farm: false, orders: false, bambu: false, spoolman: false };
+    const inherited = { farm: null, orders: null, bambu: null, spoolman: null };
+    const sibling = repo.createProfile("Sibling plan").id;
+    repo.setSetting("feature_toggles", JSON.stringify(enabled));
+    expect((await patch(disabled)).json().overrides).toEqual(disabled);
+
+    await app.close();
+    sqlite.close();
+    sqlite = new SqliteDatabase(dataDir);
+    sqlite.connect();
+    repo = new AppRepository(getDb(sqlite), undefined, sqlite.reposDir);
+    await createApp();
+
+    expect((await app.inject(url())).json()).toEqual({
+      profile_id: profileId,
+      overrides: disabled,
+      effective: {
+        farm: { enabled: false, source: "plan" },
+        orders: { enabled: false, source: "plan" },
+        bambu: { enabled: false, source: "plan" },
+        spoolman: { enabled: false, source: "plan" },
+      },
+    });
+    expect((await app.inject(`/plans/${sibling}/features`)).json().overrides).toEqual({});
+    expect((await patch(enabled)).json().overrides).toEqual(enabled);
+    expect((await app.inject(`/api/v1${url()}`)).json().overrides).toEqual(enabled);
+    expect((await patch(inherited)).json()).toEqual({
+      profile_id: profileId,
+      overrides: {},
+      effective: {
+        farm: { enabled: true, source: "user" },
+        orders: { enabled: true, source: "user" },
+        bambu: { enabled: true, source: "user" },
+        spoolman: { enabled: true, source: "user" },
+      },
+    });
+    repo.setSetting("feature_toggles", JSON.stringify(disabled));
+    expect((await app.inject(url())).json()).toEqual({
+      profile_id: profileId, overrides: {},
+      effective: {
+        farm: { enabled: false, source: "user" },
+        orders: { enabled: false, source: "user" },
+        bambu: { enabled: false, source: "user" },
+        spoolman: { enabled: false, source: "user" },
+      },
+    });
+  });
+
   it("keeps Node keys and defaults aligned with the canonical Rust feature registry", async () => {
     const rust = readFileSync(new URL("../../../../../rust/crates/pp-domain/src/features.rs", import.meta.url), "utf8");
     const registry = [...rust.matchAll(/\w+ => \(\s*"([^"]+)",\s*"[^"]*",\s*"[^"]*",\s*(true|false)\s*\)/g)];

@@ -1,6 +1,6 @@
 {
   "scope": "Observed desktop self-host registration; Node owns domain/background/file effects",
-  "registry_sha256": "6e12a52dffa6c731245da1f8801b5603ab983e5ca99d2ad9c53d7c5453400daf",
+  "registry_sha256": "ed814e0fdeb94ab53b2c83256fb7eeabdff3e6a553c7eba2b7bb0cc56199d79c",
   "gateway_owned": [
     {
       "method": "POST",
@@ -723,21 +723,21 @@
       "method": "GET",
       "path": "/api/v1/legal/summary",
       "owner": "compat",
-      "effect": "external_effect",
+      "effect": "observation",
       "operation": "GET /legal/summary current",
       "contract": "current",
       "websocket": false,
-      "effect_reason": "Conservatively guarded GET/HEAD: no audited pure-read exception; provider or local effects may occur"
+      "effect_reason": "routes/legal.ts registerLegalRoutes reads LICENSE-SUMMARY.md; Rust serves the same bundled document without mutations or provider calls"
     },
     {
       "method": "HEAD",
       "path": "/api/v1/legal/summary",
       "owner": "compat",
-      "effect": "external_effect",
+      "effect": "observation",
       "operation": "GET /legal/summary current",
       "contract": "current",
       "websocket": false,
-      "effect_reason": "Conservatively guarded GET/HEAD: no audited pure-read exception; provider or local effects may occur"
+      "effect_reason": "routes/legal.ts registerLegalRoutes reads LICENSE-SUMMARY.md; Rust serves the same bundled document without mutations or provider calls"
     },
     {
       "method": "GET",
@@ -2378,6 +2378,36 @@
       "contract": "current",
       "websocket": false,
       "effect_reason": "Conservatively guarded GET/HEAD: no audited pure-read exception; provider or local effects may occur"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/settings/features",
+      "owner": "compat",
+      "effect": "external_effect",
+      "operation": "GET /settings/features current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "Conservatively guarded GET/HEAD: no audited pure-read exception; provider or local effects may occur"
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/settings/features",
+      "owner": "compat",
+      "effect": "external_effect",
+      "operation": "GET /settings/features current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "Conservatively guarded GET/HEAD: no audited pure-read exception; provider or local effects may occur"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/settings/features",
+      "owner": "compat",
+      "effect": "local_commit",
+      "operation": "PATCH /settings/features current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "Node owns the complete local transaction or file publication"
     },
     {
       "method": "GET",
@@ -4843,21 +4873,21 @@
       "method": "GET",
       "path": "/legal/summary",
       "owner": "compat",
-      "effect": "external_effect",
+      "effect": "observation",
       "operation": "GET /legal/summary current",
       "contract": "current",
       "websocket": false,
-      "effect_reason": "Conservatively guarded GET/HEAD: no audited pure-read exception; provider or local effects may occur"
+      "effect_reason": "routes/legal.ts registerLegalRoutes reads LICENSE-SUMMARY.md; Rust serves the same bundled document without mutations or provider calls"
     },
     {
       "method": "HEAD",
       "path": "/legal/summary",
       "owner": "compat",
-      "effect": "external_effect",
+      "effect": "observation",
       "operation": "GET /legal/summary current",
       "contract": "current",
       "websocket": false,
-      "effect_reason": "Conservatively guarded GET/HEAD: no audited pure-read exception; provider or local effects may occur"
+      "effect_reason": "routes/legal.ts registerLegalRoutes reads LICENSE-SUMMARY.md; Rust serves the same bundled document without mutations or provider calls"
     },
     {
       "method": "GET",
@@ -6738,6 +6768,36 @@
       "contract": "current",
       "websocket": false,
       "effect_reason": "Conservatively guarded GET/HEAD: no audited pure-read exception; provider or local effects may occur"
+    },
+    {
+      "method": "GET",
+      "path": "/settings/features",
+      "owner": "compat",
+      "effect": "external_effect",
+      "operation": "GET /settings/features current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "Conservatively guarded GET/HEAD: no audited pure-read exception; provider or local effects may occur"
+    },
+    {
+      "method": "HEAD",
+      "path": "/settings/features",
+      "owner": "compat",
+      "effect": "external_effect",
+      "operation": "GET /settings/features current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "Conservatively guarded GET/HEAD: no audited pure-read exception; provider or local effects may occur"
+    },
+    {
+      "method": "PATCH",
+      "path": "/settings/features",
+      "owner": "compat",
+      "effect": "local_commit",
+      "operation": "PATCH /settings/features current",
+      "contract": "current",
+      "websocket": false,
+      "effect_reason": "Node owns the complete local transaction or file publication"
     },
     {
       "method": "GET",

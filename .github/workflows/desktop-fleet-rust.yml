@@ -166,6 +166,7 @@ jobs:
         run: |
           cargo test --locked --manifest-path rust/Cargo.toml -p pp-contracts --features desktop_rebuild
           cargo test --locked --manifest-path rust/Cargo.toml -p pp-domain --features desktop_rebuild
+          cargo test --locked --manifest-path rust/Cargo.toml -p pp-source --features desktop_rebuild --test archive
           cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib features
           cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test profiles
           cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test job_feature_admission
@@ -173,8 +174,11 @@ jobs:
           cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib manifest_text -- --test-threads=2
           cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib manifest_options -- --test-threads=2
           cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test manifest_options_model -- --test-threads=2
+          cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test build_graph_operations -- --test-threads=2
+          cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib build_graph -- --test-threads=2
+          cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib read_model::context::tests::plate_overlap_budget_is_distinct_from_integrity -- --exact --test-threads=2
           cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test working_draft_observation
-          cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib working_drafts::yaml
+          cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib working_drafts:: -- --test-threads=2
           cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --doc
           cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --lib --features desktop_rebuild
           cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --test profile_interpreter --features desktop_rebuild

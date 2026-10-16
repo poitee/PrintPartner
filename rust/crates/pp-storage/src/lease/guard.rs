@@ -1,10 +1,7 @@
+use super::directory::Directory;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use std::{
-    io::Write,
-    os::unix::fs::{OpenOptionsExt, PermissionsExt},
-    path::{Path, PathBuf},
-};
+use std::io::Write;
 
 #[cfg(target_os = "linux")]
 pub(crate) fn process_identity(pid: u32) -> Result<String> {
@@ -51,41 +48,77 @@ pub(crate) fn owner_is_stale(pid: u32, identity: Option<&str>) -> bool {
 
 // On platforms without foreign-process identity lookup, use an instance token.
 // A live foreign PID cannot be declared stale from a token mismatch there.
-pub fn record_child(directory: &Path, pid: u32) -> Result<()> {
+pub(super) fn record_child(
+    admitted: &super::AdmittedDirectory,
+    pid: u32,
+    lease_hash: Option<&str>,
+) -> Result<()> {
+    #[cfg(test)]
+    let directory = &admitted.path;
     #[cfg(target_os = "linux")]
     let identity = process_identity(pid)?;
     #[cfg(not(target_os = "linux"))]
     let identity = format!("instance:{}", hex::encode(rand::random::<[u8; 16]>()));
-    let path = directory.join(".desktop-owner.json");
-    let mut marker: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+    #[cfg(test)]
+    super::tests::marker_inspection_swap(directory, 7, false)?;
+    let bytes = admitted.directory.read_file(".desktop-owner.json");
+    #[cfg(test)]
+    super::tests::marker_inspection_swap(directory, 7, true)?;
+    let mut marker: serde_json::Value = serde_json::from_slice(&bytes?)?;
     anyhow::ensure!(
         marker["pid"].as_u64() == Some(u64::from(std::process::id())),
         "Desktop owner marker belongs to another process"
     );
+    anyhow::ensure!(
+        lease_hash.is_none_or(|expected| marker["lease_hash"].as_str() == Some(expected)),
+        "Desktop owner marker belongs to another lease"
+    );
     marker["child_pid"] = pid.into();
     marker["child_process_identity"] = identity.into();
-    publish_child_marker(directory, &path, &marker)
+    publish_child_marker(admitted, &marker)
 }
 
-fn publish_child_marker(directory: &Path, path: &Path, marker: &serde_json::Value) -> Result<()> {
-    let temporary = directory.join(format!(
+fn publish_child_marker(
+    admitted: &super::AdmittedDirectory,
+    marker: &serde_json::Value,
+) -> Result<()> {
+    #[cfg(test)]
+    let directory = &admitted.path;
+    let temporary = format!(
         ".desktop-owner-{}.json.new",
         hex::encode(rand::random::<[u8; 16]>())
-    ));
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&temporary)?;
+    );
+    #[cfg(test)]
+    super::tests::marker_inspection_swap(directory, 8, false)?;
+    let file = admitted.directory.create_file(&temporary);
+    #[cfg(test)]
+    super::tests::marker_inspection_swap(directory, 8, true)?;
+    let mut file = file?;
     let result = (|| {
-        file.write_all(&serde_json::to_vec(marker)?)?;
-        file.sync_all()?;
-        std::fs::rename(&temporary, path)?;
-        std::fs::File::open(directory)?.sync_all()?;
+        super::write_marker(&mut file, &serde_json::to_vec(marker)?)?;
+        #[cfg(test)]
+        super::tests::marker_inspection_swap(directory, 9, false)?;
+        let renamed =
+            admitted
+                .directory
+                .rename(&temporary, &admitted.directory, ".desktop-owner.json");
+        #[cfg(test)]
+        super::tests::marker_inspection_swap(directory, 9, true)?;
+        renamed?;
+        #[cfg(test)]
+        super::tests::marker_inspection_swap(directory, 10, false)?;
+        let synced = admitted.directory.sync_all();
+        #[cfg(test)]
+        super::tests::marker_inspection_swap(directory, 10, true)?;
+        synced?;
         Ok(())
     })();
     if result.is_err() {
-        let _ = std::fs::remove_file(&temporary);
+        #[cfg(test)]
+        super::tests::marker_inspection_swap(directory, 11, false)?;
+        let _ = admitted.directory.remove_file(&temporary);
+        #[cfg(test)]
+        super::tests::marker_inspection_swap(directory, 11, true)?;
     }
     result
 }
@@ -114,43 +147,41 @@ struct Owner {
 }
 
 pub(crate) struct StorageLease {
-    path: Option<PathBuf>,
+    directory: Directory,
+    pub(super) lease_directory: Directory,
+    path: Option<String>,
     pub(crate) identity: String,
-    detached: PathBuf,
+    detached: String,
 }
 impl StorageLease {
-    pub(crate) fn acquire(directory: &Path) -> Result<Self> {
+    pub(super) fn acquire(directory: &Directory) -> Result<Self> {
         let identity = process_identity(std::process::id())?;
         let owner = Owner {
             pid: std::process::id(),
             process_identity: identity.clone(),
             instance: hex::encode(rand::random::<[u8; 16]>()),
         };
-        let candidate = directory.join(format!(".desktop-lease-candidate-{}", owner.instance));
-        let lease = directory.join(".desktop-lease");
-        std::fs::create_dir(&candidate)?;
+        let held_directory = Directory(directory.try_clone()?);
+        let candidate = format!(".desktop-lease-candidate-{}", owner.instance);
+        let lease = ".desktop-lease";
+        directory.create_dir(&candidate)?;
         let result = (|| {
-            std::fs::set_permissions(&candidate, std::fs::Permissions::from_mode(0o700))?;
-            let mut file = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(candidate.join("owner.json"))?;
+            let candidate_directory = directory.open_dir(&candidate)?;
+            let mut file = candidate_directory.create_file("owner.json")?;
             file.write_all(&serde_json::to_vec(&owner)?)?;
             file.sync_all()?;
             for _ in 0..16 {
-                match std::fs::symlink_metadata(&lease) {
-                    Ok(metadata) => {
-                        anyhow::ensure!(metadata.is_dir(), "storage_lease_marker_invalid")
-                    }
+                match directory.open_dir(lease) {
+                    Ok(_) => {}
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                        match std::fs::rename(&candidate, &lease) {
+                        match directory.rename(&candidate, directory, lease) {
                             Ok(()) => {
                                 return Ok(Self {
-                                    path: Some(lease),
+                                    directory: held_directory,
+                                    lease_directory: candidate_directory,
+                                    path: Some(lease.into()),
                                     identity,
-                                    detached: directory
-                                        .join(format!(".desktop-lease-release-{}", owner.instance)),
+                                    detached: format!(".desktop-lease-release-{}", owner.instance),
                                 });
                             }
                             Err(error)
@@ -164,13 +195,16 @@ impl StorageLease {
                             Err(error) => return Err(error.into()),
                         }
                     }
-                    Err(error) => return Err(error.into()),
+                    Err(error) => return Err(error).context("storage_lease_marker_invalid"),
                 }
-                let bytes = match super::read_record(&lease.join("owner.json")) {
+                let bytes = match directory
+                    .open_dir(lease)
+                    .and_then(|lease| lease.read_file("owner.json"))
+                {
                     Ok(bytes) => bytes,
                     Err(error)
                         if error.kind() == std::io::ErrorKind::NotFound
-                            && !lease.try_exists()? =>
+                            && matches!(directory.open_dir(lease), Err(error) if error.kind() == std::io::ErrorKind::NotFound) =>
                     {
                         continue;
                     }
@@ -191,9 +225,10 @@ impl StorageLease {
                     "Data directory already owned"
                 );
                 // A retained nonempty destination prevents stale observers from retiring a new lease.
-                match std::fs::rename(
-                    &lease,
-                    directory.join(format!(".desktop-lease-retired-{}", prior.instance)),
+                match directory.rename(
+                    lease,
+                    directory,
+                    &format!(".desktop-lease-retired-{}", prior.instance),
                 ) {
                     Ok(()) => {}
                     Err(error)
@@ -206,14 +241,18 @@ impl StorageLease {
             }
             bail!("Data directory ownership changed repeatedly; retry startup")
         })();
-        let _ = std::fs::remove_dir_all(candidate);
+        if let Ok(candidate_directory) = directory.open_dir(&candidate) {
+            let _ = candidate_directory.remove_file("owner.json");
+            let _ = directory.remove_dir(&candidate);
+        }
         result
     }
     pub(crate) fn detach(&mut self) -> Result<()> {
         if let Some(path) = &self.path
             && path != &self.detached
         {
-            std::fs::rename(path, &self.detached)?;
+            self.directory
+                .rename(path, &self.directory, &self.detached)?;
             self.path = Some(self.detached.clone());
         }
         Ok(())
@@ -222,7 +261,9 @@ impl StorageLease {
     pub(crate) fn release(&mut self) -> Result<()> {
         self.detach()?;
         if let Some(path) = &self.path {
-            std::fs::remove_dir_all(path)?;
+            self.lease_directory.remove_file("previous-marker.json")?;
+            self.lease_directory.remove_file("owner.json")?;
+            self.directory.remove_dir(path)?;
             self.path = None;
         }
         Ok(())
@@ -248,7 +289,7 @@ mod tests {
         let path = directory.join(".desktop-owner.json");
         let marker = br#"{"pid":0,"lease_hash":"original"}"#;
         std::fs::write(&path, marker).unwrap();
-        let error = super::record_child(&directory, std::process::id()).unwrap_err();
+        let error = super::super::record_child(&directory, std::process::id()).unwrap_err();
         assert!(error.to_string().contains("another process"));
         assert_eq!(std::fs::read(&path).unwrap(), marker);
         assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
@@ -265,7 +306,8 @@ mod tests {
         let path = directory.join(".desktop-owner.json");
         std::fs::create_dir(&path).unwrap();
         std::fs::write(path.join("keep"), "original").unwrap();
-        assert!(super::publish_child_marker(&directory, &path, &serde_json::json!({})).is_err());
+        let admitted = super::super::admit_directory(&directory).unwrap();
+        assert!(super::publish_child_marker(&admitted, &serde_json::json!({})).is_err());
         assert_eq!(
             std::fs::read_to_string(path.join("keep")).unwrap(),
             "original"
@@ -292,9 +334,17 @@ mod tests {
             identity,
             super::process_identity(std::process::id()).unwrap()
         );
-        let lease = super::StorageLease::acquire(&directory).unwrap();
+        let lease = super::StorageLease::acquire(
+            &super::super::admit_directory(&directory).unwrap().directory,
+        )
+        .unwrap();
         assert_eq!(lease.identity, identity);
-        assert!(super::StorageLease::acquire(&directory).is_err());
+        assert!(
+            super::StorageLease::acquire(
+                &super::super::admit_directory(&directory).unwrap().directory
+            )
+            .is_err()
+        );
         drop(lease);
         let stale = directory.join(".desktop-lease");
         std::fs::create_dir(&stale).unwrap();
@@ -308,7 +358,12 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        drop(super::StorageLease::acquire(&directory).unwrap());
+        drop(
+            super::StorageLease::acquire(
+                &super::super::admit_directory(&directory).unwrap().directory,
+            )
+            .unwrap(),
+        );
         std::fs::remove_dir_all(directory).unwrap();
     }
 
@@ -365,6 +420,54 @@ mod tests {
         assert!(super::child_is_stale(
             &json!({"child_pid": pid, "child_process_identity": "prior"})
         ));
+    }
+
+    #[test]
+    fn externally_removed_or_relocated_lease_detach_reports_not_found() {
+        for relocate in [false, true] {
+            let directory = std::env::temp_dir().join(format!(
+                "pp-guard-external-{}",
+                hex::encode(rand::random::<[u8; 16]>())
+            ));
+            std::os::unix::fs::DirBuilderExt::mode(&mut std::fs::DirBuilder::new(), 0o700)
+                .create(&directory)
+                .unwrap();
+            let admitted = super::super::admit_directory(&directory).unwrap();
+            let mut old = super::StorageLease::acquire(&admitted.directory).unwrap();
+            let shared = directory.join(".desktop-lease");
+            let hidden = directory.join("hidden-lease");
+            let bytes = std::fs::read(shared.join("owner.json")).unwrap();
+            if relocate {
+                std::fs::rename(&shared, &hidden).unwrap();
+            } else {
+                std::fs::remove_dir_all(&shared).unwrap();
+            }
+
+            for _ in 0..2 {
+                let error = old.release().unwrap_err();
+                assert_eq!(
+                    error
+                        .downcast_ref::<std::io::Error>()
+                        .unwrap()
+                        .raw_os_error(),
+                    Some(libc::ENOENT)
+                );
+                assert_eq!(old.path.as_deref(), Some(".desktop-lease"));
+                assert!(!directory.join(&old.detached).exists());
+                if relocate {
+                    assert_eq!(std::fs::read(hidden.join("owner.json")).unwrap(), bytes);
+                }
+            }
+
+            if relocate {
+                std::fs::rename(&hidden, &shared).unwrap();
+                old.release().unwrap();
+                assert_eq!(old.path, None);
+                assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 0);
+            }
+            drop(old);
+            std::fs::remove_dir_all(directory).unwrap();
+        }
     }
 
     #[test]

@@ -9,6 +9,8 @@ export * from "./production-setup.js";
 export * from "./build-workflow.js";
 export * from "./reference-sharing.js";
 export * from "./hosted-planning.js";
+export * from "./tenant-features.js";
+export * from "./plan-features.js";
 
 export type DeployMode = "self-host" | "saas";
 

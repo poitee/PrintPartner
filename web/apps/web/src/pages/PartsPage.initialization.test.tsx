@@ -26,6 +26,7 @@ vi.mock("../components/review/PlanFileSelection", () => ({ default: ({ disabled 
 vi.mock("../components/review/PlanProgressChoices", () => ({ default: () => null }));
 vi.mock("../components/build/PlanRolesCard", () => ({ default: () => null }));
 vi.mock("../components/review/ReviewPartsSheet", () => ({ default: () => null }));
+vi.mock("../components/plan/PlanFeaturesCard", () => ({ default: () => null }));
 beforeEach(() => {
   state.freshness = "current"; state.pending = false; state.saving = false; state.error = null;
   state.prepare.mockReset().mockResolvedValue(undefined);

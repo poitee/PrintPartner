@@ -190,7 +190,7 @@ fn refuses_desktop_marker(fixture: &Fixture) {
                     Some(if before.is_dir() {
                         libc::EISDIR
                     } else {
-                        libc::ENOENT
+                        libc::ELOOP
                     })
                 );
             }

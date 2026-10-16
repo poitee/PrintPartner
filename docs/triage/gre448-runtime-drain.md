@@ -436,3 +436,277 @@ passed three baseline cycles, the expected negative control, and three restored
 cycles. All 14 child PIDs were absent, and all 60 original evidence files stayed
 byte-for-byte unchanged. The isolated receipts are under
 `/tmp/gre448-built-proof/owner-proof/run-9dy9pxzk` and `run-7pjt7tgu`.
+
+## Full built backend startup parent-death cleanup
+
+`rust/scripts/prove-built-startup-death.py` drives an ignored, exact Rust test
+against an isolated copy of the full desktop build. The owner launches the real
+`desktop.js` through production `Process::spawn`, including its production
+parent-death watcher and release verification. The driver compares the original
+and instrumented release manifests. Only `desktop-resolution.js` changes,
+including its physical path in the workspace dependency inventory. The desktop
+entry, frontend, other workspace files, Node binary, and other dependencies must
+have identical hashes.
+
+The staged resolver preserves the original resolver bytes and appends
+`built-startup-observer.mjs`. This test observer delegates the actual stdin
+`data` listener registration, records the real `setupFromParent` call stack and
+entry SHA-256, then sends itself SIGSTOP before returning to the entry. Static
+entry dependencies have loaded at this milestone. Setup has not arrived, and
+storage and server readiness have not been reached.
+
+The Rust `record_child` callback waits for that stopped milestone. It then
+returns to the production setup write with a one-megabyte fixture lease. The
+stopped backend cannot consume that write. After a further 100 ms, the owner
+requires `Starting`, zero completed health probes, no published endpoint, no
+socket, and exactly one recorded spawn. The oversized setup is intentionally
+invalid for the desktop's normal setup size limit. It never reaches the setup
+parser in this proof.
+
+Each of two cycles SIGKILLs only the owner PID. An unrelated `/bin/sleep` child
+of the test runner joins the backend group. The owner and backend groups must
+differ. The backend remains stopped, so it cannot handle stdin EOF. Within five
+seconds, the backend group must disappear and the peer must die by SIGKILL.
+The Linux test runner acts as a subreaper and reaps the adopted backend and
+watcher. Receipts require absent process identities and an absent group, rather
+than treating zombies as reaped. The spawn ledger must remain at one entry.
+The fixture guard runs only after these positive assertions.
+
+Build and run with a host-native Linux Node 24.21.0 ABI 137 binary:
+
+```sh
+npm --prefix web ci
+VITE_PRINT_PARTNER_DESKTOP=1 npm --prefix web run build
+python3 rust/scripts/prove-built-startup-death.py --node /absolute/path/to/native/node --negative-control --evidence /tmp/gre448-built-startup
+```
+
+Keep the pinned native Node directory first in `PATH` for the npm commands.
+The driver rejects shell dispatchers before executing them. Each invocation
+creates a separate `run-*` evidence directory and records its exact commands.
+
+The negative control copies the Rust workspace into the isolated stage and
+disarms the production parent-death guard only in that private source copy.
+Its Cargo target directory is separate from the calling checkout. The same exact
+test must fail with
+`built startup group outlived force-killed owner`. A pre-cleanup observation
+requires the owner to be reaped, the backend still stopped, and the peer alive.
+The fixture then kills and reaps the leaked group. A `finally` block restores
+the private `lib.rs` byte-for-byte before checking the negative result. The
+calling checkout's source stays unchanged, including if termination bypasses
+`finally`. The driver requires two more cycles with the original guard and
+retains source isolation and restoration hashes.
+
+Evidence includes original and instrumented manifests, original and instrumented
+preload hashes, the instrumented preload, built entry and Node hashes, startup
+stacks, PID start identities, group membership, owner logs, armed state, cycle
+receipts, failure observations, cleanup receipts, and source restoration.
+Desktop runtime CI explicitly runs the full command. CI uploads receipts and
+manifests but excludes the staged package copy. Local runs retain that copy.
+
+This is Linux headless evidence with an instrumented, measured preload and an
+unchanged full built entry and dependency tree. It proves group cleanup after
+owner death during setup, without relying on JavaScript EOF handling. It does
+not prove packaged desktop launch, platform signing, storage readiness, macOS
+logout, or a natural startup stall. Built ready-time EOF and SQLite health remain
+covered by the separate lifecycle proof above.
+
+The implementation run on 2026-10-15 passed two baseline and two restored
+cycles. Disarming the production guard failed the intended group-survival
+assertion, and its guard removed the leaked group. All 19 recorded owner,
+backend, peer, and watcher PIDs were absent after completion. `lib.rs` matched
+its original bytes, and the built entry retained SHA-256
+`0356744362f0fa28e5ad3ed516de7fc71aca167af7fa6428a4e6b87650541bc7`.
+Local receipts are in
+`/tmp/gre448-parent-death-implementation/proof/run-8z69qpl1`.
+The artifact identifies 42,167 measured dependency files. Focused Clippy with
+warnings denied, workspace formatting, Python compilation, observer syntax,
+workflow YAML parsing, native-dispatcher rejection, and the AST ratchet also
+passed. The test helper lives under `src/tests/`, with unchanged lint baselines.
+This is the implementation run; independent parent verification remains separate.
+
+The owner independently ran the full negative-control command on 2026-10-15.
+Both baseline cycles passed, the disarmed guard failed the intended invariant,
+and both restored cycles passed. Direct `/proc` and process-group checks found
+every recorded owner, backend, watcher, and peer absent. Positive cleanup used
+no fallback signals. The restoration hash matched production source, and the
+built entry hash stayed unchanged. Independent receipts and `owner-audit.json`
+are in `/tmp/gre448-parent-death-owner/proof/run-o8j_4qrm`. Crate boundaries,
+the unchanged AST ratchet, Python compilation, observer syntax, comment review,
+and diff checks also passed.
+
+Review identified that termination could bypass restoration of the original
+source-mutating control. The control now mutates only a private Rust workspace
+copy and compiles it into a separate Cargo target. The owner reran the full
+proof in `/tmp/gre448-parent-death-owner/isolated-proof/run-s92c0dby`: four
+positive cycles passed, the isolated negative failed the intended invariant,
+and all 19 recorded PIDs were absent. Tracked `lib.rs` stayed unchanged.
+The cancellation harness `/tmp/gre448-parent-death-owner/prove-interruption.py`
+then ran two real baseline cycles per signal and blocked Cargo immediately
+after the private fault was written. SIGTERM and SIGKILL each bypassed
+`finally` and left the private copy mutated, while tracked source remained
+byte-for-byte unchanged. Receipts are in
+`/tmp/gre448-parent-death-owner/interruption/receipts.json`.
+
+## Full built backend interrupted upload recovery
+
+`rust/tests/built_backend_upload.py` runs the full built desktop entry with native
+Node 24.21.0, real SQLite, and signed Unix HTTP. It reuses the lifecycle proof's
+inherited lock, owner identity, setup protocol, health check, observer, and process
+guard. The proof creates its integration, fleet printer, and plan through public
+HTTP. The public multipart queue route stages a 64 MiB G-code file. SQLite is
+opened read-only for independent persistence and integrity assertions. No fixture
+state is seeded into the database, and no production module is imported by the
+Python proof.
+
+A local Moonraker HTTP peer reports an idle printer. The real queue drain creates
+a running `printer-upload` job and sends a multipart POST to
+`/server/files/upload` with `start=true` requested by the queued item. The peer
+sets `SO_RCVBUF` to 4096, reads exactly 65,536 bytes, and then stops reading and
+withholds its response. The received prefix must include the G-code filename and
+fixture content. The measured receive buffer must be at most 65,536 bytes, while
+the received `Content-Length` must exceed 67,108,864 bytes. These checks establish
+an unfinished body transfer, rather than a completed upload waiting for a reply.
+
+Two cases reuse each case's own data directory across a restart:
+
+- SIGKILL terminates the backend process group while SQLite still records
+  `sending`. The abrupt crash can leave the Unix socket pathname. The fixture
+  removes that temporary runtime directory after proving the old process and
+  group are absent. It does not claim graceful crash cleanup.
+- Closing stdin reaches the production EOF shutdown path. Observer events must
+  record stdin EOF before the application's own group SIGKILL. Production
+  shutdown records the unknown-outcome error and removes its Unix socket.
+
+Before any queue HTTP read after restart, the SQLite row must contain the exact
+unknown-outcome error from `interruptSendingItem`. This directly checks startup
+reconciliation. A real queue GET and missing-job GET then exercise HTTP recovery.
+Four real HTTP drains must return empty results. The peer must still have one
+upload attempt, the queue and upload job IDs must match their original values,
+and the restarted job list must stay empty. The staged file must retain its
+original length and SHA-256. The proof never requests an explicit retry.
+
+Run after `npm --prefix web ci` and `npm --prefix web run build`:
+
+```sh
+python3 rust/tests/built_backend_upload.py --node /absolute/path/to/native/node --negative-control --evidence /absolute/path/to/evidence
+```
+
+The optional negative control copies the complete web tree, including built
+artifacts and dependencies, under its evidence directory. It rejects copied
+symlinks that escape that private tree. It changes only the private built
+`selectPrinterSendQueueDrainItems` predicate to admit `error` rows as well as
+`queued` rows. The ordinary recovery error remains intact. The next drain must
+produce a second real multipart POST and a different job ID, then fail
+`interrupted upload was resent automatically`. A state or message assertion
+cannot satisfy this control. Two further pristine cases must pass afterward.
+Shared production source, built files, dependency files, and symlink targets are
+measured before and after the run. The control never edits the shared tree.
+
+Each run creates a fresh `run-*` evidence directory. It retains artifact identity,
+per-file hashes, signed HTTP response logs, SQLite snapshots, network attempt
+records, child stdout and stderr, stop events, and cleanup receipts. Local runs
+also retain the staged G-code and private faulty bundle. Use a filesystem with
+space for the copied web tree and five staged files. Desktop runtime CI runs the
+full negative-control command and excludes the copied tree and G-code bodies
+from its uploaded evidence.
+
+Process guards kill and reap remaining backend groups on failures. Peer cleanup
+stops admission, releases held uploads, closes accepted sockets, and joins its
+listener and request threads. Socket and HTTP waits have deadlines. SIGTERM and
+KeyboardInterrupt unwind these guards. Successful cases require no fallback
+process kill. The intended negative assertion uses the fallback guard to remove
+its deliberately active second upload.
+
+This is unsigned Linux headless evidence for the full built backend's persisted
+no-resend policy after interrupted transfers. It does not prove a physical
+printer's final outcome, an explicit retry, the Rust supervisor's upload path,
+packaged launch, platform signing, macOS logout, or release manifest verification.
+
+The owner independently ran the full command on 2026-10-15. Evidence is in
+`/persist/home/poitee/.local/state/gre448-upload-owner/run-7gv8lip2`.
+All four positive cases passed. The private negative control recorded exactly
+two uploads and a different job ID. Its output included:
+
+```text
+EXPECTED FAILURE: interrupted upload was resent automatically; actual network uploads=2
+PASS: built backend interrupted uploads retain unknown outcome without automatic resend
+```
+
+All ten backend PIDs and groups were absent afterward. All five peer cleanup
+receipts passed. All 39,276 measured source, artifact, dependency, and link entries
+remained unchanged. The final run emitted no transport traceback.
+
+## Legal summary representation inventory
+
+`drain::ticket_t_3_drain_legal_summary_representation_parity` extends the CORS
+parity gate for GET and HEAD on `/legal/summary` and `/api/v1/legal/summary`.
+Its 768 cases cross both aliases, both methods, allowed or absent Origin,
+200 or 429, twelve Accept-Encoding values and four Accept values. The encoding
+inventory includes absent and empty headers, identity, identity excluded,
+Brotli, gzip, both configured encodings, weighted preferences, wildcard,
+unsupported deflate, and zero-quality exclusions. Accept includes absent,
+text/plain, application/json, and an excluded wildcard.
+
+The current 868-byte bundled summary and the rate-limit JSON are below Node's
+1024-byte compression threshold. Node returns the original representation for
+these requests, including those excluding every encoding or media type. Accept
+does not select another media type or produce 406. Both implementations must
+omit Content-Encoding and Vary: Accept-Encoding. Vary contains only Origin.
+This records existing compatibility behavior, including its permissive handling
+of exclusions. It does not establish general HTTP negotiation compliance.
+
+Every GET must match the complete expected bytes. HEAD must have an empty body
+and the full corresponding representation length. Successful responses retain
+text/plain; charset=utf-8. A 429 retains application/json; charset=utf-8 and the
+exact statusCode, error and message fields in their serialized order. Its retry
+message and Content-Length are checked against that response's own reset value,
+using the wording appropriate to its observed timer. Retry-After must equal
+X-RateLimit-Reset within 1 through 60 seconds. Limit and remaining headers,
+no-store, and CORS metadata are also checked. Time-dependent headers and body
+lengths are validated locally before stable metadata is compared across runs.
+
+The gate captures Node fixtures, refuses a receipt with one failed fixture,
+checks an isolated Rust candidate, and commits the passing receipt only after
+comparison. Two restarts repeat the matrix with Node stopped and verify that
+the ownership record stays unchanged. Existing fleet CI selects this test through
+`test(ticket_t_3_drain)` with `desktop_rebuild` enabled.
+
+These fixtures prove identity representations for the current small documents.
+They do not prove Brotli or gzip output above the threshold, static asset
+negotiation, or a common desktop HTTP compression policy. A larger summary or a
+changed compression policy must pass this gate before cutover. Common HTTP
+policy and the GRE-343 asset negotiation work remain follow-ups. Default-off
+cutover flags remain unchanged. GRE-448 stays In Progress; remaining operation
+and worker acceptance and actual Mac logout remain open.
+
+Author: Codex gpt-6.1-sol through the Codex harness on fleet VM 133. The requested
+Claude Opus 5.5 design review through claudeAgent returned exactly
+`Claude API rate limit reached. Try again later.` The authorized gpt-6-astra
+fallback reviewed the design. Exact-head scoring and CI evidence belong to the
+PR's merge gate.
+
+Local verification on 2026-10-15 built this worktree's server and desktop frontend,
+generated its measured bundle manifest with native Node v24.21.0, then ran:
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --test runtime_m0 --features desktop_rebuild ticket_t_3_drain_legal_summary -- --nocapture
+```
+
+Result: 3 passed, 0 failed. The representation test reported 768 passed and zero
+failed for Node, the isolated Rust candidate, restart 1, and restart 2. Both
+restarts ran with Node stopped and left authority unchanged. The alias and
+flag-off tests also passed. Local logs are under
+`/persist/home/.local/state/pstack-t3/gre448-negotiation/` on fleet VM 133.
+
+The companion `rate_limit::tests::ticket_t_3_drain_rate_limit_representation_boundaries`
+uses a paused Tokio clock to force reset values 60, 59, and 1. It checks exact
+429 GET bytes, HEAD emptiness, representation lengths, retry/reset headers and
+quota metadata at each boundary. This deterministically covers Rust's
+`1 minute`, `59 seconds`, and `1 second` serialization. The live Node/Rust matrix
+validates observed timers; it does not force Node's clock to these boundaries.
+
+Both rate-limit unit tests passed locally after this addition. A temporary
+`1 seconds` mutation failed the new test's representation-length assertion
+with actual 98 and expected 97 bytes. Restoring the source returned both tests
+to green. The mutation was not committed. Logs are `boundary-negative.log` and
+`boundary-restored.log` in the evidence directory above.

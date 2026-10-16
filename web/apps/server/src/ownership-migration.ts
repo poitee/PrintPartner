@@ -8,6 +8,8 @@ import { z } from "zod";
 import { acquireDataDirectory, desktopContext } from "./desktop-context.js";
 import * as schema from "./db/schema.js";
 import { readAcceptedPlanOperationalSnapshotInternal } from "./db/accepted-plan-operational.js";
+import { readAcceptedPlatesInternal } from "./db/accepted-plates.js";
+import { validateOwnershipPlateComparisonBudget, validateOwnershipPlateProtection, validateOwnershipPlateTextBytes } from "./ownership-plate-history.js";
 import { openVerifiedAcceptedArtifact } from "./services/accepted-artifacts.js";
 import { ownershipHistoryTables, validateOwnershipHistory } from "./ownership-history.js";
 import { inspectOwnershipExports, ownershipExportClaimSchema, ownershipExportTarget, ownershipFileDigest, type OwnershipExport } from "./ownership-exports.js";
@@ -65,6 +67,9 @@ function safeRelative(value: unknown): void {
 function validateData(db: Database.Database, claims = new Map<string, string>()): Inventory["tables"] {
   if (readSchemaVersion(db) !== currentSchemaVersion) throw new Error("Current database schema required");
   if (db.pragma("integrity_check", { simple: true }) !== "ok" || z.array(z.unknown()).parse(db.pragma("foreign_key_check")).length) throw new Error("Database integrity or dangling relationship");
+  validateOwnershipPlateTextBytes(db);
+  validateOwnershipPlateComparisonBudget(db);
+  validateOwnershipPlateProtection(db);
   const names = tables(db);
   const tenantTables = new Set(names.filter(table => columns(db, table).includes("tenant_id")));
   const inventory: Inventory["tables"] = [];
@@ -97,6 +102,7 @@ function validateData(db: Database.Database, claims = new Map<string, string>())
     for (const fk of foreignKeys) { const group = links.get(fk.id) ?? []; group.push(fk); links.set(fk.id, group); }
     let supplementalId = -1;
     for (const [field, target] of Object.entries({ profile_id: "build_profiles", project_id: "projects", part_id: "parts", projection_part_id: "parts", source_id: "projects", machine_profile_id: "printer_profiles", filament_profile_id: "filament_profiles" })) {
+      if (table === "plan_revision_parts" && field === "projection_part_id") continue;
       if (columns(db, table).includes(field) && !foreignKeys.some(fk => fk.from === field)) links.set(supplementalId--, [{ id: -1, seq: 0, table: target, from: field, to: "id" }]);
     }
     for (const row of data) for (const link of links.values()) {
@@ -164,7 +170,7 @@ function relocatedLocalPath(row: Row, source: string, destination: string): stri
   safeRelative(relative(root, candidate));
   return join(destination, relative(source, candidate));
 }
-function validateSnapshotPaths(source: string, db: Database.Database, checkLocalPaths = true): void {
+function validateSnapshotPaths(source: string, db: Database.Database, checkLocalPaths = true) {
   for (const project of rows(db, "projects")) {
     if (checkLocalPaths && project.local_path) {
       relocatedLocalPath(project, source, source);
@@ -184,14 +190,28 @@ function validateSnapshotPaths(source: string, db: Database.Database, checkLocal
   const sets = driver.select().from(schema.planRevisionInputSets).all();
   const revisions = driver.select().from(schema.planRevisions).all();
   for (const profile of driver.select().from(schema.buildProfiles).all()) {
-    if (profile.acceptedPlanRevisionId == null) continue;
+    if (profile.acceptedPlanRevisionId == null && profile.acceptedPlanVersion === 0) continue;
     const accepted = readAcceptedPlanOperationalSnapshotInternal({ db: driver, schema, tenantId: profile.tenantId,
       profileId: profile.id, reposDir: join(source, "repos"), sqlite: true,
       resolveSourceSnapshotPath: (sourceId, locator) => locator.startsWith(`${sourceId}/revisions/`) ? join(source, "repos", locator) : null });
+    if (profile.acceptedPlanRevisionId == null) {
+      if (accepted.kind !== "compatibility_dirty") throw new Error("Unsafe accepted Plan operational state");
+      continue;
+    }
     const revision = revisions.find(revision => revision.id === profile.acceptedPlanRevisionId);
     const format1 = sets.some(set => set.id === revision?.inputSetId && set.formatVersion === 1);
     if (accepted.kind !== "ready" && !(accepted.kind === "uninitialized" && format1)) throw new Error("Unsafe accepted Plan operational state");
   }
+  const plateProfiles = new Set(driver.select().from(schema.acceptedPlateRevisions).all().map(revision => revision.profileId));
+  const plates = driver.select().from(schema.buildProfiles).all().filter(profile => plateProfiles.has(profile.id)).map(profile => {
+    const state = readAcceptedPlatesInternal({ db: driver, schema, tenantId: profile.tenantId, reposDir: join(source, "repos"), sqlite: true,
+      resolveSourceSnapshotPath: (sourceId, locator) => locator.startsWith(`${sourceId}/revisions/`) ? join(source, "repos", locator) : null,
+      transaction: operation => db.inTransaction ? operation() : db.transaction(operation)(),
+      readTransaction: operation => db.inTransaction ? operation() : db.transaction(operation)(),
+    }, profile.id);
+    if (state.kind === "transaction_unavailable") throw new Error("Unsafe accepted Plate operational state");
+    return { profileId: profile.id, state };
+  });
   const inputs = driver.select().from(schema.planRevisionInputs).all();
   const sourceRevisions = driver.select().from(schema.sourceRevisions).all();
   for (const part of driver.select().from(schema.planRevisionParts).all()) {
@@ -213,10 +233,13 @@ function validateSnapshotPaths(source: string, db: Database.Database, checkLocal
     if (opened.kind !== "verified") throw new Error("Unsafe or missing accepted Part artifact");
     opened.lease.close();
   }
+  return plates;
 }
 function suspendOwnershipTriggers(db: Database.Database): { name: string; sql: string }[] {
   const names = new Set([
     "trg_parts_invalidate_accepted_revision_update",
+    "trg_accepted_plate_revisions_immutable_update", "trg_accepted_plates_immutable_update",
+    "trg_accepted_plate_units_immutable_update", "trg_accepted_plate_heads_ownership_update",
     "trg_plan_revisions_immutable_update", "trg_plan_revision_parts_immutable_update", "trg_required_units_immutable_update",
     "trg_plan_revision_required_units_immutable_update", "trg_plan_revision_required_unit_sets_immutable_update",
   ]);
@@ -289,7 +312,7 @@ export async function executeOwnershipCopy({ sourceDir, destinationDir, manifest
     if (snapshotDigest(db) !== input.source_digest) throw new Error("Stale source snapshot digest");
     const inventory = validateData(db);
     productFiles(source, db);
-    validateSnapshotPaths(source, db);
+    const sourcePlateState = validateSnapshotPaths(source, db);
     const artifacts = exportInventory(source, db);
     const sourceFiles = productFileDigests(source);
     const users = new Set(rows(db, "users").map(row => row.id));
@@ -344,7 +367,8 @@ export async function executeOwnershipCopy({ sourceDir, destinationDir, manifest
         const schemaRows = (database: Database.Database) => database.prepare("SELECT type,name,tbl_name,sql FROM sqlite_schema ORDER BY type,name").all();
         if (JSON.stringify(schemaRows(copy)) !== JSON.stringify(schemaRows(original))) throw new Error("Staged schema changed during ownership copy");
         validateData(copy);
-        validateSnapshotPaths(stage ?? "", copy, false);
+        const stagedPlateState = validateSnapshotPaths(stage ?? "", copy, false);
+        if (JSON.stringify(stagedPlateState) !== JSON.stringify(sourcePlateState)) throw new Error("Staged accepted Plate state differs from source");
         for (const table of tables(original)) {
           const expectedRows = rows(original, table).map(row => {
             const owner = claims.get(key(table, row.__rowid));

@@ -49,13 +49,13 @@ async function fixture() {
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(fetch).not.toHaveBeenCalled();
     expect(status).not.toHaveBeenCalled();
+    const stored = item ? tenantStorage.run(tenant, () => getPrinterSendQueueItem(repo, item.id)) : null;
     if (item) {
-      const stored = tenantStorage.run(tenant, () => getPrinterSendQueueItem(repo, item.id));
       expect(stored).toMatchObject({ id: item.id, state: terminal.status === "done" ? "done" : "error", artifact_path: path, profile_id: profileId, upload_job_id: id });
       if (terminal.status === "error") expect(readFileSync(path, "utf8")).toBe(bytes);
       else expect(existsSync(path)).toBe(false);
     } else expect(existsSync(path)).toBe(false);
-    return terminal;
+    return { ...terminal, queueItem: stored };
   }
   return { repo, jobs, profileId, host, upload, prusaUpload, run, close: async () => { await ports.db.close(); rmSync(root, { recursive: true, force: true }); } };
 }
@@ -72,6 +72,16 @@ describe("printer-upload worker Bambu admission", () => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
+  });
+
+  it.each([
+    ['{"bambu":false}', "FEATURE_DISABLED: Feature bambu is disabled."],
+    ['{"bambu":null}', "FEATURE_TOGGLES_INVALID: Stored feature toggles are invalid."],
+  ])("reconciles the exact queue error for stored choices %s", async (stored, error) => {
+    f.repo.setSetting("feature_toggles", stored);
+    const result = await f.run({ queued: true });
+    expect(result.queueItem).toMatchObject({ state: "error", error });
+    expect(result).toMatchObject({ status: "error", error });
   });
 
   for (const queued of [false, true]) {

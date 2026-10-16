@@ -291,7 +291,7 @@ describe.each([undefined, "0", "true", "1"])("release recovery flag %s", (flag) 
       fs.openSync = function(path, ...args) {
         if (String(path).includes(${JSON.stringify(prefix)})) {
           rechecked = true;
-          throw Object.assign(new Error("detached record unavailable"), { code: "ENXIO" });
+          throw Object.assign(new Error("detached record unavailable"), { code: "EIO" });
         }
         return open.call(this, path, ...args);
       };
@@ -306,7 +306,30 @@ describe.each([undefined, "0", "true", "1"])("release recovery flag %s", (flag) 
       console.log(JSON.stringify({ rechecked, error, entries }));
     `], { encoding: "utf8" });
     expect(child.status, child.stderr).toBe(0);
-    expect(JSON.parse(child.stdout)).toEqual({ rechecked: flag === "1", error: flag === "1" ? "ENXIO" : null, entries: [] });
+    expect(JSON.parse(child.stdout)).toEqual({ rechecked: flag === "1", error: flag === "1" ? "EIO" : null, entries: [] });
+  });
+});
+
+describe("ownership record read errors", () => {
+  it.each(["ENOENT", "ENOTDIR", "ENXIO", "ELOOP", "EISDIR", "ENODEV", "EACCES", "EPERM", "EIO"])("classifies %s without swallowing access or I/O failures", (code) => {
+    const child = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
+      import fs from "node:fs";
+      import { syncBuiltinESMExports } from "node:module";
+      import { recordNamesInstance } from ${JSON.stringify(new URL("./storage-lease.ts", import.meta.url).href)};
+      const failure = Object.assign(new Error("read failed"), { code: ${JSON.stringify(code)} });
+      const open = fs.openSync;
+      fs.openSync = function(path, ...args) {
+        if (path === "injected-owner.json") throw failure;
+        return open.call(this, path, ...args);
+      };
+      syncBuiltinESMExports();
+      try { console.log(JSON.stringify({ ours: recordNamesInstance("injected-owner.json", ${JSON.stringify(instance)}) })); }
+      catch (error) { console.log(JSON.stringify({ code: error.code, sameError: error === failure })); }
+    `], { encoding: "utf8" });
+    expect(child.status, child.stderr).toBe(0);
+    expect(JSON.parse(child.stdout)).toEqual(["EACCES", "EPERM", "EIO"].includes(code)
+      ? { code, sameError: true }
+      : { ours: false });
   });
 });
 
@@ -392,13 +415,31 @@ describe("release after the lease is removed externally", () => {
     { record: "directory marker", path: ".desktop-owner.json",
       republish: `fs.mkdirSync(target); fs.writeFileSync(target + "/evidence", "retain");`,
       kept: (target: string) => readFileSync(join(target, "evidence"), "utf8") === "retain" },
-  ])("hands back a $record republished between the ownership check and the detach", ({ path, republish, kept }) => {
+    { record: "socket lease", admissionError: "storage_lease_marker_invalid: Data directory lease is malformed or unreadable", path: ".desktop-lease",
+      prepare: `const server = net.createServer(); await new Promise(resolve => server.listen(socketPath, resolve)); server.unref();`,
+      republish: `fs.mkdirSync(target); fs.renameSync(socketPath, target + "/owner.json");`,
+      kept: (target: string) => lstatSync(join(target, "owner.json")).isSocket() },
+    { record: "socket marker", admissionError: expect.objectContaining({ code: "ENXIO" }), path: ".desktop-owner.json",
+      prepare: `const server = net.createServer(); await new Promise(resolve => server.listen(socketPath, resolve)); server.unref();`,
+      republish: `fs.renameSync(socketPath, target);`,
+      kept: (target: string) => lstatSync(target).isSocket() },
+    { record: "symlink-loop lease", admissionError: "storage_lease_marker_invalid: Data directory lease is malformed or unreadable", path: ".desktop-lease",
+      republish: `fs.mkdirSync(target); fs.symlinkSync("owner.json", target + "/owner.json");`,
+      kept: (target: string) => readlinkSync(join(target, "owner.json")) === "owner.json" },
+    { record: "symlink-loop marker", admissionError: expect.objectContaining({ code: "EEXIST" }), path: ".desktop-owner.json",
+      prepare: `fs.symlinkSync(socketPath + ".loop", socketPath + ".loop");`,
+      republish: `fs.symlinkSync(socketPath + ".loop", target);`,
+      kept: (target: string) => readlinkSync(target) === join(target, "..", "foreign.sock.loop") },
+  ])("hands back a $record republished between the ownership check and the detach", ({ path, prepare = "", republish, kept, admissionError }) => {
     const dir = dataDir();
     const child = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
       import fs from "node:fs";
+      import net from "node:net";
       import { syncBuiltinESMExports } from "node:module";
       import { acquireDataDirectory } from ${JSON.stringify(new URL("./desktop-context.ts", import.meta.url).href)};
       const target = ${JSON.stringify(join(dir, path))};
+      const socketPath = ${JSON.stringify(join(dir, "foreign.sock"))};
+      ${prepare}
       const rename = fs.renameSync;
       let injected = false;
       fs.renameSync = function(from, to) {
@@ -417,6 +458,7 @@ describe("release after the lease is removed externally", () => {
     expect(JSON.parse(child.stdout)).toEqual({ injected: true });
     expect(kept(join(dir, path))).toBe(true);
     expect(readdirSync(dir).filter((name) => name.includes("-release-"))).toEqual([]);
+    if (admissionError) expect(() => acquireDataDirectory(dir)).toThrow(admissionError);
   });
 
   it.skipIf(process.getuid?.() === 0).each([

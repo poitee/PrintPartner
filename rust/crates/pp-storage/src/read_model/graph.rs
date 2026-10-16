@@ -1,4 +1,41 @@
 use super::AcceptedRead;
+#[cfg(feature = "desktop_rebuild")]
+pub(crate) use super::context::{
+    AcceptedProgressFacts, BuildSummaryFacts, FreshnessFacts, StaleReasonFacts,
+    UntrackedReasonFacts,
+};
+#[cfg(feature = "desktop_rebuild")]
+use crate::manifest_text::{
+    DraftPart, ManifestText, OptionGroupId, PartManifestMetadata, read_manifest_text,
+};
+
+#[cfg(feature = "desktop_rebuild")]
+pub(crate) fn build_summary(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    profile: i64,
+    repos: &std::path::Path,
+    budget: &mut Budget,
+) -> Result<Option<crate::build_graph::ProfileSummary>> {
+    let accepted = match read_with_purpose(tx, tenant, profile, repos, budget, ReadPurpose::Summary)
+    {
+        Ok(read) => read,
+        Err(error) => match error.downcast_ref::<Integrity>() {
+            Some(error) => super::AcceptedRead::IntegrityFailure {
+                code: error.code.to_owned(),
+                message: error.message.clone(),
+            },
+            None => return Err(error),
+        },
+    };
+    if matches!(accepted, super::AcceptedRead::Missing) {
+        return Ok(None);
+    }
+    let facts = super::context::capture_build_summary(tx, tenant, profile, &accepted, budget)?
+        .ok_or_else(|| anyhow::anyhow!("Build context missing"))?;
+    Ok(Some(crate::build_graph::projection::profile_summary(facts)))
+}
+
 use anyhow::{Result, anyhow};
 use rusqlite::{Transaction, types::ValueRef};
 use serde::Serialize;
@@ -31,8 +68,16 @@ pub(super) fn check(ok: bool, code: &'static str, message: &str) -> Result<()> {
         .into())
     }
 }
+#[cfg(feature = "desktop_rebuild")]
+pub(super) fn budget_check(ok: bool, resource: crate::build_graph::BudgetResource) -> Result<()> {
+    anyhow::ensure!(
+        ok,
+        crate::build_graph::Failure::BudgetExhausted { resource }
+    );
+    Ok(())
+}
 #[derive(Default)]
-pub(super) struct Budget {
+pub(crate) struct Budget {
     rows: usize,
     bytes: usize,
 }
@@ -144,8 +189,22 @@ pub struct Part {
     pub units: Vec<Unit>,
 }
 #[derive(Clone)]
-pub(super) struct Row(BTreeMap<String, Value>, &'static str);
+pub(super) struct Row(
+    BTreeMap<String, Value>,
+    &'static str,
+    #[cfg(feature = "desktop_rebuild")] PartManifestMetadata,
+);
 impl Row {
+    pub(super) fn same_field(&self, other: &Self, key: &str) -> bool {
+        #[cfg(feature = "desktop_rebuild")]
+        match key {
+            "requirement" => return self.2.requirement == other.2.requirement,
+            "option_group_id" => return self.2.option_group_id == other.2.option_group_id,
+            _ => {}
+        }
+        self.v(key) == other.v(key)
+    }
+
     pub(super) fn v(&self, k: &str) -> &Value {
         self.0.get(k).unwrap_or(&Value::Null)
     }
@@ -214,6 +273,10 @@ pub(super) fn rows(
     let expression = columns
         .iter()
         .map(|c| {
+            #[cfg(feature = "desktop_rebuild")]
+            if matches!(c.as_str(), "requirement" | "option_group_id") {
+                return format!("coalesce(length(cast(\"{c}\" AS blob)),0)");
+            }
             format!(
                 "CASE WHEN typeof(\"{c}\")='text' THEN length(cast(\"{c}\" AS blob)) ELSE 0 END"
             )
@@ -226,8 +289,15 @@ pub(super) fn rows(
         code,
         "Accepted Plan stored row text is corrupt",
     )?;
-    budget.rows += count as usize;
-    budget.bytes += total as usize;
+    budget.rows = budget.rows.saturating_add(count as usize);
+    budget.bytes = budget.bytes.saturating_add(total as usize);
+    #[cfg(feature = "desktop_rebuild")]
+    {
+        use crate::build_graph::BudgetResource;
+        budget_check(budget.rows <= 200_000, BudgetResource::GraphRows)?;
+        budget_check(budget.bytes <= 64 * 1024 * 1024, BudgetResource::GraphBytes)?;
+    }
+    #[cfg(not(feature = "desktop_rebuild"))]
     check(
         budget.rows <= 200_000 && budget.bytes <= 64 * 1024 * 1024,
         code,
@@ -242,7 +312,53 @@ pub(super) fn rows(
     let result = stmt
         .query_map(args, |r| {
             let mut values = BTreeMap::new();
+            #[cfg(feature = "desktop_rebuild")]
+            let mut manifest = PartManifestMetadata::default();
             for (i, name) in names.iter().enumerate() {
+                #[cfg(feature = "desktop_rebuild")]
+                if matches!(table, "parts" | "plan_revision_parts" | "plan_draft_parts") {
+                    match name.as_str() {
+                        "requirement" => {
+                            manifest.requirement = read_manifest_text(r.get_ref(i)?)
+                                .map_err(|error| {
+                                    rusqlite::Error::ToSqlConversionFailure(Box::new(Integrity {
+                                        code: "manifest_text",
+                                        message: error.to_string(),
+                                    }))
+                                })?
+                                .map(ManifestText);
+                            values.insert(
+                                name.clone(),
+                                Value::from(
+                                    manifest.requirement.as_ref().and_then(|v| v.0.as_scalar()),
+                                ),
+                            );
+                            continue;
+                        }
+                        "option_group_id" => {
+                            manifest.option_group_id = read_manifest_text(r.get_ref(i)?)
+                                .map_err(|error| {
+                                    rusqlite::Error::ToSqlConversionFailure(Box::new(Integrity {
+                                        code: "manifest_text",
+                                        message: error.to_string(),
+                                    }))
+                                })?
+                                .map(OptionGroupId);
+                            values.insert(
+                                name.clone(),
+                                Value::from(
+                                    manifest
+                                        .option_group_id
+                                        .as_ref()
+                                        .and_then(|v| v.0.as_scalar()),
+                                ),
+                            );
+                            continue;
+                        }
+                        _ => {}
+                    }
+                }
+
                 let value = match r.get_ref(i)? {
                     ValueRef::Null => Value::Null,
                     ValueRef::Integer(v) => json!(v),
@@ -266,9 +382,28 @@ pub(super) fn rows(
                 };
                 values.insert(name.clone(), value);
             }
-            Ok(Row(values, code))
+            #[cfg(feature = "desktop_rebuild")]
+            {
+                manifest.manifest_source = values
+                    .get("manifest_source")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+            }
+            Ok(Row(
+                values,
+                code,
+                #[cfg(feature = "desktop_rebuild")]
+                manifest,
+            ))
         })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|error| match error {
+            rusqlite::Error::ToSqlConversionFailure(inner) => match inner.downcast::<Integrity>() {
+                Ok(integrity) => anyhow!(*integrity),
+                Err(inner) => anyhow!(rusqlite::Error::ToSqlConversionFailure(inner)),
+            },
+            error => anyhow!(error),
+        })?;
     Ok(result)
 }
 pub(super) fn one(
@@ -399,6 +534,7 @@ pub(super) fn object(fields: Vec<(&str, Value)>) -> String {
             .join(",")
     )
 }
+#[cfg(not(feature = "desktop_rebuild"))]
 fn canonical_part(r: &Row) -> Result<String> {
     let fields = [
         "part_key",
@@ -436,12 +572,69 @@ fn canonical_part(r: &Row) -> Result<String> {
     }
     Ok(object(values))
 }
+#[cfg(feature = "desktop_rebuild")]
+fn canonical_part(r: &Row) -> Result<String> {
+    let fields = [
+        "part_key",
+        "relative_path",
+        "filename",
+        "source_layer",
+        "status",
+        "role_inferred",
+        "role_override",
+        "filament_color_id",
+        "filament_custom_hex",
+        "spoolman_spool_id",
+        "quantity_inferred",
+        "quantity_override",
+        "quantity_effective",
+        "included",
+        "notes",
+        "github_blob_url",
+        "geometry_same",
+        "requirement",
+        "option_group_id",
+        "manifest_source",
+        "artifact_digest",
+    ];
+    let mut scalar = serde_json::Map::new();
+    for key in fields {
+        if matches!(key, "requirement" | "option_group_id" | "manifest_source") {
+            continue;
+        }
+        scalar.insert(
+            key.into(),
+            match key {
+                "included" => json!(r.b(key)?),
+                "geometry_same" => json!(r.ob(key)?),
+                _ => r.v(key).clone(),
+            },
+        );
+    }
+    let part = DraftPart::new(Value::Object(scalar), r.2.clone());
+    String::from_utf8(part.json_fields(&fields, false)).map_err(Into::into)
+}
+enum ReadPurpose {
+    Snapshot,
+    #[cfg(feature = "desktop_rebuild")]
+    Summary,
+}
 pub(super) fn read(
     tx: &Transaction<'_>,
     tenant: &str,
     id: i64,
     repos: &Path,
     b: &mut Budget,
+) -> Result<AcceptedRead> {
+    read_with_purpose(tx, tenant, id, repos, b, ReadPurpose::Snapshot)
+}
+fn read_with_purpose(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    id: i64,
+    repos: &Path,
+    b: &mut Budget,
+    _purpose: ReadPurpose,
 ) -> Result<AcceptedRead> {
     let Some(p) = one(
         tx,
@@ -829,7 +1022,7 @@ pub(super) fn read(
             "manifest_source",
         ] {
             check(
-                p.v(k) == r.v(k),
+                p.same_field(&r, k),
                 "projection",
                 "Accepted Plan projection differs from its revision",
             )?;
@@ -874,6 +1067,21 @@ pub(super) fn read(
                 }
             }
         };
+        #[cfg(feature = "desktop_rebuild")]
+        check(
+            matches!(_purpose, ReadPurpose::Summary)
+                || (r
+                    .2
+                    .requirement
+                    .as_ref()
+                    .is_none_or(|v| v.0.as_scalar().is_some())
+                    && r.2
+                        .option_group_id
+                        .as_ref()
+                        .is_none_or(|v| v.0.as_scalar().is_some())),
+            "manifest_text",
+            "Non-scalar manifest metadata requires a lossless snapshot projection",
+        )?;
         parts.push(Part {
             revision_part_id: r.n("id")?,
             projection_part_id: pid,

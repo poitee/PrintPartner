@@ -403,8 +403,8 @@ function insertRevision(
   return created.id;
 }
 
-function readStoredPlates(
-  dependencies: AcceptedPlateDependencies,
+export function readAcceptedPlateRevisionLayoutInternal(
+  dependencies: Pick<AcceptedPlateDependencies, "db" | "schema" | "tenantId">,
   revisionId: number,
   expectedPlateCount: number,
   expectedUnitCount: number,
@@ -439,6 +439,12 @@ function readStoredPlates(
   if (plateRows.some((plate, index) => plate.ordinal !== index + 1)) {
     throw new AcceptedPlateIntegrityError("layout");
   }
+  const unitsByPlateId = new Map<string, typeof units>();
+  for (const unit of units) {
+    const plateUnits = unitsByPlateId.get(unit.plateId);
+    if (plateUnits) plateUnits.push(unit);
+    else unitsByPlateId.set(unit.plateId, [unit]);
+  }
   const stored: AcceptedPlateInput[] = plateRows.map((plate) => ({
     plateId: plate.plateId,
     printerId: plate.printerId,
@@ -448,18 +454,16 @@ function readStoredPlates(
     bedDepthUm: plate.bedDepthUm,
     bedHeightUm: plate.bedHeightUm,
     marginUm: plate.marginUm,
-    units: units
-      .filter((unit) => unit.plateId === plate.plateId)
-      .map((unit) => ({
-        token: unit.requiredUnitToken,
-        xUm: unit.xUm,
-        yUm: unit.yUm,
-        widthUm: unit.widthUm,
-        depthUm: unit.depthUm,
-        heightUm: unit.heightUm,
-        placement: unit.placement === "manual" || unit.placement === "unplaced" ? unit.placement : "auto",
-        pinned: unit.pinned === true,
-      })),
+    units: (unitsByPlateId.get(plate.plateId) ?? []).map((unit) => ({
+      token: unit.requiredUnitToken,
+      xUm: unit.xUm,
+      yUm: unit.yUm,
+      widthUm: unit.widthUm,
+      depthUm: unit.depthUm,
+      heightUm: unit.heightUm,
+      placement: unit.placement === "manual" || unit.placement === "unplaced" ? unit.placement : "auto",
+      pinned: unit.pinned === true,
+    })),
   }));
   const legacy = validatePlates(stored, expectedTokens, false, "overlap_only");
   if (legacy.kind !== "ready") throw new AcceptedPlateIntegrityError("layout");
@@ -565,7 +569,7 @@ function readAcceptedPlateState(
       throw new AcceptedPlateIntegrityError("revision");
     }
     const objectNames = requiredObjectNames(accepted.snapshot);
-    const stored = readStoredPlates(
+    const stored = readAcceptedPlateRevisionLayoutInternal(
       dependencies,
       revision.id,
       revision.expectedPlateCount,
@@ -772,7 +776,7 @@ export function publishAcceptedPlatesInternal(
         currentRevision.planRevisionDigest === accepted.snapshot.revisionDigest &&
         currentRevision.requiredUnitMappingDigest === accepted.snapshot.requiredUnitMappingDigest;
       if (sameAcceptedBasis) {
-        readStoredPlates(
+        readAcceptedPlateRevisionLayoutInternal(
           dependencies,
           currentRevision.id,
           currentRevision.expectedPlateCount,
@@ -908,7 +912,7 @@ function editAcceptedPlatesInternal(
       throw new AcceptedPlateIntegrityError("revision");
     }
     const expectedTokens = new Set(requiredObjectNames(accepted.snapshot).keys());
-    const plates = readStoredPlates(
+    const plates = readAcceptedPlateRevisionLayoutInternal(
       dependencies,
       currentRevision.id,
       currentRevision.expectedPlateCount,
@@ -1091,7 +1095,7 @@ export function restoreAcceptedPlatesInternal(
     ) {
       return { kind: "stale_accepted_plan" };
     }
-    const plates = readStoredPlates(
+    const plates = readAcceptedPlateRevisionLayoutInternal(
       dependencies,
       revision.id,
       revision.expectedPlateCount,

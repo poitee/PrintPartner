@@ -28,6 +28,8 @@ export const queryKeys = {
   dateFormatSetting: ["dateFormatSetting"] as const,
   buildTrackingSettings: ["buildTrackingSettings"] as const,
   externalAccessSettings: ["externalAccessSettings"] as const,
+  tenantFeatures: ["tenantFeatures"] as const,
+  planFeatures: (profileId: number) => ["planFeatures", profileId] as const,
   acceptedPlateWorkspace: (profileId: number) => ["acceptedPlateWorkspace", profileId] as const,
   acceptedPlateExportJobs: (profileId: number) => ["acceptedPlateExportJobs", profileId] as const,
 };

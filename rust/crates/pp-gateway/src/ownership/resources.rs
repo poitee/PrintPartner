@@ -10,6 +10,7 @@ pub enum TableId {
     Projects,
     SourceRevisions,
     SourceDocs,
+    SourceNotes,
     AppSettings,
     AppEvents,
     BuildProfiles,
@@ -75,6 +76,20 @@ enum ReviewedEntry {
     PreviewSourceNaming { resources: Vec<ResourceId> },
     #[serde(rename = "tool.list_plan_snapshots")]
     ListPlanSnapshots { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.ui_open_source")]
+    UiOpenSource { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.audit_source_provenance")]
+    AuditSourceProvenance { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.compare_source_revisions")]
+    CompareSourceRevisions { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_source_inventory")]
+    GetSourceInventory { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_source_docs")]
+    GetSourceDocs { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.ui_open_docs")]
+    UiOpenDocs { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.ui_navigate")]
+    UiNavigate { resources: Vec<ResourceId> },
     #[serde(rename = "tool.ui_focus_stl_search")]
     UiFocusStlSearch { resources: Vec<ResourceId> },
     #[serde(rename = "tool.ui_highlight_part")]
@@ -102,7 +117,7 @@ impl ReviewedEntry {
         use TableId::{
             AppSettings, BuildProfiles, Parts, PlanAcceptedInputSets, PlanDecisions,
             PlanRevisionInputSets, PlanRevisionInputs, PlanSnapshots, ProfileLayers, Projects,
-            SourceDocs, SourceRevisions,
+            SourceDocs, SourceNotes, SourceRevisions,
         };
         let (id, resources, expected) = match self {
             Self::SourceSync {
@@ -158,6 +173,75 @@ impl ReviewedEntry {
                 "tool.list_plan_snapshots",
                 resources,
                 BTreeSet::from([Table(BuildProfiles), Table(PlanSnapshots)]),
+            ),
+            Self::UiOpenSource { resources } => (
+                "tool.ui_open_source",
+                resources,
+                BTreeSet::from([
+                    Table(BuildProfiles),
+                    Table(Projects),
+                    Table(SourceDocs),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
+            Self::GetSourceDocs { resources } => (
+                "tool.get_source_docs",
+                resources,
+                BTreeSet::from([
+                    Table(Projects),
+                    Table(SourceDocs),
+                    Table(SourceNotes),
+                    Table(SourceRevisions),
+                    Table(AppSettings),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
+            Self::AuditSourceProvenance { resources } => (
+                "tool.audit_source_provenance",
+                resources,
+                BTreeSet::from([
+                    Table(Projects),
+                    Table(SourceDocs),
+                    Table(SourceRevisions),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
+            Self::CompareSourceRevisions { resources } => (
+                "tool.compare_source_revisions",
+                resources,
+                BTreeSet::from([
+                    Table(Projects),
+                    Table(SourceDocs),
+                    Table(SourceRevisions),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
+            Self::GetSourceInventory { resources } => (
+                "tool.get_source_inventory",
+                resources,
+                BTreeSet::from([
+                    Table(Projects),
+                    Table(SourceDocs),
+                    Table(SourceNotes),
+                    Table(SourceRevisions),
+                    Table(AppSettings),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
+            Self::UiOpenDocs { resources } => (
+                "tool.ui_open_docs",
+                resources,
+                BTreeSet::from([
+                    Table(BuildProfiles),
+                    Table(Projects),
+                    Table(SourceDocs),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
+            Self::UiNavigate { resources } => (
+                "tool.ui_navigate",
+                resources,
+                BTreeSet::from([Table(BuildProfiles)]),
             ),
             Self::UiFocusStlSearch { resources } => (
                 "tool.ui_focus_stl_search",
@@ -251,8 +335,15 @@ impl Declarations {
             "tool.list_plan_snapshots",
             "tool.ui_highlight_part",
             "tool.ui_focus_stl_search",
+            "tool.ui_navigate",
+            "tool.ui_open_source",
+            "tool.ui_open_docs",
             "tool.list_sources",
             "tool.list_source_categories",
+            "tool.get_source_docs",
+            "tool.get_source_inventory",
+            "tool.compare_source_revisions",
+            "tool.audit_source_provenance",
         ] {
             if !states.contains_key(id) {
                 return Err(AdmissionError::Malformed(format!(

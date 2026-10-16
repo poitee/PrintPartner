@@ -3,6 +3,8 @@ mod auth_scheduler;
 #[cfg(feature = "desktop_rebuild")]
 use auth_scheduler::*;
 pub mod auth;
+#[cfg(feature = "desktop_rebuild")]
+pub mod build_graph;
 pub mod catalog;
 #[cfg(feature = "desktop_rebuild")]
 pub mod features;
@@ -82,6 +84,11 @@ enum WriterControl {
     AdmitDiskQuota(u32),
 }
 enum Envelope {
+    #[cfg(feature = "desktop_rebuild")]
+    BuildGraph {
+        command: build_graph::Command,
+        reply: build_graph::Reply,
+    },
     #[cfg(feature = "desktop_rebuild")]
     NativeSecrets {
         command: native_secrets::Command,
@@ -556,6 +563,10 @@ impl WriterOwner {
                     #[cfg(feature = "desktop_rebuild")]
                     Envelope::Features { command, reply } => {
                         let _ = reply.send(features::execute(&mut connection, command, admission));
+                    }
+                    #[cfg(feature = "desktop_rebuild")]
+                    Envelope::BuildGraph { command, reply } => {
+                        reply.send(build_graph::execute(&mut connection, command, admission));
                     }
                     Envelope::Read { command, reply } => {
                         let _ = reply.send(read_model::execute(&mut connection, command));

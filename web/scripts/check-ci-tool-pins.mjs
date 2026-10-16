@@ -8,8 +8,10 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-if (process.argv.length > 3) {
-  console.error('Usage: node web/scripts/check-ci-tool-pins.mjs [workflow-directory]');
+const eventMode = process.argv[2] === '--event-sha';
+const eventSha = process.argv[3];
+if (eventMode ? process.argv.length !== 4 : process.argv.length > 3) {
+  console.error('Usage: node web/scripts/check-ci-tool-pins.mjs [workflow-directory | --event-sha <commit-sha>]');
   process.exit(2);
 }
 let yaml;
@@ -17,9 +19,14 @@ try {
   const require = createRequire(join(root, 'web/package.json'));
   yaml = require('yaml');
 } catch {
-  console.error('MISSING_PARSER: run npm ci in web/ before checking CI tool pins');
+  console.error('MISSING_PARSER: run npm ci --ignore-scripts in web/ before checking CI tool pins');
   process.exit(2);
 }
+const desktopNodeLanes = [
+  ['desktop-e2e', 'linux-smoke', 'E2E', 22],
+  ['desktop-webkit', 'webkit-stl', 'WEBKIT', 24],
+];
+const additionalNodeWorkflows = ['integration-smoke', 'pr-evidence', ...desktopNodeLanes.map(([name]) => name)];
 const desktopContracts = /^desktop-contracts\.ya?ml$/;
 const directory = resolve(process.argv[2] ?? join(root, '.github/workflows'));
 let declarations = 0;
@@ -32,6 +39,15 @@ const report = (file, path, code, message) => {
 const mapping = value => value !== null && typeof value === 'object'
   && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
 const literal = value => typeof value === 'string' && value.trim() !== '' && !value.includes('${{');
+
+function checkNodeWorkflowInventory(entries, file) {
+  for (const name of additionalNodeWorkflows) {
+    const matches = entries.filter(entry => new RegExp(`^${name}\\.ya?ml$`, 'i').test(entry.name));
+    if (matches.length !== 1 || matches[0].name !== `${name}.yml` || !matches[0].regular) {
+      report(file, name, 'INVALID_NODE_WORKFLOW', `expected exactly one regular canonical ${name}.yml workflow`);
+    }
+  }
+}
 
 function checkDesktopNode(workflow, file) {
   const job = workflow.jobs.parity;
@@ -58,6 +74,46 @@ function checkDesktopNode(workflow, file) {
     || !/^\$\{\{\s*matrix\.node\s*\}\}$/.test(inputs['node-version'])
     || Object.hasOwn(inputs, 'node-version-file')) {
     report(file, 'jobs.parity.steps', 'INVALID_NODE_SETUP', 'setup-node must use node-version: ${{ matrix.node }} without node-version-file');
+  }
+}
+
+function checkNodeLanes(workflow, file, names, code = 'WEB', condition, major = 22) {
+  let expected;
+  for (const name of names) {
+    const path = `jobs.${name}`;
+    const job = workflow.jobs[name];
+    const steps = Array.isArray(job?.steps) ? job.steps : [];
+    const setups = steps.filter(step => mapping(step) && typeof step.uses === 'string'
+      && step.uses.split('@')[0].toLowerCase() === 'actions/setup-node');
+    if (!mapping(job) || ['strategy', 'needs', 'continue-on-error'].some(key => Object.hasOwn(job, key))
+      || (condition === undefined ? Object.hasOwn(job, 'if') : job.if !== condition)
+      || setups.length !== 1) {
+      report(file, path, `INVALID_${code}_NODE_SETUP`, 'expected one setup-node step in each required lane with its permitted condition and without strategy or failure overrides');
+      continue;
+    }
+    const setup = setups[0];
+    const inputs = setup.with;
+    const version = inputs?.['node-version'];
+    if (!mapping(inputs) || typeof version !== 'string'
+      || !new RegExp(`^${major}\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$`).test(version)
+      || Object.hasOwn(inputs, 'node-version-file') || Object.hasOwn(setup, 'if')
+      || Object.hasOwn(setup, 'continue-on-error')) {
+      report(file, path, `UNPINNED_${code}_NODE`, `setup-node must unconditionally select one exact Node ${major} major.minor.patch string without node-version-file`);
+      continue;
+    }
+    if (expected !== undefined && version !== expected) {
+      report(file, path, `MISMATCHED_${code}_NODE`, `expected ${expected}, received ${version}`);
+    }
+    expected ??= version;
+    if (steps.slice(0, steps.indexOf(setup)).some(step => typeof step?.run === 'string'
+      && /\b(?:node|npm|npx|corepack|yarn|pnpm)\b/.test(step.run))) {
+      report(file, path, `EARLY_${code}_NODE_COMMAND`, 'Node and dependency commands must follow setup-node and its runtime assertion');
+    }
+    const verification = steps[steps.indexOf(setup) + 1];
+    if (!mapping(verification) || verification.run !== `test "$(node --version)" = "v${version}"`
+      || Object.hasOwn(verification, 'if') || Object.hasOwn(verification, 'continue-on-error')) {
+      report(file, path, `MISSING_${code}_NODE_VERIFICATION`, 'setup-node must be immediately followed by an unconditional matching runtime version assertion');
+    }
   }
 }
 
@@ -103,8 +159,8 @@ function checkUses(step, file, path, seen) {
   }
 }
 
-function checkWorkflow(file) {
-  const document = yaml.parseDocument(readFileSync(file, 'utf8'), { uniqueKeys: true, merge: false });
+function checkWorkflow(file, source = readFileSync(file, 'utf8')) {
+  const document = yaml.parseDocument(source, { uniqueKeys: true, merge: false });
   for (const error of [...document.errors, ...document.warnings]) {
     report(file, '$', 'INVALID_YAML', error.message);
   }
@@ -130,7 +186,18 @@ function checkWorkflow(file) {
     report(file, 'jobs', 'INVALID_SHAPE', 'workflow requires a nonempty jobs mapping');
     return;
   }
-  if (desktopContracts.test(basename(file))) checkDesktopNode(workflow, file);
+  if (desktopContracts.test(basename(file))) {
+    checkDesktopNode(workflow, file);
+    if (eventMode) checkDesktopExecution(workflow, file);
+  }
+  for (const [name, lane, code, major] of desktopNodeLanes) {
+    if (new RegExp(`^${name}\\.ya?ml$`, 'i').test(basename(file))) {
+      checkNodeLanes(workflow, file, [lane], code, undefined, major);
+    }
+  }
+  if (/^web-ci\.ya?ml$/.test(basename(file))) checkNodeLanes(workflow, file, ['web', 'web-build']);
+  if (/^integration-smoke\.ya?ml$/i.test(basename(file))) checkNodeLanes(workflow, file, ['postgres'], 'INTEGRATION', "github.event_name != 'workflow_dispatch' || inputs.postgres");
+  if (/^pr-evidence\.ya?ml$/i.test(basename(file))) checkNodeLanes(workflow, file, ['lint-pr-body'], 'EVIDENCE');
   const seen = new Set();
   for (const [name, job] of Object.entries(workflow.jobs)) {
     const path = `jobs.${name}`;
@@ -155,7 +222,86 @@ function checkWorkflow(file) {
   }
 }
 
-try {
+function checkDesktopExecution(workflow, file) {
+  const requiredPaths = [
+    'fixtures/http/routes-inventory.json', 'rust/**', 'rust-toolchain.toml',
+    'web/packages/contracts/**', 'web/packages/domain/**', 'web/apps/server/**',
+    'web/apps/web/src/api/planReview.ts', 'web/scripts/desktop-parity/**',
+    'web/scripts/desktop-contracts/**', 'web/scripts/rust-contracts/**',
+    'web/package*.json', 'docs/adr/0006-autosave-text-contract.md',
+    `.github/workflows/${basename(file)}`,
+  ];
+  for (const event of ['push', 'pull_request']) {
+    const trigger = workflow.on?.[event];
+    const allowed = event === 'push' ? ['branches', 'paths'] : ['paths'];
+    if (!mapping(trigger) || Object.keys(trigger).some(key => !allowed.includes(key))
+      || !Array.isArray(trigger.paths) || !requiredPaths.every(path => trigger.paths.includes(path))
+      || trigger.paths.some(path => typeof path !== 'string' || path.startsWith('!'))
+      || (event === 'push' && (!Array.isArray(trigger.branches) || !trigger.branches.includes('main')
+        || trigger.branches.some(branch => typeof branch !== 'string' || branch.startsWith('!'))))) {
+      report(file, `on.${event}`, 'INVALID_DESKTOP_TRIGGERS', 'required automatic trigger coverage must remain enabled');
+    }
+  }
+  const job = workflow.jobs.parity;
+  if (!mapping(job) || ['if', 'needs', 'continue-on-error'].some(key => Object.hasOwn(job, key))) {
+    report(file, 'jobs.parity', 'DISABLED_DESKTOP_JOB', 'parity must run unconditionally and propagate failure');
+    return;
+  }
+  for (const [index, step] of (Array.isArray(job.steps) ? job.steps : []).entries()) {
+    if (!mapping(step)) continue;
+    const retention = typeof step.uses === 'string' && step.uses.startsWith('actions/upload-artifact@')
+      && step.if === 'always()';
+    if (Object.hasOwn(step, 'continue-on-error') || (Object.hasOwn(step, 'if') && !retention)) {
+      report(file, `jobs.parity.steps[${index}]`, 'DISABLED_DESKTOP_STEP', 'verification steps must run unconditionally and propagate failure');
+    }
+  }
+  if (!job.steps?.some(step => typeof step?.run === 'string'
+    && step.run.includes('npm run contracts:verify') && step.run.includes('npm run test:desktop-parity'))) {
+    report(file, 'jobs.parity.steps', 'MISSING_DESKTOP_VERIFICATION', 'expected contracts verification and desktop parity commands');
+  }
+}
+
+function checkEventTree() {
+  if (!/^[0-9a-f]{40}$/.test(eventSha)) throw new Error('expected a full lowercase event commit SHA');
+  const git = args => execFileSync('git', ['--no-replace-objects', ...args], { cwd: root, encoding: 'utf8' });
+  if (git(['cat-file', '-t', eventSha]).trim() !== 'commit') throw new Error('event SHA must identify a commit');
+  const entries = git(['ls-tree', '-z', eventSha, '--', '.github/workflows/']).split('\0')
+    .filter(Boolean).map(entry => {
+      const separator = entry.indexOf('\t');
+      const metadata = entry.slice(0, separator);
+      const path = entry.slice(separator + 1);
+      const [mode, type, oid] = metadata.split(' ');
+      return { mode, type, oid, path };
+    });
+  checkNodeWorkflowInventory(entries.map(entry => ({ name: basename(entry.path), regular: entry.type === 'blob' && /^100(?:644|755)$/.test(entry.mode) })), eventSha);
+  const contracts = entries.filter(entry => /^\.github\/workflows\/desktop-contracts\.ya?ml$/.test(entry.path));
+  if (contracts.length !== 1 || contracts[0].path !== '.github/workflows/desktop-contracts.yml'
+    || !/^100(?:644|755)$/.test(contracts[0].mode) || contracts[0].type !== 'blob') {
+    report(eventSha, '.github/workflows', 'INVALID_EVENT_DESKTOP_CONTRACTS', 'expected exactly one regular desktop-contracts.yml workflow in the event tree');
+    return;
+  }
+  const web = entries.filter(entry => /^\.github\/workflows\/web-ci\.ya?ml$/i.test(entry.path));
+  if (web.length !== 1 || web[0].path !== '.github/workflows/web-ci.yml'
+    || !/^100(?:644|755)$/.test(web[0].mode) || web[0].type !== 'blob') {
+    report(eventSha, '.github/workflows', 'INVALID_EVENT_WEB_CI', 'expected exactly one regular canonical web-ci.yml workflow in the event tree');
+    return;
+  }
+  for (const entry of entries.filter(entry => /\.ya?ml$/i.test(entry.path))) {
+    if (entry.type !== 'blob' || !/^100(?:644|755)$/.test(entry.mode)) {
+      report(entry.path, '$', 'INVALID_EVENT_WORKFLOW', 'workflow must be a regular file');
+      continue;
+    }
+    checkWorkflow(entry.path, git(['cat-file', 'blob', entry.oid]));
+  }
+}
+
+if (eventMode) {
+  try {
+    checkEventTree();
+  } catch (error) {
+    report(eventSha, '$', 'INVALID_EVENT_TREE', error.message);
+  }
+} else try {
   const entries = readdirSync(directory, { withFileTypes: true });
   const files = entries
     .filter(entry => /\.ya?ml$/i.test(entry.name))
@@ -169,6 +315,19 @@ try {
     report(directory, '$', 'DUPLICATE_DESKTOP_CONTRACTS', 'expected one desktop contracts workflow; found ' + contracts.map(file => basename(file)).join(', '));
   }
   if (process.argv[2] === undefined) {
+    checkNodeWorkflowInventory(entries.map(entry => ({ name: entry.name, regular: entry.isFile() })), directory);
+    const trackedNodes = execFileSync('git', ['ls-tree', '-z', 'HEAD', '--', '.github/workflows/'], { cwd: root, encoding: 'utf8' })
+      .split('\0').filter(Boolean).map(entry => ({ name: basename(entry.split('\t')[1]), regular: /^100(?:644|755) blob /.test(entry) }));
+    checkNodeWorkflowInventory(trackedNodes, 'HEAD');
+    const web = entries.filter(entry => /^web-ci\.ya?ml$/i.test(entry.name));
+    if (web.length !== 1 || web[0].name !== 'web-ci.yml' || !web[0].isFile()) {
+      report(directory, '$', 'INVALID_WEB_CI', 'expected exactly one regular canonical web-ci.yml workflow');
+    }
+    const trackedWeb = execFileSync('git', ['ls-tree', '-z', 'HEAD', '--', '.github/workflows/'], { cwd: root, encoding: 'utf8' })
+      .split('\0').filter(entry => /\t\.github\/workflows\/web-ci\.ya?ml$/i.test(entry));
+    if (trackedWeb.length !== 1 || !/^100(?:644|755) blob [0-9a-f]+\t\.github\/workflows\/web-ci\.yml$/.test(trackedWeb[0])) {
+      report(directory, '$', 'UNTRACKED_WEB_CI', 'expected one regular canonical Web CI workflow in HEAD');
+    }
     const tracked = execFileSync('git', ['ls-tree', '-z', 'HEAD', '--', '.github/workflows/'], { cwd: root, encoding: 'utf8' })
       .split('\0').filter(entry => /^100(?:644|755) blob [0-9a-f]+\t\.github\/workflows\/desktop-contracts\.ya?ml$/.test(entry))
       .map(entry => basename(entry.split('\t')[1]));
