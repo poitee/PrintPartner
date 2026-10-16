@@ -34,13 +34,15 @@ jobs:
         include:
           - os: linux
             runner: ubuntu-latest
-            scope: --workspace
+            scope: [--workspace]
             tests: all()
-          # These tests fail on macOS (docs/development/ci.md#macos-exclusions).
+          # These tests fail on macOS. Each skipped term names the ticket that removes it
+          # (docs/development/ci.md#macos-exclusions):
+          #   GRE-645: the runtime_m0 binary, ticket_t_2:: and ticket_t_12_missing_config_...
+          #   GRE-658: raw_long_labels_contract_to_valid_file_and_directory_paths
           - os: macos
             runner: macos-26
-            scope: --workspace
-            # GRE-645 root-causes the runtime_m0 and ticket_t_2:: failures and removes those two terms.
+            scope: [--workspace]
             tests: >-
               not (
               binary_id(pp-core::runtime_m0)
@@ -49,14 +51,15 @@ jobs:
               | test(=acquisition_labels::raw_long_labels_contract_to_valid_file_and_directory_paths)
               )
           # These crates still use Unix-only APIs or depend on one that does.
-          # Delete an --exclude when its Windows port lands (docs/development/ci.md).
+          # Each port ticket deletes its line (docs/development/ci.md#windows-exclusions).
           - os: windows
             runner: windows-latest
-            scope: >-
-              --workspace
-              --exclude pp-storage --exclude pp-compat --exclude pp-source
-              --exclude pp-api --exclude pp-core --exclude pp-gateway
-              --exclude pp-server --exclude pp-desktop
+            scope:
+              - --workspace
+              - --exclude pp-storage --exclude pp-source # GRE-653
+              - --exclude pp-compat --exclude pp-core # GRE-654
+              - --exclude pp-api --exclude pp-gateway --exclude pp-server # GRE-655
+              - --exclude pp-desktop # GRE-656
             tests: all()
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
@@ -125,13 +128,13 @@ jobs:
         run: cargo fmt --manifest-path rust/Cargo.toml --all --check
       - name: clippy (desktop_rebuild off)
         if: ${{ !cancelled() && steps.assets.outcome == 'success' }}
-        run: cargo clippy --manifest-path rust/Cargo.toml --locked ${{ matrix.scope }} --all-targets --keep-going -- -D warnings
+        run: cargo clippy --manifest-path rust/Cargo.toml --locked ${{ join(matrix.scope, ' ') }} --all-targets --keep-going -- -D warnings
       - name: clippy (desktop_rebuild on)
         if: ${{ !cancelled() && steps.assets.outcome == 'success' }}
-        run: cargo clippy --manifest-path rust/Cargo.toml --locked ${{ matrix.scope }} --all-targets --keep-going --features desktop_rebuild -- -D warnings
+        run: cargo clippy --manifest-path rust/Cargo.toml --locked ${{ join(matrix.scope, ' ') }} --all-targets --keep-going --features desktop_rebuild -- -D warnings
       - name: nextest (desktop_rebuild off)
         if: ${{ !cancelled() && steps.assets.outcome == 'success' }}
-        run: cargo nextest run --manifest-path rust/Cargo.toml --locked ${{ matrix.scope }} --no-fail-fast -E '${{ matrix.tests }}'
+        run: cargo nextest run --manifest-path rust/Cargo.toml --locked ${{ join(matrix.scope, ' ') }} --no-fail-fast -E '${{ matrix.tests }}'
       - name: nextest (desktop_rebuild on)
         if: ${{ !cancelled() && steps.assets.outcome == 'success' }}
-        run: cargo nextest run --manifest-path rust/Cargo.toml --locked ${{ matrix.scope }} --no-fail-fast -E '${{ matrix.tests }}' --features desktop_rebuild
+        run: cargo nextest run --manifest-path rust/Cargo.toml --locked ${{ join(matrix.scope, ' ') }} --no-fail-fast -E '${{ matrix.tests }}' --features desktop_rebuild
