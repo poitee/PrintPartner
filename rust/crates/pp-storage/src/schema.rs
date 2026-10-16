@@ -1244,6 +1244,9 @@ mod capture_tests {
             files.sort();
             files
         };
+        if database == 0 {
+            std::fs::write(path.join("printpartner.lock"), b"").unwrap();
+        }
         let before = snapshot(&path);
         PREFLIGHT_COPIES.set(0);
         let admitted = crate::lease::admit_directory(&path).unwrap();

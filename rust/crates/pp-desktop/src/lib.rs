@@ -58,7 +58,10 @@ pub fn startup_diagnostic(error: &anyhow::Error) -> String {
             "Native window initialization failed" => Some("window_initialization"),
             "Native tray initialization failed" => Some("tray_initialization"),
             "Desktop shutdown incomplete" => Some("shutdown_incomplete"),
-            "Data directory already owned" => Some("data_directory_owned"),
+            "Data directory already owned"
+            | "Data directory already owned; stop the other Print Partner process before starting another instance" => {
+                Some("data_directory_owned")
+            }
             "Unsafe data directory permissions" => Some("data_directory_permissions"),
             "Unsafe data directory ancestor" => Some("data_directory_ancestor"),
             "storage_lease_marker_invalid" => Some("storage_lease_marker_invalid"),
@@ -547,6 +550,12 @@ mod tests {
         let secret = "private/path?bootstrap=secret-token";
         let error = anyhow::anyhow!(secret)
             .context("Data directory already owned")
+            .context("Desktop core startup failed");
+        assert_eq!(
+            startup_diagnostic(&error),
+            "desktop_startup_failed: core_startup -> data_directory_owned"
+        );
+        let error = anyhow::anyhow!("Data directory already owned; stop the other Print Partner process before starting another instance")
             .context("Desktop core startup failed");
         assert_eq!(
             startup_diagnostic(&error),

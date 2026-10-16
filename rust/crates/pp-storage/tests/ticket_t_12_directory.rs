@@ -104,14 +104,20 @@ fn ticket_t_12_lock_acl_write_elevation_is_refused() {
 
 #[test]
 fn ticket_t_12_hostile_lock_entries_refuse_before_preflight_or_cleanup() {
-    for kind in [
-        "symlink",
-        "dangling",
-        "hardlink",
-        "directory",
-        "fifo",
-        "group-write",
-    ] {
+    for (name, kind) in [".desktop.lock", "printpartner.lock"]
+        .into_iter()
+        .flat_map(|name| {
+            [
+                "symlink",
+                "dangling",
+                "hardlink",
+                "directory",
+                "fifo",
+                "group-write",
+            ]
+            .map(|kind| (name, kind))
+        })
+    {
         let copy = Copy::new();
         std::fs::DirBuilder::new()
             .mode(0o700)
@@ -121,7 +127,7 @@ fn ticket_t_12_hostile_lock_entries_refuse_before_preflight_or_cleanup() {
         let config = copy.0.join("desktop.toml");
         let marker = copy.0.join(".desktop-owner.json");
         let target = copy.0.join("target");
-        let lock = copy.0.join(".desktop.lock");
+        let lock = copy.0.join(name);
         std::fs::write(&database, b"invalid database: preflight must not run").unwrap();
         std::fs::write(&config, b"port = 43123\n").unwrap();
         std::fs::write(&marker, br#"{"pid":2147483647,"kind":"standalone"}"#).unwrap();

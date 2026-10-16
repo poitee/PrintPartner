@@ -95,7 +95,7 @@ async fn ticket_t_3_drain_runtime_cancels_rejects_and_restarts() {
         .await
         .unwrap();
     assert!(handle.track_shutdown_work().is_err());
-    let lock = fs::File::open(data.join(".desktop.lock")).unwrap();
+    let lock = fs::File::open(data.join("printpartner.lock")).unwrap();
     assert!(lock.try_lock_exclusive().is_err());
     assert_eq!(
         request(
@@ -178,7 +178,7 @@ async fn tracked_timeout(data: PathBuf, cutover: bool) {
     assert!(handle.track_shutdown_work().is_err());
     assert!(work.cancellation().is_cancelled());
     assert!(!data.join(CUTOVER_FILE).exists());
-    let lock = fs::File::open(data.join(".desktop.lock")).unwrap();
+    let lock = fs::File::open(data.join("printpartner.lock")).unwrap();
     assert!(lock.try_lock_exclusive().is_err());
     let error = CoreRuntime::start(launch(data.clone()))
         .await

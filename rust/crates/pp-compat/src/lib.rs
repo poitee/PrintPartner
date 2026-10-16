@@ -492,6 +492,7 @@ impl Process {
                     .iter()
                     .filter_map(|name| std::env::var_os(name).map(|value| (*name, value))),
             )
+            .env("PP_STORAGE_CORE_LOCK", "1")
             .env("PP_COMMIT", release::manifest()?.commit)
             .env("PRINT_PARTNER_UPDATE_CHECK", "0")
             .env("AI_ENABLED", "0")
