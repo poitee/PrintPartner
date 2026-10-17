@@ -11,8 +11,9 @@ function cacheObservation(client: QueryClient, key: readonly unknown[]) {
 
 export function capturePlanSaveCache(client: QueryClient, profileId: number) {
   return {
-    reviews: [false, true].map((includeExcluded) => ({
-      includeExcluded, ...cacheObservation(client, queryKeys.planReview(profileId, includeExcluded)),
+    reviews: [false, true].flatMap((includeExcluded) => [true, false].map((allowed) => {
+      const key = queryKeys.planReview(profileId, includeExcluded, allowed);
+      return { key, includeExcluded, ...cacheObservation(client, key) };
     })),
     profile: cacheObservation(client, queryKeys.profile(profileId)),
     listRow: client.getQueryData<ProfileSummary[]>(queryKeys.profiles)?.find((profile) => profile.id === profileId),
@@ -41,9 +42,9 @@ export async function hydratePlanSave(
     (["planReview", "planDrafts", "planDraft"].includes(String(query.queryKey[0])) && query.queryKey[1] === profileId),
   }, { revert: false });
   const changedReviews = new Set(observed.reviews.filter((before) => {
-    const now = cacheObservation(client, queryKeys.planReview(profileId, before.includeExcluded));
+    const now = cacheObservation(client, before.key);
     return now.updates !== before.updates || now.data !== before.data;
-  }).map((before) => before.includeExcluded));
+  }).map((before) => before.key));
   const profileNow = cacheObservation(client, queryKeys.profile(profileId));
   const profileChanged = profileNow.updates !== observed.profile.updates || profileNow.data !== observed.profile.data;
   const listRow = client.getQueryData<ProfileSummary[]>(queryKeys.profiles)?.find((profile) => profile.id === profileId);
@@ -54,10 +55,9 @@ export async function hydratePlanSave(
     queryKey: ["planReview", profileId],
   }).map(([, review]) => review?.accepted_basis?.plan_version ?? 0), 0);
   if ((saved.review.accepted_basis?.plan_version ?? 0) >= latestVersion) {
-    for (const includeExcluded of [false, true]) {
-      const key = queryKeys.planReview(profileId, includeExcluded);
+    for (const { key, includeExcluded } of observed.reviews) {
       const current = client.getQueryData<PlanReview>(key);
-      if (changedReviews.has(includeExcluded) && current?.accepted_basis?.plan_version === saved.review.accepted_basis?.plan_version) continue;
+      if (changedReviews.has(key) && current?.accepted_basis?.plan_version === saved.review.accepted_basis?.plan_version) continue;
       client.setQueryData(key, includeExcluded ? saved.review : includedPlanReview(saved.review));
     }
     if (!profileChanged) client.setQueryData(queryKeys.profile(profileId), saved.profile);

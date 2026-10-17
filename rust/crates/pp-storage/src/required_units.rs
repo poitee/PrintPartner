@@ -136,6 +136,8 @@ impl ReconciliationCommand {
     }
 }
 
+pub use Failure as AdmissionFailure;
+
 #[derive(Debug)]
 pub enum Failure {
     Cancelled,

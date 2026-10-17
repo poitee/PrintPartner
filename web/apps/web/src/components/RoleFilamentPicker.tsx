@@ -21,10 +21,12 @@ import { normalizeFilamentHex, roleFilamentLabel } from "../lib/roleFilamentMode
 import { bumpThumbnailCache } from "../lib/thumbnailCache";
 import {
   buildSpoolmanSpoolId,
+  hasSpoolmanAssignment,
   parseSpoolmanFilamentId,
   parseSpoolmanSpoolId,
 } from "../lib/spoolmanIds";
 import { isSpoolmanIntegrationConfigured } from "../hooks/useSpoolmanEnabled";
+import { useSpoolmanWorkflowAccess } from "../hooks/useSpoolmanWorkflowAccess";
 import { allCatalogColors, catalogColorGroups } from "./FilamentSwatch";
 import { Button } from "./ui/button";
 import { Field, FieldLabel } from "./ui/field";
@@ -37,6 +39,8 @@ import {
   publishRoleFilaments,
   useRoleFilamentsQuery,
 } from "../queries/roleFilaments";
+import { invalidatePlanReview } from "../queries/planReview";
+import { queryKeys } from "../queries/keys";
 import { useFilamentCatalogQuery, useSpoolmanSpoolsQuery } from "../queries/filaments";
 import { filterFilamentSpools, formatSpoolOptionLabel } from "../lib/spoolPickerUtils";
 import {
@@ -52,6 +56,7 @@ const CHECKER_BG =
   "repeating-conic-gradient(rgba(120,120,120,0.25) 0% 25%, transparent 0% 50%)";
 
 type ColorGroup = { label: string; colors: CatalogColor[] };
+type SpoolmanAction = ReturnType<ReturnType<typeof useSpoolmanWorkflowAccess>["beginAction"]>;
 
 type Props = {
   profileId: number;
@@ -386,7 +391,11 @@ function RoleColorRow({
   );
 }
 
-export default function RoleFilamentPicker({
+export default function RoleFilamentPicker(props: Props) {
+  return <RoleFilamentPickerInner key={props.profileId} {...props} />;
+}
+
+function RoleFilamentPickerInner({
   profileId,
   disabled,
   refreshKey = 0,
@@ -396,12 +405,17 @@ export default function RoleFilamentPicker({
 }: Props) {
   const queryClient = useQueryClient();
   const rolesQuery = useRoleFilamentsQuery(profileId);
-  const catalogQuery = useFilamentCatalogQuery();
+  const spoolmanAccess = useSpoolmanWorkflowAccess(profileId);
+  const inventoryProfileId = spoolmanAccess.gated ? profileId : undefined;
+  const catalogQuery = useFilamentCatalogQuery({ profileId: inventoryProfileId });
+  const { currentAccessAllowed } = spoolmanAccess;
   const rows = rolesQuery.data ?? NO_ROWS;
   const catalog = catalogQuery.data ?? null;
   const spoolmanIntegrationId = catalog?.default_spoolman_integration_id?.trim() || null;
+  const spoolmanConfigured = isSpoolmanIntegrationConfigured(catalog);
   const spoolsQuery = useSpoolmanSpoolsQuery(
-    spoolmanIntegrationId && isSpoolmanIntegrationConfigured(catalog) ? spoolmanIntegrationId : null,
+    spoolmanIntegrationId && spoolmanConfigured ? spoolmanIntegrationId : null,
+    { profileId: inventoryProfileId },
   );
   const spools = spoolsQuery.data ?? NO_SPOOLS;
   const loaded = !rolesQuery.isPending && !catalogQuery.isPending;
@@ -452,13 +466,23 @@ export default function RoleFilamentPicker({
     async (
       result: { updated: number; thumbnails_cleared: number; roles: RoleFilamentRow[] },
       role: string,
+      action: SpoolmanAction,
+      isOptionalSpoolman: boolean,
     ) => {
+      if (!action.isCurrent() || (isOptionalSpoolman && !currentAccessAllowed())) {
+        void invalidateRoleFilaments(queryClient, profileId);
+        void invalidatePlanReview(queryClient, profileId);
+        bumpThumbnailCache();
+        if (action.isCurrent()) markRoleSaved(role);
+        return;
+      }
       publishRows(result.roles);
       await onUpdated?.();
+      if (!action.isCurrent()) return;
       bumpThumbnailCache();
       markRoleSaved(role);
     },
-    [markRoleSaved, onUpdated, publishRows],
+    [markRoleSaved, onUpdated, profileId, publishRows, queryClient, currentAccessAllowed],
   );
 
   useEffect(() => {
@@ -472,13 +496,27 @@ export default function RoleFilamentPicker({
   }, [loaded, rows, onRolesChange]);
 
   const colorGroups = useMemo(() => catalogColorGroups(catalog), [catalog]);
+
   const colorById = useMemo(() => {
     const map = new Map<string, CatalogColor>();
     for (const c of allCatalogColors(catalog)) map.set(c.id, c);
     return map;
   }, [catalog]);
 
+  const refreshAccess = () => {
+    if (spoolmanAccess.gated) {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.planFeatures(profileId) });
+    }
+  };
+
   const onPickCatalog = async (role: string, colorId: string) => {
+    const isSpoolman = hasSpoolmanAssignment({ filament_color_id: colorId });
+    const action = spoolmanAccess.beginAction();
+    if (isSpoolman && !currentAccessAllowed()) {
+      refreshAccess();
+      setLoadError("Spoolman integration is disabled.");
+      return;
+    }
     setSavingRole(role);
     setRoleSaveStatus((prev) => ({ ...prev, [role]: "saving" }));
     try {
@@ -488,8 +526,9 @@ export default function RoleFilamentPicker({
         filament_custom_hex: null,
         spoolman_spool_id: null,
       });
-      await afterColorChange(result, role);
+      await afterColorChange(result, role, action, isSpoolman);
     } catch (e) {
+      if (isSpoolman) refreshAccess();
       setLoadError(e instanceof Error ? e.message : String(e));
       setRoleSaveStatus((prev) => ({ ...prev, [role]: "error" }));
     } finally {
@@ -498,9 +537,18 @@ export default function RoleFilamentPicker({
   };
 
   const onPickSpool = async (row: RoleFilamentRow, spoolId: string) => {
+    if (!currentAccessAllowed()) {
+      refreshAccess();
+      setLoadError("Spoolman integration is disabled.");
+      return;
+    }
     const parsed = parseSpoolmanFilamentId(row.filament_color_id ?? "");
     if (!parsed) return;
+    const action = spoolmanAccess.beginAction();
     setSavingRole(row.role);
+    if (spoolmanAccess.gated) {
+      setRoleSaveStatus((prev) => ({ ...prev, [row.role]: "saving" }));
+    }
     try {
       const spoolman_spool_id = spoolId
         ? buildSpoolmanSpoolId(parsed.integrationId, Number(spoolId))
@@ -510,16 +558,25 @@ export default function RoleFilamentPicker({
         filament_color_id: row.filament_color_id,
         spoolman_spool_id,
       });
-      publishRows(result.roles);
-      onUpdated?.();
+      if (spoolmanAccess.gated) {
+        await afterColorChange(result, row.role, action, true);
+      } else if (action.isCurrent()) {
+        publishRows(result.roles);
+        onUpdated?.();
+      }
     } catch (e) {
+      refreshAccess();
       setLoadError(e instanceof Error ? e.message : String(e));
+      if (spoolmanAccess.gated) {
+        setRoleSaveStatus((prev) => ({ ...prev, [row.role]: "error" }));
+      }
     } finally {
       setSavingRole(null);
     }
   };
 
   const onPickCustomHex = async (role: string, hex: string) => {
+    const action = spoolmanAccess.beginAction();
     setSavingRole(role);
     setRoleSaveStatus((prev) => ({ ...prev, [role]: "saving" }));
     try {
@@ -529,7 +586,7 @@ export default function RoleFilamentPicker({
         filament_custom_hex: hex || null,
         spoolman_spool_id: null,
       });
-      await afterColorChange(result, role);
+      await afterColorChange(result, role, action, false);
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : String(e));
       setRoleSaveStatus((prev) => ({ ...prev, [role]: "error" }));
@@ -549,16 +606,35 @@ export default function RoleFilamentPicker({
 
   const onImportColors = async () => {
     setLoadError(null);
+    const action = spoolmanAccess.beginAction();
     const file = await pickColorPresetFile();
-    if (!file) return;
+    if (!file || !action.isCurrent()) return;
     setBusyAction("import");
+    let started = false;
+    let optional = false;
     try {
       const preset = await parseColorPreset(file);
-      const applied = await applyColorPreset(profileId, preset);
+      if (!action.isCurrent()) return;
+      optional = currentAccessAllowed() && preset.roles.some(hasSpoolmanAssignment);
+      started = true;
+      const applied = await applyColorPreset(profileId, preset, {
+        isCurrent: action.isCurrent,
+        allowSpoolman: currentAccessAllowed,
+        refreshThumbnails: spoolmanAccess.gated,
+      });
+      if (!action.isCurrent()) return;
+      if (optional && !currentAccessAllowed()) {
+        throw new Error("Spoolman integration is disabled.");
+      }
       const result = await applyRoleColorsToParts(profileId);
+      if (!action.isCurrent()) return;
+      if (optional && !currentAccessAllowed()) {
+        throw new Error("Spoolman integration is disabled.");
+      }
       publishRows(result.roles);
       await onUpdated?.();
-      bumpThumbnailCache();
+      if (!action.isCurrent()) return;
+      if (!spoolmanAccess.gated) bumpThumbnailCache();
       toast.success(
         `Imported ${applied} role color${applied === 1 ? "" : "s"}${
           result.updated > 0
@@ -567,26 +643,37 @@ export default function RoleFilamentPicker({
         }`,
       );
     } catch (e) {
+      if (optional) refreshAccess();
+      if (!action.isCurrent()) return;
       const msg = e instanceof Error ? e.message : String(e);
       setLoadError(msg);
       toast.error(msg);
     } finally {
+      if (started && spoolmanAccess.gated) {
+        void invalidateRoleFilaments(queryClient, profileId);
+        void invalidatePlanReview(queryClient, profileId);
+        bumpThumbnailCache();
+      }
       setBusyAction(null);
     }
   };
 
   const onApplyAllRoleColors = async () => {
     setLoadError(null);
+    const action = spoolmanAccess.beginAction();
     setBusyAction("apply");
     try {
       const result = await applyRoleColorsToParts(profileId);
+      if (!action.isCurrent()) return;
       publishRows(result.roles);
       await onUpdated?.();
+      if (!action.isCurrent()) return;
       bumpThumbnailCache();
       if (result.updated === 0) {
         toast.message("Set role colors above first, then rebuild the Plan to include parts.");
       }
     } catch (e) {
+      if (!action.isCurrent()) return;
       const msg = e instanceof Error ? e.message : String(e);
       setLoadError(msg);
       toast.error(msg);
@@ -597,15 +684,19 @@ export default function RoleFilamentPicker({
 
   const onRegenerateThumbnails = async () => {
     setLoadError(null);
+    const action = spoolmanAccess.beginAction();
     setBusyAction("regenerate");
     try {
       const { cleared } = await regeneratePlanThumbnails(profileId);
+      if (!action.isCurrent()) return;
       await onUpdated?.();
+      if (!action.isCurrent()) return;
       bumpThumbnailCache();
       if (cleared > 0) {
         toast.message(`Regenerating thumbnails (${cleared} cleared)`);
       }
     } catch (e) {
+      if (!action.isCurrent()) return;
       const msg = e instanceof Error ? e.message : String(e);
       setLoadError(msg);
       toast.error(msg);
@@ -614,9 +705,8 @@ export default function RoleFilamentPicker({
     }
   };
 
-  const spoolmanConfigured = isSpoolmanIntegrationConfigured(catalog);
-
   const spoolmanHint = useMemo(() => {
+    if (!spoolmanAccess.allowed) return null;
     if (!catalog?.default_spoolman_integration_id) return null;
     const spoolmanCount = catalog.spoolman_colors?.length ?? 0;
     if (spoolmanCount > 0) return null;
@@ -627,7 +717,7 @@ export default function RoleFilamentPicker({
       return "Spoolman integration is disabled — enable it in Settings → Integrations.";
     }
     return "Spoolman is enabled but returned no filaments — use Test connection in Settings (check base URL is reachable from the server, not localhost from Docker).";
-  }, [catalog]);
+  }, [catalog, spoolmanAccess.allowed]);
 
   if (!loaded) {
     return (

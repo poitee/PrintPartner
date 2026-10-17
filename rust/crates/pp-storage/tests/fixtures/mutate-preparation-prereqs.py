@@ -23,10 +23,17 @@ mutants = [
     ('accepted validation bypassed', read_model, 'let accepted = graph::read(tx, tenant, profile, repos, &mut budget)?;', 'let accepted = AcceptedRead::Empty { profile: Profile { id: profile, name: String::new(), order_number: None, special_request: None, archived_at: None } };'),
     ('freshness always current', context, 'FreshnessFacts::Current { .. }\n    ))', 'FreshnessFacts::Current { .. } | FreshnessFacts::Untracked { .. }\n    ))'),
     ('path entry budget omitted', manifest, '        b.entry(0, key.len())?;', ''),
+    ('comparison work uncharged', manifest, '    b.comparison(work)?;', ''),
+    ('raw comparison input uncharged', manifest, '    b.comparison(pattern.units().len().saturating_add(key.len()))?;', ''),
+    ('matcher steps uncounted', manifest, '        *work += 1;', ''),
+    ('comparisons charged to document bytes', manifest, '    b.comparison(work)?;', '    b.comparison(work)?;\n    b.expansion(work.saturating_mul(2))?;'),
 ]
 with tempfile.TemporaryDirectory(prefix='pp-preparation-mutants-', dir=rust / 'target') as directory:
     scratch = Path(directory) / 'rust'
     shutil.copytree(rust, scratch, ignore=shutil.ignore_patterns('target'))
+    for sibling in rust.parent.iterdir():
+        if sibling.name not in ('rust', '.git'):
+            (scratch.parent / sibling.name).symlink_to(sibling)
     env = {**os.environ, 'CARGO_TARGET_DIR': str(rust / 'target/preparation-mutants-target')}
     command = ['cargo', 'nextest', 'run', '--locked', '--manifest-path', str(scratch / 'Cargo.toml'), '-p', 'pp-storage', '--features', 'desktop_rebuild', '--lib', '-E', 'test(preparation_tests)', '--test-threads=2']
     def run():

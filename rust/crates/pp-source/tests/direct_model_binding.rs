@@ -1,11 +1,11 @@
 //! The published `pp-source-media` CLI must apply the same reader binding as
-//! ZIP extraction. An unsaturated 24-byte ZIP64 extra can point the zip crate
-//! at a local header hidden in the checked entry's extra field; preflight
-//! keeps the central offset, and the opened reader has to be rejected before
-//! any model parse or snapshot publish.
+//! ZIP extraction. An unsaturated 24-byte ZIP64 extra names a local header
+//! hidden in the checked entry's extra field. zip 8.6 followed it; zip 9 and
+//! preflight keep the central offset, so the CRC forged for the hidden view
+//! rejects the entry before any model parse or snapshot publish.
 use pp_source::{
     LocalFiles, SourcePath, TenantRepos,
-    archive::{ArchiveError, ArchiveLimits, ReaderMismatch, ZipInput},
+    archive::{ArchiveLimits, ZipInput},
 };
 use serde_json::Value;
 use std::{
@@ -287,13 +287,7 @@ fn direct_model_redirect_is_rejected_before_publish_and_valid_models_still_conve
         ArchiveLimits::default(),
         &AtomicBool::new(false),
     ) {
-        Err(extracted) => assert!(
-            matches!(
-                extracted,
-                ArchiveError::ReaderMismatch(ReaderMismatch::LocalHeaderOffset)
-            ),
-            "{extracted}"
-        ),
+        Err(extracted) => assert_eq!(extracted.to_string(), "io: Invalid checksum"),
         Ok(_) => panic!("redirected archive was extracted"),
     }
     assert_eq!(fs::read(&model).unwrap(), bytes);
@@ -301,10 +295,7 @@ fn direct_model_redirect_is_rejected_before_publish_and_valid_models_still_conve
     let media = invoke(&malicious);
     assert!(!media.status.success(), "{media:?}");
     let parsed: Value = serde_json::from_slice(&media.stdout).unwrap();
-    assert_eq!(
-        parsed["error"],
-        "invalid-archive: reader local header offset differs from preflight"
-    );
+    assert_eq!(parsed["error"], "io: Invalid checksum");
     assert_eq!(fs::read(&model).unwrap(), bytes);
     assert!(!malicious.0.join("repos/1/revisions/review").exists());
     assert!(

@@ -244,10 +244,14 @@ fn identity_and_list_expose_the_validated_draft_basis() {
 }
 
 #[test]
-fn missing_profiles_and_drafts_are_not_found() {
+fn missing_profiles_and_drafts_return_node_outcomes() {
     let f = Fixture::new("unchanged");
     let owner = f.open();
     let client = owner.working_drafts_with_policy(policy()).unwrap();
+    let node = &f.case["notFound"];
+    // Node's list returns null for a missing Plan, which its route sends as profile_not_found.
+    assert!(node["list"].is_null());
+    let outcome = |kind: &Value| format!("{{\"kind\":{kind}}}");
     for request in [
         Request::List,
         Request::Read { draft_id: id(2) },
@@ -255,12 +259,15 @@ fn missing_profiles_and_drafts_are_not_found() {
         Request::Workspace { draft_id: id(2) },
     ] {
         assert_eq!(
-            run(&client, 999, request)
-                .unwrap()
-                .into_json_body()
-                .unwrap()
-                .into_bytes(),
-            br#"{"kind":"not_found"}"#
+            String::from_utf8(
+                run(&client, 999, request)
+                    .unwrap()
+                    .into_json_body()
+                    .unwrap()
+                    .into_bytes()
+            )
+            .unwrap(),
+            outcome(&node["profile"])
         );
     }
     for request in [
@@ -268,7 +275,7 @@ fn missing_profiles_and_drafts_are_not_found() {
         Request::Diff { draft_id: id(999) },
         Request::Workspace { draft_id: id(999) },
     ] {
-        assert_eq!(body(&client, request), r#"{"kind":"not_found"}"#);
+        assert_eq!(body(&client, request), outcome(&node["draft"]));
     }
     assert_eq!(
         serde_json::from_str::<Value>(&body(&client, Request::Read { draft_id: id(2) })).unwrap()["draft"]
@@ -395,7 +402,10 @@ fn session_policy_controls_tenant_scoping_for_reads() {
     f.sql().execute_batch("BEGIN; PRAGMA defer_foreign_keys=ON; UPDATE users SET id='uuid-account'; UPDATE sessions SET user_id='uuid-account'; COMMIT").unwrap();
     let owner = f.open();
     let client = owner.working_drafts_with_policy(policy()).unwrap();
-    assert_eq!(body(&client, Request::List), r#"{"kind":"not_found"}"#);
+    assert_eq!(
+        body(&client, Request::List),
+        r#"{"kind":"profile_not_found"}"#
+    );
     let strict = owner
         .working_drafts_with_policy(auth::AuthPolicy {
             registration: auth::RegistrationPolicy::FirstAccountOnly,

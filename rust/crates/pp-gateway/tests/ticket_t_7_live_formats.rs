@@ -55,7 +55,7 @@ fn declared_versions_match_the_node_and_rust_sources() {
     );
     let rust_schema = number_after(
         include_str!("../../pp-storage/src/schema.rs"),
-        "is newer than supported version ",
+        "#[cfg(not(feature = \"desktop_rebuild\"))]\npub(crate) const CURRENT_VERSION: u64 = ",
     );
     let node_snapshot = number_after(
         include_str!("../../../../web/apps/server/src/services/local-source-snapshot.ts"),

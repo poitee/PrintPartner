@@ -1,8 +1,3 @@
-#![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Job engine wiring lands in GRE-609 (D16)")
-)]
-
 use super::{Credential, JobAccessFailure, JobRecord, JobSnapshot};
 use crate::auth::{self, AuthPolicy, StreamAuthority};
 use anyhow::{Result, ensure};
@@ -45,7 +40,9 @@ pub(crate) fn mark_committed() {
 
 pub(crate) fn record(job: &JobRecord) {
     COLLECTOR.with(|collector| {
-        if let Some(collector) = collector.borrow_mut().as_mut() {
+        if let Some(collector) = collector.borrow_mut().as_mut()
+            && !job.internal_only()
+        {
             collector.changes.push(CommittedJobView {
                 tenant: job.tenant.clone(),
                 snapshot: Arc::new(job.snapshot()),
@@ -449,7 +446,7 @@ mod tests {
         auth::{
             FirstUserTenant, Outcome, RegistrationPolicy, Request, Secret, SessionTenantPolicy,
         },
-        jobs::PersistentState,
+        jobs::{JobKind, Payload, PersistentState},
     };
     use std::{convert::Infallible, sync::atomic::AtomicBool};
 
@@ -539,6 +536,27 @@ mod tests {
         assert!(finish_collection().is_empty());
         record(&job("a", 5, PersistentState::Running));
         assert!(finish_collection().is_empty());
+    }
+
+    #[test]
+    fn supplied_import_saves_never_reach_a_stream() {
+        let import = |state_version| -> JobRecord {
+            let mut job = job("import", state_version, PersistentState::Running);
+            job.kind = JobKind::SuppliedSourceImport;
+            job.payload = Payload::SuppliedSourceImport {
+                project_id: 1,
+                operation_key: "upload".into(),
+                input_version: 1,
+            };
+            job
+        };
+        let subscriptions = JobSubscriptions::new();
+        let subscription = subscribe_to(&subscriptions, import(1), None).unwrap();
+        begin_collection();
+        record(&import(2));
+        mark_committed();
+        subscriptions.publish(finish_collection());
+        assert_eq!(drain(&subscription), (vec![1], None));
     }
 
     #[test]

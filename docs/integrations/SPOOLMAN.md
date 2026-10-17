@@ -48,6 +48,10 @@ The Plan and Checkoff screens show the available weight reported by Spoolman. Pr
 
 Per-part overrides can select a different spool from the role default. Clearing an override returns the part to the role setting.
 
+When Plan feature controls are available, disabling Spoolman for a Plan hides its inventory choices and physical spool selectors. Restoring access reloads the inventory. If a role assignment is denied, the picker refreshes access and shows the save error.
+
+Importing a color preset while Spoolman is disabled for the Plan removes its Spoolman filament and spool references. Catalog colors and custom hex colors still import. If removing Spoolman references leaves a role without a color, the import skips that role and keeps its stored assignment. If access changes during an import, it may stop after saving some roles; the picker reloads those assignments.
+
 ## Material deductions
 
 Print Partner can deduct material after a linked printer job reaches Checkoff and the user confirms the completed units.
