@@ -1636,10 +1636,8 @@ surrogate as a `\uXXXX` escape, as `JSON.stringify` does. The derived output
 writes `null` for that text. No routes call these methods yet; D23 to D26 wire
 HTTP behind `PP_DESKTOP_REBUILD`.
 
-Accepted snapshot reads still refuse non-scalar manifest text with
-`manifest_text`. The `requirement` and `optionGroupId` scalar fields still feed
-`views`, which would show `null` for that text. That refusal is lifted when
-`views` reads the carrier (D22, GRE-618).
+D22, GRE-618, lifts the temporary snapshot refusal for non-scalar manifest
+text by moving Review to the same lossless carrier, as described below.
 
 ```sh
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib read_model::json_body
@@ -1668,4 +1666,32 @@ correct:
 ```sh
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib read_model::capture_published_tests
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --test ticket_t_61_read_model
+```
+
+
+### D22 Review JSON and workflow
+
+GRE-618 completes the workflow and views delta from
+`desktop/source-sync-local-current-20261008`. Workflow already matches that
+reference, so its resolver stays unchanged. Main retains its catalog and
+collation fallbacks instead of the reference's panic behavior.
+
+With `desktop_rebuild`, `views::review_json` returns `ProjectReviewJsonBody`.
+Its `into_bytes` preserves `requirement` and `option_group_id` from each Part's
+UTF-16 manifest metadata, including unpaired surrogates as JSON escapes.
+`summary_json` returns an optional `ProjectReviewSummaryJsonBody` with its own
+`into_bytes`. Ready and empty reads have summaries; unavailable reads do not.
+The summary uses scalar fields and does not serialize Part metadata.
+Accepted snapshot reads now admit valid non-scalar metadata. Invalid PPJS
+encodings, projection mismatches and digest failures remain refusals.
+
+Default builds retain `views::review` and `views::summarize_review`. The fixture
+binary selects the matching API at compile time. No HTTP routes or runtime
+callers are added. Future product callers must check `PP_DESKTOP_REBUILD` and
+send these JSON bytes directly, without parsing them through `serde_json::Value`,
+which cannot hold unpaired surrogates.
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild
 ```
