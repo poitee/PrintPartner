@@ -14,4 +14,4 @@ serde.workspace = true
 serde_json.workspace = true
 pp-net = { path = "../pp-net" }
 pp-api-types = { path = "../pp-api-types" }
-axum.workspace = true
+url = "=2.5.8"

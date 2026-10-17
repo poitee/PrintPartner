@@ -47,7 +47,7 @@ use std::{
 };
 
 #[derive(Debug)]
-pub(super) struct Integrity {
+pub(crate) struct Integrity {
     pub code: &'static str,
     pub message: String,
 }
@@ -619,7 +619,7 @@ enum ReadPurpose {
     #[cfg(feature = "desktop_rebuild")]
     Summary,
 }
-pub(super) fn read(
+pub(crate) fn read(
     tx: &Transaction<'_>,
     tenant: &str,
     id: i64,
