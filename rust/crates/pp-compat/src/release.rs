@@ -2,7 +2,13 @@ use crate::Bundle;
 use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, fs::File, io::Read, path::Path};
+use std::{
+    collections::BTreeMap,
+    fs::File,
+    io::Read,
+    path::Path,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 #[derive(Deserialize)]
 struct DependencyInventory {
@@ -72,18 +78,67 @@ fn verify_files(root: &Path, expected: &BTreeMap<String, String>, exact: bool) -
         );
     }
 
-    for (relative, digest) in expected {
-        let path = root
-            .join(relative)
-            .canonicalize()
-            .context("Release artifact missing")?;
-        ensure!(path.starts_with(&root), "Release artifact escaped root");
-        ensure!(
-            measure(&path)? == *digest,
-            "Release artifact content mismatch"
-        );
-    }
+    verify_digests(&root, expected)
+}
+
+fn verify_digest(root: &Path, relative: &str, digest: &str) -> Result<()> {
+    let path = root
+        .join(relative)
+        .canonicalize()
+        .context("Release artifact missing")?;
+    ensure!(path.starts_with(root), "Release artifact escaped root");
+    ensure!(
+        measure(&path)? == digest,
+        "Release artifact content mismatch"
+    );
     Ok(())
+}
+
+/// Hashes every inventory entry on all available cores; the first failure stops the rest.
+fn verify_digests(root: &Path, expected: &BTreeMap<String, String>) -> Result<()> {
+    let entries: Vec<_> = expected.iter().collect();
+    let next = AtomicUsize::new(0);
+    let workers = std::thread::available_parallelism()
+        .map_or(1, usize::from)
+        .min(entries.len());
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..workers)
+            .map(|_| {
+                scope.spawn(|| {
+                    while let Some((relative, digest)) =
+                        entries.get(next.fetch_add(1, Ordering::Relaxed))
+                    {
+                        if let Err(error) = verify_digest(root, relative, digest) {
+                            next.store(entries.len(), Ordering::Relaxed);
+                            return Err(error);
+                        }
+                    }
+                    Ok(())
+                })
+            })
+            .collect();
+        handles.into_iter().try_for_each(|handle| {
+            handle
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+        })
+    })
+}
+
+/// Proof that [`verify_bundle`] accepted this bundle, consumed by the first spawn.
+pub struct VerifiedRelease {
+    bundle: Bundle,
+}
+
+impl VerifiedRelease {
+    pub(crate) fn covers(&self, bundle: &Bundle) -> bool {
+        self.bundle == *bundle
+    }
+
+    #[cfg(test)]
+    pub(crate) fn assume_verified(bundle: Bundle) -> Self {
+        Self { bundle }
+    }
 }
 
 pub(crate) fn manifest() -> Result<ReleaseManifest> {
@@ -95,10 +150,13 @@ pub(crate) fn manifest() -> Result<ReleaseManifest> {
     Ok(release)
 }
 
-pub fn verify_bundle(bundle: &Bundle, assets: &Path) -> Result<()> {
+pub fn verify_bundle(bundle: &Bundle, assets: &Path) -> Result<VerifiedRelease> {
     let release = manifest()?;
     verify_files(assets, &release.frontend, true)?;
-    verify_backend(bundle)
+    verify_backend(bundle)?;
+    Ok(VerifiedRelease {
+        bundle: bundle.clone(),
+    })
 }
 
 pub(crate) fn verify_backend(bundle: &Bundle) -> Result<()> {
@@ -301,6 +359,42 @@ mod tests {
         std::fs::remove_file(&alias).unwrap();
         symlink("/usr/bin/node", &alias).unwrap();
         assert!(verify_dependencies(&web, &inventory).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parallel_digests_reject_any_single_changed_or_missing_file() {
+        let root = std::env::temp_dir().join(format!(
+            "pp-digests-{}",
+            hex::encode(rand::random::<[u8; 8]>())
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut expected = BTreeMap::new();
+        for index in 0..257 {
+            let name = format!("{index:03}.js");
+            std::fs::write(root.join(&name), format!("module {index}")).unwrap();
+            expected.insert(name.clone(), measure(&root.join(name)).unwrap());
+        }
+        verify_files(&root, &expected, true).unwrap();
+        for name in ["000.js", "128.js", "256.js"] {
+            let original = std::fs::read(root.join(name)).unwrap();
+            std::fs::write(root.join(name), b"changed").unwrap();
+            assert_eq!(
+                verify_files(&root, &expected, false)
+                    .unwrap_err()
+                    .to_string(),
+                "Release artifact content mismatch"
+            );
+            std::fs::remove_file(root.join(name)).unwrap();
+            assert_eq!(
+                verify_files(&root, &expected, false)
+                    .unwrap_err()
+                    .to_string(),
+                "Release artifact missing"
+            );
+            std::fs::write(root.join(name), original).unwrap();
+        }
+        verify_files(&root, &expected, true).unwrap();
         std::fs::remove_dir_all(root).unwrap();
     }
 }

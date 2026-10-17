@@ -179,7 +179,8 @@ measured simulator package with a copy of native Node v24.21.0, a preload, and
 an entry that leaves stdin unread. It invokes the unchanged release manifest
 builder, embeds that manifest through `PP_DESKTOP_RELEASE_MANIFEST`, and uses
 `PP_COMPAT_MEASURED_STARTUP_STAGE` only to select those assets in the test.
-`verify_bundle` and the real spawn's `verify_backend` both run. The simulator
+`verify_bundle` runs, and its proof replaces the first spawn's `verify_backend`,
+as in production startup since GRE-661. The simulator
 entry records its PID and preload marker before the callback stops it. The
 fixture asserts both markers and unread stdin. The package includes minimal
 measured metadata, frontend, contract, domain, and dependency files. These are

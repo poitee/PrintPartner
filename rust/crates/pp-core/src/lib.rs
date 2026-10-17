@@ -180,7 +180,12 @@ async fn start_resources(
         .assets
         .canonicalize()
         .context("React assets unavailable")?;
-    pp_compat::verify_bundle(&input.bundle, &assets)?;
+    let verified = {
+        let (bundle, assets) = (input.bundle.clone(), assets.clone());
+        tokio::task::spawn_blocking(move || pp_compat::verify_bundle(&bundle, &assets))
+            .await
+            .context("Release verification task failed")??
+    };
     let data_dir = pp_storage::lease::prepare_directory(&input.data_dir)?;
     if let Some(released) = StorageLease::retry_failed_release_if_present(&data_dir)? {
         anyhow::ensure!(
@@ -202,7 +207,8 @@ async fn start_resources(
     pp_gateway::ownership::boot_bundled_source_sync(owner.data_dir())
         .map_err(|error| anyhow::anyhow!("Source Sync ownership admission failed: {error}"))?;
     let (listener, origin_change) = bind_origin(&owner).await?;
-    let supervisor = Supervisor::start_with_config(
+    let supervisor = Supervisor::start_verified(
+        verified,
         SpawnSpec {
             account_pin,
             bundle: input.bundle,

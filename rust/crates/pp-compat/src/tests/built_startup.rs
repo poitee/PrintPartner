@@ -91,9 +91,11 @@ async fn built_startup_owner_fixture() {
         setup_padding: "x".repeat(1024 * 1024),
         ..release_spec(&scratch)
     };
-    crate::release::verify_bundle(&spec.bundle, &spec.bundle.web_root.join("apps/web/dist"))
-        .unwrap();
-    let supervisor = Supervisor::start(spec).unwrap();
+    let verified =
+        crate::release::verify_bundle(&spec.bundle, &spec.bundle.web_root.join("apps/web/dist"))
+            .unwrap();
+    let supervisor =
+        Supervisor::start_verified(verified, spec, crate::SupervisorConfig::default()).unwrap();
     startup_wait_async(&scratch.pidfile()).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     let pids = recorded_pids(&scratch.pidfile());

@@ -667,7 +667,7 @@ fn ticket_t_7_ownership_call_sites_match_manifest() {
     let bound = core
         .find("let (listener, origin_change) = bind_origin(")
         .expect("core startup must bind the origin and capture its change disclosure");
-    let supervised = core.find("Supervisor::start_with_config(").unwrap();
+    let supervised = core.find("Supervisor::start_verified(").unwrap();
     assert!(admitted < bound && bound < supervised);
     let admit_at = app.find("beginSourceSyncAdmission(").unwrap();
     let watcher_at = app.find("startSourceWatcher(").unwrap();

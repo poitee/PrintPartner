@@ -14,7 +14,7 @@ use axum::{
 use hmac::{Hmac, Mac};
 use http_body_util::BodyExt;
 use hyper_util::rt::TokioIo;
-pub use release::verify_bundle;
+pub use release::{VerifiedRelease, verify_bundle};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use std::{
@@ -37,7 +37,7 @@ use tokio_util::{
     task::{TaskTracker, task_tracker::TaskTrackerToken},
 };
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct Bundle {
     pub node: PathBuf,
     pub entry: PathBuf,
@@ -456,10 +456,19 @@ async fn write_setup_or_cancel(
 impl Process {
     async fn spawn(
         spec: &SpawnSpec,
+        verified: Option<VerifiedRelease>,
         capture: &logs::Logs,
         cancelled: &CancellationToken,
     ) -> Result<Self> {
-        release::verify_backend(&spec.bundle)?;
+        if verified.is_none() {
+            let bundle = spec.bundle.clone();
+            let check = tokio::task::spawn_blocking(move || release::verify_backend(&bundle));
+            tokio::select! {
+                biased;
+                _ = cancelled.cancelled() => bail!("Compatibility startup cancelled"),
+                checked = check => checked.context("Release verification task failed")??,
+            }
+        }
         let package_root = release::package_root(&spec.bundle)?;
         let preload = spec
             .bundle
@@ -833,11 +842,12 @@ impl Launch {
 
 async fn obtain(
     source: &Launch,
+    verified: Option<VerifiedRelease>,
     logs: &logs::Logs,
     cancelled: &CancellationToken,
 ) -> Result<Process> {
     match source {
-        Launch::Release(spec) => Process::spawn(spec, logs, cancelled).await,
+        Launch::Release(spec) => Process::spawn(spec, verified, logs, cancelled).await,
         #[cfg(test)]
         Launch::Shell(spec) => Process::spawn_shell(spec, logs, cancelled).await,
     }
@@ -884,15 +894,33 @@ impl Supervisor {
 
     /// Start with a per-instance timing policy; `start` uses production defaults.
     pub fn start_with_config(spec: SpawnSpec, config: SupervisorConfig) -> Result<Self> {
-        Self::launch(Launch::Release(spec), config)
+        Self::launch(Launch::Release(spec), None, config)
+    }
+
+    /// Like [`Self::start_with_config`], but the first spawn uses `verified` instead of
+    /// measuring the release again. Every respawn still verifies it.
+    pub fn start_verified(
+        verified: VerifiedRelease,
+        spec: SpawnSpec,
+        config: SupervisorConfig,
+    ) -> Result<Self> {
+        anyhow::ensure!(
+            verified.covers(&spec.bundle),
+            "Verified release differs from the spawned bundle"
+        );
+        Self::launch(Launch::Release(spec), Some(verified), config)
     }
 
     #[cfg(test)]
     pub(crate) fn launch_shell(spec: ShellSpec, config: SupervisorConfig) -> Result<Self> {
-        Self::launch(Launch::Shell(spec), config)
+        Self::launch(Launch::Shell(spec), None, config)
     }
 
-    fn launch(source: Launch, config: SupervisorConfig) -> Result<Self> {
+    fn launch(
+        source: Launch,
+        mut verified: Option<VerifiedRelease>,
+        config: SupervisorConfig,
+    ) -> Result<Self> {
         let logs = logs::Logs::open(source.data_dir().join("logs"))?;
         let (endpoints, endpoint) = watch::channel(None);
         let (states, status) = watch::channel(Status::Starting);
@@ -916,7 +944,7 @@ impl Supervisor {
                 // first request. Starting closes admission before draining it.
                 while recovery.try_recv().is_ok() {}
                 logs.event(logs::Event::Starting, 30);
-                let process = obtain(&source, &logs, &cancelled).await;
+                let process = obtain(&source, verified.take(), &logs, &cancelled).await;
                 let mut failure = logs::FailureReason::SpawnFailed;
                 let mut termination = None;
                 if let Ok(mut process) = process {

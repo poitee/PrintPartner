@@ -1869,9 +1869,12 @@ async fn measured_startup_owner_death_fixture() {
         setup_padding: "x".repeat(1024 * 1024),
         ..release_spec(&scratch)
     };
-    super::release::verify_bundle(&spec.bundle, &spec.bundle.web_root.join("apps/web/dist"))
-        .unwrap();
-    let supervisor = super::Supervisor::start(spec).unwrap();
+    let verified =
+        super::release::verify_bundle(&spec.bundle, &spec.bundle.web_root.join("apps/web/dist"))
+            .unwrap();
+    let supervisor =
+        super::Supervisor::start_verified(verified, spec, super::SupervisorConfig::default())
+            .unwrap();
     let started = std::time::Instant::now();
     while recorded_pids(&scratch.pidfile()).is_empty() {
         assert!(
@@ -2362,4 +2365,50 @@ fn ticket_t_3_drain_rate_limit_debits_require_current_generation_signature() {
         let (encoded, signature) = debit(generation, bucket, time);
         assert_eq!(endpoint.rate_limit_bucket(&encoded, &signature), None);
     }
+}
+
+#[tokio::test]
+async fn verified_release_skips_only_the_measurement_it_proves() {
+    let scratch = Scratch::new("verified-release");
+    let spec = release_spec(&scratch);
+    let logs = super::logs::Logs::open(scratch.root.join("logs")).unwrap();
+    let live = CancellationToken::new();
+    let measured = super::Process::spawn(&spec, None, &logs, &live)
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(
+        measured.to_string(),
+        "Requested release differs from embedded identity"
+    );
+    let proof = super::VerifiedRelease::assume_verified(spec.bundle.clone());
+    let trusted = super::Process::spawn(&spec, Some(proof), &logs, &live)
+        .await
+        .err()
+        .unwrap();
+    assert_ne!(trusted.to_string(), measured.to_string(), "{trusted:#}");
+    let stopped = CancellationToken::new();
+    stopped.cancel();
+    let cancelled = super::Process::spawn(&spec, None, &logs, &stopped)
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(cancelled.to_string(), "Compatibility startup cancelled");
+}
+
+#[tokio::test]
+async fn verified_release_must_cover_the_spawned_bundle() {
+    let scratch = Scratch::new("verified-mismatch");
+    let spec = release_spec(&scratch);
+    let other = super::VerifiedRelease::assume_verified(super::Bundle {
+        commit: "another-release".into(),
+        ..spec.bundle.clone()
+    });
+    let error = super::Supervisor::start_verified(other, spec, super::SupervisorConfig::default())
+        .err()
+        .unwrap();
+    assert_eq!(
+        error.to_string(),
+        "Verified release differs from the spawned bundle"
+    );
 }
