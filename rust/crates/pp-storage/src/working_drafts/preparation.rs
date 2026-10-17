@@ -374,7 +374,7 @@ pub(super) fn parse(
         let mut strip = profile.quantity.regex.trim().replace("(?:", "(");
         strip = replace_first(&strip, r"\(\?P<\w+>", "(");
         strip = replace_first(&strip, r"\([^?][^)]*\)", "[0-9]+");
-        strip = strip.replace("\\.stl$", "$");
+        strip = strip.replacen("\\.stl$", "$", 1);
         if strip.to_lowercase().ends_with(".stl") {
             strip.truncate(strip.len() - 4);
             strip.push('$')
