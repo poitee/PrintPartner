@@ -18,7 +18,8 @@ class CiPathFilterTests(unittest.TestCase):
         for path in ["rust/Cargo.lock", "rust/crates/pp-storage/src/lib.rs",
                      "rust-toolchain.toml", "web/package.json", "web/package-lock.json",
                      "web/apps/web/src/App.tsx", "web/packages/contracts/src/a.ts",
-                     ".github/workflows/rust-cross-os.yml", "scripts/ci-path-filter.py"]:
+                     ".github/workflows/rust-cross-os.yml", "scripts/ci-path-filter.py",
+                     "web/tsconfig.base.json", "web/scripts/atomic-package-build.mjs"]:
             with self.subTest(path=path):
                 self.assertTrue(ci_filter.relevant(path, "rust"))
         for path in ["docs/ci.md", "README.md", "web/scripts/tool.mjs",
@@ -28,7 +29,8 @@ class CiPathFilterTests(unittest.TestCase):
 
     def test_actions_inputs(self):
         for path in [".github/workflows/a.yml", ".github/actions/a/action.yml",
-                     "scripts/test_ci_path_filter.py"]:
+                     "scripts/test_ci_path_filter.py", ".github/zizmor.yml",
+                     ".github/actionlint.yaml", ".github/actionlint.yml"]:
             self.assertTrue(ci_filter.relevant(path, "actions"))
         for path in ["docs/ci.md", "rust/Cargo.toml", "web/package.json"]:
             self.assertFalse(ci_filter.relevant(path, "actions"))

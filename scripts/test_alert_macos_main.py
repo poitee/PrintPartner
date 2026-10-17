@@ -38,6 +38,12 @@ class AlertTests(unittest.TestCase):
         self.assertIn("rust (macos)", create[-1])
         self.assertIn("/actions/runs/123/attempts/2", create[-1])
 
+    def test_native_precheck_failure_identifies_workflow(self):
+        calls = self.run_alert(["linux-precheck"], kind="native")
+        create = next(call for call in calls if call[:2] == ("issue", "create"))
+        self.assertIn("Native macOS bundle workflow failed on main.", create[-1])
+        self.assertIn("linux-precheck", create[-1])
+
     def test_comment_existing_issue_for_native_failure(self):
         calls = self.run_alert(["bundle (macos-26)"], [{"number": 42}],
                                [{"name": "ci-macos-main"}], "native")

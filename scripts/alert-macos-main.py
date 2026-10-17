@@ -28,7 +28,8 @@ def alert(repository, run_id, attempt, kind, server):
     issues = json.loads(gh("issue", "list", "--repo", repository, "--label", LABEL,
                            "--state", "open", "--json", "number", "--limit", "100"))
     url = f"{server}/{repository}/actions/runs/{run_id}/attempts/{attempt}"
-    body = "macOS CI failed on main.\n\n" + url + "\n\n" + "\n".join(
+    subject = "Native macOS bundle workflow" if kind == "native" else "rust (macos)"
+    body = f"{subject} failed on main.\n\n" + url + "\n\n" + "\n".join(
         f"- {job['name']}: {job['html_url']}" for job in failed)
     if issues:
         gh("issue", "comment", str(issues[0]["number"]), "--repo", repository, "--body", body)
