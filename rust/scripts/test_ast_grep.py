@@ -36,6 +36,7 @@ class RatchetTests(unittest.TestCase):
         (self.root / "ast-grep-baseline.json").write_text(json.dumps({
             "no-unwrap-expect": unwrap,
             "runtime-process-command": command,
+            "no-writer-family-literal": 0,
         }))
 
     def git(self, *args):

@@ -6,7 +6,8 @@ also opens a copy of `unchanged.db` with `PlanDraftWorkspaceService` to capture
 the stale revision outcome. It does not regenerate the existing databases.
 
 From the repository root, install the web dependencies first. Then generate or
-check the literal results with Node 24.21.0:
+check the literal results with Node 22.23.3 or 24.21.0. The `parity` job in
+`.github/workflows/desktop-contracts.yml` runs `--check` on both versions.
 
 ```sh
 umask 022

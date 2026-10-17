@@ -37,3 +37,6 @@ icu_collator = "=2.3.1"
 regress = "=0.11.1"
 ryu-js = "=1.0.2"
 saphyr-parser = { version = "=0.1.0", default-features = false, optional = true }
+
+[dev-dependencies]
+rusqlite = { workspace = true, features = ["hooks"] }

@@ -1,6 +1,6 @@
 # Continuous integration
 
-The **Rust cross-OS** workflow (`.github/workflows/rust-cross-os.yml`) builds and tests the Rust workspace on Linux, macOS and Windows. It runs on every pull request and on every push to `main`. Its purpose is to stop code that compiles on one OS only from reaching `main`.
+The **Rust cross-OS** workflow (`.github/workflows/rust-cross-os.yml`) builds and tests the Rust workspace on Linux, macOS and Windows. It runs on every pull request and on every push to `main`. A new push to a pull request cancels that pull request's older run. Every push to `main` gets its own run, so each merge has a result. Its purpose is to stop code that compiles on one OS only from reaching `main`.
 
 This page covers what the Rust jobs run and how to reproduce them. [Change a CI workflow](ci-controls.md) covers review, the actionlint and zizmor checks, action pins and required checks. Both apply to this workflow.
 
@@ -119,5 +119,5 @@ The filter also skips one test by name, outside those groups:
 ## Other Rust workflows
 
 - **Desktop Rust (hosted)** (`desktop-fleet-rust.yml`) runs the ast-grep lint counts and splits the Linux test suite into two partitions. It runs when Rust or web build inputs change.
-- **Native macOS bundle** (`desktop-native-macos.yml`) builds the unsigned macOS app and runs the macOS storage tests. On pull requests it runs only when macOS inputs change or the PR has the `ci:macos` label.
+- **Native macOS bundle** (`desktop-native-macos.yml`) builds the unsigned macOS app and runs the macOS storage tests. On pull requests it runs only when macOS inputs change or the PR has the `ci:macos` label. A new push to `main` does not cancel a running `main` run; it waits, and only the newest waiting push runs next.
 - **Desktop runtime** (`desktop-runtime.yml`) runs the Python lifecycle and gateway proofs against the built server on Linux.

@@ -4,7 +4,7 @@ use crate::{
     read_model::Credential,
     required_units::{
         self, Outcome as WorkspaceOutcome, ReconciliationCommand, model,
-        storage::{Draft, draft, num, one, rows},
+        storage::{Draft, draft, num, one, rows, text},
         view::workspace,
     },
     writer_admission,
@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::{
     collections::{HashMap, HashSet},
+    path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -26,21 +27,10 @@ use std::{
 
 mod diff;
 pub mod observation;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Recompute consumes preparation in the next GRE-607 slice"
-    )
-)]
 mod preparation;
 #[cfg(test)]
 mod preparation_tests;
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "D13 manifest consumers land in a later slice")
-)]
 mod manifest;
 #[cfg(test)]
 mod manifest_tests;
@@ -170,6 +160,48 @@ pub enum AbandonOutcome {
     NotOpen {
         workspace: Box<required_units::Workspace>,
     },
+}
+
+/// What Node's draft recompute route passes to `recomputePlanDraft`: the
+/// trimmed `Idempotency-Key` header and the body's `apply_manifest` flag.
+#[derive(Debug, Clone)]
+pub struct RecomputeRequest {
+    idempotency_key: String,
+    apply_manifest: bool,
+}
+impl RecomputeRequest {
+    pub fn new(idempotency_key: &str, apply_manifest: bool) -> Result<Self> {
+        let key = JsText::scalar(idempotency_key).trim_ecmascript();
+        ensure!(!key.is_empty(), "Plan draft idempotency key is required");
+        ensure!(key.units().len() <= 160, "Invalid idempotency key");
+        Ok(Self {
+            idempotency_key: key
+                .as_scalar()
+                .ok_or_else(|| anyhow!("Invalid idempotency key"))?,
+            apply_manifest,
+        })
+    }
+    fn options(&self) -> preparation::PreparationOptions {
+        preparation::PreparationOptions {
+            apply_manifest: self.apply_manifest,
+            prefer_accepted: !self.apply_manifest,
+            ..Default::default()
+        }
+    }
+}
+
+/// Node's `recomputePlanDraft` result, after the service's Plan check.
+#[derive(Debug)]
+pub enum RecomputeOutcome {
+    Created { draft: DraftDocument },
+    Existing { draft: DraftDocument },
+    ProfileNotFound,
+    AcceptedBaselineRequired,
+    BaseChanged,
+    InputsChanged,
+    IdempotencyConflict,
+    NoLayers,
+    NoStls,
 }
 
 #[derive(Debug)]
@@ -407,6 +439,13 @@ impl std::error::Error for Failure {}
 pub struct WorkingDraftClient {
     shared: Arc<Shared>,
     policy: auth::AuthPolicy,
+    observations: Option<Observations>,
+}
+#[derive(Clone)]
+struct Observations {
+    reads: Arc<dyn observation::DraftReads>,
+    limits: observation::PreparationLimits,
+    repos: PathBuf,
 }
 pub(super) struct Command {
     credential: Credential,
@@ -418,19 +457,25 @@ pub(super) struct Command {
 pub(super) struct Write {
     credential: Credential,
     profile: PositiveId,
-    draft_id: PositiveId,
     policy: auth::AuthPolicy,
     cancelled: Arc<AtomicBool>,
     operation: Operation,
 }
 enum Operation {
     Edit {
+        draft_id: PositiveId,
         request: EditRequest,
         reply: mpsc::Sender<Result<WorkspaceOutcome>>,
     },
     Abandon {
+        draft_id: PositiveId,
         request: AbandonRequest,
         reply: mpsc::Sender<Result<AbandonOutcome>>,
+    },
+    Recompute {
+        request: RecomputeRequest,
+        observations: Observations,
+        reply: mpsc::Sender<Result<RecomputeOutcome>>,
     },
 }
 impl WriterOwner {
@@ -442,7 +487,29 @@ impl WriterOwner {
         Ok(WorkingDraftClient {
             shared: self.client.shared.clone(),
             policy,
+            observations: None,
         })
+    }
+    /// A client that can also recompute, reading Sources through `reads`.
+    pub fn working_drafts_with_observations(
+        &self,
+        policy: auth::AuthPolicy,
+        reads: Arc<dyn observation::DraftReads>,
+        limits: observation::PreparationLimits,
+    ) -> Result<WorkingDraftClient> {
+        limits.validate()?;
+        let mut client = self.working_drafts_with_policy(policy)?;
+        client.observations = Some(Observations {
+            reads,
+            limits,
+            repos: self
+                .lease
+                .as_ref()
+                .ok_or_else(|| anyhow!("Storage owner is closed"))?
+                .data_dir()
+                .join("repos"),
+        });
+        Ok(client)
     }
 }
 impl WorkingDraftClient {
@@ -482,10 +549,13 @@ impl WorkingDraftClient {
                 command: Write {
                     credential,
                     profile,
-                    draft_id,
                     policy: self.policy,
                     cancelled,
-                    operation: Operation::Edit { request, reply },
+                    operation: Operation::Edit {
+                        draft_id,
+                        request,
+                        reply,
+                    },
                 },
             }
         })
@@ -506,10 +576,44 @@ impl WorkingDraftClient {
                 command: Write {
                     credential,
                     profile,
-                    draft_id,
                     policy: self.policy,
                     cancelled,
-                    operation: Operation::Abandon { request, reply },
+                    operation: Operation::Abandon {
+                        draft_id,
+                        request,
+                        reply,
+                    },
+                },
+            }
+        })
+    }
+    /// Creates an open draft from a fresh preparation as Node's
+    /// `recomputePlanDraft` does, abandoning every other open draft. Node's
+    /// service then selects Required units; this method does not.
+    pub fn recompute(
+        &self,
+        credential: Credential,
+        profile: PositiveId,
+        request: RecomputeRequest,
+        cancelled: Arc<AtomicBool>,
+        wait: Duration,
+    ) -> Result<RecomputeOutcome> {
+        let observations = self
+            .observations
+            .clone()
+            .ok_or_else(|| anyhow!("Working-draft observations are not configured"))?;
+        self.enqueue(cancelled, wait, |reply, cancelled| {
+            Envelope::WorkingDraftWrite {
+                command: Write {
+                    credential,
+                    profile,
+                    policy: self.policy,
+                    cancelled,
+                    operation: Operation::Recompute {
+                        request,
+                        observations,
+                        reply,
+                    },
                 },
             }
         })
@@ -607,13 +711,16 @@ pub(super) fn write(
     let Write {
         credential,
         profile,
-        draft_id,
         policy,
         cancelled,
         operation,
     } = command;
     match operation {
-        Operation::Edit { request, reply } => {
+        Operation::Edit {
+            draft_id,
+            request,
+            reply,
+        } => {
             let edited = transact(connection, admission, &cancelled, |tx| {
                 edit(tx, &credential, policy, profile, draft_id, &request)
             });
@@ -637,10 +744,29 @@ pub(super) fn write(
                 }
             }));
         }
-        Operation::Abandon { request, reply } => {
+        Operation::Abandon {
+            draft_id,
+            request,
+            reply,
+        } => {
             let _ = reply.send(transact(connection, admission, &cancelled, |tx| {
                 abandon(tx, &credential, policy, profile, draft_id, &request)
             }));
+        }
+        Operation::Recompute {
+            request,
+            observations,
+            reply,
+        } => {
+            let _ = reply.send(recompute(
+                connection,
+                &credential,
+                policy,
+                profile,
+                &request,
+                &observations,
+                &cancelled,
+            ));
         }
     }
 }
@@ -856,6 +982,289 @@ fn abandon(
     })
 }
 
+fn recompute(
+    connection: &mut Connection,
+    credential: &Credential,
+    policy: auth::AuthPolicy,
+    profile_id: PositiveId,
+    request: &RecomputeRequest,
+    observations: &Observations,
+    cancelled: &AtomicBool,
+) -> Result<RecomputeOutcome> {
+    ensure!(!cancelled.load(Ordering::Acquire), Failure::Cancelled);
+    // The outcomes reached outside `transact` check cancellation as it does.
+    let finished = |outcome| {
+        ensure!(!cancelled.load(Ordering::Acquire), Failure::Cancelled);
+        Ok(outcome)
+    };
+    let key = request.idempotency_key.as_str();
+    let profile = i64::try_from(profile_id.get())?;
+    let tx = connection.transaction()?;
+    let (tenant, actor) =
+        auth::authority::queries::observe_reconciliation_actor(&tx, credential, policy)?;
+    let Some(profile_row) = one(
+        &tx,
+        "SELECT * FROM build_profiles WHERE tenant_id=? AND id=?",
+        &[&tenant, &profile],
+    )?
+    else {
+        return finished(RecomputeOutcome::ProfileNotFound);
+    };
+    if let Some(winner) = winner(&tx, &tenant, &actor, profile, key)? {
+        return finished(winner);
+    }
+    if baseline_required(&tx, &tenant, &profile_row)? {
+        return finished(RecomputeOutcome::AcceptedBaselineRequired);
+    }
+    let base = json!({"baseRevisionId":profile_row["acceptedPlanRevisionId"], "basePlanVersion":profile_row["acceptedPlanVersion"]});
+    tx.commit()?;
+    let mut budget = observation::PreparationBudget::new(cancelled, observations.limits)?;
+    let options = request.options();
+    let prepared = preparation::prepare(
+        connection,
+        &tenant,
+        profile,
+        base.clone(),
+        preparation::PreparationContext {
+            options: &options,
+            repos: &observations.repos,
+        },
+        observations.reads.as_ref(),
+        &mut budget,
+    );
+    let mut prepared = match prepared {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            return match error.downcast_ref() {
+                Some(preparation::Failure::NoLayers) => finished(RecomputeOutcome::NoLayers),
+                Some(preparation::Failure::NoStls) => finished(RecomputeOutcome::NoStls),
+                None => Err(error),
+            };
+        }
+    };
+    // Node's write transaction waits for the writer lock on its own.
+    let admission = writer_admission::Deadline::at_dequeue();
+    transact(connection, admission, cancelled, |tx| {
+        let principal = auth::authority::queries::reconciliation_actor_ref(tx, credential, policy)?;
+        ensure!(
+            principal == (tenant.clone(), actor.clone()),
+            "Authentication principal changed"
+        );
+        if let Some(winner) = winner(tx, &tenant, &actor, profile, key)? {
+            return Ok(winner);
+        }
+        let Some(profile_row) = one(
+            tx,
+            "SELECT * FROM build_profiles WHERE tenant_id=? AND id=?",
+            &[&tenant, &profile],
+        )?
+        else {
+            return Ok(RecomputeOutcome::BaseChanged);
+        };
+        if baseline_required(tx, &tenant, &profile_row)? {
+            return Ok(RecomputeOutcome::AcceptedBaselineRequired);
+        }
+        if profile_row["acceptedPlanRevisionId"] != base["baseRevisionId"]
+            || profile_row["acceptedPlanVersion"] != base["basePlanVersion"]
+        {
+            return Ok(RecomputeOutcome::BaseChanged);
+        }
+        let current = preparation::capture(
+            tx,
+            &tenant,
+            profile,
+            observations.reads.as_ref(),
+            &mut budget,
+        )?;
+        if current.fingerprint != prepared.capture.fingerprint {
+            return Ok(RecomputeOutcome::InputsChanged);
+        }
+        if carry_open_edits(
+            tx,
+            &tenant,
+            profile,
+            &mut prepared.parts,
+            !request.apply_manifest,
+            &mut budget,
+        )? {
+            prepared.digest =
+                model::planning(&prepared.base, &prepared.capture.inputs, &prepared.parts)?;
+        }
+        tx.execute(
+            "UPDATE plan_drafts SET state='abandoned',lifecycle_version=lifecycle_version+1 WHERE tenant_id=? AND profile_id=? AND state='open'",
+            params![tenant, profile],
+        )?;
+        let id = insert_snapshot(tx, &tenant, &actor, profile, key, &prepared)?;
+        let created = draft(tx, &tenant, profile, id)?
+            .ok_or_else(|| anyhow!("Created Plan draft is missing"))?;
+        Ok(RecomputeOutcome::Created {
+            draft: snapshot(&created)?,
+        })
+    })
+}
+
+fn winner(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    actor: &str,
+    profile: i64,
+    key: &str,
+) -> Result<Option<RecomputeOutcome>> {
+    let Some(row) = one(
+        tx,
+        "SELECT id FROM plan_drafts WHERE tenant_id=? AND profile_id=? AND created_by=? AND idempotency_key=?",
+        &[&tenant, &profile, &actor, &key],
+    )?
+    else {
+        return Ok(None);
+    };
+    let saved = draft(tx, tenant, profile, num(&row, "id")?)?
+        .ok_or_else(|| anyhow!("Saved Plan draft is missing"))?;
+    Ok(Some(
+        if draft_origin(&saved.header)? == json!({"kind":"recompute"}) {
+            RecomputeOutcome::Existing {
+                draft: snapshot(&saved)?,
+            }
+        } else {
+            RecomputeOutcome::IdempotencyConflict
+        },
+    ))
+}
+
+/// One row per open draft with what `required_units::storage::draft` and the
+/// `saved` it calls read to load it. Each row they read costs a visit, and the
+/// reconciliation two because `draft` checks it before `saved` reads it. Every
+/// column they parse, hash or compare costs its bytes. Keep each table's line
+/// in step with those two functions.
+const OPEN_DRAFT_LOADS: &str = "WITH open AS (SELECT * FROM plan_drafts WHERE tenant_id=? AND profile_id=? AND state='open'),
+cost(id,visits,bytes) AS (
+SELECT id,1,LENGTH(CAST(concat(base_revision_id,base_plan_version,digest_format,snapshot_digest,current_required_unit_reconciliation_id) AS BLOB)) FROM open
+UNION ALL SELECT o.id,1,LENGTH(CAST(concat(i.source_id,i.source_layer,i.layer_order,i.tracking_kind,i.source_revision_id,i.manifest_digest,i.effective_naming_digest) AS BLOB)) FROM open o JOIN plan_draft_inputs i ON i.tenant_id=o.tenant_id AND i.draft_id=o.id
+UNION ALL SELECT o.id,1,LENGTH(CAST(concat(p.base_revision_part_id,p.part_key,p.relative_path,p.filename,p.source_layer,p.status,p.role_inferred,p.role_override,p.filament_color_id,p.filament_custom_hex,p.spoolman_spool_id,p.quantity_inferred,p.quantity_override,p.quantity_effective,p.included,p.notes,p.github_blob_url,p.geometry_same,p.requirement,p.option_group_id,p.manifest_source,p.artifact_digest) AS BLOB)) FROM open o JOIN plan_draft_parts p ON p.tenant_id=o.tenant_id AND p.draft_id=o.id
+UNION ALL SELECT o.id,2,LENGTH(CAST(concat(r.profile_id,r.draft_id,r.format,r.planning_digest,r.base_revision_id,r.base_mapping_digest,r.selection_basis_digest,r.selection_basis_json,r.decision_digest,r.result_kind,r.result_digest,r.result_json,r.reconciliation_digest,r.expected_assignment_count,r.finalized_at) AS BLOB)) FROM open o JOIN plan_draft_required_unit_reconciliations r ON r.tenant_id=o.tenant_id AND r.id=o.current_required_unit_reconciliation_id
+UNION ALL SELECT o.id,1,LENGTH(CAST(concat(x.kind,x.target_draft_part_id,x.predecessor_revision_part_id) AS BLOB)) FROM open o JOIN plan_draft_required_unit_decisions x ON x.tenant_id=o.tenant_id AND x.reconciliation_id=o.current_required_unit_reconciliation_id
+UNION ALL SELECT o.id,1,LENGTH(CAST(concat(a.kind,a.target_draft_part_id,a.unit_index,a.required_unit_token) AS BLOB)) FROM open o JOIN plan_draft_required_unit_assignments a ON a.tenant_id=o.tenant_id AND a.reconciliation_id=o.current_required_unit_reconciliation_id)
+SELECT o.id,SUM(c.visits) AS visits,SUM(c.bytes) AS bytes FROM open o JOIN cost c ON c.id=o.id GROUP BY o.id ORDER BY o.created_at,o.id";
+
+/// Node's `carryOpenDraftEdits`. A Part edit can commit after preparation
+/// read the open draft, so its quantity override, and its inclusion when the
+/// caller keeps the current draft, replace the prepared values. Returns
+/// whether any Part changed.
+///
+/// This runs under the writer lock, so `OPEN_DRAFT_LOADS` charges what
+/// loading each open draft reads to the recompute's budget first.
+fn carry_open_edits(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    profile: i64,
+    parts: &mut [DraftPart],
+    keep_inclusion: bool,
+    budget: &mut observation::PreparationBudget<'_>,
+) -> Result<bool> {
+    let mut edits = HashMap::new();
+    for open in rows(tx, OPEN_DRAFT_LOADS, &[&tenant, &profile])? {
+        for _ in 0..num(&open, "visits")? {
+            budget.visit(0)?;
+        }
+        budget.comparison(usize::try_from(num(&open, "bytes")?)?)?;
+        let Some(open) = draft(tx, tenant, profile, num(&open, "id")?)? else {
+            continue;
+        };
+        for part in open.parts {
+            budget.check()?;
+            let key = (
+                text(&part, "sourceLayer")?.to_owned(),
+                text(&part, "partKey")?.to_owned(),
+            );
+            edits.insert(
+                key,
+                (part["included"].clone(), part["quantityOverride"].clone()),
+            );
+        }
+    }
+    let mut changed = false;
+    for part in parts {
+        budget.check()?;
+        let key = (
+            text(part, "sourceLayer")?.to_owned(),
+            text(part, "partKey")?.to_owned(),
+        );
+        let Some((included, quantity)) = edits.get(&key) else {
+            continue;
+        };
+        let before = part.clone();
+        if keep_inclusion {
+            part["included"] = included.clone();
+        }
+        if !quantity.is_null() {
+            part["quantityOverride"] = quantity.clone();
+            part["quantityEffective"] = quantity.clone();
+        }
+        changed |= *part != before;
+    }
+    Ok(changed)
+}
+
+fn insert_snapshot(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    actor: &str,
+    profile: i64,
+    key: &str,
+    prepared: &preparation::PreparedDraftSnapshot,
+) -> Result<i64> {
+    tx.execute(
+        "INSERT INTO plan_drafts (tenant_id,profile_id,base_revision_id,base_plan_version,state,digest_format,snapshot_digest,created_by,idempotency_key,created_at) VALUES (?,?,?,?,'open','plan-draft-v1',?,?,?,?)",
+        params![
+            tenant,
+            profile,
+            sql_scalar(&prepared.base["baseRevisionId"])?,
+            num(&prepared.base, "basePlanVersion")?,
+            prepared.digest,
+            actor,
+            key,
+            auth::catalog_timestamp(),
+        ],
+    )?;
+    let id = tx.last_insert_rowid();
+    for input in &prepared.capture.inputs {
+        let mut values = vec![tenant.to_owned().into(), id.into()];
+        for field in model::INPUT_FIELDS {
+            values.push(sql_scalar(&input[*field])?);
+        }
+        tx.execute(
+            "INSERT INTO plan_draft_inputs (tenant_id,draft_id,source_id,source_layer,layer_order,tracking_kind,source_revision_id,manifest_digest,effective_naming_digest) VALUES (?,?,?,?,?,?,?,?,?)",
+            rusqlite::params_from_iter(values),
+        )?;
+    }
+    let fields = [vec!["baseRevisionPartId"], model::PART_FIELDS.to_vec()].concat();
+    for part in &prepared.parts {
+        let mut values = vec![tenant.to_owned().into(), id.into()];
+        values.extend(
+            part.sql_fields(&fields)?
+                .into_iter()
+                .map(|(_, value)| value),
+        );
+        tx.execute(
+            "INSERT INTO plan_draft_parts (tenant_id,draft_id,base_revision_part_id,part_key,relative_path,filename,source_layer,status,role_inferred,role_override,filament_color_id,filament_custom_hex,spoolman_spool_id,quantity_inferred,quantity_override,quantity_effective,included,notes,github_blob_url,geometry_same,requirement,option_group_id,manifest_source,artifact_digest) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            rusqlite::params_from_iter(values),
+        )?;
+    }
+    Ok(id)
+}
+
+fn sql_scalar(value: &Value) -> Result<rusqlite::types::Value> {
+    Ok(match value {
+        Value::Null => rusqlite::types::Value::Null,
+        Value::Number(number) => number
+            .as_i64()
+            .ok_or_else(|| anyhow!("Invalid Plan draft integer"))?
+            .into(),
+        Value::String(text) => text.clone().into(),
+        _ => return Err(anyhow!("Invalid Plan draft scalar")),
+    })
+}
+
 impl Outcome {
     pub fn into_json_body(self) -> Result<DraftOutcomeJsonBody> {
         let (kind, field, body) = match self {
@@ -870,15 +1279,214 @@ impl Outcome {
             Self::ProfileNotFound => ("profile_not_found", None, Vec::new()),
             Self::DraftNotFound => ("draft_not_found", None, Vec::new()),
         };
-        let mut output = b"{\"kind\":".to_vec();
-        JsText::scalar(kind).write_json(&mut output);
-        if let Some(field) = field {
-            output.push(b',');
-            JsText::scalar(field).write_json(&mut output);
-            output.push(b':');
-            output.extend_from_slice(&body);
+        Ok(outcome_json_body(kind, field, &body))
+    }
+}
+
+impl RecomputeOutcome {
+    pub fn into_json_body(self) -> DraftOutcomeJsonBody {
+        let kind = match self {
+            Self::Created { draft } => {
+                return outcome_json_body("created", Some("draft"), &draft.into_json_body().0);
+            }
+            Self::Existing { draft } => {
+                return outcome_json_body("existing", Some("draft"), &draft.into_json_body().0);
+            }
+            Self::ProfileNotFound => "profile_not_found",
+            Self::AcceptedBaselineRequired => "accepted_baseline_required",
+            Self::BaseChanged => "base_changed",
+            Self::InputsChanged => "inputs_changed",
+            Self::IdempotencyConflict => "idempotency_conflict",
+            Self::NoLayers => "no_layers",
+            Self::NoStls => "no_stls",
+        };
+        outcome_json_body(kind, None, &[])
+    }
+}
+
+fn outcome_json_body(kind: &str, field: Option<&str>, body: &[u8]) -> DraftOutcomeJsonBody {
+    let mut output = b"{\"kind\":".to_vec();
+    JsText::scalar(kind).write_json(&mut output);
+    if let Some(field) = field {
+        output.push(b',');
+        JsText::scalar(field).write_json(&mut output);
+        output.push(b':');
+        output.extend_from_slice(body);
+    }
+    output.push(b'}');
+    DraftOutcomeJsonBody(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The required-units fixture after `WriterOwner::open` has migrated it.
+    struct Database(PathBuf);
+    impl Database {
+        fn new() -> (Self, Connection) {
+            let directory =
+                std::env::temp_dir().join(format!("pp-recompute-{}", rand::random::<u64>()));
+            std::fs::create_dir_all(&directory).unwrap();
+            let path = directory.join("print-partner.db");
+            std::fs::write(
+                &path,
+                include_bytes!("../tests/fixtures/required-units/unchanged.db"),
+            )
+            .unwrap();
+            WriterOwner::open(&directory, crate::Limits::default())
+                .unwrap()
+                .0
+                .shutdown()
+                .unwrap();
+            let connection = Connection::open(&path).unwrap();
+            (Self(directory), connection)
         }
-        output.push(b'}');
-        Ok(DraftOutcomeJsonBody(output))
+    }
+    impl Drop for Database {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    struct NoReads;
+    impl observation::DraftReads for NoReads {
+        fn resolve_stl_root(
+            &self,
+            _: &observation::OwnedStlReadRequest,
+            _: &mut observation::PreparationBudget<'_>,
+        ) -> observation::ReadResult<Box<dyn observation::StlRootRead>> {
+            Err(observation::ReadFailure::Unavailable)
+        }
+        fn read_checkout_manifest(
+            &self,
+            _: &observation::OwnedCheckoutReadRequest,
+            _: observation::CheckoutManifestUse,
+            _: &mut observation::PreparationBudget<'_>,
+        ) -> observation::ReadResult<observation::DocumentRead> {
+            Err(observation::ReadFailure::Unavailable)
+        }
+        fn read_catalog_document(
+            &self,
+            _: &observation::OwnedCatalogReadRequest,
+            _: &mut observation::PreparationBudget<'_>,
+        ) -> observation::ReadResult<observation::DocumentRead> {
+            Err(observation::ReadFailure::Unavailable)
+        }
+    }
+
+    /// Recomputes `profile` with `key`, without Source reads.
+    fn read_phase(
+        connection: &mut Connection,
+        profile: u64,
+        key: &str,
+        cancelled: &AtomicBool,
+    ) -> Result<RecomputeOutcome> {
+        recompute(
+            connection,
+            &Credential::Session(auth::Secret::new("required-unit-fixture-secret".into())),
+            auth::AuthPolicy {
+                registration: auth::RegistrationPolicy::Open,
+                session_tenant: auth::SessionTenantPolicy::AccountTenant,
+                first_user: auth::FirstUserTenant::NewUser,
+            },
+            PositiveId::new(profile).unwrap(),
+            &RecomputeRequest::new(key, true).unwrap(),
+            &Observations {
+                reads: Arc::new(NoReads),
+                limits: observation::PreparationLimits::default(),
+                repos: PathBuf::new(),
+            },
+            cancelled,
+        )
+    }
+
+    /// Sets the returned token from SQLite's progress handler, so it trips
+    /// during the next query.
+    fn cancel_during_sql(connection: &Connection) -> Arc<AtomicBool> {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let flag = cancelled.clone();
+        connection
+            .progress_handler(
+                1,
+                Some(move || {
+                    flag.store(true, Ordering::Release);
+                    false
+                }),
+            )
+            .unwrap();
+        cancelled
+    }
+
+    #[test]
+    fn cancellation_while_loading_a_replay_is_not_existing() {
+        let (_database, mut connection) = Database::new();
+        assert!(matches!(
+            read_phase(&mut connection, 1, "working", &AtomicBool::new(false)),
+            Ok(RecomputeOutcome::Existing { .. })
+        ));
+        let cancelled = cancel_during_sql(&connection);
+        let Err(error) = read_phase(&mut connection, 1, "working", &cancelled) else {
+            panic!("a replay cancelled while loading returned an outcome");
+        };
+        assert!(
+            matches!(error.downcast_ref(), Some(Failure::Cancelled)),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn cancellation_during_the_read_phase_is_not_a_refusal() {
+        let (_database, mut connection) = Database::new();
+        assert!(matches!(
+            read_phase(&mut connection, 999, "new", &AtomicBool::new(false)),
+            Ok(RecomputeOutcome::ProfileNotFound)
+        ));
+        connection
+            .execute_batch(
+                "UPDATE build_profiles SET accepted_plan_revision_id=NULL,accepted_plan_version=1 WHERE id=1",
+            )
+            .unwrap();
+        assert!(matches!(
+            read_phase(&mut connection, 1, "new", &AtomicBool::new(false)),
+            Ok(RecomputeOutcome::AcceptedBaselineRequired)
+        ));
+        for profile in [999, 1] {
+            let cancelled = cancel_during_sql(&connection);
+            let Err(error) = read_phase(&mut connection, profile, "new", &cancelled) else {
+                panic!("Plan {profile} cancelled while reading returned an outcome");
+            };
+            assert!(
+                matches!(error.downcast_ref(), Some(Failure::Cancelled)),
+                "{error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn cancellation_stops_carrying_open_draft_edits() {
+        let (_database, mut connection) = Database::new();
+        let tx = connection.transaction().unwrap();
+        let carry = |cancel_after: Option<usize>| {
+            let cancelled = AtomicBool::new(false);
+            let mut budget = observation::PreparationBudget::new(
+                &cancelled,
+                observation::PreparationLimits::default(),
+            )
+            .unwrap();
+            if let Some(checks) = cancel_after {
+                budget.cancel_after_checks(checks);
+            }
+            carry_open_edits(&tx, "default", 1, &mut [], true, &mut budget)
+        };
+        assert!(!carry(None).unwrap());
+        let error = carry(Some(1)).unwrap_err();
+        assert!(
+            matches!(
+                error.downcast_ref(),
+                Some(observation::ReadFailure::Cancelled)
+            ),
+            "{error:?}"
+        );
     }
 }
