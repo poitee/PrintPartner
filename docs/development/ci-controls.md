@@ -89,6 +89,9 @@ bash scripts/check-github-actions-pinned.sh
 
 ## Dependency updates
 
+Every Dependabot ecosystem waits 7 days after a release for routine version updates.
+The cooldown does not delay security updates.
+
 Dependabot ignores semver-major updates for npm, Docker and Cargo.
 Cargo pins direct crates with `=` and uses `versioning-strategy: lockfile-only`, so Dependabot cannot change a pinned major version.
 Bump a major version in a ticketed PR that updates the manifest pin, `Cargo.lock` and any code the new API needs.
