@@ -1,0 +1,119 @@
+{
+  "cases": [
+    {
+      "name": "recorded-success",
+      "base_url": "http://printer.test:7125",
+      "fixture": "moonraker-success.json",
+      "expected": {"state": "printing", "progress": 43, "filename": "bracket.gcode", "message": "Printing bracket.gcode", "ip_address": "printer.test", "nozzle_temperature_c": 210.2, "nozzle_target_c": 215, "bed_temperature_c": 59.8, "bed_target_c": 60}
+    },
+    {
+      "name": "recorded-error",
+      "base_url": "http://printer.test",
+      "fixture": "moonraker-error.json",
+      "expected": {"state": "error", "filename": "bracket.gcode", "message": "error", "ip_address": "printer.test"}
+    },
+    {
+      "name": "recorded-klippy-unavailable",
+      "base_url": "http://printer.test",
+      "fixture": "moonraker-offline.json",
+      "expected": {"state": "unknown", "ip_address": "printer.test"},
+      "rust_rejects": "A 200 body without result.status fails closed: the Rust poller reports offline \"Moonraker status unavailable\" (runtime_m0 pins this through the gateway)."
+    },
+    {
+      "name": "standby-is-idle-without-progress",
+      "base_url": "http://printer.test",
+      "body": {"result": {"status": {"print_stats": {"state": "standby", "filename": ""}, "virtual_sdcard": {"progress": 0.5}}}},
+      "expected": {"state": "idle", "message": "Idle", "ip_address": "printer.test"}
+    },
+    {
+      "name": "cancelled-is-idle",
+      "base_url": "http://printer.test",
+      "body": {"result": {"status": {"print_stats": {"state": "cancelled", "filename": "part.gcode"}}}},
+      "expected": {"state": "idle", "filename": "part.gcode", "message": "Idle", "ip_address": "printer.test"}
+    },
+    {
+      "name": "complete-with-filename",
+      "base_url": "http://printer.test",
+      "body": {"result": {"status": {"print_stats": {"state": "complete", "filename": "part.gcode"}, "virtual_sdcard": {"progress": 1}}}},
+      "expected": {"state": "complete", "filename": "part.gcode", "message": "Complete · part.gcode", "ip_address": "printer.test"}
+    },
+    {
+      "name": "complete-without-filename",
+      "base_url": "http://printer.test",
+      "body": {"result": {"status": {"print_stats": {"state": "complete"}}}},
+      "expected": {"state": "complete", "message": "Complete", "ip_address": "printer.test"}
+    },
+    {
+      "name": "paused-null-sdcard-falls-back-to-display-status",
+      "base_url": "http://printer.test",
+      "body": {"result": {"status": {"print_stats": {"state": "paused", "filename": "part.gcode"}, "virtual_sdcard": {"progress": null}, "display_status": {"progress": 0.25}}}},
+      "expected": {"state": "paused", "progress": 25, "filename": "part.gcode", "message": "paused", "ip_address": "printer.test"}
+    },
+    {
+      "name": "paused-missing-sdcard-falls-back-to-display-status",
+      "base_url": "http://printer.test",
+      "body": {"result": {"status": {"print_stats": {"state": "paused"}, "display_status": {"progress": 0.125}}}},
+      "expected": {"state": "paused", "progress": 13, "message": "paused", "ip_address": "printer.test"}
+    },
+    {
+      "name": "printing-without-filename-clamps-high-progress",
+      "base_url": "http://printer.test",
+      "body": {"result": {"status": {"print_stats": {"state": "printing", "filename": "   "}, "virtual_sdcard": {"progress": 1.7}}}},
+      "expected": {"state": "printing", "progress": 100, "message": "printing", "ip_address": "printer.test"}
+    },
+    {
+      "name": "printing-clamps-negative-progress",
+      "base_url": "http://printer.test",
+      "body": {"result": {"status": {"print_stats": {"state": "printing", "filename": "part.gcode"}, "virtual_sdcard": {"progress": -0.2}}}},
+      "expected": {"state": "printing", "progress": 0, "filename": "part.gcode", "message": "Printing part.gcode", "ip_address": "printer.test"}
+    },
+    {
+      "name": "uppercase-state-keeps-raw-filename-case",
+      "base_url": "http://printer.test",
+      "body": {"result": {"status": {"print_stats": {"state": "PRINTING", "filename": "Benchy.gcode"}}}},
+      "expected": {"state": "printing", "filename": "Benchy.gcode", "message": "Printing Benchy.gcode", "ip_address": "printer.test"}
+    },
+    {
+      "name": "unrecognised-state-is-unknown-with-raw-message",
+      "base_url": "http://printer.test",
+      "body": {"result": {"status": {"print_stats": {"state": "startup"}}}},
+      "expected": {"state": "unknown", "message": "startup", "ip_address": "printer.test"}
+    },
+    {
+      "name": "non-string-state-is-unknown-without-message",
+      "base_url": "http://printer.test",
+      "body": {"result": {"status": {"print_stats": {"state": 3, "filename": 7}}}},
+      "expected": {"state": "unknown", "ip_address": "printer.test"}
+    },
+    {
+      "name": "empty-status-object-is-unknown",
+      "base_url": "http://printer.test",
+      "body": {"result": {"status": {}}},
+      "expected": {"state": "unknown", "ip_address": "printer.test"}
+    },
+    {
+      "name": "non-numeric-temperatures-are-omitted",
+      "base_url": "http://printer.test",
+      "body": {"result": {"status": {"print_stats": {"state": "standby"}, "extruder": {"temperature": "210", "target": null}, "heater_bed": {"temperature": 0, "target": true}}}},
+      "expected": {"state": "idle", "message": "Idle", "ip_address": "printer.test", "bed_temperature_c": 0}
+    },
+    {
+      "name": "mixed-case-host-is-lowercased",
+      "base_url": "http://Printer.LOCAL:7125",
+      "body": {"result": {"status": {"print_stats": {"state": "standby"}}}},
+      "expected": {"state": "idle", "message": "Idle", "ip_address": "printer.local"}
+    },
+    {
+      "name": "ipv6-literal-host-keeps-brackets",
+      "base_url": "http://[fd00::10]:7125",
+      "body": {"result": {"status": {"print_stats": {"state": "standby"}}}},
+      "expected": {"state": "idle", "message": "Idle", "ip_address": "[fd00::10]"}
+    },
+    {
+      "name": "path-prefixed-base-reports-host-only",
+      "base_url": "http://printer.test/moonraker",
+      "body": {"result": {"status": {"print_stats": {"state": "standby"}}}},
+      "expected": {"state": "idle", "message": "Idle", "ip_address": "printer.test"}
+    }
+  ]
+}
