@@ -58,6 +58,7 @@ import {
   mcpAccessEnabled,
   type ExternalAccessMode,
 } from "@print-partner/contracts";
+import { InvalidCommunityManifestSlugError } from "./lib/community-manifest-slug.js";
 import { sendProblem } from "./lib/api-error.js";
 import { hostedDeniedRouteDetail } from "./lib/hosted-planning-deny.js";
 import { hostedPlanningPolicy } from "./lib/hosted-planning.js";
@@ -557,6 +558,9 @@ async function configureApp(app: FastifyInstance, config: ServerConfig, ports: R
           }
           if (error instanceof KitJsonTooLargeError) {
             return reply.status(413).send({ detail: KIT_JSON_TOO_LARGE_DETAIL });
+          }
+          if (error instanceof InvalidCommunityManifestSlugError) {
+            return reply.status(400).send({ detail: error.message });
           }
           throw error;
         }

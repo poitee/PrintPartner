@@ -34,3 +34,20 @@ tokio-util = { version = "=0.7.16", features = ["rt"] }
 
 [profile.dev.package.sha2]
 opt-level = 3
+
+# Password KDFs run at production cost in auth tests. Unoptimized, one scrypt or
+# Argon2 hash takes seconds and auth tests time out on a busy runner (GRE-640).
+[profile.dev.package.scrypt]
+opt-level = 3
+
+[profile.dev.package.salsa20]
+opt-level = 3
+
+[profile.dev.package.pbkdf2]
+opt-level = 3
+
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3

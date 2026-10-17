@@ -1,7 +1,7 @@
 use pp_source::{
     ArtifactBudget, FileKind, LocalFiles, SelectedFile, Selection, SnapshotRequest, SourcePath,
     TenantRepos,
-    archive::{ArchiveError, ArchiveLimits, ReaderMismatch, ZipInput},
+    archive::{ArchiveError, ArchiveLimits, ZipInput},
 };
 use std::{
     fs::{self, File},
@@ -1160,8 +1160,9 @@ fn understated_sizes_cannot_smuggle_a_high_ratio_entry_past_the_cap() {
 
     let fixture = Fixture::new();
     deflated_zip(&fixture, &vec![0; 8 * 1024 * 1024]);
-    // Advertise exactly the floor so the central-directory check passes and
-    // only the streaming byte cap can stop the real 8 MiB payload.
+    // Advertise exactly the floor so the central-directory check passes. The
+    // ZIP reader fails the real 8 MiB payload once it passes the advertised
+    // size, before the streaming ratio cap is reached.
     let path = fixture.0.join("input/upload.zip");
     let mut data = fs::read(&path).unwrap();
     let central = data.windows(4).position(|w| w == b"PK\x01\x02").unwrap();
@@ -1169,10 +1170,10 @@ fn understated_sizes_cannot_smuggle_a_high_ratio_entry_past_the_cap() {
     data[22..26].copy_from_slice(&floor);
     data[central + 24..central + 28].copy_from_slice(&floor);
     fs::write(&path, data).unwrap();
-    assert!(matches!(
-        extract(&fixture),
-        Err(ArchiveError::CompressionRatio)
-    ));
+    assert_eq!(
+        extract(&fixture).unwrap_err().to_string(),
+        "io: File is larger than its declared uncompressed size"
+    );
     assert!(!fixture.candidate().exists());
 }
 
@@ -1276,7 +1277,8 @@ fn zip64_extra_sizes_cannot_override_the_checked_central_sizes() {
             + u32::from_le_bytes(original[central + 20..central + 24].try_into().unwrap())
                 as usize];
     // Ordinary sizes claim a harmless 10:1 entry padded to 100,000 bytes,
-    // while a ZIP64 extra field carries the real 8 MiB / ~8 KiB sizes.
+    // while a ZIP64 extra field no sentinel asked for carries the real
+    // 8 MiB / ~8 KiB sizes.
     let (claimed_compressed, claimed_inflated) = (100_000u32, 1024 * 1024u32);
     let name = b"part.stl";
     let mut data = vec![];
@@ -1321,14 +1323,17 @@ fn zip64_extra_sizes_cannot_override_the_checked_central_sizes() {
     data.extend_from_slice(&central_size.to_le_bytes());
     data.extend_from_slice(&central_offset.to_le_bytes());
     data.extend_from_slice(&0u16.to_le_bytes());
-    fs::write(fixture.0.join("input/upload.zip"), data).unwrap();
-    let error = extract(&fixture).unwrap_err();
-    assert!(
-        matches!(
-            error,
-            ArchiveError::ReaderMismatch(ReaderMismatch::EntryMetadata)
-        ),
-        "{error:?}"
+    fs::write(fixture.0.join("input/upload.zip"), &data).unwrap();
+    let mut reader = open_unchecked(data);
+    let member = reader.by_index(0).unwrap();
+    assert_eq!(
+        (member.compressed_size(), member.size()),
+        (claimed_compressed.into(), claimed_inflated.into())
+    );
+    drop(member);
+    assert_eq!(
+        extract(&fixture).unwrap_err().to_string(),
+        "io: File is larger than its declared uncompressed size"
     );
     assert!(!fixture.candidate().exists());
 }
@@ -1474,8 +1479,9 @@ fn open_unchecked(data: Vec<u8>) -> zip::ZipArchive<std::io::Cursor<Vec<u8>>> {
 #[test]
 fn zip64_extra_cannot_redirect_the_reader_to_an_unvalidated_local_header() {
     // part.stl's local extra field hides a second local header at offset 38.
-    // The central ZIP64 field keeps the checked sizes but moves the header
-    // offset there, so the reader would stream bytes preflight never bound.
+    // The central ZIP64 field keeps the checked sizes and names that offset
+    // without a sentinel asking for it. zip 8.6 followed it and streamed
+    // bytes preflight never bound; the CRC is forged for that decoy view.
     let fixture = Fixture::new();
     let decoy = b"decoy bytes preflight never validated";
     let payload = vec![b'p'; 4096];
@@ -1499,32 +1505,20 @@ fn zip64_extra_cannot_redirect_the_reader_to_an_unvalidated_local_header() {
     data.extend(end_record(central_offset, central_size));
     fs::write(fixture.0.join("input/upload.zip"), &data).unwrap();
 
-    // The pre-fix post-open checks (count, name, sizes) all pass, and the
-    // reader yields the decoy view instead of the validated payload.
+    // The reader stays on the validated header, so it streams the payload and
+    // the CRC forged for the decoy view rejects it.
     let mut reader = open_unchecked(data);
     assert_eq!(reader.central_directory_start(), central_offset as u64);
     let mut member = reader.by_index(0).unwrap();
-    assert_eq!(
-        (member.name_raw(), member.compressed_size(), member.size()),
-        (&b"part.stl"[..], size as u64, size as u64)
-    );
-    assert_eq!(member.header_start(), 38);
+    assert_eq!(member.header_start(), 0);
     let mut produced = vec![];
-    std::io::Read::read_to_end(&mut member, &mut produced).unwrap();
-    assert_eq!(produced, view);
-    assert_ne!(produced, payload);
+    let error = std::io::Read::read_to_end(&mut member, &mut produced).unwrap_err();
+    assert_eq!(error.to_string(), "Invalid checksum");
+    assert_eq!(produced, payload[..produced.len()]);
 
-    let error = extract(&fixture).unwrap_err();
-    assert!(
-        matches!(
-            error,
-            ArchiveError::ReaderMismatch(ReaderMismatch::LocalHeaderOffset)
-        ),
-        "{error:?}"
-    );
     assert_eq!(
-        error.to_string(),
-        "invalid-archive: reader local header offset differs from preflight"
+        extract(&fixture).unwrap_err().to_string(),
+        "io: Invalid checksum"
     );
     assert!(!fixture.candidate().exists());
 }
@@ -1532,7 +1526,7 @@ fn zip64_extra_cannot_redirect_the_reader_to_an_unvalidated_local_header() {
 #[test]
 fn malformed_extra_field_cannot_divert_the_reader_to_an_earlier_directory() {
     // The validated central entry ends in a truncated ZIP64 extra header. zip
-    // 8.6 fails to parse it and falls back to an end record hidden in
+    // 9 fails to parse it and falls back to an end record hidden in
     // part.stl's local extra field, indexing a decoy directory (and a decoy
     // local header) that preflight never walked.
     let fixture = Fixture::new();
