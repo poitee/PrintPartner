@@ -8,6 +8,7 @@ on:
       - "fixtures/http/routes-inventory.json"
       - "rust/**"
       - "rust-toolchain.toml"
+      - 'scripts/setup-ci-linux.sh'
       - "web/packages/contracts/**"
       - "web/packages/domain/**"
       - "web/apps/server/**"
@@ -23,6 +24,7 @@ on:
       - "fixtures/http/routes-inventory.json"
       - "rust/**"
       - "rust-toolchain.toml"
+      - 'scripts/setup-ci-linux.sh'
       - "web/packages/contracts/**"
       - "web/packages/domain/**"
       - "web/apps/server/**"

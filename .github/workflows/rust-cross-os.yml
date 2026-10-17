@@ -73,15 +73,24 @@ jobs:
       - name: Set up ephemeral Linux prerequisites
         if: runner.environment == 'self-hosted' && runner.os == 'Linux'
         run: bash "$GITHUB_WORKSPACE/scripts/setup-ci-linux.sh"
-      - name: Use system Python on ephemeral macOS
+      - name: Prepare Python tool cache for the VM user
         if: runner.environment == 'self-hosted' && runner.os == 'macOS'
         run: |
-          /usr/bin/python3 --version
-          python_root=$(/usr/bin/python3 -c 'import sys; print(sys.prefix)')
-          echo /usr/bin >> "$GITHUB_PATH"
-          for variable in pythonLocation Python_ROOT_DIR Python2_ROOT_DIR Python3_ROOT_DIR; do
-            echo "$variable=$python_root" >> "$GITHUB_ENV"
-          done
+          sudo mkdir -p /Users/runner/hostedtoolcache
+          sudo chown "$(id -un):$(id -gn)" /Users/runner/hostedtoolcache
+      - name: Set up Python 3.12 on ephemeral macOS
+        if: runner.environment == 'self-hosted' && runner.os == 'macOS'
+        id: py
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Verify macOS manifest Python
+        if: runner.environment == 'self-hosted' && runner.os == 'macOS'
+        env:
+          MANIFEST_PYTHON: ${{ steps.py.outputs.python-path }}
+        run: |
+          "$MANIFEST_PYTHON" -c 'import hashlib, sys; assert sys.version_info >= (3, 11); assert hasattr(hashlib, "file_digest"); print(sys.executable, sys.version)'
+          python3 -c 'import hashlib, sys; assert sys.version_info >= (3, 11); assert hasattr(hashlib, "file_digest")'
       - name: Set up Python on ephemeral Windows
         if: runner.environment == 'self-hosted' && runner.os == 'Windows'
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -128,6 +137,7 @@ jobs:
         id: assets
         env:
           VITE_PRINT_PARTNER_DESKTOP: '1'
+          MANIFEST_PYTHON: ${{ steps.py.outputs.python-path || 'python3' }}
         run: |
           set -euo pipefail
           node_path=$(node -p process.execPath)
@@ -137,7 +147,7 @@ jobs:
           echo "PP_TEST_NODE=$node_path" >> "$GITHUB_ENV"
           npm --prefix web ci
           npm --prefix web run build
-          python3 rust/scripts/build-desktop-manifest.py --web web --node "$node_path" --output rust/bundle-manifest.json --commit "$GITHUB_SHA"
+          "$MANIFEST_PYTHON" rust/scripts/build-desktop-manifest.py --web web --node "$node_path" --output rust/bundle-manifest.json --commit "$GITHUB_SHA"
       # The default macOS TMPDIR is case-insensitive, sits under the /var symlink and is
       # too long for Unix socket paths. The tests need a TMPDIR that is none of these.
       - name: Mount a short case-sensitive TMPDIR
@@ -164,6 +174,13 @@ jobs:
       - name: nextest (desktop_rebuild on)
         if: ${{ !cancelled() && steps.assets.outcome == 'success' && (env.RUST_OS != 'macos' || github.event_name != 'pull_request') }}
         run: cargo nextest run --manifest-path rust/Cargo.toml --locked ${{ env.CARGO_SCOPE }} --no-fail-fast -E "$NEXTEST_FILTER" --features desktop_rebuild
+      # nextest does not run doctests.
+      - name: doctests (desktop_rebuild off)
+        if: ${{ !cancelled() && steps.assets.outcome == 'success' }}
+        run: cargo test --manifest-path rust/Cargo.toml --locked ${{ env.CARGO_SCOPE }} --no-fail-fast --doc
+      - name: doctests (desktop_rebuild on)
+        if: ${{ !cancelled() && steps.assets.outcome == 'success' && (env.RUST_OS != 'macos' || github.event_name != 'pull_request') }}
+        run: cargo test --manifest-path rust/Cargo.toml --locked ${{ env.CARGO_SCOPE }} --no-fail-fast --doc --features desktop_rebuild
 
   rust-macos:
     name: rust (macos)

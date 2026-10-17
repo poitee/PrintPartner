@@ -8,6 +8,7 @@ on:
       - 'rust/crates/**'
       - 'rust/scripts/**'
       - 'rust-toolchain.toml'
+      - 'scripts/setup-ci-linux.sh'
       - 'rust/Cargo.toml'
       - 'rust/Cargo.lock'
       - '.github/workflows/desktop-e2e.yml'

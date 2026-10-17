@@ -1,6 +1,6 @@
 # Continuous integration
 
-The **Rust cross-OS** workflow (`.github/workflows/rust-cross-os.yml`) builds and tests the Rust workspace on Linux, macOS and Windows. It starts on every pull request and every push to `main`. On PRs, a `changes` job selects `rust/**`, `rust-toolchain.toml`, `web/package*.json`, `web/apps/**`, `web/packages/**`, `web/tsconfig*.json`, `web/scripts/atomic-package-build.mjs`, `web/scripts/storage-fixtures/**`, the workflow itself, and the CI filter script and its tests. Other changes skip the three named Rust jobs while keeping their check reports present. Every push to `main` and manual run executes all three jobs. A new push to a pull request cancels that pull request's older run. Every push to `main` gets its own run, so each merge has a result. Its purpose is to stop code that compiles on one OS only from reaching `main`.
+The **Rust cross-OS** workflow (`.github/workflows/rust-cross-os.yml`) builds and tests the Rust workspace on Linux, macOS and Windows. It starts on every pull request and every push to `main`. On PRs, a `changes` job selects `rust/**`, `rust-toolchain.toml`, `web/package*.json`, `web/apps/**`, `web/packages/**`, `web/tsconfig*.json`, `web/scripts/atomic-package-build.mjs`, `web/scripts/storage-fixtures/**`, `fixtures/**`, the workflow itself, and the CI filter script and its tests. Other changes skip the three named Rust jobs while keeping their check reports present. Every push to `main` and manual run executes all three jobs. A new push to a pull request cancels that pull request's older run. Every push to `main` gets its own run, so each merge has a result. Its purpose is to stop code that compiles on one OS only from reaching `main`.
 
 This page covers what the Rust jobs run and how to reproduce them. [Change a CI workflow](ci-controls.md) covers review, the actionlint and zizmor checks, action pins and required checks. Both apply to this workflow.
 
@@ -24,12 +24,14 @@ Each job runs these steps in order:
 6. `cargo clippy -D warnings`, with `desktop_rebuild` on.
 7. `cargo nextest run`, with `desktop_rebuild` off.
 8. `cargo nextest run`, with `desktop_rebuild` on.
+9. `cargo test --doc`, with `desktop_rebuild` off. nextest does not run doctests.
+10. `cargo test --doc`, with `desktop_rebuild` on.
 
-On macOS PRs, steps 6 and 8 are skipped. Linux and Windows keep both feature states on PRs. Pushes to `main` and manual runs keep both states on every OS.
+On macOS PRs, steps 6, 8 and 10 are skipped. Linux and Windows keep both feature states on PRs. Pushes to `main` and manual runs keep both states on every OS.
 
 The macOS volume exists because the default macOS `TMPDIR` breaks three kinds of test. Its paths are too long for Unix socket names, it is under the `/var` symbolic link that no-follow opens refuse, and it treats `Straße.stl` and `STRASSE.stl` as one name.
 
-Steps 4 to 8 run even when an earlier one of them fails, so one run reports every failure. Clippy uses `--keep-going`, so it reports errors in every crate whose dependencies compile.
+Steps 4 to 10 run even when an earlier one of them fails, so one run reports every failure. Clippy uses `--keep-going`, so it reports errors in every crate whose dependencies compile.
 
 Each job declares its runner in `runs-on`, its package scope in `CARGO_SCOPE`, and its test filter in `NEXTEST_FILTER`. The three jobs share the same anchored steps. They have no matrix, so GitHub reports their exact required names both when running and when skipped. To use a self-hosted runner, change `runs-on`.
 
@@ -53,6 +55,8 @@ cargo clippy --manifest-path rust/Cargo.toml --locked --workspace --all-targets 
 cargo clippy --manifest-path rust/Cargo.toml --locked --workspace --all-targets --keep-going --features desktop_rebuild -- -D warnings
 cargo nextest run --manifest-path rust/Cargo.toml --locked --workspace --no-fail-fast
 cargo nextest run --manifest-path rust/Cargo.toml --locked --workspace --no-fail-fast --features desktop_rebuild
+cargo test --manifest-path rust/Cargo.toml --locked --workspace --no-fail-fast --doc
+cargo test --manifest-path rust/Cargo.toml --locked --workspace --no-fail-fast --doc --features desktop_rebuild
 ```
 
 On macOS, set `TMPDIR` to a short directory on a case-sensitive volume before you run the tests. The workflow step `Mount a short case-sensitive TMPDIR` has the commands. Also set `PP_TEST_NODE` to the Node executable, as CI does. Without it the runtime tests fall back to `/usr/bin/node`, which macOS does not have. To skip the same tests as CI, add `-E` with the `NEXTEST_FILTER` value of the macOS job. On Windows, replace `--workspace` with the Windows job's `CARGO_SCOPE` value. On Linux, the Tauri shell also needs the GTK and WebKit packages that the workflow installs with `apt-get`.
@@ -120,9 +124,9 @@ The filter also skips one test by name, outside those groups:
 
 ## Other Rust workflows
 
-- **Desktop Rust (hosted)** (`desktop-fleet-rust.yml`) runs the ast-grep lint counts and splits the Linux test suite into two partitions. It runs when Rust or web build inputs change.
+- **Desktop Rust (hosted)** (`desktop-fleet-rust.yml`) runs only the ast-grep ratchet, in the `ast-grep ratchet` job. It runs on pull requests and pushes to `main` that change `rust/**`. Every push to `main` gets its own run, so a merge of two individually green pull requests is still checked. On a push, the ratchet compares against the `main` commit that push replaced. It does not build or test Rust; `rust (linux)` does that once per push.
 - **Native macOS bundle** (`desktop-native-macos.yml`) builds the unsigned macOS app and runs the macOS storage tests. On pull requests, bundles run only when macOS inputs change or the PR has the `ci:macos` label. Generic `pp-storage` and `pp-source` changes select the separate `macos-storage-gate` without selecting bundle jobs. A new push to `main` does not cancel a running `main` run; it waits, and only the newest waiting push runs next.
-- **Desktop runtime** (`desktop-runtime.yml`) runs the Python lifecycle and gateway proofs against the built server on Linux.
+- **Desktop runtime** (`desktop-runtime.yml`) builds `pp-api` and `pp-server` and runs the proofs that need the built server on Linux: the serial `runtime_m0` lifecycle log, the Python lifecycle, upload and gateway drivers, the source artifact checks and `verify.py`. Unit tests, clippy and fmt are not repeated here; `rust (linux)` runs them.
 
 When `rust (macos)` or a Native macOS bundle workflow job fails on a push to `main`, an alert job opens an issue labelled `ci-macos-main` for that workflow run, or comments on the existing open issue for the same run. Rust failures confined to Linux or Windows do not alert. Only the alert job receives `issues: write`.
 
@@ -131,23 +135,24 @@ Required Rust and lint jobs fail if their input-selection job fails, so a broken
 ## Ephemeral PR runners
 
 Same-repository `pull_request` jobs use `[self-hosted, linux, x64, pp-local]`
-for Rust Linux, the Rust partitions, web checks, desktop contracts, desktop runtime,
-source artifacts, Rust verification, WebKit and embedded-driver smoke, and the native
+for Rust Linux, ast-grep, web checks, desktop contracts, desktop runtime,
+source artifacts, Rust verification, embedded-driver smoke, and the native
 macOS Linux precheck. ARM64 native macOS jobs and cross-OS macOS use
 `[self-hosted, macos, arm64, pp-local-mac]` with the existing `macos` PR label gate.
-Each runner accepts one job and is destroyed afterward. Linux has three slots with
+Each runner accepts one job and is destroyed afterward. Linux has four slots with
 3 vCPU and 8 GB each; macOS has two fresh Tart VM slots.
 
 Fork PRs use each job's existing GitHub-hosted label. Pushes, schedules, releases,
 manual dispatches and merge groups also keep their existing hosted runners.
 Docker image jobs, service-container jobs and cargo-deny stay hosted because the
 Linux runner containers have no Docker socket. Selector and result-only jobs stay
-hosted. No job routed to the local fleet references `secrets.`.
+hosted. WebKit STL smoke also stays on `ubuntu-24.04` because the local
+Linux containers cannot provide its WebGL canvas. No job routed to the local fleet references `secrets.`.
 
 The `scripts/setup-ci-linux.sh` script installs build tools, Python and the GitHub CLI through
 `sudo apt-get`. Setup actions install Node, Rust and Chrome explicitly. Rust uses
-1.99.0 with rustfmt and clippy. Rust partition defaults use three build jobs on
-self-hosted runners; explicit inputs and repository variables still take precedence.
+1.99.0 with rustfmt and clippy. Changes to the setup script trigger every
+path-filtered consumer, including Rust input selection.
 
 Rust Windows jobs keep `windows-latest`. The default-off repository variable
 `PP_LOCAL_WIN` enables `[self-hosted, windows, x64, pp-local-win]` only when its
@@ -157,9 +162,12 @@ The command-shell smoke passed, but the Rust job exposed the missing Bash:
 [Windows smoke](https://github.com/poitee/PrintPartner/actions/runs/39073196185).
 The `ci/runner-smoke-win` branch remains for Chad to remove.
 
-Cross-OS Rust on local macOS verifies `/usr/bin/python3`, adds `/usr/bin` to PATH,
-and records the interpreter's real prefix in Python discovery variables. It uses
-the VM's system interpreter instead of an assumed hosted tool cache. Historical
+Local macOS jobs install Python 3.12 through pinned `actions/setup-python` before
+building manifests, which require `hashlib.file_digest`. They create the action's
+required `/Users/runner/hostedtoolcache` prefix and give the actual VM user ownership,
+including when that user is `admin`. The action sets PATH and Python discovery
+variables to the installed interpreter. A required step checks the version and API;
+cross-OS manifest generation uses the action's exact interpreter path. Historical
 schema trees missing from a shallow checkout are fetched together in one Git
 operation, then every pinned tree and the required archive are checked.
 

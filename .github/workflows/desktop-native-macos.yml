@@ -115,6 +115,24 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Prepare Python tool cache for the VM user
+        if: runner.environment == 'self-hosted' && runner.os == 'macOS'
+        run: |
+          sudo mkdir -p /Users/runner/hostedtoolcache
+          sudo chown "$(id -un):$(id -gn)" /Users/runner/hostedtoolcache
+      - name: Set up Python 3.12 on ephemeral macOS
+        if: runner.environment == 'self-hosted' && runner.os == 'macOS'
+        id: py
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Verify macOS manifest Python
+        if: runner.environment == 'self-hosted' && runner.os == 'macOS'
+        env:
+          MANIFEST_PYTHON: ${{ steps.py.outputs.python-path }}
+        run: |
+          "$MANIFEST_PYTHON" -c 'import hashlib, sys; assert sys.version_info >= (3, 11); assert hasattr(hashlib, "file_digest"); print(sys.executable, sys.version)'
+          python3 -c 'import hashlib, sys; assert sys.version_info >= (3, 11); assert hasattr(hashlib, "file_digest")'
       - name: Set up Rust on ephemeral runners
         if: runner.environment == 'self-hosted'
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
@@ -186,6 +204,24 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Prepare Python tool cache for the VM user
+        if: runner.environment == 'self-hosted' && runner.os == 'macOS'
+        run: |
+          sudo mkdir -p /Users/runner/hostedtoolcache
+          sudo chown "$(id -un):$(id -gn)" /Users/runner/hostedtoolcache
+      - name: Set up Python 3.12 on ephemeral macOS
+        if: runner.environment == 'self-hosted' && runner.os == 'macOS'
+        id: py
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Verify macOS manifest Python
+        if: runner.environment == 'self-hosted' && runner.os == 'macOS'
+        env:
+          MANIFEST_PYTHON: ${{ steps.py.outputs.python-path }}
+        run: |
+          "$MANIFEST_PYTHON" -c 'import hashlib, sys; assert sys.version_info >= (3, 11); assert hasattr(hashlib, "file_digest"); print(sys.executable, sys.version)'
+          python3 -c 'import hashlib, sys; assert sys.version_info >= (3, 11); assert hasattr(hashlib, "file_digest")'
       - name: Set up Rust on ephemeral runners
         if: runner.environment == 'self-hosted'
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
@@ -361,6 +397,24 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Prepare Python tool cache for the VM user
+        if: runner.environment == 'self-hosted' && runner.os == 'macOS'
+        run: |
+          sudo mkdir -p /Users/runner/hostedtoolcache
+          sudo chown "$(id -un):$(id -gn)" /Users/runner/hostedtoolcache
+      - name: Set up Python 3.12 on ephemeral macOS
+        if: runner.environment == 'self-hosted' && runner.os == 'macOS'
+        id: py
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Verify macOS manifest Python
+        if: runner.environment == 'self-hosted' && runner.os == 'macOS'
+        env:
+          MANIFEST_PYTHON: ${{ steps.py.outputs.python-path }}
+        run: |
+          "$MANIFEST_PYTHON" -c 'import hashlib, sys; assert sys.version_info >= (3, 11); assert hasattr(hashlib, "file_digest"); print(sys.executable, sys.version)'
+          python3 -c 'import hashlib, sys; assert sys.version_info >= (3, 11); assert hasattr(hashlib, "file_digest")'
       - name: Set up Rust on ephemeral runners
         if: runner.environment == 'self-hosted'
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8

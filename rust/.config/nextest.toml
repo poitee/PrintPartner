@@ -1,4 +1,0 @@
-# CI profile: `cargo nextest run --profile ci` writes a JUnit report to
-# rust/target/nextest/ci/junit.xml. Used by .github/workflows/desktop-fleet-rust.yml.
-[profile.ci.junit]
-path = "junit.xml"
