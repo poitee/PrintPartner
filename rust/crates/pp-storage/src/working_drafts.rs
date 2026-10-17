@@ -1399,9 +1399,9 @@ mod tests {
                 }),
             )
             .unwrap();
-        let error = replay(&mut connection, &cancelled)
-            .err()
-            .expect("a replay cancelled while loading returned an outcome");
+        let Err(error) = replay(&mut connection, &cancelled) else {
+            panic!("a replay cancelled while loading returned an outcome");
+        };
         assert!(
             matches!(error.downcast_ref(), Some(Failure::Cancelled)),
             "{error:?}"
