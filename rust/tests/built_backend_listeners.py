@@ -52,7 +52,9 @@ waiting.unref();
 class ListenerFound(AssertionError):
     def __init__(self, found):
         self.found = found
-        super().__init__(f"network listener found: {found}")
+        outside = [listener for listener in found if not listener["in_backend_group"]]
+        hint = f"; not in the backend's process group, check its args in case it is unrelated: {outside}" if outside else ""
+        super().__init__(f"network listener found: {found}{hint}")
 
 
 def lsof(*selection):
@@ -83,19 +85,21 @@ class Watch:
 
     def __init__(self):
         self.baseline = user_listeners()
+        self.backend = None
         self.polls = 0
 
     def poll(self):
         self.polls += 1
         new = user_listeners() - self.baseline
         if new:
-            raise ListenerFound([{"pid": pid, "command": command, "protocol": protocol, "name": name, **lineage(pid)}
-                                 for pid, command, protocol, name in sorted(new)])
+            raise ListenerFound([self.describe(*listener) for listener in sorted(new)])
 
-
-def lineage(pid):
-    row = subprocess.run(["ps", "-o", "ppid=,pgid=", "-p", str(pid)], capture_output=True, text=True).stdout.split()
-    return {"ppid": int(row[0]), "pgid": int(row[1])} if row else {}
+    def describe(self, pid, command, protocol, name):
+        row = subprocess.run(["ps", "-ww", "-o", "ppid=,pgid=,args=", "-p", str(pid)],
+                             capture_output=True, text=True).stdout.split(None, 2)
+        lineage = {"ppid": int(row[0]), "pgid": int(row[1]), "args": row[2].strip()} if len(row) == 3 else {}
+        return {"pid": pid, "command": command, "protocol": protocol, "name": name, **lineage,
+                "in_backend_group": self.backend in (pid, lineage.get("pgid"))}
 
 
 def token_carriers(token):
@@ -196,6 +200,7 @@ def run_backend(node, evidence, control=None):
         with inherited_lock(lock.fileno()):
             child = subprocess.Popen(command, cwd=ROOT / "web", stdin=subprocess.PIPE, stdout=stdout, stderr=stderr,
                                      env=env, start_new_session=True, pass_fds=(198,))
+        watch.backend = child.pid
         receipt = {"case": "built_backend_listeners", "platform": sys.platform, "pid": child.pid, "control": control,
                    "baseline_user_listeners": len(watch.baseline)}
         try:
@@ -223,6 +228,7 @@ def run_backend(node, evidence, control=None):
                     f"exercise failed: {receipt['exercised']}")
             while time.monotonic() - ready_at < WINDOW_SECONDS:
                 watch.poll()
+                require(child.poll() is None, f"backend exited during the observation window; see {evidence}")
                 time.sleep(POLL_SECONDS)
             receipt["window"] = {"seconds": round(time.monotonic() - ready_at, 2), "polls": watch.polls}
             child.stdin.close()
@@ -232,6 +238,7 @@ def run_backend(node, evidence, control=None):
                 require(time.monotonic() < stop_deadline, f"backend did not stop on stdin EOF; see {evidence}")
                 time.sleep(POLL_SECONDS)
             watch.poll()
+            require(child.returncode == -signal.SIGKILL, f"backend stopped with {child.returncode}, not its own SIGKILL")
             receipt.update(returncode=child.returncode, new_listeners=[])
             return receipt
         except ListenerFound as found:
@@ -283,9 +290,11 @@ def main():
     print(json.dumps(receipt), flush=True)
 
     _, found, backend = prove_control(node, evidence, "child_listener")
-    require(all(listener["pid"] != backend for listener in found), f"child listener attributed to the backend: {found}")
+    require(all(listener["pid"] != backend and listener["in_backend_group"] for listener in found),
+            f"child listener not attributed to the backend's group: {found}")
     _, found, backend = prove_control(node, evidence, "detached_grandchild_listener")
-    require(all(listener.get("pgid") not in (None, backend) and listener.get("ppid") != backend for listener in found),
+    require(all(listener.get("pgid") not in (None, backend) and listener.get("ppid") != backend
+                and not listener["in_backend_group"] and listener["args"] for listener in found),
             f"grandchild listener was not detached from the backend: {found}")
     result, found, backend = prove_control(node, evidence, "late_backend_listener")
     require(all(listener["pid"] == backend for listener in found) and result["seconds_after_ready"] >= .9,
