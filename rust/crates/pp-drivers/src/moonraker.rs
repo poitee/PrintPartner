@@ -347,9 +347,9 @@ pub fn recorded_status(body: &[u8], base: &str) -> Result<Status> {
         State::Idle => Some("Idle".into()),
         _ => raw.map(str::to_owned),
     };
-    let uri: axum::http::Uri = base.parse()?;
-    // Node reports WHATWG `URL.hostname`, which lowercases ASCII hosts.
-    result.ip_address = uri.host().map(str::to_ascii_lowercase);
+    // Node reports WHATWG `URL.hostname`; the url crate implements the same parser,
+    // so case and IP-literal canonicalization match.
+    result.ip_address = url::Url::parse(base)?.host_str().map(str::to_owned);
     let number = |object: &str, field: &str| {
         status
             .get(object)

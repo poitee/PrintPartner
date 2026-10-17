@@ -40,7 +40,7 @@ fn ticket_t_4_watcher_proof_status_parity_corpus() {
         &std::fs::read(Path::new(FIXTURES).join("status-parity.json")).unwrap(),
     )
     .unwrap();
-    assert!(corpus.cases.len() >= 19);
+    assert!(corpus.cases.len() >= 21);
     let mut mismatches = Vec::new();
     for case in &corpus.cases {
         // The poller trims the base the same way before building the query URL.

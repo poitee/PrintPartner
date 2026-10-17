@@ -110,6 +110,18 @@
       "expected": {"state": "idle", "message": "Idle", "ip_address": "[fd00::10]"}
     },
     {
+      "name": "expanded-ipv6-literal-is-canonicalized",
+      "base_url": "http://[FD00:0000:0000:0000:0000:0000:0000:0010]:7125",
+      "body": {"result": {"status": {"print_stats": {"state": "standby"}}}},
+      "expected": {"state": "idle", "message": "Idle", "ip_address": "[fd00::10]"}
+    },
+    {
+      "name": "hex-ipv4-literal-is-canonicalized",
+      "base_url": "http://0xC0.0x00.0x02.0x0A:7125",
+      "body": {"result": {"status": {"print_stats": {"state": "standby"}}}},
+      "expected": {"state": "idle", "message": "Idle", "ip_address": "192.0.2.10"}
+    },
+    {
       "name": "path-prefixed-base-reports-host-only",
       "base_url": "http://printer.test/moonraker",
       "body": {"result": {"status": {"print_stats": {"state": "standby"}}}},
