@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-          ref: ca495f9d66bb9af9dfd5acb59928b3aa160d2b32
+          ref: e033218948f550c1ced759fc9fd4eb56b1f30ab2
       - name: Set up ephemeral Linux prerequisites
         if: runner.environment == 'self-hosted' && runner.os == 'Linux'
         run: bash "$GITHUB_WORKSPACE/scripts/setup-ci-linux.sh"
@@ -56,11 +56,15 @@ jobs:
 
           python3 -c 'import hashlib, sys; assert sys.version_info >= (3, 11);
           assert hasattr(hashlib, "file_digest")'
-      - name: Set up Python on ephemeral Windows
+      - name: Verify preinstalled Python on ephemeral Windows
         if: runner.environment == 'self-hosted' && runner.os == 'Windows'
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
-        with:
-          python-version: "3.12"
+        id: py-windows
+        run: >
+          py -3.13 --version
+
+          py -3.13 -c 'import hashlib, sys; assert sys.version_info >= (3, 11);
+          assert hasattr(hashlib, "file_digest"); print("python-path=" +
+          sys.executable)' >> "$GITHUB_OUTPUT"
       - name: Set up Rust on ephemeral runners
         if: runner.environment == 'self-hosted'
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
@@ -104,7 +108,8 @@ jobs:
         id: assets
         env:
           VITE_PRINT_PARTNER_DESKTOP: "1"
-          MANIFEST_PYTHON: ${{ steps.py.outputs.python-path || 'python3' }}
+          MANIFEST_PYTHON: ${{ steps.py.outputs.python-path ||
+            steps.py-windows.outputs.python-path || 'python3' }}
         run: >
           set -euo pipefail
 
