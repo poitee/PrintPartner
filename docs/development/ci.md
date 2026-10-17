@@ -162,10 +162,3 @@ The temporary `ci/runner-smoke-win` branch remains for Chad to remove.
 Linux and macOS label smoke passed before this change:
 [run 39072361760](https://github.com/poitee/PrintPartner/actions/runs/39072361760).
 The temporary `ci/runner-smoke` branch was deleted after both jobs succeeded.
-
-`ci-runner-plan.yml` exposes the existing reusable runner-plan output names with
-this PR-only policy. Its planner runs on `ubuntu-latest`. Same-repository PRs select
-the new Linux and ARM64 macOS labels; forks and non-PR events select
-`ubuntu-latest` and `macos-26`. `HOSTED_CI=on` or the `ci:hosted` label also selects
-hosted outputs. The reusable plan was previously present only in unmerged PR #314;
-current workflows keep their direct runner expressions and macOS label gates.
