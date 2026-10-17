@@ -1,0 +1,28 @@
+name: Ephemeral Linux permissions diagnostic
+on:
+  push:
+    branches: [ci/gre-753-linux-permissions]
+permissions:
+  contents: read
+jobs:
+  permissions:
+    runs-on: [self-hosted, linux, x64, pp-local]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Inspect fixture ancestors
+        shell: bash
+        run: |
+          id
+          umask
+          python3 - <<'PYTHON'
+          import os, pathlib, stat
+          paths = {pathlib.Path(os.environ[key]).resolve() for key in ('HOME', 'GITHUB_WORKSPACE', 'RUNNER_TEMP')}
+          for path in sorted({p for root in paths for p in (root, *root.parents)}):
+              info = path.stat()
+              print(path, 'uid=', info.st_uid, 'gid=', info.st_gid, 'mode=', oct(stat.S_IMODE(info.st_mode)))
+          probe = pathlib.Path(os.environ['GITHUB_WORKSPACE']) / '.mode-probe'
+          probe.mkdir()
+          print('new directory mode=', oct(stat.S_IMODE(probe.stat().st_mode)))
+          PYTHON
