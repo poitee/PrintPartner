@@ -10,7 +10,7 @@ use std::{
 };
 
 #[cfg(feature = "desktop_rebuild")]
-pub(crate) const CURRENT_VERSION: u64 = 37;
+pub(crate) const CURRENT_VERSION: u64 = 39;
 #[cfg(not(feature = "desktop_rebuild"))]
 pub(crate) const CURRENT_VERSION: u64 = 35;
 
@@ -205,6 +205,8 @@ pub(crate) fn preflight(
     crate::jobs::validate_schema(&conn, version)?;
     #[cfg(feature = "desktop_rebuild")]
     crate::plan_publication::validate_schema(&conn, version)?;
+    #[cfg(feature = "desktop_rebuild")]
+    crate::uploads::validate_schema(&conn, version)?;
     Ok(version)
 }
 
@@ -277,8 +279,10 @@ pub(crate) fn backup(conn: &Connection, path: &Path, replace: bool) -> Result<()
             .context("schema::backup: sync parent directory")?;
         Ok(())
     })();
-    if temp.exists() {
-        let _ = std::fs::remove_file(temp);
+    for suffix in ["", "-wal", "-shm"] {
+        let mut member = temp.clone().into_os_string();
+        member.push(suffix);
+        let _ = std::fs::remove_file(member);
     }
     result
 }
@@ -289,22 +293,26 @@ pub(crate) fn initialize(
     now: &str,
 ) -> Result<(Connection, SchemaReady)> {
     let mut conn = Connection::open(path)?;
-    let backup_path = if version < CURRENT_VERSION
-        && path
-            .metadata()
-            .with_context(|| {
-                format!(
-                    "schema::initialize: stat {} after SQLite open",
-                    path.display()
-                )
-            })?
-            .len()
-            > 0
-    {
+    let populated = path
+        .metadata()
+        .with_context(|| {
+            format!(
+                "schema::initialize: stat {} after SQLite open",
+                path.display()
+            )
+        })?
+        .len()
+        > 0;
+    let legacy_version = if cfg!(feature = "desktop_rebuild") {
+        37
+    } else {
+        CURRENT_VERSION
+    };
+    let backup_path = if version < legacy_version && populated {
         let target = path
             .parent()
             .unwrap()
-            .join(format!("backups/pre-schema{CURRENT_VERSION}.db"));
+            .join(format!("backups/pre-schema{legacy_version}.db"));
         if !target.exists() {
             backup(&conn, &target, true)?;
         }
@@ -413,15 +421,37 @@ pub(crate) fn initialize(
         tx.commit()?;
     }
     #[cfg(feature = "desktop_rebuild")]
-    {
-        if version < CURRENT_VERSION {
+    let backup_path = {
+        if version < legacy_version {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             tx.execute_batch(include_str!("plan_publication/schema.sql"))?;
             tx.execute("UPDATE app_settings SET value='37' WHERE tenant_id='default' AND key='schema_version'", [])?;
             tx.commit()?;
         }
+        let mut first = backup_path;
+        // Each step commits with its version stamp, so an interrupted step
+        // leaves the from-version intact and a fresh copy is always current.
+        for (step, install) in crate::uploads::SCHEMA_STEPS {
+            if version < step {
+                let target =
+                    populated.then(|| path.with_file_name(format!("backups/pre-schema{step}.db")));
+                if let Some(target) = &target {
+                    backup(&conn, target, true)?;
+                }
+                let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                install(&tx)?;
+                tx.execute(
+                    "UPDATE app_settings SET value=?1 WHERE tenant_id='default' AND key='schema_version'",
+                    [step.to_string()],
+                )?;
+                tx.commit()?;
+                first = first.or(target);
+            }
+        }
         crate::plan_publication::validate_schema(&conn, CURRENT_VERSION)?;
-    }
+        crate::uploads::validate_schema(&conn, CURRENT_VERSION)?;
+        first
+    };
     Ok((
         conn,
         SchemaReady {
@@ -690,7 +720,7 @@ fn execute_migration(conn: &Connection, sql: &str) -> Result<()> {
     }
 }
 
-fn add_column(conn: &Connection, table: &str, column: &str, sql: &str) -> Result<()> {
+pub(crate) fn add_column(conn: &Connection, table: &str, column: &str, sql: &str) -> Result<()> {
     let columns = conn
         .prepare(&format!("PRAGMA table_info({table})"))?
         .query_map([], |r| r.get::<_, String>(1))?
