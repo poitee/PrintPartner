@@ -838,8 +838,20 @@ with the 38 step and the validator threshold moved from 36 to 38. A database at 
 holding them is refused. Columns that already exist are kept, as in the reference,
 and the validator then checks their definitions.
 
-Each step first writes `backups/pre-schema{N}.db`, where N is the step's target
-version, and then commits its tables and version stamp in one transaction. An
+Opening a database below 39 runs in this order:
+
+1. Back up the database as opened, before any write.
+2. Restore missing common tables and objects and repair tenant mismatches. This
+   pass seeds nothing.
+3. Install each pending step.
+4. Seed the starter profiles.
+
+Repairs run before the steps because the 38 step's provenance triggers refuse the
+repair's writes to `source_revisions`. Each step writes `backups/pre-schema{N}.db`,
+where N is the step's target version, validates its objects and columns, and then
+commits them with its version stamp in one transaction. For a database at 37 the
+first backup, `pre-schema38.db`, is the untouched input. `pre-schema39.db` is taken
+after step 2, so it can include that pass's repairs. An
 interrupted step leaves its input version intact, so each attempt takes a fresh copy
 rather than reusing an existing file. The legacy upgrade to 37 (35 without the
 feature) still reuses an existing backup, because its earlier migrations do not

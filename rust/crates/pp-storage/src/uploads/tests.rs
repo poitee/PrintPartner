@@ -440,3 +440,86 @@ fn step_refuses_drifted_existing_columns_before_its_stamp() {
     assert_eq!((ready.version, ready.previous_version), (39, 37));
     assert_reopen_is_noop(&directory);
 }
+
+fn live(directory: &Path, sql: &str) -> rusqlite::types::Value {
+    Connection::open(directory.join("print-partner.db"))
+        .unwrap()
+        .query_row(sql, [], |row| row.get(0))
+        .unwrap()
+}
+
+// Fixture revision 1 is its project's active revision.
+fn tenant_mismatch_with_provenance() -> String {
+    let digest = |c: char| c.to_string().repeat(64);
+    format!(
+        "{}UPDATE source_revisions SET tenant_id='old-tenant',source_configuration_version=3,activation_observation_digest='{}',input_digest='{}',producer_version='probe' WHERE id=1;",
+        super::COLUMNS,
+        digest('a'),
+        digest('b')
+    )
+}
+
+const REVISION: &str = "SELECT tenant_id||':'||source_configuration_version||':'||producer_version FROM source_revisions WHERE id=1";
+
+#[test]
+fn steps_run_after_the_tenant_repair() {
+    let input = schema37_input("uploads-repair", &tenant_mismatch_with_provenance());
+    let (directory, ready) = upgrade("uploads-repair-open", &input);
+    assert_eq!((ready.version, ready.previous_version), (39, 37));
+    assert_eq!(
+        live(&directory, REVISION),
+        "default:3:probe".to_owned().into()
+    );
+    let saved = immutable(&directory.join("backups/pre-schema38.db"));
+    let tenant: String = saved
+        .query_row(
+            "SELECT tenant_id FROM source_revisions WHERE id=1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(tenant, "old-tenant");
+    assert_reopen_is_noop(&directory);
+}
+
+#[test]
+fn steps_run_after_missing_common_tables_are_restored() {
+    let input = schema37_input("uploads-restore", "DROP TABLE source_docs");
+    let (directory, ready) = upgrade("uploads-restore-open", &input);
+    assert_eq!((ready.version, ready.previous_version), (39, 37));
+    assert_eq!(
+        live(&directory, "SELECT count(*) FROM source_docs"),
+        0.into()
+    );
+    assert_reopen_is_noop(&directory);
+}
+
+#[test]
+fn renamed_starter_and_tenant_repair_upgrade_with_the_seed_last() {
+    let input = schema37_input(
+        "uploads-repair-seed",
+        &format!(
+            "{}UPDATE printer_profiles SET name='Renamed starter' WHERE tenant_id='default' AND name='Generic Klipper Machine';",
+            tenant_mismatch_with_provenance()
+        ),
+    );
+    let directory = directory("uploads-repair-seed-open");
+    let database = directory.join("print-partner.db");
+    std::fs::write(&database, &input).unwrap();
+    let original = contents(&database);
+    assert_eq!(starters(&database), 0);
+    let (owner, ready) = WriterOwner::open(&directory, Limits::default()).unwrap();
+    owner.shutdown().unwrap();
+    assert_eq!((ready.version, ready.previous_version), (39, 37));
+    let first = directory.join("backups/pre-schema38.db");
+    assert_eq!(ready.backup, Some(first.clone()));
+    assert_eq!(contents(&first), original);
+    assert_eq!(starters(&directory.join("backups/pre-schema39.db")), 0);
+    assert_eq!(
+        live(&directory, REVISION),
+        "default:3:probe".to_owned().into()
+    );
+    let seeded = "SELECT count(*) FROM printer_profiles WHERE tenant_id='default' AND name='Generic Klipper Machine'";
+    assert_eq!(live(&directory, seeded), 1.into());
+    assert_reopen_is_noop(&directory);
+}

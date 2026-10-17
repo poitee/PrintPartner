@@ -329,14 +329,6 @@ pub(crate) fn initialize(
         None
     };
     configure(&conn, false)?;
-    // Schema 37 and later already hold everything the common pass installs,
-    // so their pending steps run first and back up untouched input.
-    #[cfg(feature = "desktop_rebuild")]
-    let backup_path = if version >= legacy_version {
-        install_steps(&mut conn, path, version, populated, backup_path)?
-    } else {
-        backup_path
-    };
     let data: SchemaData = serde_json::from_str(include_str!("../data/schema.json"))?;
     for sql in &data.migrations {
         execute_migration(&conn, sql)?;
@@ -373,6 +365,37 @@ pub(crate) fn initialize(
     conn.execute_batch(&data.extras[1])?;
     if version < 34 {
         conn.execute("INSERT INTO app_settings(tenant_id,key,value) VALUES('default','schema_version','34') ON CONFLICT(tenant_id,key) DO UPDATE SET value=excluded.value",[])?;
+    }
+    {
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if version < 35 {
+            tx.execute_batch(include_str!("jobs/schema.sql"))?;
+        }
+        tx.execute_batch(include_str!("jobs/printer-start-indexes.sql"))?;
+        if version < 35 {
+            tx.execute(
+                "UPDATE app_settings SET value='35' WHERE tenant_id='default' AND key='schema_version'",
+                [],
+            )?;
+        }
+        tx.commit()?;
+    }
+    // Steps run after the common restoration and tenant repair, whose writes
+    // their triggers would refuse, and before starter seeding.
+    #[cfg(feature = "desktop_rebuild")]
+    let backup_path = {
+        if version < legacy_version {
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            tx.execute_batch(include_str!("plan_publication/schema.sql"))?;
+            tx.execute("UPDATE app_settings SET value='37' WHERE tenant_id='default' AND key='schema_version'", [])?;
+            tx.commit()?;
+        }
+        install_steps(&mut conn, path, version, populated, backup_path)?
+    };
+    #[cfg(feature = "desktop_rebuild")]
+    {
+        crate::plan_publication::validate_schema(&conn, CURRENT_VERSION)?;
+        crate::uploads::validate_schema(&conn, CURRENT_VERSION)?;
     }
     // Node's fixture builder connects once to create the input and again to
     // create the expected database. The first Rust open must repeat that
@@ -422,34 +445,6 @@ pub(crate) fn initialize(
         }
         tx.commit()?;
     }
-    {
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if version < 35 {
-            tx.execute_batch(include_str!("jobs/schema.sql"))?;
-        }
-        tx.execute_batch(include_str!("jobs/printer-start-indexes.sql"))?;
-        if version < 35 {
-            tx.execute(
-                "UPDATE app_settings SET value='35' WHERE tenant_id='default' AND key='schema_version'",
-                [],
-            )?;
-        }
-        tx.commit()?;
-    }
-    #[cfg(feature = "desktop_rebuild")]
-    let backup_path = {
-        let mut backup_path = backup_path;
-        if version < legacy_version {
-            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            tx.execute_batch(include_str!("plan_publication/schema.sql"))?;
-            tx.execute("UPDATE app_settings SET value='37' WHERE tenant_id='default' AND key='schema_version'", [])?;
-            tx.commit()?;
-            backup_path = install_steps(&mut conn, path, version, populated, backup_path)?;
-        }
-        crate::plan_publication::validate_schema(&conn, CURRENT_VERSION)?;
-        crate::uploads::validate_schema(&conn, CURRENT_VERSION)?;
-        backup_path
-    };
     Ok((
         conn,
         SchemaReady {
