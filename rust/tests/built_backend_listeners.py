@@ -48,7 +48,7 @@ const waiting = setInterval(() => {
 }, 50);
 waiting.unref();
 """,
-    # Non-dumpable hides the helper's fds and environment from same-user lsof and token cleanup,
+    # Non-dumpable hides the helper's fds and environment from same-user inspection and token cleanup,
     # so it exits on its own once the harness removes the runtime directory.
     "non_dumpable_listener": """
 import { spawn } from "node:child_process";
@@ -67,12 +67,13 @@ spawn(process.env.PP_LISTENER_CONTROL_PYTHON, ["-c", helper], { detached: true, 
 """,
 }
 
-Endpoint = namedtuple("Endpoint", "protocol address port uid inode")
+# Kernel-reported ownership: Linux /proc/net gives the socket's uid and inode, macOS netstat -v the owning pid and epid.
+Endpoint = namedtuple("Endpoint", "protocol address port uid inode pids")
 
-# The kernel lists every socket in /proc/net without inspecting its owner, so dumpability cannot hide one.
 PROC_TABLES = {"tcp": "tcp4", "tcp6": "tcp6", "udp": "udp4", "udp6": "udp6"}
-OBSERVATION = {"linux": "/proc/net/{tcp,tcp6,udp,udp6}", "darwin": "netstat -an -p tcp; netstat -an -p udp"}
+OBSERVATION = {"linux": "/proc/net/{tcp,tcp6,udp,udp6}", "darwin": "netstat -anv -p tcp; netstat -anv -p udp"}
 TCP_LISTEN, UDP_UNCONNECTED = "0A", "07"
+NETSTAT_PROTOCOLS = ("tcp4", "tcp6", "tcp46", "udp4", "udp6", "udp46")
 
 
 def proc_address(text):
@@ -91,23 +92,31 @@ def proc_endpoints(table, text):
         fields = row.split()
         address, port = fields[1].split(":")
         if fields[3] == (TCP_LISTEN if protocol.startswith("tcp") else UDP_UNCONNECTED) and int(port, 16):
-            found.append(Endpoint(protocol, proc_address(address), int(port, 16), int(fields[7]), int(fields[9])))
+            found.append(Endpoint(protocol, proc_address(address), int(port, 16), int(fields[7]), int(fields[9]), None))
     return found
 
 
 def netstat_endpoints(text):
-    found = []
+    found, pid_column, epid_column = [], None, None
     for row in text.splitlines():
         fields = row.split()
-        if not fields or row.startswith("Active Internet connections") or fields[0] == "Proto":
+        if not fields or row.startswith("Active Internet connections"):
+            continue
+        if fields[0] == "Proto":
+            # Columns are counted from the right: "Local Address" splits in two and UDP rows have no state.
+            pid_column = next((len(fields) - index for index, name in enumerate(fields)
+                               if name == "pid" or name.endswith(":pid")), None)
+            epid_column = len(fields) - fields.index("epid") if "epid" in fields else None
+            require(pid_column, f"netstat -v printed no pid column: {row!r}")
             continue
         protocol = fields[0]
-        require(protocol in ("tcp4", "tcp6", "tcp46", "udp4", "udp6", "udp46") and len(fields) in (5, 6),
+        require(pid_column and protocol in NETSTAT_PROTOCOLS and len(fields) >= 5 + pid_column,
                 f"unparseable netstat row: {row!r}")
         address, _, port = fields[3].rpartition(".")
-        listening = fields[5:] == ["LISTEN"] if protocol.startswith("tcp") else fields[4] == "*.*" and port != "*"
+        pids = (int(fields[-pid_column].rpartition(":")[2]), int(fields[-epid_column]) if epid_column else 0)
+        listening = fields[5] == "LISTEN" if protocol.startswith("tcp") else fields[4] == "*.*" and port != "*"
         if listening:
-            found.append(Endpoint(protocol, address, int(port), None, None))
+            found.append(Endpoint(protocol, address, int(port), None, None, pids))
     return found
 
 
@@ -119,10 +128,27 @@ def endpoints():
                      for endpoint in proc_endpoints(table, Path(f"/proc/net/{table}").read_text())]
         else:
             found = [endpoint for protocol in ("tcp", "udp")
-                     for endpoint in netstat_endpoints(subprocess.check_output(["netstat", "-an", "-p", protocol], text=True))]
+                     for endpoint in netstat_endpoints(subprocess.check_output(["netstat", "-anv", "-p", protocol], text=True))]
     except (OSError, ValueError, IndexError, AssertionError, subprocess.CalledProcessError) as error:
         raise AssertionError(f"observation unavailable: {error!r}") from error
     return Counter(found)
+
+
+def socket_pids(inode):
+    """Processes holding the socket; a non-dumpable process's fds are unreadable, so it is missing here."""
+    target, pids = f"socket:[{inode}]", []
+    for entry in Path("/proc").iterdir():
+        try:
+            if entry.name.isdigit() and any(os.readlink(fd) == target for fd in (entry / "fd").iterdir()):
+                pids.append(int(entry.name))
+        except OSError:
+            pass
+    return pids
+
+
+def process_uid(pid):
+    row = subprocess.run(["ps", "-o", "uid=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+    return int(row) if row else None
 
 
 LINUX_PROC_FIXTURE = """\
@@ -131,37 +157,44 @@ LINUX_PROC_FIXTURE = """\
    1: 00000000000000000000000001000000:1F90 00000000000000000000000001000000:C350 01 00000000:00000000 00:00000000 00000000  1000        0 41001 1 0000000000000000 20 4 30 10 -1
    2: 00000000000000000000000001000000:9C41 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 41002 1 0000000000000000 100 0 0 10 0
 """
-MACOS_NETSTAT_FIXTURE = """\
+MACOS_NETSTAT_FIXTURES = ("""\
 Active Internet connections (including servers)
-Proto Recv-Q Send-Q  Local Address          Foreign Address        (state)
-tcp4       0      0  127.0.0.1.50701        *.*                    LISTEN
-tcp6       0      0  ::1.631                *.*                    LISTEN
-tcp46      0      0  *.7000                 *.*                    LISTEN
-tcp6       0      0  fe80::1%lo0.49152      *.*                    LISTEN
-tcp4       0      0  192.168.1.20.53422     17.57.146.20.5223      ESTABLISHED
+Proto Recv-Q Send-Q  Local Address          Foreign Address        (state)      rhiwat  shiwat    process:pid    state  options           gencnt    flags   flags1 usscnt rtncnt fltrs
+tcp4       0      0  127.0.0.1.50701        *.*                    LISTEN       131072  131072       node:4242  00100 00000006 000000000001a2b3 00000000 00000800      1      0 000001
+tcp6       0      0  fe80::1%lo0.49152      *.*                    LISTEN       131072  131072  Google Ch:777  00100 00000006 000000000001a2b4 00000000 00000800      1      0 000001
+tcp4       0      0  192.168.1.20.53422     17.57.146.20.5223      ESTABLISHED  131072  131768      apsd:396   00102 00000020 000000000001a2b5 00000000 00000800      1      0 000001
 Active Internet connections (including servers)
-Proto Recv-Q Send-Q  Local Address          Foreign Address        (state)
-udp4       0      0  *.5353                 *.*
-udp6       0      0  *.5353                 *.*
-udp46      0      0  *.62093                *.*
-udp4       0      0  192.168.1.20.61234     192.168.1.1.53
-udp4       0      0  *.*                    *.*
-"""
+Proto Recv-Q Send-Q  Local Address          Foreign Address        (state)      rhiwat  shiwat    process:pid    state  options           gencnt    flags   flags1 usscnt rtncnt fltrs
+udp4       0      0  *.5353                 *.*                                 786896    9216  mDNSRespo:412  00000 00000000 000000000000016c 00000000 00000800      1      0 000001
+udp4       0      0  192.168.1.20.61234     192.168.1.1.53                      786896    9216  mDNSRespo:412  00000 00000000 000000000000016d 00000000 00000800      1      0 000001
+udp4       0      0  *.*                    *.*                                 786896    9216  mDNSRespo:412  00000 00000000 000000000000016e 00000000 00000800      1      0 000001
+""", """\
+Active Internet connections (including servers)
+Proto Recv-Q Send-Q  Local Address          Foreign Address        (state)     rhiwat shiwat    pid   epid  state    options
+tcp46      0      0  *.7000                 *.*                    LISTEN      131072 131072    463      0 0x0100 0x00000106
+udp46      0      0  *.62093                *.*                                786896   9216    501    388 0x0000 0x00000000
+""")
 
 
 def parser_self_test():
     require(proc_endpoints("tcp6", LINUX_PROC_FIXTURE) == [
-        Endpoint("tcp6", "fd7a:115c:a1e0::5831:6805", 443, 0, 21605), Endpoint("tcp6", "::1", 40001, 1000, 41002)],
+        Endpoint("tcp6", "fd7a:115c:a1e0::5831:6805", 443, 0, 21605, None),
+        Endpoint("tcp6", "::1", 40001, 1000, 41002, None)],
         f"/proc/net parser mismatch: {proc_endpoints('tcp6', LINUX_PROC_FIXTURE)}")
-    require(netstat_endpoints(MACOS_NETSTAT_FIXTURE) == [
-        Endpoint("tcp4", "127.0.0.1", 50701, None, None), Endpoint("tcp6", "::1", 631, None, None),
-        Endpoint("tcp46", "*", 7000, None, None), Endpoint("tcp6", "fe80::1%lo0", 49152, None, None),
-        Endpoint("udp4", "*", 5353, None, None), Endpoint("udp6", "*", 5353, None, None),
-        Endpoint("udp46", "*", 62093, None, None)],
-        f"netstat parser mismatch: {netstat_endpoints(MACOS_NETSTAT_FIXTURE)}")
+    parsed = [netstat_endpoints(fixture) for fixture in MACOS_NETSTAT_FIXTURES]
+    require(parsed == [[Endpoint("tcp4", "127.0.0.1", 50701, None, None, (4242, 0)),
+                        Endpoint("tcp6", "fe80::1%lo0", 49152, None, None, (777, 0)),
+                        Endpoint("udp4", "*", 5353, None, None, (412, 0))],
+                       [Endpoint("tcp46", "*", 7000, None, None, (463, 0)),
+                        Endpoint("udp46", "*", 62093, None, None, (501, 388))]],
+            f"netstat parser mismatch: {parsed}")
+    header = MACOS_NETSTAT_FIXTURES[1].splitlines()[1]
     truncated_proc = LINUX_PROC_FIXTURE.splitlines()[0] + "\n   0: 0100007F:1F90\n"
-    for parse, broken in ((netstat_endpoints, "tcp4 0 0 127.0.0.1.80"), (netstat_endpoints, "unix 0 0 /tmp/sock"),
-                          (netstat_endpoints, "tcp4 0 0 127.0.0.1.http *.* LISTEN"),
+    for parse, broken in ((netstat_endpoints, "tcp4 0 0 127.0.0.1.80 *.* LISTEN 1 1 463 0 0x0100 0x00000106"),
+                          (netstat_endpoints, "Proto Recv-Q Send-Q  Local Address  Foreign Address  (state)"),
+                          (netstat_endpoints, f"{header}\nunix 0 0 /tmp/sock *.* LISTEN 1 1 463 0 0x0100 0x00000106"),
+                          (netstat_endpoints, f"{header}\ntcp4 0 0 127.0.0.1.80 *.* LISTEN"),
+                          (netstat_endpoints, f"{header}\ntcp4 0 0 127.0.0.1.http *.* LISTEN 1 1 463 0 0x0100 0x00000106"),
                           (lambda text: proc_endpoints("tcp", text), ""),
                           (lambda text: proc_endpoints("tcp", text), truncated_proc)):
         try:
@@ -181,26 +214,36 @@ class ListenerFound(AssertionError):
 
 
 class Watch:
-    """Fails as soon as the kernel lists a listening endpoint that was absent before launch, whoever owns it."""
+    """Fails as soon as the kernel lists a new listening endpoint owned by this user or an owner it cannot name."""
 
     def __init__(self):
         self.baseline = endpoints()
         self.backend = None
         self.polls = 0
+        self.other_users = {}
 
     def poll(self):
         self.polls += 1
-        new = endpoints() - self.baseline
-        if new:
-            raise ListenerFound(new, self.baseline, [self.describe(endpoint) for endpoint in new.elements()])
+        owned, found = Counter(), []
+        for endpoint, count in (endpoints() - self.baseline).items():
+            if endpoint in self.other_users:
+                continue
+            finding = self.describe(endpoint)
+            if os.getuid() in finding["uids"] or None in finding["uids"] or not finding["uids"]:
+                owned[endpoint] = count
+                found.append(finding)
+            else:
+                self.other_users[endpoint] = finding
+        if owned:
+            raise ListenerFound(owned, self.baseline, found)
 
     def describe(self, endpoint):
-        # lsof only attributes; a process it cannot inspect still fails the proof as unattributed.
-        state = ["-sTCP:LISTEN"] if endpoint.protocol.startswith("tcp") else []
-        rows = subprocess.run(["lsof", "-w", "-nP", "-a", f"-i{endpoint.protocol[:3].upper()}:{endpoint.port}", *state,
-                               "-F", "p"], capture_output=True, text=True).stdout.splitlines()
-        pids = sorted({int(row[1:]) for row in rows if row.startswith("p")})
-        return {"endpoint": f"{endpoint.protocol} {endpoint.address}:{endpoint.port}", "uid": endpoint.uid,
+        if endpoint.pids is None:
+            uids, pids = [endpoint.uid], socket_pids(endpoint.inode)
+        else:
+            pids = sorted({pid for pid in endpoint.pids if pid})
+            uids = sorted({process_uid(pid) for pid in pids}, key=str)
+        return {"endpoint": f"{endpoint.protocol} {endpoint.address}:{endpoint.port}", "uids": uids,
                 "inode": endpoint.inode, "owners": [self.lineage(pid) for pid in pids] or "unattributed"}
 
     def lineage(self, pid):
@@ -348,7 +391,8 @@ def run_backend(node, evidence, control=None):
             if not group_absent(child.pid):
                 os.killpg(child.pid, signal.SIGKILL)
             child.wait(timeout=5)
-            receipt.update(polls=watch.polls, killed_after_stop=kill_token_carriers(token))
+            receipt.update(polls=watch.polls, killed_after_stop=kill_token_carriers(token),
+                           ignored_other_users=list(watch.other_users.values()))
             write_json(evidence / "receipt.json", receipt)
             shutil.rmtree(runtime, ignore_errors=True)
 
@@ -392,13 +436,13 @@ def backend_opened_late(result, found, backend):
             f"late listener was not opened by the backend after readiness: {result}")
 
 
-def hidden_from_lsof(result, found, backend):
-    require(all(finding["owners"] == "unattributed" and finding["uid"] == os.getuid() for finding in found),
-            f"non-dumpable listener was attributed, so the control did not hide it from lsof: {found}")
+def hidden_from_inspection(result, found, backend):
+    require(all(finding["owners"] == "unattributed" and finding["uids"] == [os.getuid()] for finding in found),
+            f"non-dumpable listener was attributed, so the control did not hide its fds: {found}")
 
 
 CONTROL_CHECKS = {"child_listener": child_opened, "detached_grandchild_listener": detached_opened,
-                  "late_backend_listener": backend_opened_late, "non_dumpable_listener": hidden_from_lsof}
+                  "late_backend_listener": backend_opened_late, "non_dumpable_listener": hidden_from_inspection}
 
 
 def main():
@@ -407,7 +451,6 @@ def main():
     parser.add_argument("--evidence", type=Path, required=True)
     args = parser.parse_args()
     require(sys.platform in ("linux", "darwin"), "this proof requires Linux or macOS")
-    require(shutil.which("lsof") is not None, "this proof requires lsof to attribute listeners")
     require(args.node is not None, "supply --node with Node 24.21.0")
     node = Path(args.node).resolve(strict=True)
     node_identity = json.loads(subprocess.check_output([str(node), "-p",
