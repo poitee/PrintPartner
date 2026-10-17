@@ -179,8 +179,17 @@ fn project_naming(
     if crate::catalog::naming::uses_defaults(&metadata) {
         GLOBAL_NAMING_PROJECTIONS.with(|count| count.set(count.get() + 1));
     }
-    let mut projected = crate::catalog::naming::project(metadata, global)
-        .map_err(|error| error.context(crate::catalog::CatalogFailure::InvalidStoredNaming))?;
+    let mut projected = if crate::catalog::naming::uses_defaults(&metadata) {
+        crate::catalog::naming::project(metadata, global)
+    } else {
+        let override_value = metadata["naming"]
+            .get("override")
+            .filter(|value| !value.is_null())
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        crate::catalog::naming::merge_override(override_value, global)
+    }
+    .map_err(|error| error.context(crate::catalog::CatalogFailure::InvalidStoredNaming))?;
     let bytes = serde_json::to_vec(&projected["effective"])?;
     budget.expansion(bytes.len())?;
     Ok(NamingSnapshot {

@@ -296,6 +296,9 @@ pub(crate) fn project(m: Map<String, Value>, global: NamingProfile) -> Result<Va
     {
         return response(full.clone(), false, serde_json::to_value(full)?);
     }
+    merge_override(override_value, global)
+}
+pub(crate) fn merge_override(override_value: Value, global: NamingProfile) -> Result<Value> {
     let mut effective = serde_json::to_value(global)?;
     let object = override_value
         .as_object()
