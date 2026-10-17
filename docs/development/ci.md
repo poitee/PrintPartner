@@ -149,15 +149,19 @@ The `scripts/setup-ci-linux.sh` script installs build tools, Python and the GitH
 1.99.0 with rustfmt and clippy. Rust partition defaults use three build jobs on
 self-hosted runners; explicit inputs and repository variables still take precedence.
 
-Same-repository PR Rust Windows jobs use
-`[self-hosted, windows, x64, pp-local-win]`, with one ephemeral runner slot.
-Fork PRs and non-PR events keep `windows-latest`. Setup actions install Rust,
-Python and Node on the Windows runner. The same shared Rust steps also install
-Python explicitly on local macOS.
+Rust Windows jobs keep `windows-latest`. The default-off repository variable
+`PP_LOCAL_WIN` enables `[self-hosted, windows, x64, pp-local-win]` only when its
+value is `true` and the event is a same-repository PR. Keep it off until the
+Windows runner service has Bash on PATH and the Rust job has been verified.
+The command-shell smoke passed, but the Rust job exposed the missing Bash:
+[Windows smoke](https://github.com/poitee/PrintPartner/actions/runs/39073196185).
+The `ci/runner-smoke-win` branch remains for Chad to remove.
 
-Windows label smoke passed before enabling this route:
-[run 39073196185](https://github.com/poitee/PrintPartner/actions/runs/39073196185).
-The temporary `ci/runner-smoke-win` branch remains for Chad to remove.
+Cross-OS Rust on local macOS verifies `/usr/bin/python3`, adds `/usr/bin` to PATH,
+and records the interpreter's real prefix in Python discovery variables. It uses
+the VM's system interpreter instead of an assumed hosted tool cache. Historical
+schema trees missing from a shallow checkout are fetched together in one Git
+operation, then every pinned tree and the required archive are checked.
 
 Linux and macOS label smoke passed before this change:
 [run 39072361760](https://github.com/poitee/PrintPartner/actions/runs/39072361760).

@@ -73,8 +73,17 @@ jobs:
       - name: Set up ephemeral Linux prerequisites
         if: runner.environment == 'self-hosted' && runner.os == 'Linux'
         run: bash "$GITHUB_WORKSPACE/scripts/setup-ci-linux.sh"
-      - name: Set up Python on ephemeral macOS and Windows
-        if: runner.environment == 'self-hosted' && runner.os != 'Linux'
+      - name: Use system Python on ephemeral macOS
+        if: runner.environment == 'self-hosted' && runner.os == 'macOS'
+        run: |
+          /usr/bin/python3 --version
+          python_root=$(/usr/bin/python3 -c 'import sys; print(sys.prefix)')
+          echo /usr/bin >> "$GITHUB_PATH"
+          for variable in pythonLocation Python_ROOT_DIR Python2_ROOT_DIR Python3_ROOT_DIR; do
+            echo "$variable=$python_root" >> "$GITHUB_ENV"
+          done
+      - name: Set up Python on ephemeral Windows
+        if: runner.environment == 'self-hosted' && runner.os == 'Windows'
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
@@ -183,7 +192,8 @@ jobs:
     needs: changes
     # Explicit jobs keep each required check present when selection skips it.
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.relevant != 'false') }}
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","windows","x64","pp-local-win"]') || 'windows-latest' }}
+    # Keep Windows hosted until the runner service has a verified Bash toolchain.
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.PP_LOCAL_WIN == 'true') && fromJSON('["self-hosted","windows","x64","pp-local-win"]') || 'windows-latest' }}
     env:
       RUST_OS: windows
       # Unix-only crates; remove each exclusion when its port ticket is fixed.
