@@ -82,8 +82,12 @@ jobs:
           tool: ast-grep@0.50.0
       - name: Check Rust ast-grep ratchet
         if: steps.workspace.outputs.manifest != '' && env.PARTITION == '1'
+        env:
+          # A main push compares against the main it replaced, not a newer main
+          # that may have lowered the baseline since.
+          RATCHET_BASE: ${{ github.event_name == 'push' && github.event.before || 'refs/heads/main' }}
         run: |
-          git fetch --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main
+          git fetch --no-tags --depth=1 origin "+$RATCHET_BASE:refs/remotes/origin/main"
           ast-grep test --config rust/sgconfig.yml --skip-snapshot-tests
           python3 -m unittest discover -s rust/scripts -p 'test_ast_grep.py' -v
           python3 rust/scripts/check-ast-grep.py
