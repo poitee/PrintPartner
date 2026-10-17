@@ -4,7 +4,7 @@
 //! Part manifest metadata is written from its UTF-16 carrier, so text that is
 //! not valid Unicode keeps its unpaired surrogates as `\uXXXX` escapes.
 
-use super::{AcceptedRead, Batch, graph::Part, graph::Snapshot};
+use super::{AcceptedRead, Batch, BuildRead, graph::Part, graph::Snapshot};
 use crate::manifest_text::DraftPart;
 use anyhow::{Result, bail, ensure};
 use serde::Serialize;
@@ -30,30 +30,36 @@ impl AcceptedBatchJsonBody {
     }
 }
 
-/// Serializes `value` as serde does, but writes `raw` as the value of `field`.
-fn with_raw_field(value: &impl Serialize, field: &str, raw: &[u8]) -> Result<Vec<u8>> {
-    let Value::Object(object) = serde_json::to_value(value)? else {
-        bail!("Accepted read JSON is not an object");
-    };
-    ensure!(
-        object.contains_key(field),
-        "Accepted read JSON has no {field} field"
-    );
-    let mut output = vec![b'{'];
-    for (index, (key, value)) in object.iter().enumerate() {
-        if index > 0 {
-            output.push(b',');
-        }
-        serde_json::to_writer(&mut output, key)?;
-        output.push(b':');
-        if key == field {
-            output.extend_from_slice(raw);
-        } else {
-            serde_json::to_writer(&mut output, value)?;
-        }
+/// Writes a JSON object field by field, so a nested body is written once.
+#[derive(Default)]
+struct Object(Vec<u8>);
+
+impl Object {
+    fn key(&mut self, key: &'static str) {
+        self.0.push(if self.0.is_empty() { b'{' } else { b',' });
+        self.0.push(b'"');
+        self.0.extend_from_slice(key.as_bytes());
+        self.0.extend_from_slice(b"\":");
     }
-    output.push(b'}');
-    Ok(output)
+
+    fn raw(&mut self, key: &'static str, raw: &[u8]) {
+        self.key(key);
+        self.0.extend_from_slice(raw);
+    }
+
+    fn value(&mut self, key: &'static str, value: &impl Serialize) -> Result<()> {
+        self.key(key);
+        serde_json::to_writer(&mut self.0, value)?;
+        Ok(())
+    }
+
+    fn finish(mut self) -> Vec<u8> {
+        if self.0.is_empty() {
+            self.0.push(b'{');
+        }
+        self.0.push(b'}');
+        self.0
+    }
 }
 
 fn array(items: impl IntoIterator<Item = Result<Vec<u8>>>) -> Result<Vec<u8>> {
@@ -90,11 +96,32 @@ impl Part {
 
 impl Snapshot {
     fn json_bytes(&self) -> Result<Vec<u8>> {
-        with_raw_field(
-            self,
-            "parts",
-            &array(self.parts.iter().map(Part::json_bytes))?,
-        )
+        // Exhaustive, so a new field fails to compile here. The serde parity
+        // test pins the names and order.
+        let Self {
+            format,
+            profile,
+            plan_version,
+            revision_id,
+            revision_number,
+            revision_digest,
+            accepted_at,
+            provenance,
+            required_unit_mapping_digest,
+            parts,
+        } = self;
+        let mut object = Object::default();
+        object.value("format", format)?;
+        object.value("profile", profile)?;
+        object.value("planVersion", plan_version)?;
+        object.value("revisionId", revision_id)?;
+        object.value("revisionNumber", revision_number)?;
+        object.value("revisionDigest", revision_digest)?;
+        object.value("acceptedAt", accepted_at)?;
+        object.value("provenance", provenance)?;
+        object.value("requiredUnitMappingDigest", required_unit_mapping_digest)?;
+        object.raw("parts", &array(parts.iter().map(Part::json_bytes))?);
+        Ok(object.finish())
     }
 
     pub fn into_json_body(self) -> Result<AcceptedSnapshotJsonBody> {
@@ -105,7 +132,12 @@ impl Snapshot {
 impl AcceptedRead {
     fn json_bytes(&self) -> Result<Vec<u8>> {
         match self {
-            Self::Ready { snapshot } => with_raw_field(self, "snapshot", &snapshot.json_bytes()?),
+            Self::Ready { snapshot } => {
+                let mut object = Object::default();
+                object.value("kind", &"ready")?;
+                object.raw("snapshot", &snapshot.json_bytes()?);
+                Ok(object.finish())
+            }
             _ => Ok(serde_json::to_vec(self)?),
         }
     }
@@ -115,23 +147,37 @@ impl AcceptedRead {
     }
 }
 
+impl BuildRead {
+    fn json_bytes(&self) -> Result<Vec<u8>> {
+        let Self {
+            profile_id,
+            accepted,
+            context,
+            context_error,
+        } = self;
+        let mut object = Object::default();
+        object.value("profileId", profile_id)?;
+        object.raw("accepted", &accepted.json_bytes()?);
+        object.value("context", context)?;
+        if let Some(error) = context_error {
+            object.value("contextError", error)?;
+        }
+        Ok(object.finish())
+    }
+}
+
 impl Batch {
     pub fn into_json_body(self) -> Result<AcceptedBatchJsonBody> {
         let Self { builds } = self;
-        let mut output = b"{\"builds\":".to_vec();
-        output.extend_from_slice(&array(
-            builds
-                .iter()
-                .map(|build| with_raw_field(build, "accepted", &build.accepted.json_bytes()?)),
-        )?);
-        output.push(b'}');
-        Ok(AcceptedBatchJsonBody(output))
+        let mut object = Object::default();
+        object.raw("builds", &array(builds.iter().map(BuildRead::json_bytes))?);
+        Ok(AcceptedBatchJsonBody(object.finish()))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::{BuildRead, graph};
+    use super::super::graph;
     use super::*;
     use crate::manifest_text::{JsText, ManifestText, OptionGroupId};
 

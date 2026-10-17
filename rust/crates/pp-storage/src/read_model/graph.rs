@@ -189,7 +189,7 @@ pub struct Part {
     /// the stored text is not valid Unicode; JSON bodies write this instead.
     #[cfg(feature = "desktop_rebuild")]
     #[serde(skip)]
-    pub(crate) manifest: PartManifestMetadata,
+    pub manifest: PartManifestMetadata,
     pub artifact: Artifact,
     pub units: Vec<Unit>,
 }
