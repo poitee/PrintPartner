@@ -1,12 +1,17 @@
 name: Rust cross-OS
 
-# Relevant PRs test Rust on Linux, macOS and Windows. macOS PRs test only
-# desktop_rebuild=off; main and manual runs cover both feature states.
+# Relevant PRs test Rust on Linux and Windows. Ready PRs with the macos label
+# also test macOS with desktop_rebuild=off. Non-PR events cover both states.
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review, converted_to_draft]
   push:
     branches: [main]
   workflow_dispatch:
+  merge_group:
+    types: [checks_requested]
+  schedule:
+    - cron: '37 7 * * *'
 
 permissions:
   contents: read
@@ -140,8 +145,11 @@ jobs:
   rust-macos:
     name: rust (macos)
     needs: changes
-    # Explicit jobs keep each required check present when selection skips it.
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.relevant != 'false') }}
+    # macOS is opt-in on ready PRs, and always selected on non-PR events.
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'macos'))) }}
+    concurrency:
+      group: rust-macos-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     runs-on: macos-26
     env:
       RUST_OS: macos

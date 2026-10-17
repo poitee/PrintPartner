@@ -2,31 +2,24 @@ name: Native macOS bundle
 
 on:
   workflow_dispatch:
-  # No workflow-level paths filter: a PR-level `paths:` skip leaves the
-  # "bundle (...)" checks absent and pending if required. The `changes` job
-  # decides instead: macOS jobs conclude `skipped` (or, for server-smoke, a
-  # cheap ubuntu stub succeeds) when they are not selected. GitHub accepts
-  # `skipped` for required status checks, so PRs never hang on them.
-  #
-  # Hosted macOS is expensive and queues for hours, so it runs post-merge:
-  #   - push to main (both arches), nightly (both arches), manual dispatch;
-  #   - PRs only when macOS/desktop-native inputs change (arm64 only) or the
-  #     PR carries the `ci:macos` label (arm64 only). Intel never runs on PRs.
+  # Job conditions keep skipped check reports present. Hosted macOS runs on
+  # ready PRs only with the macos label. Main, merge groups, nightly and manual
+  # runs select every macOS job, including Intel, regardless of changed paths.
   pull_request:
-    types: [opened, synchronize, reopened, labeled]
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review, converted_to_draft]
   push:
     branches: [main, master]
+  merge_group:
+    types: [checks_requested]
   schedule:
     - cron: '17 7 * * *'
 
 permissions:
   contents: read
 
-# One run per ref. A newer PR push cancels the older PR run. On main the running
-# run finishes and only the newest push waits, so main gets completed results
-# without one macOS run per merge. Nightly runs get their own group.
+# Superseded PR runs cancel; every non-PR run has its own group.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'schedule' && 'nightly' || github.ref }}
+  group: native-macos-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 defaults:
@@ -64,27 +57,26 @@ jobs:
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
-          NATIVE: ${{ steps.select.outputs.native }}
-          HAS_LABEL: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:macos') }}
+          IS_DRAFT: ${{ github.event.pull_request.draft }}
+          HAS_LABEL: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'macos') }}
         run: |
           set -euo pipefail
           if [[ "$EVENT_NAME" != pull_request ]]; then
             macos=true intel=true
-          elif [[ "$HAS_LABEL" == true || "$NATIVE" != false ]]; then
-            # Fail open: an unknown selection still runs arm64.
+          elif [[ "$HAS_LABEL" == true && "$IS_DRAFT" == false ]]; then
             macos=true intel=false
           else
             macos=false intel=false
           fi
           echo "macos=$macos" >> "$GITHUB_OUTPUT"
           echo "intel=$intel" >> "$GITHUB_OUTPUT"
-          echo "macOS jobs: $macos (intel: $intel; native inputs: $NATIVE; ci:macos label: $HAS_LABEL)" >> "$GITHUB_STEP_SUMMARY"
+          echo "macOS jobs: $macos (intel: $intel; macos label: $HAS_LABEL; draft: $IS_DRAFT)" >> "$GITHUB_STEP_SUMMARY"
 
   # Fast Linux gate: macOS runners only start once the shared web build and
   # filter tests pass, so doomed commits never burn a macOS queue slot.
   linux-precheck:
     needs: changes
-    if: ${{ needs.changes.outputs.macos != 'false' || needs.changes.outputs.storage != 'false' }}
+    if: ${{ needs.changes.outputs.macos == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -107,10 +99,11 @@ jobs:
 
   server-smoke:
     needs: [changes, linux-precheck]
-    # Report a status on a cheap runner when macOS work is not selected.
-    # Unknown/failed selection still runs the full macOS smoke.
-    if: ${{ !cancelled() && (needs.changes.outputs.macos == 'false' || needs.linux-precheck.result == 'success') }}
-    runs-on: ${{ needs.changes.outputs.macos != 'false' && 'macos-26' || 'ubuntu-24.04' }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'macos'))) && needs.changes.outputs.macos == 'true' && needs.linux-precheck.result == 'success' }}
+    concurrency:
+      group: native-macos-server-smoke-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    runs-on: macos-26
     timeout-minutes: 30
     env:
       VITE_PRINT_PARTNER_DESKTOP: '1'
@@ -123,16 +116,11 @@ jobs:
         run: |
           set -euo pipefail
           bash rust/scripts/workflow-smoke-pgrep-test.sh
-      - name: Skip native server smoke (no native inputs changed)
-        if: needs.changes.outputs.macos == 'false'
-        run: echo "No native inputs changed; macOS pp-server smoke skipped." >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        if: needs.changes.outputs.macos != 'false'
         with:
           node-version: '24.21.0'
           architecture: arm64
       - name: Build desktop assets and pp-server
-        if: needs.changes.outputs.macos != 'false'
         run: |
           set -euo pipefail
           export PP_EVIDENCE="$RUNNER_TEMP/server-smoke-evidence"
@@ -150,17 +138,15 @@ jobs:
           cargo build --manifest-path rust/Cargo.toml --locked -p pp-server 2>&1 | tee "$PP_EVIDENCE/server-build.log"
           git diff --exit-code -- rust/Cargo.lock web/package-lock.json
       - name: Smoke pp-server on loopback
-        if: needs.changes.outputs.macos != 'false'
         run: |
           set -euo pipefail
           bash rust/scripts/workflow-smoke.sh rust/target/debug/pp-server "$(command -v node)" 2>&1 | tee "$PP_EVIDENCE/workflow-smoke.log"
       - name: Prove built backend listens only on its private socket
-        if: needs.changes.outputs.macos != 'false'
         run: |
           set -euo pipefail
           python3 rust/tests/built_backend_listeners.py --node "$(command -v node)" --evidence "$PP_EVIDENCE/built-backend-listeners" 2>&1 | tee "$PP_EVIDENCE/built-backend-listeners.log"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: ${{ always() && needs.changes.outputs.macos != 'false' }}
+        if: ${{ always() }}
         with:
           name: native-macos-server-smoke-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/server-smoke-evidence/
@@ -171,8 +157,10 @@ jobs:
     # Explicit architecture jobs keep both check names present even when skipped.
     name: bundle (macos-26, arm64, arm64, aarch64-apple-darwin, ee35ee364a0c626df7852d9a5bc0c5394b6440772e9...
     needs: [changes, linux-precheck]
-    # Fail open if selection fails; honor concurrency cancellation.
-    if: ${{ !cancelled() && needs.changes.outputs.macos != 'false' && needs.linux-precheck.result == 'success' }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'macos'))) && needs.changes.outputs.macos == 'true' && needs.linux-precheck.result == 'success' }}
+    concurrency:
+      group: native-macos-bundle-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     runs-on: macos-26
     timeout-minutes: 90
     env:
@@ -327,8 +315,11 @@ jobs:
   bundle-intel:
     name: bundle (macos-26-intel, x86_64, x64, x86_64-apple-darwin, e5386ba6dadc3fbbdcf46c1f95b700f28caf03d...
     needs: [changes, linux-precheck]
-    # Intel is post-merge only: push to main, nightly, dispatch.
+    # Intel runs on every non-PR event, including merge groups.
     if: ${{ !cancelled() && needs.changes.outputs.intel == 'true' && needs.linux-precheck.result == 'success' }}
+    concurrency:
+      group: native-macos-bundle-intel-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     runs-on: macos-26-intel
     timeout-minutes: 90
     env:
@@ -345,7 +336,10 @@ jobs:
 
   macos-storage-gate:
     needs: [changes, linux-precheck]
-    if: ${{ !cancelled() && (needs.changes.outputs.macos != 'false' || needs.changes.outputs.storage != 'false') && needs.linux-precheck.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'macos'))) && needs.changes.outputs.macos == 'true' && needs.linux-precheck.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    concurrency:
+      group: native-macos-storage-gate-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
