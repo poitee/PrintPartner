@@ -1006,6 +1006,7 @@ fn recompute(
         return Ok(RecomputeOutcome::ProfileNotFound);
     };
     if let Some(winner) = winner(&tx, &tenant, &actor, profile, key)? {
+        ensure!(!cancelled.load(Ordering::Acquire), Failure::Cancelled);
         return Ok(winner);
     }
     if baseline_required(&tx, &tenant, &profile_row)? {
@@ -1132,8 +1133,8 @@ fn winner(
 /// whether any Part changed.
 ///
 /// This runs under the writer lock, so each open draft, each of its Parts
-/// and the Part text that loading it hashes are charged to the recompute's
-/// budget before the draft is loaded.
+/// and the bytes of every Part column that loading it hashes are charged to
+/// the recompute's budget before the draft is loaded.
 fn carry_open_edits(
     tx: &Transaction<'_>,
     tenant: &str,
@@ -1145,7 +1146,7 @@ fn carry_open_edits(
     let mut edits = HashMap::new();
     for open in rows(
         tx,
-        "SELECT d.id,COUNT(p.id) AS parts,COALESCE(SUM(LENGTH(CAST(concat(p.part_key,p.relative_path,p.filename,p.source_layer,p.status,p.role_inferred,p.role_override,p.filament_color_id,p.filament_custom_hex,p.notes,p.github_blob_url,p.requirement,p.option_group_id,p.manifest_source,p.artifact_digest) AS BLOB))),0) AS bytes FROM plan_drafts d LEFT JOIN plan_draft_parts p ON p.tenant_id=d.tenant_id AND p.draft_id=d.id WHERE d.tenant_id=? AND d.profile_id=? AND d.state='open' GROUP BY d.id ORDER BY d.created_at,d.id",
+        "SELECT d.id,COUNT(p.id) AS parts,COALESCE(SUM(LENGTH(CAST(concat(p.base_revision_part_id,p.part_key,p.relative_path,p.filename,p.source_layer,p.status,p.role_inferred,p.role_override,p.filament_color_id,p.filament_custom_hex,p.spoolman_spool_id,p.quantity_inferred,p.quantity_override,p.quantity_effective,p.included,p.notes,p.github_blob_url,p.geometry_same,p.requirement,p.option_group_id,p.manifest_source,p.artifact_digest) AS BLOB))),0) AS bytes FROM plan_drafts d LEFT JOIN plan_draft_parts p ON p.tenant_id=d.tenant_id AND p.draft_id=d.id WHERE d.tenant_id=? AND d.profile_id=? AND d.state='open' GROUP BY d.id ORDER BY d.created_at,d.id",
         &[&tenant, &profile],
     )? {
         budget.visit(0)?;
@@ -1304,18 +1305,112 @@ fn outcome_json_body(kind: &str, field: Option<&str>, body: &[u8]) -> DraftOutco
 }
 
 #[cfg(test)]
-mod carry_tests {
+mod tests {
     use super::*;
+
+    /// The required-units fixture after `WriterOwner::open` has migrated it.
+    struct Database(PathBuf);
+    impl Database {
+        fn new() -> (Self, Connection) {
+            let directory =
+                std::env::temp_dir().join(format!("pp-recompute-{}", rand::random::<u64>()));
+            std::fs::create_dir_all(&directory).unwrap();
+            let path = directory.join("print-partner.db");
+            std::fs::write(
+                &path,
+                include_bytes!("../tests/fixtures/required-units/unchanged.db"),
+            )
+            .unwrap();
+            WriterOwner::open(&directory, crate::Limits::default())
+                .unwrap()
+                .0
+                .shutdown()
+                .unwrap();
+            let connection = Connection::open(&path).unwrap();
+            (Self(directory), connection)
+        }
+    }
+    impl Drop for Database {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    struct NoReads;
+    impl observation::DraftReads for NoReads {
+        fn resolve_stl_root(
+            &self,
+            _: &observation::OwnedStlReadRequest,
+            _: &mut observation::PreparationBudget<'_>,
+        ) -> observation::ReadResult<Box<dyn observation::StlRootRead>> {
+            Err(observation::ReadFailure::Unavailable)
+        }
+        fn read_checkout_manifest(
+            &self,
+            _: &observation::OwnedCheckoutReadRequest,
+            _: observation::CheckoutManifestUse,
+            _: &mut observation::PreparationBudget<'_>,
+        ) -> observation::ReadResult<observation::DocumentRead> {
+            Err(observation::ReadFailure::Unavailable)
+        }
+        fn read_catalog_document(
+            &self,
+            _: &observation::OwnedCatalogReadRequest,
+            _: &mut observation::PreparationBudget<'_>,
+        ) -> observation::ReadResult<observation::DocumentRead> {
+            Err(observation::ReadFailure::Unavailable)
+        }
+    }
+
+    #[test]
+    fn cancellation_while_loading_a_replay_is_not_existing() {
+        let (_database, mut connection) = Database::new();
+        let replay = |connection: &mut Connection, cancelled: &AtomicBool| {
+            recompute(
+                connection,
+                &Credential::Session(auth::Secret::new("required-unit-fixture-secret".into())),
+                auth::AuthPolicy {
+                    registration: auth::RegistrationPolicy::Open,
+                    session_tenant: auth::SessionTenantPolicy::AccountTenant,
+                    first_user: auth::FirstUserTenant::NewUser,
+                },
+                PositiveId::new(1).unwrap(),
+                &RecomputeRequest::new("working", true).unwrap(),
+                &Observations {
+                    reads: Arc::new(NoReads),
+                    limits: observation::PreparationLimits::default(),
+                    repos: PathBuf::new(),
+                },
+                cancelled,
+            )
+        };
+        assert!(matches!(
+            replay(&mut connection, &AtomicBool::new(false)),
+            Ok(RecomputeOutcome::Existing { .. })
+        ));
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let flag = cancelled.clone();
+        connection
+            .progress_handler(
+                1,
+                Some(move || {
+                    flag.store(true, Ordering::Release);
+                    false
+                }),
+            )
+            .unwrap();
+        let error = replay(&mut connection, &cancelled)
+            .err()
+            .expect("a replay cancelled while loading returned an outcome");
+        assert!(
+            matches!(error.downcast_ref(), Some(Failure::Cancelled)),
+            "{error:?}"
+        );
+    }
 
     #[test]
     fn cancellation_stops_carrying_open_draft_edits() {
-        let path = std::env::temp_dir().join(format!("pp-carry-{}.db", rand::random::<u64>()));
-        std::fs::write(
-            &path,
-            include_bytes!("../tests/fixtures/required-units/unchanged.db"),
-        )
-        .unwrap();
-        let mut connection = Connection::open(&path).unwrap();
+        let (_database, mut connection) = Database::new();
         let tx = connection.transaction().unwrap();
         let carry = |cancel_after: Option<usize>| {
             let cancelled = AtomicBool::new(false);
@@ -1329,13 +1424,8 @@ mod carry_tests {
             }
             carry_open_edits(&tx, "default", 1, &mut [], true, &mut budget)
         };
-        let uncancelled = carry(None);
-        let cancelled = carry(Some(1));
-        drop(tx);
-        drop(connection);
-        std::fs::remove_file(&path).unwrap();
-        assert!(!uncancelled.unwrap());
-        let error = cancelled.unwrap_err();
+        assert!(!carry(None).unwrap());
+        let error = carry(Some(1)).unwrap_err();
         assert!(
             matches!(
                 error.downcast_ref(),

@@ -470,6 +470,28 @@ fn carrying_open_draft_edits_spends_the_recompute_budget() {
 }
 
 #[test]
+fn every_hashed_part_column_spends_the_carry_budget() {
+    let f = Fixture::new(&node("created-then-replayed"));
+    f.sql()
+        .execute_batch("UPDATE plan_draft_parts SET spoolman_spool_id=hex(zeroblob(20000)) WHERE id=(SELECT MIN(id) FROM plan_draft_parts WHERE draft_id=2)")
+        .unwrap();
+    let before = f.recorded_rows();
+    let limits = PreparationLimits {
+        comparison_work: 20_000,
+        ..PreparationLimits::default()
+    };
+    let error = refused(&f, false, limits);
+    assert!(
+        matches!(
+            error.downcast_ref(),
+            Some(ReadFailure::LimitExceeded(Resource::ComparisonWork))
+        ),
+        "{error:?}"
+    );
+    assert_eq!(f.recorded_rows(), before);
+}
+
+#[test]
 fn refused_requests_write_nothing() {
     let f = Fixture::new(&node("created-then-replayed"));
     let before = f.recorded_rows();

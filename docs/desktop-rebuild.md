@@ -412,8 +412,8 @@ A recompute runs in three steps on the writer thread:
    copies quantity overrides, and inclusion when the draft is kept, from open
    drafts, as Node's `carryOpenDraftEdits` does. Before it loads an open draft,
    it charges the preparation budget one visit for the draft, one visit per
-   Part, and the Part text that the draft's digest check hashes as comparison
-   work. A limit or cancellation refusal rolls the transaction back. It abandons
+   Part, and the bytes of every Part column that the draft's digest check
+   hashes as comparison work. A limit or cancellation refusal rolls the transaction back. It abandons
    every open draft, increments their lifecycle versions, inserts the draft,
    inputs and Parts, and returns `created` with the saved snapshot.
 
