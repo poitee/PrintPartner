@@ -43,15 +43,24 @@ jobs:
   rust-partition-1:
     name: Rust partition (1/2)
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","pp-local"]') || 'ubuntu-latest' }}
     timeout-minutes: 45
     env:
-      CARGO_BUILD_JOBS: ${{ inputs.build_jobs || vars.CARGO_BUILD_JOBS || '6' }}
+      CARGO_BUILD_JOBS: ${{ inputs.build_jobs || vars.CARGO_BUILD_JOBS || ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && '3' || '6') }}
       PARTITION: '1'
     steps: &rust-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Set up ephemeral Linux prerequisites
+        if: runner.environment == 'self-hosted' && runner.os == 'Linux'
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/setup-ci-linux.sh"
+      - name: Set up Rust on ephemeral runners
+        if: runner.environment == 'self-hosted'
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: '1.99.0'
+          components: rustfmt, clippy
       - name: Fetch pinned historical schema commits
         shell: bash
         run: rust/scripts/fetch-historical-schema-commits.sh
@@ -230,10 +239,10 @@ jobs:
   rust-partition-2:
     name: Rust partition (2/2)
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","pp-local"]') || 'ubuntu-latest' }}
     timeout-minutes: 45
     env:
-      CARGO_BUILD_JOBS: ${{ inputs.build_jobs || vars.CARGO_BUILD_JOBS || '6' }}
+      CARGO_BUILD_JOBS: ${{ inputs.build_jobs || vars.CARGO_BUILD_JOBS || ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && '3' || '6') }}
       PARTITION: '2'
     steps: *rust-steps
 

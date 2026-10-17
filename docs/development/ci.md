@@ -127,3 +127,33 @@ The filter also skips one test by name, outside those groups:
 When `rust (macos)` or a Native macOS bundle workflow job fails on a push to `main`, an alert job opens an issue labelled `ci-macos-main` for that workflow run, or comments on the existing open issue for the same run. Rust failures confined to Linux or Windows do not alert. Only the alert job receives `issues: write`.
 
 Required Rust and lint jobs fail if their input-selection job fails, so a broken filter or failing filter test cannot pass through the required checks. Failure alerts run independently with a separate issue per workflow run, so a shared concurrency queue cannot drop pending alerts. Reruns comment on the existing open issue for that run.
+
+## Ephemeral PR runners
+
+Same-repository `pull_request` jobs use `[self-hosted, linux, x64, pp-local]`
+for Rust Linux, the Rust partitions, web checks, desktop contracts, desktop runtime,
+source artifacts, Rust verification, WebKit and embedded-driver smoke, and the native
+macOS Linux precheck. ARM64 native macOS jobs and cross-OS macOS use
+`[self-hosted, macos, arm64, pp-local-mac]` with the existing `macos` PR label gate.
+Each runner accepts one job and is destroyed afterward. Linux has three slots with
+3 vCPU and 8 GB each; macOS has two fresh Tart VM slots.
+
+Fork PRs use each job's existing GitHub-hosted label. Pushes, schedules, releases,
+manual dispatches and merge groups also keep their existing hosted runners.
+Docker image jobs, service-container jobs and cargo-deny stay hosted because the
+Linux runner containers have no Docker socket. Selector and result-only jobs stay
+hosted. No job routed to the local fleet references `secrets.`.
+
+The local Linux setup script installs build tools, Python and the GitHub CLI through
+`sudo apt-get`. Setup actions install Node, Rust and Chrome explicitly. Rust uses
+1.99.0 with rustfmt and clippy. Rust partition defaults use three build jobs on
+self-hosted runners; explicit inputs and repository variables still take precedence.
+
+Windows remains on `windows-latest`. The commented `runs-on` expression in
+`rust-cross-os.yml` documents the future same-repository PR switch, gated by
+`vars.PP_LOCAL_WIN == 'true'`. Enabling the variable alone does not change routing;
+the workflow must be edited after the Windows runner is provisioned.
+
+Linux and macOS label smoke passed before this change:
+[run 39072361760](https://github.com/poitee/PrintPartner/actions/runs/39072361760).
+The temporary `ci/runner-smoke` branch was deleted after both jobs succeeded.

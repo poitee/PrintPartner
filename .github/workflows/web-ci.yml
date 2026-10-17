@@ -51,7 +51,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","pp-local"]') || 'ubuntu-latest' }}
     timeout-minutes: 20
     defaults:
       run:
@@ -60,6 +60,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Set up ephemeral Linux prerequisites
+        if: runner.environment == 'self-hosted' && runner.os == 'Linux'
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/setup-ci-linux.sh"
       - name: Check GitHub Actions are SHA-pinned
         working-directory: .
         run: bash scripts/check-github-actions-pinned.sh
@@ -114,7 +117,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","pp-local"]') || 'ubuntu-latest' }}
     timeout-minutes: 20
     defaults:
       run:
@@ -123,6 +126,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Set up ephemeral Linux prerequisites
+        if: runner.environment == 'self-hosted' && runner.os == 'Linux'
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/setup-ci-linux.sh"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22.23.3"
@@ -142,9 +148,16 @@ jobs:
           node web/scripts/check-desktop-workflow-state.mjs
       - name: Run dependency lifecycle scripts
         run: npm rebuild
+      - name: Install Chrome on ephemeral Linux
+        if: runner.environment == 'self-hosted'
+        id: chrome
+        uses: browser-actions/setup-chrome@54e7c7bf1c147ffca98dc47b796907454c8c1787
+        with:
+          chrome-version: stable
+          install-dependencies: true
       - name: Build, bundle, runtime and browser checks
         env:
-          PLAYWRIGHT_CHROMIUM_EXECUTABLE: /usr/bin/google-chrome
+          PLAYWRIGHT_CHROMIUM_EXECUTABLE: ${{ steps.chrome.outputs.chrome-path || '/usr/bin/google-chrome' }}
         run: npm run build && npm run test:workflow-smoke && npm run test:bundles -w @print-partner/web && npm run test:runtime && npm run test:browser
 
   # The OrcaSlicer base image is about 1.7 GB. When the Actions cache has evicted it, the
