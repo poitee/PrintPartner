@@ -136,7 +136,7 @@ Required Rust and lint jobs fail if their input-selection job fails, so a broken
 
 Same-repository `pull_request` jobs use `[self-hosted, linux, x64, pp-local]`
 for Rust Linux, ast-grep, web checks, desktop contracts, desktop runtime,
-source artifacts, Rust verification, embedded-driver smoke, and the native
+source artifacts, embedded-driver smoke, and the native
 macOS Linux precheck. ARM64 native macOS jobs and cross-OS macOS use
 `[self-hosted, macos, arm64, pp-local-mac]` with the existing `macos` PR label gate.
 Each runner accepts one job and is destroyed afterward. Linux has four slots with
@@ -147,7 +147,8 @@ manual dispatches and merge groups also keep their existing hosted runners.
 Docker image jobs, service-container jobs and cargo-deny stay hosted because the
 Linux runner containers have no Docker socket. Selector and result-only jobs stay
 hosted. WebKit STL smoke also stays on `ubuntu-24.04` because the local
-Linux containers cannot provide its WebGL canvas. No job routed to the local fleet references `secrets.`.
+Linux containers cannot provide its WebGL canvas. Rust verification stays hosted
+because its iptables LAN guard requires privileges absent from the containers. No job routed to the local fleet references `secrets.`.
 
 The `scripts/setup-ci-linux.sh` script installs build tools, Python and the GitHub CLI through
 `sudo apt-get`. Setup actions install Node, Rust and Chrome explicitly. Rust uses
