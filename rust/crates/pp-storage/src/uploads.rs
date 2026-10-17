@@ -98,7 +98,7 @@ pub(crate) fn validate_schema(connection: &Connection, version: u64) -> Result<(
     for (table, column, definition) in added_columns()? {
         ensure!(
             column_definition(connection, table, column)? == definition,
-            "Source revision column schema mismatch"
+            "Source revision column schema mismatch: {table}.{column}"
         );
     }
     for (check, message) in [

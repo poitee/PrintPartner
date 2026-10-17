@@ -225,7 +225,7 @@ fn validator_refuses_drifted_objects_and_columns() {
     }
     assert_eq!(
         validate_schema(&connection, 39).unwrap_err().to_string(),
-        "Source revision column schema mismatch"
+        "Source revision column schema mismatch: projects.source_configuration_version"
     );
 }
 
@@ -283,4 +283,160 @@ fn validator_refuses_rows_outside_the_schema_invariants() {
         )),
         "Source observation cursor collision"
     );
+}
+
+fn schema37_input(label: &str, edit: &str) -> Vec<u8> {
+    let node = include_bytes!("../../tests/fixtures/accepted-plan-node.db");
+    let (from34, _) = upgrade(&format!("{label}-source"), node);
+    let path = from34.join("backups/pre-schema38.db");
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch(edit)
+        .unwrap();
+    assert_eq!(version_at(&path), "37");
+    std::fs::read(&path).unwrap()
+}
+
+fn starters(path: &Path) -> i64 {
+    immutable(path)
+        .query_row(
+            "SELECT count(*) FROM printer_profiles WHERE tenant_id='default' AND name='Generic Klipper Machine'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
+// The backup API rewrites header counters for a WAL input, so backups are
+// compared by schema and rows rather than by bytes.
+fn contents(path: &Path) -> Vec<String> {
+    let connection = immutable(path);
+    let mut found: Vec<String> = connection
+        .prepare("SELECT type,name,sql FROM sqlite_master ORDER BY name")
+        .unwrap()
+        .query_map([], |row| {
+            Ok(format!(
+                "{:?}",
+                (
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?
+                )
+            ))
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    let tables: Vec<String> = connection
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    for table in tables {
+        let mut statement = connection
+            .prepare(&format!("SELECT * FROM \"{table}\" ORDER BY rowid"))
+            .or_else(|_| connection.prepare(&format!("SELECT * FROM \"{table}\"")))
+            .unwrap();
+        let width = statement.column_count();
+        let rows = statement
+            .query_map([], |row| {
+                (0..width)
+                    .map(|index| row.get::<_, rusqlite::types::Value>(index))
+                    .collect::<rusqlite::Result<Vec<_>>>()
+            })
+            .unwrap()
+            .map(|row| format!("{table} {:?}", row.unwrap()));
+        found.extend(rows);
+    }
+    found
+}
+
+#[test]
+fn step_backups_precede_starter_seed_writes() {
+    let input = schema37_input(
+        "uploads-seed",
+        "UPDATE printer_profiles SET name='Renamed starter' WHERE tenant_id='default' AND name='Generic Klipper Machine'",
+    );
+
+    let blocked = directory("uploads-seed-blocked");
+    let database = blocked.join("print-partner.db");
+    std::fs::write(&database, &input).unwrap();
+    assert_eq!(starters(&database), 0);
+    let original = contents(&database);
+    std::fs::create_dir_all(blocked.join("backups/pre-schema38.db")).unwrap();
+    let error = WriterOwner::open(&blocked, Limits::default())
+        .err()
+        .unwrap();
+    assert!(
+        format!("{error:#}").contains("schema::backup: rename temporary backup"),
+        "{error:#}"
+    );
+    assert!(
+        std::fs::read(&database).unwrap() == input,
+        "refused open changed the database"
+    );
+    assert_eq!(version_at(&database), "37");
+    assert_eq!(starters(&database), 0);
+
+    let (directory, ready) = upgrade("uploads-seed-open", &input);
+    let saved = directory.join("backups/pre-schema38.db");
+    assert_eq!(ready.backup, Some(saved.clone()));
+    assert_eq!(starters(&saved), 0);
+    assert_eq!(contents(&saved), original);
+    assert_eq!(starters(&directory.join("backups/pre-schema39.db")), 0);
+    // The seeded row may still sit in the WAL, which an immutable reader skips.
+    let live: i64 = Connection::open(directory.join("print-partner.db"))
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM printer_profiles WHERE tenant_id='default' AND name='Generic Klipper Machine'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(live, 1);
+    assert_reopen_is_noop(&directory);
+}
+
+#[test]
+fn step_refuses_drifted_existing_columns_before_its_stamp() {
+    for (label, edit, column) in [
+        (
+            "uploads-column-type",
+            "ALTER TABLE projects ADD COLUMN source_configuration_version TEXT",
+            "projects.source_configuration_version",
+        ),
+        (
+            "uploads-column-foreign-key",
+            "ALTER TABLE source_docs ADD COLUMN source_revision_id INTEGER",
+            "source_docs.source_revision_id",
+        ),
+    ] {
+        let input = schema37_input(label, edit);
+        let directory = directory(&format!("{label}-open"));
+        let database = directory.join("print-partner.db");
+        std::fs::write(&database, &input).unwrap();
+        let original = contents(&database);
+        for _ in 0..2 {
+            let error = WriterOwner::open(&directory, Limits::default())
+                .err()
+                .unwrap();
+            assert_eq!(version_at(&database), "37", "{label}");
+            assert_eq!(contents(&database), original, "{label}");
+            assert!(
+                format!("{error:#}")
+                    .contains(&format!("Source revision column schema mismatch: {column}")),
+                "{label}: {error:#}"
+            );
+        }
+    }
+
+    let input = schema37_input(
+        "uploads-column-kept",
+        "ALTER TABLE projects ADD COLUMN source_configuration_version INTEGER NOT NULL DEFAULT 1",
+    );
+    let (directory, ready) = upgrade("uploads-column-kept-open", &input);
+    assert_eq!((ready.version, ready.previous_version), (39, 37));
+    assert_reopen_is_noop(&directory);
 }
