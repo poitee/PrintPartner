@@ -148,7 +148,8 @@ Docker image jobs, service-container jobs and cargo-deny stay hosted because the
 Linux runner containers have no Docker socket. Selector and result-only jobs stay
 hosted. WebKit STL smoke also stays on `ubuntu-24.04` because the local
 Linux containers cannot provide its WebGL canvas. Rust verification stays hosted
-because its iptables LAN guard requires privileges absent from the containers. No job routed to the local fleet references `secrets.`.
+because its iptables LAN guard requires privileges absent from the containers.
+No job routed to the local fleet references `secrets.`.
 
 The `scripts/setup-ci-linux.sh` script installs build tools, Python and the GitHub CLI through
 `sudo apt-get`. Setup actions install Node, Rust and Chrome explicitly. Rust uses
@@ -161,7 +162,10 @@ value is `true` and the event is a same-repository PR. Keep it off until the
 Windows runner service has Bash on PATH and the Rust job has been verified.
 The command-shell smoke passed, but the Rust job exposed the missing Bash:
 [Windows smoke](https://github.com/poitee/PrintPartner/actions/runs/39073196185).
-The `ci/runner-smoke-win` branch remains for Chad to remove.
+The local Windows job uses the preinstalled Python 3.13 launcher, verifies the
+required version and hashing API, and passes its exact executable path to manifest
+generation. It avoids the setup-python installer, which requires administrator
+privileges on Windows. The `ci/runner-smoke-win` branch remains for Chad to remove.
 
 Local macOS jobs install Python 3.12 through pinned `actions/setup-python` before
 building manifests, which require `hashlib.file_digest`. They create the action's

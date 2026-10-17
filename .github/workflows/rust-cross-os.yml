@@ -91,11 +91,12 @@ jobs:
         run: |
           "$MANIFEST_PYTHON" -c 'import hashlib, sys; assert sys.version_info >= (3, 11); assert hasattr(hashlib, "file_digest"); print(sys.executable, sys.version)'
           python3 -c 'import hashlib, sys; assert sys.version_info >= (3, 11); assert hasattr(hashlib, "file_digest")'
-      - name: Set up Python on ephemeral Windows
+      - name: Verify preinstalled Python on ephemeral Windows
         if: runner.environment == 'self-hosted' && runner.os == 'Windows'
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.12'
+        id: py-windows
+        run: |
+          py -3.13 --version
+          py -3.13 -c 'import hashlib, sys; assert sys.version_info >= (3, 11); assert hasattr(hashlib, "file_digest"); print("python-path=" + sys.executable)' >> "$GITHUB_OUTPUT"
       - name: Set up Rust on ephemeral runners
         if: runner.environment == 'self-hosted'
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
@@ -137,7 +138,7 @@ jobs:
         id: assets
         env:
           VITE_PRINT_PARTNER_DESKTOP: '1'
-          MANIFEST_PYTHON: ${{ steps.py.outputs.python-path || 'python3' }}
+          MANIFEST_PYTHON: ${{ steps.py.outputs.python-path || steps.py-windows.outputs.python-path || 'python3' }}
         run: |
           set -euo pipefail
           node_path=$(node -p process.execPath)
@@ -209,7 +210,7 @@ jobs:
     needs: changes
     # Explicit jobs keep each required check present when selection skips it.
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.relevant != 'false') }}
-    # Keep Windows hosted until the runner service has a verified Bash toolchain.
+    # Enable only after the full Windows Rust smoke passes.
     runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.PP_LOCAL_WIN == 'true') && fromJSON('["self-hosted","windows","x64","pp-local-win"]') || 'windows-latest' }}
     env:
       RUST_OS: windows
