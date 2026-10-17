@@ -41,7 +41,7 @@ type BackupMetadataBase = Readonly<{
   appVersion: string;
 }>;
 
-export type BackupMetadataV1 = BackupMetadataBase &
+type BackupMetadataV1 = BackupMetadataBase &
   Readonly<{
     version: "1";
     formatVersion: 1;
@@ -57,7 +57,7 @@ type BackupScope =
       includedRoots: readonly [];
     }>;
 
-export type BackupMetadataV2 = BackupMetadataBase &
+type BackupMetadataV2 = BackupMetadataBase &
   Readonly<{
     version: "2";
     formatVersion: 2;

@@ -17,7 +17,7 @@ type RepoTreeSubdirSummary = {
   file_count: number;
 };
 
-export type RepoTreeDirSummary = {
+type RepoTreeDirSummary = {
   path: string;
   stl_count: number;
   doc_count: number;
@@ -25,7 +25,7 @@ export type RepoTreeDirSummary = {
   subdirs: RepoTreeSubdirSummary[];
 };
 
-export type RepoVariantOption = {
+type RepoVariantOption = {
   id: string;
   label: string;
   path: string;

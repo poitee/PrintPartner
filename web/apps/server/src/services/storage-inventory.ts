@@ -28,7 +28,7 @@ type StorageCategoryKey =
   | "backups"
   | "other";
 
-export type StorageCategoryUsage = Readonly<{
+type StorageCategoryUsage = Readonly<{
   key: StorageCategoryKey;
   label: string;
   bytes: number;

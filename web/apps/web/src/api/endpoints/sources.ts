@@ -51,14 +51,14 @@ type BulkCategoryAssignResult = {
   failed: number;
 };
 
-export type StlTreeFileNode = {
+type StlTreeFileNode = {
   kind: "file";
   path: string;
   name: string;
   checked: boolean;
 };
 
-export type StlTreeFolderNode = {
+type StlTreeFolderNode = {
   kind: "folder";
   path: string;
   name: string;

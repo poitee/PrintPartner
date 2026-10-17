@@ -10,7 +10,7 @@ const execFileAsync = promisify(execFile);
 
 export const SLICER_INSTANCE_LABEL = "printpartner.slicer_instance_id";
 
-export type DockerTarget = "local" | "pp_compose" | "remote";
+type DockerTarget = "local" | "pp_compose" | "remote";
 
 export type SlicerPortMapping = {
   host: number;

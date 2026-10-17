@@ -7,8 +7,6 @@ import type {
 import { createRequire } from "node:module";
 import { resolveRuntimeReleaseIdentity } from "./lib/version.js";
 
-export type { DeployMode, AiProviderId, SearchProviderId };
-
 const SEARCH_PROVIDER_IDS: SearchProviderId[] = [
   "anthropic-native",
   "openai-native",

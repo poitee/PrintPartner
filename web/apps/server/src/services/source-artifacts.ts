@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { extname, join, relative, resolve, sep } from "node:path";
 
-export type SourceArtifactFormat = "stl" | "3mf" | "zip";
+type SourceArtifactFormat = "stl" | "3mf" | "zip";
 
 export type SourceArtifact = Readonly<{
   path: string;

@@ -8,7 +8,7 @@ export function isCheckoffSort(value: unknown): value is CheckoffSort {
   return value === "manual" || value === "source" || value === "directory";
 }
 
-export type CheckoffFolderGroup = {
+type CheckoffFolderGroup = {
   folder: string;
   parts: ReviewPart[];
 };

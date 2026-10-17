@@ -1,6 +1,6 @@
 # Record the Rust crate layout and dependency edges
 
-Status: accepted record of the `rust/crates` layout on `main` and the planned edges as the desktop rebuild slices land on main ([GRE-595](../desktop-rebuild.md#slice-plan); the old desktop chain and #171 will not land). D3 adds the optional `pp-core` to `pp-source` and `pp-net` edges for review observations. The boundary checker requires those edges to compile through `desktop_rebuild` only.
+Status: accepted record of the `rust/crates` layout on `main` and the planned edges as the desktop rebuild slices land on main ([GRE-595](../desktop-rebuild.md#slice-plan); the old desktop chain and #171 will not land). D3 adds the optional `pp-core` to `pp-source` and `pp-net` edges for review observations. The boundary checker requires the `pp-core` edges to `pp-source` and `pp-net` and the `pp-storage` edges to `pp-domain` and `pp-contracts` to compile through `desktop_rebuild` only.
 
 Print Partner's Rust workspace under `rust/crates` is the protected runtime foundation and the home for the D7 crate split. Enforcement today is the explicit `ALLOWED` map in `rust/scripts/check-boundaries.py`, checked with `cargo metadata --no-deps`. Edges listed as **current** are copied from that map. Edges listed as **planned** cover the addition of `pp-api`, extensions to `pp-storage`, printer/provider adapters in the reserved `pp-drivers` crate, and broader use cases extending `pp-services` beyond its existing Orca/Bambu discovery. Planned edges are documentation only until a later change updates `ALLOWED`.
 

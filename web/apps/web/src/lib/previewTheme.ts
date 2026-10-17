@@ -29,9 +29,9 @@
 
 import { useSyncExternalStore } from "react";
 
-export type PreviewThemeMode = "light" | "dark";
+type PreviewThemeMode = "light" | "dark";
 
-export type PreviewLight = Readonly<{
+type PreviewLight = Readonly<{
   /** "#rrggbb". */
   color: string;
   intensity: number;

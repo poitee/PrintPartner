@@ -15,7 +15,7 @@ import { checkoffUnitTotals, type CheckoffUnitTotals } from "./checkoffProgress"
 // Schema types (mirrors pp-phases.json / build_phases DB row)
 // ---------------------------------------------------------------------------
 
-export type PhaseDefinition = {
+type PhaseDefinition = {
   name: string;
   order: number;
   description?: string;
