@@ -334,16 +334,13 @@ impl SettingsClient {
         cancelled: &AtomicBool,
         wait: Duration,
     ) -> Result<WriteReply> {
-        #[cfg(feature = "desktop_rebuild")]
-        {
-            let (SettingCommand::Set(setting) | SettingCommand::CompareAndSet { setting, .. }) =
-                &command;
-            ensure!(
-                !auth::OWNED_SETTINGS.contains(&setting.key.as_str()),
-                "Setting {} is owned by auth and changes only through auth requests",
-                setting.key
-            );
-        }
+        let (SettingCommand::Set(setting) | SettingCommand::CompareAndSet { setting, .. }) =
+            &command;
+        ensure!(
+            !auth::OWNED_SETTINGS.contains(&setting.key.as_str()),
+            "Setting {} is owned by auth and changes only through auth requests",
+            setting.key
+        );
         self.enqueue(Work::Setting(command), cancelled, wait)
     }
     pub fn reader(&self, wait: Duration) -> Result<ReaderCheckout> {
