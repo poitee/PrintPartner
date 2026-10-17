@@ -219,6 +219,10 @@ pub struct QuarantinedJob {
     pub uncertain_resource: Option<String>,
 }
 pub enum Outcome {
+    #[cfg(feature = "desktop_rebuild")]
+    LocalScanObservation(crate::source_scan::LocalScanObservation),
+    #[cfg(feature = "desktop_rebuild")]
+    LocalScanSettled(JobRecord, crate::source_scan::LocalScanApplied),
     Job(JobRecord, LocalCommit),
     List(Vec<JobRecord>),
     #[cfg(feature = "desktop_rebuild")]
@@ -313,6 +317,19 @@ pub(crate) enum Command {
         credential: Credential,
         policy: AuthPolicy,
         job_id: String,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    ObserveLocalScan {
+        lease: AttemptLease,
+        source_work: crate::catalog::SourceWorkProof,
+        policy: AuthPolicy,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    SettleLocalScan {
+        lease: AttemptLease,
+        source_work: crate::catalog::SourceWorkProof,
+        policy: AuthPolicy,
+        settlement: crate::source_scan::LocalScanSettlement,
     },
     Retain {
         per_tenant: usize,
@@ -733,6 +750,62 @@ impl ServerWorkerClient {
         }
     }
 }
+#[cfg(feature = "desktop_rebuild")]
+impl ServerWorkerClient {
+    pub fn observe_local_scan(
+        &self,
+        lease: &AttemptLease,
+        source_work: &crate::catalog::SourceWorkLease,
+    ) -> Result<crate::source_scan::LocalScanObservation> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
+        match submit(
+            &self.storage,
+            Command::ObserveLocalScan {
+                lease: lease.clone(),
+                source_work: source_work.proof()?,
+                policy,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::LocalScanObservation(observation) => Ok(observation),
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn settle_local_scan(
+        &self,
+        lease: &mut AttemptLease,
+        source_work: &crate::catalog::SourceWorkLease,
+        settlement: crate::source_scan::LocalScanSettlement,
+    ) -> Result<crate::source_scan::LocalScanApplied> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
+        match submit(
+            &self.storage,
+            Command::SettleLocalScan {
+                lease: lease.clone(),
+                source_work: source_work.proof()?,
+                policy,
+                settlement,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::LocalScanSettled(job, applied) => {
+                lease.version = job.state_version;
+                Ok(applied)
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
 fn random() -> String {
     hex::encode(rand::random::<[u8; 32]>())
 }
@@ -1166,6 +1239,31 @@ pub(crate) fn execute(
                 policy,
                 snapshot: job.snapshot(),
             }
+        }
+        #[cfg(feature = "desktop_rebuild")]
+        Command::ObserveLocalScan {
+            lease,
+            source_work,
+            policy,
+        } => TransactionDecision::Outcome(Outcome::LocalScanObservation(
+            crate::source_scan::observe(&tx, catalog_state, &lease, &source_work, policy)?,
+        )),
+        #[cfg(feature = "desktop_rebuild")]
+        Command::SettleLocalScan {
+            lease,
+            source_work,
+            policy,
+            settlement,
+        } => {
+            let (job, applied) = crate::source_scan::settle(
+                &tx,
+                catalog_state,
+                &lease,
+                &source_work,
+                policy,
+                settlement,
+            )?;
+            TransactionDecision::Outcome(Outcome::LocalScanSettled(job, applied))
         }
         Command::Retain { per_tenant, global } => {
             TransactionDecision::Outcome(Outcome::Retained(prune(&tx, per_tenant, global)?))

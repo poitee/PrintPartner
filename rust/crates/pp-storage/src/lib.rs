@@ -25,6 +25,8 @@ pub mod read_model;
 pub mod required_units;
 mod schema;
 #[cfg(feature = "desktop_rebuild")]
+pub mod source_scan;
+#[cfg(feature = "desktop_rebuild")]
 pub mod working_drafts;
 mod writer_admission;
 
