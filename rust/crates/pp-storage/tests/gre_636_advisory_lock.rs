@@ -361,7 +361,7 @@ fn gre_636_standalone_node_blocks_rust_before_database_preflight() {
     rust.start();
     assert_eq!(
         rust.event(),
-        "refused Data directory already owned by standalone Node; stop it before starting Rust: open_lock: openat O_RDWR|O_CREAT|O_NOFOLLOW .desktop-lease: Is a directory (os error 21)"
+        "refused Data directory already owned by standalone Node; stop it before starting Rust: open_lock: openat O_RDWR|O_NOFOLLOW .desktop-lease: Is a directory (os error 21)"
     );
     assert!(rust.wait().success());
     assert_eq!(
