@@ -1377,3 +1377,53 @@ trigger failure through the real route. Internal transaction callers retain
 the original diagnostic error. Authentication failures retain the auth module's
 existing errors. Queue admission has no Node counterpart; direct Rust tests
 check the supplied reference behavior, including cancellation after admission.
+
+### D17 source scan: observation and settlement
+
+D17 (a), GRE-613, ports `source_scan` document records, observations, and
+settlement from `desktop/source-sync-local-current-20261008`. The
+`desktop_rebuild` feature gates the module and the jobs commands
+`ObserveLocalScan` and `SettleLocalScan`. Settlement rechecks the original
+credential, Source reservation, configuration, activation, and path. It replaces
+the document index and records a confirmed effect receipt in one transaction.
+PDFs remain pending for extraction. Settlement does not finish the job or retire
+its Source token. Callers must release or drop `source_work` promptly.
+
+The two-PR slice plan assigns the complete D17 scope as follows:
+
+| Slice | Work | Estimated added/changed lines |
+| --- | --- | ---: |
+| D17 (a) | Document types, observation/settlement, journal SQL, jobs commands/clients/outcomes, `classify_issued`/`proof` callers | 600 |
+| D17 (a) | Settlement, authority and reservation tests; Node generator and golden; docs | 650–850 |
+| D17 (b) | Complete, inspect, inspect-held and reconcile commands/clients/outcomes; both transaction decisions; `retire_issued`/`consume_retired` callers | 780 |
+| D17 (b) | `revalidate_source_authority`, `commit_source_authority_refusal`, idempotent End/release, remaining reference catalog tests | 400–500 |
+| D17 (b) | Schema 40, `backups/pre-schema40.db`, validation inside the migration transaction, migration tests and docs | 150–200 |
+
+PR #553, D14 (b), was open when this branch started. It supplies schema 39 and
+the Source configuration and document provenance columns. This branch starts
+from main and does not install schema 40. Settlement tests explicitly install
+those prerequisite columns and the journal in temporary databases. Production
+startup remains at desktop schema 37 and default schema 35. Sequence the schema
+step after #553 before landing D17. Source Sync remains D18, GRE-614.
+
+`fixtures/parity/source-scan/generate.mjs` runs Node's
+`services/source-docs-index.ts`, which calls `services/source-docs-scan.ts`.
+Four cases cover empty input, markdown/PDF indexing, ignored directories and
+Unicode paths. Rust tests assert the committed Node rows and counts. Node stores
+24 hex characters of the content hash; the reference Rust journal uses full
+SHA-256. The generator also records full Node crypto hashes for Rust input.
+The probe sorts paths by JavaScript code units for the settlement contract and
+records inventory/index digests from Node crypto. Durable settlement, Source
+reservations and authority checks have no Node counterpart. The tests adapt the
+observation/settlement portion of the reference catalog test
+`repeated_local_scan_completion_adopts_the_exact_terminal_result` and its Source
+lease lifetime checks. Exact terminal-result adoption and release acknowledgement
+remain in D17 (b). New tests exercise stale observations, revoked authority,
+invalid documents and transaction rollback.
+
+Regenerate or verify the Node results with:
+
+```sh
+node fixtures/parity/source-scan/generate.mjs
+node fixtures/parity/source-scan/generate.mjs --check
+```
