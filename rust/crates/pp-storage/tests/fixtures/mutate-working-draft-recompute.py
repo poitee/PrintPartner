@@ -20,6 +20,8 @@ mutants = [
     ('changed inputs ignored', 'if current.fingerprint != prepared.capture.fingerprint {', 'if false {'),
     ('carried quantity dropped', 'if !quantity.is_null() {', 'if false {'),
     ('inclusion always carried', '        if keep_inclusion {', '        if true {'),
+    ('carried Parts are not charged', '        for _ in 0..num(&open, "parts")? {\n            budget.visit(0)?;\n        }\n', ''),
+    ('carried Part text is not charged', '        budget.comparison(usize::try_from(num(&open, "bytes")?)?)?;\n', ''),
     ('carried edits keep the prepared digest', 'changed |= *part != before;', 'changed |= false;'),
     ('superseded draft keeps its lifecycle', "SET state='abandoned',lifecycle_version=lifecycle_version+1 WHERE tenant_id=? AND profile_id=? AND state='open'", "SET state='abandoned' WHERE tenant_id=? AND profile_id=? AND state='open'"),
     ('creation time is not ISO', '            auth::catalog_timestamp(),', '            "now",'),

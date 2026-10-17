@@ -410,9 +410,12 @@ A recompute runs in three steps on the writer thread:
    principal and the key again. A hidden Plan or a moved accepted base is
    `base_changed`. A changed input fingerprint is `inputs_changed`. It then
    copies quantity overrides, and inclusion when the draft is kept, from open
-   drafts, as Node's `carryOpenDraftEdits` does. It abandons every open draft,
-   increments their lifecycle versions, inserts the draft, inputs and Parts, and
-   returns `created` with the saved snapshot.
+   drafts, as Node's `carryOpenDraftEdits` does. Before it loads an open draft,
+   it charges the preparation budget one visit for the draft, one visit per
+   Part, and the Part text that the draft's digest check hashes as comparison
+   work. A limit or cancellation refusal rolls the transaction back. It abandons
+   every open draft, increments their lifecycle versions, inserts the draft,
+   inputs and Parts, and returns `created` with the saved snapshot.
 
 `RecomputeOutcome::into_json_body` writes Node's result kinds. Node's service
 also selects Required units after a created or existing draft. This client does
@@ -428,9 +431,9 @@ the first STL scan starts. After that scan, preparation still reads settings,
 Source rows, and whether the Plan exists. Only the hidden-Plan case changes one
 of those, and it only turns off Spoolman defaults, which the fixture does not
 set. Both sides therefore prepare the same Parts.
-Rust-only tests cover cancellation, a budget refusal, a cancelled or
-unauthenticated request, and a client without observations. Regenerate the
-fixture twice:
+Rust-only tests cover cancellation, a budget refusal, an open draft that
+exceeds the budget when its edits are carried, a cancelled or unauthenticated
+request, and a client without observations. Regenerate the fixture twice:
 
 ```sh
 node --import ./web/node_modules/tsx/dist/loader.mjs --conditions=development rust/crates/pp-storage/tests/fixtures/working-draft-recompute-node.mjs web/apps/server > /persist/tmp/recompute-first.jsonl

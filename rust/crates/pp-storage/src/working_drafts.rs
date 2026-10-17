@@ -1080,6 +1080,7 @@ fn recompute(
             profile,
             &mut prepared.parts,
             !request.apply_manifest,
+            &mut budget,
         )? {
             prepared.digest =
                 model::planning(&prepared.base, &prepared.capture.inputs, &prepared.parts)?;
@@ -1129,23 +1130,34 @@ fn winner(
 /// read the open draft, so its quantity override, and its inclusion when the
 /// caller keeps the current draft, replace the prepared values. Returns
 /// whether any Part changed.
+///
+/// This runs under the writer lock, so each open draft, each of its Parts
+/// and the Part text that loading it hashes are charged to the recompute's
+/// budget before the draft is loaded.
 fn carry_open_edits(
     tx: &Transaction<'_>,
     tenant: &str,
     profile: i64,
     parts: &mut [DraftPart],
     keep_inclusion: bool,
+    budget: &mut observation::PreparationBudget<'_>,
 ) -> Result<bool> {
     let mut edits = HashMap::new();
     for open in rows(
         tx,
-        "SELECT id FROM plan_drafts WHERE tenant_id=? AND profile_id=? AND state='open' ORDER BY created_at,id",
+        "SELECT d.id,COUNT(p.id) AS parts,COALESCE(SUM(LENGTH(CAST(concat(p.part_key,p.relative_path,p.filename,p.source_layer,p.status,p.role_inferred,p.role_override,p.filament_color_id,p.filament_custom_hex,p.notes,p.github_blob_url,p.requirement,p.option_group_id,p.manifest_source,p.artifact_digest) AS BLOB))),0) AS bytes FROM plan_drafts d LEFT JOIN plan_draft_parts p ON p.tenant_id=d.tenant_id AND p.draft_id=d.id WHERE d.tenant_id=? AND d.profile_id=? AND d.state='open' GROUP BY d.id ORDER BY d.created_at,d.id",
         &[&tenant, &profile],
     )? {
+        budget.visit(0)?;
+        for _ in 0..num(&open, "parts")? {
+            budget.visit(0)?;
+        }
+        budget.comparison(usize::try_from(num(&open, "bytes")?)?)?;
         let Some(open) = draft(tx, tenant, profile, num(&open, "id")?)? else {
             continue;
         };
         for part in open.parts {
+            budget.check()?;
             let key = (
                 text(&part, "sourceLayer")?.to_owned(),
                 text(&part, "partKey")?.to_owned(),
@@ -1158,6 +1170,7 @@ fn carry_open_edits(
     }
     let mut changed = false;
     for part in parts {
+        budget.check()?;
         let key = (
             text(part, "sourceLayer")?.to_owned(),
             text(part, "partKey")?.to_owned(),
@@ -1288,4 +1301,47 @@ fn outcome_json_body(kind: &str, field: Option<&str>, body: &[u8]) -> DraftOutco
     }
     output.push(b'}');
     DraftOutcomeJsonBody(output)
+}
+
+#[cfg(test)]
+mod carry_tests {
+    use super::*;
+
+    #[test]
+    fn cancellation_stops_carrying_open_draft_edits() {
+        let path = std::env::temp_dir().join(format!("pp-carry-{}.db", rand::random::<u64>()));
+        std::fs::write(
+            &path,
+            include_bytes!("../tests/fixtures/required-units/unchanged.db"),
+        )
+        .unwrap();
+        let mut connection = Connection::open(&path).unwrap();
+        let tx = connection.transaction().unwrap();
+        let carry = |cancel_after: Option<usize>| {
+            let cancelled = AtomicBool::new(false);
+            let mut budget = observation::PreparationBudget::new(
+                &cancelled,
+                observation::PreparationLimits::default(),
+            )
+            .unwrap();
+            if let Some(checks) = cancel_after {
+                budget.cancel_after_checks(checks);
+            }
+            carry_open_edits(&tx, "default", 1, &mut [], true, &mut budget)
+        };
+        let uncancelled = carry(None);
+        let cancelled = carry(Some(1));
+        drop(tx);
+        drop(connection);
+        std::fs::remove_file(&path).unwrap();
+        assert!(!uncancelled.unwrap());
+        let error = cancelled.unwrap_err();
+        assert!(
+            matches!(
+                error.downcast_ref(),
+                Some(observation::ReadFailure::Cancelled)
+            ),
+            "{error:?}"
+        );
+    }
 }
