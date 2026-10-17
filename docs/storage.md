@@ -14,7 +14,7 @@ The Rust core uses SQLite only. It does not support Postgres.
 
 ## One writer
 
-Only one Print Partner runtime may own a data directory at a time. The Rust core and standalone Rust writer acquire an exclusive OS advisory lock on `<data-dir>/printpartner.lock` with [fs4](https://docs.rs/fs4/1.1.0/fs4/). They take it before database preflight, migrations, or any SQLite open. A second instance refuses with `Data directory already owned; stop the other Print Partner process before starting another instance`.
+Only one Print Partner runtime may own a data directory at a time. The Rust core and standalone Rust writer acquire an exclusive OS advisory lock on `<data-dir>/printpartner.lock` with [fs4](https://docs.rs/fs4/1.1.0/fs4/). They take it before database preflight, migrations, or any SQLite open. A second instance refuses with `Data directory already owned; stop the other Print Partner process before starting another instance`. Rust creates `printpartner.lock` and `.desktop-lease` with `O_EXCL` and opens an existing entry without `O_CREAT`. On macOS, racing `O_CREAT` opens relative to a directory descriptor can fail with `ENOENT` (GRE-673).
 
 The runtime holds the lock while it can access storage, including compatibility-child restarts. Graceful shutdown releases it after database closure and child reaping. If writer closure or cleanup cannot be proved, the runtime retains ownership until a successful cleanup retry or process exit. The kernel releases the lock when its last owning descriptor closes, including after a crash or SIGKILL. The lock file remains on disk. Its presence does not mean the directory is owned, and startup does not delete it.
 
