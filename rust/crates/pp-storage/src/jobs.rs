@@ -1053,7 +1053,7 @@ fn encode(job: &JobRecord) -> Result<String> {
     check_document_size(document.len())?;
     Ok(document)
 }
-fn decode(document: &str) -> Result<JobRecord> {
+pub(crate) fn decode(document: &str) -> Result<JobRecord> {
     check_document_size(document.len())?;
     let value: serde_json::Value = serde_json::from_str(document)?;
     let mut job: JobRecord = serde_json::from_value(value.clone())?;
@@ -1578,7 +1578,7 @@ pub(crate) fn authority_change<T>(
         result
     })
 }
-fn actor(
+pub(crate) fn actor(
     tx: &Transaction<'_>,
     credential: Credential,
     policy: AuthPolicy,
@@ -1623,7 +1623,7 @@ fn prune(tx: &Transaction<'_>, per_tenant: usize, global: usize) -> Result<usize
     }
     Ok(removed.len())
 }
-fn user(
+pub(crate) fn user(
     tx: &Transaction<'_>,
     tenant: &str,
     subject: &str,

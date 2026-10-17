@@ -892,8 +892,8 @@ longer leave the temporary copy's `-wal` and `-shm` files behind.
 Opening checks the installed objects against the SQL text for the stored version,
 and refuses objects from a later step. It also refuses an orphaned quota row,
 partial revision or document provenance, an invalid observation, an invalid preclaim
-refusal, and a cursor shared by a refusal and an observation. Checks of the journal
-documents against their durable jobs arrive with D14 (c). Without the feature, storage
+refusal, and a cursor shared by a refusal and an observation. D14 (c) adds the checks
+of the journal documents against their durable jobs. Without the feature, storage
 stays at schema 35 and refuses a schema-39 database.
 
 Node's schema stops at 34 and has none of these tables, so there is no Node literal
@@ -904,6 +904,56 @@ from 35, 37 and 38:
 
 ```sh
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib -- uploads:: tests::ticket_t_7_migrations
+```
+
+### D14 uploads: upload journal and admission
+
+GRE-610's third PR adds the upload journal and admits supplied files and zips into
+it, behind `desktop_rebuild`. Nothing claims or runs an admitted import yet; the
+import phases arrive in D14 (d) and captured inputs in D14 (e).
+
+`WriterOwner::imports(policy, quota)` returns an `ImportClient` for the owner's import
+quota, at most 64 GiB. Every client of one owner must name the same quota.
+`ImportClient::admit` takes a credential, an `Admission` (operation key, an existing
+Source or one to create, `Input::Files` or `Input::Zip`, the reserved bytes and the
+input and prepared limits), the expected input files, the bytes already on disk, and
+the `accounting_epoch` read before measuring them. In one writer transaction it:
+
+1. refuses a stale epoch ("Import accounting changed; retry admission");
+2. checks the key, each file's relative path and digest, duplicates, at most 10,000
+   files and the input limit;
+3. returns the prior operation for a replay of the same request by the same actor,
+   and refuses any other reuse of the key ("Import idempotency conflict");
+4. checks the target, the limits (input at most 256 MiB, prepared at most 1 GiB, and a
+   reservation of at least input + 3 × prepared + 16 MiB, within the quota), and that
+   the bytes on disk plus every unsettled reservation plus this one fit the quota
+   ("Owner import quota exceeded");
+5. creates the Source if asked, enqueues the internal `SuppliedSourceImport` job with the
+   admitting authority, and writes the journal entry and its reservation.
+
+The entry is validated before it is written, so an entry whose input paths differ from
+its files, or whose files are not of kind `input`, is refused rather than committed.
+The reference wrote such an entry, and every later read of its key failed.
+`ImportClient::get` returns an entry to the actor that admitted it. Each successful
+admission advances the epoch.
+
+Opening storage now checks each journal entry: its columns against its document, the
+document's state and bindings, its job (live or archived) against its Source, key and
+input version, a settled entry against a terminal job, and its quota row against its
+reservation and retained bytes.
+
+Node writes supplied files with `writeUploadedFiles` and has no journal, quota or
+idempotency. `fixtures/parity/uploads/generate.mjs` records its limits and its results
+for ten file sets. The journal matches Node's 256 MiB and 10,000-file limits and its
+refusal of empty, oversized, escaping and duplicate inputs. It differs on purpose for
+three: Node rewrites backslashes and a leading slash, and folds case when it looks for
+duplicates. The journal stores exact canonical paths, so it refuses the first two and
+admits names that differ only in case. The quota, idempotency, startup and codec cases
+port the reference `source_import_codec.rs` and its serializer fixture:
+
+```sh
+node fixtures/parity/uploads/generate.mjs --check
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test upload_journal
 ```
 
 ## D9 build graph receipt
