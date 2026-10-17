@@ -1,3 +1,6 @@
+#[path = "tests/client.rs"]
+mod client;
+
 use super::*;
 use crate::manifest_text::{JsText, ManifestText, OptionGroupId, PartManifestMetadata};
 use rusqlite::Connection;
@@ -648,7 +651,7 @@ mod transaction {
         }
         result
     }
-    fn replace_time(value: &mut Value, actual: &str, expected: &Value) {
+    pub(super) fn replace_time(value: &mut Value, actual: &str, expected: &Value) {
         if actual.is_empty() {
             return;
         }

@@ -81,13 +81,6 @@ pub(crate) fn job_key_actor_ref(
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "GRE-612 (D19) plan publication reconciliation calls this"
-    )
-)]
 pub(crate) fn reconciliation_actor(
     tx: &Transaction<'_>,
     credential: crate::read_model::Credential,
@@ -104,7 +97,7 @@ pub(crate) fn reconciliation_actor_ref(
         crate::read_model::Credential::Session(secret) => {
             ensure!(
                 !secret.expose().is_empty() && secret.expose().len() <= 4096,
-                "Authentication required"
+                AuthFailure::SessionRequired
             );
             let user = actor(tx, &crypto::digest(secret.expose()))?;
             let tenant = policy::tenant_for_authenticated_actor(tx, &user, policy)?;
@@ -121,7 +114,7 @@ pub(crate) fn reconciliation_actor_ref(
                 let actor = format!("tenant:{}", principal.tenant_id);
                 Ok((principal.tenant_id, actor))
             }
-            _ => bail!("Authentication required"),
+            _ => Err(AuthFailure::SessionRequired.into()),
         },
     }
 }
