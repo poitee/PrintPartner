@@ -94,5 +94,5 @@ Confirm the part has a specific Spoolman spool, the printer job is linked to the
 ## Related documentation
 
 - [Printer setup](PRINTER_SETUP.md)
-- [Architecture](../ARCHITECTURE.md)
+- [Architecture](../architecture.md)
 - [Operations](../../OPERATIONS.md)

@@ -76,7 +76,7 @@ Marked **planned**. Taken from the reference branch’s (`desktop/source-sync-lo
 
 | Crate | Planned allowed `pp-*` deps |
 | --- | --- |
-| `pp-storage` | `pp-contracts` **(planned dependency on the existing crate)** |
+| `pp-storage` | `pp-domain`, `pp-contracts` *(already current, only through `desktop_rebuild`)* |
 | `pp-api` | `pp-storage` *(current)*, plus `pp-contracts` **(planned addition)** |
 | `pp-core` | `pp-gateway`, `pp-compat`, `pp-storage`, `pp-source` *(current, gated)*, plus `pp-api` **(planned addition)** |
 | `pp-drivers` | `pp-net`, `pp-api-types` *(current; more printer/provider code moves in later)* |
@@ -91,10 +91,10 @@ Marked **planned**. Taken from the reference branch’s (`desktop/source-sync-lo
 | `pp-net` | *(none)* *(unchanged)* |
 | `pp-source` | *(none)* *(unchanged leaf; consumers gain edges to it)* |
 
-Planned additions in graph form:
+Planned additions and already current storage edges in graph form:
 
 ```text
-pp-storage → pp-contracts                    (planned)
+pp-storage → pp-domain, pp-contracts         (already current, desktop_rebuild only)
 pp-api → pp-contracts                        (planned addition)
 pp-core → pp-api                             (planned addition)
 pp-services → pp-domain                      (planned)
