@@ -110,6 +110,9 @@ jobs:
       - name: Prove built backend repeated EOF cleanup
         run: |
           python3 rust/tests/built_backend_lifecycle.py --node /usr/bin/node --negative-control --evidence "$PP_EVIDENCE/built-backend-lifecycle" 2>&1 | tee "$PP_EVIDENCE/built-backend-lifecycle.log"
+      - name: Prove built backend listens only on its private socket
+        run: |
+          python3 rust/tests/built_backend_listeners.py --node /usr/bin/node --evidence "$PP_EVIDENCE/built-backend-listeners" 2>&1 | tee "$PP_EVIDENCE/built-backend-listeners.log"
       - name: Prove built backend interrupted upload never resends
         run: |
           python3 rust/tests/built_backend_upload.py --node /usr/bin/node --negative-control --evidence "$PP_EVIDENCE/built-backend-upload" 2>&1 | tee "$PP_EVIDENCE/built-backend-upload.log"

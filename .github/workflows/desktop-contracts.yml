@@ -66,6 +66,10 @@ jobs:
         run: npm ci && npm rebuild better-sqlite3
       - name: Build authority packages
         run: npm run build -w @print-partner/contracts && npm run build -w @print-partner/domain
+      - name: Verify required-unit Node fixtures
+        run: |
+          node ../rust/crates/pp-storage/tests/fixtures/required-units/messages-node.mjs --check
+          TMPDIR="$RUNNER_TEMP" node --conditions=development --import tsx ../rust/crates/pp-storage/tests/fixtures/required-units/gaps-node.mjs --check
       - name: Verify golden Node HTTP route inventory
         run: |
           npm run build -w @print-partner/server

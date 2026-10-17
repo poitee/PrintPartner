@@ -24,7 +24,11 @@ impl LiveFormatId {
             Self::SqliteSchema => "sqlite-schema",
             Self::SourceRevisionWorkspace => "source-revision-workspace",
             Self::SourceCovers => "source-covers",
+            // Names the format, does not write it.
+            // ast-grep-ignore: no-writer-family-literal
             Self::KitCatalog => "kit-catalog",
+            // Names the format, does not write it.
+            // ast-grep-ignore: no-writer-family-literal
             Self::PathHints => "path-hints",
             Self::CommunityManifests => "community-manifests",
         }
@@ -121,8 +125,12 @@ pub(super) struct LiveFormats {
     source_revision_workspace: LiveFormat,
     #[serde(rename = "source-covers")]
     source_covers: LiveFormat,
+    // Names the format, does not write it.
+    // ast-grep-ignore: no-writer-family-literal
     #[serde(rename = "kit-catalog")]
     kit_catalog: LiveFormat,
+    // Names the format, does not write it.
+    // ast-grep-ignore: no-writer-family-literal
     #[serde(rename = "path-hints")]
     path_hints: LiveFormat,
     #[serde(rename = "community-manifests")]
