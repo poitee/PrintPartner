@@ -432,3 +432,33 @@ fn capture_processes_global_naming_once_across_layers() {
     assert_eq!(json!(captured.inputs), case["result"]["inputs"]);
     assert_eq!(GLOBAL_NAMING_PROJECTIONS.with(|count| count.get()), 1);
 }
+
+#[test]
+fn capture_charges_layer_override_projection_work() {
+    let case = cases()
+        .into_iter()
+        .find(|case| case["name"] == "naming-layer-overrides")
+        .unwrap();
+    let (_root, mut connection) = database(&case);
+    let reads = Reads {
+        case: case.clone(),
+        hashes: Default::default(),
+    };
+    let cancelled = AtomicBool::new(false);
+    let tx = connection.transaction().unwrap();
+    let mut budget = PreparationBudget::new(
+        &cancelled,
+        PreparationLimits {
+            comparison_work: 100,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let error = capture(&tx, "default", 1, &reads, &mut budget)
+        .err()
+        .unwrap();
+    assert_eq!(error.to_string(), "LimitExceeded(ComparisonWork)");
+    let mut budget = PreparationBudget::new(&cancelled, PreparationLimits::default()).unwrap();
+    let captured = capture(&tx, "default", 1, &reads, &mut budget).unwrap();
+    assert_eq!(json!(captured.inputs), case["result"]["inputs"]);
+}

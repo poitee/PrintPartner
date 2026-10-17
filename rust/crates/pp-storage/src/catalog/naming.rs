@@ -198,18 +198,24 @@ fn validate_regex_structure(pattern: &str) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn uses_defaults(m: &Map<String, Value>) -> bool {
+pub(crate) fn uses_defaults(m: &Map<String, Value>) -> bool {
     m.get("naming")
         .and_then(Value::as_object)
         .and_then(|n| n.get("use_defaults"))
         .and_then(Value::as_bool)
         .unwrap_or(true)
 }
-pub(super) fn global(tx: &Transaction<'_>, tenant: &str) -> Result<NamingProfile> {
-    Ok(get_setting(tx, tenant, "stl_naming_defaults")?
-        .and_then(|s| serde_json::from_str::<NamingProfile>(&s).ok())
+pub(crate) fn parse_global(raw: Option<String>) -> NamingProfile {
+    raw.and_then(|s| serde_json::from_str::<NamingProfile>(&s).ok())
         .and_then(|p| p.validate().ok())
-        .unwrap_or_default())
+        .unwrap_or_default()
+}
+pub(super) fn global(tx: &Transaction<'_>, tenant: &str) -> Result<NamingProfile> {
+    Ok(parse_global(get_setting(
+        tx,
+        tenant,
+        "stl_naming_defaults",
+    )?))
 }
 fn response(profile: NamingProfile, use_defaults: bool, override_value: Value) -> Result<Value> {
     #[derive(Serialize)]
@@ -265,7 +271,7 @@ fn require_source(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<SourceS
     #[cfg(not(feature = "desktop_rebuild"))]
     require(tx, tenant, id)
 }
-fn project(m: Map<String, Value>, global: NamingProfile) -> Result<Value> {
+pub(crate) fn project(m: Map<String, Value>, global: NamingProfile) -> Result<Value> {
     let Some(naming) = m.get("naming") else {
         return response(global, true, json!({}));
     };

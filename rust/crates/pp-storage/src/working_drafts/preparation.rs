@@ -7,8 +7,11 @@ use crate::required_units::storage::{normalize_parts, num, one, part_rows, rows,
 use crate::{catalog::naming::NamingProfile, required_units};
 use anyhow::{Result, anyhow, ensure};
 use rusqlite::{Connection, Transaction};
-use serde_json::{Value, json};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use serde_json::{Map, Value, json};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    sync::Arc,
+};
 
 #[cfg(test)]
 thread_local! {
@@ -23,7 +26,7 @@ pub(super) struct Capture {
 struct Layer {
     source_id: i64,
     source_layer: String,
-    naming: NamingProfile,
+    naming: Arc<NamingProfile>,
     rules: Option<Vec<String>>,
     root: Box<dyn StlRootRead>,
 }
@@ -145,6 +148,46 @@ fn imported(
     }
     Ok(false)
 }
+#[derive(Clone)]
+struct NamingSnapshot {
+    profile: Arc<NamingProfile>,
+    digest: Value,
+    bytes: usize,
+}
+fn project_naming(
+    metadata: Map<String, Value>,
+    global: NamingProfile,
+    budget: &mut PreparationBudget<'_>,
+) -> Result<NamingSnapshot> {
+    #[cfg(test)]
+    if crate::catalog::naming::uses_defaults(&metadata) {
+        GLOBAL_NAMING_PROJECTIONS.with(|count| count.set(count.get() + 1));
+    }
+    let mut projected = crate::catalog::naming::project(metadata, global)
+        .map_err(|error| error.context(crate::catalog::CatalogFailure::InvalidStoredNaming))?;
+    let bytes = serde_json::to_vec(&projected["effective"])?;
+    budget.expansion(bytes.len())?;
+    Ok(NamingSnapshot {
+        profile: Arc::new(serde_json::from_slice(&bytes)?),
+        digest: projected["effective_digest"].take(),
+        bytes: bytes.len(),
+    })
+}
+fn global_naming(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    budget: &mut PreparationBudget<'_>,
+) -> Result<NamingSnapshot> {
+    let raw = setting(tx, tenant, "stl_naming_defaults")?;
+    if let Some(raw) = &raw {
+        budget.document(raw.len(), raw.len())?;
+    }
+    project_naming(
+        Map::new(),
+        crate::catalog::naming::parse_global(raw),
+        budget,
+    )
+}
 pub(super) fn capture(
     tx: &Transaction<'_>,
     tenant: &str,
@@ -158,9 +201,7 @@ pub(super) fn capture(
         "SELECT * FROM profile_layers WHERE tenant_id=? AND profile_id=? ORDER BY layer_order",
         &[&tenant, &profile],
     )?;
-    if let Some(raw) = setting(tx, tenant, "stl_naming_defaults")? {
-        budget.document(raw.len(), raw.len())?;
-    }
+    let defaults = global_naming(tx, tenant, budget)?;
     let mut seen = HashSet::new();
     let mut layers = Vec::new();
     let mut inputs = Vec::new();
@@ -180,13 +221,25 @@ pub(super) fn capture(
             &[&tenant, &id],
         )?
         .ok_or_else(|| anyhow!("Plan Source not found"))?;
-        if let Some(raw) = source["metadataJson"].as_str() {
+        let raw_metadata = source["metadataJson"].as_str();
+        if let Some(raw) = raw_metadata {
             budget.document(raw.len(), raw.len())?;
         }
-        #[cfg(test)]
-        GLOBAL_NAMING_PROJECTIONS.with(|count| count.set(count.get() + 1));
-        let naming = crate::catalog::naming::get(tx, tenant, id)?;
-        let effective: NamingProfile = serde_json::from_value(naming["effective"].clone())?;
+        let metadata = raw_metadata
+            .and_then(|raw| serde_json::from_str::<Map<String, Value>>(raw).ok())
+            .unwrap_or_default();
+        let naming = if crate::catalog::naming::uses_defaults(&metadata) {
+            defaults.clone()
+        } else {
+            budget.comparison(
+                defaults
+                    .bytes
+                    .saturating_add(raw_metadata.map(str::len).unwrap_or_default())
+                    .saturating_mul(8),
+            )?;
+            project_naming(metadata, (*defaults.profile).clone(), budget)?
+        };
+        let effective = naming.profile;
         for rule in &effective.folder_rules {
             budget.rule()?;
             budget.comparison(rule.path_contains.len())?;
@@ -235,7 +288,7 @@ pub(super) fn capture(
             budget,
         )?;
         let rules = import_rules(&source["importedPaths"], budget)?;
-        let input = json!({"sourceId":id,"sourceLayer":layer,"layerOrder":attachment["layerOrder"],"trackingKind":if revision.is_some(){"revision"}else{"untracked"},"sourceRevisionId":revision.as_ref().map(|r|r["id"].clone()),"manifestDigest":revision.as_ref().map(|r|r["manifestDigest"].clone()),"effectiveNamingDigest":naming["effective_digest"]});
+        let input = json!({"sourceId":id,"sourceLayer":layer,"layerOrder":attachment["layerOrder"],"trackingKind":if revision.is_some(){"revision"}else{"untracked"},"sourceRevisionId":revision.as_ref().map(|r|r["id"].clone()),"manifestDigest":revision.as_ref().map(|r|r["manifestDigest"].clone()),"effectiveNamingDigest":naming.digest});
         let wire = json!({"source_id":id,"source_name":source["name"],"source_layer":layer,"layer_order":attachment["layerOrder"],"tracking_kind":input["trackingKind"],"source_revision_id":input["sourceRevisionId"],"manifest_digest":input["manifestDigest"],"effective_naming_digest":input["effectiveNamingDigest"]});
         fingerprint.push(json!({"layer_id":attachment["id"],"layer_order":attachment["layerOrder"],"layer_type":attachment["layerType"],"project_id":id,"source_name":source["name"],"local_path":root.logical_resolved_path(),"import_rules":rules,"input":wire}));
         inputs.push(input);
