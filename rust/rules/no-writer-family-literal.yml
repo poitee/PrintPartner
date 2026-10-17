@@ -1,0 +1,18 @@
+id: no-writer-family-literal
+language: Rust
+severity: warning
+message: 'GRE-402: review this no-writer family literal; update the manifest rust_writes declaration if Rust starts writing this family.'
+files:
+  - crates/**/*.rs
+ignores:
+  - crates/*/tests/**
+  # Out-of-line unit tests follow the src/**/tests.rs or src/**/tests/** convention.
+  - crates/*/src/**/tests.rs
+  - crates/*/src/**/tests/**
+# Inline #[cfg(test)] code naming a family needs a reasoned per-line suppression.
+rule:
+  all:
+    - any:
+        - kind: string_literal
+        - kind: raw_string_literal
+    - regex: '(?i)(^|["/\\])(covers|kit-catalog|path-hints|manifests)([./\\"#]|$)'
