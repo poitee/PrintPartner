@@ -32,7 +32,7 @@ Storage admission and preflight I/O failures identify the filesystem operation a
 
 The shutdown receipt's legacy `marker_removed` field now reports removal of the `.desktop-lease` compatibility file. `CoreRuntime::runtime_dir()` exposes the private socket directory for lifecycle inspection without an owner marker. The existing launcher test receipt also carries `child_pid` and `runtime_dir`. These fields replace lifecycle fixtures' marker reads and are emitted only with `--test-credential-file`.
 
-The compatibility backend serves only on that private socket. `rust/tests/built_backend_listeners.py` runs the built backend in desktop mode on Linux and macOS CI. It checks that the socket has mode `0600` inside a `0700` directory and that the backend process tree holds no TCP listener or UDP socket.
+The compatibility backend serves only on that private socket. `rust/tests/built_backend_listeners.py` runs the built backend in desktop mode on Linux and macOS CI. It checks that the socket has mode `0600` inside a `0700` directory. It records the TCP listeners and UDP sockets the user owns before launch, then polls about every 100 ms from launch through a 4-second window after readiness and through shutdown. Any new one fails the proof, whichever process opened it. Three negative controls must fail the same check: a child listener, a detached grandchild listener and a backend listener opened 1 second after readiness. Every process that inherited the run's environment token is killed after shutdown.
 
 ## Ownership today
 
