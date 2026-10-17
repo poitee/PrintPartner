@@ -16,6 +16,7 @@ use std::{
 #[cfg(test)]
 thread_local! {
     pub(super) static GLOBAL_NAMING_PROJECTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(super) static SOURCE_LAYER_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 pub(super) struct Capture {
@@ -758,10 +759,11 @@ pub(super) fn prepare(
         let quantity_override = old
             .map(|v| v["quantityOverride"].clone())
             .unwrap_or(Value::Null);
-        let tracked = captured
-            .inputs
-            .iter()
-            .any(|v| v["sourceLayer"] == p.layer && v["trackingKind"] == "revision");
+        let tracked = captured.inputs.iter().any(|v| {
+            #[cfg(test)]
+            SOURCE_LAYER_VISITS.with(|count| count.set(count.get() + 1));
+            v["sourceLayer"] == p.layer && v["trackingKind"] == "revision"
+        });
         let artifact = if tracked {
             Some(
                 inventories[p.inventory]

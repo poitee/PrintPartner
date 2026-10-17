@@ -76,13 +76,19 @@ impl DraftReads for Reads {
         b: &mut PreparationBudget<'_>,
     ) -> ReadResult<Box<dyn StlRootRead>> {
         b.check()?;
-        let logical = request.stored_path().map(|p| {
-            if request.purpose() == StlPurpose::Revision {
-                format!("/logical/{p}")
-            } else {
-                p.into()
-            }
-        });
+        let logical = if request.purpose() == StlPurpose::CheckoutOptions
+            && self.case["unresolvableCheckout"] == true
+        {
+            None
+        } else {
+            request.stored_path().map(|p| {
+                if request.purpose() == StlPurpose::Revision {
+                    format!("/logical/{p}")
+                } else {
+                    p.into()
+                }
+            })
+        };
         let files = self.case["files"]
             .as_array()
             .unwrap()
@@ -132,6 +138,9 @@ impl StlRootRead for Root {
     }
     fn scan_stls(&mut self, b: &mut PreparationBudget<'_>) -> ReadResult<Box<dyn StlInventory>> {
         b.check()?;
+        if self.logical.is_none() {
+            return Err(ReadFailure::Unavailable);
+        }
         let mut entries = Vec::new();
         for (i, file) in self.files.iter().enumerate() {
             let path = file["path"].as_str().unwrap();
@@ -461,4 +470,35 @@ fn capture_charges_layer_override_projection_work() {
     let mut budget = PreparationBudget::new(&cancelled, PreparationLimits::default()).unwrap();
     let captured = capture(&tx, "default", 1, &reads, &mut budget).unwrap();
     assert_eq!(json!(captured.inputs), case["result"]["inputs"]);
+}
+
+#[test]
+fn part_tracking_indexes_layers_once() {
+    let case = cases()
+        .into_iter()
+        .find(|case| case["name"] == "layer-winners-and-conflicts")
+        .unwrap();
+    let (root, mut connection) = database(&case);
+    let reads = Reads {
+        case: case.clone(),
+        hashes: Default::default(),
+    };
+    let cancelled = AtomicBool::new(false);
+    let mut budget = PreparationBudget::new(&cancelled, PreparationLimits::default()).unwrap();
+    SOURCE_LAYER_VISITS.with(|count| count.set(0));
+    let prepared = prepare(
+        &mut connection,
+        "default",
+        1,
+        case["base"].clone(),
+        PreparationContext {
+            options: &options(&case),
+            repos: root.path(),
+        },
+        &reads,
+        &mut budget,
+    )
+    .unwrap();
+    assert_eq!(projection(prepared), case["result"]);
+    assert_eq!(SOURCE_LAYER_VISITS.with(|count| count.get()), 2);
 }
