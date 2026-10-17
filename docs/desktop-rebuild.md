@@ -312,7 +312,8 @@ beside it for compile-time includes, and builds there with its own
 
 GRE-607 adds the remaining manifest helpers and the accepted-base reuse check
 behind `desktop_rebuild`. `optional_document` ignores missing, skipped, and
-invalid optional manifests. `kit` projects stored kit selections through the
+invalid optional manifests, but it checks cancellation first, and after an
+invalid parse, so a cancelled attempt never reads as an absent manifest. `kit` projects stored kit selections through the
 existing `KitManifest` parser. Both propagate preparation budget and cancellation
 failures. `apply` preserves Node's document order, project filtering, selection
 defaults, explicit group membership, group bounds, and exclusion precedence.
