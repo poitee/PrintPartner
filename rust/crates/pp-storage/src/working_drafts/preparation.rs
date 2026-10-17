@@ -10,6 +10,11 @@ use rusqlite::{Connection, Transaction};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+#[cfg(test)]
+thread_local! {
+    pub(super) static GLOBAL_NAMING_PROJECTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub(super) struct Capture {
     pub fingerprint: String,
     pub inputs: Vec<Value>,
@@ -178,6 +183,8 @@ pub(super) fn capture(
         if let Some(raw) = source["metadataJson"].as_str() {
             budget.document(raw.len(), raw.len())?;
         }
+        #[cfg(test)]
+        GLOBAL_NAMING_PROJECTIONS.with(|count| count.set(count.get() + 1));
         let naming = crate::catalog::naming::get(tx, tenant, id)?;
         let effective: NamingProfile = serde_json::from_value(naming["effective"].clone())?;
         for rule in &effective.folder_rules {

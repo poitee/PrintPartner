@@ -28,6 +28,7 @@ const cases = [
   { name: 'naming-noncapturing-before-capture', files: ["part_x2.stl", "x/part.stl"].map(path => ({ source: 1, path, content: path })), sql: setting('stl_naming_defaults', { ...naming, quantity: { ...naming.quantity, regex: "(?:_x)([0-9]+)\\.stl$" } }) },
   { name: 'naming-bom-trim', files: ["part_x2.stl", "x/part.stl"].map(path => ({ source: 1, path, content: path })), sql: setting('stl_naming_defaults', { ...naming, quantity: { ...naming.quantity, regex: "\ufeff_x([0-9]+)\\.stl$\ufeff" } }) },
   { name: 'naming-uppercase-extension-at-strip-end', files: ['partX2.STL', 'x/part.stl'].map(path => ({ source: 1, path, content: path })), sql: setting('stl_naming_defaults', { ...naming, quantity: { ...naming.quantity, regex: 'X([0-9]+)\\.STL' } }) },
+  { name: 'naming-layer-overrides', files: [...files, { source: 2, path: 'addon.stl', content: 'addon' }], second: true, sql: `${setting('stl_naming_defaults', naming)}; UPDATE projects SET metadata_json='{"naming":{"use_defaults":false,"override":{"quantity":{"default":4}}}}' WHERE id=2` },
   { name: 'tracked', files },
   { name: 'untracked', files, sql: 'UPDATE projects SET current_source_revision_id=NULL' },
   { name: 'prior-decisions', files, base: { baseRevisionId: 1, basePlanVersion: 1 }, sql: "UPDATE plan_revision_parts SET included=0,quantity_override=7,quantity_effective=7,role_override='clear',notes='keep',filament_custom_hex='#abcdef' WHERE part_key='included.stl'" },

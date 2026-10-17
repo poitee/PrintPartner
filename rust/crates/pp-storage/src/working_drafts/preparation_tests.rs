@@ -412,3 +412,23 @@ fn naming_comparisons_are_cumulative_and_cancellable() {
         );
     }
 }
+
+#[test]
+fn capture_processes_global_naming_once_across_layers() {
+    let case = cases()
+        .into_iter()
+        .find(|case| case["name"] == "layer-winners-and-conflicts")
+        .unwrap();
+    let (_root, mut connection) = database(&case);
+    let reads = Reads {
+        case: case.clone(),
+        hashes: Default::default(),
+    };
+    let cancelled = AtomicBool::new(false);
+    let mut budget = PreparationBudget::new(&cancelled, PreparationLimits::default()).unwrap();
+    let tx = connection.transaction().unwrap();
+    GLOBAL_NAMING_PROJECTIONS.with(|count| count.set(0));
+    let captured = capture(&tx, "default", 1, &reads, &mut budget).unwrap();
+    assert_eq!(json!(captured.inputs), case["result"]["inputs"]);
+    assert_eq!(GLOBAL_NAMING_PROJECTIONS.with(|count| count.get()), 1);
+}
