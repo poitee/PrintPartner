@@ -16,6 +16,11 @@ updates:
       - dependency-name: "*"
         update-types:
           - version-update:semver-major
+      # knip is exact-pinned. 6.41.0 reports 55 unused exported types, one
+      # unused export and two unlisted binaries that 6.5.0 accepts, so
+      # `npm run lint:dead` fails. Upgrade it in its own PR with that cleanup
+      # (GRE-664).
+      - dependency-name: "knip"
 
   - package-ecosystem: pip
     directory: /manifests
@@ -71,3 +76,8 @@ updates:
         update-types:
           - minor
           - patch
+    # Direct crates are pinned with "=", so a lockfile-only major bump cannot build.
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major

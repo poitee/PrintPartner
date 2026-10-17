@@ -1,9 +1,9 @@
 #![cfg(test)]
 
 use super::observation::{
-    BuilderGroup, BuilderGroups, BuilderVariant, PreparationBudget, PreparationLimits, ReadFailure,
-    Resource, builder_path_matches, infer_builder_siblings, merge_builder_groups,
-    parse_builder_hints, parse_builder_manifest,
+    BuilderGlob, BuilderGroup, BuilderGroups, BuilderVariant, PreparationBudget, PreparationLimits,
+    ReadFailure, Resource, infer_builder_siblings, merge_builder_groups, parse_builder_hints,
+    parse_builder_manifest,
 };
 use crate::manifest_text::ManifestText;
 use serde_json::{Value, json};
@@ -280,7 +280,7 @@ fn builder_groups_merge_node_precedence_duplicates_and_property_order() {
 }
 
 #[test]
-fn builder_path_matches_node_globs_and_basename_fallback() {
+fn builder_globs_match_node_globs_and_basename_fallback() {
     for (pattern, path, expected) in [
         ("  PART?.STL ", "Folder\\Part1.stl", true),
         ("folder/*.stl", "folder/deep/part.stl", true),
@@ -295,7 +295,7 @@ fn builder_path_matches_node_globs_and_basename_fallback() {
         ("a/b.stl", "deep/a/b.stl", false),
     ] {
         assert_eq!(
-            builder_path_matches(&ManifestText::from(pattern.to_owned()), path),
+            BuilderGlob::new(&ManifestText::from(pattern.to_owned())).matches(path),
             expected,
             "{pattern:?}, {path:?}"
         );

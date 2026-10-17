@@ -16,29 +16,29 @@ Transitive packages are recorded in `web/package-lock.json` and remain subject t
 | @fastify/cors | 11.3.1 | MIT | https://github.com/fastify/fastify-cors#readme |
 | @fastify/multipart | 10.1.3 | MIT | https://github.com/fastify/fastify-multipart#readme |
 | @fastify/rate-limit | 11.2.1 | MIT | https://github.com/fastify/fastify-rate-limit#readme |
-| @fastify/static | 10.1.5 | MIT | https://github.com/fastify/fastify-static |
-| @fastify/swagger | 9.9.1 | MIT | https://github.com/fastify/fastify-swagger#readme |
-| @fastify/swagger-ui | 6.1.1 | MIT | https://github.com/fastify/fastify-swagger-ui#readme |
+| @fastify/static | 10.1.6 | MIT | https://github.com/fastify/fastify-static |
+| @fastify/swagger | 9.9.2 | MIT | https://github.com/fastify/fastify-swagger#readme |
+| @fastify/swagger-ui | 6.1.2 | MIT | https://github.com/fastify/fastify-swagger-ui#readme |
 | @fastify/websocket | 11.3.4 | MIT | https://github.com/fastify/fastify-websocket#readme |
 | @modelcontextprotocol/sdk | 1.32.1 | MIT | https://modelcontextprotocol.io |
 | @octokit/rest | 22.0.1 | MIT | https://github.com/octokit/rest.js |
-| @radix-ui/react-alert-dialog | 1.1.24 | MIT | https://radix-ui.com/primitives |
-| @radix-ui/react-checkbox | 1.3.12 | MIT | https://radix-ui.com/primitives |
-| @radix-ui/react-dialog | 1.2.0 | MIT | https://radix-ui.com/primitives |
-| @radix-ui/react-dropdown-menu | 2.1.25 | MIT | https://radix-ui.com/primitives |
-| @radix-ui/react-label | 2.1.16 | MIT | https://radix-ui.com/primitives |
-| @radix-ui/react-popover | 1.2.0 | MIT | https://radix-ui.com/primitives |
-| @radix-ui/react-progress | 1.1.17 | MIT | https://radix-ui.com/primitives |
-| @radix-ui/react-radio-group | 1.4.8 | MIT | https://radix-ui.com/primitives |
-| @radix-ui/react-select | 2.3.8 | MIT | https://radix-ui.com/primitives |
-| @radix-ui/react-separator | 1.1.16 | MIT | https://radix-ui.com/primitives |
-| @radix-ui/react-slot | 1.4.0 | MIT | https://radix-ui.com/primitives |
-| @radix-ui/react-switch | 1.3.8 | MIT | https://radix-ui.com/primitives |
-| @radix-ui/react-tabs | 1.1.22 | MIT | https://radix-ui.com/primitives |
-| @radix-ui/react-tooltip | 1.3.0 | MIT | https://radix-ui.com/primitives |
+| @radix-ui/react-alert-dialog | 1.2.1 | MIT | https://radix-ui.com/primitives |
+| @radix-ui/react-checkbox | 1.4.1 | MIT | https://radix-ui.com/primitives |
+| @radix-ui/react-dialog | 1.3.1 | MIT | https://radix-ui.com/primitives |
+| @radix-ui/react-dropdown-menu | 2.2.1 | MIT | https://radix-ui.com/primitives |
+| @radix-ui/react-label | 2.1.17 | MIT | https://radix-ui.com/primitives |
+| @radix-ui/react-popover | 1.3.1 | MIT | https://radix-ui.com/primitives |
+| @radix-ui/react-progress | 1.2.1 | MIT | https://radix-ui.com/primitives |
+| @radix-ui/react-radio-group | 1.5.1 | MIT | https://radix-ui.com/primitives |
+| @radix-ui/react-select | 2.4.1 | MIT | https://radix-ui.com/primitives |
+| @radix-ui/react-separator | 1.2.0 | MIT | https://radix-ui.com/primitives |
+| @radix-ui/react-slot | 1.5.0 | MIT | https://radix-ui.com/primitives |
+| @radix-ui/react-switch | 1.4.1 | MIT | https://radix-ui.com/primitives |
+| @radix-ui/react-tabs | 1.2.1 | MIT | https://radix-ui.com/primitives |
+| @radix-ui/react-tooltip | 1.4.1 | MIT | https://radix-ui.com/primitives |
 | @sentry/react | 10.76.2 | MIT | https://github.com/getsentry/sentry-javascript/tree/master/packages/react |
 | @tailwindcss/vite | 4.3.3 | MIT | https://tailwindcss.com |
-| @tanstack/react-query | 5.104.1 | MIT | https://tanstack.com/query |
+| @tanstack/react-query | 5.104.2 | MIT | https://tanstack.com/query |
 | adm-zip | 0.6.1 | MIT | https://github.com/cthackers/adm-zip |
 | better-sqlite3 | 13.0.3 | MIT | https://github.com/WiseLibs/better-sqlite3 |
 | chokidar | 4.0.3 | MIT | https://github.com/paulmillr/chokidar |
@@ -47,13 +47,13 @@ Transitive packages are recorded in `web/package-lock.json` and remain subject t
 | cmdk | 1.1.1 | MIT | https://github.com/pacocoursey/cmdk#readme |
 | dockerode | 5.0.1 | Apache-2.0 | https://github.com/apocas/dockerode |
 | drizzle-orm | 0.45.4 | Apache-2.0 | https://orm.drizzle.team |
-| fastify | 5.12.5 | MIT | https://fastify.dev/ |
+| fastify | 5.12.7 | MIT | https://fastify.dev/ |
 | fflate | 0.8.3 | MIT | https://101arrowz.github.io/fflate |
 | js-yaml | 5.4.3 | MIT | https://github.com/nodeca/js-yaml |
 | jszip | 3.10.2 | (MIT OR GPL-3.0-or-later) | https://github.com/Stuk/jszip |
-| lucide-react | 1.54.0 | ISC | https://lucide.dev |
+| lucide-react | 1.56.0 | ISC | https://lucide.dev |
 | mqtt | 5.16.0 | MIT | https://github.com/mqttjs/MQTT.js |
-| nodemailer | 10.0.16 | MIT-0 | https://nodemailer.com/ |
+| nodemailer | 10.1.0 | MIT-0 | https://nodemailer.com/ |
 | pdf-parse | 2.4.5 | Apache-2.0 | https://mehmet-kozan.github.io/pdf-parse/ |
 | pg | 8.23.1 | MIT | https://github.com/brianc/node-postgres |
 | pino | 10.4.0 | MIT | https://getpino.io |
@@ -66,7 +66,7 @@ Transitive packages are recorded in `web/package-lock.json` and remain subject t
 | three | 0.186.1 | MIT | https://threejs.org/ |
 | undici | 7.30.0 | MIT | https://undici.nodejs.org |
 | yazl | 3.3.1 | MIT | https://github.com/thejoshwolfe/yazl |
-| zod | 4.6.5 | MIT | https://zod.dev |
+| zod | 4.6.7 | MIT | https://zod.dev |
 
 Versions reflect the installed dependency tree used to generate this file.
 

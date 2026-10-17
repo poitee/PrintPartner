@@ -1,6 +1,5 @@
 use pp_storage::{
-    Limits, Setting, SettingCommand, SettingSnapshot, WriterOwner,
-    lease::{StorageLease, record_child},
+    Limits, Setting, SettingCommand, SettingSnapshot, WriterOwner, lease::StorageLease,
 };
 use std::os::unix::fs::DirBuilderExt;
 use std::{
@@ -44,57 +43,6 @@ fn temp_dir(name: &str) -> PathBuf {
         .create(&path)
         .unwrap();
     path
-}
-
-fn json_string(bytes: &[u8], field: &str) -> String {
-    let text = std::str::from_utf8(bytes).unwrap();
-    let needle = format!("\"{field}\":\"");
-    let start = text
-        .find(&needle)
-        .unwrap_or_else(|| panic!("missing {field}"))
-        + needle.len();
-    let end = text[start..].find('"').unwrap();
-    text[start..start + end].to_string()
-}
-
-fn production_node() -> Option<PathBuf> {
-    let mut candidates = Vec::new();
-    if let Ok(path) = std::env::var("PP_PRODUCTION_NODE") {
-        candidates.push(PathBuf::from(path));
-    }
-    candidates.push(PathBuf::from(
-        "/opt/agent-fleet/artifacts/.local/share/mise/installs/node/24.21.0/bin/node",
-    ));
-    for path in candidates {
-        if !path.is_file() {
-            continue;
-        }
-        let mut file = std::fs::File::open(&path).unwrap();
-        let mut magic = [0u8; 4];
-        std::io::Read::read_exact(&mut file, &mut magic).unwrap();
-        assert_eq!(magic, *b"\x7fELF", "{}", path.display());
-        let output = child_process::command(&path)
-            .arg("-p")
-            .arg("process.version + ' ' + process.versions.modules + ' ' + process.execPath")
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let text = String::from_utf8(output.stdout).unwrap();
-        let mut parts = text.split_whitespace();
-        assert_eq!(parts.next().unwrap(), "v24.21.0");
-        assert_eq!(parts.next().unwrap(), "137");
-        let exec_path = PathBuf::from(parts.next().unwrap());
-        assert_eq!(
-            exec_path.canonicalize().unwrap(),
-            path.canonicalize().unwrap()
-        );
-        return Some(path);
-    }
-    None
 }
 
 fn read_event_line<R: BufRead + Send + 'static>(mut stdout: R) -> (String, R) {
@@ -172,121 +120,11 @@ fn ticket_t_7_writer_reopens_after_clean_process_exit() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-#[test]
-fn ticket_t_7_writer_survives_kill_and_live_node_child() {
-    let dir = temp_dir("kill");
-    let bin = env!("CARGO_BIN_EXE_storage-fixture");
-    let mut child = child_process::command(bin)
-        .args(["hold", dir.to_str().unwrap(), "2026-10-02T00:00:00.000Z"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .stdin(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let stdout = child.stdout.take().unwrap();
-    let mut owner_process = StopProcess(Some(child));
-    let (ready, stdout) = read_ready(BufReader::new(stdout));
-    assert!(ready.starts_with('{'), "{ready}");
-    let live = match WriterOwner::open(&dir, Limits::default()) {
-        Ok(_) => panic!("second runtime opened the held directory"),
-        Err(error) => error.to_string(),
-    };
-    assert!(live.contains("Data directory already owned"), "{live}");
-    let marker_before = std::fs::read(dir.join(".desktop-owner.json")).unwrap();
-    let runtime = PathBuf::from(json_string(&marker_before, "runtime_dir"));
-    let node = production_node();
-    let mut node_process = None;
-    if let Some(node) = node {
-        let node_child = child_process::command(&node)
-            .arg("-e")
-            .arg("setInterval(() => {}, 1000000)")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
-        let pid = node_child.id();
-        node_process = Some(StopProcess(Some(node_child)));
-        let denied = record_child(&dir, pid).unwrap_err().to_string();
-        assert!(denied.contains("belongs to another process"), "{denied}");
-        assert_eq!(
-            std::fs::read(dir.join(".desktop-owner.json")).unwrap(),
-            marker_before
-        );
-        writeln!(
-            owner_process.0.as_mut().unwrap().stdin.as_mut().unwrap(),
-            "{}",
-            serde_json::json!({"command": "record-child", "pid": pid})
-        )
-        .unwrap();
-        let (recorded, _) = read_ready(stdout);
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&recorded).unwrap(),
-            serde_json::json!({"child_pid": pid})
-        );
-    }
-    owner_process.0.as_mut().unwrap().kill().unwrap();
-    let killed = owner_process.0.as_mut().unwrap().wait().unwrap();
-    assert!(!killed.success(), "{killed}");
-    owner_process.0.take();
-    if let Some(node) = node_process.as_mut() {
-        let marker_with_child = std::fs::read(dir.join(".desktop-owner.json")).unwrap();
-        let denied = match WriterOwner::open(&dir, Limits::default()) {
-            Ok((owner, _)) => {
-                drop(owner);
-                panic!("opened storage while the recorded node child was alive");
-            }
-            Err(error) => error.to_string(),
-        };
-        assert!(denied.contains("Data directory already owned"), "{denied}");
-        assert_eq!(
-            std::fs::read(dir.join(".desktop-owner.json")).unwrap(),
-            marker_with_child
-        );
-        node.0.as_mut().unwrap().kill().unwrap();
-        node.0.as_mut().unwrap().wait().unwrap();
-        node.0.take();
-    }
-    assert_eq!(
-        snapshot(&dir, "tenant-a", "discord_notify_on_update"),
-        SettingSnapshot::Stored { value: "1".into() }
-    );
-    assert_eq!(
-        snapshot(&dir, "tenant-a", "discord_notify_on_sync"),
-        SettingSnapshot::Stored { value: "1".into() }
-    );
-    let (owner, _) = WriterOwner::open(&dir, Limits::default()).unwrap();
-    let client = owner.client();
-    client
-        .submit(
-            SettingCommand::Set(Setting {
-                tenant: "tenant-a".into(),
-                key: "after-restart".into(),
-                value: "written".into(),
-            }),
-            &std::sync::atomic::AtomicBool::new(false),
-            Duration::from_secs(5),
-        )
-        .unwrap()
-        .recv()
-        .unwrap()
-        .unwrap();
-    owner.shutdown().unwrap();
-    assert_eq!(
-        snapshot(&dir, "tenant-a", "after-restart"),
-        SettingSnapshot::Stored {
-            value: "written".into()
-        }
-    );
-    std::fs::remove_dir_all(&dir).unwrap();
-    let _ = std::fs::remove_dir_all(runtime);
-}
-
 const NODE_PROBE: &str = r#"
 import { readFileSync, writeSync } from "node:fs";
 import Database from "better-sqlite3";
 import { SqliteDatabase } from CLIENT_SPECIFIER;
-import { presentDesktopChildCredential } from CREDENTIAL_SPECIFIER;
+import { admitDesktopDataDirectory } from CREDENTIAL_SPECIFIER;
 
 const mode = process.argv[2];
 const dataDir = process.argv[3];
@@ -318,15 +156,7 @@ function fingerprint() {
   }
 }
 
-if (mode === "child" || mode === "bootstrap" || mode === "orphan") {
-  emit({ event: "ready", pid: process.pid });
-  const offered = readFileSync(0, "utf8").trim();
-  const prefix = "credential:";
-  if (!offered.startsWith(prefix) || offered.length === prefix.length) {
-    throw new Error("child credential missing");
-  }
-  presentDesktopChildCredential(offered.slice(prefix.length));
-}
+if (mode === "child" || mode === "bootstrap") admitDesktopDataDirectory(dataDir);
 
 const before = mode === "bootstrap" ? null : fingerprint();
 const database = new SqliteDatabase(dataDir);
@@ -455,31 +285,16 @@ fn run_node_probe(
         buffer
     });
     let mut process = StopProcess(Some(child));
-    let mut stdin = process.0.as_mut().unwrap().stdin.take().unwrap();
-    let (first, stdout) = read_event_line(BufReader::new(stdout));
+    let stdin = process.0.as_mut().unwrap().stdin.take().unwrap();
+    let (first, _stdout) = read_event_line(BufReader::new(stdout));
     if first.is_empty() {
         let status = process.0.as_mut().unwrap().wait().unwrap();
         process.0.take();
         let stderr = stderr_thread.join().unwrap();
         panic!("node probe exited {status} before an event:\n{stderr}");
     }
-    let event_line = if mode == "child" || mode == "bootstrap" || mode == "orphan" {
-        let ready = parse_event(&first, "");
-        assert_eq!(ready["event"], "ready", "{ready}");
-        let pid = u32::try_from(ready["pid"].as_u64().unwrap()).unwrap();
-        if mode == "orphan" {
-            write_orphan_marker(dir, pid, &child_process_identity(pid));
-        } else {
-            record_child(dir, pid).unwrap();
-        }
-        write_child_credential(dir, &mut stdin);
-        drop(stdin);
-        let (line, _) = read_event_line(stdout);
-        line
-    } else {
-        drop(stdin);
-        first
-    };
+    drop(stdin);
+    let event_line = first;
     let status = process.0.as_mut().unwrap().wait().unwrap();
     process.0.take();
     let stderr = stderr_thread.join().unwrap();
@@ -505,35 +320,6 @@ fn assert_stable_fingerprint(event: &serde_json::Value) {
     }
 }
 
-fn write_child_credential(dir: &Path, stdin: &mut impl Write) {
-    let marker: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(dir.join(".desktop-owner.json")).unwrap()).unwrap();
-    let identity = marker["child_process_identity"].as_str().unwrap();
-    assert!(!identity.is_empty(), "{marker}");
-    writeln!(stdin, "credential:{identity}").unwrap();
-}
-
-fn child_process_identity(pid: u32) -> String {
-    #[cfg(target_os = "linux")]
-    {
-        let boot = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").unwrap();
-        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
-        let start = stat
-            .rsplit_once(')')
-            .unwrap()
-            .1
-            .split_whitespace()
-            .nth(19)
-            .unwrap();
-        format!("{}:{start}", boot.trim())
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = pid;
-        format!("instance:{}", hex::encode(rand::random::<[u8; 16]>()))
-    }
-}
-
 fn stamp_schema_version(dir: &Path, version: &str) {
     let connection = rusqlite::Connection::open(dir.join("print-partner.db")).unwrap();
     connection
@@ -546,29 +332,6 @@ fn stamp_schema_version(dir: &Path, version: &str) {
         )
         .unwrap();
     assert_eq!(changed, 1);
-}
-
-fn exited_pid() -> u32 {
-    let mut child = child_process::command("sh")
-        .arg("-c")
-        .arg("exit 0")
-        .spawn()
-        .unwrap();
-    let pid = child.id();
-    let status = child.wait().unwrap();
-    assert!(status.success());
-    pid
-}
-
-fn write_orphan_marker(dir: &Path, child_pid: u32, child_identity: &str) {
-    let marker = serde_json::json!({
-        "storage_protocol_version": 1,
-        "pid": exited_pid(),
-        "process_identity": "prior",
-        "child_pid": child_pid,
-        "child_process_identity": child_identity,
-    });
-    std::fs::write(dir.join(".desktop-owner.json"), marker.to_string()).unwrap();
 }
 
 // Desktop startup holds StorageLease and lets its recorded Node child create
@@ -586,26 +349,8 @@ fn desktop_lease_with_node_schema(
     lease
 }
 
-fn sequence_of(event: &serde_json::Value, side: &str, name: &str) -> i64 {
-    event[side]["sequences"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|row| row["name"] == name)
-        .unwrap()["seq"]
-        .as_i64()
-        .unwrap()
-}
-
 fn release_owner(dir: &Path, owner: WriterOwner) {
-    let runtime = std::fs::read(dir.join(".desktop-owner.json"))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .and_then(|marker| marker["runtime_dir"].as_str().map(PathBuf::from));
     owner.shutdown().unwrap();
-    if let Some(runtime) = runtime {
-        let _ = std::fs::remove_dir_all(runtime);
-    }
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -703,48 +448,6 @@ fn ticket_t_7_writer_node_child_bootstraps_a_lease_without_a_database() {
         assert!(names.contains(&name), "{event}");
     }
     lease.release();
-    std::fs::remove_dir_all(&dir).unwrap();
-    remove_probe(&probe);
-}
-
-#[test]
-fn ticket_t_7_writer_node_live_child_keeps_a_dead_owner_exclusive() {
-    let web = web_root();
-    let node = server_node(&web);
-    let probe = write_probe(&web);
-    let dir = temp_dir("node-orphan");
-    desktop_lease_with_node_schema(&dir, &web, &node, &probe).release();
-    assert!(!dir.join(".desktop-owner.json").exists());
-    let event = run_node_probe("orphan", &dir, &web, &node, &probe);
-    assert_eq!(event["event"], "connected", "{event}");
-    assert_eq!(event["before"]["version"], "34", "{event}");
-    assert_stable_fingerprint(&event);
-
-    let mut sleeper = StopProcess(Some(
-        child_process::command("sleep").arg("120").spawn().unwrap(),
-    ));
-    let child_pid = sleeper.0.as_ref().unwrap().id();
-    write_orphan_marker(&dir, child_pid, &child_process_identity(child_pid));
-    let refused = run_node_probe("foreign", &dir, &web, &node, &probe);
-    assert_eq!(refused["event"], "refused", "{refused}");
-    assert!(
-        refused["message"]
-            .as_str()
-            .unwrap()
-            .contains("will not migrate or write"),
-        "{refused}"
-    );
-    assert_stable_fingerprint(&refused);
-    let mut held = sleeper.0.take().unwrap();
-    let _ = held.kill();
-    let _ = held.wait();
-    let reopened = run_node_probe("foreign", &dir, &web, &node, &probe);
-    assert_eq!(reopened["event"], "connected", "{reopened}");
-    assert!(
-        sequence_of(&reopened, "after", "printer_profiles")
-            > sequence_of(&reopened, "before", "printer_profiles"),
-        "{reopened}"
-    );
     std::fs::remove_dir_all(&dir).unwrap();
     remove_probe(&probe);
 }

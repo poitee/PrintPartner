@@ -1,8 +1,8 @@
 use super::{
-    observation::{PreparationBudget, ReadFailure, ReadResult},
+    observation::{DocumentRead, PreparationBudget, ReadFailure, ReadResult},
     yaml::{Document, Node},
 };
-use crate::manifest_text::{JsText, ManifestText, OptionGroupId, VariantId};
+use crate::manifest_text::{DraftPart, JsText, ManifestText, OptionGroupId, VariantId};
 
 #[cfg(test)]
 #[path = "manifest_glob_tests.rs"]
@@ -274,6 +274,19 @@ pub(crate) fn parse(bytes: &[u8], b: &mut PreparationBudget<'_>) -> ReadResult<M
     }
     Ok(out)
 }
+pub(super) fn optional_document(
+    read: &DocumentRead,
+    b: &mut PreparationBudget<'_>,
+) -> ReadResult<Option<Manifest>> {
+    match read {
+        DocumentRead::Bytes(bytes) => match parse(bytes, b) {
+            Ok(d) => Ok(Some(d)),
+            Err(ReadFailure::InvalidDocument) => Ok(None),
+            Err(e) => Err(e),
+        },
+        _ => Ok(None),
+    }
+}
 fn union(left: &mut Vec<ManifestText>, right: &[ManifestText]) {
     for s in std::mem::take(left)
         .into_iter()
@@ -403,31 +416,42 @@ fn wildcard_matches(pattern: &[u16], key: &[u16]) -> bool {
     pattern[pat..].iter().all(|unit| *unit == 0x2a)
 }
 
-pub(crate) fn matches(pattern: &ManifestText, key: &str) -> bool {
-    let pattern = normalize_glob(pattern);
-    let key = normalize_glob(&JsText::scalar(key));
-    if pattern == key {
-        return true;
+pub(crate) struct Glob {
+    text: JsText,
+    units: Vec<u16>,
+}
+
+impl Glob {
+    pub(crate) fn new(pattern: &ManifestText) -> Self {
+        let text = normalize_glob(pattern);
+        let units = text
+            .units()
+            .iter()
+            .copied()
+            .map(canonicalize_regex_unit)
+            .collect();
+        Self { text, units }
     }
-    let pattern: Vec<_> = pattern
-        .units()
-        .iter()
-        .copied()
-        .map(canonicalize_regex_unit)
-        .collect();
-    let key: Vec<_> = key
-        .units()
-        .iter()
-        .copied()
-        .map(canonicalize_regex_unit)
-        .collect();
-    wildcard_matches(&pattern, &key)
-        || (!pattern.contains(&0x2f)
-            && key.contains(&0x2f)
-            && key
-                .rsplit(|unit| *unit == 0x2f)
-                .next()
-                .is_some_and(|basename| wildcard_matches(&pattern, basename)))
+
+    pub(crate) fn matches(&self, key: &str) -> bool {
+        let key = normalize_glob(&JsText::scalar(key));
+        if self.text == key {
+            return true;
+        }
+        let key: Vec<_> = key
+            .units()
+            .iter()
+            .copied()
+            .map(canonicalize_regex_unit)
+            .collect();
+        wildcard_matches(&self.units, &key)
+            || (!self.units.contains(&0x2f)
+                && key.contains(&0x2f)
+                && key
+                    .rsplit(|unit| *unit == 0x2f)
+                    .next()
+                    .is_some_and(|basename| wildcard_matches(&self.units, basename)))
+    }
 }
 pub(crate) fn hints(bytes: &[u8], b: &mut PreparationBudget<'_>) -> ReadResult<Vec<HintRule>> {
     b.document(bytes.len(), 0)?;
@@ -498,3 +522,185 @@ pub(crate) fn infer_siblings(
 ) -> ReadResult<Groups> {
     super::siblings::infer(paths, budget)
 }
+
+fn any_path(
+    patterns: &[ManifestText],
+    key: &str,
+    b: &mut PreparationBudget<'_>,
+) -> ReadResult<bool> {
+    for pattern in patterns {
+        if path_matches(pattern, key, b)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn path_matches(
+    pattern: &ManifestText,
+    key: &str,
+    b: &mut PreparationBudget<'_>,
+) -> ReadResult<bool> {
+    b.visit(0)?;
+    b.expansion(
+        pattern
+            .units()
+            .len()
+            .saturating_add(key.len())
+            .saturating_mul(2),
+    )?;
+    Ok(Glob::new(pattern).matches(key))
+}
+
+pub(super) fn apply(
+    parts: &mut [DraftPart],
+    docs: &[(String, String, Manifest)],
+    mut groups: Groups,
+    mut selections: Selections,
+    b: &mut PreparationBudget<'_>,
+) -> ReadResult<()> {
+    b.check()?;
+    for (_, _, d) in docs {
+        b.visit(0)?;
+        for (key, s) in &d.selections {
+            b.visit(0)?;
+            if !selections.iter().any(|(k, _)| k == key) {
+                b.expansion(
+                    key.0
+                        .units()
+                        .len()
+                        .saturating_add(s.iter().map(|id| id.0.units().len()).sum::<usize>())
+                        .saturating_mul(2),
+                )?;
+                selections.push((key.clone(), s.clone()));
+            }
+        }
+    }
+    let inferred = std::mem::take(&mut groups);
+    for (_, _, d) in docs {
+        b.visit(0)?;
+        merge(&mut groups, d.groups.clone());
+    }
+    merge(&mut groups, inferred);
+    for part in parts {
+        let key = part["partKey"].as_str().unwrap_or_default();
+        b.entry(0, key.len())?;
+        let key = key.to_owned();
+        let label = part["sourceLayer"]
+            .as_str()
+            .unwrap_or_default()
+            .split(':')
+            .nth(1);
+        for (name, source, d) in docs {
+            b.visit(0)?;
+            if d.project.as_ref().is_some_and(|p| {
+                !p.is_empty()
+                    && label.is_some_and(|l| {
+                        !l.is_empty() && p.as_scalar().as_deref() != Some(l) && name != l
+                    })
+            }) {
+                continue;
+            }
+            let mut matched = None;
+            for rule in &d.rules {
+                if path_matches(&rule.pattern, &key, b)? {
+                    matched = Some(rule);
+                    break;
+                }
+            }
+            if let Some(rule) = matched {
+                if let Some(v) = &rule.requirement {
+                    part.manifest.requirement = Some(v.clone());
+                }
+                if let Some(v) = &rule.group {
+                    part.manifest.option_group_id = Some(v.clone());
+                }
+                part.manifest.manifest_source = Some(source.clone());
+                break;
+            }
+        }
+        let explicit = part.manifest.option_group_id.as_ref();
+        let mut member = false;
+        let mut included = false;
+        let mut excluded = false;
+        for (id, g) in &groups {
+            b.visit(0)?;
+            let mut ids = Vec::new();
+            if let Some((_, values)) = selections.iter().find(|(k, _)| k == id) {
+                for id in values {
+                    b.visit(0)?;
+                    if g.variants.is_empty() || g.variants.iter().any(|v| v.id == *id) {
+                        ids.push(id);
+                    }
+                }
+            }
+            let max = if g.rule == "pick_one" {
+                g.max.unwrap_or(1).min(1)
+            } else {
+                g.max.unwrap_or(u64::MAX)
+            };
+            let complete = (ids.len() as u64) >= g.min.unwrap_or(0) && (ids.len() as u64) <= max;
+            let membership = if let Some(explicit) = explicit {
+                explicit == id
+            } else {
+                let mut found = any_path(&g.parts, &key, b)?;
+                for variant in &g.variants {
+                    b.visit(0)?;
+                    if found {
+                        break;
+                    }
+                    found = any_path(&variant.parts, &key, b)?;
+                }
+                found
+            };
+            member |= membership;
+            if complete {
+                for selected in ids {
+                    b.visit(0)?;
+                    let variant = g.variants.iter().find(|v| v.id == *selected);
+                    if membership {
+                        included |= if let Some(v) = variant {
+                            any_path(&v.parts, &key, b)?
+                        } else {
+                            path_matches(&ManifestText(selected.0.clone()), &key, b)?
+                        };
+                    }
+                    if explicit.is_none_or(|v| v == id)
+                        && let Some(v) = variant
+                    {
+                        excluded |= any_path(&v.excludes, &key, b)?;
+                    }
+                }
+            }
+        }
+        if member {
+            part["included"] = included.into();
+        }
+        if excluded {
+            part["included"] = false.into();
+        }
+    }
+    b.check()
+}
+
+pub(super) fn kit(raw: Option<String>, b: &mut PreparationBudget<'_>) -> ReadResult<Selections> {
+    b.check()?;
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    b.document(raw.len(), raw.len())?;
+    match Document::parse(raw.as_bytes(), b) {
+        Ok(_) => {}
+        Err(ReadFailure::InvalidDocument) => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    }
+    let selections = crate::manifest_options::KitManifest::from_stored(&raw)
+        .unwrap_or_default()
+        .selection_projection();
+    b.check()?;
+    Ok(selections)
+}
+
+#[cfg(test)]
+#[path = "manifest_preparation_tests.rs"]
+mod preparation_tests;

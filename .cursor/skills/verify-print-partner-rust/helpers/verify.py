@@ -417,10 +417,10 @@ def terminate(process):
 
 def verify_shutdown(process, fixture, runtime_dir, require_lock=True):
     check(process.returncode == 0, f"Rust exited {process.returncode}")
-    check(not (fixture / "data/.desktop-owner.json").exists(), "Owner marker survived")
+    check(not (fixture / "data/.desktop-lease").exists(), "Compatibility reservation survived")
     check(runtime_dir is None or not runtime_dir.exists(), "Private runtime directory survived")
     try:
-        with (fixture / "data/.desktop.lock").open("rb") as lock:
+        with (fixture / "data/printpartner.lock").open("rb") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except FileNotFoundError:
         if require_lock:
@@ -445,8 +445,7 @@ def verify(root):
                     signal_server(process)
                 origin = read_origin(process, errors)
                 print(f"START: pid={process.pid} origin={origin}", flush=True)
-                marker = fixture / "data/.desktop-owner.json"
-                runtime_dir = Path(json.loads(marker.read_text())["runtime_dir"])
+                runtime_dir = Path(json.loads(credentials.read_text())["runtime_dir"])
                 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
                 cookie = None
 
@@ -523,7 +522,7 @@ def verify(root):
             if cleanup_stop is not None and not failed:
                 raise cleanup_stop
             verify_shutdown(process, fixture, runtime_dir)
-            print("STOP: exit=0; owner marker removed; private sockets removed; data lock reacquired", flush=True)
+            print("STOP: exit=0; compatibility reservation removed; private sockets removed; data lock reacquired", flush=True)
     print("PASS: Rust build, gateway endpoints, persisted Source and shutdown", flush=True)
 
 
@@ -619,13 +618,12 @@ def serve(binary, root, node, commit, credentials):
         origin = None
         with (fixture / "server.stderr").open("w+") as errors:
             # pp-server writes its bootstrap into the private fixture; launch publishes it below.
-            internal = fixture / "bootstrap.json" if credentials is not None else None
+            internal = fixture / "bootstrap.json"
             held["active"] = True
             process = start_server(binary, root, node, commit, fixture, errors, internal, isolated=True)
             try:
                 origin = read_origin(process, errors)
-                marker = fixture / "data/.desktop-owner.json"
-                runtime_dir = Path(json.loads(marker.read_text())["runtime_dir"])
+                runtime_dir = Path(json.loads(internal.read_text())["runtime_dir"])
                 if held["pending"] is not None:
                     # Stopped once ready: skip publishing and stop below with full shutdown checks.
                     release_signals()
@@ -657,11 +655,10 @@ def serve(binary, root, node, commit, credentials):
                 held["active"] = False
                 try:
                     # Startup may create resources before it announces an origin. Capture
-                    # their ownership record before termination removes it.
+                    # their test receipt before termination removes it.
                     try:
-                        marker = fixture / "data/.desktop-owner.json"
-                        if runtime_dir is None and marker.exists():
-                            runtime_dir = Path(json.loads(marker.read_text())["runtime_dir"])
+                        if runtime_dir is None and internal.exists():
+                            runtime_dir = Path(json.loads(internal.read_text())["runtime_dir"])
                     finally:
                         try:
                             terminate(process)
@@ -669,8 +666,11 @@ def serve(binary, root, node, commit, credentials):
                             if getattr(process, "guard", None) is not None:
                                 release_guard(process.guard)
                 finally:
-                    if credentials is not None:
-                        unpublish_credential(credentials, published)
+                    try:
+                        if credentials is not None:
+                            unpublish_credential(credentials, published)
+                    finally:
+                        internal.unlink(missing_ok=True)
                     process.stdout.close()
                     errors.seek(0)
                     print("SERVER STDERR:\n" + errors.read(), flush=True)
@@ -681,7 +681,7 @@ def serve(binary, root, node, commit, credentials):
                 print("STOP: exit=0; pp-server stopped before readiness", flush=True)
             else:
                 verify_shutdown(process, fixture, runtime_dir)
-                print("STOP: exit=0; owner marker removed; private sockets removed; data lock reacquired", flush=True)
+                print("STOP: exit=0; compatibility reservation removed; private sockets removed; data lock reacquired", flush=True)
 
 
 def main():

@@ -1,5 +1,5 @@
 pub(crate) mod model;
-mod reconcile;
+pub(crate) mod reconcile;
 pub(crate) mod storage;
 #[cfg(test)]
 mod tests;

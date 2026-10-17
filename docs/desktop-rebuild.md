@@ -172,7 +172,7 @@ GRE-607 exposes five crate-private helpers through `working_drafts::observation`
 for GRE-604 D10b. `parse_builder_manifest` reads part rules, option groups,
 repository defaults, and their scalar or array shapes. `merge_builder_groups`
 preserves earlier metadata, unions patterns, and preserves JavaScript property
-order. `builder_path_matches` applies the Node glob and basename rules.
+order. `BuilderGlob` applies the Node glob and basename rules.
 `parse_builder_hints` validates version 1 path hints and rejects unknown fields.
 `infer_builder_siblings` delegates to the sibling inference already on main.
 
@@ -223,9 +223,9 @@ retain manifest strings as UTF-16 and serialize lone surrogates as JSON escapes.
 Use their `into_json_body().into_bytes()` methods. The complete outcome uses
 `Outcome::into_json_body()?.into_bytes()`.
 
-This first core unit ports the read-only seam. Edit, lifecycle transitions,
-recompute, and preparation remain on GRE-607. Save and rebase remain GRE-608.
-There is no HTTP route or default-feature change.
+This first core unit ports the read-only seam. The writes section below covers
+Part edits and abandon. Recompute and preparation remain on GRE-607. Save and
+rebase remain GRE-608. There is no HTTP route or default-feature change.
 
 The operation tests call the public client against Node-written databases.
 Their literal expected JSON comes from `getPlanDraft`, `listPlanDraftIdentities`,
@@ -245,6 +245,106 @@ node --conditions=development --import ./web/node_modules/tsx/dist/loader.mjs \
   > rust/crates/pp-storage/tests/fixtures/working-drafts-node.jsonl
 cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test working_draft_core
 ```
+
+### D12 working-draft writes
+
+`WorkingDraftClient` has two write methods. Each one queues a `Write` command
+on the existing single writer. The writer runs `abandon` in one immediate
+transaction and `edit` in up to two. Each transaction has its own admission
+deadline, and the writer checks cancellation before each transaction starts and
+again before it commits.
+
+- `edit` ports `PlanDraftWorkspaceService.editParts` and the repository's
+  `editPlanDraftPartsBatch`. It returns the `required_units::Outcome` result.
+  A changed edit clears the selected Required-unit reconciliation and writes
+  the new snapshot digest and Part rows. An edit that changes no Part returns
+  the current draft, even when the expected digest is stale. Both paths then
+  select Required units with no decisions and the key `auto-<snapshot digest>`,
+  as Node's `autoReconcile` does. The selection runs in a second transaction
+  after the edit commits. A retry of the same edit finds the saved selection
+  and writes nothing.
+- `abandon` ports `PlanDraftWorkspaceService.abandon` and the repository's
+  `transitionPlanDraft` for `abandon`. It returns `AbandonOutcome`. A retry
+  with the same expected lifecycle version returns the abandoned draft and
+  writes nothing.
+
+Both methods return `profile_not_found` and `draft_not_found` as separate
+outcomes. A stale snapshot digest or lifecycle version returns `draft_changed`
+with the current workspace. A consumed or abandoned draft returns `not_open`.
+
+`EditRequest` and `AbandonRequest` accept the JSON bodies that Node's
+`parseEditPlanDraftPartsRequest` and `parseAbandonPlanDraftRequest` accept.
+An edit body has either one `decision` or 1 to 10,000 `decisions`. Each
+decision names at least one Part, and a batch edits each Part field at most
+once. A quantity override is `null` or an integer from 1 to 10,000.
+
+If the selection fails or is cancelled, the edit stays committed and `edit`
+returns the error, as Node does. Node's route answers that error with HTTP 500
+and `internal_error`. A retry of the same edit changes no Part, so it only runs
+the selection again.
+
+Resume has no Node route or service caller, so it is not ported. Recompute
+needs preparation and stays on GRE-607.
+
+The operation tests replay each Node case on a copy of the required-units
+`unchanged` database. They restart the writer between calls and compare every
+outcome and the draft, Part, reconciliation, and assignment rows with Node's.
+Some cases run SQL between calls, for example to remove an injected selection
+failure or to advance the accepted base.
+The generator runs Node's service and contract parsers. Regenerate the
+fixture from the repository root:
+
+```sh
+node --conditions=development --import ./web/node_modules/tsx/dist/loader.mjs \
+  rust/crates/pp-storage/tests/fixtures/working-draft-writes-node.mjs web/apps/server \
+  > rust/crates/pp-storage/tests/fixtures/working-draft-writes-node.jsonl
+cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test working_draft_writes
+```
+
+`rust/crates/pp-storage/tests/fixtures/mutate-working-drafts.py` runs the
+read and write mutants against both test files. It copies the Rust workspace
+and builds in its own temporary target directory, so it never changes
+`rust/target`.
+
+### D12 preparation prerequisites
+
+GRE-607 adds the remaining manifest helpers and the accepted-base reuse check
+behind `desktop_rebuild`. `optional_document` ignores missing, skipped, and
+invalid optional manifests. `kit` projects stored kit selections through the
+existing `KitManifest` parser. Both propagate preparation budget and cancellation
+failures. `apply` preserves Node's document order, project filtering, selection
+defaults, explicit group membership, group bounds, and exclusion precedence.
+It accepts the shared `PreparationBudget` and accounts for each Part and pattern
+comparison. Kit JSON passes through the budgeted document reader before the
+stored-kit parser, so UTF-16 selection text uses the existing codec.
+
+`read_model::reusable_draft_base` checks current freshness before validating the
+complete accepted snapshot with the existing bounded readers. It propagates
+integrity errors and checks preparation cancellation around those reads.
+`catalog::naming::get` is crate-visible for the next preparation port's
+transactional effective naming profile and digest. Its behavior is unchanged.
+These helpers have no runtime caller yet. Preparation and recompute remain
+separate GRE-607 slices.
+
+The committed Node generator covers manifest application, optional documents,
+stored kit selections, freshness, and accepted-base integrity. Regenerate its
+literal outputs twice and compare them before replacing the fixture:
+
+```sh
+node --import ./web/node_modules/tsx/dist/loader.mjs --conditions=development \
+  rust/crates/pp-storage/tests/fixtures/preparation-prereqs-node.mjs web/apps/server \
+  > rust/target/preparation-first.jsonl
+node --import ./web/node_modules/tsx/dist/loader.mjs --conditions=development \
+  rust/crates/pp-storage/tests/fixtures/preparation-prereqs-node.mjs web/apps/server \
+  > rust/target/preparation-second.jsonl
+cmp rust/target/preparation-first.jsonl rust/target/preparation-second.jsonl
+cmp rust/target/preparation-first.jsonl rust/crates/pp-storage/tests/fixtures/preparation-prereqs-node.jsonl
+cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib -E 'test(preparation_tests)' --test-threads=2
+python3 rust/crates/pp-storage/tests/fixtures/mutate-preparation-prereqs.py
+```
+
+The mutation runner copies the workspace and uses a separate `CARGO_TARGET_DIR`.
+It requires a passing baseline and counts only executed test failures as kills.
 
 ### D4 media reconciliation
 
@@ -413,9 +513,9 @@ Before recursive creation, admission checks existing input prefixes and their re
 
 Store admission checks permissions on an open directory descriptor and holds it while it resolves the canonical path. It compares that descriptor's device and inode with the canonical directory, then rechecks the canonical leaf's owner and permissions. Replacement at this checkpoint fails with `Data directory was replaced` before lock creation, ownership cleanup or database preflight. Existing aliases remain supported.
 
-Writer admission keeps that descriptor through OS-lock acquisition and opens `printpartner.lock` relative to it before database preflight. Lease acquisition then opens the retained `.desktop.lock` relative to the same directory descriptor. It rechecks directory identity and permissions before opening the lock, before locking, and after locking, before ownership marker access. An observed replacement fails with `Data directory was replaced`. A lock created during a replacement race belongs to the admitted directory; refusal closes the lock without path-based cleanup.
+Writer admission keeps that descriptor through OS-lock acquisition and opens `printpartner.lock` relative to it before database preflight. After taking that lock, Rust reserves `.desktop-lease` with a regular file to exclude standalone Node. An existing Node lease directory refuses admission without owner-marker inspection or recovery. Rust rechecks directory identity and permissions before and after locking. An observed replacement fails with `Data directory was replaced`. A lock created during a replacement race belongs to the admitted directory; refusal closes the lock without path-based cleanup.
 
-The standalone Rust writer acquires `printpartner.lock` before its first read-only database preflight and retains the same admitted directory descriptor into lease acquisition. It rechecks identity and permissions immediately before preflight, refusing an observed replacement before database capture, temporary-copy creation or SQLite open. It checks resolved ancestor permissions before each lock acquisition. `PP_STORAGE_CORE_LOCK=1` tells the supervised Node child to validate its inherited descriptor against `printpartner.lock`. The standalone Node lease protocol remains unchanged. See [Storage](storage.md) for shutdown, crash recovery, and unsupported directory operations.
+The standalone Rust writer acquires `printpartner.lock` before its first read-only database preflight and retains the same admitted directory descriptor through storage ownership. It rechecks identity and permissions immediately before preflight, refusing an observed replacement before database capture, temporary-copy creation or SQLite open. It checks resolved ancestor permissions before each lock acquisition. `PP_STORAGE_CORE_LOCK=1` tells the supervised Node child to validate its inherited descriptor against `printpartner.lock`. The standalone Node lease protocol remains unchanged. See [Storage](storage.md) for shutdown, crash recovery, and unsupported directory operations.
 
 These Unix checks remain snapshots, not path confinement. Replacement during preflight capture or after the OS-lock checkpoints, transient replacement restored between checks, ancestor replacement, ACL policy, standalone Node admission, and Windows runtime permission policy remain open.
 
@@ -466,7 +566,122 @@ The same D6 foundation ports durable authority receipts for sessions and routed
 API keys. Receipts retain credential digests, tenant, subject and authentication
 policy, and revalidation rejects changed policy or revoked credentials. Physical
 owner admission checks the storage identity. These internal APIs compile behind
-the feature; D15/D16 will wire them into jobs. The current job engine is unchanged.
+the feature, and the D16 jobs engine stores and revalidates them (see below).
+
+### D15 jobs model and subscriptions
+
+GRE-611 adds the reference job model behind `desktop_rebuild`. `CompletedResult` holds
+each job kind's public result. A job document can carry `public_result`, and a checklist
+export effect can carry a completion claim. Decoding checks each claim against the
+payload, effect intent, tenant binding, accepted Plan basis and, once the job succeeds,
+its confirmed receipt and public result. Empty fields are omitted, so existing documents
+encode unchanged. Two deliberate differences from the reference follow Node: basis
+identifiers must be positive safe integers, and the `extract-source-docs` result stores
+an error count.
+
+The job stream registry starts each stream with its job's snapshot and queues newer
+committed versions for the same tenant and job. A stream closes when the job finishes,
+its 16-frame mailbox overflows, its credential expires or is revoked, or the owner stops.
+At most 128 streams are live. Nothing calls the registry yet. The snapshot changes
+that expose `public_result` landed with D16 (b); the engine and auth revalidation calls
+land with D16 (c).
+
+`fixtures/parity/jobs-model/generate.mjs` records Node's parsed accepted-plate and
+direct-3mf results and its verdict on accepted-basis seals. Node builds its other job
+results inside `InProcessJobRunner`, which built-in type stripping cannot load, so Rust
+tests check those shapes as literals. The generator imports zod:
+
+```sh
+npm --prefix web ci --ignore-scripts
+node fixtures/parity/jobs-model/generate.mjs --check
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib jobs::
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test jobs_model_parity
+```
+
+### D16 jobs engine: enqueue and claim
+
+GRE-609's first PR wires original authority into the job engine behind
+`desktop_rebuild`. With the feature off, the engine is unchanged. No runtime caller
+uses it yet; future callers must also check `PP_DESKTOP_REBUILD`.
+
+Enqueue records who asked. A session or routed-key job stores a sealed reference to
+that credential as `_authority`: the session digest or key id and hash, the admitted
+tenant and subject, and the policy. The raw secret is never stored. A physical-owner
+job stores `_authority: null`. Documents written before this change have no
+`_authority` field. They stay that way and are never upgraded.
+
+Claims check that authority. `WriterOwner::job_worker_with_policy(policy, admission)`
+returns a worker that revalidates each job's original credential under `policy`.
+A revoked or expired credential, a changed policy, tenant or subject, or a missing
+legacy authority fails the job with `_authority_refusal` (reason, phase `claim`,
+time and generation). The refusal commits and the claim continues with the next job,
+so a refused entry never blocks healthy work. A plain `job_worker` claims
+physical-owner jobs. When it reaches a job with an original credential, it returns
+`AuthorityFailure::PolicyRequired` after committing the refusals and expiry
+recovery already done in that transaction. `claim_kind(kind)` claims only one
+admitted kind. `authorize(lease)` returns the live attempt's revalidated tenant and
+subject without changing the job. A queued job's snapshot reports progress `0`, and
+another tenant's read returns `JobAccessFailure::NotFound`.
+
+Claims do not yet reserve the job's Source; that lands in D16 (c). Upload, local scan
+and Source Sync paths arrive with D14, D17 and D18.
+
+`fixtures/parity/jobs-engine/generate.mjs` starts jobs in Node's
+`InProcessJobRunner` under web's tsx loader and records the enqueued snapshot and the
+other-tenant read. The durable engine's queued message, "Waiting for a compatible
+worker", deliberately differs from Node's "Queued". Node keeps no queue across restarts
+and never revalidates the enqueuing credential, so the claim tests follow the reference
+engine's `job_authority_recovery.rs`:
+
+```sh
+npm --prefix web ci --ignore-scripts
+node fixtures/parity/jobs-engine/generate.mjs --check
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test jobs_engine_parity --test job_authority_claims
+```
+
+### D16 jobs engine: recovery and public results
+
+GRE-609's second PR revalidates authority on every worker operation, behind
+`desktop_rebuild`. Heartbeat, progress, effect admission, effect confirmation, finish
+and fail all check the attempt's original credential first, under the worker's policy.
+A refusal records `_authority_refusal` with phase `worker_advance`, fences the
+attempt, commits, and then returns the typed `AuthorityFailure`. An attempt with no
+effects fails. An attempt with effects waits for reconciliation. Physical-owner
+attempts are not checked, and an attempt whose document lost its `_authority` is
+refused as a missing original.
+
+A refused `ConfirmEffect` whose receipt matches the admitted effect keeps that
+receipt as observed evidence. The effect stays unconfirmed, and a document may hold an
+observed receipt only while the job is waiting for reconciliation after a refusal. A
+receipt that does not match is rejected and nothing is written. Reconciliation can
+confirm the observed receipt only with the same receipt. It cannot deny the effect, and
+an observed receipt never proves an uploaded-only print or a resolved printer failure.
+`ConfirmSucceeded` reconciliation and `Finish` refuse jobs that carry a checklist
+completion claim, which only the checklist finalizer settles.
+
+`WorkerOperation::FinishPublic { artifact, result }` finishes like `Finish` and stores
+`result` as the job's `public_result`. The result kind must match the job's kind.
+Snapshots now report `public_result` as `result`, never the internal receipt, and add
+`created_at`. `AtomicJobClient::read_public` returns one snapshot.
+`AtomicJobClient::list_retained` returns the tenant's retained snapshots with Node's
+filters (`LegacyListFilter`: status, `since` in milliseconds against finish time or
+else update time, and profile) and Node's newest-first order. Ties keep enqueue order.
+Quarantined and unreadable rows are skipped. Turning HTTP query strings into
+`LegacyListFilter` belongs to D25.
+
+`fixtures/parity/jobs-engine/generate.mjs` now also runs Node jobs to the end and
+records the finished snapshot and `listJobs` under each filter. The Rust test finishes
+the update check with Node's literal result and asserts the public read and each list.
+Stored times have whole-second precision, so the test waits one second between the two
+finishes. Node's snapshots have no `created_at`. The worker-advance and
+observed-evidence tests port the reference `job_authority_recovery.rs`, because Node
+never revalidates a running job:
+
+```sh
+node fixtures/parity/jobs-engine/generate.mjs --check
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test jobs_engine_parity --test job_authority_claims
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib jobs::
+```
 
 ## D9 build graph receipt
 
@@ -520,7 +735,7 @@ Focused codec unit tests and public model integration tests run in the desktop g
 ## D10b manifest observation receipt
 
 GRE-604 D10b adds `pp_storage::manifest_options::observation` behind `desktop_rebuild`.
-It has no runtime caller yet. Build graph manifest commands and HTTP routes remain deferred.
+GRE-644 slice 1 wires its build graph manifest commands, described below. HTTP routes remain deferred.
 
 `capture` reads the build, its stored kit, and its ordered source layers in one transaction.
 `basis_matches` repeats the capture, so a later transaction can reject a stale observation.
@@ -538,7 +753,7 @@ A source without a checkout path is skipped. A source whose checkout root the ad
 
 Adapter reads, manifest and hint parsing, and STL scans charge the caller's `PreparationBudget`.
 The stored kit and each source's import rules charge their bytes as documents.
-Import rules also charge every JSON node and one rule per accepted path.
+Both also charge every JSON node and its depth to the same budget. Import rules charge one rule per accepted path.
 Import rules over the JSON byte, depth, or node limit refuse the observation.
 Malformed or non-array import rules give an empty rule set, as in Node.
 A malformed stored kit falls back to an empty kit, as in Node.
@@ -562,8 +777,10 @@ Lone surrogate pattern units are preserved, and `?` consumes half a supplementar
 
 The matcher uses two indices and one saved `*` retry point instead of a regex.
 It has O(path units × pattern units) worst-case work and O(path units + pattern
-units) normalization storage. The helper has no `PreparationBudget` parameter;
-callers retain their existing cancellation checks between matches.
+units) normalization storage. `BuilderGlob::new` normalizes a pattern once for
+all paths. The matcher has no `PreparationBudget` parameter; the observation
+checks cancellation before each path, so cancellation waits for at most one
+path's match.
 This resolves the backtracking and UTF-16 parity defects in GRE-642 and GRE-641.
 
 Regenerate or verify the Node differential corpus with
@@ -687,6 +904,53 @@ Inspect runs one history validation pass and one set of production head reads, f
 
 The source digest is rechecked after reservation, after the SQLite backup and before publication. Product file hashes and export inventory are rechecked after copying. Any database change requires a new inventory and reviewed manifest. The command exits with status 1 on refusal and status 0 with a JSON receipt on success. Both inspect and apply require `PP_DESKTOP_REBUILD` to be exactly `1` or `true`.
 
+## GRE-644 manifest commands, slice 1
+
+`build_graph::ManifestOptionsCommand` adds `ReadKit`, `SaveKit`, and
+`ReadBuilder` through `BuildCommand::Manifest`, behind `desktop_rebuild`.
+`BuildOutcome::Manifest` returns typed outcomes. Use `into_success_body()` for
+lossless JSON bytes, including UTF-16 selection IDs.
+
+`WriterOwner::build_graph_with_observations` accepts the existing `DraftReads`
+adapter and `PreparationLimits`. Capture authenticates and reads the graph in
+a reader transaction, then releases that reader before adapter calls. Two
+observations share one preparation budget and must have equal source stamps.
+The queued command authenticates again and checks `basis_matches` inside its
+immediate write transaction. Save validates selections in that transaction,
+then writes the kit setting and configuration timestamp together. Cancellation
+before commit rolls both back. Save refuses stale inputs without retrying;
+builder reads retry once. Kit reads need no filesystem adapter.
+
+This adapts the reference's command location to main's separate
+`manifest_options` model. The builder outcome holds serialized bytes because
+main keeps its builder model internal. Stored malformed kits read as empty,
+missing Plans win over invalid save input, and omitted save fields reset to
+empty defaults, as Node does. SQL read errors propagate instead of becoming
+empty kits as in the reference.
+
+Unlike the reference, selection validation runs inside the write transaction.
+Unlike both Node and the reference, save rejects unknown group and variant IDs,
+as required by this slice. D10b's validator continues to check cardinality;
+the command adds unknown-ID checks without changing `observation.rs`.
+Save observes attached checkouts even when selections are omitted, as the
+reference does, so source failures and stale stamps still refuse that save.
+Node only builds option groups when the update supplies selections.
+Two observations share a budget instead of receiving separate budgets as in
+the reference.
+
+The public command tests cover Node response parity, save/read persistence,
+stamp changes, database changes before writer admission, bounded builder retry,
+unknown selections, cancellation, missing and foreign Plans, adapter failures,
+and rollback when the freshness update fails. The Node fixture follows D10b's
+JSON and generator pattern. Regenerate it from `web`:
+
+```sh
+npx tsx --conditions=development ../rust/crates/pp-storage/tests/fixtures/manifest-commands-node.mts apps/server > ../rust/crates/pp-storage/tests/fixtures/manifest-commands-node.json
+```
+
+No HTTP route or runtime caller is added. GRE-644 still needs its HTTP slice
+with D25/GRE-620 build routes, including `PP_DESKTOP_REBUILD` admission.
+
 ## D11 required units (GRE-606)
 
 `required_units` compiles only with `desktop_rebuild`. It has a model, readers,
@@ -758,3 +1022,40 @@ Run the tests with:
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib required_units -- --test-threads=2
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test required_unit_operations -- --test-threads=2
 ```
+
+## D19 publication model and production links, GRE-612 PR 1
+
+`pp-storage::plan_publication` is internal and requires `desktop_rebuild`.
+The feature remains off by default. This slice ports publication assignments,
+preparation, revision digests, accepted projection validation, production setting
+validation, and Required-unit token remapping from the source-sync reference.
+The optional `pp-contracts` dependency supplies `UnmappableLink`; the boundary
+check rejects this dependency if it becomes required or reachable by default.
+
+PR 2 adds `publish_in_transaction`, receipts, inputs, admission schema, and job
+publication conflicts. PR 3 adds `PublicationClient`, admission, and writer
+`Envelope` dispatch. PR 1 exposes no publication command and writes no schema.
+Temporary `expect(dead_code)` annotations identify the PR 2 integration point.
+
+`node fixtures/parity/plan-publication/generate.mjs` regenerates literal Node
+results in `fixtures/parity/plan-publication/node.json`; `--check` detects drift.
+It requires Node 22.18 or newer with built-in type stripping and no npm install.
+The fixture header records the generating Node version. The generator imports
+`preparePlanPublication`, `digestPlanRevisionParts`, `assessCheckoffRemap`, and
+`requiredUnitObjectName`. It extracts and executes the repository's inline
+accepted revision check, `projectionPlanningFieldsMatch`, and private
+`applyCheckoffRemap` and `strictProductionState` methods with row and setting
+adapters. It does not copy their implementations. Later slices can add cases to
+the same generator.
+
+Rust tests compare literal digests, progress, assignment coordinates, object
+names, remap mappings, and persisted settings. Shared projection cases compare
+acceptance and rejection. Production validation accepts Checkoff coordinates
+owned by another profile, matching Node. Remapping treats an ownerless queue item
+as related when any part belongs to the profile or no referenced parts still exist,
+even when its state is `done`. Node's exact error messages are retained in the
+fixture; tests separately assert the Rust reference's more specific diagnostics.
+Node's inline projection check has no progress-validation counterpart, and its
+match-key remap cannot represent token identity, excluded targets, resolved-only
+coordinates, or changed unit indexes. Direct Rust tests cover progress corruption,
+excluded or missing tokens, and changed indexes against the reference behavior.

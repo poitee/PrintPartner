@@ -18,4 +18,4 @@ rules:
       # stops at the first entry with a cooldown, so it never audits the Docker and
       # Cargo entries below it.
       - dependabot.yml:3
-      - dependabot.yml:20
+      - dependabot.yml:25

@@ -53,6 +53,7 @@ describe("assistant tools + example builds", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     rmSync(dataDir, { recursive: true, force: true });
   });
 
@@ -856,6 +857,36 @@ option_groups:
     });
     expect(result).toMatchObject({ ok: false, detail: expect.stringMatching(/inventory/i) });
     expect(readBuildPlanningBrief(repo, plan.id)?.requirements[0]?.status).toBe("unverified");
+  });
+
+  it.each([
+    { account: false, plan: false, gate: "1", allowed: false },
+    { account: true, plan: false, gate: "1", allowed: false },
+    { account: false, plan: true, gate: "1", allowed: true },
+    { account: false, plan: false, gate: "0", allowed: true },
+  ])("admits Spoolman proposals for account=$account Plan=$plan gate=$gate", async ({ account, plan, gate, allowed }) => {
+    vi.stubEnv("PP_DESKTOP_REBUILD", gate);
+    const profile = repo.createProfile("Scoped proposal");
+    repo.setSetting("feature_toggles", JSON.stringify({ spoolman: account }));
+    repo.setSetting(`feature_toggles:plan:${profile.id}`, JSON.stringify({ spoolman: plan }));
+    const brief = newBuildPlanningBrief(profile.id, "Primary color is Red.", []);
+    saveBuildPlanningBrief(repo, brief);
+    const result = await invokeAssistantTool("propose_assign_role_filament", {
+      plan_id: profile.id,
+      assignment: { role: "primary", inventory_kind: "spoolman", inventory_id: "spoolman:inventory:filament:7", color_hex: "#ff0000" },
+    }, { repo });
+    if (allowed) {
+      expect(result.proposedAction).toMatchObject({ type: "propose_assign_role_filament", plan_id: profile.id });
+    } else {
+      expect(JSON.parse(result.content)).toEqual({ error: "Feature spoolman is disabled.", code: "FEATURE_DISABLED" });
+      expect(result.proposedAction).toBeUndefined();
+      const catalog = await invokeAssistantTool("propose_assign_role_filament", {
+        plan_id: profile.id,
+        assignment: { role: "primary", inventory_kind: "catalog", inventory_id: "abs-matte::black-pantone-7c", color_hex: "#c0afa1" },
+      }, { repo });
+      expect(catalog.proposedAction?.type).toBe("propose_assign_role_filament");
+    }
+    expect(readBuildPlanningBrief(repo, profile.id)).toEqual(brief);
   });
 
   it("rejects unverified Spoolman and unconfirmed custom assignments", async () => {

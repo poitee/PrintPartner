@@ -203,7 +203,7 @@ pub enum GroupBy {
     #[default]
     ColorDir,
 }
-fn id(value: u64) -> Result<()> {
+pub(super) fn id(value: u64) -> Result<()> {
     ensure!(
         value > 0 && value <= 9_007_199_254_740_991,
         "Invalid identifier"
@@ -402,6 +402,18 @@ impl Payload {
             _ => String::new(),
         }
     }
+    #[cfg(feature = "desktop_rebuild")]
+    pub(crate) fn profile_id(&self) -> Option<u64> {
+        match self {
+            Self::ExportStlPack { profile_id, .. }
+            | Self::ExportChecklistHtml { profile_id }
+            | Self::ExportKitBundle { profile_id, .. }
+            | Self::ExportAcceptedPlate3mf { profile_id, .. }
+            | Self::ExportDirect3mf { profile_id, .. } => Some(*profile_id),
+            Self::PrinterUpload { profile_id, .. } => *profile_id,
+            _ => None,
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -462,12 +474,19 @@ pub struct EffectReceipt {
     #[serde(default, skip_serializing_if = "is_false")]
     pub no_effect: bool,
     pub receipt: Option<ResultArtifact>,
+    #[cfg(feature = "desktop_rebuild")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) checklist_completion: Option<Box<super::checklist::ChecklistCompletionClaim>>,
 }
 fn is_false(value: &bool) -> bool {
     !*value
 }
 pub enum EffectOutcome<'a> {
     Unresolved,
+    /// A receipt retained from an attempt whose authority was refused before
+    /// it could confirm the effect. Only explicit reconciliation confirms it.
+    #[cfg(feature = "desktop_rebuild")]
+    Observed(&'a ResultArtifact),
     Confirmed(&'a ResultArtifact),
     Denied,
 }
@@ -475,18 +494,23 @@ impl EffectReceipt {
     pub(super) fn outcome(&self) -> Result<EffectOutcome<'_>> {
         match (self.confirmed, self.no_effect, self.receipt.as_ref()) {
             (false, false, None) => Ok(EffectOutcome::Unresolved),
+            #[cfg(feature = "desktop_rebuild")]
+            (false, false, Some(receipt)) => Ok(EffectOutcome::Observed(receipt)),
             (true, false, Some(receipt)) => Ok(EffectOutcome::Confirmed(receipt)),
             (false, true, None) => Ok(EffectOutcome::Denied),
             _ => Err(anyhow::anyhow!("Invalid effect outcome")),
         }
     }
     pub(super) fn confirm(&mut self, receipt: ResultArtifact) -> Result<()> {
-        ensure!(
-            matches!(self.outcome()?, EffectOutcome::Unresolved),
-            "Effect already resolved"
-        );
+        match self.outcome()? {
+            EffectOutcome::Unresolved => self.receipt = Some(receipt),
+            #[cfg(feature = "desktop_rebuild")]
+            EffectOutcome::Observed(stored) => ensure!(stored == &receipt, "Receipt mismatch"),
+            EffectOutcome::Confirmed(_) | EffectOutcome::Denied => {
+                return Err(anyhow::anyhow!("Effect already resolved"));
+            }
+        }
         self.confirmed = true;
-        self.receipt = Some(receipt);
         Ok(())
     }
     pub(super) fn deny(&mut self) -> Result<()> {
@@ -512,6 +536,45 @@ impl ResultArtifact {
         text(&self.target, 1024)
     }
 }
+/// How a durable document records who enqueued it. Documents written before
+/// authority persistence decode as `LegacyMissing` and are never upgraded.
+#[cfg(feature = "desktop_rebuild")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum AuthorityDisposition {
+    Original,
+    PhysicalOwner,
+    #[default]
+    LegacyMissing,
+}
+#[cfg(feature = "desktop_rebuild")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AuthorityRefusalReason {
+    MissingOriginal,
+    CredentialInvalid,
+    PolicyChanged,
+    TenantChanged,
+    SubjectChanged,
+}
+#[cfg(feature = "desktop_rebuild")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AuthorityRefusalPhase {
+    Claim,
+    TargetedClaim,
+    WorkerAdvance,
+    SourceWriter,
+}
+#[cfg(feature = "desktop_rebuild")]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AuthorityRefusalObservation {
+    pub(crate) version: u8,
+    pub(crate) reason: AuthorityRefusalReason,
+    pub(crate) phase: AuthorityRefusalPhase,
+    pub(crate) observed_at: i64,
+    pub(crate) generation: i64,
+}
 #[derive(Clone, Serialize, Deserialize)]
 pub struct JobRecord {
     pub job_id: String,
@@ -531,7 +594,19 @@ pub struct JobRecord {
     pub progress: Option<u8>,
     pub effects: Vec<EffectReceipt>,
     pub result: Option<ResultArtifact>,
+    #[cfg(feature = "desktop_rebuild")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_result: Option<super::CompletedResult>,
     pub recovery: Option<String>,
+    #[cfg(feature = "desktop_rebuild")]
+    #[serde(skip)]
+    pub(crate) authority: Option<crate::auth::authority::AuthorityBasis>,
+    #[cfg(feature = "desktop_rebuild")]
+    #[serde(skip)]
+    pub(crate) authority_disposition: AuthorityDisposition,
+    #[cfg(feature = "desktop_rebuild")]
+    #[serde(skip)]
+    pub(crate) authority_refusal: Option<AuthorityRefusalObservation>,
     #[serde(skip)]
     pub(crate) fence: Option<String>,
     #[serde(skip)]
@@ -539,13 +614,25 @@ pub struct JobRecord {
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct JobSnapshot {
+    #[cfg(feature = "desktop_rebuild")]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "Job engine wiring lands in GRE-609 (D16)")
+    )]
+    #[serde(skip)]
+    pub(crate) version: i64,
     pub job_id: String,
     pub kind: JobKind,
     pub status: &'static str,
     pub message: &'static str,
     pub progress: Option<u8>,
+    #[cfg(not(feature = "desktop_rebuild"))]
     pub result: Option<ResultArtifact>,
+    #[cfg(feature = "desktop_rebuild")]
+    pub result: Option<super::CompletedResult>,
     pub error: Option<&'static str>,
+    #[cfg(feature = "desktop_rebuild")]
+    pub created_at: String,
     pub finished_at: Option<String>,
     pub updated_at: String,
 }
@@ -556,7 +643,20 @@ impl JobRecord {
             digest(&effect.intent.basis_hash)?;
             digest(&effect.intent.content_hash)?;
             text(&effect.intent.target, 1024)?;
-            if let EffectOutcome::Confirmed(receipt) = outcome {
+            let receipt = match outcome {
+                EffectOutcome::Confirmed(receipt) => Some(receipt),
+                #[cfg(feature = "desktop_rebuild")]
+                EffectOutcome::Observed(receipt) => {
+                    ensure!(
+                        self.state == PersistentState::ReconciliationRequired
+                            && self.authority_refusal.is_some(),
+                        "Observed effect requires authority reconciliation"
+                    );
+                    Some(receipt)
+                }
+                EffectOutcome::Unresolved | EffectOutcome::Denied => None,
+            };
+            if let Some(receipt) = receipt {
                 receipt.validate()?;
                 ensure!(
                     receipt.content_hash == effect.intent.content_hash
@@ -573,6 +673,8 @@ impl JobRecord {
             self.state != PersistentState::UploadedOnly || self.uploaded_only_proof().is_some(),
             "Invalid uploaded-only job"
         );
+        #[cfg(feature = "desktop_rebuild")]
+        super::checklist::validate_claims(self)?;
         Ok(())
     }
     pub(super) fn uploaded_only_proof(&self) -> Option<UploadedProof<'_>> {
@@ -605,7 +707,7 @@ impl JobRecord {
                     }
                 }
                 EffectOperation::SpoolmanDeduction => {
-                    if matches!(outcome, EffectOutcome::Unresolved) {
+                    if !matches!(outcome, EffectOutcome::Confirmed(_) | EffectOutcome::Denied) {
                         return None;
                     }
                 }
@@ -647,13 +749,27 @@ impl JobRecord {
             PersistentState::Cancelled => ("cancelled", "Cancelled before effects"),
         };
         JobSnapshot {
+            #[cfg(feature = "desktop_rebuild")]
+            version: self.state_version,
             job_id: self.job_id.clone(),
             kind: self.kind,
             status,
             message,
+            #[cfg(feature = "desktop_rebuild")]
+            progress: if self.state == PersistentState::Queued {
+                Some(0)
+            } else {
+                self.progress
+            },
+            #[cfg(not(feature = "desktop_rebuild"))]
             progress: self.progress,
+            #[cfg(not(feature = "desktop_rebuild"))]
             result: self.result.clone(),
+            #[cfg(feature = "desktop_rebuild")]
+            result: self.public_result.clone(),
             error: (status == "error").then_some(message),
+            #[cfg(feature = "desktop_rebuild")]
+            created_at: timestamp(self.created_at),
             finished_at: self.finished_at.map(timestamp),
             updated_at: timestamp(self.updated_at),
         }
@@ -718,6 +834,31 @@ pub struct JobListQuery {
     pub since: Option<i64>,
     pub profile_id: Option<u64>,
     pub before: Option<(i64, String)>,
+}
+/// Node's job list filters. `NoMatch` is a filter value Node accepts but no job
+/// can satisfy, such as an unknown status or a non-numeric profile.
+#[cfg(feature = "desktop_rebuild")]
+#[derive(Clone, Debug, Default)]
+pub struct LegacyListFilter {
+    pub status: LegacyStatusFilter,
+    pub since_millis: Option<i64>,
+    pub profile: LegacyProfileFilter,
+}
+#[cfg(feature = "desktop_rebuild")]
+#[derive(Clone, Debug, Default)]
+pub enum LegacyStatusFilter {
+    #[default]
+    Any,
+    Exact(String),
+    NoMatch,
+}
+#[cfg(feature = "desktop_rebuild")]
+#[derive(Clone, Debug, Default)]
+pub enum LegacyProfileFilter {
+    #[default]
+    Any,
+    Exact(u64),
+    NoMatch,
 }
 impl Default for JobListQuery {
     fn default() -> Self {

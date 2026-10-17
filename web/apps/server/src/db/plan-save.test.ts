@@ -8,7 +8,7 @@ import { getDb, SqliteDatabase } from "./client.js";
 import { AppRepository, type SavePlanChoicesCommand } from "./repository.js";
 
 const cleanups: Array<() => void> = [];
-afterEach(() => { for (const cleanup of cleanups.splice(0).reverse()) cleanup(); });
+afterEach(() => { for (const cleanup of cleanups.splice(0).reverse()) cleanup(); vi.unstubAllEnvs(); });
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "pp-plan-save-"));
@@ -95,6 +95,54 @@ function editedDraft(context: ReturnType<typeof fixture>, explicitDecisions = fa
 }
 
 describe("savePlanChoices", () => {
+  it.each(["off", "invalid", "enabled", "legacy", "catalog"])("admits only accessible saved defaults during publication: %s", (mode) => {
+    const { repo, source, command: basis } = fixture();
+    vi.stubEnv("PP_DESKTOP_REBUILD", mode === "legacy" ? "0" : "1");
+    const profile = repo.createProfile("Scoped defaults", source.id);
+    const defaults = { primary: { filament_color_id: mode === "catalog" ? "catalog:red" : "spoolman:proof:filament:7",
+      filament_custom_hex: "#123456", spoolman_spool_id: "spoolman:proof:spool:11" } };
+    repo.setSetting(`role_filaments_${profile.id}`, JSON.stringify(defaults));
+    repo.setSetting(`feature_toggles:plan:${profile.id}`, mode === "invalid" ? "broken" : JSON.stringify({ spoolman: mode === "enabled" }));
+    const command: SavePlanChoicesCommand = { profileId: profile.id, actorId: "test", idempotencyKey: "initial",
+      expectedBase: { kind: "empty", planVersion: 0 }, expectedDraft: null, remapCheckoffLinks: true, changes: basis.changes };
+    expect(repo.savePlanChoices(command).kind).toBe("saved");
+    const allowed = mode === "enabled" || mode === "legacy";
+    const accepted = repo.getAcceptedPlanRevision(profile.id);
+    if (!accepted) throw new Error("Accepted Plan missing");
+    const parts = accepted.parts;
+    expect(parts).toHaveLength(2);
+    for (const part of parts ?? []) expect(part).toMatchObject({
+      filamentColorId: allowed || mode === "catalog" ? defaults.primary.filament_color_id : null,
+      filamentCustomHex: "#123456", spoolmanSpoolId: allowed ? defaults.primary.spoolman_spool_id : null,
+    });
+    expect(repo.getSetting(`role_filaments_${profile.id}`)).toBe(JSON.stringify(defaults));
+    repo.setSetting(`feature_toggles:plan:${profile.id}`, '{"spoolman":false}');
+    expect(repo.savePlanChoices({ ...command, idempotencyKey: "preserve", expectedBase: {
+      kind: "revision", revisionId: accepted.id, planVersion: 1,
+    } }).kind).toBe("saved");
+    expect(repo.getAcceptedPlanRevision(profile.id)?.parts.map((part) => part.filamentColorId))
+      .toEqual(parts?.map((part) => part.filamentColorId));
+  });
+
+  it("rolls back publication of new optional assignments from a draft prepared before revocation", () => {
+    const { repo, source, state, command: basis } = fixture();
+    vi.stubEnv("PP_DESKTOP_REBUILD", "1");
+    const profile = repo.createProfile("Revoked draft", source.id);
+    repo.setSetting(`feature_toggles:plan:${profile.id}`, '{"spoolman":true}');
+    repo.setSetting(`role_filaments_${profile.id}`, JSON.stringify({ primary: {
+      filament_color_id: "spoolman:proof:filament:7", spoolman_spool_id: "spoolman:proof:spool:11",
+    } }));
+    const result = repo.recomputePlanDraft({ profileId: profile.id, actor: "test", idempotencyKey: "draft", applyManifest: false });
+    if (result.kind !== "created") throw new Error("Draft not created");
+    expect(result.draft.parts[0]?.filamentColorId).toBe("spoolman:proof:filament:7");
+    repo.setSetting(`feature_toggles:plan:${profile.id}`, '{"spoolman":false}');
+    const before = state();
+    expect(repo.savePlanChoices({ profileId: profile.id, actorId: "test", idempotencyKey: "save",
+      expectedBase: { kind: "empty", planVersion: 0 }, expectedDraft: result.draft, changes: basis.changes, remapCheckoffLinks: true,
+    })).toMatchObject({ kind: "spoolman_unavailable", problem: { status: 403, code: "FEATURE_DISABLED" } });
+    expect(state()).toEqual(before);
+  });
+
   it("prepares each repeated insert once per save instead of once per part or unit", () => {
     const context = fixture();
     const prepare = vi.spyOn(Database.prototype, "prepare");

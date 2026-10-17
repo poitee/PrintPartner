@@ -55,7 +55,7 @@ fn events() -> Vec<Value> {
         .collect()
 }
 
-fn record_child(data: &Path, pid: u32) -> anyhow::Result<()> {
+fn before_setup(data: &Path, pid: u32) -> anyhow::Result<()> {
     let root = data.parent().unwrap();
     crate::record_test_pid(&root.join("pids"), pid)?;
     startup_wait(
@@ -76,10 +76,6 @@ fn record_child(data: &Path, pid: u32) -> anyhow::Result<()> {
             .contains("setupFromParent")
     );
     write_json(&root.join("milestone.json"), &observed[0]);
-    write_json(
-        &data.join(".desktop-owner.json"),
-        &json!({"child_process_identity": identity(pid).to_string()}),
-    );
     Ok(())
 }
 
@@ -91,8 +87,8 @@ async fn built_startup_owner_fixture() {
     let scratch = Scratch { root: root.into() };
     let spec = crate::SpawnSpec {
         bundle: bundle(),
-        record_child: Box::new(record_child),
-        lease: "x".repeat(1024 * 1024),
+        before_setup: Box::new(before_setup),
+        setup_padding: "x".repeat(1024 * 1024),
         ..release_spec(&scratch)
     };
     crate::release::verify_bundle(&spec.bundle, &spec.bundle.web_root.join("apps/web/dist"))

@@ -88,6 +88,12 @@ Web CI runs the same script. It exits with status zero when `unpinned=0`.
 bash scripts/check-github-actions-pinned.sh
 ```
 
+## Dependency updates
+
+Dependabot ignores semver-major updates for npm, Docker and Cargo.
+Cargo pins direct crates with `=` and uses `versioning-strategy: lockfile-only`, so Dependabot cannot change a pinned major version.
+Bump a major version in a ticketed PR that updates the manifest pin, `Cargo.lock` and any code the new API needs.
+
 ## Settings for Chad
 
 CODEOWNERS requests review. GitHub enforces that review only after Chad enables the main-branch ruleset.

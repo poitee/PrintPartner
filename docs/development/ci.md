@@ -53,7 +53,7 @@ cargo nextest run --manifest-path rust/Cargo.toml --locked --workspace --no-fail
 cargo nextest run --manifest-path rust/Cargo.toml --locked --workspace --no-fail-fast --features desktop_rebuild
 ```
 
-On macOS, set `TMPDIR` to a short directory on a case-sensitive volume before you run the tests. The workflow step `Mount a short case-sensitive TMPDIR` has the commands. To skip the same tests as CI, add `-E` with the `tests` value of the macOS entry. On Windows, replace `--workspace` with the items of the Windows entry's `scope` list, separated by spaces. On Linux, the Tauri shell also needs the GTK and WebKit packages that the workflow installs with `apt-get`.
+On macOS, set `TMPDIR` to a short directory on a case-sensitive volume before you run the tests. The workflow step `Mount a short case-sensitive TMPDIR` has the commands. Also set `PP_TEST_NODE` to the Node executable, as CI does. Without it the runtime tests fall back to `/usr/bin/node`, which macOS does not have. To skip the same tests as CI, add `-E` with the `tests` value of the macOS entry. On Windows, replace `--workspace` with the items of the Windows entry's `scope` list, separated by spaces. On Linux, the Tauri shell also needs the GTK and WebKit packages that the workflow installs with `apt-get`.
 
 Clippy and fmt do not read the manifest contents. For a lint-only run, `echo '{}' > rust/bundle-manifest.json` is enough. The tests need the real manifest.
 
@@ -108,14 +108,13 @@ These crates do not build on Windows yet. The Windows job excludes them with `--
 
 The `tests` value of the macOS entry skips these tests. The comment above the macOS entry names the ticket for each skipped term. When a test passes on macOS, delete it from that filter in the same pull request.
 
-The macOS job skips two lifecycle groups as a whole. They are every test in the `pp-core` `runtime_m0` binary and every `pp-compat` test under `ticket_t_2::`. On the hosted runner, a different subset of them fails on each run, with "Compatibility readiness/release verification failed" or with Node and shell children that exit with status 126. Linux still runs both groups in full, and **Native macOS bundle** still runs its own selected macOS lifecycle tests. GRE-645 tracks the root cause, including whether the mounted `TMPDIR` volume is involved, and removes the group skip.
+The macOS job skips two lifecycle groups as a whole. They are every test in the `pp-core` `runtime_m0` binary and every `pp-compat` test under `ticket_t_2::`. Linux still runs both groups in full, and **Native macOS bundle** still runs its own selected macOS lifecycle tests. GRE-645 owns the skip. On the hosted runner, one release verification takes 10 to 20 seconds, almost all of it spent walking and hashing about 42,000 dependency files. Every runtime start verifies twice, once inside the 32-second readiness budget, and every supervisor restart verifies again. GRE-661 tracks that cost. The skip stays until it is fixed.
 
-The filter also skips two tests by name, outside those groups:
+The filter also skips one test by name, outside those groups:
 
 | Crate | Test | Ticket | Failure |
 |-------|------|--------|---------|
-| `pp-core` | `origin_tests::ticket_t_12_missing_config_persists_private_port_and_reuses_it` | GRE-645 | The Node child does not reach readiness, the same symptom as the `runtime_m0` group. |
-| `pp-source` | `acquisition_labels::raw_long_labels_contract_to_valid_file_and_directory_paths` | GRE-658 | The extracted directory is missing on APFS. This test exists only with `desktop_rebuild` on. |
+| `pp-core` | `origin_tests::ticket_t_12_missing_config_persists_private_port_and_reuses_it` | GRE-645 | It reruns the test binary with a 3-second deadline, which it misses while release verification in other tests saturates the runner. |
 
 ## Other Rust workflows
 
