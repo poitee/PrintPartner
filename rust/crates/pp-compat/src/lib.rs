@@ -6,7 +6,7 @@ pub use logs::recent_diagnostics;
 mod parent_death;
 use parent_death::{ParentDeathGuard, configure_child};
 mod release;
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use axum::{
     body::Body,
     http::{HeaderValue, Request, Response},
@@ -14,7 +14,7 @@ use axum::{
 use hmac::{Hmac, Mac};
 use http_body_util::BodyExt;
 use hyper_util::rt::TokioIo;
-pub use release::verify_bundle;
+pub use release::{MeasuredBundle, verify_bundle};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use std::{
@@ -51,7 +51,7 @@ pub type BeforeSetup = Box<dyn Fn(&Path, u32) -> Result<()> + Send + Sync>;
 
 pub struct SpawnSpec {
     pub account_pin: DesktopAccountPin,
-    pub bundle: Bundle,
+    pub bundle: MeasuredBundle,
     pub data_dir: PathBuf,
     pub runtime_dir: PathBuf,
     #[cfg(test)]
@@ -454,12 +454,27 @@ async fn write_setup_or_cancel(
 }
 
 impl Process {
+    /// The first spawn uses the verification that produced `spec.bundle`. A respawn passes
+    /// the restart-disarm token, measures the release again on a blocking thread that stops
+    /// between files once `cancelled` fires, and starts no child if restarts were blocked
+    /// while it measured.
     async fn spawn(
         spec: &SpawnSpec,
         capture: &logs::Logs,
         cancelled: &CancellationToken,
+        respawn: Option<&CancellationToken>,
     ) -> Result<Self> {
-        release::verify_backend(&spec.bundle)?;
+        if let Some(disarmed) = respawn {
+            let bundle = Bundle::clone(&spec.bundle);
+            let stop = cancelled.clone();
+            tokio::task::spawn_blocking(move || release::verify_backend(&bundle, &stop))
+                .await
+                .context("Release verification task failed")??;
+            ensure!(
+                !restarts_blocked(cancelled, disarmed),
+                "Compatibility restart blocked during release verification"
+            );
+        }
         let package_root = release::package_root(&spec.bundle)?;
         let preload = spec
             .bundle
@@ -835,9 +850,10 @@ async fn obtain(
     source: &Launch,
     logs: &logs::Logs,
     cancelled: &CancellationToken,
+    respawn: Option<&CancellationToken>,
 ) -> Result<Process> {
     match source {
-        Launch::Release(spec) => Process::spawn(spec, logs, cancelled).await,
+        Launch::Release(spec) => Process::spawn(spec, logs, cancelled, respawn).await,
         #[cfg(test)]
         Launch::Shell(spec) => Process::spawn_shell(spec, logs, cancelled).await,
     }
@@ -907,6 +923,7 @@ impl Supervisor {
             let mut crashes = std::collections::VecDeque::new();
             let mut exit = CompatExit::Graceful;
             let mut attempt = 0;
+            let mut spawned = false;
             loop {
                 if restarts_blocked(&cancelled, &disarmed) {
                     break;
@@ -916,7 +933,9 @@ impl Supervisor {
                 // first request. Starting closes admission before draining it.
                 while recovery.try_recv().is_ok() {}
                 logs.event(logs::Event::Starting, 30);
-                let process = obtain(&source, &logs, &cancelled).await;
+                let process =
+                    obtain(&source, &logs, &cancelled, spawned.then_some(&disarmed)).await;
+                spawned = true;
                 let mut failure = logs::FailureReason::SpawnFailed;
                 let mut termination = None;
                 if let Ok(mut process) = process {
