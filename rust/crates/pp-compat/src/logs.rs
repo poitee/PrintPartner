@@ -218,24 +218,29 @@ fn secure_archives(directory: &File) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Create with O_EXCL, then open an existing entry without O_CREAT. On macOS,
+/// racing dirfd-relative O_CREAT opens without O_EXCL can fail with ENOENT.
 fn open_log(directory: &File) -> std::io::Result<File> {
-    let fd = unsafe {
-        libc::openat(
-            directory.as_raw_fd(),
-            c"desktop.jsonl".as_ptr(),
-            libc::O_WRONLY
-                | libc::O_APPEND
-                | libc::O_CREAT
-                | libc::O_CLOEXEC
-                | libc::O_NOFOLLOW
-                | libc::O_NONBLOCK,
-            0o600 as libc::c_uint,
-        )
+    let flags =
+        libc::O_WRONLY | libc::O_APPEND | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK;
+    let open = |flags| {
+        let fd = unsafe {
+            libc::openat(
+                directory.as_raw_fd(),
+                c"desktop.jsonl".as_ptr(),
+                flags,
+                0o600 as libc::c_uint,
+            )
+        };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(unsafe { File::from_raw_fd(fd) })
     };
-    if fd < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    let file = unsafe { File::from_raw_fd(fd) };
+    let file = match open(flags | libc::O_CREAT | libc::O_EXCL) {
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => open(flags)?,
+        result => result?,
+    };
     secure_log(&file)?;
     Ok(file)
 }
