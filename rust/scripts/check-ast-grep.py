@@ -1,6 +1,7 @@
 """Fail unless Rust ast-grep rule counts equal the checked-in baseline.
 
-The baseline may not rise over origin/main unless PP_AST_GREP_ALLOW_BASELINE_RAISE=1.
+The baseline may not rise over the push base, or origin/main outside push runs,
+unless PP_AST_GREP_ALLOW_BASELINE_RAISE=1.
 """
 
 from collections import Counter
@@ -99,17 +100,35 @@ def parse_baseline(text):
     return baseline
 
 
-def main_baseline(root):
-    """Return the baseline at BASE_REF, or None before it first lands there.
+def comparison_ref(root):
+    """Pin push runs to their event base, even when origin/main has advanced."""
+    if os.environ.get("GITHUB_EVENT_NAME") != "push":
+        return BASE_REF
+    event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+    before = event.get("before")
+    if not isinstance(before, str) or not re.fullmatch(r"[0-9a-f]{40}", before) or before == "0" * 40:
+        raise ValueError("push event must contain a nonzero before commit SHA")
+    if subprocess.run(
+        ["git", "cat-file", "-e", before + "^{commit}"], cwd=root, capture_output=True,
+    ).returncode:
+        subprocess.run(
+            ["git", "fetch", "--no-tags", "--depth=1", "origin", before],
+            cwd=root, text=True, capture_output=True, check=True,
+        )
+    return before
 
-    A missing BASE_REF is an error, so an unfetched checkout cannot skip the rise check.
+
+def main_baseline(root, base_ref):
+    """Return the baseline at base_ref, or None before it first lands there.
+
+    A missing base_ref is an error, so an unfetched checkout cannot skip the rise check.
     """
     if subprocess.run(
-        ["git", "rev-parse", "--verify", "--quiet", BASE_REF + "^{commit}"],
+        ["git", "rev-parse", "--verify", "--quiet", base_ref + "^{commit}"],
         cwd=root, capture_output=True,
     ).returncode:
-        raise ValueError(f"{BASE_REF} is unavailable; fetch it so baseline raises can be checked")
-    spec = f"{BASE_REF}:./ast-grep-baseline.json"
+        raise ValueError(f"{base_ref} is unavailable; fetch it so baseline raises can be checked")
+    spec = f"{base_ref}:./ast-grep-baseline.json"
     if subprocess.run(["git", "cat-file", "-e", spec], cwd=root, capture_output=True).returncode:
         return None
     shown = subprocess.run(["git", "show", spec], cwd=root, text=True, capture_output=True, check=True)
@@ -128,7 +147,8 @@ def raised_over_main(baseline, main):
 def main():
     root = Path(__file__).resolve().parents[1]
     baseline = parse_baseline((root / "ast-grep-baseline.json").read_text())
-    main = main_baseline(root)
+    base_ref = comparison_ref(root)
+    main = main_baseline(root, base_ref)
     scan = subprocess.run(
         ["ast-grep", "scan", "--config", "sgconfig.yml", "--json=compact", "--inspect=entity", "crates"],
         cwd=root,
@@ -165,9 +185,9 @@ def main():
             line = hit["range"]["start"]["line"] + 1
             print(f'{hit["file"]}:{line}: {hit["ruleId"]}: {hit["text"]}')
     if main is None:
-        print(f"ast-grep baseline raise check skipped: {BASE_REF} has no ast-grep-baseline.json yet (first landing).")
+        print(f"ast-grep baseline raise check skipped: {base_ref} has no ast-grep-baseline.json yet (first landing).")
     for rule, (before, after) in raised.items():
-        print(f"{rule}: baseline raised {before} -> {after} over {BASE_REF}")
+        print(f"{rule}: baseline raised {before} -> {after} over {base_ref}")
     status = 0
     if exceeded:
         print("ast-grep ratchet FAILED: hits exceed the baseline.")
@@ -176,7 +196,7 @@ def main():
         print(f"ast-grep ratchet FAILED: baseline must equal hit counts; lower ast-grep-baseline.json for {sorted(lowered)}.")
         status = 1
     if raised and not allow_raise:
-        print(f"ast-grep ratchet FAILED: baseline raised over {BASE_REF}; set {RAISE_OVERRIDE}=1 only for an intentional raise.")
+        print(f"ast-grep ratchet FAILED: baseline raised over {base_ref}; set {RAISE_OVERRIDE}=1 only for an intentional raise.")
         status = 1
     if status == 0:
         print("ast-grep ratchet passed: counts match the baseline.")
@@ -186,7 +206,7 @@ def main():
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+    except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:
         print(f"ast-grep ratchet error: {error}", file=sys.stderr)
         if isinstance(error, subprocess.CalledProcessError):
             print(error.stderr, file=sys.stderr)

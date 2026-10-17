@@ -40,7 +40,7 @@ class RatchetTests(unittest.TestCase):
         }))
 
     def git(self, *args):
-        subprocess.run(
+        return subprocess.run(
             ["git", "-c", "user.name=test", "-c", "user.email=test@example.invalid",
              "-c", "commit.gpgsign=false", *args],
             cwd=self.root, check=True, capture_output=True, text=True,
@@ -56,8 +56,12 @@ class RatchetTests(unittest.TestCase):
         self.git("commit", "-q", "--allow-empty", "-m", "main")
         self.git("update-ref", "refs/remotes/origin/main", "HEAD")
 
-    def check(self, allow_raise=False):
-        environment = {key: value for key, value in os.environ.items() if key != RAISE_OVERRIDE}
+    def check(self, allow_raise=False, push_before=None):
+        environment = {key: value for key, value in os.environ.items() if key not in (RAISE_OVERRIDE, "GITHUB_EVENT_NAME", "GITHUB_EVENT_PATH")}
+        if push_before is not None:
+            event = self.root / "push-event.json"
+            event.write_text(json.dumps({"before": push_before}))
+            environment.update(GITHUB_EVENT_NAME="push", GITHUB_EVENT_PATH=str(event))
         if allow_raise:
             environment[RAISE_OVERRIDE] = "1"
         return subprocess.run(
@@ -120,6 +124,46 @@ class RatchetTests(unittest.TestCase):
         result = self.check()
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("origin/main is unavailable", result.stderr)
+
+    def test_older_push_uses_its_base_after_main_baseline_drops(self):
+        before = self.git("rev-parse", "HEAD").stdout.strip()
+        self.git("commit", "-q", "--allow-empty", "-m", "older push")
+        self.source("pp-source/src/lib.rs", "fn production() {}")
+        self.publish_main(unwrap=0)
+        self.git("checkout", "--detach", "HEAD^")
+        result = self.check(push_before=before)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_push_baseline_raise_fails_even_when_live_main_matches(self):
+        self.publish_main(unwrap=0)
+        before = self.git("rev-parse", "HEAD").stdout.strip()
+        self.publish_main(unwrap=1)
+        result = self.check(push_before=before)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn(f"baseline raised 0 -> 1 over {before}", result.stdout)
+
+    def test_shallow_push_fetches_exact_base_and_rejects_raise(self):
+        self.publish_main(unwrap=0)
+        before = self.git("rev-parse", "HEAD").stdout.strip()
+        self.publish_main(unwrap=1)
+        clone = self.root / "shallow"
+        self.git("clone", "--quiet", "--depth=1", self.root.as_uri(), str(clone))
+        self.root = clone
+        self.assertEqual(self.git("rev-parse", "--is-shallow-repository").stdout.strip(), "true")
+        self.assertNotEqual(subprocess.run(
+            ["git", "cat-file", "-e", before], cwd=self.root, capture_output=True,
+        ).returncode, 0)
+        result = self.check(push_before=before)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn(f"baseline raised 0 -> 1 over {before}", result.stdout)
+        self.git("cat-file", "-e", before)
+
+    def test_invalid_push_base_fails_closed(self):
+        for before in ("", "0" * 40, "origin/main"):
+            with self.subTest(before=before):
+                result = self.check(push_before=before)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn("push event must contain a nonzero before commit SHA", result.stderr)
 
     def test_new_unwrap_fails(self):
         self.source("pp-source/src/lib.rs", "fn production() { value.unwrap(); value.unwrap(); }")
