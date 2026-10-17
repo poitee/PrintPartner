@@ -41,7 +41,7 @@ fn ticket_t_12_lock_acl_write_elevation_is_refused() {
         .mode(0o700)
         .create(&copy.0)
         .unwrap();
-    let lock = copy.0.join(".desktop.lock");
+    let lock = copy.0.join("printpartner.lock");
     let database = copy.0.join("print-partner.db");
     std::fs::write(&lock, b"existing lock").unwrap();
     mode(&lock, 0o600);
@@ -104,20 +104,17 @@ fn ticket_t_12_lock_acl_write_elevation_is_refused() {
 
 #[test]
 fn ticket_t_12_hostile_lock_entries_refuse_before_preflight_or_cleanup() {
-    for (name, kind) in [".desktop.lock", "printpartner.lock"]
-        .into_iter()
-        .flat_map(|name| {
-            [
-                "symlink",
-                "dangling",
-                "hardlink",
-                "directory",
-                "fifo",
-                "group-write",
-            ]
-            .map(|kind| (name, kind))
-        })
-    {
+    for (name, kind) in ["printpartner.lock"].into_iter().flat_map(|name| {
+        [
+            "symlink",
+            "dangling",
+            "hardlink",
+            "directory",
+            "fifo",
+            "group-write",
+        ]
+        .map(|kind| (name, kind))
+    }) {
         let copy = Copy::new();
         std::fs::DirBuilder::new()
             .mode(0o700)
@@ -246,7 +243,7 @@ fn ticket_t_12_permission_repair_reopens_the_copied_database() {
     let error = WriterOwner::open(&copy.0, Limits::default()).err().unwrap();
     assert_eq!(error.to_string(), "Unsafe data directory permissions");
     assert_eq!(std::fs::read(&database).unwrap(), before);
-    assert!(!copy.0.join(".desktop.lock").exists());
+    assert!(!copy.0.join("printpartner.lock").exists());
     mode(&copy.0, 0o700);
     let (owner, _) = WriterOwner::open(&copy.0, Limits::default()).unwrap();
     owner.shutdown().unwrap();

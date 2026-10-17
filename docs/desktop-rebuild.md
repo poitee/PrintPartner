@@ -172,7 +172,7 @@ GRE-607 exposes five crate-private helpers through `working_drafts::observation`
 for GRE-604 D10b. `parse_builder_manifest` reads part rules, option groups,
 repository defaults, and their scalar or array shapes. `merge_builder_groups`
 preserves earlier metadata, unions patterns, and preserves JavaScript property
-order. `builder_path_matches` applies the Node glob and basename rules.
+order. `BuilderGlob` applies the Node glob and basename rules.
 `parse_builder_hints` validates version 1 path hints and rejects unknown fields.
 `infer_builder_siblings` delegates to the sibling inference already on main.
 
@@ -513,9 +513,9 @@ Before recursive creation, admission checks existing input prefixes and their re
 
 Store admission checks permissions on an open directory descriptor and holds it while it resolves the canonical path. It compares that descriptor's device and inode with the canonical directory, then rechecks the canonical leaf's owner and permissions. Replacement at this checkpoint fails with `Data directory was replaced` before lock creation, ownership cleanup or database preflight. Existing aliases remain supported.
 
-Writer admission keeps that descriptor through OS-lock acquisition and opens `printpartner.lock` relative to it before database preflight. Lease acquisition then opens the retained `.desktop.lock` relative to the same directory descriptor. It rechecks directory identity and permissions before opening the lock, before locking, and after locking, before ownership marker access. An observed replacement fails with `Data directory was replaced`. A lock created during a replacement race belongs to the admitted directory; refusal closes the lock without path-based cleanup.
+Writer admission keeps that descriptor through OS-lock acquisition and opens `printpartner.lock` relative to it before database preflight. After taking that lock, Rust reserves `.desktop-lease` with a regular file to exclude standalone Node. An existing Node lease directory refuses admission without owner-marker inspection or recovery. Rust rechecks directory identity and permissions before and after locking. An observed replacement fails with `Data directory was replaced`. A lock created during a replacement race belongs to the admitted directory; refusal closes the lock without path-based cleanup.
 
-The standalone Rust writer acquires `printpartner.lock` before its first read-only database preflight and retains the same admitted directory descriptor into lease acquisition. It rechecks identity and permissions immediately before preflight, refusing an observed replacement before database capture, temporary-copy creation or SQLite open. It checks resolved ancestor permissions before each lock acquisition. `PP_STORAGE_CORE_LOCK=1` tells the supervised Node child to validate its inherited descriptor against `printpartner.lock`. The standalone Node lease protocol remains unchanged. See [Storage](storage.md) for shutdown, crash recovery, and unsupported directory operations.
+The standalone Rust writer acquires `printpartner.lock` before its first read-only database preflight and retains the same admitted directory descriptor through storage ownership. It rechecks identity and permissions immediately before preflight, refusing an observed replacement before database capture, temporary-copy creation or SQLite open. It checks resolved ancestor permissions before each lock acquisition. `PP_STORAGE_CORE_LOCK=1` tells the supervised Node child to validate its inherited descriptor against `printpartner.lock`. The standalone Node lease protocol remains unchanged. See [Storage](storage.md) for shutdown, crash recovery, and unsupported directory operations.
 
 These Unix checks remain snapshots, not path confinement. Replacement during preflight capture or after the OS-lock checkpoints, transient replacement restored between checks, ancestor replacement, ACL policy, standalone Node admission, and Windows runtime permission policy remain open.
 
@@ -794,7 +794,7 @@ A source without a checkout path is skipped. A source whose checkout root the ad
 
 Adapter reads, manifest and hint parsing, and STL scans charge the caller's `PreparationBudget`.
 The stored kit and each source's import rules charge their bytes as documents.
-Import rules also charge every JSON node and one rule per accepted path.
+Both also charge every JSON node and its depth to the same budget. Import rules charge one rule per accepted path.
 Import rules over the JSON byte, depth, or node limit refuse the observation.
 Malformed or non-array import rules give an empty rule set, as in Node.
 A malformed stored kit falls back to an empty kit, as in Node.
@@ -818,8 +818,10 @@ Lone surrogate pattern units are preserved, and `?` consumes half a supplementar
 
 The matcher uses two indices and one saved `*` retry point instead of a regex.
 It has O(path units × pattern units) worst-case work and O(path units + pattern
-units) normalization storage. The helper has no `PreparationBudget` parameter;
-callers retain their existing cancellation checks between matches.
+units) normalization storage. `BuilderGlob::new` normalizes a pattern once for
+all paths. The matcher has no `PreparationBudget` parameter; the observation
+checks cancellation before each path, so cancellation waits for at most one
+path's match.
 This resolves the backtracking and UTF-16 parity defects in GRE-642 and GRE-641.
 
 Regenerate or verify the Node differential corpus with
