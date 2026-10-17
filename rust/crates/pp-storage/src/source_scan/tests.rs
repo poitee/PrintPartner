@@ -32,43 +32,6 @@ impl Scan {
         let root = std::env::temp_dir().join(format!("pp-source-scan-{}", rand::random::<u64>()));
         let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
         let connection = Connection::open(root.join("print-partner.db")).unwrap();
-        // #553 installs these columns. D17 (b) installs the journal at schema 40.
-        for (table, column, sql) in [
-            (
-                "projects",
-                "source_configuration_version",
-                "ALTER TABLE projects ADD COLUMN source_configuration_version INTEGER NOT NULL DEFAULT 1",
-            ),
-            (
-                "source_docs",
-                "source_revision_id",
-                "ALTER TABLE source_docs ADD COLUMN source_revision_id INTEGER REFERENCES source_revisions(id) ON DELETE RESTRICT",
-            ),
-            (
-                "source_docs",
-                "input_digest",
-                "ALTER TABLE source_docs ADD COLUMN input_digest TEXT",
-            ),
-            (
-                "source_docs",
-                "producer_version",
-                "ALTER TABLE source_docs ADD COLUMN producer_version TEXT CHECK ((source_revision_id IS NULL AND input_digest IS NULL AND producer_version IS NULL) OR (source_revision_id IS NOT NULL AND input_digest IS NOT NULL AND length(input_digest) = 64 AND producer_version IS NOT NULL))",
-            ),
-        ] {
-            let exists: bool = connection
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name=?2)",
-                    params![table, column],
-                    |row| row.get(0),
-                )
-                .unwrap();
-            if !exists {
-                connection.execute_batch(sql).unwrap();
-            }
-        }
-        connection
-            .execute_batch(include_str!("schema.sql"))
-            .unwrap();
         let policy = AuthPolicy {
             registration: RegistrationPolicy::Open,
             session_tenant: SessionTenantPolicy::AccountTenant,

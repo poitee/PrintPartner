@@ -1,4 +1,4 @@
-CREATE TABLE source_scan_executions (
+CREATE TABLE IF NOT EXISTS source_scan_executions (
   job_id TEXT NOT NULL REFERENCES durable_jobs(id) ON DELETE CASCADE,
   generation INTEGER NOT NULL CHECK (generation > 0),
   tenant TEXT NOT NULL,
@@ -38,5 +38,5 @@ CREATE TABLE source_scan_executions (
   CHECK ((phase='completed' AND result_digest IS NOT NULL) OR (phase<>'completed' AND result_digest IS NULL)),
   CHECK (phase<>'reconciliation_required' OR reconciliation_reason IS NOT NULL)
 );
-CREATE UNIQUE INDEX source_scan_execution_receipt
+CREATE UNIQUE INDEX IF NOT EXISTS source_scan_execution_receipt
 ON source_scan_executions(receipt_id) WHERE receipt_id IS NOT NULL;

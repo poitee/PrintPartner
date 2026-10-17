@@ -891,7 +891,6 @@ pub(crate) fn reconcile(
     })
 }
 
-#[cfg_attr(not(test), expect(dead_code, reason = "D17 (c) calls this"))]
 pub(crate) fn validate_schema(connection: &Connection, version: u64) -> Result<()> {
     let objects = |connection: &Connection| -> Result<Vec<(String, Option<String>)>> {
         Ok(connection

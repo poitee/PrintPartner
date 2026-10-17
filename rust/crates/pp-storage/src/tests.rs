@@ -1845,9 +1845,9 @@ fn ticket_t_7_migrations_preserves_refused_inputs() {
         "Cannot upgrade database schema version 30",
     );
     let newer = if cfg!(feature = "desktop_rebuild") {
-        "40"
+        "41"
     } else {
-        "39"
+        "40"
     };
     assert_refused(
         &refused_wal_input(newer),
@@ -3188,8 +3188,18 @@ fn with_sql_identity(graph: &SchemaGraph) -> SchemaGraph {
 }
 
 #[cfg(feature = "desktop_rebuild")]
-fn omit_upload_schema(graph: &mut SchemaGraph) {
-    let owned = crate::uploads::owned_objects().unwrap();
+fn omit_source_schema(graph: &mut SchemaGraph) {
+    let mut owned = crate::uploads::owned_objects().unwrap();
+    owned.extend(
+        graph
+            .objects
+            .keys()
+            .filter(|(_, name)| {
+                name.starts_with("source_scan_execution")
+                    || name.starts_with("sqlite_autoindex_source_scan_execution")
+            })
+            .map(|(_, name)| name.clone()),
+    );
     graph.objects.retain(|(_, name), _| !owned.contains(name));
     for name in &owned {
         graph.columns.remove(name);
@@ -3248,7 +3258,7 @@ fn omit_durable_jobs(graph: &mut SchemaGraph) {
         graph.columns.remove("plan_apply_admissions");
         graph.foreign_keys.remove("plan_apply_admissions");
         graph.rows.remove("plan_apply_admissions");
-        omit_upload_schema(graph);
+        omit_source_schema(graph);
     }
     let job_object = |name: &str| {
         name.starts_with("durable_job") || name.starts_with("sqlite_autoindex_durable_job")

@@ -785,7 +785,6 @@ impl ServerWorkerClient {
 }
 #[cfg(feature = "desktop_rebuild")]
 impl ServerWorkerClient {
-    /// Requires the schema 39 Source columns and schema 40 scan journal.
     pub fn observe_local_scan(
         &self,
         lease: &AttemptLease,
@@ -810,7 +809,6 @@ impl ServerWorkerClient {
         }
     }
 
-    /// Requires the schema 39 Source columns and schema 40 scan journal.
     pub fn settle_local_scan(
         &self,
         lease: &mut AttemptLease,
