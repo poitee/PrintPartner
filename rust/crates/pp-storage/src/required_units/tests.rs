@@ -298,8 +298,9 @@ fn node_message_cases(column: &str) {
         };
         tx.execute(sql, [case["input"].as_str().unwrap()]).unwrap();
         let actual = error(storage::saved(&tx, "default", 1, 1, 1));
-        if actual != case["message"].as_str().unwrap() {
-            mismatches.push(json!({"name":case["name"],"actual":actual,"node":case["message"]}));
+        let expected = case.get("rust").unwrap_or(&case["message"]);
+        if actual != expected.as_str().unwrap() {
+            mismatches.push(json!({"name":case["name"],"actual":actual,"expected":expected}));
         }
         tx.execute_batch("ROLLBACK TO malformed_json; RELEASE malformed_json")
             .unwrap();

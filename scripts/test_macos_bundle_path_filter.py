@@ -72,14 +72,15 @@ class PathFilterTests(unittest.TestCase):
                     "rust/scripts/check-macos-bundle.py", "rust/scripts/precompress-spa.py",
                     "rust/Cargo.lock", "web/package-lock.json",
                     "rust-toolchain.toml", ".github/workflows/desktop-native-macos.yml",
-                    "scripts/macos-bundle-path-filter.py", "rust/crates/pp-storage/src/macos.rs"]
+                    "scripts/macos-bundle-path-filter.py", "rust/crates/pp-storage/src/macos.rs",
+                    "rust/tests/built_backend_listeners.py"]
         for path in triggers:
             with self.subTest(path=path):
                 self.assertTrue(bundle_filter.is_macos_pr_input(path))
         quiet = ["web/apps/web/src/App.tsx", "web/apps/server/src/start.ts",
                  "rust/crates/pp-server/src/lib.rs", "rust/crates/pp-core/src/lib.rs",
                  ".github/workflows/web-ci.yml", "scripts/release.mjs", "Dockerfile",
-                 "rust/crates/pp-desktop/README.md", "docs/macos.md"]
+                 "rust/crates/pp-desktop/README.md", "docs/macos.md", "rust/tests/built_backend_upload.py"]
         for path in quiet:
             with self.subTest(path=path):
                 self.assertFalse(bundle_filter.is_macos_pr_input(path))

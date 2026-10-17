@@ -170,28 +170,24 @@ fn ready(parsed: &Value) -> Result<StoredResult> {
         &["kind", "assignments", "surplus"],
         "Required-unit reconciliation result",
     )?;
-    ensure!(
-        parsed["assignments"].is_array() && parsed["surplus"].is_array(),
-        "Required-unit reconciliation ready result is invalid"
-    );
-    let mut assignments = array(
-        &parsed["assignments"],
-        "Required-unit reconciliation ready result",
-    )?
-    .iter()
-    .map(assignment)
-    .collect::<Result<Vec<_>>>()?;
-    let surplus = array(
-        &parsed["surplus"],
-        "Required-unit reconciliation ready result",
-    )?
-    .iter()
-    .map(|value| {
-        value
-            .as_str()
-            .ok_or_else(|| anyhow!("Required-unit reconciliation surplus is invalid"))
-    })
-    .collect::<Result<Vec<_>>>()?;
+    let (Some(assignments), Some(surplus)) = (
+        parsed["assignments"].as_array(),
+        parsed["surplus"].as_array(),
+    ) else {
+        bail!("Required-unit reconciliation ready result is invalid");
+    };
+    let mut assignments = assignments
+        .iter()
+        .map(assignment)
+        .collect::<Result<Vec<_>>>()?;
+    let surplus = surplus
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or_else(|| anyhow!("Required-unit reconciliation surplus is invalid"))
+        })
+        .collect::<Result<Vec<_>>>()?;
     let mut slots = HashSet::new();
     let mut tokens = HashSet::new();
     for assignment in &assignments {

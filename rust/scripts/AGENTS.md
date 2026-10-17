@@ -3,3 +3,4 @@
 | Rule | Enforcement |
 | --- | --- |
 | Desktop staging accepts a supplied Node path only when the resolved file is a Linux ELF or macOS Mach-O image, then checks Node 24.21.0 ABI 137 and the host platform. A dispatcher script is rejected before the stager runs that file or creates the stage directory. | `native_node_binary` in `rust/scripts/stage-desktop.py`. Run `python3 rust/scripts/stage-desktop.py --self-test`. |
+| Every manifest `rust_writes: "none"` format has family literal tokens in the ast-grep rule; new non-test Rust family literals exceed the baseline. | `no-writer-family-literal.yml`, `ticket_t_7_live_formats`, and `rust/scripts/check-ast-grep.py`. Run `ast-grep test --config rust/sgconfig.yml --skip-snapshot-tests` and `python3 rust/scripts/check-ast-grep.py`. |

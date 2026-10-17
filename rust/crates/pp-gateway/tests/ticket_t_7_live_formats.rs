@@ -276,29 +276,39 @@ fn workspace_format_must_match_the_source_sync_record() {
 }
 
 #[test]
-fn bundled_read_only_catalog_admits_rollback() {
-    let index = admit_bundled_manifest().unwrap();
-    assert_eq!(
-        index.admit_rollback("tool.get_kit_catalog"),
-        Ok(&BTreeSet::from([File(FileFamily::KitCatalog)]))
-    );
-}
+fn no_writer_declarations_have_family_literal_rules() {
+    let families = std::collections::BTreeMap::from([
+        ("source-covers", "covers"),
+        ("kit-catalog", "kit-catalog"),
+        ("path-hints", "path-hints"),
+        ("community-manifests", "manifests"),
+    ]);
+    let manifest = manifest();
+    let no_writers: std::collections::BTreeSet<_> = manifest["live_formats"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .filter(|(_, format)| format["rust_writes"] == "none")
+        .map(|(name, _)| name.as_str())
+        .collect();
+    assert_eq!(no_writers, families.keys().copied().collect());
 
-#[test]
-fn catalog_format_one_is_a_fixed_unversioned_loader_contract() {
-    // loadKitCatalog accepts object-shaped JSON/YAML without checking version.
-    // Format 1 names that contract, not a maximum catalog version Node accepts.
-    assert_eq!(
-        manifest()["live_formats"]["kit-catalog"]["node_reads"],
-        json!(1)
+    let rule = include_str!("../../../rules/no-writer-family-literal.yml");
+    let mut regexes = rule
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("- regex: '"));
+    let regex = regexes.next().expect("family literal regex");
+    assert!(
+        regexes.next().is_none(),
+        "expected one family literal regex"
     );
-    assert_eq!(
-        number_after(
-            include_str!("../../../../web/apps/server/src/services/kit-catalog.ts"),
-            "return { version: ",
-        ),
-        1
-    );
+    let alternation = regex
+        .strip_suffix('\'')
+        .and_then(|regex| regex.strip_prefix(r#"(?i)(^|["/\\])("#))
+        .and_then(|regex| regex.strip_suffix(r##")([./\\"#]|$)"##))
+        .expect("family literal regex must retain its path-component boundaries");
+    let tokens: std::collections::BTreeSet<_> = alternation.split('|').collect();
+    assert_eq!(tokens, families.values().copied().collect());
 }
 
 #[test]
@@ -342,6 +352,15 @@ fn read_only_formats_require_explicit_none_and_fail_closed_otherwise() {
                 })
             );
         }
+        value["live_formats"][format]["rust_writes"] = Value::Null;
+        assert_eq!(
+            admit(&value)
+                .unwrap()
+                .admit_rollback(participant)
+                .unwrap_err()
+                .to_string(),
+            format!("rollback of {operation} refused: Rust writer for {format} is undeclared")
+        );
         for writer in [
             json!(0),
             json!("unknown"),
