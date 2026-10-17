@@ -405,15 +405,19 @@ A recompute runs in three steps on the writer thread:
    for a repeated key, or `idempotency_conflict` when that key named a rebased
    draft. It refuses a Plan that needs an accepted baseline.
 2. Preparation runs outside any transaction with a fresh budget. No layers and
-   no STLs become `no_layers` and `no_stls`.
+   no STLs become `no_layers` and `no_stls`. A request cancelled before either
+   step returns its outcome fails as cancelled, as the write transaction does.
 3. An immediate transaction with its own admission deadline checks the
    principal and the key again. A hidden Plan or a moved accepted base is
    `base_changed`. A changed input fingerprint is `inputs_changed`. It then
    copies quantity overrides, and inclusion when the draft is kept, from open
    drafts, as Node's `carryOpenDraftEdits` does. Before it loads an open draft,
-   it charges the preparation budget one visit for the draft, one visit per
-   Part, and the bytes of every Part column that the draft's digest check
-   hashes as comparison work. A limit or cancellation refusal rolls the transaction back. It abandons
+   it charges the preparation budget for everything the load reads. That is
+   one visit per row of the draft, its inputs and Parts, and for a v2 draft
+   its selected reconciliation, decisions and assignments. The bytes of every
+   column the load parses, hashes or compares count as comparison work. An
+   open draft with more than about 100,000 assignments therefore exceeds the
+   default visit limit. A limit or cancellation refusal rolls the transaction back. It abandons
    every open draft, increments their lifecycle versions, inserts the draft,
    inputs and Parts, and returns `created` with the saved snapshot.
 
@@ -431,9 +435,10 @@ the first STL scan starts. After that scan, preparation still reads settings,
 Source rows, and whether the Plan exists. Only the hidden-Plan case changes one
 of those, and it only turns off Spoolman defaults, which the fixture does not
 set. Both sides therefore prepare the same Parts.
-Rust-only tests cover cancellation, a budget refusal, an open draft that
-exceeds the budget when its edits are carried, a cancelled or unauthenticated
-request, and a client without observations. Regenerate the fixture twice:
+Rust-only tests cover cancellation, a budget refusal, open drafts whose Parts,
+selected reconciliation or any loaded column exceed the budget when their edits
+are carried, a cancelled or unauthenticated request, and a client without
+observations. Regenerate the fixture twice:
 
 ```sh
 node --import ./web/node_modules/tsx/dist/loader.mjs --conditions=development rust/crates/pp-storage/tests/fixtures/working-draft-recompute-node.mjs web/apps/server > /persist/tmp/recompute-first.jsonl

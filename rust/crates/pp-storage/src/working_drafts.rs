@@ -992,6 +992,11 @@ fn recompute(
     cancelled: &AtomicBool,
 ) -> Result<RecomputeOutcome> {
     ensure!(!cancelled.load(Ordering::Acquire), Failure::Cancelled);
+    // The outcomes reached outside `transact` check cancellation as it does.
+    let finished = |outcome| {
+        ensure!(!cancelled.load(Ordering::Acquire), Failure::Cancelled);
+        Ok(outcome)
+    };
     let key = request.idempotency_key.as_str();
     let profile = i64::try_from(profile_id.get())?;
     let tx = connection.transaction()?;
@@ -1003,14 +1008,13 @@ fn recompute(
         &[&tenant, &profile],
     )?
     else {
-        return Ok(RecomputeOutcome::ProfileNotFound);
+        return finished(RecomputeOutcome::ProfileNotFound);
     };
     if let Some(winner) = winner(&tx, &tenant, &actor, profile, key)? {
-        ensure!(!cancelled.load(Ordering::Acquire), Failure::Cancelled);
-        return Ok(winner);
+        return finished(winner);
     }
     if baseline_required(&tx, &tenant, &profile_row)? {
-        return Ok(RecomputeOutcome::AcceptedBaselineRequired);
+        return finished(RecomputeOutcome::AcceptedBaselineRequired);
     }
     let base = json!({"baseRevisionId":profile_row["acceptedPlanRevisionId"], "basePlanVersion":profile_row["acceptedPlanVersion"]});
     tx.commit()?;
@@ -1032,8 +1036,8 @@ fn recompute(
         Ok(prepared) => prepared,
         Err(error) => {
             return match error.downcast_ref() {
-                Some(preparation::Failure::NoLayers) => Ok(RecomputeOutcome::NoLayers),
-                Some(preparation::Failure::NoStls) => Ok(RecomputeOutcome::NoStls),
+                Some(preparation::Failure::NoLayers) => finished(RecomputeOutcome::NoLayers),
+                Some(preparation::Failure::NoStls) => finished(RecomputeOutcome::NoStls),
                 None => Err(error),
             };
         }
@@ -1127,14 +1131,28 @@ fn winner(
     ))
 }
 
+/// One row per open draft with what `required_units::storage::draft` and the
+/// `saved` it calls read to load it. Each row they read costs a visit, and the
+/// reconciliation two because `draft` checks it before `saved` reads it. Every
+/// column they parse, hash or compare costs its bytes. Keep each table's line
+/// in step with those two functions.
+const OPEN_DRAFT_LOADS: &str = "WITH open AS (SELECT * FROM plan_drafts WHERE tenant_id=? AND profile_id=? AND state='open'),
+cost(id,visits,bytes) AS (
+SELECT id,1,LENGTH(CAST(concat(base_revision_id,base_plan_version,digest_format,snapshot_digest,current_required_unit_reconciliation_id) AS BLOB)) FROM open
+UNION ALL SELECT o.id,1,LENGTH(CAST(concat(i.source_id,i.source_layer,i.layer_order,i.tracking_kind,i.source_revision_id,i.manifest_digest,i.effective_naming_digest) AS BLOB)) FROM open o JOIN plan_draft_inputs i ON i.tenant_id=o.tenant_id AND i.draft_id=o.id
+UNION ALL SELECT o.id,1,LENGTH(CAST(concat(p.base_revision_part_id,p.part_key,p.relative_path,p.filename,p.source_layer,p.status,p.role_inferred,p.role_override,p.filament_color_id,p.filament_custom_hex,p.spoolman_spool_id,p.quantity_inferred,p.quantity_override,p.quantity_effective,p.included,p.notes,p.github_blob_url,p.geometry_same,p.requirement,p.option_group_id,p.manifest_source,p.artifact_digest) AS BLOB)) FROM open o JOIN plan_draft_parts p ON p.tenant_id=o.tenant_id AND p.draft_id=o.id
+UNION ALL SELECT o.id,2,LENGTH(CAST(concat(r.profile_id,r.draft_id,r.format,r.planning_digest,r.base_revision_id,r.base_mapping_digest,r.selection_basis_digest,r.selection_basis_json,r.decision_digest,r.result_kind,r.result_digest,r.result_json,r.reconciliation_digest,r.expected_assignment_count,r.finalized_at) AS BLOB)) FROM open o JOIN plan_draft_required_unit_reconciliations r ON r.tenant_id=o.tenant_id AND r.id=o.current_required_unit_reconciliation_id
+UNION ALL SELECT o.id,1,LENGTH(CAST(concat(x.kind,x.target_draft_part_id,x.predecessor_revision_part_id) AS BLOB)) FROM open o JOIN plan_draft_required_unit_decisions x ON x.tenant_id=o.tenant_id AND x.reconciliation_id=o.current_required_unit_reconciliation_id
+UNION ALL SELECT o.id,1,LENGTH(CAST(concat(a.kind,a.target_draft_part_id,a.unit_index,a.required_unit_token) AS BLOB)) FROM open o JOIN plan_draft_required_unit_assignments a ON a.tenant_id=o.tenant_id AND a.reconciliation_id=o.current_required_unit_reconciliation_id)
+SELECT o.id,SUM(c.visits) AS visits,SUM(c.bytes) AS bytes FROM open o JOIN cost c ON c.id=o.id GROUP BY o.id ORDER BY o.created_at,o.id";
+
 /// Node's `carryOpenDraftEdits`. A Part edit can commit after preparation
 /// read the open draft, so its quantity override, and its inclusion when the
 /// caller keeps the current draft, replace the prepared values. Returns
 /// whether any Part changed.
 ///
-/// This runs under the writer lock, so each open draft, each of its Parts
-/// and the bytes of every Part column that loading it hashes are charged to
-/// the recompute's budget before the draft is loaded.
+/// This runs under the writer lock, so `OPEN_DRAFT_LOADS` charges what
+/// loading each open draft reads to the recompute's budget first.
 fn carry_open_edits(
     tx: &Transaction<'_>,
     tenant: &str,
@@ -1144,13 +1162,8 @@ fn carry_open_edits(
     budget: &mut observation::PreparationBudget<'_>,
 ) -> Result<bool> {
     let mut edits = HashMap::new();
-    for open in rows(
-        tx,
-        "SELECT d.id,COUNT(p.id) AS parts,COALESCE(SUM(LENGTH(CAST(concat(p.base_revision_part_id,p.part_key,p.relative_path,p.filename,p.source_layer,p.status,p.role_inferred,p.role_override,p.filament_color_id,p.filament_custom_hex,p.spoolman_spool_id,p.quantity_inferred,p.quantity_override,p.quantity_effective,p.included,p.notes,p.github_blob_url,p.geometry_same,p.requirement,p.option_group_id,p.manifest_source,p.artifact_digest) AS BLOB))),0) AS bytes FROM plan_drafts d LEFT JOIN plan_draft_parts p ON p.tenant_id=d.tenant_id AND p.draft_id=d.id WHERE d.tenant_id=? AND d.profile_id=? AND d.state='open' GROUP BY d.id ORDER BY d.created_at,d.id",
-        &[&tenant, &profile],
-    )? {
-        budget.visit(0)?;
-        for _ in 0..num(&open, "parts")? {
+    for open in rows(tx, OPEN_DRAFT_LOADS, &[&tenant, &profile])? {
+        for _ in 0..num(&open, "visits")? {
             budget.visit(0)?;
         }
         budget.comparison(usize::try_from(num(&open, "bytes")?)?)?;
