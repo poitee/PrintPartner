@@ -21,27 +21,34 @@ mutants = [
     ('changed inputs ignored', 'if current.fingerprint != prepared.capture.fingerprint {', 'if false {'),
     ('carried quantity dropped', 'if !quantity.is_null() {', 'if false {'),
     ('inclusion always carried', '        if keep_inclusion {', '        if true {'),
-    ('carried draft header is not charged', 'SELECT id,1,LENGTH(CAST(concat(base_revision_id,base_plan_version,digest_format,snapshot_digest,current_required_unit_reconciliation_id) AS BLOB)) FROM open', 'SELECT id,1,0 FROM open'),
-    ('carried inputs are not charged', 'concat(i.source_id,i.source_layer,i.layer_order,i.tracking_kind,i.source_revision_id,i.manifest_digest,i.effective_naming_digest)', "''"),
-    ('carried Parts are not charged', 'SELECT o.id,1,LENGTH(CAST(concat(p.', 'SELECT o.id,0,LENGTH(CAST(concat(p.'),
-    ('carried reconciliation is not charged', 'JOIN plan_draft_required_unit_reconciliations r ON r.tenant_id=o.tenant_id', 'JOIN plan_draft_required_unit_reconciliations r ON 0 AND r.tenant_id=o.tenant_id'),
-    ('carried assignments are not charged', 'JOIN plan_draft_required_unit_assignments a ON a.tenant_id=o.tenant_id', 'JOIN plan_draft_required_unit_assignments a ON 0 AND a.tenant_id=o.tenant_id'),
-    ('carried text is not charged', '        budget.comparison(usize::try_from(num(&open, "bytes")?)?)?;\n', ''),
-    ('carried spool IDs are not charged', 'p.filament_custom_hex,p.spoolman_spool_id,', 'p.filament_custom_hex,'),
+    ('carried draft header is not charged', '    for (table, columns, predicate, visits, overhead) in tables {', '    for (table, columns, predicate, visits, overhead) in tables {\n        if table == "plan_drafts" { continue; }'),
+    ('carried inputs are not charged', '    for (table, columns, predicate, visits, overhead) in tables {', '    for (table, columns, predicate, visits, overhead) in tables {\n        if table == "plan_draft_inputs" { continue; }'),
+    ('carried Parts are not charged', '    for (table, columns, predicate, visits, overhead) in tables {', '    for (table, columns, predicate, visits, overhead) in tables {\n        if table == "plan_draft_parts" { continue; }'),
+    ('carried reconciliation is not charged', '    for (table, columns, predicate, visits, overhead) in tables {', '    for (table, columns, predicate, visits, overhead) in tables {\n        if table == "plan_draft_required_unit_reconciliations" { continue; }'),
+    ('carried assignments are not charged', '    for (table, columns, predicate, visits, overhead) in tables {', '    for (table, columns, predicate, visits, overhead) in tables {\n        if table == "plan_draft_required_unit_assignments" { continue; }'),
+    ('carried text is not charged', '            budget.comparison(usize::try_from(row.get::<_, i64>(0)?)? + overhead)?;\n', '            let _ = (row, overhead);\n'),
+    ('carried spool IDs are not charged', "            .split(',')\n", "            .split(',')\n            .filter(|column| *column != \"spoolman_spool_id\")\n"),
+    ('assignment row work is free', 'const ASSIGNMENT_ROW_WORK: usize = 32;', 'const ASSIGNMENT_ROW_WORK: usize = 0;'),
+    ('assignments spend visits', '            0,\n            ASSIGNMENT_ROW_WORK,', '            1,\n            ASSIGNMENT_ROW_WORK,'),
     ('carried edits keep the prepared digest', 'changed |= *part != before;', 'changed |= false;'),
     ('superseded draft keeps its lifecycle', "SET state='abandoned',lifecycle_version=lifecycle_version+1 WHERE tenant_id=? AND profile_id=? AND state='open'", "SET state='abandoned' WHERE tenant_id=? AND profile_id=? AND state='open'"),
     ('creation time is not ISO', '            auth::catalog_timestamp(),', '            "now",'),
 ]
-with tempfile.TemporaryDirectory(prefix='pp-a8-mutants-', dir='/persist/tmp') as directory:
+with tempfile.TemporaryDirectory(prefix='pp-a9-mutants-', dir='/persist/tmp') as directory:
     scratch = Path(directory) / 'rust'
     shutil.copytree(rust, scratch, ignore=shutil.ignore_patterns('target'))
     for sibling in rust.parent.iterdir():
         if sibling.name not in ('rust', '.git'):
             (scratch.parent / sibling.name).symlink_to(sibling)
-    env = {**os.environ, 'CARGO_TARGET_DIR': str(Path(directory) / 'target')}
+    env = {**os.environ, 'CARGO_TARGET_DIR': os.environ.get('CARGO_TARGET_DIR', str(Path(directory) / 'target'))}
     command = ['cargo', 'nextest', 'run', '--locked', '--manifest-path', str(scratch / 'Cargo.toml'), '-p', 'pp-storage', '--features', 'desktop_rebuild', '--test', 'working_draft_recompute', '--test-threads=4']
-    def run():
-        return subprocess.run(command, env=env, capture_output=True, text=True)
+    def run(name=None):
+        selected = command
+        if name == 'assignments spend visits':
+            selected = command + ['--release', '-E', 'test(two_hundred_thousand_assignments)']
+        elif name:
+            selected = command + ['-E', 'not test(two_hundred_thousand_assignments)']
+        return subprocess.run(selected, env=env, capture_output=True, text=True)
     baseline = run()
     if baseline.returncode:
         raise SystemExit(baseline.stdout + baseline.stderr)
@@ -54,7 +61,7 @@ with tempfile.TemporaryDirectory(prefix='pp-a8-mutants-', dir='/persist/tmp') as
             raise SystemExit(f'Mutation target is not unique: {name}')
         try:
             target.write_text(original.replace(before, after))
-            result = run()
+            result = run(name)
             output = result.stdout + result.stderr
             if result.returncode == 100 and 'FAIL [' in output:
                 killed += 1

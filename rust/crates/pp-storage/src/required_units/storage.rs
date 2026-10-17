@@ -11,7 +11,16 @@ use std::collections::{HashMap, HashSet};
 
 mod json;
 
-const ROW_LIMIT: usize = 200_000;
+pub(crate) const DRAFT_COLUMNS: &str = "id,tenant_id,profile_id,base_revision_id,base_plan_version,state,lifecycle_version,rebased_from_draft_id,rebased_from_lifecycle_version,rebased_from_snapshot_digest,digest_format,snapshot_digest,created_by,idempotency_key,created_at,current_required_unit_reconciliation_id,consumed_revision_id,consumed_at";
+pub(crate) const INPUT_COLUMNS: &str = "id,tenant_id,draft_id,source_id,source_layer,layer_order,tracking_kind,source_revision_id,manifest_digest,effective_naming_digest";
+pub(crate) const PART_COLUMNS: &str = "id,tenant_id,draft_id,base_revision_part_id,part_key,relative_path,filename,source_layer,status,role_inferred,role_override,filament_color_id,filament_custom_hex,spoolman_spool_id,quantity_inferred,quantity_override,quantity_effective,included,notes,github_blob_url,geometry_same,requirement,option_group_id,manifest_source,artifact_digest";
+pub(crate) const RECONCILIATION_CHECK_COLUMNS: &str = "id";
+pub(crate) const RECONCILIATION_COLUMNS: &str = "id,tenant_id,profile_id,draft_id,format,planning_digest,base_revision_id,base_mapping_digest,selection_basis_digest,selection_basis_json,decision_digest,result_kind,result_digest,result_json,reconciliation_digest,expected_assignment_count,actor_id,idempotency_key,payload_digest,created_at,finalized_at";
+pub(crate) const DECISION_COLUMNS: &str = "kind,target_draft_part_id,predecessor_revision_part_id";
+pub(crate) const ASSIGNMENT_COLUMNS: &str =
+    "kind,target_draft_part_id,unit_index,required_unit_token";
+
+pub(crate) const ROW_LIMIT: usize = 200_000;
 const TEXT_LIMIT: usize = 65_536;
 const TOTAL_TEXT_LIMIT: usize = 64 * 1024 * 1024;
 const UNIT_LIMIT: u16 = 10_000;
@@ -295,7 +304,7 @@ pub(super) fn saved(
 ) -> Result<Saved> {
     let header = one(
         tx,
-        "SELECT * FROM plan_draft_required_unit_reconciliations WHERE tenant_id=? AND id=?",
+        &format!("SELECT {RECONCILIATION_COLUMNS} FROM plan_draft_required_unit_reconciliations WHERE tenant_id=? AND id=?"),
         &[&tenant, &id],
     )?
     .filter(|h| h["finalizedAt"].is_string())
@@ -329,7 +338,7 @@ pub(super) fn saved(
     );
     let decisions = rows(
         tx,
-        "SELECT kind,target_draft_part_id,predecessor_revision_part_id FROM plan_draft_required_unit_decisions WHERE tenant_id=? AND reconciliation_id=? ORDER BY target_draft_part_id",
+        &format!("SELECT {DECISION_COLUMNS} FROM plan_draft_required_unit_decisions WHERE tenant_id=? AND reconciliation_id=? ORDER BY target_draft_part_id"),
         &[&tenant, &id],
     )?
     .into_iter()
@@ -351,7 +360,7 @@ pub(super) fn saved(
     );
     let assignments = rows(
         tx,
-        "SELECT kind,target_draft_part_id,unit_index,required_unit_token FROM plan_draft_required_unit_assignments WHERE tenant_id=? AND reconciliation_id=? ORDER BY target_draft_part_id,unit_index",
+        &format!("SELECT {ASSIGNMENT_COLUMNS} FROM plan_draft_required_unit_assignments WHERE tenant_id=? AND reconciliation_id=? ORDER BY target_draft_part_id,unit_index"),
         &[&tenant, &id],
     )?
     .into_iter()
@@ -404,7 +413,9 @@ pub(crate) fn draft(
 ) -> Result<Option<Draft>> {
     let Some(header) = one(
         tx,
-        "SELECT * FROM plan_drafts WHERE tenant_id=? AND profile_id=? AND id=?",
+        &format!(
+            "SELECT {DRAFT_COLUMNS} FROM plan_drafts WHERE tenant_id=? AND profile_id=? AND id=?"
+        ),
         &[&tenant, &profile, &id],
     )?
     else {
@@ -412,12 +423,16 @@ pub(crate) fn draft(
     };
     let inputs = rows(
         tx,
-        "SELECT * FROM plan_draft_inputs WHERE tenant_id=? AND draft_id=? ORDER BY layer_order,source_id",
+        &format!(
+            "SELECT {INPUT_COLUMNS} FROM plan_draft_inputs WHERE tenant_id=? AND draft_id=? ORDER BY layer_order,source_id"
+        ),
         &[&tenant, &id],
     )?;
     let mut parts = part_rows(
         tx,
-        "SELECT * FROM plan_draft_parts WHERE tenant_id=? AND draft_id=? ORDER BY id",
+        &format!(
+            "SELECT {PART_COLUMNS} FROM plan_draft_parts WHERE tenant_id=? AND draft_id=? ORDER BY id"
+        ),
         &[&tenant, &id],
     )?;
     normalize_parts(&mut parts)?;
@@ -427,7 +442,7 @@ pub(crate) fn draft(
             ensure!(
                 one(
                     tx,
-                    "SELECT id FROM plan_draft_required_unit_reconciliations WHERE tenant_id=? AND id=? AND profile_id=? AND draft_id=? AND finalized_at IS NOT NULL",
+                    &format!("SELECT {RECONCILIATION_CHECK_COLUMNS} FROM plan_draft_required_unit_reconciliations WHERE tenant_id=? AND id=? AND profile_id=? AND draft_id=? AND finalized_at IS NOT NULL"),
                     &[&tenant, &rid, &profile, &id],
                 )?
                 .is_some(),

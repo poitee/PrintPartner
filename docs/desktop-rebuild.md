@@ -413,11 +413,19 @@ A recompute runs in three steps on the writer thread:
    copies quantity overrides, and inclusion when the draft is kept, from open
    drafts, as Node's `carryOpenDraftEdits` does. Before it loads an open draft,
    it charges the preparation budget for everything the load reads. That is
-   one visit per row of the draft, its inputs and Parts, and for a v2 draft
-   its selected reconciliation, decisions and assignments. The bytes of every
-   column the load parses, hashes or compares count as comparison work. An
-   open draft with more than about 100,000 assignments therefore exceeds the
-   default visit limit. A limit or cancellation refusal rolls the transaction back. It abandons
+   one visit per draft, input, Part and decision, plus two for the selected
+   reconciliation. Shared explicit column lists drive both the loaders and
+   their cost queries. Each loaded column costs its byte length, including
+   identifiers and metadata. Each assignment also costs 32 comparison units
+   and uses no visit. A 200,000-assignment draft therefore fits the default
+   limits. The 268,435,456-unit comparison cap permits at most 8,388,608
+   assignments across all carried drafts before their bytes and other work,
+   and the existing 200,000-row cap still applies to each table load.
+   Structural work stays capped at 100,000 visits. Each cost query streams
+   indexed rows and sums individual column lengths without concatenation,
+   aggregation or sorting. Cancellation is checked between rows, including
+   assignments. SQLite hooks remain a test-only dependency. A limit or
+   cancellation refusal rolls the transaction back. It abandons
    every open draft, increments their lifecycle versions, inserts the draft,
    inputs and Parts, and returns `created` with the saved snapshot.
 
@@ -446,11 +454,13 @@ node --import ./web/node_modules/tsx/dist/loader.mjs --conditions=development ru
 cmp /persist/tmp/recompute-first.jsonl /persist/tmp/recompute-second.jsonl
 cmp /persist/tmp/recompute-first.jsonl rust/crates/pp-storage/tests/fixtures/working-draft-recompute-node.jsonl
 cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test working_draft_recompute --test-threads=2
+cargo nextest run --release --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test working_draft_recompute -E 'test(two_hundred_thousand_assignments)'
+node --import ./web/node_modules/tsx/dist/loader.mjs --conditions=development rust/crates/pp-storage/tests/fixtures/working-draft-recompute-node.mjs web/apps/server --large-carry
 python3 rust/crates/pp-storage/tests/fixtures/mutate-working-draft-recompute.py
 ```
 
-The mutation runner copies the workspace into `/persist/tmp` with its own target
-directory. Only an executed failing test counts as a kill.
+The mutation runner copies the workspace into `/persist/tmp` and reuses
+`CARGO_TARGET_DIR` when supplied. Only an executed failing test counts as a kill.
 
 ### D4 media reconciliation
 

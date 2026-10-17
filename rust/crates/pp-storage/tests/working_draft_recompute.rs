@@ -243,7 +243,7 @@ fn recompute(
         id(profile),
         RecomputeRequest::new(key, apply_manifest)?,
         cancelled,
-        Duration::from_secs(5),
+        Duration::from_secs(60),
     )?;
     let mut outcome: Value = serde_json::from_slice(&outcome.into_json_body().into_bytes())?;
     if let Some(created_at) = outcome["draft"]["createdAt"].as_str() {
@@ -477,9 +477,6 @@ fn carrying_open_draft_edits_spends_the_recompute_budget() {
     owner.shutdown().unwrap();
 }
 
-/// The reviewer's probe. A v2 draft built through the public API selects a
-/// reconciliation with 20,000 assignments over only 20 Parts. The reviewer
-/// ran it with the maximum 200,000, which the default visit limit refuses.
 #[test]
 fn carrying_a_selected_reconciliation_spends_the_recompute_budget() {
     let files = json!(
@@ -527,7 +524,95 @@ fn carrying_a_selected_reconciliation_spends_the_recompute_budget() {
         f.rows("SELECT d.digest_format,(SELECT COUNT(*) FROM plan_draft_parts p WHERE p.draft_id=d.id) AS parts,(SELECT COUNT(*) FROM plan_draft_required_unit_assignments a WHERE a.reconciliation_id=d.current_required_unit_reconciliation_id) AS assignments FROM plan_drafts d WHERE d.profile_id=3"),
         json!([{"digest_format": "plan-draft-v2", "parts": 20, "assignments": 20000}])
     );
-    assert_carry_refused(&f, &owner);
+    let before = f.recorded_rows();
+    let error = recompute(
+        &owner,
+        f.reads(&json!(["only-current.stl"]), &Value::Null, None),
+        PreparationLimits {
+            comparison_work: 1_500_000,
+            ..PreparationLimits::default()
+        },
+        "bounded",
+        true,
+        3,
+        Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error.downcast_ref(),
+        Some(ReadFailure::LimitExceeded(Resource::ComparisonWork))
+    ));
+    assert_eq!(f.recorded_rows(), before);
+    owner.shutdown().unwrap();
+}
+
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "run this 200,000-assignment regression in release mode"
+)]
+fn two_hundred_thousand_assignments_recompute_with_default_limits() {
+    let files = json!(
+        (0..20)
+            .map(|i| format!("old-{i:04}.stl"))
+            .collect::<Vec<_>>()
+    );
+    let f = Fixture::new(&json!({"files": files, "setup": [NEW_PLAN]}));
+    let owner = f.open();
+    let large = recompute(
+        &owner,
+        f.reads(&files, &Value::Null, None),
+        PreparationLimits::default(),
+        "large",
+        true,
+        3,
+        Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap();
+    let ids = large["draft"]["parts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|part| part["id"].clone())
+        .collect::<Vec<_>>();
+    let request = serde_json::from_value(json!({
+        "expected_snapshot_digest": large["draft"]["snapshotDigest"],
+        "decision": {"kind": "set_quantity_override", "draft_part_ids": ids, "value": 10000},
+    }))
+    .unwrap();
+    let edited = owner
+        .working_drafts_with_policy(policy())
+        .unwrap()
+        .edit(
+            session(),
+            id(3),
+            id(large["draft"]["id"].as_u64().unwrap()),
+            request,
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+    assert_eq!(serde_json::to_value(edited).unwrap()["kind"], "ready");
+    assert_eq!(
+        f.rows("SELECT d.digest_format,(SELECT COUNT(*) FROM plan_draft_parts p WHERE p.draft_id=d.id) AS parts,(SELECT COUNT(*) FROM plan_draft_required_unit_assignments a WHERE a.reconciliation_id=d.current_required_unit_reconciliation_id) AS assignments FROM plan_drafts d WHERE d.profile_id=3"),
+        json!([{"digest_format": "plan-draft-v2", "parts": 20, "assignments": 200000}])
+    );
+    let result = recompute(
+        &owner,
+        f.reads(&json!(["only-current.stl"]), &Value::Null, None),
+        PreparationLimits::default(),
+        "small",
+        true,
+        3,
+        Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap();
+    assert_eq!(result["kind"], "created");
+    assert_eq!(result["draft"]["parts"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        f.rows("SELECT state,lifecycle_version FROM plan_drafts WHERE profile_id=3 ORDER BY id"),
+        json!([{"state":"abandoned","lifecycle_version":1},{"state":"open","lifecycle_version":0}])
+    );
     owner.shutdown().unwrap();
 }
 
@@ -594,6 +679,132 @@ fn every_column_a_draft_load_reads_spends_the_carry_budget() {
         );
         assert_eq!(f.recorded_rows(), before, "{name}");
     }
+}
+
+fn assert_metadata_charged(setup: &str, padded: &str) {
+    let f = Fixture::new(&node("created-then-replayed"));
+    f.sql().execute_batch(setup).unwrap();
+    f.sql()
+        .execute(
+            "UPDATE plan_drafts SET snapshot_digest='invalid' WHERE id=2",
+            [],
+        )
+        .unwrap();
+    let owner = f.open();
+    let attempt = |comparison_work| {
+        recompute(
+            &owner,
+            f.reads(&node("created-then-replayed")["files"], &Value::Null, None),
+            PreparationLimits {
+                comparison_work,
+                ..PreparationLimits::default()
+            },
+            "metadata",
+            true,
+            1,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap_err()
+    };
+    let (mut low, mut high) = (0, 100_000);
+    while low < high {
+        let mid = (low + high) / 2;
+        if matches!(
+            attempt(mid).downcast_ref(),
+            Some(ReadFailure::LimitExceeded(Resource::ComparisonWork))
+        ) {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    assert!(!matches!(
+        attempt(high).downcast_ref(),
+        Some(ReadFailure::LimitExceeded(Resource::ComparisonWork))
+    ));
+    owner.shutdown().unwrap();
+    let f = Fixture::new(&node("created-then-replayed"));
+    f.sql().execute_batch(padded).unwrap();
+    f.sql()
+        .execute(
+            "UPDATE plan_drafts SET snapshot_digest='invalid' WHERE id=2",
+            [],
+        )
+        .unwrap();
+    let before = f.recorded_rows();
+    let reconciliations =
+        f.rows("SELECT * FROM plan_draft_required_unit_reconciliations ORDER BY id");
+    let error = refused(
+        &f,
+        false,
+        PreparationLimits {
+            comparison_work: high,
+            ..PreparationLimits::default()
+        },
+    );
+    assert!(
+        matches!(
+            error.downcast_ref(),
+            Some(ReadFailure::LimitExceeded(Resource::ComparisonWork))
+        ),
+        "{error:?}"
+    );
+    assert_eq!(f.recorded_rows(), before);
+    assert_eq!(
+        f.rows("SELECT * FROM plan_draft_required_unit_reconciliations ORDER BY id"),
+        reconciliations
+    );
+}
+
+#[test]
+fn header_metadata_spends_comparison_work() {
+    let f = Fixture::new(&node("created-then-replayed"));
+    f.sql()
+        .execute(
+            "UPDATE plan_drafts SET created_by=? WHERE id=2",
+            ["x".repeat(40_000)],
+        )
+        .unwrap();
+    let before = f.recorded_rows();
+    let error = refused(
+        &f,
+        false,
+        PreparationLimits {
+            comparison_work: 10_000,
+            ..PreparationLimits::default()
+        },
+    );
+    assert!(
+        matches!(
+            error.downcast_ref(),
+            Some(ReadFailure::LimitExceeded(Resource::ComparisonWork))
+        ),
+        "{error:?}"
+    );
+    assert_eq!(f.recorded_rows(), before);
+}
+
+#[test]
+fn input_identifiers_spend_comparison_work() {
+    assert_metadata_charged(
+        "",
+        "UPDATE plan_draft_inputs SET id=9007199254740991 WHERE id=(SELECT MIN(id) FROM plan_draft_inputs WHERE draft_id=2)",
+    );
+}
+
+#[test]
+fn part_identifiers_spend_comparison_work() {
+    assert_metadata_charged(
+        "",
+        "UPDATE plan_draft_parts SET id=9007199254740991 WHERE id=(SELECT MIN(id) FROM plan_draft_parts WHERE draft_id=2)",
+    );
+}
+
+#[test]
+fn reconciliation_metadata_spends_comparison_work() {
+    let setup = select_reconciliation("'[]'", "'{\"kind\":\"unresolved\",\"conflicts\":[]}'");
+    let padded = setup.replace("0,created_by,", "0,hex(zeroblob(20000)),");
+    assert_metadata_charged(&setup, &padded);
 }
 
 #[test]

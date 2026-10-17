@@ -4,7 +4,7 @@ use crate::{
     read_model::Credential,
     required_units::{
         self, Outcome as WorkspaceOutcome, ReconciliationCommand, model,
-        storage::{Draft, draft, num, one, rows, text},
+        storage::{self, Draft, draft, num, one, rows, text},
         view::workspace,
     },
     writer_admission,
@@ -1131,27 +1131,94 @@ fn winner(
     ))
 }
 
-/// One row per open draft with what `required_units::storage::draft` and the
-/// `saved` it calls read to load it. Each row they read costs a visit, and the
-/// reconciliation two because `draft` checks it before `saved` reads it. Every
-/// column they parse, hash or compare costs its bytes. Keep each table's line
-/// in step with those two functions.
-const OPEN_DRAFT_LOADS: &str = "WITH open AS (SELECT * FROM plan_drafts WHERE tenant_id=? AND profile_id=? AND state='open'),
-cost(id,visits,bytes) AS (
-SELECT id,1,LENGTH(CAST(concat(base_revision_id,base_plan_version,digest_format,snapshot_digest,current_required_unit_reconciliation_id) AS BLOB)) FROM open
-UNION ALL SELECT o.id,1,LENGTH(CAST(concat(i.source_id,i.source_layer,i.layer_order,i.tracking_kind,i.source_revision_id,i.manifest_digest,i.effective_naming_digest) AS BLOB)) FROM open o JOIN plan_draft_inputs i ON i.tenant_id=o.tenant_id AND i.draft_id=o.id
-UNION ALL SELECT o.id,1,LENGTH(CAST(concat(p.base_revision_part_id,p.part_key,p.relative_path,p.filename,p.source_layer,p.status,p.role_inferred,p.role_override,p.filament_color_id,p.filament_custom_hex,p.spoolman_spool_id,p.quantity_inferred,p.quantity_override,p.quantity_effective,p.included,p.notes,p.github_blob_url,p.geometry_same,p.requirement,p.option_group_id,p.manifest_source,p.artifact_digest) AS BLOB)) FROM open o JOIN plan_draft_parts p ON p.tenant_id=o.tenant_id AND p.draft_id=o.id
-UNION ALL SELECT o.id,2,LENGTH(CAST(concat(r.profile_id,r.draft_id,r.format,r.planning_digest,r.base_revision_id,r.base_mapping_digest,r.selection_basis_digest,r.selection_basis_json,r.decision_digest,r.result_kind,r.result_digest,r.result_json,r.reconciliation_digest,r.expected_assignment_count,r.finalized_at) AS BLOB)) FROM open o JOIN plan_draft_required_unit_reconciliations r ON r.tenant_id=o.tenant_id AND r.id=o.current_required_unit_reconciliation_id
-UNION ALL SELECT o.id,1,LENGTH(CAST(concat(x.kind,x.target_draft_part_id,x.predecessor_revision_part_id) AS BLOB)) FROM open o JOIN plan_draft_required_unit_decisions x ON x.tenant_id=o.tenant_id AND x.reconciliation_id=o.current_required_unit_reconciliation_id
-UNION ALL SELECT o.id,1,LENGTH(CAST(concat(a.kind,a.target_draft_part_id,a.unit_index,a.required_unit_token) AS BLOB)) FROM open o JOIN plan_draft_required_unit_assignments a ON a.tenant_id=o.tenant_id AND a.reconciliation_id=o.current_required_unit_reconciliation_id)
-SELECT o.id,SUM(c.visits) AS visits,SUM(c.bytes) AS bytes FROM open o JOIN cost c ON c.id=o.id GROUP BY o.id ORDER BY o.created_at,o.id";
+const ASSIGNMENT_ROW_WORK: usize = 32;
+
+fn charge_open_draft(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    id: i64,
+    budget: &mut observation::PreparationBudget<'_>,
+) -> Result<()> {
+    let tables = [
+        ("plan_drafts", storage::DRAFT_COLUMNS, "id=o.id", 1, 0),
+        (
+            "plan_draft_inputs",
+            storage::INPUT_COLUMNS,
+            "draft_id=o.id",
+            1,
+            0,
+        ),
+        (
+            "plan_draft_parts",
+            storage::PART_COLUMNS,
+            "draft_id=o.id",
+            1,
+            0,
+        ),
+        (
+            "plan_draft_required_unit_reconciliations",
+            storage::RECONCILIATION_CHECK_COLUMNS,
+            "id=o.current_required_unit_reconciliation_id",
+            1,
+            0,
+        ),
+        (
+            "plan_draft_required_unit_reconciliations",
+            storage::RECONCILIATION_COLUMNS,
+            "id=o.current_required_unit_reconciliation_id",
+            1,
+            0,
+        ),
+        (
+            "plan_draft_required_unit_decisions",
+            storage::DECISION_COLUMNS,
+            "reconciliation_id=o.current_required_unit_reconciliation_id",
+            1,
+            0,
+        ),
+        (
+            "plan_draft_required_unit_assignments",
+            storage::ASSIGNMENT_COLUMNS,
+            "reconciliation_id=o.current_required_unit_reconciliation_id",
+            0,
+            ASSIGNMENT_ROW_WORK,
+        ),
+    ];
+    for (table, columns, predicate, visits, overhead) in tables {
+        budget.check()?;
+        let lengths = columns
+            .split(',')
+            .map(|column| format!("COALESCE(LENGTH(CAST(t.{column} AS BLOB)),0)"))
+            .collect::<Vec<_>>()
+            .join("+");
+        let sql = format!(
+            "SELECT {lengths} FROM plan_drafts o JOIN {table} t ON t.tenant_id=o.tenant_id AND t.{predicate} WHERE o.tenant_id=? AND o.id=?"
+        );
+        let mut statement = tx.prepare(&sql)?;
+        let mut query = statement.query(params![tenant, id])?;
+        let mut count = 0;
+        while let Some(row) = query.next()? {
+            budget.check()?;
+            ensure!(
+                count < storage::ROW_LIMIT,
+                "Reconciliation row limit exceeded"
+            );
+            count += 1;
+            for _ in 0..visits {
+                budget.visit(0)?;
+            }
+            budget.comparison(usize::try_from(row.get::<_, i64>(0)?)? + overhead)?;
+        }
+    }
+    Ok(())
+}
 
 /// Node's `carryOpenDraftEdits`. A Part edit can commit after preparation
 /// read the open draft, so its quantity override, and its inclusion when the
 /// caller keeps the current draft, replace the prepared values. Returns
 /// whether any Part changed.
 ///
-/// This runs under the writer lock, so `OPEN_DRAFT_LOADS` charges what
+/// This runs under the writer lock, so `charge_open_draft` charges what
 /// loading each open draft reads to the recompute's budget first.
 fn carry_open_edits(
     tx: &Transaction<'_>,
@@ -1162,11 +1229,12 @@ fn carry_open_edits(
     budget: &mut observation::PreparationBudget<'_>,
 ) -> Result<bool> {
     let mut edits = HashMap::new();
-    for open in rows(tx, OPEN_DRAFT_LOADS, &[&tenant, &profile])? {
-        for _ in 0..num(&open, "visits")? {
-            budget.visit(0)?;
-        }
-        budget.comparison(usize::try_from(num(&open, "bytes")?)?)?;
+    for open in rows(
+        tx,
+        "SELECT id FROM plan_drafts WHERE tenant_id=? AND profile_id=? AND state='open' ORDER BY created_at,id",
+        &[&tenant, &profile],
+    )? {
+        charge_open_draft(tx, tenant, num(&open, "id")?, budget)?;
         let Some(open) = draft(tx, tenant, profile, num(&open, "id")?)? else {
             continue;
         };
@@ -1416,6 +1484,61 @@ mod tests {
             )
             .unwrap();
         cancelled
+    }
+
+    #[test]
+    fn cancellation_mid_carry_scan_stops_before_the_remaining_assignments() {
+        let (_database, mut connection) = Database::new();
+        let assignments: Vec<_> = (0..10000)
+            .map(|i| json!({"kind":"create","draftPartId":4,"unitIndex":i}))
+            .collect();
+        connection.execute_batch("DELETE FROM plan_draft_parts WHERE draft_id=2 AND id<>4; UPDATE plan_draft_parts SET quantity_effective=10000 WHERE id=4").unwrap();
+        connection.execute(
+            "INSERT INTO plan_draft_required_unit_reconciliations(tenant_id,profile_id,draft_id,format,planning_digest,base_revision_id,selection_basis_digest,selection_basis_json,decision_digest,result_kind,result_digest,result_json,reconciliation_digest,expected_assignment_count,actor_id,idempotency_key,payload_digest,created_at)
+             SELECT tenant_id,profile_id,id,'required-unit-reconciliation-v1','',base_revision_id,'','[]','','ready','',?,'',10000,created_by,'scan','','2026-01-01T00:00:00.000Z' FROM plan_drafts WHERE id=2",
+            [json!({"kind":"ready","assignments":assignments,"surplus":[]}).to_string()],
+        ).unwrap();
+        connection.execute_batch(
+            "WITH RECURSIVE units(i) AS (VALUES(0) UNION ALL SELECT i+1 FROM units WHERE i<9999)
+             INSERT INTO plan_draft_required_unit_assignments(tenant_id,reconciliation_id,target_draft_part_id,unit_index,kind)
+             SELECT 'default',2,4,i,'create' FROM units;
+             UPDATE plan_draft_required_unit_reconciliations SET finalized_at=created_at WHERE id=2;
+             UPDATE plan_drafts SET current_required_unit_reconciliation_id=2 WHERE id=2;"
+        ).unwrap();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let flag = cancelled.clone();
+        let steps = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = steps.clone();
+        connection
+            .progress_handler(
+                1,
+                Some(move || {
+                    if count.fetch_add(1, Ordering::Relaxed) >= 1000 {
+                        flag.store(true, Ordering::Release);
+                    }
+                    false
+                }),
+            )
+            .unwrap();
+        let before = connection.total_changes();
+        let tx = connection.transaction().unwrap();
+        let mut budget = observation::PreparationBudget::new(
+            &cancelled,
+            observation::PreparationLimits::default(),
+        )
+        .unwrap();
+        let error = carry_open_edits(&tx, "default", 1, &mut [], true, &mut budget).unwrap_err();
+        assert!(matches!(
+            error.downcast_ref(),
+            Some(observation::ReadFailure::Cancelled)
+        ));
+        assert!(
+            steps.load(Ordering::Relaxed) < 2000,
+            "scanned {} VM steps",
+            steps.load(Ordering::Relaxed)
+        );
+        tx.rollback().unwrap();
+        assert_eq!(connection.total_changes(), before);
     }
 
     #[test]
