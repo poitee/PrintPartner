@@ -460,7 +460,8 @@ python3 rust/crates/pp-storage/tests/fixtures/mutate-working-draft-recompute.py
 ```
 
 The mutation runner copies the workspace into `/persist/tmp` and reuses
-`CARGO_TARGET_DIR` when supplied. Only an executed failing test counts as a kill.
+`CARGO_TARGET_DIR` when supplied. Run it separately from other Cargo commands
+when you reuse a target directory. Only an executed failing test counts as a kill.
 
 ### D4 media reconciliation
 
