@@ -204,7 +204,29 @@ fn projection(prepared: PreparedDraftSnapshot) -> Value {
 
 #[test]
 fn preparation_matches_literal_node_results() {
-    for case in cases() {
+    preparation_matches_cases(cases());
+}
+#[test]
+fn full_naming_override_omits_role() {
+    naming_override_case("naming-full-override-omits-role");
+}
+#[test]
+fn full_naming_override_reorders_roles() {
+    naming_override_case("naming-full-override-reorders-roles");
+}
+#[test]
+fn full_naming_override_adds_role() {
+    naming_override_case("naming-full-override-adds-role");
+}
+fn naming_override_case(name: &str) {
+    let case = cases()
+        .into_iter()
+        .find(|case| case["name"] == name)
+        .unwrap();
+    preparation_matches_cases([case]);
+}
+fn preparation_matches_cases(cases: impl IntoIterator<Item = Value>) {
+    for case in cases {
         let (root, mut connection) = database(&case);
         let writes = connection.total_changes();
         let reads = Reads {

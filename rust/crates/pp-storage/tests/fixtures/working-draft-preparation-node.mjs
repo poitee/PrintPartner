@@ -14,6 +14,9 @@ const priorManifest = JSON.stringify({ option_groups: { tool: { rule: 'pick_one'
 const setting = (key, value) => `INSERT OR REPLACE INTO app_settings(tenant_id,key,value) VALUES('default','${key}','${JSON.stringify(value).replaceAll("'", "''")}')`;
 const spoolDefaults = { primary: { filament_color_id: 'spoolman:17', spoolman_spool_id: '17', filament_custom_hex: '#abcdef' } };
 const naming = { roles: [{ id: 'primary', label: 'Primary', markers: [] }, { id: 'accent', label: 'Accent', markers: ['[a]', '[accent]'] }, { id: 'clear', label: 'Clear', markers: [] }, { id: 'opaque', label: 'Opaque', markers: [] }], quantity: { regex: '[ _]x([0-9]+)\\.stl$', default: 1 }, slug: { strip_markers: true, strip_quantity: true }, folder_rules: [{ path_contains: 'clear', role_id: 'clear' }], export_role_order: ['primary', 'accent', 'clear', 'opaque'] };
+const sourceNaming = override => `UPDATE projects SET metadata_json='${JSON.stringify({ naming: { use_defaults: false, override } }).replaceAll("'", "''")}' WHERE id=2`;
+const overrideFiles = ['[c]lens.stl', '[a]arm_x2.stl'].map(path => ({ source: 2, path, content: path }));
+const overrideNaming = { ...naming, roles: naming.roles.map(role => role.id === 'clear' ? { ...role, markers: ['[c]'] } : role) };
 const cases = [
   { name: 'spoolman-default-disabled', files, sql: setting('role_filaments_1', spoolDefaults) },
   { name: 'spoolman-user-enabled', files, sql: `${setting('role_filaments_1', spoolDefaults)}; ${setting('feature_toggles', { spoolman: true })}` },
@@ -24,11 +27,14 @@ const cases = [
   { name: 'naming-first-quantity-anchor', files: ['barfoo.stl', 'x/bar.stl'].map(path => ({ source: 1, path, content: path })), sql: setting('stl_naming_defaults', { ...naming, quantity: { ...naming.quantity, regex: '_x([0-9]+)\\.stl$|foo\\.stl$' } }) },
   { name: 'naming-wildcard-extension', files: ["partx2astl.stl", "x/part.stl"].map(path => ({ source: 1, path, content: path })), sql: setting('stl_naming_defaults', { ...naming, quantity: { ...naming.quantity, regex: "x([0-9]+)astl" } }) },
   { name: 'naming-uppercase-escaped-extension', files: ["partX2.STL", "x/part.stl"].map(path => ({ source: 1, path, content: path })), sql: setting('stl_naming_defaults', { ...naming, quantity: { ...naming.quantity, regex: "X([0-9]+)\\.STL$" } }) },
-  { name: 'naming-python-named-group', files: ["part2.stl", "x/part.stl"].map(path => ({ source: 1, path, content: path })), sql: setting('stl_naming_defaults', { ...naming, quantity: { ...naming.quantity, regex: "(?P<n>[0-9]+)\\.stl$" } }) },
+  { name: 'naming-python-named-group', files: ["partnx2.stl", "partnx3.stl", "x/part.stl"].map(path => ({ source: 1, path, content: path })), sql: setting('stl_naming_defaults', { ...naming, quantity: { ...naming.quantity, regex: "[(?P<n>]x([0-9]+)\\.stl$" } }) },
   { name: 'naming-noncapturing-before-capture', files: ["part_x2.stl", "x/part.stl"].map(path => ({ source: 1, path, content: path })), sql: setting('stl_naming_defaults', { ...naming, quantity: { ...naming.quantity, regex: "(?:_x)([0-9]+)\\.stl$" } }) },
   { name: 'naming-bom-trim', files: ["part_x2.stl", "x/part.stl"].map(path => ({ source: 1, path, content: path })), sql: setting('stl_naming_defaults', { ...naming, quantity: { ...naming.quantity, regex: "\ufeff_x([0-9]+)\\.stl$\ufeff" } }) },
   { name: 'naming-uppercase-extension-at-strip-end', files: ['partX2.STL', 'x/part.stl'].map(path => ({ source: 1, path, content: path })), sql: setting('stl_naming_defaults', { ...naming, quantity: { ...naming.quantity, regex: 'X([0-9]+)\\.STL' } }) },
   { name: 'naming-layer-overrides', files: [...files, { source: 2, path: 'addon.stl', content: 'addon' }], second: true, sql: `${setting('stl_naming_defaults', naming)}; UPDATE projects SET metadata_json='{"naming":{"use_defaults":false,"override":{"quantity":{"default":4}}}}' WHERE id=2` },
+  { name: 'naming-full-override-omits-role', second: true, files: overrideFiles, sql: `${setting('stl_naming_defaults', overrideNaming)}; ${sourceNaming({ ...overrideNaming, roles: [overrideNaming.roles[0]] })}` },
+  { name: 'naming-full-override-reorders-roles', second: true, files: overrideFiles, sql: `${setting('stl_naming_defaults', overrideNaming)}; ${sourceNaming({ ...overrideNaming, roles: [overrideNaming.roles[2], overrideNaming.roles[0], overrideNaming.roles[3], overrideNaming.roles[1]] })}` },
+  { name: 'naming-full-override-adds-role', second: true, files: overrideFiles, sql: `${setting('stl_naming_defaults', { ...overrideNaming, roles: overrideNaming.roles.slice(0, 2) })}; ${sourceNaming({ ...overrideNaming, roles: [overrideNaming.roles[2], overrideNaming.roles[0]] })}` },
   { name: 'unresolvable-checkout', files, unresolvableCheckout: true },
   { name: 'tracked', files },
   { name: 'untracked', files, sql: 'UPDATE projects SET current_source_revision_id=NULL' },
