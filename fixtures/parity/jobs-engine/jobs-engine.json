@@ -19,5 +19,6 @@
     {"id":"since_epoch","jobs":[{"kind":"export-checklist-html","status":"error"},{"kind":"check-source-updates","status":"done"}]},
     {"id":"since_future","jobs":[]},
     {"id":"other_tenant","jobs":[]}
-  ]
+  ],
+  "internal": {"start_error":"Unsupported job kind: supplied-source-import","get":null,"stream":null,"list":[]}
 }

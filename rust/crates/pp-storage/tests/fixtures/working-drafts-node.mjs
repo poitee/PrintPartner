@@ -58,12 +58,18 @@ for (const name of ['unchanged', 'list-order', 'legacy-input', 'shrink', 'unsafe
         const columns = inputFields.map(key => key.replace(/[A-Z]/g, c => `_${c.toLowerCase()}`));
         apply(`INSERT INTO plan_revision_inputs (tenant_id,input_set_id,${columns.join(',')}) VALUES ('default',1,${columns.map(() => '?').join(',')})`, ...Object.values(input));
         baseInputs.push(input);
+        const basePart = raw.prepare('SELECT * FROM plan_revision_parts WHERE id=1').get();
+        for (const id of [9, 10]) {
+          const row = { ...basePart, id, projection_part_id: null, part_key: `removed-${id}.stl`, relative_path: `removed-${id}.stl`, filename: `removed-${id}.stl` };
+          apply(`INSERT INTO plan_revision_parts (${Object.keys(row).join(',')}) VALUES (${Object.keys(row).map(() => '?').join(',')})`, ...Object.values(row));
+        }
         draft.inputs = [
           { ...draft.inputs[0], layerOrder: 2, effectiveNamingDigest: 'changed' },
           ...[4, 3].map(id => ({ id: 100 + id, draftId: 2, sourceId: id, sourceLayer: `addon:${id}`, layerOrder: -1, trackingKind: 'untracked', sourceRevisionId: null, manifestDigest: null, effectiveNamingDigest: '' })),
         ].sort((a, b) => a.layerOrder - b.layerOrder || a.sourceId - b.sourceId);
         draft.parts = [
           { ...draft.parts[0], baseRevisionPartId: null },
+          { ...draft.parts[1], id: 11, notes: 'changed' },
           { ...draft.parts[2], quantityOverride: 3, quantityEffective: 3, requirement: 'optional', optionGroupId: 'group', manifestSource: 'manifest.yaml', geometrySame: false, notes: 'quote"\n雪' },
           ...[9, 10].map(id => ({ ...draft.parts[0], id, baseRevisionPartId: null, filename: `${id}.stl`, partKey: `${id}.stl`, relativePath: `${id}.stl` })),
         ];
@@ -97,7 +103,7 @@ for (const name of ['unchanged', 'list-order', 'legacy-input', 'shrink', 'unsafe
         continue;
       }
     }
-    output.push({ name, fixture, setup, list: JSON.stringify(repo.listPlanDraftIdentities(1)), read: JSON.stringify(repo.getPlanDraft(1, 2)), diff: JSON.stringify(repo.diffPlanDraft(1, 2)), workspace: JSON.stringify(service.read(1, 2).workspace), consumed: name === 'unchanged' ? JSON.stringify(repo.getPlanDraft(1, 1)) : null });
+    output.push({ name, fixture, setup, list: JSON.stringify(repo.listPlanDraftIdentities(1)), read: JSON.stringify(repo.getPlanDraft(1, 2)), diff: JSON.stringify(repo.diffPlanDraft(1, 2)), workspace: JSON.stringify(service.read(1, 2).workspace), consumed: name === 'unchanged' ? JSON.stringify(repo.getPlanDraft(1, 1)) : null, ...(name === 'unchanged' ? { notFound: { list: service.list(999), profile: service.read(999, 2).kind, draft: service.read(1, 999).kind } } : {}) });
   } finally {
     raw.close();
     await ports.db.close();

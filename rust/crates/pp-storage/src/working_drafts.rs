@@ -10,7 +10,7 @@ use crate::{
     writer_admission,
 };
 use anyhow::{Result, anyhow, ensure};
-pub use pp_domain::{Digest, PositiveId, Quantity, Version};
+pub use pp_domain::{Digest, DraftState, PositiveId, Quantity, Version};
 use rusqlite::{Connection, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -176,24 +176,8 @@ pub enum Outcome {
     Workspace {
         workspace: Box<required_units::Workspace>,
     },
-    NotFound,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum DraftState {
-    Open,
-    Abandoned,
-    Consumed,
-}
-impl DraftState {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Open => "open",
-            Self::Abandoned => "abandoned",
-            Self::Consumed => "consumed",
-        }
-    }
+    ProfileNotFound,
+    DraftNotFound,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -576,25 +560,25 @@ pub(super) fn execute(connection: &mut Connection, command: Command) -> Result<O
         &[&tenant, &profile],
     )?
     else {
-        return Ok(Outcome::NotFound);
+        return Ok(Outcome::ProfileNotFound);
+    };
+    let load = |draft_id: PositiveId| -> Result<Option<Draft>> {
+        draft(&tx, &tenant, profile, i64::try_from(draft_id.get())?)
     };
     let outcome = match command.request {
         Request::List => Outcome::Listed { drafts: DraftList(rows(&tx, "SELECT id,state,lifecycle_version,snapshot_digest,base_revision_id,base_plan_version FROM plan_drafts WHERE tenant_id=? AND profile_id=? ORDER BY created_at,id", &[&tenant, &profile])?.iter().map(DraftIdentity::from_header).collect::<Result<_>>()?) },
-        request => {
-            let id = match request {
-                Request::Read { draft_id } | Request::Diff { draft_id } | Request::Workspace { draft_id } => i64::try_from(draft_id.get())?,
-                Request::List => return Err(anyhow!("Invalid draft read request")),
-            };
-            let Some(draft) = draft(&tx, &tenant, profile, id)? else { return Ok(Outcome::NotFound); };
-            match request {
-                Request::Read { .. } => Outcome::Read { draft: snapshot(&draft)? },
-                Request::Diff { .. } => Outcome::Diff { diff: diff::read(&tx, &tenant, &profile_row, &draft)? },
-                Request::Workspace { .. } => {
-                    draft_origin(&draft.header)?;
-                    Outcome::Workspace { workspace: required_units::view::workspace(&tx, &tenant, &profile_row, &draft)? }
-                },
-                Request::List => return Err(anyhow!("Invalid draft read request")),
-            }
+        Request::Read { draft_id } => {
+            let Some(draft) = load(draft_id)? else { return Ok(Outcome::DraftNotFound); };
+            Outcome::Read { draft: snapshot(&draft)? }
+        }
+        Request::Diff { draft_id } => {
+            let Some(draft) = load(draft_id)? else { return Ok(Outcome::DraftNotFound); };
+            Outcome::Diff { diff: diff::read(&tx, &tenant, &profile_row, &draft)? }
+        }
+        Request::Workspace { draft_id } => {
+            let Some(draft) = load(draft_id)? else { return Ok(Outcome::DraftNotFound); };
+            draft_origin(&draft.header)?;
+            Outcome::Workspace { workspace: required_units::view::workspace(&tx, &tenant, &profile_row, &draft)? }
         }
     };
     ensure!(
@@ -873,7 +857,8 @@ impl Outcome {
                 Some("workspace"),
                 serde_json::to_vec(&workspace)?,
             ),
-            Self::NotFound => ("not_found", None, Vec::new()),
+            Self::ProfileNotFound => ("profile_not_found", None, Vec::new()),
+            Self::DraftNotFound => ("draft_not_found", None, Vec::new()),
         };
         let mut output = b"{\"kind\":".to_vec();
         JsText::scalar(kind).write_json(&mut output);

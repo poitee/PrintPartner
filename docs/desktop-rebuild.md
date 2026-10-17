@@ -62,7 +62,7 @@ Each slice is done when:
 - the existing suites pass with the feature off and on, and the default build is unchanged;
 - a reviewer engine other than the author's scores it above 8 on the exact head, with all checks green.
 
-Slices land in this order. Linear tracks each one under GRE-595. A slice is one Linear item and may ship as several PRs (D16 ships as four). Some modules already exist on main from earlier PRs (for example #129 to #131); a slice ports only the delta from the reference branch.
+Slices land in this order. Linear tracks each one under GRE-595. A slice is one Linear item and may ship as several PRs (D16 ships as four, D14 as five). Some modules already exist on main from earlier PRs (for example #129 to #131); a slice ports only the delta from the reference branch.
 
 | Slice | Linear | Scope |
 | --- | --- | --- |
@@ -79,7 +79,7 @@ Slices land in this order. Linear tracks each one under GRE-595. A slice is one 
 | D11 | GRE-606 | pp-storage required_units |
 | D12 | GRE-607 | pp-storage working_drafts core, yaml and preparation |
 | D13 | GRE-608 | pp-storage working_drafts save, manifest, rebase and siblings |
-| D14 | GRE-610 | pp-storage uploads and capture_manifest |
+| D14 | GRE-610 | pp-storage uploads and capture_manifest (5 PRs) |
 | D15 | GRE-611 | pp-storage jobs model and subscriptions |
 | D16 | GRE-609 | pp-storage jobs engine (4 PRs) |
 | D17 | GRE-613 | pp-storage source_scan |
@@ -210,11 +210,13 @@ They use the existing writer queue and one deferred transaction. Authentication
 observes the actor without updating usage timestamps.
 
 `Read` returns a `DraftDocument` with a validated `DraftIdentity`. `List` orders
-identities by creation time and then ID. Missing or unowned profiles and drafts
-return `NotFound`. Draft loading reuses the required-units reader, including its
-snapshot digest and selected reconciliation validation. Document, diff, and
-workspace reads reject incomplete rebase origins. `Workspace` reuses the
-required-units workspace builder. No required-units reader logic changes.
+identities by creation time and then ID. A missing or unowned profile returns
+`ProfileNotFound`, and a missing draft returns `DraftNotFound`, as Node's
+`PlanDraftWorkspaceService.read` and draft list route do. Draft loading reuses
+the required-units reader, including its snapshot digest and selected
+reconciliation validation. Document, diff, and workspace reads reject
+incomplete rebase origins. `Workspace` reuses the required-units workspace
+builder. No required-units reader logic changes.
 
 `Diff` returns the complete input and Part diff against the draft's base
 revision. Both the revision ID and Plan version determine `baseIsCurrent`.
@@ -303,8 +305,9 @@ cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-storage --featu
 
 `rust/crates/pp-storage/tests/fixtures/mutate-working-drafts.py` runs the
 read and write mutants against both test files. It copies the Rust workspace
-and builds in its own temporary target directory, so it never changes
-`rust/target`.
+into a temporary directory under `rust/target`, links the real `web` directory
+beside it for compile-time includes, and builds there with its own
+`CARGO_TARGET_DIR`, so it never changes the build artifacts in `rust/target`.
 
 ### D12 preparation prerequisites
 
@@ -733,6 +736,42 @@ shutdown tests port the reference `job_transport.rs`:
 node fixtures/parity/jobs-engine/generate.mjs --check
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test jobs_engine_parity --test job_transport
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib catalog::
+```
+
+### D14 uploads: supplied-import job arms
+
+GRE-610's first PR adds the job kind the upload journal will own, behind
+`desktop_rebuild`. With the feature off, the engine is unchanged. The journal, its
+schema and the capture paths arrive in D14 (b) to (e).
+
+`JobKind::SuppliedSourceImport` carries `Payload::SuppliedSourceImport { project_id,
+operation_key, input_version }` and reserves `source:{project_id}`. Only the upload
+journal enqueues it: `AtomicJobClient::submit` refuses the payload with "Supplied
+imports require atomic domain admission". The public job API never shows one. A public
+read or stream of an import returns `JobAccessFailure::NotFound`, the retained list
+skips it, and its saves are never published to a stream. The internal `Get` still
+reads it.
+
+`ServerWorkerClient::claim_import(job_id)` claims that queued import and no other job.
+If its original authority is refused, the refusal commits with phase `targeted_claim`
+and the typed `AuthorityFailure` is returned, instead of moving on to the next job. An
+import attempt advances only by heartbeat and progress; the journal owns its other
+phases. Cancelling an import, or recovering a cancelled one after a restart, returns it
+to the queue with `cancel_requested` set, so its owner can reclaim it and release its
+input. As a deliberate difference from the reference, the 100-attempt limit does not
+apply to these cleanup claims, and recovery never fails a cancelled import for its
+attempt count; other import attempts and other job kinds keep the limit.
+
+Node has no supplied-import kind. `fixtures/parity/jobs-engine/generate.mjs` records
+that Node refuses to start one ("Unsupported job kind: supplied-source-import") and that
+a job it never started cannot be read, streamed or listed. The Rust parity test asserts
+that a durable import looks the same to its own tenant. The claim, advance and
+cancellation cases port the reference engine:
+
+```sh
+node fixtures/parity/jobs-engine/generate.mjs --check
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test jobs_engine_parity --test supplied_imports --test job_authority_claims
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib jobs::subscriptions::
 ```
 
 ## D9 build graph receipt

@@ -25,6 +25,8 @@ fn client(capacity: usize) -> PublicationClient {
             changed: Condvar::new(),
             capacity,
             job_admission: Mutex::new(None),
+            orphaned_source_leases: Mutex::new(Vec::new()),
+            job_subscriptions: crate::jobs::JobSubscriptions::new(),
         }),
         policy: policy(),
     }
