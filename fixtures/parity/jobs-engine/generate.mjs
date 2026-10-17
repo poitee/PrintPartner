@@ -92,8 +92,19 @@ if (process.argv.includes("--probe")) {
     jobs: retainedRunner.listJobs(filters, "tenant-a").map(({ kind, status }) => ({ kind, status })),
   }));
   retained.push({ id: "other_tenant", jobs: retainedRunner.listJobs({}, "tenant-b") });
+  // Node has no supplied-import kind. Starting one is refused and leaves the
+  // tenant nothing to read, list or stream.
+  const internalRunner = newRunner();
+  const internal = {
+    start_error: await internalRunner
+      .start("supplied-source-import", { project_id: 1, operation_key: "upload", input_version: 1 }, "tenant-a")
+      .then(() => null, (error) => error.message),
+    get: await internalRunner.get("never-started", "tenant-a"),
+    stream: internalRunner.subscribe("never-started", "tenant-a", () => undefined),
+    list: internalRunner.listJobs({}, "tenant-a"),
+  };
   // The failing export logs to stdout, so the probe result is the last line.
-  process.stdout.write(`\n${JSON.stringify({ node: process.version, cases, finished, retained })}`);
+  process.stdout.write(`\n${JSON.stringify({ node: process.version, cases, finished, retained, internal })}`);
   process.exit(0);
 }
 
@@ -121,7 +132,8 @@ ${probe.finished.map((item) => `    ${JSON.stringify(item)}`).join(",\n")}
   ],
   "retained": [
 ${probe.retained.map((item) => `    ${JSON.stringify(item)}`).join(",\n")}
-  ]
+  ],
+  "internal": ${JSON.stringify(probe.internal)}
 }
 `;
 
