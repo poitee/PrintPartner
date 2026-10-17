@@ -322,10 +322,6 @@ impl State {
         })
     }
     #[cfg(feature = "desktop_rebuild")]
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "GRE-613 (D17) settles local scans with this")
-    )]
     pub(crate) fn classify_issued(&self, incarnation: &str, token: u64) -> IssuedTokenState<'_> {
         if incarnation != self.incarnation {
             return IssuedTokenState::WrongIncarnation;
@@ -563,10 +559,6 @@ pub(crate) fn begin_job_work(
 }
 impl SourceWorkLease {
     #[cfg(feature = "desktop_rebuild")]
-    #[expect(
-        dead_code,
-        reason = "GRE-613/614 (D17/D18) bind scan and Sync journals to this"
-    )]
     pub(crate) fn proof(&self) -> Result<SourceWorkProof> {
         self.proof
             .clone()
