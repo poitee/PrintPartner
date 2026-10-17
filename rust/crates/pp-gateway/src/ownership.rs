@@ -221,7 +221,7 @@ impl std::fmt::Display for AdmissionError {
                 ),
                 None => write!(
                     formatter,
-                    "rollback of {operation} refused: no Rust writer for {format}"
+                    "rollback of {operation} refused: Rust writer for {format} is undeclared"
                 ),
             },
             Self::DuplicateParticipant { id } => {
