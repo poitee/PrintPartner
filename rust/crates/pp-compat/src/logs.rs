@@ -984,4 +984,34 @@ mod tests {
         assert_eq!(row.as_object().unwrap().len(), 3);
         assert!(!text.contains("SECRET_TOKEN"));
     }
+
+    #[test]
+    fn gre_696_racing_first_log_opens_share_one_file() {
+        let scratch = Scratch::new();
+        let path = scratch.0.join("logs/desktop.jsonl");
+        let directory = File::open(scratch.0.join("logs")).unwrap();
+        let threads = 8;
+        for trial in 0..200 {
+            let barrier = std::sync::Barrier::new(threads);
+            let opened: Vec<_> = std::thread::scope(|scope| {
+                let handles: Vec<_> = (0..threads)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            barrier.wait();
+                            open_log(&directory)
+                                .map(|file| file.metadata().unwrap().ino())
+                                .map_err(|error| error.to_string())
+                        })
+                    })
+                    .collect();
+                handles.into_iter().map(|h| h.join().unwrap()).collect()
+            });
+            let inode = std::fs::symlink_metadata(&path).unwrap().ino();
+            assert!(
+                opened.iter().all(|result| result == &Ok(inode)),
+                "trial {trial}: {opened:?}"
+            );
+            std::fs::remove_file(&path).unwrap();
+        }
+    }
 }
