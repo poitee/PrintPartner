@@ -1131,7 +1131,7 @@ fn winner(
     ))
 }
 
-const ASSIGNMENT_ROW_WORK: usize = 32;
+const ASSIGNMENT_ROW_WORK: usize = 1024;
 
 fn charge_open_draft(
     tx: &Transaction<'_>,
@@ -1235,7 +1235,10 @@ fn carry_open_edits(
         &[&tenant, &profile],
     )? {
         charge_open_draft(tx, tenant, num(&open, "id")?, budget)?;
-        let Some(open) = draft(tx, tenant, profile, num(&open, "id")?)? else {
+        let Some(open) = storage::draft_checked(tx, tenant, profile, num(&open, "id")?, &|| {
+            Ok(budget.check()?)
+        })?
+        else {
             continue;
         };
         for part in open.parts {

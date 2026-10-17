@@ -416,16 +416,28 @@ A recompute runs in three steps on the writer thread:
    one visit per draft, input, Part and decision, plus two for the selected
    reconciliation. Shared explicit column lists drive both the loaders and
    their cost queries. Each loaded column costs its byte length, including
-   identifiers and metadata. Each assignment also costs 32 comparison units
-   and uses no visit. A 200,000-assignment draft therefore fits the default
-   limits. The 268,435,456-unit comparison cap permits at most 8,388,608
-   assignments across all carried drafts before their bytes and other work,
-   and the existing 200,000-row cap still applies to each table load.
-   Structural work stays capped at 100,000 visits. Each cost query streams
-   indexed rows and sums individual column lengths without concatenation,
-   aggregation or sorting. Cancellation is checked between rows, including
-   assignments. SQLite hooks remain a test-only dependency. A limit or
-   cancellation refusal rolls the transaction back. It abandons
+   identifiers and metadata. Each assignment also costs 1,024 comparison units
+   and uses no visit. A 200,000-assignment draft fits the default limits; two
+   such open drafts exhaust the default grant. Before their bytes and other
+   work, the 268,435,456-unit comparison cap permits at most 262,144 assignment
+   rows across carried drafts. Each table load retains its 200,000-row cap,
+   and structural work stays capped at 100,000 visits.
+   On the Linux calibration VM, two runs of five alternating release trials
+   measured a median 1,929.5 ms for a 200,000-assignment carry and 12.8 ms
+   without a carry. The difference is 9,583 ns per assignment. The slowest
+   carry, 2,431.6 ms, projects to about 3.2 seconds for the default grant's
+   assignment ceiling.
+   This is a work bound; elapsed time depends on the machine and scheduler.
+   Refusing two drafts with 200,000 assignments took 2,381.8 ms in one run.
+   Each cost query streams indexed rows and sums individual column lengths
+   without concatenation, aggregation or sorting. Both the cost scan and the
+   loader check cancellation between rows. JSON parsing and serialization
+   also check cancellation. Large JSON arrays retain raw rows and validate
+   one at a time, so cancelling does not free a whole parsed object tree.
+   The release test sweeps cancellation offsets on 200,000 assignments; the
+   debug test uses 20,000 assignments. SQLite hooks remain a test-only
+   dependency. A limit or cancellation refusal rolls the transaction back.
+   It abandons
    every open draft, increments their lifecycle versions, inserts the draft,
    inputs and Parts, and returns `created` with the saved snapshot.
 
@@ -454,7 +466,7 @@ node --import ./web/node_modules/tsx/dist/loader.mjs --conditions=development ru
 cmp /persist/tmp/recompute-first.jsonl /persist/tmp/recompute-second.jsonl
 cmp /persist/tmp/recompute-first.jsonl rust/crates/pp-storage/tests/fixtures/working-draft-recompute-node.jsonl
 cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test working_draft_recompute --test-threads=2
-cargo nextest run --release --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test working_draft_recompute -E 'test(two_hundred_thousand_assignments)'
+cargo nextest run --release --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test working_draft_recompute -E 'test(two_hundred_thousand_assignments) | test(multiple_maximum_drafts) | test(cancellation_inside_a_large)'
 node --import ./web/node_modules/tsx/dist/loader.mjs --conditions=development rust/crates/pp-storage/tests/fixtures/working-draft-recompute-node.mjs web/apps/server --large-carry
 python3 rust/crates/pp-storage/tests/fixtures/mutate-working-draft-recompute.py
 ```

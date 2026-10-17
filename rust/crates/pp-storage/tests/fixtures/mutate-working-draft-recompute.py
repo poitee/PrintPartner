@@ -28,7 +28,9 @@ mutants = [
     ('carried assignments are not charged', '    for (table, columns, predicate, visits, overhead) in tables {', '    for (table, columns, predicate, visits, overhead) in tables {\n        if table == "plan_draft_required_unit_assignments" { continue; }'),
     ('carried text is not charged', '            budget.comparison(usize::try_from(row.get::<_, i64>(0)?)? + overhead)?;\n', '            let _ = (row, overhead);\n'),
     ('carried spool IDs are not charged', "            .split(',')\n", "            .split(',')\n            .filter(|column| *column != \"spoolman_spool_id\")\n"),
-    ('assignment row work is free', 'const ASSIGNMENT_ROW_WORK: usize = 32;', 'const ASSIGNMENT_ROW_WORK: usize = 0;'),
+    ('assignment row work is free', 'const ASSIGNMENT_ROW_WORK: usize = 1024;', 'const ASSIGNMENT_ROW_WORK: usize = 0;'),
+    ('assignment row work is undercharged', 'const ASSIGNMENT_ROW_WORK: usize = 1024;', 'const ASSIGNMENT_ROW_WORK: usize = 32;'),
+    ('carried loader cancellation is removed', 'Ok(budget.check()?)', 'Ok(())'),
     ('assignments spend visits', '            0,\n            ASSIGNMENT_ROW_WORK,', '            1,\n            ASSIGNMENT_ROW_WORK,'),
     ('carried edits keep the prepared digest', 'changed |= *part != before;', 'changed |= false;'),
     ('superseded draft keeps its lifecycle', "SET state='abandoned',lifecycle_version=lifecycle_version+1 WHERE tenant_id=? AND profile_id=? AND state='open'", "SET state='abandoned' WHERE tenant_id=? AND profile_id=? AND state='open'"),
@@ -44,7 +46,9 @@ with tempfile.TemporaryDirectory(prefix='pp-a9-mutants-', dir='/persist/tmp') as
     command = ['cargo', 'nextest', 'run', '--locked', '--manifest-path', str(scratch / 'Cargo.toml'), '-p', 'pp-storage', '--features', 'desktop_rebuild', '--test', 'working_draft_recompute', '--test-threads=4']
     def run(name=None):
         selected = command
-        if name == 'assignments spend visits':
+        if name in ('assignment row work is free', 'assignment row work is undercharged'):
+            selected = command + ['--release', '-E', 'test(multiple_maximum_drafts)']
+        elif name == 'assignments spend visits':
             selected = command + ['--release', '-E', 'test(two_hundred_thousand_assignments)']
         elif name:
             selected = command + ['-E', 'not test(two_hundred_thousand_assignments)']
@@ -52,7 +56,11 @@ with tempfile.TemporaryDirectory(prefix='pp-a9-mutants-', dir='/persist/tmp') as
     baseline = run()
     if baseline.returncode:
         raise SystemExit(baseline.stdout + baseline.stderr)
-    print('BASELINE passed', flush=True)
+    print('BASELINE debug passed', flush=True)
+    baseline = subprocess.run(command + ['--release', '-E', 'test(two_hundred_thousand_assignments) | test(multiple_maximum_drafts) | test(cancellation_inside_a_large)'], env=env, capture_output=True, text=True)
+    if baseline.returncode:
+        raise SystemExit(baseline.stdout + baseline.stderr)
+    print('BASELINE release passed', flush=True)
     target = scratch / source
     original = target.read_text()
     killed = 0

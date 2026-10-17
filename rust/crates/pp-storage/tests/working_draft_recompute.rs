@@ -546,12 +546,7 @@ fn carrying_a_selected_reconciliation_spends_the_recompute_budget() {
     owner.shutdown().unwrap();
 }
 
-#[test]
-#[cfg_attr(
-    debug_assertions,
-    ignore = "run this 200,000-assignment regression in release mode"
-)]
-fn two_hundred_thousand_assignments_recompute_with_default_limits() {
+fn large_carried_draft(quantity: u16) -> (Fixture, WriterOwner) {
     let files = json!(
         (0..20)
             .map(|i| format!("old-{i:04}.stl"))
@@ -577,7 +572,7 @@ fn two_hundred_thousand_assignments_recompute_with_default_limits() {
         .collect::<Vec<_>>();
     let request = serde_json::from_value(json!({
         "expected_snapshot_digest": large["draft"]["snapshotDigest"],
-        "decision": {"kind": "set_quantity_override", "draft_part_ids": ids, "value": 10000},
+        "decision": {"kind": "set_quantity_override", "draft_part_ids": ids, "value": quantity},
     }))
     .unwrap();
     let edited = owner
@@ -595,24 +590,177 @@ fn two_hundred_thousand_assignments_recompute_with_default_limits() {
     assert_eq!(serde_json::to_value(edited).unwrap()["kind"], "ready");
     assert_eq!(
         f.rows("SELECT d.digest_format,(SELECT COUNT(*) FROM plan_draft_parts p WHERE p.draft_id=d.id) AS parts,(SELECT COUNT(*) FROM plan_draft_required_unit_assignments a WHERE a.reconciliation_id=d.current_required_unit_reconciliation_id) AS assignments FROM plan_drafts d WHERE d.profile_id=3"),
-        json!([{"digest_format": "plan-draft-v2", "parts": 20, "assignments": 200000}])
+        json!([{"digest_format": "plan-draft-v2", "parts": 20, "assignments": 20 * usize::from(quantity)}])
     );
-    let result = recompute(
+    (f, owner)
+}
+
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "run this 200,000-assignment regression in release mode"
+)]
+fn two_hundred_thousand_assignments_recompute_with_default_limits() {
+    let (f, owner) = large_carried_draft(10000);
+    owner.shutdown().unwrap();
+    let golden = f.path.join("golden.db");
+    f.sql().backup("main", &golden, None).unwrap();
+    for trial in 0..5 {
+        for carry in [true, false] {
+            f.sql()
+                .restore("main", &golden, None::<fn(rusqlite::backup::Progress)>)
+                .unwrap();
+            if !carry {
+                f.sql().execute_batch("UPDATE plan_drafts SET state='abandoned',lifecycle_version=lifecycle_version+1 WHERE profile_id=3 AND state='open'").unwrap();
+            }
+            let owner = f.open();
+            let started = std::time::Instant::now();
+            let result = recompute(
+                &owner,
+                f.reads(&json!(["only-current.stl"]), &Value::Null, None),
+                PreparationLimits::default(),
+                "small",
+                true,
+                3,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .unwrap();
+            eprintln!(
+                "maximum-count trial {trial}, carry={carry}: {:?}",
+                started.elapsed()
+            );
+            assert_eq!(result["kind"], "created");
+            assert_eq!(result["draft"]["parts"].as_array().unwrap().len(), 1);
+            assert_eq!(
+                f.rows(
+                    "SELECT state,lifecycle_version FROM plan_drafts WHERE profile_id=3 ORDER BY id"
+                ),
+                json!([{"state":"abandoned","lifecycle_version":1},{"state":"open","lifecycle_version":0}])
+            );
+            owner.shutdown().unwrap();
+        }
+    }
+}
+
+#[test]
+fn cancellation_inside_a_large_carried_load_is_prompt() {
+    let quantity = if cfg!(debug_assertions) { 1000 } else { 10000 };
+    let (f, owner) = large_carried_draft(quantity);
+    let before = f.recorded_rows();
+    let offsets: Vec<u64> = if cfg!(debug_assertions) {
+        vec![200]
+    } else {
+        (0..=1400).step_by(70).collect()
+    };
+    let mut cancelled_trials = 0;
+    for offset in offsets {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let flag = cancelled.clone();
+        let setter = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(offset));
+            let at = std::time::Instant::now();
+            flag.store(true, Ordering::Release);
+            at
+        });
+        let result = recompute(
+            &owner,
+            f.reads(&json!(["only-current.stl"]), &Value::Null, None),
+            PreparationLimits::default(),
+            &format!("cancel-load-{offset}"),
+            true,
+            3,
+            cancelled,
+        );
+        let finished = std::time::Instant::now();
+        let at = setter.join().unwrap();
+        if let Ok(outcome) = result {
+            assert_eq!(outcome["kind"], "created");
+            assert!(
+                finished.saturating_duration_since(at) < Duration::from_millis(50),
+                "response finished too late after cancellation"
+            );
+            break;
+        }
+        let error = result.unwrap_err();
+        let latency = finished.saturating_duration_since(at);
+        assert!(format!("{error:?}").contains("Cancelled"), "{error:?}");
+        assert_eq!(f.recorded_rows(), before);
+        eprintln!(
+            "{}-assignment cancellation at {offset} ms: {latency:?}",
+            20 * usize::from(quantity)
+        );
+        assert!(latency < Duration::from_millis(50), "{latency:?}");
+        cancelled_trials += 1;
+    }
+    assert!(cancelled_trials > 0);
+    owner.shutdown().unwrap();
+}
+
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "run maximum-count carry admission in release mode"
+)]
+fn multiple_maximum_drafts_exceed_the_default_carry_grant() {
+    let (f, owner) = large_carried_draft(10000);
+    let files = json!(
+        (0..20)
+            .map(|i| format!("new-{i:04}.stl"))
+            .collect::<Vec<_>>()
+    );
+    let out = recompute(
         &owner,
-        f.reads(&json!(["only-current.stl"]), &Value::Null, None),
+        f.reads(&files, &Value::Null, None),
         PreparationLimits::default(),
-        "small",
+        "second",
         true,
         3,
         Arc::new(AtomicBool::new(false)),
     )
     .unwrap();
-    assert_eq!(result["kind"], "created");
-    assert_eq!(result["draft"]["parts"].as_array().unwrap().len(), 1);
-    assert_eq!(
-        f.rows("SELECT state,lifecycle_version FROM plan_drafts WHERE profile_id=3 ORDER BY id"),
-        json!([{"state":"abandoned","lifecycle_version":1},{"state":"open","lifecycle_version":0}])
+    let ids = out["draft"]["parts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["id"].clone())
+        .collect::<Vec<_>>();
+    let request = serde_json::from_value(json!({"expected_snapshot_digest": out["draft"]["snapshotDigest"], "decision":{"kind":"set_quantity_override","draft_part_ids":ids,"value":10000}})).unwrap();
+    let edited = owner
+        .working_drafts_with_policy(policy())
+        .unwrap()
+        .edit(
+            session(),
+            id(3),
+            id(out["draft"]["id"].as_u64().unwrap()),
+            request,
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+    assert_eq!(serde_json::to_value(edited).unwrap()["kind"], "ready");
+    f.sql().execute_batch("UPDATE plan_drafts SET state='open',lifecycle_version=lifecycle_version+1 WHERE profile_id=3 AND state='abandoned'").unwrap();
+    assert_eq!(f.rows("SELECT COUNT(*) AS assignments FROM plan_draft_required_unit_assignments a JOIN plan_drafts d ON a.reconciliation_id=d.current_required_unit_reconciliation_id WHERE d.profile_id=3 AND d.state='open'"), json!([{"assignments":400000}]));
+    let before = f.recorded_rows();
+    let start = std::time::Instant::now();
+    let result = recompute(
+        &owner,
+        f.reads(&json!(["only-current.stl"]), &Value::Null, None),
+        PreparationLimits::default(),
+        "refused",
+        true,
+        3,
+        Arc::new(AtomicBool::new(false)),
     );
+    eprintln!("multiple maximum drafts refused in {:?}", start.elapsed());
+    let error = result.unwrap_err();
+    assert!(
+        matches!(
+            error.downcast_ref(),
+            Some(ReadFailure::LimitExceeded(Resource::ComparisonWork))
+        ),
+        "{error:?}"
+    );
+    assert_eq!(f.recorded_rows(), before);
     owner.shutdown().unwrap();
 }
 
