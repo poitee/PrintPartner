@@ -61,6 +61,7 @@ describe("community manifest reads", () => {
   });
 
   it.each([
+    "kit-catalog",
     "../kit-catalog",
     "../path-hints",
     "..\\kit-catalog",

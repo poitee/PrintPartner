@@ -27,6 +27,7 @@ const INVALID_SLUGS = [
   "a/b",
   "..",
   "a".repeat(65),
+  "kit-catalog",
 ];
 const VALID_SLUGS = ["ldo-2.4-sb-tap", "voron-stealthburner", "example-kit-r2", "a".repeat(64)];
 const SOURCE_URL = "https://github.com/a/addon";
