@@ -106,6 +106,49 @@ afterEach(() => {
 });
 
 describe("RoleFilamentPicker Plan access", () => {
+  it("gate off spool pick leaves no save status after success", async () => {
+    gated = false;
+    seedAccess();
+    const onUpdated = vi.fn();
+    render(<RoleFilamentPicker profileId={1} onUpdated={onUpdated} />, { wrapper });
+    await openPrimary();
+    fireEvent.change(await screen.findByLabelText("Physical spool for Primary"), { target: { value: "5" } });
+
+    await waitFor(() => expect(onUpdated).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText("Saving…")).toBeNull();
+    expect(screen.queryByText("Saved")).toBeNull();
+    expect(screen.queryByText("Save failed")).toBeNull();
+  });
+
+  it("gate off failed spool pick leaves no save status", async () => {
+    gated = false;
+    seedAccess();
+    intercept = (url, init) => url.pathname.endsWith("/role-filament") && init?.method === "PUT"
+      ? json({ detail: "Spool save rejected." }, 500) : undefined;
+    render(<RoleFilamentPicker profileId={1} />, { wrapper });
+    await openPrimary();
+    fireEvent.change(await screen.findByLabelText("Physical spool for Primary"), { target: { value: "5" } });
+
+    await screen.findByText("Spool save rejected.");
+    expect(screen.queryByText("Saving…")).toBeNull();
+    expect(screen.queryByText("Save failed")).toBeNull();
+  });
+
+  it("gate off failed import preserves main's role fetch count", async () => {
+    gated = false;
+    seedAccess();
+    intercept = (url, init) => url.pathname.endsWith("/role-filament") && init?.method === "PUT"
+      ? json({ detail: "Import rejected." }, 500) : undefined;
+    render(<RoleFilamentPicker profileId={1} />, { wrapper });
+    await screen.findByRole("button", { name: "Change Primary color" });
+    importPreset([{ role: "primary", filament_color_id: "c1", filament_custom_hex: null, spoolman_spool_id: null }]);
+
+    await screen.findByText("Import rejected.");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Import colors" })).toHaveProperty("disabled", false));
+    expect(count("/plans/1/role-filaments")).toBe(1);
+    expect(count("/plans/1/apply-role-colors")).toBe(0);
+  });
+
   it.each([
     ["integration is disabled in Settings", "Spoolman: integration is disabled in Settings"],
     [null, "Spoolman integration is disabled — enable it in Settings → Integrations."],
@@ -144,6 +187,14 @@ describe("RoleFilamentPicker Plan access", () => {
     expect(count("/filaments/catalog")).toBe(1);
     expect(count("/plans/1/role-filaments")).toBe(1);
     expect(count(spoolsPath)).toBe(1);
+    expect(requests.filter((request) => request.url.pathname === "/filaments/catalog" || request.url.pathname === spoolsPath)
+      .every((request) => !request.url.searchParams.has("profile_id"))).toBe(true);
+    expect(client.getQueryData(queryKeys.filamentCatalog())).toEqual(catalog);
+    expect(client.getQueryData(queryKeys.spoolmanSpools("int-1"))).toEqual([
+      { id: 5, filament_id: 2, remaining_weight: 850, location: "Shelf A" },
+    ]);
+    expect(client.getQueryData(queryKeys.filamentCatalog(1))).toBeUndefined();
+    expect(client.getQueryData(queryKeys.spoolmanSpools("int-1", 1))).toBeUndefined();
   });
 
   it("gate off imports Spoolman references with main's payloads and fetch counts", async () => {

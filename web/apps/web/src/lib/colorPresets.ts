@@ -121,7 +121,7 @@ export async function applyColorPreset(
         ...role,
         filament_color_id: hasSpoolmanAssignment({ filament_color_id: role.filament_color_id }) ? null : role.filament_color_id,
         spoolman_spool_id: null,
-      }))
+      })).filter((role) => role.filament_color_id || role.filament_custom_hex)
     : preset.roles;
 
   let applied = 0;

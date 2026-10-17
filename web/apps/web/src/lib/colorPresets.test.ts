@@ -12,10 +12,11 @@ function preset(roles: Parameters<typeof applyColorPreset>[1]["roles"]) {
 const catalogRole = { role: "body", filament_color_id: "catalog:xyz", filament_custom_hex: null, spoolman_spool_id: null };
 
 describe("applyColorPreset", () => {
-  beforeEach(() => vi.mocked(filamentsApi.saveRoleFilament).mockClear());
+  beforeEach(() => vi.mocked(filamentsApi.saveRoleFilament)
+    .mockReset().mockResolvedValue({ updated: 1, thumbnails_cleared: 0, roles: [] }));
 
   it.each([
-    [{ ...catalogRole, filament_color_id: "spoolman:1:42", spoolman_spool_id: "spoolman:1:99" }, null],
+    [{ ...catalogRole, filament_color_id: "spoolman:1:42", filament_custom_hex: "#112233", spoolman_spool_id: "spoolman:1:99" }, null],
     [{ ...catalogRole, spoolman_spool_id: "42" }, "catalog:xyz"],
   ] as const)("strips denied Spoolman references and keeps ordinary colors: %j", async (optionalRole, expectedColorId) => {
     const count = await applyColorPreset(1, preset([catalogRole, optionalRole]), { allowSpoolman: () => false });
@@ -24,6 +25,22 @@ describe("applyColorPreset", () => {
       [1, { ...catalogRole, refresh_thumbnails: false }],
       [1, { ...optionalRole, filament_color_id: expectedColorId, spoolman_spool_id: null, refresh_thumbnails: false }],
     ]);
+  });
+
+  it("leaves the stored role unchanged when denied stripping removes its entire assignment", async () => {
+    const stored = { ...catalogRole };
+    vi.mocked(filamentsApi.saveRoleFilament).mockImplementationOnce(async (_profileId, payload) => {
+      Object.assign(stored, payload);
+      return { updated: 1, thumbnails_cleared: 0, roles: [] };
+    });
+
+    const count = await applyColorPreset(1, preset([
+      { ...catalogRole, filament_color_id: "spoolman:1:filament:42", spoolman_spool_id: "spoolman:1:spool:99" },
+    ]), { allowSpoolman: () => false });
+
+    expect(filamentsApi.saveRoleFilament).not.toHaveBeenCalled();
+    expect(stored).toEqual(catalogRole);
+    expect(count).toBe(0);
   });
 
   it("rejects before writing if isCurrent returns false", async () => {
