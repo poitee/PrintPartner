@@ -737,7 +737,7 @@ test("counts real marker comments without counting code after a block close", ()
 test("only scans source extensions and skips the ratchet itself", () => {
   assert.equal(isSourcePath("rust/crates/pp-core/src/lib.rs"), true);
   assert.equal(isSourcePath("web/apps/web/src/App.tsx"), true);
-  assert.equal(isSourcePath("docs/ARCHITECTURE.md"), false);
+  assert.equal(isSourcePath("docs/architecture.md"), false);
   assert.equal(isSourcePath("scripts/workaround-ratchet.mjs"), false);
   assert.equal(isSourcePath(".github/workflows/web-ci.yml"), true);
   assert.equal(isSourcePath("workflow.yaml"), true);

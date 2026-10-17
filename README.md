@@ -220,10 +220,10 @@ The monorepo contains four workspaces:
 
 - [Documentation index](docs/README.md)
 - [Install guide](docs/INSTALL.md)
-- [Architecture](docs/ARCHITECTURE.md)
+- [Architecture](docs/architecture.md)
 - [Building](docs/development/building.md)
 - [Contributing](docs/development/contributing.md) and the [definition of done](docs/development/definition-of-done.md)
-- [HTTP API](docs/API.md)
+- [HTTP API](docs/api.md)
 - [MCP setup](docs/assistant-mcp.md)
 - [Deployment reference](web/DEPLOY.md)
 - [Operations](OPERATIONS.md)
