@@ -30,6 +30,11 @@ fn tag_name(tag: Option<&Tag>) -> ReadResult<Option<&str>> {
     match tag {
         None => Ok(None),
         Some(t) if t.handle.is_empty() && t.suffix == "!" => Ok(Some("!")),
+        Some(t) if t.handle.is_empty() => t
+            .suffix
+            .strip_prefix("tag:yaml.org,2002:")
+            .map(Some)
+            .ok_or(ReadFailure::InvalidDocument),
         Some(t) if t.is_yaml_core_schema() => Ok(Some(t.suffix.as_str())),
         _ => invalid(),
     }
@@ -181,7 +186,10 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
     let mut flow = 0usize;
     let mut quote = None;
     let mut plain = false;
-    let mut plain_indent = 0usize;
+    // Indent of the line holding the last block `:`, `-` or `?`; None at the
+    // document root. A plain scalar continues on any deeper line.
+    let mut parent: Option<usize> = None;
+    let mut plain_parent: Option<usize> = None;
     let mut node = true;
     let mut line_start = true;
     let mut line_indent = 0usize;
@@ -237,7 +245,7 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             if i == chars.len() {
                 break;
             }
-            if flow == 0 && (!plain || line_indent <= plain_indent) {
+            if flow == 0 && (!plain || plain_parent.is_some_and(|n| line_indent <= n)) {
                 plain = false;
                 node = true;
                 quoted_end = false;
@@ -251,6 +259,7 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                 output.push_str("---");
                 consumed += 3;
                 i += 3;
+                parent = None;
                 plain = false;
                 node = true;
                 quoted_end = false;
@@ -362,10 +371,13 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             continue;
         }
         if node && matches!(c, '!' | '&' | '*') {
-            // saphyr gives verbatim tags an empty handle, so `!<!>` would pass as
-            // a bare `!`, which js-yaml rejects. No other verbatim tag passes
-            // `tag_name`.
-            if c == '!' && next == Some('<') {
+            // saphyr decodes verbatim tags and gives them an empty handle, so
+            // `!<!>` and `!<%21>` would pass as a bare `!`, which js-yaml rejects.
+            if c == '!'
+                && next == Some('<')
+                && (chars.get(i + 2..i + 4) == Some(&['!', '>'])
+                    || chars.get(i + 2..i + 6) == Some(&['%', '2', '1', '>']))
+            {
                 return invalid();
             }
             let mut end = i + 1;
@@ -437,6 +449,9 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             || (node && matches!(c, '[' | '{'))
             || (node && matches!(c, '-' | '?') && next.is_none_or(yaml_blank_break));
         if structural {
+            if flow == 0 && matches!(c, ':' | '-' | '?') {
+                parent = Some(line_indent);
+            }
             if matches!(c, '[' | '{') {
                 flow += 1;
             } else if matches!(c, ']' | '}') {
@@ -447,7 +462,7 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             quoted_end = false;
         } else if !yaml_blank_break(c) {
             if node {
-                plain_indent = line_indent;
+                plain_parent = parent;
             }
             node = false;
             plain = true;
@@ -995,6 +1010,110 @@ mod tests {
         let a = doc.get(groups, "a", &mut budget).unwrap().unwrap();
         assert!(matches!(doc.node(a, &mut budget).unwrap(), Node::Number(n) if *n == 1.0));
         for source in ["project: !<!> 123", "parts: !<%21> [a]"] {
+            let mut budget = PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
+            assert!(
+                matches!(
+                    Document::parse(source.as_bytes(), &mut budget),
+                    Err(ReadFailure::InvalidDocument)
+                ),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn yaml_plain_continuation_keeps_property_lookalikes_like_js_yaml() {
+        let cancel = AtomicBool::new(false);
+        for (source, path, expected) in [
+            (
+                "project:\n  prefix\n  !<literal>",
+                &["project"][..],
+                "prefix !<literal>",
+            ),
+            ("project:\n  prefix\n  !<!>", &["project"], "prefix !<!>"),
+            ("project:\n  prefix\n  &a b", &["project"], "prefix &a b"),
+            ("project:\n  prefix\n  'q'", &["project"], "prefix 'q'"),
+            ("project:\n  prefix\n  - x", &["project"], "prefix - x"),
+            ("project:\n    prefix\n  !<l>", &["project"], "prefix !<l>"),
+            (
+                "x:\n  a:\n    prefix\n    !<l>\n  b: 1",
+                &["x", "a"],
+                "prefix !<l>",
+            ),
+            ("? a\n  !<l>\n: v", &["a !<l>"], "v"),
+            ("- a\n  !<b>", &[], "a !<b>"),
+            ("a\n!<b>", &[], "a !<b>"),
+        ] {
+            let mut budget = PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
+            let doc = Document::parse(source.as_bytes(), &mut budget).unwrap();
+            let mut id = doc.root;
+            for key in path {
+                id = doc.get(id, key, &mut budget).unwrap().unwrap();
+            }
+            assert_eq!(
+                doc.text(id, &mut budget).unwrap().as_scalar().as_deref(),
+                Some(expected),
+                "{source}"
+            );
+        }
+        for source in [
+            "a:\n  b # c\n  !<l> x",
+            "a:\n  b\n# c\n  !<l> x",
+            "- - a\n  !<l>",
+        ] {
+            let mut budget = PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
+            assert!(
+                matches!(
+                    Document::parse(source.as_bytes(), &mut budget),
+                    Err(ReadFailure::InvalidDocument)
+                ),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn yaml_verbatim_core_schema_tags_match_js_yaml() {
+        let cancel = AtomicBool::new(false);
+        let mut budget = PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
+        let doc = Document::parse(
+            b"str: !<tag:yaml.org,2002:str> 123\n\
+              escaped: !<tag:yaml.org,2002:%73tr> 123\n\
+              int: !<tag:yaml.org,2002:int> 123\n\
+              null: !<tag:yaml.org,2002:null> ''\n\
+              bool: !<tag:yaml.org,2002:bool> true\n\
+              float: !<tag:yaml.org,2002:float> 1.5\n\
+              seq: !<tag:yaml.org,2002:seq> [a]\n\
+              map: !<tag:yaml.org,2002:map> {a: 1}\n\
+              flow: [!<tag:yaml.org,2002:str> 1, b]\n",
+            &mut budget,
+        )
+        .unwrap();
+        let mut node = |key: &str| {
+            let id = doc.get(doc.root, key, &mut budget).unwrap().unwrap();
+            doc.node(id, &mut budget).unwrap().clone()
+        };
+        for key in ["str", "escaped"] {
+            assert!(
+                matches!(node(key), Node::String(s) if s.as_scalar().as_deref() == Some("123")),
+                "{key}"
+            );
+        }
+        assert!(matches!(node("int"), Node::Number(n) if n == 123.0));
+        assert!(matches!(node("null"), Node::Null));
+        assert!(matches!(node("bool"), Node::Bool(true)));
+        assert!(matches!(node("float"), Node::Number(n) if n == 1.5));
+        assert!(matches!(node("seq"), Node::Sequence(v) if v.len() == 1));
+        assert!(matches!(node("map"), Node::Mapping(v) if v.len() == 1));
+        assert_eq!(
+            units(&doc, "flow", &mut budget),
+            "1,b".encode_utf16().collect::<Vec<_>>()
+        );
+        for source in [
+            "project: !<tag:yaml.org,2002:binary> 123",
+            "project: !<tag:example.com,2000:x> 1",
+            "project: !<> 1",
+        ] {
             let mut budget = PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
             assert!(
                 matches!(
