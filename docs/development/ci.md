@@ -1,6 +1,6 @@
 # Continuous integration
 
-The **Rust cross-OS** workflow (`.github/workflows/rust-cross-os.yml`) builds and tests the Rust workspace on Linux, macOS and Windows. It runs on every pull request and on every push to `main`. Its purpose is to stop code that compiles on one OS only from reaching `main`.
+The **Rust cross-OS** workflow (`.github/workflows/rust-cross-os.yml`) builds and tests the Rust workspace on Linux, macOS and Windows. It runs on every pull request and on every push to `main`. A new push to a pull request cancels that pull request's older run. Every push to `main` gets its own run, so each merge has a result. Its purpose is to stop code that compiles on one OS only from reaching `main`.
 
 This page covers what the Rust jobs run and how to reproduce them. [Change a CI workflow](ci-controls.md) covers review, the actionlint and zizmor checks, action pins and required checks. Both apply to this workflow.
 
