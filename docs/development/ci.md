@@ -149,11 +149,23 @@ The `scripts/setup-ci-linux.sh` script installs build tools, Python and the GitH
 1.99.0 with rustfmt and clippy. Rust partition defaults use three build jobs on
 self-hosted runners; explicit inputs and repository variables still take precedence.
 
-Windows remains on `windows-latest`. The commented `runs-on` expression in
-`rust-cross-os.yml` documents the future same-repository PR switch, gated by
-`vars.PP_LOCAL_WIN == 'true'`. Enabling the variable alone does not change routing;
-the workflow must be edited after the Windows runner is provisioned.
+Same-repository PR Rust Windows jobs use
+`[self-hosted, windows, x64, pp-local-win]`, with one ephemeral runner slot.
+Fork PRs and non-PR events keep `windows-latest`. Setup actions install Rust,
+Python and Node on the Windows runner. The same shared Rust steps also install
+Python explicitly on local macOS.
+
+Windows label smoke passed before enabling this route:
+[run 39073196185](https://github.com/poitee/PrintPartner/actions/runs/39073196185).
+The temporary `ci/runner-smoke-win` branch remains for Chad to remove.
 
 Linux and macOS label smoke passed before this change:
 [run 39072361760](https://github.com/poitee/PrintPartner/actions/runs/39072361760).
 The temporary `ci/runner-smoke` branch was deleted after both jobs succeeded.
+
+`ci-runner-plan.yml` exposes the existing reusable runner-plan output names with
+this PR-only policy. Its planner runs on `ubuntu-latest`. Same-repository PRs select
+the new Linux and ARM64 macOS labels; forks and non-PR events select
+`ubuntu-latest` and `macos-26`. `HOSTED_CI=on` or the `ci:hosted` label also selects
+hosted outputs. The reusable plan was previously present only in unmerged PR #314;
+current workflows keep their direct runner expressions and macOS label gates.

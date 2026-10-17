@@ -1,0 +1,61 @@
+name: CI runner policy
+
+on:
+  workflow_call:
+    outputs:
+      hosted:
+        value: ${{ jobs.plan.outputs.hosted }}
+      linux:
+        value: ${{ jobs.plan.outputs.linux }}
+      macos:
+        value: ${{ jobs.plan.outputs.macos }}
+      intel:
+        value: ${{ jobs.plan.outputs.intel }}
+      linux-runner:
+        value: ${{ jobs.plan.outputs.linux-runner }}
+      macos-runner:
+        value: ${{ jobs.plan.outputs.macos-runner }}
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      hosted: ${{ steps.select.outputs.hosted }}
+      linux: ${{ steps.select.outputs.linux }}
+      macos: ${{ steps.select.outputs.macos }}
+      intel: ${{ steps.select.outputs.intel }}
+      linux-runner: ${{ steps.select.outputs.linux-runner }}
+      macos-runner: ${{ steps.select.outputs.macos-runner }}
+    steps:
+      - name: Select PR runners with GitHub-hosted fallbacks
+        id: select
+        shell: bash
+        env:
+          HOSTED_CI: ${{ vars.HOSTED_CI }}
+          HOSTED_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'ci:hosted') }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          hosted=true
+          linux_runner='["ubuntu-latest"]'
+          macos_runner='["macos-26"]'
+          if [[ "$EVENT_NAME" == pull_request && "$HEAD_REPO" == "$REPOSITORY" \
+                && "$HOSTED_CI" != on && "$HOSTED_LABEL" != true ]]; then
+            hosted=false
+            linux_runner='["self-hosted","linux","x64","pp-local"]'
+            macos_runner='["self-hosted","macos","arm64","pp-local-mac"]'
+          fi
+          {
+            echo "hosted=$hosted"
+            echo 'linux=true'
+            echo 'macos=true'
+            echo "intel=$hosted"
+            echo "linux-runner=$linux_runner"
+            echo "macos-runner=$macos_runner"
+          } >> "$GITHUB_OUTPUT"
