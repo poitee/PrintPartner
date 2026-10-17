@@ -837,10 +837,16 @@ fn invalid_stored_community_slugs_read_no_community_manifest() {
         let captured = database.capture(TENANT, 1).unwrap();
         let observed =
             observe(&captured, Some(&reads), PreparationLimits::default(), false).unwrap();
-        (json(&observed), observed.stamps)
+        (
+            (json(&observed), observed.stamps),
+            observed.invalid_community_slugs,
+        )
     };
-    let without = observe_with(None);
-    assert_ne!(observe_with(Some("oracle-kit")), without);
+    let (without, refused) = observe_with(None);
+    assert!(refused.is_empty());
+    let (valid, refused) = observe_with(Some("oracle-kit"));
+    assert_ne!(valid, without);
+    assert!(refused.is_empty());
     for slug in [
         "../oracle-kit",
         "oracle-kit/..",
@@ -848,6 +854,10 @@ fn invalid_stored_community_slugs_read_no_community_manifest() {
         " oracle-kit ",
         "Oracle-Kit",
     ] {
-        assert_eq!(observe_with(Some(slug)), without, "{slug:?}");
+        assert_eq!(
+            observe_with(Some(slug)),
+            (without.clone(), vec![2]),
+            "{slug:?}"
+        );
     }
 }

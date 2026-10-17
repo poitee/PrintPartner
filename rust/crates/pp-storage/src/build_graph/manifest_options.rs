@@ -159,6 +159,10 @@ impl BuildGraphClient {
                     ));
                 }
             };
+            // Node's loadCommunityManifest warns for each skipped stored slug.
+            for source in &observed.invalid_community_slugs {
+                eprintln!("Ignoring invalid stored community manifest slug source_id={source}");
+            }
             if observed.stamps != rechecked.stamps {
                 if attempt < retries {
                     continue;
