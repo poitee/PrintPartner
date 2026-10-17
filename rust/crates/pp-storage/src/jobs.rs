@@ -2527,6 +2527,7 @@ pub(crate) fn publication_conflicts(
             | Payload::ImportScan { .. }
             | Payload::ExtractSourceDocs { .. }
             | Payload::CheckSourceUpdates {} => false,
+            Payload::SuppliedSourceImport { .. } => false,
             Payload::ExportStlPack { profile_id, .. }
             | Payload::ExportChecklistHtml { profile_id }
             | Payload::ExportKitBundle { profile_id, .. }
