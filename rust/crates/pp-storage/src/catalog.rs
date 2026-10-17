@@ -746,6 +746,19 @@ pub(crate) fn get(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<Option<
         )
         .optional()?)
 }
+#[cfg(feature = "desktop_rebuild")]
+pub(crate) fn validate_capture_existing(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<()> {
+    require(tx, tenant, id).map(drop)
+}
+#[cfg(feature = "desktop_rebuild")]
+pub(crate) fn validate_capture_create(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    source: &mut CreateSource,
+) -> Result<()> {
+    *source = rebuild::create(tx, tenant, std::mem::take(source))?;
+    Ok(())
+}
 fn require(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<SourceSummary> {
     get(tx, tenant, id)?.ok_or_else(|| anyhow!("Source not found"))
 }
@@ -852,7 +865,12 @@ fn normalize_rule(s: &str) -> String {
         format!("{s}/")
     }
 }
-fn run(tx: &Transaction<'_>, state: &State, tenant: &str, request: Request) -> Result<Outcome> {
+pub(crate) fn run(
+    tx: &Transaction<'_>,
+    state: &State,
+    tenant: &str,
+    request: Request,
+) -> Result<Outcome> {
     Ok(match request {
         #[cfg(feature = "desktop_rebuild")]
         Request::SourceActivity { limit } => Outcome::Activity(activity::list(tx, tenant, limit)?),

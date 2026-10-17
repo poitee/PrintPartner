@@ -27,6 +27,8 @@ fn client(capacity: usize) -> PublicationClient {
             job_admission: Mutex::new(None),
             orphaned_source_leases: Mutex::new(Vec::new()),
             job_subscriptions: crate::jobs::JobSubscriptions::new(),
+            import_epoch: std::sync::atomic::AtomicU64::new(0),
+            import_quota: Mutex::new(None),
         }),
         policy: policy(),
     }
