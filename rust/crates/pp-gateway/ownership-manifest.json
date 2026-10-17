@@ -1076,19 +1076,19 @@
     },
     "source-covers": {
       "node_reads": 1,
-      "rust_writes": null
+      "rust_writes": "none"
     },
     "kit-catalog": {
       "node_reads": 1,
-      "rust_writes": null
+      "rust_writes": "none"
     },
     "path-hints": {
       "node_reads": 1,
-      "rust_writes": null
+      "rust_writes": "none"
     },
     "community-manifests": {
-      "node_reads": 2,
-      "rust_writes": null
+      "node_reads": 1,
+      "rust_writes": "none"
     }
   }
 }

@@ -1,8 +1,3 @@
-#![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Durable job authority is integrated in D15/D16")
-)]
-
 pub(crate) mod queries;
 
 use super::{
@@ -13,6 +8,7 @@ use anyhow::{Result, ensure};
 use rusqlite::Transaction;
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone)]
 pub(crate) struct AuthorityBasis {
     credential: AuthorityCredential,
     admitted_tenant: String,
@@ -20,6 +16,7 @@ pub(crate) struct AuthorityBasis {
     policy: PolicyIdentity,
 }
 
+#[derive(Clone)]
 enum AuthorityCredential {
     Session(SealedSessionReference),
     RoutedKey {
@@ -28,8 +25,10 @@ enum AuthorityCredential {
     },
 }
 
+#[derive(Clone)]
 struct SealedSessionReference(String);
 
+#[derive(Clone)]
 struct SealedRoutedKeyReference {
     id: String,
     hash: String,

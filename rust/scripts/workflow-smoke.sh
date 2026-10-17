@@ -64,7 +64,7 @@ trap 'exit 143' TERM
 # Prints "free" or "held" for the OS lock on the data directory; any other
 # error (missing file, unexpected errno) makes the probe itself fail.
 lock_state() {
-  python3 - "$data/.desktop.lock" <<'PY'
+  python3 - "$data/printpartner.lock" <<'PY'
 import fcntl, sys
 with open(sys.argv[1], 'rb') as lock:
     try:
@@ -95,11 +95,11 @@ esac
 log "ready: $origin (pid $server_pid)"
 
 # Data lock taken at boot.
-test -f "$data/.desktop-owner.json" || fail 'owner marker missing after boot'
-runtime_dir="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["runtime_dir"])' "$data/.desktop-owner.json")"
+test -f "$data/.desktop-lease" || fail 'compatibility reservation missing after boot'
+runtime_dir="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["runtime_dir"])' "$credentials")"
 lock="$(lock_state)" || fail 'data lock probe failed at boot'
 test "$lock" = held || fail "data lock is $lock while running"
-log 'lock: held at boot (flock EWOULDBLOCK, owner marker present)'
+log 'lock: held at boot (flock EWOULDBLOCK, compatibility reservation present)'
 
 # Authenticate with the one-use bootstrap credential.
 test "$(python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))' "$credentials")" = 0o600 \
@@ -194,11 +194,11 @@ check_no_leftovers -P "$server_pid_stopped"
 log "stop: SIGTERM -> gateway drain timeout, exit 1 in ${shutdown_seconds}s, ws closed, child $child_pid gone, no process-group or child leftovers"
 
 # Data lock released at stop.
-test ! -e "$data/.desktop-owner.json" || fail 'owner marker survived stop'
+test ! -e "$data/.desktop-lease" || fail 'compatibility reservation survived stop'
 test ! -e "$runtime_dir" || fail 'runtime directory survived stop'
 lock="$(lock_state)" || fail 'data lock probe failed after stop'
 test "$lock" = free || fail "data lock is $lock after stop"
-log 'lock: released at stop (flock acquired, owner marker removed)'
+log 'lock: released at stop (flock acquired, compatibility reservation removed)'
 
 python3 - "$commit" "$origin" "$child_pid" "$plan_id" "$fixture/server.out" "$shutdown_seconds" <<'PY'
 import json, platform, sys

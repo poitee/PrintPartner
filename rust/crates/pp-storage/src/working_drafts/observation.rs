@@ -1,8 +1,8 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub(crate) use super::manifest::{
-    Group as BuilderGroup, Groups as BuilderGroups, Manifest as BuilderManifest,
-    Variant as BuilderVariant,
+    Glob as BuilderGlob, Group as BuilderGroup, Groups as BuilderGroups,
+    Manifest as BuilderManifest, Variant as BuilderVariant,
 };
 
 pub(crate) fn parse_builder_manifest(
@@ -14,13 +14,6 @@ pub(crate) fn parse_builder_manifest(
 
 pub(crate) fn merge_builder_groups(target: &mut BuilderGroups, incoming: BuilderGroups) {
     super::manifest::merge(target, incoming)
-}
-
-pub(crate) fn builder_path_matches(
-    pattern: &crate::manifest_text::ManifestText,
-    path: &str,
-) -> bool {
-    super::manifest::matches(pattern, path)
 }
 
 pub(crate) type BuilderHint = super::manifest::HintRule;
@@ -131,6 +124,8 @@ pub struct PreparationBudget<'a> {
     expanded: usize,
     nodes: usize,
     rules: usize,
+    #[cfg(test)]
+    checks_until_cancel: std::sync::atomic::AtomicUsize,
 }
 impl<'a> PreparationBudget<'a> {
     pub fn new(cancelled: &'a AtomicBool, limits: PreparationLimits) -> ReadResult<Self> {
@@ -146,9 +141,24 @@ impl<'a> PreparationBudget<'a> {
             expanded: 0,
             nodes: 0,
             rules: 0,
+            #[cfg(test)]
+            checks_until_cancel: Default::default(),
         })
     }
+    /// Cancels this budget's flag when the next `checks` calls to `check` have passed.
+    #[cfg(test)]
+    pub(crate) fn cancel_after_checks(&mut self, checks: usize) {
+        *self.checks_until_cancel.get_mut() = checks + 1;
+    }
     pub fn check(&self) -> ReadResult<()> {
+        #[cfg(test)]
+        match self.checks_until_cancel.load(Ordering::Relaxed) {
+            0 => {}
+            1 => self.cancelled.store(true, Ordering::Release),
+            remaining => self
+                .checks_until_cancel
+                .store(remaining - 1, Ordering::Relaxed),
+        }
         if self.cancelled.load(Ordering::Acquire) {
             Err(ReadFailure::Cancelled)
         } else {

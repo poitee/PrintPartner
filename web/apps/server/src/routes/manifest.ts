@@ -5,6 +5,7 @@ import type { FastifyInstance } from "fastify";
 import * as yaml from "js-yaml";
 import { importRulesForProject, scanRepo } from "@print-partner/domain";
 import type { AppRepository } from "../db/repository.js";
+import { isCommunityManifestSlug } from "../lib/community-manifest-slug.js";
 import { safePathUnderRoot } from "../lib/secure-path.js";
 import { loadKitCatalog } from "../services/kit-catalog.js";
 import { applyStackPresetToProfile } from "../services/stack-preset.js";
@@ -62,7 +63,7 @@ export async function registerManifestRoutes(
 
   app.get("/manifest-registry/:slug", async (request, reply) => {
     const slug = (request.params as { slug: string }).slug;
-    const path = /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(slug)
+    const path = isCommunityManifestSlug(slug)
       ? safePathUnderRoot(DATA_DIR, `${slug}.yaml`)
       : null;
     if (!path) return reply.status(404).send({ detail: "Manifest not found" });

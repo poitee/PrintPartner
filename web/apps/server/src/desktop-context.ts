@@ -1,10 +1,10 @@
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { closeSync, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import { z } from "zod";
 import { admitDesktopAccount, accountModeSchema, type DesktopAccount } from "./desktop-account.js";
-import { presentDesktopChildCredential } from "./desktop-child-credential.js";
+import { admitDesktopDataDirectory } from "./desktop-child-credential.js";
 import { acquireStorageLease, ownerIsStale, readOwnershipRecord, recordNamesInstance, storageParentIdentityEnv } from "./storage-lease.js";
 import type { SessionUser } from "./routes/auth-types.js";
 
@@ -14,19 +14,11 @@ const baseSetupSchema = z.strictObject({
   socket_path: z.string().min(1),
   generation: z.string().regex(/^[a-f0-9]{32}$/),
   key: z.string().regex(/^[a-f0-9]{64}$/),
-  lease: z.string().regex(/^[a-f0-9]{64}$/),
   parent_pid: z.number().int().positive(),
   port: z.number().int().min(1).max(65535),
   gateway_rate_limit: z.boolean().optional(),
-  child_process_identity: z.string().min(1),
 });
 const setupSchema = z.union([baseSetupSchema.extend({ account_mode: accountModeSchema }), baseSetupSchema]);
-const markerSchema = z.object({
-  pid: z.number().int().positive(),
-  lease_hash: z.string(),
-  child_pid: z.number().int().positive(),
-  child_process_identity: z.string().min(1),
-});
 const assertionSchema = z.strictObject({
   version: z.literal(1), generation: z.string(), tenant: z.literal("default"),
   actor: z.literal("desktop-owner"), method: z.string(), target: z.string(),
@@ -73,34 +65,22 @@ export function installDesktopContext(input: unknown): void {
   if (context) throw new Error("Desktop context already installed");
   const parsed = setupSchema.parse(input);
   const dataDir = realpathSync(parsed.data_dir);
-  const markerPath = join(dataDir, ".desktop-owner.json");
-  const marker = markerSchema.parse(JSON.parse(readOwnershipRecord(markerPath)));
-  const mode = statSync(markerPath).mode & 0o777;
+  if (process.env.PP_STORAGE_CORE_LOCK !== "1") throw new Error("Core storage lock required");
   const inherited = fstatSync(198);
-  const ownerLock = statSync(join(dataDir, process.env.PP_STORAGE_CORE_LOCK === "1" ? "printpartner.lock" : ".desktop.lock"));
-  if (inherited.dev !== ownerLock.dev || inherited.ino !== ownerLock.ino) throw new Error("Inherited storage lock rejected");
-  const leaseHash = createHash("sha256").update(parsed.lease).digest("hex");
-  if (marker.pid !== process.ppid || parsed.parent_pid !== process.ppid ||
-      marker.lease_hash !== leaseHash || mode !== 0o600 || parsed.data_dir !== dataDir ||
-      marker.child_pid !== process.pid || marker.child_process_identity !== parsed.child_process_identity) {
-    throw new Error("Desktop storage lease rejected");
-  }
-  presentDesktopChildCredential(parsed.child_process_identity);
+  const ownerLock = statSync(join(dataDir, "printpartner.lock"));
+  if (!inherited.isFile() || inherited.dev !== ownerLock.dev || inherited.ino !== ownerLock.ino) throw new Error("Inherited storage lock rejected");
+  if (parsed.parent_pid !== process.ppid || parsed.data_dir !== dataDir) throw new Error("Desktop storage owner rejected");
   account = admitDesktopAccount(dataDir, "account_mode" in parsed ? parsed.account_mode.pin : { kind: "disabled" });
   context = parsed;
+  admitDesktopDataDirectory(dataDir);
 }
 
-/** After the desktop parent died, removes its socket and owner marker if the marker still names it. */
+/** Remove the private socket after the desktop parent dies. */
 export function releaseOrphanedDesktopOwner(setup: { data_dir: string; socket_path: string; parent_pid: number }): void {
-  const marker = join(setup.data_dir, ".desktop-owner.json");
   try {
-    const owner: unknown = JSON.parse(readOwnershipRecord(marker));
-    if (typeof owner === "object" && owner !== null && "pid" in owner && owner.pid === setup.parent_pid) {
-      rmSync(setup.socket_path, { force: true });
-      rmdirSync(dirname(setup.socket_path));
-      rmSync(marker);
-    }
-  } catch { /* Owner cleanup can race a normal Rust shutdown. */ }
+    rmSync(setup.socket_path, { force: true });
+    rmdirSync(dirname(setup.socket_path));
+  } catch { /* Cleanup can race the parent-death watcher. */ }
 }
 
 function assertDataDirectoryAvailable(dataDir: string): void {

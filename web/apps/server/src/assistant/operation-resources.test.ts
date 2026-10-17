@@ -5,7 +5,7 @@ import { eq } from "drizzle-orm";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { join, relative, isAbsolute, sep } from "node:path";
+import { dirname, join, relative, isAbsolute, sep } from "node:path";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -18,6 +18,8 @@ import { ISOLATED_SOURCE_FILESYSTEM } from "../services/source-filesystem-policy
 import { digestEffectiveNaming } from "../services/plan-freshness.js";
 import { createJobRunner } from "../services/job-runner.js";
 import { WORKFLOW_GUIDE } from "../routes/workflow-guide.js";
+import { loadManifestYaml } from "../services/manifest-apply.js";
+import { inferOptionGroupsFromPaths } from "../services/path-hints.js";
 import { invokeAssistantTool } from "./tools.js";
 
 const observer = vi.hoisted(() => {
@@ -54,7 +56,10 @@ vi.mock("node:fs/promises", async (original) => observer.wrap(await original<obj
 const TOOL_IDS = ["read_source_file", "list_sources", "list_source_categories"] as const;
 const TABLES = ["table:app_settings", "table:projects", "table:source_docs"];
 const FILE_RESOURCES = ["file:source-workspace", "table:projects", "table:source_docs"];
-const manifest = z.object({ resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
+const manifest = z.object({ live_formats: z.object({
+  "path-hints": z.object({ node_reads: z.number() }),
+  "community-manifests": z.object({ node_reads: z.number() }),
+}), resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
   z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
@@ -2029,7 +2034,8 @@ it("traces get_kit_catalog real catalogs, fallbacks and tenant independence with
 const OPTION_GROUP_TABLES = ["table:app_settings", "table:build_profiles", "table:profile_layers", "table:projects"];
 const OPTION_GROUP_UNION = ["file:community-manifests", "file:path-hints", "file:source-workspace", ...OPTION_GROUP_TABLES];
 const SHIPPED_PATH_HINTS = fileURLToPath(new URL("../data/path-hints.yaml", import.meta.url));
-const COMMUNITY_MANIFEST = fileURLToPath(new URL("../data/manifests/registry-index.yaml", import.meta.url));
+const COMMUNITY_MANIFEST_DIR = fileURLToPath(new URL("../data/manifests", import.meta.url));
+const COMMUNITY_MANIFEST = join(COMMUNITY_MANIFEST_DIR, "registry-index.yaml");
 type FileCall = [string, ...unknown[]];
 
 function optionGroupSelect(statement: unknown, tenantId: string, planId?: number): string {
@@ -2039,6 +2045,25 @@ function optionGroupSelect(statement: unknown, tenantId: string, planId?: number
     if (sql === `select "id", "tenant_id", "profile_id", "layer_order", "layer_type", "project_id" from "profile_layers" where "profile_layers"."profile_id" = ${planId}.0 order by "profile_layers"."layer_order" asc`) return "table:profile_layers";
   }
   return tableForObservedSelect(sql, tenantId);
+}
+
+function optionGroupFileResources(files: FileCall[]): string[] {
+  const resources = new Set<string>();
+  const workspaceRoots = [join(dataDir, "repos"), userRoot, join(dataDir, "moved-checkout")];
+  for (const [api, candidate] of files) {
+    const path = z.string().parse(candidate);
+    if (path === SHIPPED_PATH_HINTS || path === join(dataDir, "path-hints.yaml")) resources.add("file:path-hints");
+    else if (path === COMMUNITY_MANIFEST_DIR && api === "realpathSync"
+      || dirname(path) === COMMUNITY_MANIFEST_DIR && /^[a-z0-9][a-z0-9._-]{0,63}\.yaml$/.test(path.slice(COMMUNITY_MANIFEST_DIR.length + 1))) resources.add("file:community-manifests");
+    else if (workspaceRoots.some((root) => under(root, path))) resources.add("file:source-workspace");
+    else throw new Error(`Unclassified option group path: ${api} ${path}`);
+  }
+  return [...resources];
+}
+
+function communityManifestCalls(path: string, exists = true): FileCall[] {
+  return [["realpathSync", COMMUNITY_MANIFEST_DIR], ["realpathSync", path],
+    ...(exists ? [["statSync", path], ["readFileSync", path, "utf8"]] satisfies FileCall[] : [])];
 }
 
 async function traceOptionGroups({ input = {}, repository = repo, tenantId = "default", activePlanId, planId, tables, files = [], hintDir = dataDir }: {
@@ -2056,10 +2081,7 @@ async function traceOptionGroups({ input = {}, repository = repo, tenantId = "de
   expect(observer.state.files.map(({ api, args }) => [api, ...args])).toEqual(files);
   const union = unions.get("get_plan_option_groups") ?? new Set<string>();
   for (const resource of observed) union.add(resource);
-  for (const [, path] of files) {
-    union.add(path === COMMUNITY_MANIFEST ? "file:community-manifests"
-      : path === SHIPPED_PATH_HINTS || path === join(dataDir, "path-hints.yaml") ? "file:path-hints" : "file:source-workspace");
-  }
+  for (const resource of optionGroupFileResources(observer.state.files.map(({ api, args }) => [api, ...args]))) union.add(resource);
   unions.set("get_plan_option_groups", union);
   return z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
 }
@@ -2136,7 +2158,7 @@ for (const isolated of [false, true]) {
       ...inferredProbes, ...optionGroupManifestCalls(inferred.checkout), ...optionGroupScanCalls(inferred.checkout), ...optionGroupHintCalls(),
       ...declaredProbes, ...inferredProbes,
       ...declaredProbes, ...optionGroupManifestCalls(declared.checkout),
-      ...inferredProbes, ...optionGroupManifestCalls(inferred.checkout), ["readFileSync", COMMUNITY_MANIFEST, "utf8"] satisfies FileCall];
+      ...inferredProbes, ...optionGroupManifestCalls(inferred.checkout), ...communityManifestCalls(COMMUNITY_MANIFEST)];
     const output = { plan_id: plan.id, selections: { fixture_mode: "chosen" }, option_groups: {
       fixture_mode: { rule: "pick_one", label: "Mode", parts: [], min: null, max: null, variants: [
         { id: "chosen", label: null, parts: ["chosen.stl"], excludes: [], source_id: declared.id, source_name: "Declared" },
@@ -2273,4 +2295,62 @@ it("rejects extra real reads against get_plan_option_groups observers", async ()
     ]);
     expect(() => optionGroupSelect('select * from "projects"', "default", plan.id)).toThrow("Unsupported SQL:");
   } finally { read.mockRestore(); }
+});
+
+for (const isolated of [false, true]) {
+  it(`traces get_plan_option_groups valid, missing and legacy community slugs under ${isolated ? "isolated" : "trusted"} policy`, async () => {
+    const source = optionGroupCheckout("Community");
+    const plan = repo.createProfile("Community", source.id);
+    const repository = isolated ? new AppRepository(drizzle(sqlite, { schema }), undefined, join(dataDir, "repos"), schema, { sourceFilesystemPolicy: ISOLATED_SOURCE_FILESYSTEM }) : repo;
+    const probes = optionGroupPathProbes(source, isolated);
+    const sourceFiles = [...probes, ...probes, ...optionGroupManifestCalls(source.checkout), ...optionGroupScanCalls(source.checkout), ...probes, ...probes, ...optionGroupManifestCalls(source.checkout)];
+    const options = { input: { plan_id: plan.id }, planId: plan.id, repository, tables: OPTION_GROUP_TABLES };
+    const fixture = join(COMMUNITY_MANIFEST_DIR, "gre402-fixture.yaml");
+    fs.copyFileSync(fileURLToPath(new URL("../test-fixtures/community-manifest.yaml", import.meta.url)), fixture);
+    try {
+      sqlite.prepare("UPDATE projects SET manifest_community_slug = ? WHERE id = ?").run("gre402-fixture", source.id);
+      const output = await traceOptionGroups({ ...options, files: [...sourceFiles, ...communityManifestCalls(fixture)] });
+      expect(loadManifestYaml(fs.readFileSync(fixture, "utf8")).selections).toEqual({ fixture_mode: "chosen" });
+      expect(output).toMatchObject({ plan_id: plan.id, selections: {}, sources: [{ source_id: source.id }] });
+      sqlite.prepare("UPDATE projects SET manifest_community_slug = ? WHERE id = ?").run("gre402-missing", source.id);
+      expect(await traceOptionGroups({ ...options, files: [...sourceFiles, ...communityManifestCalls(join(COMMUNITY_MANIFEST_DIR, "gre402-missing.yaml"), false)] })).toEqual(output);
+      sqlite.prepare("UPDATE projects SET manifest_community_slug = ? WHERE id = ?").run("../kit-catalog", source.id);
+      expect(await traceOptionGroups({ ...options, files: sourceFiles })).toEqual(output);
+      expect(observer.state.files.every(({ args }) => typeof args[0] === "string" && under(join(dataDir, "repos"), args[0]))).toBe(true);
+      expect(observer.state.files.some(({ args }) => typeof args[0] === "string" && args[0].includes("kit-catalog"))).toBe(false);
+    } finally { fs.rmSync(fixture, { force: true }); }
+  });
+}
+
+it("classifies option group files by family roots and rejects every unknown path", () => {
+  expect(optionGroupFileResources([
+    ["readFileSync", join(dataDir, "repos", "1", "chosen.stl")],
+    ["readFileSync", SHIPPED_PATH_HINTS],
+    ["readFileSync", join(dataDir, "path-hints.yaml")],
+    ["readFileSync", COMMUNITY_MANIFEST],
+  ])).toEqual(["file:source-workspace", "file:path-hints", "file:community-manifests"]);
+  for (const path of [join(root, "README.md"), join(dataDir, "kit-catalog.yaml"), join(COMMUNITY_MANIFEST_DIR, "nested", "other.yaml"), join(COMMUNITY_MANIFEST_DIR, "INVALID.yaml"), join(dataDir, "repos-other", "part.stl")]) {
+    expect(() => optionGroupFileResources([["readFileSync", path]])).toThrow("Unclassified option group path:");
+  }
+});
+
+it("pins community manifests to the unversioned Node object reader contract", () => {
+  expect(manifest.live_formats["community-manifests"].node_reads).toBe(1);
+  const fixture = fs.readFileSync(fileURLToPath(new URL("../test-fixtures/community-manifest.yaml", import.meta.url)), "utf8");
+  const expected = loadManifestYaml(fixture);
+  for (const header of ["", "version: 1", "version: 2", "version: 999", "version: future", "format: unknown\nversion: -1"]) {
+    expect(loadManifestYaml(`${header}\n${fixture.replace(/^format:.*\nversion:.*\n/, "")}`)).toEqual(expected);
+  }
+  expect(() => loadManifestYaml("[]")).toThrow("manifest must be an object");
+});
+
+it("pins path hints to Node's exact version 1 reader", () => {
+  expect(manifest.live_formats["path-hints"].node_reads).toBe(1);
+  const path = join(dataDir, "path-hints.yaml");
+  fs.writeFileSync(path, "version: 1\nrules:\n  - path: gre402.stl\n    option_group: gre402\n    variant_id: chosen\n");
+  expect(inferOptionGroupsFromPaths(["gre402.stl"], dataDir).gre402?.variants?.map(({ id }) => id)).toEqual(["chosen"]);
+  for (const header of ["", "version: 0", "version: 2", "version: 999", "version: future"]) {
+    fs.writeFileSync(path, `${header}\nrules: []\n`);
+    expect(() => inferOptionGroupsFromPaths(["gre402.stl"], dataDir)).toThrow(`${path}: version must be 1`);
+  }
 });

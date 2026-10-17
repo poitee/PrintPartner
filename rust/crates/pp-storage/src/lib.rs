@@ -35,7 +35,7 @@ mod schema;
 pub mod working_drafts;
 mod writer_admission;
 
-use anyhow::{Result, anyhow, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 pub use schema::SchemaReady;
 use serde::{Deserialize, Serialize};
@@ -464,7 +464,8 @@ impl WriterOwner {
         let path = lease.data_dir().join("print-partner.db");
         let version = lease.preflight()?;
         for name in ["repos", "sources", "exports", "thumbs", "covers"] {
-            std::fs::create_dir_all(lease.data_dir().join(name))?;
+            std::fs::create_dir_all(lease.data_dir().join(name))
+                .with_context(|| format!("WriterOwner::open: create storage directory {name}"))?;
         }
         let (mut connection, ready) = schema::initialize(&path, version, seed_timestamp)?;
         jobs::recover(&mut connection)?;

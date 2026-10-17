@@ -2080,9 +2080,6 @@ fn ticket_t_7_ownership_get_kit_catalog_refuses_invalid_admission_before_effects
 fn assert_catalog_tool_invalid_admission(id: &str) {
     let mut original = manifest();
     original["live_formats"]["sqlite-schema"]["rust_writes"] = json!(34);
-    original["live_formats"]["kit-catalog"]["rust_writes"] = json!(1);
-    original["live_formats"]["path-hints"]["rust_writes"] = json!(1);
-    original["live_formats"]["community-manifests"]["rust_writes"] = json!(2);
     let mut baseline_effect = false;
     admit(&original)
         .and_then(|index| {
@@ -2282,17 +2279,18 @@ fn ticket_t_7_ownership_get_plan_snapshot_has_complete_node_owned_resources() {
             assert!(!effect);
         }
     }
-    let mut value = manifest();
-    value["live_formats"]["sqlite-schema"]["rust_writes"] = json!(34);
     assert_eq!(
-        admit(&value).unwrap().admit_rollback(id),
+        index.admit_rollback(id),
         Err(AdmissionError::IncompatibleLiveFormat {
             operation: id.into(),
-            format: "kit-catalog".into(),
-            node_reads: 1,
-            rust_writes: None,
+            format: "sqlite-schema".into(),
+            node_reads: 34,
+            rust_writes: Some(35),
         })
     );
+    let mut value = manifest();
+    value["live_formats"]["sqlite-schema"]["rust_writes"] = json!(34);
+    assert_eq!(admit(&value).unwrap().admit_rollback(id), Ok(&expected));
     value["live_formats"]["kit-catalog"]["rust_writes"] = json!(1);
     assert_eq!(admit(&value).unwrap().admit_rollback(id), Ok(&expected));
     value["live_formats"]["kit-catalog"]["node_reads"] = json!(2);
@@ -2340,6 +2338,7 @@ fn ticket_t_7_ownership_get_kit_catalog_has_complete_node_owned_resources() {
         index.lookup(id).unwrap().disposition,
         Disposition::Owned(Owner::Node)
     );
+    assert_eq!(index.admit_rollback(id), Ok(&expected));
     for rust_writes in [None, Some(2)] {
         let mut value = manifest();
         value["live_formats"]["kit-catalog"]["rust_writes"] = json!(rust_writes);
@@ -2401,11 +2400,23 @@ fn ticket_t_7_ownership_get_plan_option_groups_has_complete_node_owned_resources
             rust_writes: Some(35),
         })
     );
+    let mut sqlite_compatible = manifest();
+    sqlite_compatible["live_formats"]["sqlite-schema"]["node_reads"] = json!(35);
+    assert_eq!(
+        admit(&sqlite_compatible).unwrap().admit_rollback(id),
+        Ok(&expected)
+    );
+    for format in ["path-hints", "community-manifests"] {
+        assert_eq!(
+            sqlite_compatible["live_formats"][format]["rust_writes"],
+            json!("none")
+        );
+    }
     for (format, node_reads) in [
         ("sqlite-schema", 34),
         ("source-revision-workspace", 1),
         ("path-hints", 1),
-        ("community-manifests", 2),
+        ("community-manifests", 1),
     ] {
         for rust_writes in [None, Some(node_reads + 1)] {
             let mut value = manifest();
@@ -2413,7 +2424,7 @@ fn ticket_t_7_ownership_get_plan_option_groups_has_complete_node_owned_resources
                 ("sqlite-schema", 34),
                 ("source-revision-workspace", 1),
                 ("path-hints", 1),
-                ("community-manifests", 2),
+                ("community-manifests", 1),
             ] {
                 value["live_formats"][compatible_format]["rust_writes"] = json!(version);
             }
