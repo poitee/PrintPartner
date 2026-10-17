@@ -5,9 +5,10 @@ use super::model::KitManifest;
 use crate::manifest_text::{JsText, ManifestText, OptionGroupId, VariantId};
 use crate::working_drafts::observation::{
     BuilderGlob, BuilderGroup, BuilderGroups, BuilderVariant, CatalogPurpose, CheckoutManifestUse,
-    DocumentRead, DraftReads, InventoryPath, OwnedCatalogReadRequest, OwnedCheckoutReadRequest,
-    OwnedStlReadRequest, PreparationBudget, ReadFailure, ReadResult, Resource, StlPurpose,
-    infer_builder_siblings, merge_builder_groups, parse_builder_hints, parse_builder_manifest,
+    CommunitySlug, DocumentRead, DraftReads, InventoryPath, OwnedCatalogReadRequest,
+    OwnedCheckoutReadRequest, OwnedStlReadRequest, PreparationBudget, ReadFailure, ReadResult,
+    Resource, StlPurpose, infer_builder_siblings, merge_builder_groups, parse_builder_hints,
+    parse_builder_manifest,
 };
 use rusqlite::{OptionalExtension, Transaction, params};
 use sha2::{Digest, Sha256};
@@ -234,14 +235,16 @@ fn observe_source(
     } else {
         declared.clone()
     };
+    // Node logs and skips an invalid stored slug. pp-storage has no logger,
+    // so it only skips.
     if let Some(slug) = source
         .community_slug
         .as_deref()
-        .filter(|slug| !slug.is_empty())
+        .and_then(CommunitySlug::parse)
     {
         let community = reads.read_catalog_document(
             &OwnedCatalogReadRequest {
-                purpose: CatalogPurpose::Community(slug.into()),
+                purpose: CatalogPurpose::Community(slug),
             },
             budget,
         )?;

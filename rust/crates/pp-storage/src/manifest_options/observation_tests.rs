@@ -3,9 +3,9 @@
 use super::KitManifest;
 use super::observation::{self, CapturedManifestGraph, ObservedBuilder};
 use crate::working_drafts::observation::{
-    ArtifactRead, CatalogPurpose, DocumentRead, DraftReads, InventoryPath, OwnedCatalogReadRequest,
-    OwnedCheckoutReadRequest, OwnedStlReadRequest, PreparationBudget, PreparationLimits,
-    ReadFailure, ReadResult, Resource, StlInventory, StlPurpose, StlRootRead,
+    ArtifactRead, CatalogPurpose, CommunitySlug, DocumentRead, DraftReads, InventoryPath,
+    OwnedCatalogReadRequest, OwnedCheckoutReadRequest, OwnedStlReadRequest, PreparationBudget,
+    PreparationLimits, ReadFailure, ReadResult, Resource, StlInventory, StlPurpose, StlRootRead,
     parse_builder_manifest,
 };
 use rusqlite::{Connection, params};
@@ -227,7 +227,7 @@ impl DraftReads for Reads {
         budget: &mut PreparationBudget<'_>,
     ) -> ReadResult<DocumentRead> {
         let key = match request.purpose() {
-            CatalogPurpose::Community(slug) => format!("community:{slug}"),
+            CatalogPurpose::Community(slug) => format!("community:{}", slug.as_str()),
             CatalogPurpose::ShippedHintsFirst => "shipped-first".into(),
             CatalogPurpose::ShippedHintsSecond => "shipped-second".into(),
             CatalogPurpose::CustomHints => "custom".into(),
@@ -800,4 +800,54 @@ fn the_stored_kit_shares_the_node_allowance_with_import_rules() {
     // {"selections":{"zeta":"z1"}} charges its root, two keys, the inner object and one value.
     assert_eq!(outcome(&both, 7), Ok(()));
     assert_eq!(outcome(&both, 6), Err("LimitExceeded(Nodes)".to_owned()));
+}
+
+#[test]
+fn community_slugs_follow_the_node_grammar_on_the_shared_corpus() {
+    let corpus: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../../fixtures/parity/community-manifest-slug.json"
+    ))
+    .unwrap();
+    for (key, valid) in [("valid", true), ("invalid", false)] {
+        for slug in corpus[key].as_array().unwrap() {
+            let slug = slug.as_str().unwrap();
+            assert_eq!(CommunitySlug::parse(slug).is_some(), valid, "{slug:?}");
+        }
+    }
+}
+
+#[test]
+fn invalid_stored_community_slugs_read_no_community_manifest() {
+    let observe_with = |slug: Option<&str>| {
+        let mut database = Database::oracle();
+        database
+            .connection
+            .execute(
+                "UPDATE projects SET manifest_community_slug=?1 WHERE id=2",
+                [slug],
+            )
+            .unwrap();
+        let mut reads = Reads::oracle();
+        if let Some(slug) = slug {
+            reads.catalog.insert(
+                format!("community:{slug}"),
+                Ok(b"selections:\n  beta: x\n  toolhead: custom\n".to_vec()),
+            );
+        }
+        let captured = database.capture(TENANT, 1).unwrap();
+        let observed =
+            observe(&captured, Some(&reads), PreparationLimits::default(), false).unwrap();
+        (json(&observed), observed.stamps)
+    };
+    let without = observe_with(None);
+    assert_ne!(observe_with(Some("oracle-kit")), without);
+    for slug in [
+        "../oracle-kit",
+        "oracle-kit/..",
+        "..",
+        " oracle-kit ",
+        "Oracle-Kit",
+    ] {
+        assert_eq!(observe_with(Some(slug)), without, "{slug:?}");
+    }
 }
