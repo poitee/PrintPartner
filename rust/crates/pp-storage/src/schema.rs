@@ -10,7 +10,7 @@ use std::{
 };
 
 #[cfg(feature = "desktop_rebuild")]
-pub(crate) const CURRENT_VERSION: u64 = 37;
+pub(crate) const CURRENT_VERSION: u64 = 39;
 #[cfg(not(feature = "desktop_rebuild"))]
 pub(crate) const CURRENT_VERSION: u64 = 35;
 
@@ -205,6 +205,8 @@ pub(crate) fn preflight(
     crate::jobs::validate_schema(&conn, version)?;
     #[cfg(feature = "desktop_rebuild")]
     crate::plan_publication::validate_schema(&conn, version)?;
+    #[cfg(feature = "desktop_rebuild")]
+    crate::uploads::validate_schema(&conn, version)?;
     Ok(version)
 }
 
@@ -277,8 +279,10 @@ pub(crate) fn backup(conn: &Connection, path: &Path, replace: bool) -> Result<()
             .context("schema::backup: sync parent directory")?;
         Ok(())
     })();
-    if temp.exists() {
-        let _ = std::fs::remove_file(temp);
+    for suffix in ["", "-wal", "-shm"] {
+        let mut member = temp.clone().into_os_string();
+        member.push(suffix);
+        let _ = std::fs::remove_file(member);
     }
     result
 }
@@ -289,23 +293,35 @@ pub(crate) fn initialize(
     now: &str,
 ) -> Result<(Connection, SchemaReady)> {
     let mut conn = Connection::open(path)?;
-    let backup_path = if version < CURRENT_VERSION
-        && path
-            .metadata()
-            .with_context(|| {
-                format!(
-                    "schema::initialize: stat {} after SQLite open",
-                    path.display()
-                )
-            })?
-            .len()
-            > 0
-    {
+    let populated = path
+        .metadata()
+        .with_context(|| {
+            format!(
+                "schema::initialize: stat {} after SQLite open",
+                path.display()
+            )
+        })?
+        .len()
+        > 0;
+    let legacy_version = if cfg!(feature = "desktop_rebuild") {
+        37
+    } else {
+        CURRENT_VERSION
+    };
+    // The first backup is the database exactly as opened, before configure
+    // or any repair, seed, or step write. A legacy upgrade keeps an earlier
+    // copy because its pass is not one transaction.
+    let first_step = if version < legacy_version {
+        legacy_version
+    } else {
+        version + 1
+    };
+    let backup_path = if version < CURRENT_VERSION && populated {
         let target = path
             .parent()
             .unwrap()
-            .join(format!("backups/pre-schema{CURRENT_VERSION}.db"));
-        if !target.exists() {
+            .join(format!("backups/pre-schema{first_step}.db"));
+        if version >= legacy_version || !target.exists() {
             backup(&conn, &target, true)?;
         }
         Some(target)
@@ -349,6 +365,37 @@ pub(crate) fn initialize(
     conn.execute_batch(&data.extras[1])?;
     if version < 34 {
         conn.execute("INSERT INTO app_settings(tenant_id,key,value) VALUES('default','schema_version','34') ON CONFLICT(tenant_id,key) DO UPDATE SET value=excluded.value",[])?;
+    }
+    {
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if version < 35 {
+            tx.execute_batch(include_str!("jobs/schema.sql"))?;
+        }
+        tx.execute_batch(include_str!("jobs/printer-start-indexes.sql"))?;
+        if version < 35 {
+            tx.execute(
+                "UPDATE app_settings SET value='35' WHERE tenant_id='default' AND key='schema_version'",
+                [],
+            )?;
+        }
+        tx.commit()?;
+    }
+    // Steps run after the common restoration and tenant repair, whose writes
+    // their triggers would refuse, and before starter seeding.
+    #[cfg(feature = "desktop_rebuild")]
+    let backup_path = {
+        if version < legacy_version {
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            tx.execute_batch(include_str!("plan_publication/schema.sql"))?;
+            tx.execute("UPDATE app_settings SET value='37' WHERE tenant_id='default' AND key='schema_version'", [])?;
+            tx.commit()?;
+        }
+        install_steps(&mut conn, path, version, populated, backup_path)?
+    };
+    #[cfg(feature = "desktop_rebuild")]
+    {
+        crate::plan_publication::validate_schema(&conn, CURRENT_VERSION)?;
+        crate::uploads::validate_schema(&conn, CURRENT_VERSION)?;
     }
     // Node's fixture builder connects once to create the input and again to
     // create the expected database. The first Rust open must repeat that
@@ -398,30 +445,6 @@ pub(crate) fn initialize(
         }
         tx.commit()?;
     }
-    {
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if version < 35 {
-            tx.execute_batch(include_str!("jobs/schema.sql"))?;
-        }
-        tx.execute_batch(include_str!("jobs/printer-start-indexes.sql"))?;
-        if version < 35 {
-            tx.execute(
-                "UPDATE app_settings SET value='35' WHERE tenant_id='default' AND key='schema_version'",
-                [],
-            )?;
-        }
-        tx.commit()?;
-    }
-    #[cfg(feature = "desktop_rebuild")]
-    {
-        if version < CURRENT_VERSION {
-            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            tx.execute_batch(include_str!("plan_publication/schema.sql"))?;
-            tx.execute("UPDATE app_settings SET value='37' WHERE tenant_id='default' AND key='schema_version'", [])?;
-            tx.commit()?;
-        }
-        crate::plan_publication::validate_schema(&conn, CURRENT_VERSION)?;
-    }
     Ok((
         conn,
         SchemaReady {
@@ -430,6 +453,41 @@ pub(crate) fn initialize(
             backup: backup_path,
         },
     ))
+}
+
+// Each step validates and commits with its version stamp, so a refused or
+// interrupted step leaves the from-version intact and a fresh copy is always
+// current. `first` is the backup already taken at open, if any.
+#[cfg(feature = "desktop_rebuild")]
+fn install_steps(
+    conn: &mut Connection,
+    path: &Path,
+    version: u64,
+    populated: bool,
+    first: Option<PathBuf>,
+) -> Result<Option<PathBuf>> {
+    let mut first = first;
+    for (step, install) in crate::uploads::SCHEMA_STEPS {
+        if version < step {
+            let target =
+                populated.then(|| path.with_file_name(format!("backups/pre-schema{step}.db")));
+            if let Some(target) = &target
+                && first.as_ref() != Some(target)
+            {
+                backup(conn, target, true)?;
+            }
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            install(&tx)?;
+            crate::uploads::validate_schema(&tx, step)?;
+            tx.execute(
+                "UPDATE app_settings SET value=?1 WHERE tenant_id='default' AND key='schema_version'",
+                [step.to_string()],
+            )?;
+            tx.commit()?;
+            first = first.or(target);
+        }
+    }
+    Ok(first)
 }
 
 pub(crate) fn sql_identity(sql: &str) -> String {
@@ -690,7 +748,7 @@ fn execute_migration(conn: &Connection, sql: &str) -> Result<()> {
     }
 }
 
-fn add_column(conn: &Connection, table: &str, column: &str, sql: &str) -> Result<()> {
+pub(crate) fn add_column(conn: &Connection, table: &str, column: &str, sql: &str) -> Result<()> {
     let columns = conn
         .prepare(&format!("PRAGMA table_info({table})"))?
         .query_map([], |r| r.get::<_, String>(1))?

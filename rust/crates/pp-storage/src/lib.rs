@@ -27,6 +27,8 @@ mod schema;
 #[cfg(feature = "desktop_rebuild")]
 pub mod source_scan;
 #[cfg(feature = "desktop_rebuild")]
+mod uploads;
+#[cfg(feature = "desktop_rebuild")]
 pub mod working_drafts;
 mod writer_admission;
 

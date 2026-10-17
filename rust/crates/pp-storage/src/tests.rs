@@ -1844,8 +1844,13 @@ fn ticket_t_7_migrations_preserves_refused_inputs() {
         &refused_wal_input("30"),
         "Cannot upgrade database schema version 30",
     );
+    let newer = if cfg!(feature = "desktop_rebuild") {
+        "40"
+    } else {
+        "39"
+    };
     assert_refused(
-        &refused_wal_input("38"),
+        &refused_wal_input(newer),
         &format!("newer than supported version {}", schema::CURRENT_VERSION),
     );
     assert_refused(&refused_wal_input("abc"), "Invalid database schema version");
@@ -2583,15 +2588,28 @@ fn build_historical_database(
     root
 }
 
+fn upload_columns() -> Vec<(&'static str, &'static str, &'static str)> {
+    #[cfg(feature = "desktop_rebuild")]
+    return crate::uploads::added_columns().unwrap();
+    #[cfg(not(feature = "desktop_rebuild"))]
+    Vec::new()
+}
+
 fn table_columns(db: &Path, table: &str) -> Vec<String> {
     let connection = Connection::open(db).unwrap();
     let mut statement = connection
         .prepare(&format!("PRAGMA table_info({})", quote_ident(table)))
         .unwrap();
+    let added = upload_columns();
     statement
         .query_map([], |row| row.get::<_, String>(1))
         .unwrap()
         .map(|name| name.unwrap())
+        .filter(|name| {
+            !added
+                .iter()
+                .any(|(owner, column, _)| *owner == table && column == name)
+        })
         .collect()
 }
 
@@ -3169,6 +3187,58 @@ fn with_sql_identity(graph: &SchemaGraph) -> SchemaGraph {
     graph
 }
 
+#[cfg(feature = "desktop_rebuild")]
+fn omit_upload_schema(graph: &mut SchemaGraph) {
+    let owned = crate::uploads::owned_objects().unwrap();
+    graph.objects.retain(|(_, name), _| !owned.contains(name));
+    for name in &owned {
+        graph.columns.remove(name);
+        graph.foreign_keys.remove(name);
+        graph.rows.remove(name);
+    }
+    let added = upload_columns();
+    for (table, column, definition) in &added {
+        if let Some((_, Some(sql))) = graph.objects.get_mut(&("table".into(), (*table).into())) {
+            *sql = sql.replacen(&format!(", {definition}"), "", 1);
+        }
+        let Some(keys) = graph.foreign_keys.get_mut(*table) else {
+            continue;
+        };
+        let field = |key: &str, index: usize| key.split('\u{1f}').nth(index).unwrap().to_owned();
+        let dropped: BTreeSet<String> = keys
+            .iter()
+            .filter(|key| field(key, 3) == *column)
+            .map(|key| field(key, 0))
+            .collect();
+        keys.retain(|key| !dropped.contains(&field(key, 0)));
+        for key in keys.iter_mut() {
+            let id: i64 = field(key, 0).parse().unwrap();
+            let (_, rest) = key.split_once('\u{1f}').unwrap();
+            *key = format!("{}\u{1f}{rest}", id - dropped.len() as i64);
+        }
+    }
+    for (table, defs) in graph.columns.iter_mut() {
+        let before = defs.len();
+        defs.retain(|line| {
+            let name = line.split('\u{1f}').nth(1).unwrap();
+            !added
+                .iter()
+                .any(|(owner, column, _)| owner == table && *column == name)
+        });
+        if defs.len() < before
+            && let Some(rows) = graph.rows.get_mut(table)
+        {
+            for row in rows.iter_mut() {
+                *row = row
+                    .split('\u{1e}')
+                    .take(defs.len())
+                    .collect::<Vec<_>>()
+                    .join("\u{1e}");
+            }
+        }
+    }
+}
+
 fn omit_durable_jobs(graph: &mut SchemaGraph) {
     #[cfg(feature = "desktop_rebuild")]
     {
@@ -3178,6 +3248,7 @@ fn omit_durable_jobs(graph: &mut SchemaGraph) {
         graph.columns.remove("plan_apply_admissions");
         graph.foreign_keys.remove("plan_apply_admissions");
         graph.rows.remove("plan_apply_admissions");
+        omit_upload_schema(graph);
     }
     let job_object = |name: &str| {
         name.starts_with("durable_job") || name.starts_with("sqlite_autoindex_durable_job")

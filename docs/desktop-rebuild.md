@@ -815,7 +815,7 @@ node fixtures/parity/jobs-engine/generate.mjs --check
 
 GRE-610's first PR adds the job kind the upload journal will own, behind
 `desktop_rebuild`. With the feature off, the engine is unchanged. The journal, its
-schema and the capture paths arrive in D14 (b) to (e).
+schema arrives in D14 (b), and the journal and capture paths in (c) to (e).
 
 `JobKind::SuppliedSourceImport` carries `Payload::SuppliedSourceImport { project_id,
 operation_key, input_version }` and reserves `source:{project_id}`. Only the upload
@@ -845,6 +845,65 @@ cancellation cases port the reference engine:
 node fixtures/parity/jobs-engine/generate.mjs --check
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test jobs_engine_parity --test supplied_imports --test job_authority_claims
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib jobs::subscriptions::
+```
+
+### D14 uploads: import, Source revision and preclaim schema
+
+GRE-610's second PR installs the upload journal's tables behind `desktop_rebuild`,
+with no callers until D14 (c). The SQL is the reference's
+`uploads/schema.sql`, `remote_sources/schema.sql` and
+`remote_sources/preclaim39.sql`, unchanged. The reference's provenance columns move
+from Rust into `remote_sources/columns38.sql`.
+
+Main keeps the reference's numbering, so D17's Source scan can stay at 40:
+
+| Step | Installs |
+| --- | --- |
+| 37 to 38 | the provenance columns on `projects`, `source_revisions` and `source_docs`, `source_import_operations`, `source_import_quota`, and the Source revision attempt, artifact and observation journal with its immutability triggers |
+| 38 to 39 | `source_preclaim_refusals` and its cursor triggers |
+
+The reference installed the import tables at 36. Main never used 36, so they arrive
+with the 38 step and the validator threshold moved from 36 to 38. A database at 36
+holding them is refused. Columns that already exist are kept, as in the reference,
+and the validator then checks their definitions.
+
+Opening a database below 39 runs in this order:
+
+1. Back up the database as opened, before any write.
+2. Restore missing common tables and objects and repair tenant mismatches. This
+   pass seeds nothing.
+3. Install each pending step.
+4. Seed the starter profiles.
+
+Repairs run before the steps because the 38 step's provenance triggers refuse the
+repair's writes to `source_revisions`. Each step writes `backups/pre-schema{N}.db`,
+where N is the step's target version, validates its objects and columns, and then
+commits them with its version stamp in one transaction. For a database at 37 the
+first backup, `pre-schema38.db`, is the untouched input. `pre-schema39.db` is taken
+after step 2, so it can include that pass's repairs. An
+interrupted step leaves its input version intact, so each attempt takes a fresh copy
+rather than reusing an existing file. The legacy upgrade to 37 (35 without the
+feature) still reuses an existing backup, because its earlier migrations do not
+commit atomically. Upgrading from 35 therefore writes `pre-schema37.db`,
+`pre-schema38.db` and `pre-schema39.db`, and `SchemaReady.backup` names the first. A
+failed backup stops the upgrade before the step writes. Backups of a WAL database no
+longer leave the temporary copy's `-wal` and `-shm` files behind.
+
+Opening checks the installed objects against the SQL text for the stored version,
+and refuses objects from a later step. It also refuses an orphaned quota row,
+partial revision or document provenance, an invalid observation, an invalid preclaim
+refusal, and a cursor shared by a refusal and an observation. Checks of the journal
+documents against their durable jobs arrive with D14 (c). Without the feature, storage
+stays at schema 35 and refuses a schema-39 database.
+
+Node's schema stops at 34 and has none of these tables, so there is no Node literal
+to match. The parity target is the reference SQL. The Node schema-parity tests
+compare Node's catalog with Rust's after omitting these objects and columns, the
+same way they omit the Plan Apply admissions. The upgrade tests run the real owner
+from 35, 37 and 38:
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib -- uploads:: tests::ticket_t_7_migrations
 ```
 
 ## D9 build graph receipt
@@ -1290,10 +1349,10 @@ commits applied or replayed receipts and rolls back unsuccessful publication.
 Its token allocator uses operating-system randomness.
 
 The feature installs and validates the admission table and immutable triggers
-at schema 37. Version 36 remains reserved for the reference branch's separate
-migration. Reopening checks schema text and orphan admissions. Without the
-feature, storage remains at schema 35 and refuses a schema-37 database.
-The publication schema uses the reference's version 37, and the uploads port (GRE-610) must install its v36 tables when a database is already at 37 without them.
+at schema 37. Main never uses version 36: the reference's version 36 import
+tables arrive with D14's version 38 step. Reopening checks schema text and
+orphan admissions. Without the feature, storage remains at schema 35 and refuses
+a newer database.
 
 D13 save, GRE-608, can call `AuthenticatedPublicationContext::resolve` and
 `publish_in_transaction` on its own transaction, using `PublicationRequests::new`
