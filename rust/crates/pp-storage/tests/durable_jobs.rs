@@ -972,8 +972,14 @@ fn ticket_t_28_recovery_every_existing_kind_has_incomplete_intent_policy() {
         },
         printer("test-printer"),
     ];
-    assert_eq!(payloads.len(), JobKind::ALL.len());
-    for (payload, kind) in payloads.into_iter().zip(JobKind::ALL) {
+    // Supplied imports are never enqueued here and advance only through the
+    // upload journal's owned phases.
+    let kinds = JobKind::ALL
+        .into_iter()
+        .filter(|kind| kind.name() != "supplied-source-import")
+        .collect::<Vec<_>>();
+    assert_eq!(payloads.len(), kinds.len());
+    for (payload, kind) in payloads.into_iter().zip(kinds) {
         assert_eq!(payload.kind(), kind);
         let (path, owner) = fixture();
         let queued = enqueue(&owner, "kind-coverage", payload);
@@ -1294,8 +1300,11 @@ fn schema35_auxiliary_indexes_install_and_reopen() {
 }
 #[test]
 fn ticket_t_28_claims_wire_job_kinds_match_existing_contract() {
+    let names = JobKind::ALL.map(JobKind::name);
+    #[cfg(feature = "desktop_rebuild")]
+    assert_eq!(names[10..], ["supplied-source-import"]);
     assert_eq!(
-        JobKind::ALL.map(JobKind::name),
+        names[..10],
         [
             "sync",
             "import-scan",

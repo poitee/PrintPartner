@@ -278,6 +278,8 @@ pub(crate) enum Command {
         worker: String,
         admission: Arc<WorkerAdmission>,
         #[cfg(feature = "desktop_rebuild")]
+        job_id: Option<String>,
+        #[cfg(feature = "desktop_rebuild")]
         kind: Option<JobKind>,
         #[cfg(feature = "desktop_rebuild")]
         policy: Option<AuthPolicy>,
@@ -501,6 +503,11 @@ impl AtomicJobClient {
                 grouping.normalize();
             }
             payload.validate()?;
+            #[cfg(feature = "desktop_rebuild")]
+            ensure!(
+                !matches!(payload, Payload::SuppliedSourceImport { .. }),
+                "Supplied imports require atomic domain admission"
+            );
         }
         submit(
             &self.storage,
@@ -604,6 +611,8 @@ impl ServerWorkerClient {
                 worker: self.identity.clone(),
                 admission: self.admission.clone(),
                 #[cfg(feature = "desktop_rebuild")]
+                job_id: None,
+                #[cfg(feature = "desktop_rebuild")]
                 kind: None,
                 #[cfg(feature = "desktop_rebuild")]
                 policy: self.policy,
@@ -631,7 +640,26 @@ impl ServerWorkerClient {
             Command::Claim {
                 worker: self.identity.clone(),
                 admission: self.admission.clone(),
+                job_id: None,
                 kind: Some(kind),
+                policy: self.policy,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?)
+        .receive()
+    }
+    /// Claims one queued supplied import by id. A refused original authority
+    /// commits the refusal and returns the typed failure instead of moving on.
+    #[cfg(feature = "desktop_rebuild")]
+    pub fn claim_import(&self, job_id: &str) -> Result<Option<(JobRecord, AttemptLease)>> {
+        PendingClaim(submit(
+            &self.storage,
+            Command::Claim {
+                worker: self.identity.clone(),
+                admission: self.admission.clone(),
+                job_id: Some(job_id.into()),
+                kind: Some(JobKind::SuppliedSourceImport),
                 policy: self.policy,
             },
             &AtomicBool::new(false),
@@ -986,6 +1014,8 @@ fn recover_in(tx: &Transaction<'_>, all: bool) -> Result<()> {
         if !all && !lease_until.is_some_and(|until| until <= now()) {
             continue;
         }
+        // A cancelled import goes back to its owner, as `Cancel` does.
+        let owner_cleanup = job.awaits_owner_cleanup();
         job.generation += 1;
         job.fence = None;
         job.worker = None;
@@ -997,9 +1027,9 @@ fn recover_in(tx: &Transaction<'_>, all: bool) -> Result<()> {
             job.state = PersistentState::ReconciliationRequired;
             job.recovery =
                 Some("Resume from confirmed receipts requires handler reconciliation".into());
-        } else if job.cancel_requested {
+        } else if job.cancel_requested && !owner_cleanup {
             job.state = PersistentState::Cancelled;
-        } else if job.attempt >= 100 {
+        } else if job.attempt >= 100 && !owner_cleanup {
             job.state = PersistentState::Failed;
             job.recovery = Some("Attempt limit reached".into());
         } else {
@@ -1067,9 +1097,19 @@ pub(crate) fn execute(
         Command::Claim {
             worker,
             admission,
+            job_id,
             kind,
             policy,
-        } => claim(&tx, &worker, &admission, kind, policy)?,
+        } => claim(
+            &tx,
+            &worker,
+            &admission,
+            ClaimFilter {
+                job_id: job_id.as_deref(),
+                kind,
+            },
+            policy,
+        )?,
         #[cfg(not(feature = "desktop_rebuild"))]
         Command::Worker {
             lease,
@@ -1098,6 +1138,7 @@ pub(crate) fn execute(
         } => {
             let authority = auth::resolve_stream_authority(&tx, &credential, policy, true)?;
             let job = owned(&tx, &job_id, &authority.tenant)?;
+            ensure!(!job.internal_only(), JobAccessFailure::NotFound);
             TransactionDecision::Observation {
                 credential,
                 authority,
@@ -1295,7 +1336,9 @@ fn user(
         )),
         #[cfg(feature = "desktop_rebuild")]
         UserOperation::GetPublic { job_id } => {
-            Ok(Outcome::PublicJob(owned(tx, &job_id, tenant)?.snapshot()))
+            let job = owned(tx, &job_id, tenant)?;
+            ensure!(!job.internal_only(), JobAccessFailure::NotFound);
+            Ok(Outcome::PublicJob(job.snapshot()))
         }
         #[cfg(feature = "desktop_rebuild")]
         UserOperation::ListRetained(filter) => {
@@ -1311,6 +1354,9 @@ fn user(
                     decode_row(&id, &document, &mut diagnostics).map(|job| (sequence, job))
                 })
                 .filter(|(_, job)| {
+                    if job.internal_only() {
+                        return false;
+                    }
                     let status = match &filter.status {
                         LegacyStatusFilter::Any => true,
                         LegacyStatusFilter::Exact(status) => job.snapshot().status == status,
@@ -1477,6 +1523,17 @@ fn user(
                 return Ok(Outcome::Job(job, LocalCommit::ReadOnly));
             }
             job.cancel_requested = true;
+            // The import's owner reclaims it to release its input and quota.
+            #[cfg(feature = "desktop_rebuild")]
+            if job.kind == JobKind::SuppliedSourceImport {
+                job.state = PersistentState::Queued;
+                job.generation += 1;
+                job.fence = None;
+                job.worker = None;
+                job.lease_until = None;
+                save(tx, &mut job, "cancellation_requested")?;
+                return Ok(Outcome::Job(job, LocalCommit::Committed));
+            }
             if job.effects.is_empty() {
                 job.state = PersistentState::Cancelled;
                 job.generation += 1;
@@ -1599,11 +1656,16 @@ fn user(
         }
     }
 }
+#[cfg(feature = "desktop_rebuild")]
+struct ClaimFilter<'a> {
+    job_id: Option<&'a str>,
+    kind: Option<JobKind>,
+}
 fn claim(
     tx: &Transaction<'_>,
     worker: &str,
     admission: &WorkerAdmission,
-    #[cfg(feature = "desktop_rebuild")] requested: Option<JobKind>,
+    #[cfg(feature = "desktop_rebuild")] filter: ClaimFilter<'_>,
     #[cfg(feature = "desktop_rebuild")] policy: Option<AuthPolicy>,
 ) -> Result<TransactionDecision> {
     let mut diagnostics = DocumentDiagnostics::default();
@@ -1620,7 +1682,7 @@ fn claim(
     let mut refused = false;
     for (kind, capacity) in &admission.kinds {
         #[cfg(feature = "desktop_rebuild")]
-        if requested.is_some_and(|requested| requested != *kind) {
+        if filter.kind.is_some_and(|requested| requested != *kind) {
             continue;
         }
         let count:i64=tx.query_row("SELECT COUNT(*) FROM durable_jobs WHERE kind=?1 AND state IN ('running','effect_admitted')",[kind.name()],|r|r.get(0))?;
@@ -1629,6 +1691,10 @@ fn claim(
         }
         let documents=tx.prepare("SELECT id,document FROM durable_jobs WHERE state='queued' AND kind=?1 ORDER BY created,id")?.query_map([kind.name()],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
         for (id, document) in documents {
+            #[cfg(feature = "desktop_rebuild")]
+            if filter.job_id.is_some_and(|target| target != id) {
+                continue;
+            }
             let Some(mut job) = decode_row(&id, &document, &mut diagnostics) else {
                 continue;
             };
@@ -1642,7 +1708,10 @@ fn claim(
                     continue;
                 }
             }
-            ensure!(job.attempt < 100, "Job attempt limit reached");
+            ensure!(
+                job.attempt < 100 || job.awaits_owner_cleanup(),
+                "Job attempt limit reached"
+            );
             #[cfg(feature = "desktop_rebuild")]
             {
                 let refusal = match job.authority_disposition {
@@ -1663,7 +1732,18 @@ fn claim(
                     }
                 };
                 if let Some(reason) = refusal {
-                    record_refusal(tx, &mut job, reason, AuthorityRefusalPhase::Claim, None)?;
+                    let phase = if filter.job_id.is_some() {
+                        AuthorityRefusalPhase::TargetedClaim
+                    } else {
+                        AuthorityRefusalPhase::Claim
+                    };
+                    record_refusal(tx, &mut job, reason, phase, None)?;
+                    if filter.job_id.is_some() {
+                        return Ok(TransactionDecision::Refused(CommittedRefusal {
+                            job,
+                            failure: reason.failure(),
+                        }));
+                    }
                     refused |= job.state.terminal();
                     continue;
                 }
@@ -1745,6 +1825,8 @@ fn proven_primary_printer_receipt(job: &JobRecord) -> Option<&ResultArtifact> {
 }
 fn completion_proven(job: &JobRecord, result: Option<&ResultArtifact>) -> bool {
     match &job.payload {
+        #[cfg(feature = "desktop_rebuild")]
+        Payload::SuppliedSourceImport { .. } => false,
         Payload::PrinterUpload { .. } => {
             proven_primary_printer_receipt(job).is_some_and(|primary| result == Some(primary))
         }
@@ -1920,6 +2002,15 @@ fn advance(
     if let Some(refusal) = refuse_advance(tx, &mut job, &operation, policy)? {
         return Ok(TransactionDecision::Refused(refusal));
     }
+    #[cfg(feature = "desktop_rebuild")]
+    ensure!(
+        job.kind != JobKind::SuppliedSourceImport
+            || matches!(
+                operation,
+                WorkerOperation::Heartbeat | WorkerOperation::Progress(_)
+            ),
+        "Supplied imports advance through owned phases"
+    );
     let event = match operation {
         WorkerOperation::Heartbeat => "heartbeat",
         WorkerOperation::Progress(progress) => {
@@ -2436,6 +2527,7 @@ pub(crate) fn publication_conflicts(
             | Payload::ImportScan { .. }
             | Payload::ExtractSourceDocs { .. }
             | Payload::CheckSourceUpdates {} => false,
+            Payload::SuppliedSourceImport { .. } => false,
             Payload::ExportStlPack { profile_id, .. }
             | Payload::ExportChecklistHtml { profile_id }
             | Payload::ExportKitBundle { profile_id, .. }
@@ -2683,6 +2775,8 @@ mod tests {
                 per_resource: 4,
                 lease_seconds: 60,
             }),
+            #[cfg(feature = "desktop_rebuild")]
+            job_id: None,
             #[cfg(feature = "desktop_rebuild")]
             kind: None,
             #[cfg(feature = "desktop_rebuild")]

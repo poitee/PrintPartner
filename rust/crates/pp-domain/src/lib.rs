@@ -66,13 +66,23 @@ impl<'de> Deserialize<'de> for Digest {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[cfg_attr(feature = "codegen", derive(schemars::JsonSchema))]
 pub enum DraftState {
     Open,
     Abandoned,
     Consumed,
+}
+
+impl DraftState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Abandoned => "abandoned",
+            Self::Consumed => "consumed",
+        }
+    }
 }
 
 impl<const MIN: u64, const MAX: u64> WireInteger<MIN, MAX> {
