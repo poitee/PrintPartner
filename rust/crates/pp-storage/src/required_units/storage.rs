@@ -258,7 +258,7 @@ pub(crate) struct Draft {
     pub(crate) header: Value,
     pub(crate) inputs: Vec<Value>,
     pub(crate) parts: Vec<DraftPart>,
-    pub(super) planning: String,
+    pub(crate) planning: String,
     pub(crate) selected: Option<Saved>,
 }
 
@@ -267,7 +267,7 @@ pub(crate) struct Saved {
     pub(super) result: StoredResult,
 }
 
-pub(super) fn selection_basis_digest(mapping: &Value, basis: &Value) -> String {
+pub(crate) fn selection_basis_digest(mapping: &Value, basis: &Value) -> String {
     digest(&json!({"format":FORMAT,"base_mapping_digest":mapping,"rows":basis}))
 }
 
@@ -480,7 +480,7 @@ fn valid_object_name(name: &str, token: &str) -> bool {
 /// Reads the accepted revision's Required-unit set as predecessor Parts.
 /// Returns `None` when the revision has no set, as Node's
 /// `readRequiredUnitSetByRevision` reports `uninitialized`.
-pub(super) fn base(
+pub(crate) fn base(
     tx: &Transaction<'_>,
     tenant: &str,
     profile: i64,

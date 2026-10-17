@@ -42,7 +42,7 @@ Copied from `ALLOWED` in `rust/scripts/check-boundaries.py` on `main`. A missing
 | --- | --- |
 | `pp-source` | *(none)* |
 | `pp-core` | `pp-gateway`, `pp-compat`, `pp-storage`, `pp-source` and `pp-net` only through `desktop_rebuild` |
-| `pp-storage` | *(none)* |
+| `pp-storage` | `pp-domain` and `pp-contracts`, only through `desktop_rebuild` |
 | `pp-api` | `pp-storage` |
 | `pp-gateway` | `pp-compat`, `pp-drivers`, `pp-net` |
 | `pp-compat` | *(none)* |
@@ -64,9 +64,10 @@ pp-gateway → pp-compat, pp-drivers, pp-net
 pp-drivers → pp-net, pp-api-types
 pp-core → pp-gateway, pp-compat, pp-storage
 pp-core → pp-source, pp-net                 (desktop_rebuild only)
+pp-storage → pp-domain, pp-contracts         (desktop_rebuild only)
 pp-desktop → pp-core
 pp-server → pp-core
-pp-source, pp-storage, pp-services → (no pp-* deps)
+pp-source, pp-services → (no pp-* deps)
 ```
 
 ## Planned edges after the desktop rebuild

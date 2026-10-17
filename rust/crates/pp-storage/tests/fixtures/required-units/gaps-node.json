@@ -1,0 +1,270 @@
+{
+  "surplus": {
+    "kind": "ready",
+    "assignments": [],
+    "surplus": [
+      "ppu_00000000000000000000000000000001",
+      "ppu_00000000000000000000000000000004"
+    ],
+    "selectionBasis": []
+  },
+  "basis": {
+    "kind": "ready",
+    "assignments": [
+      {
+        "kind": "reuse",
+        "draftPartId": 21,
+        "unitIndex": 0,
+        "token": "ppu_00000000000000000000000000000003"
+      },
+      {
+        "kind": "reuse",
+        "draftPartId": 22,
+        "unitIndex": 0,
+        "token": "ppu_00000000000000000000000000000001"
+      }
+    ],
+    "surplus": [
+      "ppu_00000000000000000000000000000002",
+      "ppu_00000000000000000000000000000004"
+    ],
+    "selectionBasis": [
+      {
+        "revisionPartId": 10,
+        "token": "ppu_00000000000000000000000000000001",
+        "priorIndex": 0,
+        "createdAt": "2026-08-20T09:00:00.000Z",
+        "completed": false,
+        "assembled": false
+      },
+      {
+        "revisionPartId": 10,
+        "token": "ppu_00000000000000000000000000000002",
+        "priorIndex": 1,
+        "createdAt": "2026-08-20T09:00:00.000Z",
+        "completed": false,
+        "assembled": false
+      },
+      {
+        "revisionPartId": 11,
+        "token": "ppu_00000000000000000000000000000003",
+        "priorIndex": 0,
+        "createdAt": "2026-08-20T09:00:00.000Z",
+        "completed": false,
+        "assembled": false
+      },
+      {
+        "revisionPartId": 11,
+        "token": "ppu_00000000000000000000000000000004",
+        "priorIndex": 1,
+        "createdAt": "2026-08-20T09:00:00.000Z",
+        "completed": false,
+        "assembled": false
+      }
+    ]
+  },
+  "nullSource": {
+    "kind": "ready",
+    "assignments": [
+      {
+        "kind": "create",
+        "draftPartId": 21,
+        "unitIndex": 0
+      }
+    ],
+    "surplus": [
+      "ppu_0000000000000000000000000000000a"
+    ],
+    "selectionBasis": []
+  },
+  "nullArtifact": {
+    "kind": "ready",
+    "assignments": [
+      {
+        "kind": "create",
+        "draftPartId": 21,
+        "unitIndex": 0
+      }
+    ],
+    "surplus": [
+      "ppu_0000000000000000000000000000000a"
+    ],
+    "selectionBasis": []
+  },
+  "tokenTie": {
+    "kind": "ready",
+    "assignments": [
+      {
+        "kind": "reuse",
+        "draftPartId": 21,
+        "unitIndex": 0,
+        "token": "ppu_00000000000000000000000000000003"
+      }
+    ],
+    "surplus": [
+      "ppu_00000000000000000000000000000004"
+    ],
+    "selectionBasis": [
+      {
+        "revisionPartId": 10,
+        "token": "ppu_00000000000000000000000000000004",
+        "priorIndex": 0,
+        "createdAt": "2026-08-20T09:00:00.000Z",
+        "completed": true,
+        "assembled": false
+      },
+      {
+        "revisionPartId": 10,
+        "token": "ppu_00000000000000000000000000000003",
+        "priorIndex": 1,
+        "createdAt": "2026-08-20T09:00:00.000Z",
+        "completed": true,
+        "assembled": false
+      }
+    ]
+  },
+  "priorOrder": {
+    "kind": "ready",
+    "assignments": [
+      {
+        "kind": "reuse",
+        "draftPartId": 21,
+        "unitIndex": 0,
+        "token": "ppu_00000000000000000000000000000004"
+      },
+      {
+        "kind": "reuse",
+        "draftPartId": 21,
+        "unitIndex": 1,
+        "token": "ppu_00000000000000000000000000000003"
+      }
+    ],
+    "surplus": [
+      "ppu_00000000000000000000000000000001"
+    ],
+    "selectionBasis": [
+      {
+        "revisionPartId": 10,
+        "token": "ppu_00000000000000000000000000000004",
+        "priorIndex": 0,
+        "createdAt": "2026-08-20T09:00:00.000Z",
+        "completed": true,
+        "assembled": false
+      },
+      {
+        "revisionPartId": 10,
+        "token": "ppu_00000000000000000000000000000001",
+        "priorIndex": 1,
+        "createdAt": "2026-08-20T09:00:00.000Z",
+        "completed": false,
+        "assembled": false
+      },
+      {
+        "revisionPartId": 10,
+        "token": "ppu_00000000000000000000000000000003",
+        "priorIndex": 2,
+        "createdAt": "2026-08-20T08:00:00.000Z",
+        "completed": true,
+        "assembled": false
+      }
+    ]
+  },
+  "revisionBase": {
+    "setup": [
+      "INSERT INTO plan_revisions (id,tenant_id,profile_id,revision_number,parent_revision_id,input_set_id,provenance_kind,digest_format,snapshot_digest,created_by,accepted_by,created_at,accepted_at)\n     SELECT 2,tenant_id,profile_id,2,id,input_set_id,provenance_kind,digest_format,snapshot_digest,created_by,accepted_by,created_at,accepted_at FROM plan_revisions WHERE id=1",
+      "UPDATE build_profiles SET accepted_plan_revision_id=2,accepted_plan_version=(SELECT base_plan_version FROM plan_drafts WHERE id=2) WHERE id=1"
+    ],
+    "result": {
+      "kind": "base_changed",
+      "workspace": {
+        "profile_id": 1,
+        "draft": {
+          "draft_id": 2,
+          "state": "open",
+          "lifecycle_version": 0,
+          "snapshot_digest": "ae11e670337e3e5eab736b29b4e294edbea8b564661cf15972625783f8930ee3",
+          "base": {
+            "revision_id": 1,
+            "plan_version": 1
+          }
+        },
+        "parts": [
+          {
+            "draft_part_id": 4,
+            "base_revision_part_id": 1,
+            "part_key": "bracket.stl",
+            "filename": "bracket.stl",
+            "relative_path": "bracket.stl",
+            "source_layer": "base:Fixture Source",
+            "role": "primary",
+            "quantity_inferred": 1,
+            "quantity_override": 3,
+            "quantity_effective": 3,
+            "included": true
+          },
+          {
+            "draft_part_id": 5,
+            "base_revision_part_id": 2,
+            "part_key": "excluded.stl",
+            "filename": "excluded.stl",
+            "relative_path": "excluded.stl",
+            "source_layer": "base:Fixture Source",
+            "role": "primary",
+            "quantity_inferred": 1,
+            "quantity_override": 1,
+            "quantity_effective": 1,
+            "included": false
+          },
+          {
+            "draft_part_id": 6,
+            "base_revision_part_id": 3,
+            "part_key": "gear.stl",
+            "filename": "gear.stl",
+            "relative_path": "gear.stl",
+            "source_layer": "base:Fixture Source",
+            "role": "primary",
+            "quantity_inferred": 1,
+            "quantity_override": 2,
+            "quantity_effective": 2,
+            "included": true
+          }
+        ],
+        "diff": {
+          "base_is_current": false,
+          "added": [],
+          "removed": [],
+          "changed": [
+            {
+              "before": {
+                "revision_part_id": 2,
+                "filename": "excluded.stl",
+                "relative_path": "excluded.stl",
+                "source_layer": "base:Fixture Source"
+              },
+              "after": {
+                "draft_part_id": 5,
+                "base_revision_part_id": 2,
+                "part_key": "excluded.stl",
+                "filename": "excluded.stl",
+                "relative_path": "excluded.stl",
+                "source_layer": "base:Fixture Source",
+                "role": "primary",
+                "quantity_inferred": 1,
+                "quantity_override": 1,
+                "quantity_effective": 1,
+                "included": false
+              },
+              "fields": [
+                "status"
+              ]
+            }
+          ]
+        },
+        "reconciliation": {
+          "kind": "unresolved",
+          "conflicts": []
+        }
+      }
+    }
+  }
+}
