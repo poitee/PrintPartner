@@ -56,7 +56,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install Linux prerequisites
-        run: bash "$GITHUB_WORKSPACE/.github/scripts/setup-ci-linux.sh"
+        run: bash "$GITHUB_WORKSPACE/scripts/setup-ci-linux.sh"
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:

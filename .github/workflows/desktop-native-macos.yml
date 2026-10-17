@@ -85,7 +85,7 @@ jobs:
           persist-credentials: false
       - name: Set up ephemeral Linux prerequisites
         if: runner.environment == 'self-hosted' && runner.os == 'Linux'
-        run: bash "$GITHUB_WORKSPACE/.github/scripts/setup-ci-linux.sh"
+        run: bash "$GITHUB_WORKSPACE/scripts/setup-ci-linux.sh"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.21.0'

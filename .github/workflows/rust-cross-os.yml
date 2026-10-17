@@ -72,7 +72,7 @@ jobs:
           persist-credentials: false
       - name: Set up ephemeral Linux prerequisites
         if: runner.environment == 'self-hosted' && runner.os == 'Linux'
-        run: bash "$GITHUB_WORKSPACE/.github/scripts/setup-ci-linux.sh"
+        run: bash "$GITHUB_WORKSPACE/scripts/setup-ci-linux.sh"
       - name: Set up Rust on ephemeral runners
         if: runner.environment == 'self-hosted'
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8

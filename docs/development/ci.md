@@ -144,7 +144,7 @@ Docker image jobs, service-container jobs and cargo-deny stay hosted because the
 Linux runner containers have no Docker socket. Selector and result-only jobs stay
 hosted. No job routed to the local fleet references `secrets.`.
 
-The local Linux setup script installs build tools, Python and the GitHub CLI through
+The `scripts/setup-ci-linux.sh` script installs build tools, Python and the GitHub CLI through
 `sudo apt-get`. Setup actions install Node, Rust and Chrome explicitly. Rust uses
 1.99.0 with rustfmt and clippy. Rust partition defaults use three build jobs on
 self-hosted runners; explicit inputs and repository variables still take precedence.
