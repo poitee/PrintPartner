@@ -218,24 +218,29 @@ fn secure_archives(directory: &File) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Create with O_EXCL, then open an existing entry without O_CREAT. On macOS,
+/// racing dirfd-relative O_CREAT opens without O_EXCL can fail with ENOENT.
 fn open_log(directory: &File) -> std::io::Result<File> {
-    let fd = unsafe {
-        libc::openat(
-            directory.as_raw_fd(),
-            c"desktop.jsonl".as_ptr(),
-            libc::O_WRONLY
-                | libc::O_APPEND
-                | libc::O_CREAT
-                | libc::O_CLOEXEC
-                | libc::O_NOFOLLOW
-                | libc::O_NONBLOCK,
-            0o600 as libc::c_uint,
-        )
+    let flags =
+        libc::O_WRONLY | libc::O_APPEND | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK;
+    let open = |flags| {
+        let fd = unsafe {
+            libc::openat(
+                directory.as_raw_fd(),
+                c"desktop.jsonl".as_ptr(),
+                flags,
+                0o600 as libc::c_uint,
+            )
+        };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(unsafe { File::from_raw_fd(fd) })
     };
-    if fd < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    let file = unsafe { File::from_raw_fd(fd) };
+    let file = match open(flags | libc::O_CREAT | libc::O_EXCL) {
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => open(flags)?,
+        result => result?,
+    };
     secure_log(&file)?;
     Ok(file)
 }
@@ -983,5 +988,35 @@ mod tests {
         assert_eq!(row["level"], 50);
         assert_eq!(row.as_object().unwrap().len(), 3);
         assert!(!text.contains("SECRET_TOKEN"));
+    }
+
+    #[test]
+    fn gre_696_racing_first_log_opens_share_one_file() {
+        let scratch = Scratch::new();
+        let path = scratch.0.join("logs/desktop.jsonl");
+        let directory = File::open(scratch.0.join("logs")).unwrap();
+        let threads = 8;
+        for trial in 0..200 {
+            let barrier = std::sync::Barrier::new(threads);
+            let opened: Vec<_> = std::thread::scope(|scope| {
+                let handles: Vec<_> = (0..threads)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            barrier.wait();
+                            open_log(&directory)
+                                .map(|file| file.metadata().unwrap().ino())
+                                .map_err(|error| error.to_string())
+                        })
+                    })
+                    .collect();
+                handles.into_iter().map(|h| h.join().unwrap()).collect()
+            });
+            let inode = std::fs::symlink_metadata(&path).unwrap().ino();
+            assert!(
+                opened.iter().all(|result| result == &Ok(inode)),
+                "trial {trial}: {opened:?}"
+            );
+            std::fs::remove_file(&path).unwrap();
+        }
     }
 }
