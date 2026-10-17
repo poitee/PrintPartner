@@ -381,8 +381,8 @@ fn any_pattern_matches(
     paths: &[String],
     budget: &PreparationBudget<'_>,
 ) -> ReadResult<bool> {
+    budget.check()?;
     for pattern in patterns {
-        budget.check()?;
         let glob = BuilderGlob::new(pattern);
         for path in paths {
             budget.check()?;

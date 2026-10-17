@@ -1115,8 +1115,8 @@ The matcher uses two indices and one saved `*` retry point instead of a regex.
 It has O(path units × pattern units) worst-case work and O(path units + pattern
 units) normalization storage. `BuilderGlob::new` normalizes a pattern once for
 all paths. The matcher has no `PreparationBudget` parameter. The observation
-checks cancellation before each pattern and before each path, so cancellation
-waits for at most one path's match, even when no paths were scanned.
+checks cancellation once on entry and before each path, so cancellation waits
+for at most one path's match, even when no paths were scanned or a variant has no parts.
 This resolves the backtracking and UTF-16 parity defects in GRE-642 and GRE-641.
 
 Regenerate or verify the Node differential corpus with

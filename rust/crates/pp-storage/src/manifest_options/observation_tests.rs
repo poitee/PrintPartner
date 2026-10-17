@@ -452,7 +452,11 @@ impl DraftReads for LongPaths {
     }
 }
 
-fn observe_long_paths(paths: Vec<String>, checks_before_cancel: usize) -> ReadResult<()> {
+fn observe_long_paths(
+    parts: &str,
+    paths: Vec<String>,
+    checks_before_cancel: usize,
+) -> ReadResult<()> {
     let mut database = Database::oracle();
     database
         .connection
@@ -463,8 +467,7 @@ fn observe_long_paths(paths: Vec<String>, checks_before_cancel: usize) -> ReadRe
     let captured = database.capture(TENANT, 1).unwrap();
     let reads = LongPaths {
         manifest: format!(
-            "option_groups:\n  slow:\n    variants:\n      - id: crafted\n        parts: [\"*{}b\"]\n",
-            "a".repeat(2048)
+            "option_groups:\n  slow:\n    variants:\n      - id: crafted\n        parts: {parts}\n"
         )
         .into_bytes(),
         paths,
@@ -475,19 +478,22 @@ fn observe_long_paths(paths: Vec<String>, checks_before_cancel: usize) -> ReadRe
 
 #[test]
 fn cancellation_while_matching_long_paths_refuses() {
-    // The pattern check passes; cancellation lands after the first path.
+    // The entry check passes; cancellation lands after the first path.
+    let parts = format!("[\"*{}b\"]", "a".repeat(2048));
     assert!(matches!(
-        observe_long_paths(vec!["a".repeat(4096); 256], 2),
+        observe_long_paths(&parts, vec!["a".repeat(4096); 256], 2),
         Err(ReadFailure::Cancelled)
     ));
 }
 
 #[test]
-fn cancellation_before_matching_without_paths_refuses() {
-    assert!(matches!(
-        observe_long_paths(Vec::new(), 0),
-        Err(ReadFailure::Cancelled)
-    ));
+fn cancellation_before_matching_without_paths_or_parts_refuses() {
+    for (parts, paths) in [("[\"*b\"]", Vec::new()), ("[]", vec!["b".to_owned()])] {
+        assert!(matches!(
+            observe_long_paths(parts, paths, 0),
+            Err(ReadFailure::Cancelled)
+        ));
+    }
 }
 
 fn import_only_source(imported_paths: &str) -> Database {
