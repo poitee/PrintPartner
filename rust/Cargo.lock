@@ -3394,13 +3394,13 @@ name = "pp-drivers"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "axum",
  "pp-api-types",
  "pp-net",
  "serde",
  "serde_json",
  "tokio",
  "tokio-util",
+ "url",
 ]
 
 [[package]]

@@ -1392,10 +1392,12 @@ owned by another profile, matching Node. Remapping treats an ownerless queue ite
 as related when any part belongs to the profile or no referenced parts still exist,
 even when its state is `done`. Node's exact error messages are retained in the
 fixture; tests separately assert the Rust reference's more specific diagnostics.
-Node's inline projection check has no progress-validation counterpart, and its
-match-key remap cannot represent token identity, excluded targets, resolved-only
-coordinates, or changed unit indexes. Direct Rust tests cover progress corruption,
-excluded or missing tokens, and changed indexes against the reference behavior.
+Node's inline projection check has no progress-validation counterpart. Both
+implementations remap Checkoff and send-queue coordinates by Required-unit token
+(GRE-677): a kept unit follows its token to its new index, and a dropped or
+excluded unit refuses the remap. The Node transaction cases
+`mapped-remap-index-change` and `mapped-remap-index-0` record this. Direct Rust
+tests cover progress corruption, excluded or missing tokens, and changed indexes.
 
 
 ## D19 publication transaction and job conflicts, GRE-612 PR 2
@@ -1431,17 +1433,17 @@ Node `applyPlanChanges` does not check durable jobs, so its running-export case
 publishes. Rust returns the exact job conflict list and leaves publication rows
 unchanged. Both runtimes publish with a terminal uploaded-only upload.
 
-Rust never publishes where Node's Checkoff remap assessment refuses. It preserves
-Node's refusal reasons for deleted Parts, missing match keys, and indexes at or
-past the new quantity. Where both would publish, Rust writes coordinates by
-Required-unit token and refuses if the referenced token was dropped.
+Rust keeps Node's Checkoff remap refusal reasons for deleted Parts, missing match
+keys, and indexes at or past the new quantity. After those checks, both runtimes
+write coordinates by Required-unit token and refuse if the referenced token was
+dropped or excluded (GRE-677).
 
 This rule applies whenever a kept token's index changes. `Selection::PriorCompletion`
-renumbers units with no quantity change. The index-1 fixture proves that Rust
-preserves the token where Node's coordinate resolves to a different token. At
-index 0, Rust refuses the dropped token and writes nothing where Node publishes.
-Index 2 and a cross-Part filename rename match Node's refusal literally. Fixtures
-retain Node's literal outcomes and compare Checkoff coordinates to Required-unit rows.
+renumbers units with no quantity change. In the index-1 fixture both runtimes move
+the coordinate to the kept token's new index. At index 0 both refuse the dropped
+token and write nothing. Index 2 and a cross-Part filename rename refuse with
+Node's quantity and match-key reasons. Fixtures record Node's literal outcomes,
+and Rust compares them exactly.
 
 ## D19 publication client and writer admission, GRE-612 PR 3
 
@@ -1589,3 +1591,57 @@ initializer test bypasses preflight to prove that step validation rolls back the
 new index and leaves version 39 intact. The same drift is also refused through
 `WriterOwner` preflight. Logical comparisons include the SQLite catalog and rows,
 because SQLite's backup API can rewrite header counters.
+
+### D20 Checkoff progress
+
+GRE-615 adds `pp-storage::checkoff_progress`, compiled only with
+`desktop_rebuild`. `WriterOwner::checkoff_progress()` returns a client whose
+`apply` runs one request in one immediate writer transaction. No routes call it
+yet; D24 and D26 wire HTTP behind `PP_DESKTOP_REBUILD`.
+
+The contract is `db/accepted-plan-progress.ts`, `setAcceptedPrintedCounts` in
+`db/repository.ts`, the progress and assembly routes in `routes/parts.ts`, and
+the import route in `routes/plan-drafts.ts`. `apply` returns the Node status
+and JSON body for each outcome:
+
+- Completion by Required-unit token marks that unit and every lower unit
+  printed. Clearing it clears that unit and every higher unit, including their
+  assembly.
+- Assembly by token sets one unit. Assembling an unprinted unit changes nothing.
+- Part coordinates (`/parts/:id/progress` and `/parts/:id/assembled` bodies)
+  resolve to a token against the current accepted snapshot.
+- Import sets each listed Part's printed prefix. It checks every row before it
+  writes any, and reports how many Parts changed.
+
+Every write first checks the expected accepted basis, then archival. Unit
+completion and assembly then check that each Part has one progress row per
+unit. Import skips that check, as Node does. Only a successful write commits,
+so a refusal leaves the database unchanged, including API key usage. An import for a Plan the caller cannot see returns 404
+`progress_target_not_found`. This differs from Node on purpose. Node throws a
+plain error and returns 500, but its route already returns 404 for a Plan it
+does not serve.
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test checkoff_progress
+```
+
+### D21 accepted read JSON bodies, GRE-616 PR 1
+
+With `desktop_rebuild`, `AcceptedRead`, `Snapshot` and `Batch` each have an
+`into_json_body` method. It returns the same bytes as the derived `Serialize`
+output, except for Part manifest metadata. Each accepted `Part` now carries its
+`PartManifestMetadata`, and the body writes `requirement` and `optionGroupId`
+from those UTF-16 units. Text that is not valid Unicode keeps each unpaired
+surrogate as a `\uXXXX` escape, as `JSON.stringify` does. The derived output
+writes `null` for that text. No routes call these methods yet; D23 to D26 wire
+HTTP behind `PP_DESKTOP_REBUILD`.
+
+Accepted snapshot reads still refuse non-scalar manifest text with
+`manifest_text`. The `requirement` and `optionGroupId` scalar fields still feed
+`views`, which would show `null` for that text. That refusal is lifted when
+`views` reads the carrier (D22, GRE-618). GRE-616 PR 2 ports the remaining
+`read_model::context` differences from the reference branch.
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib read_model::json_body
+```
