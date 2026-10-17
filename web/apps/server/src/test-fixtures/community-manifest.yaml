@@ -1,0 +1,15 @@
+format: print-partner-manifest-v2
+version: 2
+project: Community fixture
+option_groups:
+  fixture_mode:
+    rule: pick_one
+    variants:
+      - id: chosen
+        parts: [chosen.stl]
+      - id: ignored
+        parts: [ignored.stl]
+selections:
+  fixture_mode: chosen
+parts:
+  - match: chosen.stl
