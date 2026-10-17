@@ -103,14 +103,11 @@ impl AttemptLease {
     }
 }
 #[cfg(feature = "desktop_rebuild")]
-#[expect(
-    dead_code,
-    reason = "GRE-610/613/614 (D14/D17/D18) fence their journals with these"
-)]
 impl AttemptLease {
     pub(crate) fn generation(&self) -> i64 {
         self.generation
     }
+    #[cfg(test)]
     pub(crate) fn version(&self) -> i64 {
         self.version
     }
@@ -223,6 +220,12 @@ pub enum Outcome {
     LocalScanObservation(crate::source_scan::LocalScanObservation),
     #[cfg(feature = "desktop_rebuild")]
     LocalScanSettled(JobRecord, crate::source_scan::LocalScanApplied),
+    #[cfg(feature = "desktop_rebuild")]
+    LocalScanCompletion(crate::source_scan::LocalCompletionInspection),
+    #[cfg(feature = "desktop_rebuild")]
+    HeldLocalScan(crate::source_scan::HeldLocalScanInspection),
+    #[cfg(feature = "desktop_rebuild")]
+    LocalScanReconciled(JobRecord),
     Job(JobRecord, LocalCommit),
     List(Vec<JobRecord>),
     #[cfg(feature = "desktop_rebuild")]
@@ -244,6 +247,10 @@ enum TransactionDecision {
     Outcome(Outcome),
     #[cfg(feature = "desktop_rebuild")]
     Claimed(ClaimPlan),
+    #[cfg(feature = "desktop_rebuild")]
+    LocalScanCompleted(crate::source_scan::PendingLocalCompletion),
+    #[cfg(feature = "desktop_rebuild")]
+    LocalScanReconciled(crate::source_scan::PendingLocalReconciliation),
     /// Report this error only after committing the refusals recorded before it.
     #[cfg(feature = "desktop_rebuild")]
     ErrorAfterCommit(anyhow::Error),
@@ -330,6 +337,32 @@ pub(crate) enum Command {
         source_work: crate::catalog::SourceWorkProof,
         policy: AuthPolicy,
         settlement: crate::source_scan::LocalScanSettlement,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    CompleteLocalScan {
+        lease: AttemptLease,
+        source_work: crate::catalog::SourceWorkProof,
+        policy: AuthPolicy,
+        applied: crate::source_scan::LocalScanApplied,
+        result: SourceScanResult,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    InspectLocalScan {
+        lease: AttemptLease,
+        worker: String,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    InspectHeldLocalScan {
+        lease: AttemptLease,
+        source_work: crate::catalog::SourceWorkProof,
+        worker: String,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    ReconcileLocalScan {
+        lease: AttemptLease,
+        source_work: crate::catalog::SourceWorkProof,
+        applied: crate::source_scan::LocalScanApplied,
+        reason: String,
     },
     Retain {
         per_tenant: usize,
@@ -752,6 +785,7 @@ impl ServerWorkerClient {
 }
 #[cfg(feature = "desktop_rebuild")]
 impl ServerWorkerClient {
+    /// Requires the schema 39 Source columns and schema 40 scan journal.
     pub fn observe_local_scan(
         &self,
         lease: &AttemptLease,
@@ -776,6 +810,7 @@ impl ServerWorkerClient {
         }
     }
 
+    /// Requires the schema 39 Source columns and schema 40 scan journal.
     pub fn settle_local_scan(
         &self,
         lease: &mut AttemptLease,
@@ -803,6 +838,118 @@ impl ServerWorkerClient {
             }
             _ => unreachable!(),
         }
+    }
+
+    pub fn complete_local_scan(
+        &self,
+        lease: &mut AttemptLease,
+        source_work: &mut crate::catalog::SourceWorkLease,
+        applied: crate::source_scan::LocalScanApplied,
+        result: SourceScanResult,
+    ) -> Result<crate::source_scan::LocalCompletionInspection> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
+        let outcome = match submit(
+            &self.storage,
+            Command::CompleteLocalScan {
+                lease: lease.clone(),
+                source_work: source_work.proof()?,
+                policy,
+                applied,
+                result,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::LocalScanCompletion(outcome) => outcome,
+            _ => unreachable!(),
+        };
+        if matches!(
+            outcome,
+            crate::source_scan::LocalCompletionInspection::Completed(_)
+        ) {
+            source_work.consume_retired()?;
+        }
+        Ok(outcome)
+    }
+
+    pub fn inspect_local_scan_completion(
+        &self,
+        lease: &AttemptLease,
+    ) -> Result<crate::source_scan::LocalCompletionInspection> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        match submit(
+            &self.storage,
+            Command::InspectLocalScan {
+                lease: lease.clone(),
+                worker: self.identity.clone(),
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::LocalScanCompletion(outcome) => Ok(outcome),
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn inspect_local_scan_while_held(
+        &self,
+        lease: &mut AttemptLease,
+        source_work: &crate::catalog::SourceWorkLease,
+    ) -> Result<crate::source_scan::HeldLocalScanInspection> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let outcome = match submit(
+            &self.storage,
+            Command::InspectHeldLocalScan {
+                lease: lease.clone(),
+                source_work: source_work.proof()?,
+                worker: self.identity.clone(),
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::HeldLocalScan(outcome) => outcome,
+            _ => unreachable!(),
+        };
+        lease.version = match &outcome {
+            crate::source_scan::HeldLocalScanInspection::NotApplied(job)
+            | crate::source_scan::HeldLocalScanInspection::Applied(job, _) => job.state_version,
+        };
+        Ok(outcome)
+    }
+
+    pub fn record_local_scan_reconciliation(
+        &self,
+        lease: &AttemptLease,
+        source_work: &mut crate::catalog::SourceWorkLease,
+        applied: crate::source_scan::LocalScanApplied,
+        reason: String,
+    ) -> Result<JobRecord> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let job = match submit(
+            &self.storage,
+            Command::ReconcileLocalScan {
+                lease: lease.clone(),
+                source_work: source_work.proof()?,
+                applied,
+                reason,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::LocalScanReconciled(job) => job,
+            _ => unreachable!(),
+        };
+        source_work.consume_retired()?;
+        Ok(job)
     }
 }
 
@@ -1265,6 +1412,53 @@ pub(crate) fn execute(
             )?;
             TransactionDecision::Outcome(Outcome::LocalScanSettled(job, applied))
         }
+        #[cfg(feature = "desktop_rebuild")]
+        Command::CompleteLocalScan {
+            lease,
+            source_work,
+            policy,
+            applied,
+            result,
+        } => TransactionDecision::LocalScanCompleted(crate::source_scan::complete(
+            &tx,
+            catalog_state,
+            &lease,
+            source_work,
+            policy,
+            applied,
+            result,
+        )?),
+        #[cfg(feature = "desktop_rebuild")]
+        Command::InspectLocalScan { lease, worker } => {
+            TransactionDecision::Outcome(Outcome::LocalScanCompletion(crate::source_scan::inspect(
+                &tx,
+                catalog_state,
+                &worker,
+                &lease,
+            )?))
+        }
+        #[cfg(feature = "desktop_rebuild")]
+        Command::InspectHeldLocalScan {
+            lease,
+            source_work,
+            worker,
+        } => TransactionDecision::Outcome(Outcome::HeldLocalScan(
+            crate::source_scan::inspect_held(&tx, catalog_state, &worker, &lease, &source_work)?,
+        )),
+        #[cfg(feature = "desktop_rebuild")]
+        Command::ReconcileLocalScan {
+            lease,
+            source_work,
+            applied,
+            reason,
+        } => TransactionDecision::LocalScanReconciled(crate::source_scan::reconcile(
+            &tx,
+            catalog_state,
+            &lease,
+            source_work,
+            &applied,
+            &reason,
+        )?),
         Command::Retain { per_tenant, global } => {
             TransactionDecision::Outcome(Outcome::Retained(prune(&tx, per_tenant, global)?))
         }
@@ -1275,6 +1469,8 @@ pub(crate) fn execute(
         }
         #[cfg(feature = "desktop_rebuild")]
         TransactionDecision::Refused(CommittedRefusal { job, .. }) => job.state.terminal(),
+        #[cfg(feature = "desktop_rebuild")]
+        TransactionDecision::LocalScanCompleted(_) => true,
         _ => false,
     };
     if terminal {
@@ -1303,6 +1499,53 @@ pub(crate) fn execute(
         TransactionDecision::ErrorAfterCommit(error) => Err(error),
         #[cfg(feature = "desktop_rebuild")]
         TransactionDecision::Refused(CommittedRefusal { failure, .. }) => Err(failure.into()),
+        #[cfg(feature = "desktop_rebuild")]
+        TransactionDecision::LocalScanCompleted(pending) => {
+            use crate::catalog::IssuedTokenState;
+            let outcome = match catalog_state
+                .classify_issued(&pending.proof.incarnation, pending.proof.token)
+            {
+                IssuedTokenState::Active(actual) if actual == &pending.binding => {
+                    catalog_state.retire_issued(&pending.proof, &pending.binding)?;
+                    crate::source_scan::LocalCompletionInspection::Completed(pending.completion)
+                }
+                IssuedTokenState::Retired => {
+                    crate::source_scan::LocalCompletionInspection::Completed(pending.completion)
+                }
+                IssuedTokenState::Active(_) => {
+                    crate::source_scan::LocalCompletionInspection::CommittedReservationConflict(
+                        pending.completion,
+                    )
+                }
+                IssuedTokenState::NeverIssued | IssuedTokenState::WrongIncarnation => {
+                    crate::source_scan::LocalCompletionInspection::CommittedReservationCorrupt(
+                        pending.completion,
+                    )
+                }
+            };
+            Ok(Outcome::LocalScanCompletion(outcome))
+        }
+        #[cfg(feature = "desktop_rebuild")]
+        TransactionDecision::LocalScanReconciled(pending) => {
+            use crate::catalog::IssuedTokenState;
+            match catalog_state.classify_issued(&pending.proof.incarnation, pending.proof.token) {
+                IssuedTokenState::Active(actual) if actual == &pending.binding => {
+                    catalog_state.retire_issued(&pending.proof, &pending.binding)?;
+                }
+                IssuedTokenState::Retired => {}
+                IssuedTokenState::Active(_) => {
+                    return Err(anyhow!(
+                        "Committed Local scan reconciliation has a Source reservation conflict"
+                    ));
+                }
+                IssuedTokenState::NeverIssued | IssuedTokenState::WrongIncarnation => {
+                    return Err(anyhow!(
+                        "Committed Local scan reconciliation has a corrupt Source reservation"
+                    ));
+                }
+            }
+            Ok(Outcome::LocalScanReconciled(pending.job))
+        }
         #[cfg(feature = "desktop_rebuild")]
         TransactionDecision::Observation {
             credential,
@@ -2548,6 +2791,38 @@ pub(crate) fn require_original_authority(
     let (tenant, subject) = auth::authority::resolve(tx, basis, policy)?;
     ensure!(tenant == job.tenant, auth::AuthorityFailure::TenantChanged);
     Ok(ValidatedAuthority { tenant, subject })
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[cfg_attr(not(test), expect(dead_code, reason = "D17 (c) calls this"))]
+pub(crate) fn revalidate_source_authority(
+    tx: &Transaction<'_>,
+    job: &JobRecord,
+    policy: AuthPolicy,
+) -> Result<()> {
+    if job.authority_disposition == AuthorityDisposition::PhysicalOwner {
+        return Ok(());
+    }
+    require_original_authority(tx, job, policy).map(drop)
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[cfg_attr(not(test), expect(dead_code, reason = "D17 (c) calls this"))]
+pub(crate) fn commit_source_authority_refusal(
+    tx: &Transaction<'_>,
+    job: &mut JobRecord,
+    error: &anyhow::Error,
+) -> Result<bool> {
+    let reason = if job.authority_disposition == AuthorityDisposition::LegacyMissing {
+        Some(AuthorityRefusalReason::MissingOriginal)
+    } else {
+        AuthorityRefusalReason::of(error)
+    };
+    let Some(reason) = reason else {
+        return Ok(false);
+    };
+    record_refusal(tx, job, reason, AuthorityRefusalPhase::SourceWriter, None)?;
+    Ok(true)
 }
 
 #[cfg(feature = "desktop_rebuild")]

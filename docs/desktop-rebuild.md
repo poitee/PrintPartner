@@ -1328,9 +1328,9 @@ settlement from `desktop/source-sync-local-current-20261008`. The
 credential, Source reservation, configuration, activation, and path. It replaces
 the document index and records a confirmed effect receipt in one transaction.
 PDFs remain pending for extraction. Settlement does not finish the job or retire
-its Source token. Callers must release or drop `source_work` promptly.
+its Source token. Callers must complete, reconcile, release or drop `source_work` promptly.
 
-The two-PR slice plan assigns the complete D17 scope as follows:
+The three-PR slice plan assigns the complete D17 scope as follows:
 
 | Slice | Work | Estimated added/changed lines |
 | --- | --- | ---: |
@@ -1338,14 +1338,15 @@ The two-PR slice plan assigns the complete D17 scope as follows:
 | D17 (a) | Settlement, authority and reservation tests; Node generator and golden; docs | 650–850 |
 | D17 (b) | Complete, inspect, inspect-held and reconcile commands/clients/outcomes; both transaction decisions; `retire_issued`/`consume_retired` callers | 780 |
 | D17 (b) | `revalidate_source_authority`, `commit_source_authority_refusal`, idempotent End/release, remaining reference catalog tests | 400–500 |
-| D17 (b) | Schema 40, `backups/pre-schema40.db`, validation inside the migration transaction, migration tests and docs | 150–200 |
+| D17 (c) | Schema 40, `backups/pre-schema40.db`, validation inside the migration transaction, migration tests and docs | 150–200 |
 
 PR #553, D14 (b), was open when this branch started. It supplies schema 39 and
 the Source configuration and document provenance columns. This branch starts
 from main and does not install schema 40. Settlement tests explicitly install
 those prerequisite columns and the journal in temporary databases. Production
-startup remains at desktop schema 37 and default schema 35. Sequence the schema
-step after #553 before landing D17. Source Sync remains D18, GRE-614.
+startup remains at desktop schema 37 and default schema 35. D17 (c) installs the
+schema step after #553 and moves the test harness onto the real migration.
+Source Sync remains D18, GRE-614.
 
 `fixtures/parity/source-scan/generate.mjs` runs Node's
 `services/source-docs-index.ts`, which calls `services/source-docs-scan.ts`.
@@ -1358,8 +1359,8 @@ records inventory/index digests from Node crypto. Durable settlement, Source
 reservations and authority checks have no Node counterpart. The tests adapt the
 observation/settlement portion of the reference catalog test
 `repeated_local_scan_completion_adopts_the_exact_terminal_result` and its Source
-lease lifetime checks. Exact terminal-result adoption and release acknowledgement
-remain in D17 (b). New tests exercise stale observations, revoked authority,
+lease lifetime checks. D17 (b) ports exact terminal-result adoption and release
+acknowledgement. New tests exercise stale observations, revoked authority,
 invalid documents and transaction rollback.
 
 Regenerate or verify the Node results with:
@@ -1368,3 +1369,26 @@ Regenerate or verify the Node results with:
 node fixtures/parity/source-scan/generate.mjs
 node fixtures/parity/source-scan/generate.mjs --check
 ```
+
+D17 (b) adds `CompleteLocalScan`, `InspectLocalScan`, `InspectHeldLocalScan` and
+`ReconcileLocalScan`. Completion commits the public result and journal digest
+before retiring the Source token. A repeated completion adopts only the exact
+terminal request and result. Held inspection recovers settlement evidence after
+a lost reply. Reconciliation retains the effects and records the failure before
+retiring the reservation. Release acknowledges already retired tokens and keeps
+the proof if acknowledgement fails.
+
+GRE-703 items 2–4 bind settlement to the journaled reservation incarnation and
+token, test retired proofs and cancellation after observation, and replace the
+raw UNIQUE error with `LocalScanFailure::AlreadyObserved`. Observe and settle
+require schemas 39 and 40, as documented on their client methods. GRE-703 item 1,
+the schema 40 install and migration-based test harness, stays in D17 (c).
+`validate_schema`, `mark_local_failure`, `revalidate_source_authority` and
+`commit_source_authority_refusal` have tests here and production callers in (c).
+The authority helper reuses `AuthorityRefusalReason::of` and saves one refusal.
+
+The Node generator now also executes the local `syncProjectById` completion and
+failure paths. Rust compares four terminal document-index results and two
+failure-metadata cases against Node. Durable completion, inspection and
+reconciliation have no Node counterpart. Tests port the remaining reference
+completion and release checks, and add refusal, rollback and lost-reply cases.

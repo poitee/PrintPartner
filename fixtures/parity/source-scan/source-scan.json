@@ -11,7 +11,13 @@
         "pending_pdfs": 0
       },
       "inventory_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "index_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      "index_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "completion": {
+        "stl_count": 0,
+        "downloaded": 0,
+        "doc_count": 0,
+        "docs_downloaded": 0
+      }
     },
     {
       "id": "documents",
@@ -66,7 +72,13 @@
         "pending_pdfs": 1
       },
       "inventory_digest": "bcd64b044f01f63e3f4974f60d353991fbf22755b4357eb3b98b20fa43873739",
-      "index_digest": "2192a1415872fb9fb7c356981bf8cb1b6bf04508d7b9274b1ec9438cf113c6cf"
+      "index_digest": "2192a1415872fb9fb7c356981bf8cb1b6bf04508d7b9274b1ec9438cf113c6cf",
+      "completion": {
+        "stl_count": 0,
+        "downloaded": 0,
+        "doc_count": 3,
+        "docs_downloaded": 0
+      }
     },
     {
       "id": "ignored",
@@ -93,7 +105,13 @@
         "pending_pdfs": 0
       },
       "inventory_digest": "903fb8dc31369ffb3f1a9938e445aa1f07b8a80486bd54f539bfbb20d3ad0ddf",
-      "index_digest": "8a70156392ee4856bd397464b810f4e94d955e405ec73c10e32f537616c3c5ba"
+      "index_digest": "8a70156392ee4856bd397464b810f4e94d955e405ec73c10e32f537616c3c5ba",
+      "completion": {
+        "stl_count": 0,
+        "downloaded": 0,
+        "doc_count": 1,
+        "docs_downloaded": 0
+      }
     },
     {
       "id": "utf16",
@@ -148,7 +166,38 @@
         "pending_pdfs": 0
       },
       "inventory_digest": "84018227b8eb6dfbc2ec6077e9c8b9421bc62ffea4b8f50cb540f7c8d2181bae",
-      "index_digest": "3d0cdce02401855cb468c8dd69e34fa15dfff17d10e44814584382e371212a3d"
+      "index_digest": "3d0cdce02401855cb468c8dd69e34fa15dfff17d10e44814584382e371212a3d",
+      "completion": {
+        "stl_count": 0,
+        "downloaded": 0,
+        "doc_count": 3,
+        "docs_downloaded": 0
+      }
+    }
+  ],
+  "failures": [
+    {
+      "metadata": null,
+      "detail": "disk read failed",
+      "result": {
+        "sync_error": "disk read failed",
+        "sync_required": true
+      },
+      "error": "disk read failed"
+    },
+    {
+      "metadata": {
+        "keep": 7,
+        "sync_error": "old",
+        "sync_required": false
+      },
+      "detail": "disk read failed",
+      "result": {
+        "keep": 7,
+        "sync_error": "disk read failed",
+        "sync_required": true
+      },
+      "error": "disk read failed"
     }
   ]
 }
