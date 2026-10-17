@@ -31,7 +31,7 @@ console.log(JSON.stringify({ path: '.github/workflows/desktop-contracts.yml', st
   symlinkSync(join(root, 'web/node_modules'), join(directory, 'web/node_modules'));
   writeFileSync(join(directory, contracts), original);
   writeFileSync(join(directory, '.github/workflows/web-ci.yml'), YAML.stringify(webCI));
-  for (const name of ['integration-smoke', 'pr-evidence', 'desktop-e2e', 'desktop-webkit']) {
+  for (const name of ['integration-smoke', 'pr-evidence', 'desktop-e2e', 'desktop-webkit', 'desktop-runtime', 'desktop-native-macos']) {
     copyFileSync(join(root, `.github/workflows/${name}.yml`), join(directory, `.github/workflows/${name}.yml`));
   }
   const git = (...args) => {
@@ -146,7 +146,7 @@ test('event tree accepts original blob despite deleted worktree and moved HEAD',
   f.commit();
   const result = f.run();
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout, 'install_declarations=0 tool_specs=0 errors=0\n');
+  assert.equal(result.stdout, 'install_declarations=1 tool_specs=1 errors=0\n');
 });
 
 test('event tree ignores replacement commit', t => {
@@ -320,6 +320,8 @@ for (const [name, job, diagnostic] of [
   ['pr-evidence', 'lint-pr-body', 'UNPINNED_EVIDENCE_NODE'],
   ['desktop-e2e', 'linux-smoke', 'UNPINNED_E2E_NODE'],
   ['desktop-webkit', 'webkit-stl', 'UNPINNED_WEBKIT_NODE'],
+  ['desktop-runtime', 'runtime', 'UNPINNED_DESKTOP_NODE'],
+  ['desktop-native-macos', 'bundle', 'UNPINNED_DESKTOP_NODE'],
 ]) {
   test(`event tree rejects floating ${name} despite repaired checkout`, t => {
     const path = `.github/workflows/${name}.yml`;
@@ -382,6 +384,8 @@ test('event tree rejects disabled smoke lane despite repaired checkout', t => {
 for (const [name, lane, code] of [
   ['desktop-e2e', 'linux-smoke', 'E2E'],
   ['desktop-webkit', 'webkit-stl', 'WEBKIT'],
+  ['desktop-runtime', 'runtime', 'DESKTOP'],
+  ['desktop-native-macos', 'bundle', 'DESKTOP'],
 ]) {
   test(`event tree rejects missing ${name} assertion despite repaired checkout`, t => {
     const path = `.github/workflows/${name}.yml`;
@@ -396,5 +400,91 @@ for (const [name, lane, code] of [
     const result = f.run();
     assert.equal(result.status, 1, result.stdout);
     assert.match(result.stderr, new RegExp(`MISSING_${code}_NODE_VERIFICATION`));
+  });
+}
+
+for (const [label, name, mutate, diagnostic] of [
+  ['unlisted setup', 'desktop-runtime', workflow => {
+    workflow.jobs.extra = { steps: [{ uses: 'actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1', with: { 'node-version': '24' } }] };
+  }, 'UNEXPECTED_DESKTOP_NODE_SETUP'],
+  ['job failure override', 'desktop-runtime', workflow => { workflow.jobs.runtime['continue-on-error'] = true; }, 'INVALID_DESKTOP_NODE_SETUP'],
+  ['fixture dependency install', 'desktop-native-macos', workflow => {
+    const steps = workflow.jobs['macos-storage-gate'].steps;
+    steps.splice(steps.findIndex(step => step.with?.['node-version'] === '24.21.0'), 0, { run: 'npm ci' });
+  }, 'EARLY_DESKTOP_NODE_COMMAND'],
+  ['unguarded conditional build', 'desktop-native-macos', workflow => {
+    delete workflow.jobs['server-smoke'].steps.find(step => step.name === 'Build desktop assets and pp-server').if;
+  }, 'UNGUARDED_DESKTOP_NODE_COMMAND'],
+]) {
+  test(`event tree rejects ${label} despite repaired checkout`, t => {
+    const path = `.github/workflows/${name}.yml`;
+    const f = fixture(t, directory => {
+      const workflow = YAML.parse(readFileSync(join(directory, path), 'utf8'));
+      mutate(workflow);
+      writeFileSync(join(directory, path), YAML.stringify(workflow));
+    });
+    copyFileSync(join(root, path), join(f.directory, path));
+    const result = f.run();
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stderr, new RegExp(`${diagnostic}:`));
+  });
+}
+
+for (const [name, lane] of [['desktop-runtime', 'runtime'], ['desktop-native-macos', 'bundle']]) {
+  test(`event tree rejects disabled ${name} job despite repaired checkout`, t => {
+    const path = `.github/workflows/${name}.yml`;
+    const f = fixture(t, directory => {
+      const workflow = YAML.parse(readFileSync(join(directory, path), 'utf8'));
+      workflow.jobs[lane].if = false;
+      writeFileSync(join(directory, path), YAML.stringify(workflow));
+    });
+    copyFileSync(join(root, path), join(f.directory, path));
+    const result = f.run();
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stderr, /INVALID_DESKTOP_NODE_SETUP:/);
+  });
+}
+
+for (const [label, name, mutate, diagnostic] of [
+  ...['step', 'job', 'workflow'].map(level => [
+    `masking assertion shell at ${level}`, 'desktop-runtime', workflow => {
+      const shell = 'bash -c \'bash "{0}"; exit 0\'';
+      if (level === 'workflow') workflow.defaults.run.shell = shell;
+      else if (level === 'job') workflow.jobs.runtime.defaults = { run: { shell } };
+      else {
+        const steps = workflow.jobs.runtime.steps;
+        steps[steps.findIndex(step => step.uses?.startsWith('actions/setup-node@')) + 1].shell = shell;
+      }
+    }, 'INVALID_DESKTOP_NODE_SHELL',
+  ]),
+  ['removed linux-precheck dependency', 'desktop-native-macos', workflow => {
+    workflow.jobs.bundle.needs = ['changes'];
+  }, 'INVALID_DESKTOP_NODE_SETUP'],
+  ['dependent runtime lane', 'desktop-runtime', workflow => {
+    workflow.jobs.runtime.needs = ['skipped'];
+  }, 'INVALID_DESKTOP_NODE_SETUP'],
+  ...['removed', 'disabled', 'dependent'].map(change => [
+    `${change} changes prerequisite`, 'desktop-native-macos', workflow => {
+      if (change === 'removed') delete workflow.jobs.changes;
+      else if (change === 'disabled') workflow.jobs.changes.if = false;
+      else workflow.jobs.changes.needs = ['skipped'];
+    }, 'INVALID_DESKTOP_PREREQUISITE',
+  ]),
+]) {
+  test(`event tree rejects ${label} despite repaired checkout and HEAD`, t => {
+    const path = `.github/workflows/${name}.yml`;
+    const f = fixture(t, directory => {
+      const workflow = YAML.parse(readFileSync(join(directory, path), 'utf8'));
+      mutate(workflow);
+      writeFileSync(join(directory, path), YAML.stringify(workflow));
+    });
+    copyFileSync(join(root, path), join(f.directory, path));
+    f.git('add', '.github');
+    const repairedSha = f.commit();
+    const result = f.run();
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stderr, new RegExp(`${diagnostic}:`));
+    const repaired = f.run(repairedSha);
+    assert.equal(repaired.status, 0, repaired.stderr);
   });
 }
