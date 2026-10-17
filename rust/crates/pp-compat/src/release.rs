@@ -3,6 +3,7 @@ use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, fs::File, io::Read, path::Path};
+use tokio_util::sync::CancellationToken;
 
 #[derive(Deserialize)]
 struct DependencyInventory {
@@ -40,13 +41,19 @@ fn measure(path: &Path) -> Result<String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
-fn verify_files(root: &Path, expected: &BTreeMap<String, String>, exact: bool) -> Result<()> {
+fn verify_files(
+    root: &Path,
+    expected: &BTreeMap<String, String>,
+    exact: bool,
+    stop: &CancellationToken,
+) -> Result<()> {
     let root = root.canonicalize().context("Release root missing")?;
     ensure!(!expected.is_empty(), "Release inventory empty");
     if exact {
         let mut actual = std::collections::BTreeSet::new();
         let mut pending = vec![root.clone()];
         while let Some(directory) = pending.pop() {
+            ensure!(!stop.is_cancelled(), "Release verification cancelled");
             for entry in std::fs::read_dir(directory)? {
                 let entry = entry?;
                 ensure!(
@@ -77,7 +84,7 @@ fn verify_files(root: &Path, expected: &BTreeMap<String, String>, exact: bool) -
     std::thread::scope(|scope| {
         let handles: Vec<_> = entries
             .chunks(entries.len().div_ceil(workers))
-            .map(|chunk| scope.spawn(|| verify_chunk(&root, chunk)))
+            .map(|chunk| scope.spawn(|| verify_chunk(&root, chunk, stop)))
             .collect();
         handles.into_iter().try_for_each(|handle| {
             handle
@@ -87,8 +94,13 @@ fn verify_files(root: &Path, expected: &BTreeMap<String, String>, exact: bool) -
     })
 }
 
-fn verify_chunk(root: &Path, entries: &[(&String, &String)]) -> Result<()> {
+fn verify_chunk(
+    root: &Path,
+    entries: &[(&String, &String)],
+    stop: &CancellationToken,
+) -> Result<()> {
     for (relative, digest) in entries {
+        ensure!(!stop.is_cancelled(), "Release verification cancelled");
         let path = root
             .join(relative)
             .canonicalize()
@@ -112,8 +124,8 @@ pub(crate) fn manifest() -> Result<ReleaseManifest> {
 }
 
 /// A bundle whose measured release passed [`verify_bundle`]. Only verification creates one,
-/// so the supervisor can start its first child without measuring the release again.
-#[derive(Clone)]
+/// and it is not `Clone`: each supervisor start consumes fresh evidence, so its first child
+/// runs without measuring the release again.
 pub struct MeasuredBundle(Bundle);
 
 impl std::ops::Deref for MeasuredBundle {
@@ -135,12 +147,14 @@ impl MeasuredBundle {
 
 pub fn verify_bundle(bundle: Bundle, assets: &Path) -> Result<MeasuredBundle> {
     let release = manifest()?;
-    verify_files(assets, &release.frontend, true)?;
-    verify_backend(&bundle)?;
+    let stop = CancellationToken::new();
+    verify_files(assets, &release.frontend, true, &stop)?;
+    verify_backend(&bundle, &stop)?;
     Ok(MeasuredBundle(bundle))
 }
 
-pub(crate) fn verify_backend(bundle: &Bundle) -> Result<()> {
+/// Returns early with an error once `stop` is cancelled; checked between files.
+pub(crate) fn verify_backend(bundle: &Bundle, stop: &CancellationToken) -> Result<()> {
     let release = manifest()?;
     ensure!(
         release.runtime_version == bundle.runtime_version && release.commit == bundle.commit,
@@ -172,19 +186,22 @@ pub(crate) fn verify_backend(bundle: &Bundle) -> Result<()> {
         bundle.entry.parent().context("Missing backend root")?,
         &release.backend,
         true,
+        stop,
     )?;
     verify_files(
         &bundle.web_root.join("packages/contracts/dist/current"),
         &release.contracts,
         true,
+        stop,
     )?;
     verify_files(
         &bundle.web_root.join("packages/domain/dist/current"),
         &release.domain,
         true,
+        stop,
     )?;
-    verify_files(&bundle.web_root, &release.metadata, false)?;
-    verify_dependencies(&bundle.web_root, &release.dependencies)?;
+    verify_files(&bundle.web_root, &release.metadata, false, stop)?;
+    verify_dependencies(&bundle.web_root, &release.dependencies, stop)?;
     Ok(())
 }
 
@@ -222,7 +239,11 @@ pub(crate) fn package_root(bundle: &Bundle) -> Result<std::path::PathBuf> {
     inventory_root(&bundle.web_root, &manifest()?.dependencies)
 }
 
-fn verify_dependencies(web: &Path, inventory: &DependencyInventory) -> Result<()> {
+fn verify_dependencies(
+    web: &Path,
+    inventory: &DependencyInventory,
+    stop: &CancellationToken,
+) -> Result<()> {
     let root = inventory_root(web, inventory)?;
     ensure!(
         !inventory.files.is_empty() && !inventory.roots.is_empty(),
@@ -242,6 +263,7 @@ fn verify_dependencies(web: &Path, inventory: &DependencyInventory) -> Result<()
         );
         let mut pending = vec![directory];
         while let Some(directory) = pending.pop() {
+            ensure!(!stop.is_cancelled(), "Release verification cancelled");
             let directory = directory.canonicalize()?;
             if !visited.insert(directory.clone()) {
                 continue;
@@ -286,13 +308,33 @@ fn verify_dependencies(web: &Path, inventory: &DependencyInventory) -> Result<()
             "Dependency link changed"
         );
     }
-    verify_files(&root, &inventory.files, false)
+    verify_files(&root, &inventory.files, false, stop)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::os::unix::fs::symlink;
+
+    #[test]
+    fn cancelled_verification_stops_before_hashing() {
+        let root = std::env::temp_dir().join(format!(
+            "pp-release-cancel-{}",
+            hex::encode(rand::random::<[u8; 8]>())
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("artifact.js"), b"export {};\n").unwrap();
+        let expected = BTreeMap::from([(
+            "artifact.js".to_string(),
+            measure(&root.join("artifact.js")).unwrap(),
+        )]);
+        verify_files(&root, &expected, true, &CancellationToken::new()).unwrap();
+        let stop = CancellationToken::new();
+        stop.cancel();
+        let error = verify_files(&root, &expected, true, &stop).unwrap_err();
+        assert_eq!(error.to_string(), "Release verification cancelled");
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn dependency_aliases_are_measured_and_cannot_escape() {
@@ -321,25 +363,30 @@ mod tests {
                 target.to_string_lossy().into_owned(),
             )]),
         };
-        verify_dependencies(&web, &inventory).unwrap();
+        verify_dependencies(&web, &inventory, &CancellationToken::new()).unwrap();
         let moved = root.with_extension("relocated");
         std::fs::rename(&root, &moved).unwrap();
-        verify_dependencies(&moved.join("Resources/desktop-runtime/web"), &inventory).unwrap();
+        verify_dependencies(
+            &moved.join("Resources/desktop-runtime/web"),
+            &inventory,
+            &CancellationToken::new(),
+        )
+        .unwrap();
         std::fs::rename(&moved, &root).unwrap();
         std::fs::write(&framework, b"changed signed bytes").unwrap();
-        assert!(verify_dependencies(&web, &inventory).is_err());
+        assert!(verify_dependencies(&web, &inventory, &CancellationToken::new()).is_err());
         std::fs::write(&framework, b"measured native addon").unwrap();
         std::fs::write(modules.join("unmeasured.js"), b"extra code").unwrap();
-        assert!(verify_dependencies(&web, &inventory).is_err());
+        assert!(verify_dependencies(&web, &inventory, &CancellationToken::new()).is_err());
         std::fs::remove_file(modules.join("unmeasured.js")).unwrap();
         let nearer = web.join("apps/node_modules");
         std::fs::create_dir_all(&nearer).unwrap();
         std::fs::write(nearer.join("shadow.js"), b"new search root").unwrap();
-        assert!(verify_dependencies(&web, &inventory).is_err());
+        assert!(verify_dependencies(&web, &inventory, &CancellationToken::new()).is_err());
         std::fs::remove_dir_all(&nearer).unwrap();
         std::fs::remove_file(&alias).unwrap();
         symlink("/usr/bin/node", &alias).unwrap();
-        assert!(verify_dependencies(&web, &inventory).is_err());
+        assert!(verify_dependencies(&web, &inventory, &CancellationToken::new()).is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
 }

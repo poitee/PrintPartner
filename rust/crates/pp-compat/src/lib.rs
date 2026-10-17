@@ -455,7 +455,8 @@ async fn write_setup_or_cancel(
 
 impl Process {
     /// The first spawn uses the verification that produced `spec.bundle`. Every respawn
-    /// measures the release again, on a blocking thread so the supervisor stays responsive.
+    /// measures the release again on a blocking thread, which stops between files once
+    /// `cancelled` fires, so shutdown waits for at most one file's hash.
     async fn spawn(
         spec: &SpawnSpec,
         capture: &logs::Logs,
@@ -464,13 +465,10 @@ impl Process {
     ) -> Result<Self> {
         if reverify {
             let bundle = Bundle::clone(&spec.bundle);
-            tokio::select! {
-                biased;
-                _ = cancelled.cancelled() => bail!("Compatibility start cancelled"),
-                verified = tokio::task::spawn_blocking(move || release::verify_backend(&bundle)) => {
-                    verified.context("Release verification task failed")??;
-                }
-            }
+            let stop = cancelled.clone();
+            tokio::task::spawn_blocking(move || release::verify_backend(&bundle, &stop))
+                .await
+                .context("Release verification task failed")??;
         }
         let package_root = release::package_root(&spec.bundle)?;
         let preload = spec

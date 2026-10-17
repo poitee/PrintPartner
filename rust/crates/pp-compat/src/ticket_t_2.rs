@@ -2174,7 +2174,6 @@ async fn ticket_t_3_drain_measured_release_repeated_eof_cleanup() {
 
     let bundle = measured_startup_bundle();
     let assets = bundle.web_root.join("apps/web/dist");
-    let bundle = super::release::verify_bundle(bundle, &assets).unwrap();
     assert_eq!(bundle.runtime_version, "0.0.0-gre448-simulator-web");
     let mut completed: Vec<MeasuredLifecycleCycle> = Vec::new();
     for cycle in 0..3 {
@@ -2184,7 +2183,7 @@ async fn ticket_t_3_drain_measured_release_repeated_eof_cleanup() {
         let scratch = Scratch::new("measured-lifecycle");
         let events = scratch.root.join("data/lifecycle-events");
         let supervisor = super::Supervisor::start(super::SpawnSpec {
-            bundle: bundle.clone(),
+            bundle: super::release::verify_bundle(bundle.clone(), &assets).unwrap(),
             gateway_rate_limit: false,
             before_setup: Box::new(MeasuredLifecycleCycle::before_setup),
             ..release_spec(&scratch)
