@@ -4,6 +4,7 @@ import shutil
 import subprocess
 
 ALLOWED = {"pp-api": {"pp-storage"}, "pp-source": set(), "pp-storage": {"pp-domain", "pp-contracts"}, "pp-core": {"pp-gateway", "pp-compat", "pp-storage", "pp-source", "pp-net"}, "pp-gateway": {"pp-compat", "pp-drivers", "pp-net"}, "pp-compat": set(), "pp-server": {"pp-core"}, "pp-contracts": {"pp-api-types"}, "pp-desktop": {"pp-core"}, "pp-domain": set(), "pp-api-types": {"pp-domain"}, "pp-net": set(), "pp-drivers": {"pp-net", "pp-api-types"}, "pp-services": set()}
+GATED = {"pp-core": {"pp-source", "pp-net"}, "pp-storage": {"pp-domain", "pp-contracts"}}
 
 
 def rebuild_edge_is_gated(package, dependency):
@@ -32,8 +33,7 @@ def violations(packages):
             for dependency in package["dependencies"]
             if dependency["name"].startswith("pp-") and (
                 dependency["name"] not in ALLOWED[package["name"]]
-                or (((package["name"] == "pp-core" and dependency["name"] in {"pp-source", "pp-net"})
-                     or (package["name"] == "pp-storage" and dependency["name"] == "pp-contracts"))
+                or (dependency["name"] in GATED.get(package["name"], set())
                     and not rebuild_edge_is_gated(package, dependency))
             )]
 
@@ -71,6 +71,11 @@ def planted_edges_rejected():
     cases += (([storage], []),
               ([{**storage, "dependencies": [{"name": "pp-contracts", "optional": False}]}], [("pp-storage", "pp-contracts")]),
               ([{**storage, "features": {**storage["features"], "default": ["desktop_rebuild"]}}], [("pp-storage", "pp-contracts")]))
+    domain = {"name": "pp-storage", "dependencies": [{"name": "pp-domain", "optional": True}],
+              "features": {"default": [], "desktop_rebuild": ["dep:pp-domain", "pp-domain/desktop_rebuild"]}}
+    cases += (([domain], []),
+              ([{**domain, "dependencies": [{"name": "pp-domain", "optional": False}]}], [("pp-storage", "pp-domain")]),
+              ([{**domain, "features": {**domain["features"], "default": ["desktop_rebuild"]}}], [("pp-storage", "pp-domain")]))
     return all(violations(packages) == expected for packages, expected in cases)
 
 
