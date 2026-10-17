@@ -27,7 +27,7 @@ mod schema;
 #[cfg(feature = "desktop_rebuild")]
 pub mod source_scan;
 #[cfg(feature = "desktop_rebuild")]
-mod uploads;
+pub mod uploads;
 #[cfg(feature = "desktop_rebuild")]
 pub mod working_drafts;
 mod writer_admission;
@@ -124,6 +124,11 @@ enum Envelope {
         command: required_units::Command,
         reply: mpsc::Sender<Result<required_units::Outcome>>,
     },
+    #[cfg(feature = "desktop_rebuild")]
+    Uploads {
+        command: uploads::Command,
+        reply: mpsc::Sender<Result<uploads::Operation>>,
+    },
     Read {
         command: read_model::Command,
         reply: mpsc::Sender<Result<read_model::Batch>>,
@@ -184,6 +189,10 @@ struct Shared {
     orphaned_source_leases: Mutex<Vec<u64>>,
     #[cfg(feature = "desktop_rebuild")]
     job_subscriptions: jobs::JobSubscriptions,
+    #[cfg(feature = "desktop_rebuild")]
+    import_epoch: std::sync::atomic::AtomicU64,
+    #[cfg(feature = "desktop_rebuild")]
+    import_quota: Mutex<Option<u64>>,
 }
 #[derive(Clone)]
 pub struct SettingsClient {
@@ -515,6 +524,10 @@ impl WriterOwner {
             orphaned_source_leases: Mutex::new(Vec::new()),
             #[cfg(feature = "desktop_rebuild")]
             job_subscriptions: jobs::JobSubscriptions::new(),
+            #[cfg(feature = "desktop_rebuild")]
+            import_epoch: std::sync::atomic::AtomicU64::new(0),
+            #[cfg(feature = "desktop_rebuild")]
+            import_quota: Mutex::new(None),
         });
         let worker = shared.clone();
         let mut catalog_state = catalog::State::new(lease.data_dir().to_owned());
@@ -634,6 +647,16 @@ impl WriterOwner {
                             command,
                             admission,
                         ));
+                    }
+                    #[cfg(feature = "desktop_rebuild")]
+                    Envelope::Uploads { command, reply } => {
+                        let changes_accounting = command.changes_accounting();
+                        let result =
+                            uploads::execute(&mut connection, &catalog_state, command, admission);
+                        if result.is_ok() && changes_accounting {
+                            worker.import_epoch.fetch_add(1, Ordering::AcqRel);
+                        }
+                        let _ = reply.send(result);
                     }
                     #[cfg(feature = "desktop_rebuild")]
                     Envelope::WorkingDraft { command, reply } => {
