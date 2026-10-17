@@ -36,7 +36,7 @@ There is no path filter or job condition, so a documentation-only PR reports bot
 They also run on pushes to `main` and `master`, and on manual dispatch.
 Both jobs have only `contents: read` permission and disable persisted checkout credentials.
 
-Actionlint 1.7.12 checks workflow syntax and embedded shell commands with ShellCheck.
+Actionlint 1.7.12 checks workflow syntax and embedded shell commands with ShellCheck. On PRs, actionlint and zizmor run when `.github/workflows/**`, `.github/actions/**`, either linter's configuration, or the CI filter script and its tests change. Their named jobs report skipped checks for other paths. Pushes and manual runs always execute both linters. New PR pushes cancel older runs; pushes to the default branch do not.
 The job verifies the actionlint download against its SHA-256 checksum before execution.
 It reports through the job exit status, so fork PRs do not need permission to create check runs.
 
@@ -104,7 +104,7 @@ With `poitee` as the only collaborator, the unchanged rules block every PR he au
 Alternatively, Chad must add a bypass actor or relax the approval requirements before applying the ruleset. Either option changes its protections.
 
 The GRE-635 PR contains the proposed ruleset JSON payload and the matching UI steps.
-The intended required check names are `actionlint`, `zizmor`, `rust (linux)`, `rust (macos)`, and `rust (windows)`.
+The intended required check names are `actionlint`, `zizmor`, `rust (linux)`, and `rust (windows)`.
 
 Apply that ruleset after this PR and GRE-632's three-OS CI land and report all five checks on `main`.
 Require a PR with an approving review, code owner approval, dismissal of stale approvals, and approval of the latest push.
