@@ -156,16 +156,15 @@ The `scripts/setup-ci-linux.sh` script installs build tools, Python and the GitH
 1.99.0 with rustfmt and clippy. Changes to the setup script trigger every
 path-filtered consumer, including Rust input selection.
 
-Rust Windows jobs keep `windows-latest`. The default-off repository variable
-`PP_LOCAL_WIN` enables `[self-hosted, windows, x64, pp-local-win]` only when its
-value is `true` and the event is a same-repository PR. Keep it off until the
-Windows runner service has Bash on PATH and the Rust job has been verified.
-The command-shell smoke passed, but the Rust job exposed the missing Bash:
-[Windows smoke](https://github.com/poitee/PrintPartner/actions/runs/39073196185).
-The local Windows job uses the preinstalled Python 3.13 launcher, verifies the
-required version and hashing API, and passes its exact executable path to manifest
-generation. It avoids the setup-python installer, which requires administrator
-privileges on Windows. The `ci/runner-smoke-win` branch remains for Chad to remove.
+Rust Windows jobs select `[self-hosted, windows, x64, pp-local-win]` only when
+`PP_LOCAL_WIN` is `true` and the event is a same-repository PR. The switch defaults
+off; it is now enabled after the full local Rust job passed:
+[Windows Rust smoke](https://github.com/poitee/PrintPartner/actions/runs/39079477016).
+Fork PRs and non-PR events retain `windows-latest`. The runner image supplies Git
+Bash, PowerShell 7 and Python 3.13. The job verifies Python's version and hashing
+API and passes its exact executable path to manifest generation. It avoids the
+setup-python Windows installer, which requires administrator privileges.
+The `ci/runner-smoke-win` branch remains for Chad to remove.
 
 Local macOS jobs install Python 3.12 through pinned `actions/setup-python` before
 building manifests, which require `hashlib.file_digest`. They create the action's

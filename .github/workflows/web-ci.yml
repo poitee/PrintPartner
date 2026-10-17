@@ -151,7 +151,7 @@ jobs:
       - name: Install Chrome on ephemeral Linux
         if: runner.environment == 'self-hosted'
         id: chrome
-        uses: browser-actions/setup-chrome@54e7c7bf1c147ffca98dc47b796907454c8c1787
+        uses: browser-actions/setup-chrome@48ad923757ca74d66703209fe939badbdf80f2f4 # v2.2.0
         with:
           chrome-version: stable
           install-dependencies: true
