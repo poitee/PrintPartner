@@ -33,17 +33,26 @@ function progressReview(version: number, completed: boolean) {
 }
 
 describe("confirmed Plan cache", () => {
-  it("preserves same-version progress that changed after a save was sent", async () => {
+  it("publishes saved quantities into both access variants of the Review", async () => {
+    const client = new QueryClient();
+    for (const allowed of [true, false]) client.setQueryData(queryKeys.planReview(7, false, allowed), saved(1).review);
+    const response = saved(2);
+    await hydratePlanSave(client, response, capturePlanSaveCache(client, 7));
+    for (const allowed of [true, false]) expect(client.getQueryData(queryKeys.planReview(7, false, allowed))).toEqual(response.review);
+    client.clear();
+  });
+
+  it.each([true, false])("preserves same-version progress during a save with Spoolman access=%s", async (allowed) => {
     const client = new QueryClient();
     const response = saved(2);
     response.review = progressReview(2, false);
-    client.setQueryData(queryKeys.planReview(7, false), response.review);
+    client.setQueryData(queryKeys.planReview(7, false, allowed), response.review);
     const observed = capturePlanSaveCache(client, 7);
     const progressed = progressReview(2, true);
-    client.setQueryData(queryKeys.planReview(7, false), progressed);
+    client.setQueryData(queryKeys.planReview(7, false, allowed), progressed);
     await hydratePlanSave(client, response, observed);
-    expect(client.getQueryData(queryKeys.planReview(7, false))).toEqual(progressed);
-    expect(client.getQueryState(queryKeys.planReview(7, false))?.isInvalidated).toBe(true);
+    expect(client.getQueryData(queryKeys.planReview(7, false, allowed))).toEqual(progressed);
+    expect(client.getQueryState(queryKeys.planReview(7, false, allowed))?.isInvalidated).toBe(true);
     client.clear();
   });
 

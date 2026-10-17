@@ -39,7 +39,6 @@ Print Partner is moving its backend from Node to one Rust core. The core runs as
 | [Release](release.md) | How releases are built, signed, and published. |
 | [Domain](domain/README.md) | The core model and one page per product area. |
 | [Desktop rebuild flag and slice plan](desktop-rebuild.md) | The `desktop_rebuild` feature and the GRE-595 slices. |
-| [Single-process guarantees](architecture/background-work-guarantees.md) | What one server process guarantees for the send queue and backup restore. |
 
 ## Development
 
@@ -85,6 +84,7 @@ These pages describe the Node server that the Rust core replaces. Its multi-user
 - [Deployment reference](../web/DEPLOY.md)
 - [Invite-beta hosted planning](../web/DEPLOY.md#invite-beta-hosted-planning)
 - [Hosted tenant storage](hosted-storage.md)
+- [Single-process guarantees](architecture/background-work-guarantees.md): what one Node server process guarantees for the send queue and backup restore.
 
 ## Agent workflows
 

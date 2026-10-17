@@ -314,9 +314,20 @@ invalid optional manifests. `kit` projects stored kit selections through the
 existing `KitManifest` parser. Both propagate preparation budget and cancellation
 failures. `apply` preserves Node's document order, project filtering, selection
 defaults, explicit group membership, group bounds, and exclusion precedence.
-It accepts the shared `PreparationBudget` and accounts for each Part and pattern
-comparison. Kit JSON passes through the budgeted document reader before the
-stored-kit parser, so UTF-16 selection text uses the existing codec.
+It accepts the shared `PreparationBudget`, charges each Part as an entry, and
+charges each pattern comparison as a visit. A comparison keeps no memory after it
+returns, so it does not charge the document-byte cap. It charges the separate
+`comparison_work` counter instead. Before a comparison it charges the raw
+pattern UTF-16 units plus the key's UTF-8 bytes, because normalization scans
+the raw text before trimming. Each comparison builds its own `Glob`, so after
+the comparison it charges the normalized pattern and key UTF-16 units plus the
+glob matcher steps that `Glob` counted. The default and maximum is 2^28 units, so
+comparisons at the 100,000-visit limit can average about 2,680 units each. One
+comparison costs O(P + K²) units for a pattern of P units and a key of K units,
+with K at most 4,096. Only the post-comparison charge can pass the limit, so an
+attempt can exceed it by one comparison's normalized and matcher work. Kit JSON
+passes through the budgeted document reader before the stored-kit parser, so
+UTF-16 selection text uses the existing codec.
 
 `read_model::reusable_draft_base` checks current freshness before validating the
 complete accepted snapshot with the existing bounded readers. It propagates

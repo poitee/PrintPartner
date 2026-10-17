@@ -6,7 +6,7 @@ Fixes GRE-xxx <!-- Use "Refs GRE-xxx" for a partial slice. Use "Fixes" only in t
 
 ## Definition of done
 
-See docs/development/definition-of-done.md.
+See [the definition of done](https://github.com/poitee/PrintPartner/blob/main/docs/development/definition-of-done.md).
 
 - [ ] One job, under about 1,500 lines. Work for other tickets is noted on those tickets.
 - [ ] Unslop pass run on code, comments and docs. No filler comments, dead code or speculative abstractions.
