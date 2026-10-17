@@ -408,6 +408,68 @@ fn a_budget_refusal_writes_nothing() {
 }
 
 #[test]
+fn carrying_open_draft_edits_spends_the_recompute_budget() {
+    let files = json!(
+        (0..600)
+            .map(|i| format!("old-{i:04}.stl"))
+            .collect::<Vec<_>>()
+    );
+    let f = Fixture::new(&json!({
+        "files": files,
+        "setup": ["INSERT INTO build_profiles(id,tenant_id,name) VALUES(3,'default','New Build'); INSERT INTO profile_layers(tenant_id,profile_id,project_id,layer_type,layer_order) SELECT tenant_id,3,project_id,layer_type,layer_order FROM profile_layers WHERE profile_id=1; UPDATE projects SET current_source_revision_id=NULL WHERE id=1"],
+    }));
+    let owner = f.open();
+    let large = recompute(
+        &owner,
+        f.reads(&files, &Value::Null, None),
+        PreparationLimits::default(),
+        "large",
+        true,
+        3,
+        Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap();
+    assert_eq!(large["kind"], "created");
+    assert_eq!(large["draft"]["parts"].as_array().unwrap().len(), 600);
+    let before = f.recorded_rows();
+    let bounded = |limits| {
+        recompute(
+            &owner,
+            f.reads(&json!(["only-current.stl"]), &Value::Null, None),
+            limits,
+            "bounded",
+            true,
+            3,
+            Arc::new(AtomicBool::new(false)),
+        )
+    };
+    let visits = bounded(PreparationLimits {
+        visits: 512,
+        ..PreparationLimits::default()
+    });
+    let compared = bounded(PreparationLimits {
+        comparison_work: 10_000,
+        ..PreparationLimits::default()
+    });
+    owner.shutdown().unwrap();
+    assert!(
+        matches!(
+            visits.as_ref().map_err(|error| error.downcast_ref()),
+            Err(Some(ReadFailure::LimitExceeded(Resource::Visits)))
+        ),
+        "{visits:?}"
+    );
+    assert!(
+        matches!(
+            compared.as_ref().map_err(|error| error.downcast_ref()),
+            Err(Some(ReadFailure::LimitExceeded(Resource::ComparisonWork)))
+        ),
+        "{compared:?}"
+    );
+    assert_eq!(f.recorded_rows(), before);
+}
+
+#[test]
 fn refused_requests_write_nothing() {
     let f = Fixture::new(&node("created-then-replayed"));
     let before = f.recorded_rows();
