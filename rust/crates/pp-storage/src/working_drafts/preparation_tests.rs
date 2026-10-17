@@ -598,7 +598,9 @@ fn invalid_stored_community_slugs_make_no_community_read() {
     assert!(!requests.is_empty());
     assert!(requests.iter().all(|slug| slug == "oracle-kit"));
     for slug in [
+        // ast-grep-ignore: no-writer-family-literal -- Test input that the slug check must refuse.
         "../kit-catalog",
+        // ast-grep-ignore: no-writer-family-literal -- Test input that the slug check must refuse.
         "kit-catalog",
         "oracle-kit/..",
         "Oracle-Kit",
