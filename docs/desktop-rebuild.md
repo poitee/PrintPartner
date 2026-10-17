@@ -1639,9 +1639,33 @@ HTTP behind `PP_DESKTOP_REBUILD`.
 Accepted snapshot reads still refuse non-scalar manifest text with
 `manifest_text`. The `requirement` and `optionGroupId` scalar fields still feed
 `views`, which would show `null` for that text. That refusal is lifted when
-`views` reads the carrier (D22, GRE-618). GRE-616 PR 2 ports the remaining
-`read_model::context` differences from the reference branch.
+`views` reads the carrier (D22, GRE-618).
 
 ```sh
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib read_model::json_body
+```
+
+### D21 published capture, GRE-616 PR 2
+
+With `desktop_rebuild`, `read_model::capture_published` reads the Accepted Plan
+and its Build context in one transaction after a committed Save. It fails when
+the Build is missing, when the Accepted Plan is not ready, or when the snapshot
+Plan version is older than the Save receipt. Integrity failures propagate
+unchanged. The D13 Save port (GRE-608) is its first caller.
+
+Two other reference differences are not ported, because main is already
+correct:
+
+- Accepted progress. The reference counts units inline. Main uses
+  `views::progress`, which gives the same counts: units of included Parts, and
+  the units not yet completed. A test pins these counts in both profile
+  summaries.
+- Naming folder rules. The reference omits `functional_class` when it is unset,
+  which changes the effective naming digest. Node `digestEffectiveNaming` writes
+  `"functional_class":null`, and main does the same. Porting the change would
+  mark every Build with such a rule stale. A test pins the Node digest.
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib read_model::capture_published_tests
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --test ticket_t_61_read_model
 ```
