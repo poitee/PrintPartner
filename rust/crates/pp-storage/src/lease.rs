@@ -876,6 +876,39 @@ mod tests {
     }
 
     #[test]
+    fn gre_673_racing_first_lock_opens_share_one_file() {
+        let path = directory();
+        let admitted = admit_directory(&path).unwrap();
+        let threads = 8;
+        for trial in 0..200 {
+            let name = CString::new(format!("race-{trial}")).unwrap();
+            let barrier = std::sync::Barrier::new(threads);
+            let opened: Vec<_> = std::thread::scope(|scope| {
+                let handles: Vec<_> = (0..threads)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            barrier.wait();
+                            admitted
+                                .open_lock(&name)
+                                .map(|file| file.metadata().unwrap().ino())
+                                .map_err(|error| format!("{error:#}"))
+                        })
+                    })
+                    .collect();
+                handles.into_iter().map(|h| h.join().unwrap()).collect()
+            });
+            let inode = std::fs::symlink_metadata(path.join(name.to_str().unwrap()))
+                .unwrap()
+                .ino();
+            assert!(
+                opened.iter().all(|result| result == &Ok(inode)),
+                "trial {trial}: {opened:?}"
+            );
+        }
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
     fn gre_636_busy_lock_prevents_all_database_preflight() {
         let path = directory();
         let lock = OpenOptions::new()
