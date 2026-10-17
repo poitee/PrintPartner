@@ -30,6 +30,16 @@ describe("filament endpoints", () => {
       .respond(jsonResponse({ filaments: [] }))
       .respond(jsonResponse({ roles: [] }))
       .respond(jsonResponse({ integration_id: "spoolman" }))
+      .respond(jsonResponse({ spools: [] }))
+      .respond(
+        jsonResponse({
+          synced_at: "now",
+          source: "local",
+          status: "ok",
+          colors: [],
+          custom_colors: [],
+        }),
+      )
       .respond(jsonResponse({ spools: [] }));
 
     await expect(fetchFilamentCatalog()).resolves.toMatchObject({
@@ -43,6 +53,17 @@ describe("filament endpoints", () => {
     await expect(fetchSpoolmanSpools("int/id")).resolves.toEqual([]);
     expect(http.calls[4]?.[0]).toContain(
       "/api/v1/integrations/int%2Fid/spoolman/spools",
+    );
+    expect(http.calls[4]?.[0]).not.toContain("profile_id=");
+
+    await expect(fetchFilamentCatalog(42)).resolves.toMatchObject({
+      status: "ok",
+    });
+    expect(http.calls[5]?.[0]).toContain("/filaments/catalog?profile_id=42");
+
+    await expect(fetchSpoolmanSpools("int/id", 42)).resolves.toEqual([]);
+    expect(http.calls[6]?.[0]).toContain(
+      "/api/v1/integrations/int%2Fid/spoolman/spools?profile_id=42",
     );
   });
 
