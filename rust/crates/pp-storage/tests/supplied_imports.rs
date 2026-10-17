@@ -170,7 +170,12 @@ fn targeted_import_claim_reserves_its_source_and_leaves_busy_work_queued() {
     config.per_resource = 2;
     let worker = owner.job_worker(config).unwrap();
     let before = get(&owner, &job_id);
-    assert!(worker.claim_import(&job_id).unwrap().is_none());
+    let error = worker.claim_import(&job_id).err().expect("Source busy");
+    assert!(
+        error
+            .downcast_ref::<pp_storage::catalog::SourceBusy>()
+            .is_some()
+    );
     let after = get(&owner, &job_id);
     assert_eq!(after.state, PersistentState::Queued);
     assert_eq!(after.state_version, before.state_version);
@@ -201,12 +206,60 @@ fn targeted_import_claim_reserves_its_source_and_leaves_busy_work_queued() {
     assert!(other_claim.source_work.is_some());
 
     let cancelled = cancel(&owner, &job_id);
-    assert!(worker.claim_import(&job_id).unwrap().is_none());
+    let error = worker.claim_import(&job_id).err().expect("Source busy");
+    assert!(
+        error
+            .downcast_ref::<pp_storage::catalog::SourceBusy>()
+            .is_some()
+    );
     assert_eq!(get(&owner, &job_id).state_version, cancelled.state_version);
     drop(claimed);
     let cleanup = worker.claim_import(&job_id).unwrap().unwrap();
     assert!(cleanup.job.cancel_requested);
     assert!(cleanup.source_work.is_some());
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn targeted_import_with_foreign_source_fails_without_tenant_leak() {
+    let path = directory();
+    let owner = open(&path);
+    let job_id = supplied_import(&path, &owner, "foreign-source", 1);
+    let other = supplied_import(&path, &owner, "healthy-source", 2);
+    let db = Connection::open(path.join("print-partner.db")).unwrap();
+    assert_eq!(
+        db.execute(
+            "UPDATE projects SET tenant_id='foreign-tenant',name='Private Source' WHERE id=1",
+            [],
+        )
+        .unwrap(),
+        1
+    );
+    let before = get(&owner, &job_id);
+    let worker = owner.job_worker(admission()).unwrap();
+
+    assert!(worker.claim_import(&job_id).unwrap().is_none());
+    let failed = get(&owner, &job_id);
+    assert_eq!(failed.state, PersistentState::Failed);
+    assert_eq!(failed.attempt, before.attempt);
+    assert_eq!(failed.generation, before.generation);
+    assert_eq!(
+        failed.recovery.as_deref(),
+        Some("Source is unavailable for this job")
+    );
+    let (state, event): (String, String) = db
+        .query_row(
+            "SELECT state,event FROM durable_job_history WHERE job_id=?1 AND version=?2",
+            rusqlite::params![job_id, failed.state_version],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(state, "failed");
+    assert_eq!(event, "source_unavailable");
+    assert_eq!(get(&owner, &other).state, PersistentState::Queued);
+    let claimed = worker.claim_import(&other).unwrap().unwrap();
+    assert_eq!(claimed.job.job_id, other);
+    assert!(claimed.source_work.is_some());
     owner.shutdown().unwrap();
 }
 
@@ -268,7 +321,12 @@ fn cancelled_import_returns_to_its_owner_through_cancel_and_recovery() {
     assert_eq!(cancelled.generation, claimed.generation + 1);
     assert!(cancelled.lease_until.is_none());
 
-    assert!(worker.claim_import(&job_id).unwrap().is_none());
+    let error = worker.claim_import(&job_id).err().expect("Source busy");
+    assert!(
+        error
+            .downcast_ref::<pp_storage::catalog::SourceBusy>()
+            .is_some()
+    );
     drop(source_work);
     let claimed_attempt!(reclaimed, _) = worker.claim_import(&job_id).unwrap().unwrap();
     assert!(reclaimed.cancel_requested);
@@ -325,7 +383,12 @@ fn cancelled_import_stays_claimable_for_cleanup_past_the_attempt_limit() {
 
     let cancelled = cancel(&owner, &job_id);
     assert_eq!(cancelled.state, PersistentState::Queued);
-    assert!(worker.claim_import(&job_id).unwrap().is_none());
+    let error = worker.claim_import(&job_id).err().expect("Source busy");
+    assert!(
+        error
+            .downcast_ref::<pp_storage::catalog::SourceBusy>()
+            .is_some()
+    );
     assert_eq!(get(&owner, &job_id).state_version, cancelled.state_version);
     drop(source_work);
     let claimed_attempt!(cleanup, cleanup_lease, cleanup_source) =

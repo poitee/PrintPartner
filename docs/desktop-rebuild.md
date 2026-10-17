@@ -748,8 +748,10 @@ their stored Source, including targeted import claims and cancelled import clean
 claims past the attempt limit.
 A missing Source, including a Source in another tenant, fails the queued job with
 "Source is unavailable for this job" and a `source_unavailable` history entry.
-The claim does not increment attempt or generation and continues to healthy work.
-A busy Source leaves the queued job unchanged and does not block other Sources.
+The claim does not increment attempt or generation. Untargeted claims continue to
+healthy work, while `claim_import` returns `None` after failing the targeted job.
+A busy Source leaves the queued job unchanged. `claim_import` returns `SourceBusy`
+so its caller can retry, while untargeted claims skip the busy Source.
 
 `ClaimPlan` carries a pending `SourceReservation` through the database commit.
 Only `TransactionDecision::Claimed` activates its token and creates the Source-work
@@ -761,9 +763,10 @@ CheckSourceUpdates claims have no initial Source-work lease. Their workers acqui
 individual leases through `begin_source_work`. Sync keeps its existing scoped
 Source bridge until D18 supplies the target API. Import settlement belongs to
 D14 (d), local scan settlement to D17, and Sync settlement to D18. Claim-time
-import reservation follows the reference `source_binding` and `claim_import` in
+import reservation and targeted `SourceBusy` errors follow the reference
+`source_binding`, `claim`, and `claim_import` in
 `desktop/source-sync-local-current-20261008` at `d73b6d8d`,
-`rust/crates/pp-storage/src/jobs.rs:2431` and `:3372`.
+`rust/crates/pp-storage/src/jobs.rs:2431`, `:2588`, and `:3372`.
 
 Node has no durable claims or Source reservation counterpart. These tests port the
 reference `durable_jobs.rs` reservation cases. The committed Node generator and its
@@ -772,7 +775,7 @@ pattern retains the Source-work lease while matching either build's return type.
 `rust/scripts/migrate-claimed-attempt.py` reruns the mechanical tuple migration.
 
 ```sh
-cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test durable_jobs
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test durable_jobs --test supplied_imports
 node fixtures/parity/jobs-engine/generate.mjs --check
 ```
 

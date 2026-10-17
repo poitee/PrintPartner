@@ -666,6 +666,7 @@ impl ServerWorkerClient {
     }
     /// Claims one queued supplied import by id. A refused original authority
     /// commits the refusal and returns the typed failure instead of moving on.
+    /// A busy Source returns `SourceBusy` and leaves the queued job unchanged.
     #[cfg(feature = "desktop_rebuild")]
     pub fn claim_import(&self, job_id: &str) -> Result<Option<ClaimedAttempt>> {
         PendingClaim(submit(
@@ -1835,6 +1836,11 @@ fn claim(
                         continue;
                     }
                     if catalog_state.source_busy(&job.tenant, id) {
+                        if filter.job_id.is_some() {
+                            return Ok(TransactionDecision::ErrorAfterCommit(anyhow!(
+                                crate::catalog::SourceBusy
+                            )));
+                        }
                         continue;
                     }
                     Some(SourceReservation {
