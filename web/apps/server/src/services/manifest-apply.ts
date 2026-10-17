@@ -42,7 +42,7 @@ export type ManifestVariant = {
   excludes?: string[];
 };
 
-export type ManifestOptionGroupRule = "pick_one" | "pick_any" | "pick_n";
+type ManifestOptionGroupRule = "pick_one" | "pick_any" | "pick_n";
 
 export type ManifestOptionGroup = {
   rule: ManifestOptionGroupRule;

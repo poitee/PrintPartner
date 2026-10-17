@@ -2,7 +2,7 @@ import { categoryPathSegments, type SourceSummary } from "@print-partner/contrac
 import type { PlanReview } from "../api/endpoints/planManifests";
 import { sourceSyncIssue } from "./sourceMonitoring";
 
-export type LibraryCardTone = "default" | "update" | "syncing" | "attached" | "local";
+type LibraryCardTone = "default" | "update" | "syncing" | "attached" | "local";
 
 export type LibraryCardMeta = {
   slug: string;

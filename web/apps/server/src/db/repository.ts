@@ -679,8 +679,6 @@ type ApplyPlanChangesCommand = {
   readonly remapCheckoffLinks?: boolean;
 };
 
-export type { UnmappableCheckoffLink } from "./plan-apply-model.js";
-
 export type AppliedPlanReceipt = {
   readonly profileId: number;
   readonly draftId: number;

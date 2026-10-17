@@ -1,6 +1,6 @@
 import { EngineHttpError, engineFetch } from "../engineTransport";
 
-export type PlanPhaseDefinition = {
+type PlanPhaseDefinition = {
   name: string;
   order: number;
   description?: string;

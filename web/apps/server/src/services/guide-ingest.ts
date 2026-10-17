@@ -18,7 +18,7 @@ import {
 const DEFAULT_GUIDE_INGEST_MAX_BYTES = 512 * 1024;
 const DEFAULT_GUIDE_TEXT_MAX_CHARS = 48_000;
 
-export type GuideExtractLink = {
+type GuideExtractLink = {
   url: string;
   kind: "github" | "printables" | "makerworld" | "other";
   label?: string;

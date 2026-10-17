@@ -25,10 +25,10 @@ import {
  * into a single upsert, per the original spec.
  */
 
-export type SlicerKind = "orca" | "prusa" | "bambu";
+type SlicerKind = "orca" | "prusa" | "bambu";
 export type ProfileKind = "printer" | "process" | "filament";
 
-export type SlicerWatchRoot = {
+type SlicerWatchRoot = {
   kind: SlicerKind;
   /** Absolute directory containing the slicer's per-user profile tree. */
   baseDir: string;

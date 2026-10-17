@@ -1,6 +1,6 @@
 import { engineFetchMultipart } from "../engineTransport";
 
-export type KitBundleUnmatchedSource = {
+type KitBundleUnmatchedSource = {
   name: string;
   url?: string;
   branch?: string;
