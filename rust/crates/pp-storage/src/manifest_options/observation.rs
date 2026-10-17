@@ -120,7 +120,14 @@ pub(crate) fn observe(
     let mut resolved_selections = match captured.stored_kit.as_deref() {
         Some(raw) => {
             budget.document(raw.len(), raw.len())?;
-            KitManifest::from_stored_or_empty(raw).map_err(limit_exceeded)?
+            match json::parse(raw.as_bytes()) {
+                Ok(parsed) => {
+                    charge_nodes(&parsed, 0, budget)?;
+                    KitManifest::from_stored_or_empty(parsed)
+                }
+                Err(JsonError::Syntax) => KitManifest::default(),
+                Err(JsonError::Limit(limit)) => return Err(limit_exceeded(limit)),
+            }
         }
         None => KitManifest::default(),
     };

@@ -49,6 +49,7 @@ import {
 } from "../services/role-filament-store.js";
 import { getColorById } from "../services/filament-catalog.js";
 import { hasSpoolmanAssignment, readSpoolmanAccess, spoolmanAccessProblem } from "../lib/spoolman-access.js";
+import { parseCommunityManifestSlug } from "../lib/community-manifest-slug.js";
 import type { EditableKitRecipe } from "../services/export-kit.js";
 import { REMOTE_CHECKED_AT_KEY, REMOTE_UPDATE_STATUS_KEY } from "../services/source-update-check.js";
 import {
@@ -3697,7 +3698,7 @@ export class AppRepository {
       updates.metadataJson = JSON.stringify(merged);
     }
     if (patch.manifest_community_slug !== undefined) {
-      updates.manifestCommunitySlug = patch.manifest_community_slug;
+      updates.manifestCommunitySlug = parseCommunityManifestSlug(patch.manifest_community_slug);
     }
 
     const identityChanged =
@@ -8180,6 +8181,7 @@ export class AppRepository {
     warnings: string[];
     unmatched_sources: KitBundleUnmatchedSource[];
   } {
+    const sourceRefs = collectKitBundleSourceRefs(data);
     const profileData = (data.profile as Record<string, unknown>) ?? {};
     const desired = (newName || profileData.name || "Imported kit").toString().trim() || "Imported kit";
     let name = desired;
@@ -8232,7 +8234,7 @@ export class AppRepository {
       return null;
     };
 
-    for (const sourceRef of collectKitBundleSourceRefs(data)) {
+    for (const sourceRef of sourceRefs) {
       const projectId = resolveProjectId({
         name: sourceRef.name,
         url: sourceRef.url,

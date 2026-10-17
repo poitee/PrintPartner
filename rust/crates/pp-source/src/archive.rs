@@ -506,7 +506,7 @@ fn verify_reader_entry<R: Read + ?Sized>(
     Err(ArchiveError::ReaderMismatch(mismatch))
 }
 
-/// Walks central extra-field records the way zip 8.6 parses them and rejects
+/// Walks central extra-field records the way zip 9 parses them and rejects
 /// anything it would fail on, so the reader never abandons the validated
 /// directory for an earlier end record.
 fn validate_extra_field(extra: &[u8], central: &[u8; 46]) -> Result<ResolvedZip64> {
@@ -515,40 +515,25 @@ fn validate_extra_field(extra: &[u8], central: &[u8; 46]) -> Result<ResolvedZip6
         u64::from(u32_at(central, 20)?),
         u64::from(u32_at(central, 42)?),
     ];
-    let mut values = original;
-    let original_disk = u64::from(u16_at(central, 34)?);
-    let mut disk = original_disk;
-    absorb_zip64(extra, &mut values, &mut disk)?;
-    // A 24-byte ZIP64 record rewrites unsaturated fields the way zip 8.6 does.
-    // Preflight keeps the central header's own values unless they are sentinels,
-    // so that rewrite shows up as a reader mismatch instead of becoming the
-    // sizes and offset the ratio cap and local-header checks trusted.
-    let values = trust_sentinels(original, values);
-    if original_disk != u64::from(u16::MAX) {
-        disk = original_disk;
-    }
+    let ([uncompressed_bytes, compressed_bytes, local_header_offset], disk) =
+        absorb_zip64(extra, original, u64::from(u16_at(central, 34)?))?;
     Ok(ResolvedZip64 {
-        uncompressed_bytes: values[0],
-        compressed_bytes: values[1],
-        local_header_offset: values[2],
+        uncompressed_bytes,
+        compressed_bytes,
+        local_header_offset,
         disk,
     })
 }
 
-fn trust_sentinels(original: [u64; 3], absorbed: [u64; 3]) -> [u64; 3] {
-    let mut trusted = absorbed;
-    for (trusted, original) in trusted.iter_mut().zip(original) {
-        if original != u64::from(u32::MAX) {
-            *trusted = original;
-        }
-    }
-    trusted
-}
-
-/// Walks extra-field records the way zip 8.6 parses them. ZIP64 values still
-/// saturated, and any 24-byte ZIP64 record, replace the running sizes so a
-/// later record has to carry what an earlier record put back.
-fn absorb_zip64(extra: &[u8], values: &mut [u64; 3], disk: &mut u64) -> Result<()> {
+/// Walks extra-field records the way zip 9 parses them. A ZIP64 record's
+/// length decides which values it must carry, but a value replaces the
+/// header's only where the header field holds the sentinel, so a full record
+/// cannot rewrite the sizes and offset the ratio cap and local-header checks
+/// trusted. Each record is read against the header's own fields, and the last
+/// one wins.
+fn absorb_zip64(extra: &[u8], original: [u64; 3], original_disk: u64) -> Result<([u64; 3], u64)> {
+    let mut values = original;
+    let mut disk = original_disk;
     let mut rest = extra;
     while !rest.is_empty() {
         if rest.len() < 4 {
@@ -562,24 +547,27 @@ fn absorb_zip64(extra: &[u8], values: &mut [u64; 3], disk: &mut u64) -> Result<(
         match id {
             0x0001 => {
                 let mut cursor = 0;
-                for value in values.iter_mut() {
-                    if len >= 24 || *value == u64::from(u32::MAX) {
+                for (value, original) in values.iter_mut().zip(original) {
+                    let saturated = original == u64::from(u32::MAX);
+                    if len >= 24 || saturated {
                         let Some(bytes) = data.get(cursor..cursor + 8) else {
                             return Err(ArchiveError::MalformedExtraField);
                         };
-                        let mut wide = [0u8; 8];
-                        wide.copy_from_slice(bytes);
-                        *value = u64::from_le_bytes(wide);
+                        if saturated {
+                            let mut wide = [0u8; 8];
+                            wide.copy_from_slice(bytes);
+                            *value = u64::from_le_bytes(wide);
+                        }
                         cursor += 8;
                     }
                 }
-                if *disk == u64::from(u16::MAX) {
+                if original_disk == u64::from(u16::MAX) {
                     let Some(bytes) = data.get(cursor..cursor + 4) else {
                         return Err(ArchiveError::MalformedExtraField);
                     };
                     let mut narrow = [0u8; 4];
                     narrow.copy_from_slice(bytes);
-                    *disk = u64::from(u32::from_le_bytes(narrow));
+                    disk = u64::from(u32::from_le_bytes(narrow));
                 }
             }
             0x000a => {
@@ -599,7 +587,7 @@ fn absorb_zip64(extra: &[u8], values: &mut [u64; 3], disk: &mut u64) -> Result<(
         }
         rest = &rest[4 + len..];
     }
-    Ok(())
+    Ok((values, disk))
 }
 fn ratio_limit(compressed_bytes: u64) -> u64 {
     compressed_bytes
@@ -1088,8 +1076,7 @@ fn validate_local_header(
         let local_uncompressed = u64::from(u32_at(&local, 22)?);
         let local_compressed = u64::from(u32_at(&local, 18)?);
         // Opaque local extra bytes are not a second central directory. Only a
-        // saturated size is resolved from the local ZIP64 field; an unsaturated
-        // ZIP64 rewrite is left for the reader mismatch check.
+        // saturated size is resolved from the local ZIP64 field.
         let (uncompressed, compressed) = if local_uncompressed == u64::from(u32::MAX)
             || local_compressed == u64::from(u32::MAX)
         {
@@ -1123,11 +1110,8 @@ fn resolved_local_sizes(extra: &[u8], local: &[u8; 30]) -> Result<(u64, u64)> {
         u64::from(u32_at(local, 18)?),
         0,
     ];
-    let mut values = original;
-    let mut disk = 0;
-    absorb_zip64(extra, &mut values, &mut disk)?;
-    let values = trust_sentinels(original, values);
-    Ok((values[0], values[1]))
+    let ([uncompressed, compressed, _], _) = absorb_zip64(extra, original, 0)?;
+    Ok((uncompressed, compressed))
 }
 
 fn data_descriptor_matches(
@@ -1265,7 +1249,7 @@ mod tests {
     }
 
     #[test]
-    fn zip64_requirements_follow_values_replaced_by_earlier_records() {
+    fn every_zip64_record_is_read_against_the_header_sentinels() {
         let zip64 = |values: &[u64]| {
             let mut record = Vec::from([1, 0]);
             record.extend_from_slice(&(values.len() as u16 * 8).to_le_bytes());
@@ -1275,18 +1259,26 @@ mod tests {
             record
         };
         let header = |size: u32| <[u8; 46]>::try_from(&central(size, &[])[..46]).unwrap();
-        // zip resolves the saturated sizes with the first record, so an empty
-        // second record is as parsable as it is for any unsaturated header.
+        let resolved = |extra: &[u8], size: u32| {
+            validate_extra_field(extra, &header(size)).map(|r| {
+                (
+                    r.uncompressed_bytes,
+                    r.compressed_bytes,
+                    r.local_header_offset,
+                )
+            })
+        };
+        // Saturated sizes oblige every record to carry them, and the last wins.
         let saturated = [zip64(&[7, 7]), zip64(&[])].concat();
-        assert!(validate_extra_field(&saturated, &header(u32::MAX)).is_ok());
-        // A full record can replace the sizes with the saturated marker,
-        // which obliges the next record to carry them again.
-        let remarked = [zip64(&[u32::MAX.into(); 3]), zip64(&[])].concat();
         assert!(matches!(
-            validate_extra_field(&remarked, &header(10)),
+            resolved(&saturated, u32::MAX),
             Err(ArchiveError::MalformedExtraField)
         ));
-        let repeated = [zip64(&[u32::MAX.into(); 3]), zip64(&[1, 2, 3])].concat();
-        assert!(validate_extra_field(&repeated, &header(10)).is_ok());
+        let repeated = [zip64(&[7, 7]), zip64(&[8, 9])].concat();
+        assert_eq!(resolved(&repeated, u32::MAX).unwrap(), (8, 9, 0));
+        // A full record over an unsaturated header is read but changes nothing,
+        // so it obliges no later record.
+        let full = [zip64(&[u32::MAX.into(); 3]), zip64(&[])].concat();
+        assert_eq!(resolved(&full, 10).unwrap(), (10, 10, 0));
     }
 }

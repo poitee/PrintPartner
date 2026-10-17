@@ -134,8 +134,8 @@ def run_cycles(node, evidence, suppress_eof=False):
     completed = []
     receipts = []
     env = {name: os.environ[name] for name in ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ") if name in os.environ}
-    env.update(PRINT_PARTNER_UPDATE_CHECK="0", AI_ENABLED="0", HOST="127.0.0.1", DEPLOY_MODE="self-host")
-    with (data / ".desktop.lock").open("w+b") as lock:
+    env.update(PP_STORAGE_CORE_LOCK="1", PRINT_PARTNER_UPDATE_CHECK="0", AI_ENABLED="0", HOST="127.0.0.1", DEPLOY_MODE="self-host")
+    with (data / "printpartner.lock").open("w+b") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         for cycle in range(1 if suppress_eof else 3):
             assert_previous(completed)
@@ -145,7 +145,7 @@ def run_cycles(node, evidence, suppress_eof=False):
             with tempfile.TemporaryDirectory(prefix="pp-built-") as runtime:
                 socket_path = Path(runtime) / "backend.sock"
                 events = output / "events.jsonl"
-                generation, key, lease = secrets.token_hex(16), secrets.token_hex(32), secrets.token_hex(32)
+                generation, key = secrets.token_hex(16), secrets.token_hex(32)
                 command = [str(node), "--no-global-search-paths", "--require", str(OBSERVER),
                            "--import", str(ROOT / "web/apps/server/dist/current/desktop-resolution.js"),
                            str(ROOT / "web/apps/server/dist/current/desktop.js"),
@@ -154,17 +154,9 @@ def run_cycles(node, evidence, suppress_eof=False):
                     command.append("--pp-lifecycle-suppress-eof")
                 with owned_child(command, lock.fileno(), output, env) as child:
                     child_identity = identity(child.pid)
-                    marker = {"storage_protocol_version": 1, "pid": os.getpid(),
-                              "process_identity": identity(os.getpid()), "child_pid": child.pid,
-                              "child_process_identity": child_identity,
-                              "lease_hash": hashlib.sha256(lease.encode()).hexdigest()}
-                    marker_path = data / ".desktop-owner.json"
-                    marker_path.write_text(json.dumps(marker))
-                    marker_path.chmod(0o600)
                     setup = {"version": 1, "data_dir": str(data), "socket_path": str(socket_path),
-                             "generation": generation, "key": key, "lease": lease,
-                             "parent_pid": os.getpid(), "port": 43123,
-                             "child_process_identity": child_identity}
+                             "generation": generation, "key": key,
+                             "parent_pid": os.getpid(), "port": 43123}
                     child.stdin.write((json.dumps(setup) + "\n").encode())
                     child.stdin.flush()
                     deadline = time.monotonic() + STARTUP_SECONDS
@@ -211,7 +203,6 @@ def run_cycles(node, evidence, suppress_eof=False):
                     receipts.append(receipt)
                     completed.append({"pid": child.pid, "socket": str(socket_path),
                                       "events_path": str(events), "event_bytes": events.read_bytes()})
-                marker_path.unlink()
         assert_previous(completed)
     write_json(evidence / "receipts.json", receipts)
     return receipts

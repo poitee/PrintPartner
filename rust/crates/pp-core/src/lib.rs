@@ -9,7 +9,11 @@ use pp_gateway::ownership::{
 use pp_gateway::{Gateway, LaunchTarget};
 use pp_storage::lease::StorageLease;
 use serde::Serialize;
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 mod drain;
 mod origin;
 mod preferences;
@@ -111,6 +115,7 @@ pub struct CoreRuntime {
     evidence_unsaved: bool,
     worker: Option<std::thread::JoinHandle<()>>,
     origin: String,
+    runtime_dir: PathBuf,
     origin_change: Option<OriginChange>,
     handle: CoreHandle,
     launch: Option<LaunchTarget>,
@@ -134,6 +139,7 @@ pub struct ShutdownReceipt {
     pub compat_reaped: bool,
     pub storage_released: bool,
     pub gateway_stopped: bool,
+    /// Removal of the standalone Node compatibility reservation.
     pub marker_removed: bool,
     pub runtime_removed: bool,
     pub errors: Vec<&'static str>,
@@ -202,12 +208,10 @@ async fn start_resources(
             bundle: input.bundle,
             data_dir: owner.data_dir().to_owned(),
             runtime_dir: owner.runtime_dir().to_owned(),
-            lease: owner.secret().to_owned(),
-            lease_file: owner.clone_file()?,
+            storage_lock: owner.clone_file()?,
             port: listener.local_addr()?.port(),
             gateway_rate_limit: owners.owner_of("http.GET /legal/summary")
                 == pp_gateway::ownership::Owner::Rust,
-            record_child: Box::new(owner.child_recorder()),
         },
         compat_config,
     )?;
@@ -317,6 +321,7 @@ impl CoreRuntime {
                             resources.origin_change.clone(),
                             resources.owners.clone(),
                             resources.owner.data_dir().to_owned(),
+                            resources.owner.runtime_dir().to_owned(),
                         )
                     });
                     let mut plan = None;
@@ -345,8 +350,16 @@ impl CoreRuntime {
                 });
             })
             .context("Core owner thread unavailable")?;
-        let (origin, handle, launch, shutdown_requested, origin_change, owners, data_dir) =
-            startup.await.context("Core owner startup failed")??;
+        let (
+            origin,
+            handle,
+            launch,
+            shutdown_requested,
+            origin_change,
+            owners,
+            data_dir,
+            runtime_dir,
+        ) = startup.await.context("Core owner startup failed")??;
         Ok(Self {
             desktop_rebuild,
             ownership,
@@ -357,6 +370,7 @@ impl CoreRuntime {
             completion: Some(completion),
             worker: Some(worker),
             origin,
+            runtime_dir,
             origin_change,
             handle,
             launch: Some(launch),
@@ -371,6 +385,9 @@ impl CoreRuntime {
         self.origin_change.as_ref()
     }
 
+    pub fn runtime_dir(&self) -> &Path {
+        &self.runtime_dir
+    }
     pub fn origin(&self) -> &str {
         &self.origin
     }
@@ -524,7 +541,9 @@ async fn stop_resources(
     receipt.marker_removed = released.marker_removed;
     receipt.runtime_removed = released.runtime_removed;
     if !released.marker_removed {
-        receipt.errors.push("owner_marker_cleanup_failed");
+        receipt
+            .errors
+            .push("compatibility_reservation_cleanup_failed");
     }
     if !released.runtime_removed {
         receipt.errors.push("runtime_directory_cleanup_failed");

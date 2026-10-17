@@ -4,5 +4,20 @@
   "cases": [
     {"id":"check-source-updates","kind":"check-source-updates","queued":{"kind":"check-source-updates","status":"pending","message":"Queued","progress":0,"result":null,"error":null},"other_tenant":null,"other_tenant_stream":null},
     {"id":"export-checklist-html","kind":"export-checklist-html","queued":{"kind":"export-checklist-html","status":"pending","message":"Queued","progress":0,"result":null,"error":null},"other_tenant":null,"other_tenant_stream":null}
+  ],
+  "finished": [
+    {"id":"check-source-updates","kind":"check-source-updates","status":"done","snapshot":{"kind":"check-source-updates","status":"done","message":"Complete","progress":100,"result":{"checked":[],"skipped":[],"updates_available":0,"checked_count":0},"error":null}},
+    {"id":"export-checklist-html","kind":"export-checklist-html","status":"error"}
+  ],
+  "retained": [
+    {"id":"all","jobs":[{"kind":"export-checklist-html","status":"error"},{"kind":"check-source-updates","status":"done"}]},
+    {"id":"done","jobs":[{"kind":"check-source-updates","status":"done"}]},
+    {"id":"unknown_status","jobs":[]},
+    {"id":"profile_7","jobs":[{"kind":"export-checklist-html","status":"error"}]},
+    {"id":"profile_8","jobs":[]},
+    {"id":"non_numeric_profile","jobs":[]},
+    {"id":"since_epoch","jobs":[{"kind":"export-checklist-html","status":"error"},{"kind":"check-source-updates","status":"done"}]},
+    {"id":"since_future","jobs":[]},
+    {"id":"other_tenant","jobs":[]}
   ]
 }

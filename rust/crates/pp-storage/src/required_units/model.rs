@@ -658,6 +658,11 @@ mod tests {
             result["surplus"],
             json!(["ppu_00000000000000000000000000000004"])
         );
+        assert_eq!(
+            result["selectionBasis"],
+            json!([{"revisionPartId":10,"token":"ppu_00000000000000000000000000000004","priorIndex":0,"createdAt":"2026-08-20T09:00:00.000Z","completed":true,"assembled":false},
+                    {"revisionPartId":10,"token":"ppu_00000000000000000000000000000003","priorIndex":1,"createdAt":"2026-08-20T09:00:00.000Z","completed":true,"assembled":false}])
+        );
         let mut earlier = unit(3, 2, true);
         earlier.created_at = "2026-08-20T08:00:00.000Z".into();
         let mut prior = base(10);
@@ -673,6 +678,67 @@ mod tests {
         assert_eq!(
             result["surplus"],
             json!(["ppu_00000000000000000000000000000001"])
+        );
+        assert_eq!(
+            result["selectionBasis"],
+            json!([{"revisionPartId":10,"token":"ppu_00000000000000000000000000000004","priorIndex":0,"createdAt":"2026-08-20T09:00:00.000Z","completed":true,"assembled":false},
+                    {"revisionPartId":10,"token":"ppu_00000000000000000000000000000001","priorIndex":1,"createdAt":"2026-08-20T09:00:00.000Z","completed":false,"assembled":false},
+                    {"revisionPartId":10,"token":"ppu_00000000000000000000000000000003","priorIndex":2,"createdAt":"2026-08-20T08:00:00.000Z","completed":true,"assembled":false}])
+        );
+    }
+
+    // Expected results are captured by tests/fixtures/required-units/gaps-node.mjs.
+    #[test]
+    fn surplus_tokens_are_sorted_independently_of_prior_indices() {
+        let mut prior = base(10);
+        prior.units = vec![unit(4, 0, false), unit(1, 1, false)];
+        assert_eq!(
+            run(&[], &[prior], &[]),
+            json!({"kind":"ready","assignments":[],"surplus":["ppu_00000000000000000000000000000001","ppu_00000000000000000000000000000004"],"selectionBasis":[]})
+        );
+    }
+
+    #[test]
+    fn selection_basis_is_sorted_across_shrinking_predecessors() {
+        let mut first = base(10);
+        first.units = vec![unit(1, 0, false), unit(2, 1, false)];
+        let mut second = base(11);
+        second.units = vec![unit(3, 0, false), unit(4, 1, false)];
+        assert_eq!(
+            run(
+                &[part(21, Some(11), 1), part(22, Some(10), 1)],
+                &[first, second],
+                &[]
+            ),
+            json!({"kind":"ready","assignments":[{"kind":"reuse","draftPartId":21,"unitIndex":0,"token":"ppu_00000000000000000000000000000003"},
+                    {"kind":"reuse","draftPartId":22,"unitIndex":0,"token":"ppu_00000000000000000000000000000001"}],"surplus":["ppu_00000000000000000000000000000002","ppu_00000000000000000000000000000004"],"selectionBasis":[{"revisionPartId":10,"token":"ppu_00000000000000000000000000000001","priorIndex":0,"createdAt":"2026-08-20T09:00:00.000Z","completed":false,"assembled":false},
+                    {"revisionPartId":10,"token":"ppu_00000000000000000000000000000002","priorIndex":1,"createdAt":"2026-08-20T09:00:00.000Z","completed":false,"assembled":false},
+                    {"revisionPartId":11,"token":"ppu_00000000000000000000000000000003","priorIndex":0,"createdAt":"2026-08-20T09:00:00.000Z","completed":false,"assembled":false},
+                    {"revisionPartId":11,"token":"ppu_00000000000000000000000000000004","priorIndex":1,"createdAt":"2026-08-20T09:00:00.000Z","completed":false,"assembled":false}]})
+        );
+    }
+
+    #[test]
+    fn null_source_on_both_sides_does_not_make_an_exact_match() {
+        let mut prior = base(10);
+        prior.source_id = None;
+        assert_eq!(
+            reconcile(&[part(21, None, 1)], &[input(), input()], &[prior], &[])
+                .unwrap()
+                .full(),
+            json!({"kind":"ready","assignments":[{"kind":"create","draftPartId":21,"unitIndex":0}],"surplus":["ppu_0000000000000000000000000000000a"],"selectionBasis":[]})
+        );
+    }
+
+    #[test]
+    fn null_artifact_on_both_sides_does_not_make_an_exact_match() {
+        let mut prior = base(10);
+        prior.artifact = None;
+        let mut target = part(21, None, 1);
+        target["artifactDigest"] = Value::Null;
+        assert_eq!(
+            run(&[target], &[prior], &[]),
+            json!({"kind":"ready","assignments":[{"kind":"create","draftPartId":21,"unitIndex":0}],"surplus":["ppu_0000000000000000000000000000000a"],"selectionBasis":[]})
         );
     }
 
