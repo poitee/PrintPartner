@@ -17,6 +17,12 @@ use std::{
     time::Duration,
 };
 
+const CURRENT_SCHEMA: u64 = if cfg!(feature = "desktop_rebuild") {
+    37
+} else {
+    35
+};
+
 #[path = "common/process.rs"]
 mod child_process;
 fn directory() -> PathBuf {
@@ -41,7 +47,7 @@ fn policy() -> AuthPolicy {
 fn fixture() -> (PathBuf, WriterOwner) {
     let path = directory();
     let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
-    assert_eq!(ready.version, 35);
+    assert_eq!(ready.version, CURRENT_SCHEMA);
     (path, owner)
 }
 fn admission() -> WorkerAdmission {
@@ -972,8 +978,14 @@ fn ticket_t_28_recovery_every_existing_kind_has_incomplete_intent_policy() {
         },
         printer("test-printer"),
     ];
-    assert_eq!(payloads.len(), JobKind::ALL.len());
-    for (payload, kind) in payloads.into_iter().zip(JobKind::ALL) {
+    // Supplied imports are never enqueued here and advance only through the
+    // upload journal's owned phases.
+    let kinds = JobKind::ALL
+        .into_iter()
+        .filter(|kind| kind.name() != "supplied-source-import")
+        .collect::<Vec<_>>();
+    assert_eq!(payloads.len(), kinds.len());
+    for (payload, kind) in payloads.into_iter().zip(kinds) {
         assert_eq!(payload.kind(), kind);
         let (path, owner) = fixture();
         #[cfg(feature = "desktop_rebuild")]
@@ -1261,8 +1273,8 @@ fn schema35_auxiliary_indexes_install_and_reopen() {
     .unwrap();
     drop(raw);
     let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
-    assert_eq!(ready.version, 35);
-    assert_eq!(ready.previous_version, 35);
+    assert_eq!(ready.version, CURRENT_SCHEMA);
+    assert_eq!(ready.previous_version, CURRENT_SCHEMA);
     owner.shutdown().unwrap();
     let raw = readonly(&path);
     let indexes = raw
@@ -1286,18 +1298,21 @@ fn schema35_auxiliary_indexes_install_and_reopen() {
             |row| row.get::<_, String>(0),
         )
         .unwrap(),
-        "35"
+        CURRENT_SCHEMA.to_string()
     );
     drop(raw);
     let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
-    assert_eq!(ready.version, 35);
-    assert_eq!(ready.previous_version, 35);
+    assert_eq!(ready.version, CURRENT_SCHEMA);
+    assert_eq!(ready.previous_version, CURRENT_SCHEMA);
     owner.shutdown().unwrap();
 }
 #[test]
 fn ticket_t_28_claims_wire_job_kinds_match_existing_contract() {
+    let names = JobKind::ALL.map(JobKind::name);
+    #[cfg(feature = "desktop_rebuild")]
+    assert_eq!(names[10..], ["supplied-source-import"]);
     assert_eq!(
-        JobKind::ALL.map(JobKind::name),
+        names[..10],
         [
             "sync",
             "import-scan",
@@ -1409,6 +1424,10 @@ fn ticket_t_28_claims_schema35_migration_rollback_and_backup_restart() {
     let (path, owner) = fixture();
     owner.shutdown().unwrap();
     let fixture = Connection::open(path.join("print-partner.db")).unwrap();
+    #[cfg(feature = "desktop_rebuild")]
+    fixture
+        .execute_batch("DROP TABLE plan_apply_admissions")
+        .unwrap();
     fixture.execute_batch("DROP TABLE durable_job_reconciliations; DROP TABLE durable_job_history; DROP TABLE durable_job_keys; DROP TABLE durable_jobs; UPDATE app_settings SET value='34' WHERE tenant_id='default' AND key='schema_version'; CREATE TRIGGER reject_schema35 BEFORE UPDATE ON app_settings WHEN NEW.key='schema_version' AND NEW.value='35' BEGIN SELECT RAISE(ABORT,'fixture migration constraint'); END;").unwrap();
     drop(fixture);
     assert!(WriterOwner::open(&path, Limits::default()).is_err());

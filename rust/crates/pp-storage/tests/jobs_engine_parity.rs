@@ -16,6 +16,7 @@ use pp_storage::{
     },
 };
 use std::{
+    path::{Path, PathBuf},
     sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
@@ -58,13 +59,14 @@ fn golden() -> serde_json::Value {
     .unwrap()
 }
 
-fn open() -> WriterOwner {
+fn open() -> (PathBuf, WriterOwner) {
     let path = std::env::temp_dir().join(format!(
         "pp-jobs-engine-parity-{}",
         hex::encode(rand::random::<[u8; 8]>())
     ));
     std::fs::create_dir_all(&path).unwrap();
-    WriterOwner::open(&path, Limits::default()).unwrap().0
+    let owner = WriterOwner::open(&path, Limits::default()).unwrap().0;
+    (path, owner)
 }
 
 fn copy(credential: &Credential) -> Credential {
@@ -99,7 +101,7 @@ fn enqueued_jobs_project_like_node_and_stay_tenant_private() {
     let golden = golden();
     let cases = golden["cases"].as_array().unwrap();
     assert_eq!(cases.len(), 2);
-    let owner = open();
+    let (_, owner) = open();
     let tenant_a = session(&owner, "parity-a@example.com");
     let tenant_b = session(&owner, "parity-b@example.com");
     for case in cases {
@@ -255,7 +257,7 @@ fn finished_and_retained_jobs_read_and_list_like_node() {
     let golden = golden();
     let finished = golden["finished"].as_array().unwrap();
     assert_eq!(finished.len(), 2);
-    let owner = open();
+    let (_, owner) = open();
     let tenant_a = session(&owner, "retained-a@example.com");
     let tenant_b = session(&owner, "retained-b@example.com");
     let client = owner.jobs(policy()).unwrap();
@@ -409,5 +411,124 @@ fn finished_and_retained_jobs_read_and_list_like_node() {
             .collect::<Vec<_>>();
         assert_eq!(serde_json::Value::from(jobs), case["jobs"], "{id}");
     }
+    owner.shutdown().unwrap();
+}
+
+/// Rewrites a queued job as a supplied import, the internal kind only the
+/// upload journal enqueues.
+fn make_supplied_import(path: &Path, job_id: &str) {
+    let db = rusqlite::Connection::open(path.join("print-partner.db")).unwrap();
+    let document: String = db
+        .query_row(
+            "SELECT document FROM durable_jobs WHERE id=?1",
+            [job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut document: serde_json::Value = serde_json::from_str(&document).unwrap();
+    document["kind"] = "supplied-source-import".into();
+    document["payload"] = serde_json::to_value(Payload::SuppliedSourceImport {
+        project_id: 1,
+        operation_key: "upload".into(),
+        input_version: 1,
+    })
+    .unwrap();
+    db.execute(
+        "UPDATE durable_jobs SET kind='supplied-source-import',resource='source:1',document=?2 WHERE id=?1",
+        rusqlite::params![job_id, document.to_string()],
+    )
+    .unwrap();
+}
+
+/// Node has no supplied-import kind: starting one is refused, and the tenant
+/// can read, list and stream nothing. A durable supplied import belongs to the
+/// upload journal, so the public client refuses to enqueue one, and an existing
+/// one looks to its own tenant exactly like a job Node never started.
+#[test]
+fn supplied_imports_stay_invisible_like_jobs_node_never_started() {
+    let node = &golden()["internal"];
+    assert_eq!(
+        node["start_error"],
+        "Unsupported job kind: supplied-source-import"
+    );
+    assert!(node["get"].is_null() && node["stream"].is_null());
+    assert_eq!(node["list"], serde_json::json!([]));
+
+    let (path, owner) = open();
+    let tenant = session(&owner, "parity-internal@example.com");
+    let refused = call(
+        &owner,
+        copy(&tenant),
+        UserOperation::Enqueue {
+            key: "upload".into(),
+            payload_version: 1,
+            payload: Payload::SuppliedSourceImport {
+                project_id: 1,
+                operation_key: "upload".into(),
+                input_version: 1,
+            },
+        },
+    )
+    .err()
+    .expect("public client enqueued a supplied import");
+    assert_eq!(
+        refused.to_string(),
+        "Supplied imports require atomic domain admission"
+    );
+
+    let job_id = enqueue(&owner, &tenant, "internal", Payload::CheckSourceUpdates {});
+    make_supplied_import(&path, &job_id);
+    let Outcome::Job(record, _) = call(
+        &owner,
+        copy(&tenant),
+        UserOperation::Get {
+            job_id: job_id.clone(),
+        },
+    )
+    .unwrap() else {
+        panic!("job expected")
+    };
+    assert_eq!(record.kind, JobKind::SuppliedSourceImport);
+
+    let jobs = owner.jobs(policy()).unwrap();
+    let read = jobs
+        .read_public(
+            copy(&tenant),
+            job_id.clone(),
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .expect_err("public read returned a supplied import");
+    assert_eq!(
+        read.downcast_ref::<JobAccessFailure>(),
+        Some(&JobAccessFailure::NotFound)
+    );
+    assert_eq!(read.to_string(), "Job not found");
+    let stream = jobs
+        .subscribe(
+            copy(&tenant),
+            job_id,
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .err()
+        .expect("public stream opened on a supplied import");
+    assert_eq!(
+        stream.downcast_ref::<JobAccessFailure>(),
+        Some(&JobAccessFailure::NotFound)
+    );
+    let listed = jobs
+        .list_retained(
+            copy(&tenant),
+            LegacyListFilter::default(),
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&*listed).unwrap(),
+        node["list"],
+        "public list included a supplied import"
+    );
     owner.shutdown().unwrap();
 }

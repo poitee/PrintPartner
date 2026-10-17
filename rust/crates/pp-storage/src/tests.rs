@@ -387,7 +387,7 @@ fn reader_pool_resets_pragmas_rejects_writes_and_is_bounded() {
 }
 #[test]
 fn ahead_and_old_versions_reject_before_side_effects() {
-    for version in [30, 36] {
+    for version in [30, schema::CURRENT_VERSION + 1] {
         let path = directory("version");
         let database = path.join("print-partner.db");
         let conn = Connection::open(&database).unwrap();
@@ -738,7 +738,7 @@ fn wal_only_unsupported_versions_preserve_every_input_file() {
         entries
     };
     for stale_marker in [false, true] {
-        for version in [30, 36] {
+        for version in [30, schema::CURRENT_VERSION + 1] {
             for with_shm in [false, true] {
                 let source = directory("wal-source");
                 let raw = Connection::open(source.join("print-partner.db")).unwrap();
@@ -1330,15 +1330,23 @@ fn index_and_trigger_sql(db: &Path) -> Vec<(String, String, String)> {
 
 fn assert_second_open_keeps_catalog(dir: &Path, label: &str) {
     let db = dir.join("print-partner.db");
-    assert_eq!(schema_version_at(&db), "35", "{label}");
+    assert_eq!(
+        schema_version_at(&db),
+        schema::CURRENT_VERSION.to_string(),
+        "{label}"
+    );
     let cookie = sqlite_schema_cookie(&db);
     let catalog = index_and_trigger_sql(&db);
     let (owner, ready) = open_parity(dir, "2026-10-02T00:00:00.000Z");
-    assert_eq!(ready.version, 35, "{label}");
-    assert_eq!(ready.previous_version, 35, "{label}");
+    assert_eq!(ready.version, schema::CURRENT_VERSION, "{label}");
+    assert_eq!(ready.previous_version, schema::CURRENT_VERSION, "{label}");
     assert!(ready.backup.is_none(), "{label}");
     owner.shutdown().unwrap();
-    assert_eq!(schema_version_at(&db), "35", "{label}");
+    assert_eq!(
+        schema_version_at(&db),
+        schema::CURRENT_VERSION.to_string(),
+        "{label}"
+    );
     assert_eq!(
         sqlite_schema_cookie(&db),
         cookie,
@@ -1709,7 +1717,7 @@ fn ticket_t_7_migrations() {
             );
         }
         let (owner, ready) = open_parity(&work, &clock);
-        assert_eq!(ready.version, 35, "{name}");
+        assert_eq!(ready.version, schema::CURRENT_VERSION, "{name}");
         assert_eq!(ready.previous_version, initial, "{name}");
         let backup = ready.backup.clone();
         if (1..35).contains(&initial) {
@@ -1730,8 +1738,8 @@ fn ticket_t_7_migrations() {
         assert!(diff.is_empty(), "{name} node {node_version}: {diff:#?}");
         let backup_bytes = backup.as_ref().map(|path| std::fs::read(path).unwrap());
         let (reopened, again) = open_parity(&work, &clock);
-        assert_eq!(again.version, 35);
-        assert_eq!(again.previous_version, 35);
+        assert_eq!(again.version, schema::CURRENT_VERSION);
+        assert_eq!(again.previous_version, schema::CURRENT_VERSION);
         assert!(again.backup.is_none());
         reopened.shutdown().unwrap();
         if let Some(bytes) = backup_bytes {
@@ -1836,7 +1844,10 @@ fn ticket_t_7_migrations_preserves_refused_inputs() {
         &refused_wal_input("30"),
         "Cannot upgrade database schema version 30",
     );
-    assert_refused(&refused_wal_input("36"), "newer than supported version 35");
+    assert_refused(
+        &refused_wal_input("38"),
+        &format!("newer than supported version {}", schema::CURRENT_VERSION),
+    );
     assert_refused(&refused_wal_input("abc"), "Invalid database schema version");
     let corrupt = directory("refuse-corrupt");
     std::fs::write(corrupt.join("print-partner.db"), b"not a sqlite database").unwrap();
@@ -2851,7 +2862,7 @@ fn ticket_t_7_migrations_historical_order() {
 
     let fresh_dir = directory("historical-fresh");
     let (fresh_owner, fresh_ready) = open_parity(&fresh_dir, "2026-10-02T00:00:00.000Z");
-    assert_eq!(fresh_ready.version, 35);
+    assert_eq!(fresh_ready.version, schema::CURRENT_VERSION);
     assert_eq!(fresh_ready.previous_version, 0);
     assert!(fresh_ready.backup.is_none());
     fresh_owner.shutdown().unwrap();
@@ -2861,7 +2872,7 @@ fn ticket_t_7_migrations_historical_order() {
         let work = directory(&format!("historical-upgrade-{label}"));
         copy_db_files(source, &work);
         let (owner, ready) = open_parity(&work, "2026-10-02T00:00:00.000Z");
-        assert_eq!(ready.version, 35, "{label}");
+        assert_eq!(ready.version, schema::CURRENT_VERSION, "{label}");
         assert_eq!(ready.previous_version, *version, "{label}");
         match ready.backup.as_ref() {
             Some(path) if *version < 35 => {
@@ -3159,6 +3170,15 @@ fn with_sql_identity(graph: &SchemaGraph) -> SchemaGraph {
 }
 
 fn omit_durable_jobs(graph: &mut SchemaGraph) {
+    #[cfg(feature = "desktop_rebuild")]
+    {
+        graph
+            .objects
+            .retain(|(_, name), _| !name.contains("plan_apply_admissions"));
+        graph.columns.remove("plan_apply_admissions");
+        graph.foreign_keys.remove("plan_apply_admissions");
+        graph.rows.remove("plan_apply_admissions");
+    }
     let job_object = |name: &str| {
         name.starts_with("durable_job") || name.starts_with("sqlite_autoindex_durable_job")
     };
@@ -3208,8 +3228,7 @@ fn blank_schema_version_stamp(graph: &mut SchemaGraph) {
     }
 }
 
-/// Node schema 34 is the shared catalog. Durable jobs and the schema 35 stamp
-/// are the Rust-owned extension and are compared by the jobs tests.
+/// Compare Node-owned objects separately from the jobs and publication schemas.
 fn node_owned_catalog(node: &SchemaGraph, rust: &SchemaGraph) -> Vec<String> {
     let mut node = node.clone();
     let mut rust = rust.clone();
@@ -3270,7 +3289,7 @@ fn ticket_t_7_migrations_preserves_plan_revision_inputs() {
     copy_db_files(&historical, &rust_dir);
     apply_historical_node_upgrade(&node_dir);
     let (owner, ready) = open_parity(&rust_dir, "2026-10-02T00:00:00.000Z");
-    assert_eq!(ready.version, 35);
+    assert_eq!(ready.version, schema::CURRENT_VERSION);
     assert_eq!(ready.previous_version, 31);
     assert_eq!(schema_version_at(ready.backup.as_ref().unwrap()), "31");
     let backup_rows = plan_input_rows(ready.backup.as_ref().unwrap());
@@ -3488,7 +3507,7 @@ fn ticket_t_7_migrations_matches_node_upgrade() {
         insert_historical_plan_inputs(&rust_dir.join("print-partner.db"));
         run_node_driver(&historical, &node_dir);
         let (owner, ready) = open_parity(&rust_dir, "2026-10-02T00:00:00.000Z");
-        assert_eq!(ready.version, 35, "{label}");
+        assert_eq!(ready.version, schema::CURRENT_VERSION, "{label}");
         assert_eq!(ready.previous_version, version, "{label}");
         if version < 35 {
             assert_eq!(

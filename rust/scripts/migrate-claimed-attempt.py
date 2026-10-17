@@ -10,7 +10,7 @@ for path in paths:
     source = path.read_text()
     # The RHS must call claim, not another API that happens to return a tuple.
     source, count = re.subn(
-        r"\blet \(([^()\n]+), ([^()\n]+)\)(\s*=\s*[^;]*?\.claim(?:_kind)?\([^;]*?;)",
+        r"\blet \(([^()\n]+), ([^()\n]+)\)(\s*=\s*[^;]*?\.claim(?:_kind|_import)?\([^;]*?;)",
         lambda m: "let claimed_attempt!(" + m[1] + ", " + m[2] + ")" + m[3],
         source,
     )

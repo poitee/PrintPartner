@@ -1,3 +1,6 @@
+#[path = "tests/client.rs"]
+mod client;
+
 use super::*;
 use crate::manifest_text::{JsText, ManifestText, OptionGroupId, PartManifestMetadata};
 use rusqlite::Connection;
@@ -648,7 +651,7 @@ mod transaction {
         }
         result
     }
-    fn replace_time(value: &mut Value, actual: &str, expected: &Value) {
+    pub(super) fn replace_time(value: &mut Value, actual: &str, expected: &Value) {
         if actual.is_empty() {
             return;
         }
@@ -986,5 +989,39 @@ fn publication_job_scope_terminal_states_and_deferred_start_bindings() {
             .unwrap()
             .len(),
         1
+    );
+}
+
+#[test]
+fn running_supplied_import_is_not_a_publication_conflict() {
+    let golden = golden();
+    let fixture = json!({"definitions":golden["transactionSchema"]});
+    let cases = golden["transactions"].as_array().unwrap();
+    let export = cases.iter().find(|c| c["id"] == "running-export").unwrap();
+    let mut c = transaction::database(&fixture, export);
+    let tx = c.transaction().unwrap();
+    assert_eq!(
+        crate::jobs::publication_conflicts(&tx, "default", 1)
+            .unwrap()
+            .len(),
+        1
+    );
+    let mut job: Value = serde_json::from_str(
+        export["before"]["durable_jobs"][0]["document"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    job["kind"] = json!("supplied-source-import");
+    job["payload"] = json!({"kind":"supplied-source-import","payload":{"project_id":1,"operation_key":"import","input_version":1}});
+    tx.execute(
+        "UPDATE durable_jobs SET kind='supplied-source-import',document=? WHERE id='running-export'",
+        [job.to_string()],
+    )
+    .unwrap();
+    assert!(
+        crate::jobs::publication_conflicts(&tx, "default", 1)
+            .unwrap()
+            .is_empty()
     );
 }
