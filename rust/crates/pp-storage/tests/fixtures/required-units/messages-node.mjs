@@ -29,9 +29,7 @@ const conflict = (targetDraftPartId = 1) => ({
 });
 const unresolved = (conflicts = [conflict()]) => ({ kind: "unresolved", conflicts });
 const cases = [];
-function add(column, name, value, literal = false) {
-  const input = literal ? value : JSON.stringify(value);
-  let message;
+function parse(column, input) {
   try {
     if (column === "result_json") {
       parseRequiredUnitReconciliationResult({ resultJson: input, selectionBasis: [] });
@@ -39,10 +37,26 @@ function add(column, name, value, literal = false) {
       parseRequiredUnitSelectionBasis(input);
     }
   } catch (error) {
-    message = error.message;
+    return error.message;
   }
+  return null;
+}
+function add(column, name, value, literal = false) {
+  const input = literal ? value : JSON.stringify(value);
+  const message = parse(column, input);
   assert.equal(typeof message, "string", `${name} must fail in Node`);
   cases.push({ column, name, input, message });
+}
+function accepted(column, name, value, rust) {
+  const input = JSON.stringify(value);
+  assert.equal(parse(column, input), null, `${name} must pass in Node`);
+  cases.push({ column, name, input, message: null, rust });
+}
+function diverged(name, input, rust) {
+  const message = parse("result_json", input);
+  assert.equal(typeof message, "string", `${name} must fail in Node`);
+  assert.notEqual(message, rust, `${name} must diverge from Rust`);
+  cases.push({ column: "result_json", name, input, message, rust });
 }
 const result = (name, value, literal = false) => add("result_json", name, value, literal);
 const selection = (name, value, literal = false) => add("selection_basis_json", name, value, literal);
@@ -84,6 +98,9 @@ result("surplus-token-invalid", ready([], ["bad"]));
 result("duplicate-surplus", ready([], [token(1), token(1)]));
 result("reused-surplus", ready([reuse()], [token(1)]));
 result("reversed-surplus", ready([], [token(2), token(1)]));
+result("duplicate-slot-before-invalid-reuse-token", ready([create(), { ...reuse(), token: "bad" }]));
+result("invalid-surplus-before-duplicate-surplus", ready([], [token(1), token(1), "bad"]));
+result("duplicate-assignment-token-before-invalid-surplus", ready([reuse(), reuse(1)], ["bad"]));
 result("result-whitespace", ` ${JSON.stringify(ready())}`, true);
 result("result-key-order", { assignments: [create()], kind: "ready", surplus: [] });
 result("assignment-key-order", ready([{ draftPartId: 1, kind: "create", unitIndex: 0 }]));
@@ -129,6 +146,23 @@ selection("progress-before-duplicate", [basis(), { ...basis(), completed: 0 }]);
 selection("whitespace", ` ${JSON.stringify([basis()])}`, true);
 selection("key-order", [{ token: token(1), revisionPartId: 1, priorIndex: 0, createdAt: "now", completed: false, assembled: false }]);
 selection("index-limit", [{ ...basis(), priorIndex: 10000 }]);
+const stored = ready([create(), create(1), create(2), { ...create(), draftPartId: 2 },
+  { ...create(), draftPartId: 3 }, { ...create(1), draftPartId: 3 }]);
+const digest = (label) => `Required-unit reconciliation ${label} digest mismatch`;
+accepted("result_json", "valid-stored", stored, "");
+accepted("result_json", "valid-empty", ready([]), digest("result"));
+accepted("result_json", "valid-reuse-and-surplus", ready([create(), reuse(1)], [token(2), token(3)]), digest("result"));
+accepted("result_json", "valid-unresolved", unresolved([
+  conflict(),
+  { kind: "ambiguous_exact_match", targetDraftPartId: 2, candidateRevisionPartIds: [1, 2] },
+  { ...conflict(3), kind: "predecessor_claimed" },
+]), "Required-unit reconciliation result kind mismatch");
+accepted("selection_basis_json", "valid-stored", [], "");
+accepted("selection_basis_json", "valid-rows", [basis(), { ...basis(1), completed: true, assembled: true }], digest("selection basis"));
+const syntax = "Required-unit reconciliation result is invalid";
+diverged("syntax-number-overflow", JSON.stringify(ready()).replace('"draftPartId":1', '"draftPartId":1e400'), syntax);
+diverged("syntax-lone-surrogate", JSON.stringify(ready([{ ...reuse(), token: "\ud800" }])), syntax);
+diverged("syntax-nesting-depth", JSON.stringify(ready([JSON.parse("[".repeat(200) + "]".repeat(200))])), syntax);
 const output = cases.map((item) => JSON.stringify(item)).join("\n") + "\n";
 const fixture = new URL("messages-node.jsonl", import.meta.url);
 if (process.argv.includes("--check")) assert.equal(readFileSync(fixture, "utf8"), output);

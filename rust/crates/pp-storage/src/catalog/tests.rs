@@ -27,6 +27,10 @@ fn ticket_t_59_catalog_private_full_queue_retains_unreleased_work() {
         orphaned_source_leases: Mutex::new(Vec::new()),
         #[cfg(feature = "desktop_rebuild")]
         job_subscriptions: crate::jobs::JobSubscriptions::new(),
+        #[cfg(feature = "desktop_rebuild")]
+        import_epoch: std::sync::atomic::AtomicU64::new(0),
+        #[cfg(feature = "desktop_rebuild")]
+        import_quota: Mutex::new(None),
     });
     let readers = Arc::new(ReaderPool {
         state: Mutex::new(ReaderState {
