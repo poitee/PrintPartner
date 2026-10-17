@@ -4,6 +4,11 @@
 //! these cases test the reference behavior: targeted claims, the owned-phase
 //! advance rule, and cancellation that returns the import to its owner. Unlike
 //! the reference, the attempt limit does not bound that cleanup claim.
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/common/claimed_attempt.rs"
+));
+use pp_storage::jobs::ClaimedAttempt;
 use pp_storage::{
     Limits, WriterOwner,
     auth::{AuthPolicy, FirstUserTenant, RegistrationPolicy, SessionTenantPolicy},
@@ -78,6 +83,19 @@ fn enqueue(owner: &WriterOwner, key: &str, payload: Payload) -> JobRecord {
 /// Enqueues a job and rewrites it as a supplied import for `source_id`, the
 /// internal kind only the upload journal enqueues.
 fn supplied_import(path: &Path, owner: &WriterOwner, key: &str, source_id: u64) -> String {
+    let pp_storage::catalog::Outcome::Source(Some(source)) = owner
+        .local_source_catalog()
+        .execute(pp_storage::catalog::Request::Create {
+            source: pp_storage::catalog::CreateSource {
+                name: key.into(),
+                ..Default::default()
+            },
+        })
+        .unwrap()
+    else {
+        panic!("Source expected")
+    };
+    assert_eq!(source.id as u64, source_id);
     let job_id = enqueue(owner, key, Payload::CheckSourceUpdates {}).job_id;
     let db = Connection::open(path.join("print-partner.db")).unwrap();
     let document: String = db
@@ -126,7 +144,7 @@ fn targeted_claim_takes_only_the_named_queued_import() {
     .job_id;
     let worker = owner.job_worker(admission()).unwrap();
 
-    let (claimed, lease) = worker.claim_import(&named).unwrap().unwrap();
+    let claimed_attempt!(claimed, lease) = worker.claim_import(&named).unwrap().unwrap();
     assert_eq!(claimed.job_id, named);
     assert_eq!(lease.job_id(), named);
     assert_eq!(claimed.state, PersistentState::Running);
@@ -139,12 +157,119 @@ fn targeted_claim_takes_only_the_named_queued_import() {
 }
 
 #[test]
+fn targeted_import_claim_reserves_its_source_and_leaves_busy_work_queued() {
+    let path = directory();
+    let owner = open(&path);
+    let job_id = supplied_import(&path, &owner, "reserved", 1);
+    let other = supplied_import(&path, &owner, "other", 2);
+    let catalog = owner.local_source_catalog();
+    let mut direct = catalog
+        .begin_work(1, &AtomicBool::new(false), Duration::from_secs(5))
+        .unwrap();
+    let mut config = admission();
+    config.per_resource = 2;
+    let worker = owner.job_worker(config).unwrap();
+    let before = get(&owner, &job_id);
+    let error = worker.claim_import(&job_id).err().expect("Source busy");
+    assert!(
+        error
+            .downcast_ref::<pp_storage::catalog::SourceBusy>()
+            .is_some()
+    );
+    let after = get(&owner, &job_id);
+    assert_eq!(after.state, PersistentState::Queued);
+    assert_eq!(after.state_version, before.state_version);
+    assert_eq!(after.attempt, before.attempt);
+    assert_eq!(after.generation, before.generation);
+    assert_eq!(get(&owner, &other).state, PersistentState::Queued);
+    direct.release().unwrap();
+
+    let claimed = worker.claim_import(&job_id).unwrap().unwrap();
+    assert_eq!(claimed.job.job_id, job_id);
+    assert!(claimed.source_work.is_some());
+    let error = worker
+        .begin_source_work(
+            &claimed.lease,
+            None,
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .err()
+        .expect("import must reserve its Source");
+    assert!(
+        error
+            .downcast_ref::<pp_storage::catalog::SourceBusy>()
+            .is_some()
+    );
+    let other_claim = worker.claim_import(&other).unwrap().unwrap();
+    assert_eq!(other_claim.job.job_id, other);
+    assert!(other_claim.source_work.is_some());
+
+    let cancelled = cancel(&owner, &job_id);
+    let error = worker.claim_import(&job_id).err().expect("Source busy");
+    assert!(
+        error
+            .downcast_ref::<pp_storage::catalog::SourceBusy>()
+            .is_some()
+    );
+    assert_eq!(get(&owner, &job_id).state_version, cancelled.state_version);
+    drop(claimed);
+    let cleanup = worker.claim_import(&job_id).unwrap().unwrap();
+    assert!(cleanup.job.cancel_requested);
+    assert!(cleanup.source_work.is_some());
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn targeted_import_with_foreign_source_fails_without_tenant_leak() {
+    let path = directory();
+    let owner = open(&path);
+    let job_id = supplied_import(&path, &owner, "foreign-source", 1);
+    let other = supplied_import(&path, &owner, "healthy-source", 2);
+    let db = Connection::open(path.join("print-partner.db")).unwrap();
+    assert_eq!(
+        db.execute(
+            "UPDATE projects SET tenant_id='foreign-tenant',name='Private Source' WHERE id=1",
+            [],
+        )
+        .unwrap(),
+        1
+    );
+    let before = get(&owner, &job_id);
+    let worker = owner.job_worker(admission()).unwrap();
+
+    assert!(worker.claim_import(&job_id).unwrap().is_none());
+    let failed = get(&owner, &job_id);
+    assert_eq!(failed.state, PersistentState::Failed);
+    assert_eq!(failed.attempt, before.attempt);
+    assert_eq!(failed.generation, before.generation);
+    assert_eq!(
+        failed.recovery.as_deref(),
+        Some("Source is unavailable for this job")
+    );
+    let (state, event): (String, String) = db
+        .query_row(
+            "SELECT state,event FROM durable_job_history WHERE job_id=?1 AND version=?2",
+            rusqlite::params![job_id, failed.state_version],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(state, "failed");
+    assert_eq!(event, "source_unavailable");
+    assert_eq!(get(&owner, &other).state, PersistentState::Queued);
+    let claimed = worker.claim_import(&other).unwrap().unwrap();
+    assert_eq!(claimed.job.job_id, other);
+    assert!(claimed.source_work.is_some());
+    owner.shutdown().unwrap();
+}
+
+#[test]
 fn import_attempts_advance_only_by_heartbeat_and_progress() {
     let path = directory();
     let owner = open(&path);
     let job_id = supplied_import(&path, &owner, "phases", 1);
     let worker = owner.job_worker(admission()).unwrap();
-    let (_, mut lease) = worker.claim_import(&job_id).unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim_import(&job_id).unwrap().unwrap();
     worker
         .update(&mut lease, WorkerOperation::Heartbeat)
         .unwrap();
@@ -183,7 +308,7 @@ fn cancelled_import_returns_to_its_owner_through_cancel_and_recovery() {
     let owner = open(&path);
     let job_id = supplied_import(&path, &owner, "cancel", 1);
     let worker = owner.job_worker(admission()).unwrap();
-    let (claimed, _) = worker.claim_import(&job_id).unwrap().unwrap();
+    let claimed_attempt!(claimed, _, source_work) = worker.claim_import(&job_id).unwrap().unwrap();
 
     let cancelled = user(
         &owner,
@@ -196,7 +321,14 @@ fn cancelled_import_returns_to_its_owner_through_cancel_and_recovery() {
     assert_eq!(cancelled.generation, claimed.generation + 1);
     assert!(cancelled.lease_until.is_none());
 
-    let (reclaimed, _) = worker.claim_import(&job_id).unwrap().unwrap();
+    let error = worker.claim_import(&job_id).err().expect("Source busy");
+    assert!(
+        error
+            .downcast_ref::<pp_storage::catalog::SourceBusy>()
+            .is_some()
+    );
+    drop(source_work);
+    let claimed_attempt!(reclaimed, _) = worker.claim_import(&job_id).unwrap().unwrap();
     assert!(reclaimed.cancel_requested);
     owner.shutdown().unwrap();
     let owner = open(&path);
@@ -246,15 +378,39 @@ fn cancelled_import_stays_claimable_for_cleanup_past_the_attempt_limit() {
     set_attempt(&path, &job_id, 99);
     set_attempt(&path, &running, 100);
     let worker = owner.job_worker(admission()).unwrap();
-    let (claimed, _) = worker.claim_import(&job_id).unwrap().unwrap();
+    let claimed_attempt!(claimed, _, source_work) = worker.claim_import(&job_id).unwrap().unwrap();
     assert_eq!(claimed.attempt, 100);
 
     let cancelled = cancel(&owner, &job_id);
     assert_eq!(cancelled.state, PersistentState::Queued);
-    let (cleanup, _) = worker.claim_import(&job_id).unwrap().unwrap();
+    let error = worker.claim_import(&job_id).err().expect("Source busy");
+    assert!(
+        error
+            .downcast_ref::<pp_storage::catalog::SourceBusy>()
+            .is_some()
+    );
+    assert_eq!(get(&owner, &job_id).state_version, cancelled.state_version);
+    drop(source_work);
+    let claimed_attempt!(cleanup, cleanup_lease, cleanup_source) =
+        worker.claim_import(&job_id).unwrap().unwrap();
     assert!(cleanup.cancel_requested);
     assert_eq!(cleanup.attempt, 101);
     assert_eq!(cleanup.generation, cancelled.generation + 1);
+    assert!(cleanup_source.is_some());
+    let error = worker
+        .begin_source_work(
+            &cleanup_lease,
+            None,
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .err()
+        .expect("cleanup must reserve its Source");
+    assert!(
+        error
+            .downcast_ref::<pp_storage::catalog::SourceBusy>()
+            .is_some()
+    );
 
     let Err(error) = worker.claim_import(&running) else {
         panic!("attempt limit expected")
@@ -274,9 +430,9 @@ fn recovery_returns_a_cancelled_import_at_the_attempt_limit_to_its_owner() {
     set_attempt(&path, &running, 99);
     let worker = owner.job_worker(admission()).unwrap();
     assert!(cancel(&owner, &job_id).cancel_requested);
-    let (reclaimed, _) = worker.claim_import(&job_id).unwrap().unwrap();
+    let claimed_attempt!(reclaimed, _) = worker.claim_import(&job_id).unwrap().unwrap();
     assert_eq!(reclaimed.attempt, 100);
-    let (claimed, _) = worker.claim_import(&running).unwrap().unwrap();
+    let claimed_attempt!(claimed, _) = worker.claim_import(&running).unwrap().unwrap();
     assert_eq!(claimed.attempt, 100);
     owner.shutdown().unwrap();
 
@@ -289,7 +445,7 @@ fn recovery_returns_a_cancelled_import_at_the_attempt_limit_to_its_owner() {
     assert_eq!(failed.state, PersistentState::Failed);
     assert_eq!(failed.recovery.as_deref(), Some("Attempt limit reached"));
     let worker = owner.job_worker(admission()).unwrap();
-    let (cleanup, _) = worker.claim_import(&job_id).unwrap().unwrap();
+    let claimed_attempt!(cleanup, _) = worker.claim_import(&job_id).unwrap().unwrap();
     assert_eq!(cleanup.attempt, 101);
     owner.shutdown().unwrap();
 }

@@ -1,3 +1,7 @@
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/common/claimed_attempt.rs"
+));
 use anyhow::Result;
 use pp_storage::{
     Limits, WriterOwner,
@@ -198,7 +202,7 @@ fn enqueue_start(owner: &WriterOwner, key: &str, parent_id: &str) -> Result<Outc
 fn uploaded_only_parent(owner: &WriterOwner, key: &str, printer_id: &str) -> JobRecord {
     enqueue(owner, key, printer(printer_id));
     let worker = owner.job_worker(admission()).unwrap();
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     worker
         .update(
             &mut lease,
@@ -217,7 +221,7 @@ fn uploaded_only_parent(owner: &WriterOwner, key: &str, printer_id: &str) -> Job
 fn denied_start_parent(owner: &WriterOwner, key: &str, printer_id: &str, seed: u64) -> JobRecord {
     enqueue(owner, key, printer(printer_id));
     let worker = owner.job_worker(admission()).unwrap();
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     let upload = distinct_intent(EffectOperation::PrinterUpload, printer_id, seed);
     begin_and_confirm(
         &worker,
@@ -333,7 +337,7 @@ fn ticket_t_28_claims_duplicate_conflict_and_concurrent_claims() {
         .filter_map(|h| h.join().unwrap())
         .collect();
     assert_eq!(claims.len(), 1);
-    let (_, mut lease) = claims.pop().unwrap();
+    let claimed_attempt!(_, mut lease) = claims.pop().unwrap();
     let mut stale = lease.clone();
     worker
         .update(&mut lease, WorkerOperation::Progress(25))
@@ -550,7 +554,7 @@ fn ticket_t_28_claims_cancel_before_admission_running_and_effect() {
     let worker = owner.job_worker(admission()).unwrap();
     assert!(worker.claim().unwrap().is_none());
     let running = enqueue(&owner, "running", Payload::CheckSourceUpdates {});
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     assert_eq!(
         job(call(
             &owner,
@@ -571,7 +575,7 @@ fn ticket_t_28_claims_cancel_before_admission_running_and_effect() {
             .is_err()
     );
     let effect = enqueue(&owner, "effect", printer("printer-a"));
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     worker
         .update(
             &mut lease,
@@ -600,6 +604,8 @@ fn ticket_t_28_claims_cancel_before_admission_running_and_effect() {
 #[test]
 fn ticket_t_28_claims_kind_resource_capacity_and_source_intent() {
     let (_, owner) = fixture();
+    #[cfg(feature = "desktop_rebuild")]
+    assert_eq!(source(&owner.local_source_catalog(), "Fixture source"), 1);
     let mut limits = admission();
     for (_, cap) in &mut limits.kinds {
         *cap = 4;
@@ -630,7 +636,7 @@ fn ticket_t_28_recovery_orderly_restart_and_subject_bound_reconciliation() {
     let (path, owner) = fixture();
     let record = enqueue(&owner, "uncertain", printer("printer-a"));
     let worker = owner.job_worker(admission()).unwrap();
-    let (_, mut old) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut old) = worker.claim().unwrap().unwrap();
     worker
         .update(
             &mut old,
@@ -721,7 +727,7 @@ fn ticket_t_28_recovery_receipts_duplicate_effects_and_finish() {
     let (_, owner) = fixture();
     enqueue(&owner, "effects", printer("printer-a"));
     let worker = owner.job_worker(admission()).unwrap();
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     assert!(
         worker
             .update(
@@ -840,13 +846,13 @@ fn ticket_t_28_recovery_retention_preserves_uncertainty_and_idempotency() {
             &format!("done-{index}"),
             Payload::CheckSourceUpdates {},
         );
-        let (_, mut lease) = worker.claim().unwrap().unwrap();
+        let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
         worker
             .update(&mut lease, WorkerOperation::Finish(None))
             .unwrap();
     }
     let uncertain = enqueue(&owner, "uncertain", printer("p"));
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     worker
         .update(
             &mut lease,
@@ -982,9 +988,11 @@ fn ticket_t_28_recovery_every_existing_kind_has_incomplete_intent_policy() {
     for (payload, kind) in payloads.into_iter().zip(kinds) {
         assert_eq!(payload.kind(), kind);
         let (path, owner) = fixture();
+        #[cfg(feature = "desktop_rebuild")]
+        assert_eq!(source(&owner.local_source_catalog(), "Fixture source"), 1);
         let queued = enqueue(&owner, "kind-coverage", payload);
         let worker = owner.job_worker(admission()).unwrap();
-        let (_, mut lease) = worker.claim().unwrap().unwrap();
+        let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
         let (operation, target) = match kind {
             JobKind::PrinterUpload => (EffectOperation::PrinterUploadAndStart, "test-printer"),
             JobKind::Sync
@@ -1035,7 +1043,7 @@ fn ticket_t_28_recovery_confirmed_local_candidate_requires_exact_receipt() {
         Payload::ExportChecklistHtml { profile_id: 1 },
     );
     let worker = owner.job_worker(admission()).unwrap();
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     let effect = EffectIntent {
         operation: EffectOperation::LocalArtifact,
         basis_hash: "a".repeat(64),
@@ -1084,7 +1092,7 @@ fn ticket_t_28_recovery_abandon_keeps_uncertain_proof_and_resource_lock() {
     let (_, owner) = fixture();
     let queued = enqueue(&owner, "uncertain-abandon", printer("a"));
     let worker = owner.job_worker(admission()).unwrap();
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     worker
         .update(
             &mut lease,
@@ -1163,10 +1171,10 @@ fn ticket_t_28_claims_expired_lease_fences_old_worker() {
     let mut config = admission();
     config.lease_seconds = 1;
     let worker = owner.job_worker(config).unwrap();
-    let (_, mut old) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut old) = worker.claim().unwrap().unwrap();
     thread::sleep(Duration::from_millis(1100));
     assert!(worker.update(&mut old, WorkerOperation::Heartbeat).is_err());
-    let (next, mut current) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(next, mut current) = worker.claim().unwrap().unwrap();
     assert_eq!(next.job_id, queued.job_id);
     assert_eq!(next.attempt, 2);
     assert!(next.generation > 1);
@@ -1336,7 +1344,7 @@ fn ticket_t_28_recovery_success_requires_effect_receipts() {
     let (_, owner) = fixture();
     enqueue(&owner, "no-fake-printer", printer("p"));
     let worker = owner.job_worker(admission()).unwrap();
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     assert!(
         worker
             .update(&mut lease, WorkerOperation::Finish(None))
@@ -1381,7 +1389,7 @@ fn ticket_t_28_recovery_success_requires_effect_receipts() {
         "no-fake-export",
         Payload::ExportChecklistHtml { profile_id: 1 },
     );
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     assert!(
         worker
             .update(&mut lease, WorkerOperation::Finish(None))
@@ -1467,7 +1475,7 @@ fn ticket_t_28_recovery_lost_claim_reply_is_fenced_on_orderly_restart() {
     owner.shutdown().unwrap();
     let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
     let worker = owner.job_worker(admission()).unwrap();
-    let (recovered, _) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(recovered, _) = worker.claim().unwrap().unwrap();
     assert_eq!(recovered.job_id, queued.job_id);
     assert_eq!(recovered.attempt, 2);
     assert_eq!(recovered.generation, 3);
@@ -1481,7 +1489,7 @@ fn ticket_t_28_claims_crash_retry_fences_stale_updates() {
         let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
         let queued = enqueue(&owner, "crash-retry", Payload::CheckSourceUpdates {});
         let worker = owner.job_worker(admission()).unwrap();
-        let (claimed, _) = worker.claim().unwrap().unwrap();
+        let claimed_attempt!(claimed, _) = worker.claim().unwrap().unwrap();
         assert_eq!(claimed.job_id, queued.job_id);
         // process::exit skips Drop, so the owner marker and running claim stay behind.
         std::process::exit(28);
@@ -1524,7 +1532,7 @@ fn ticket_t_28_claims_crash_retry_fences_stale_updates() {
     let duplicate = enqueue(&owner, "crash-retry", Payload::CheckSourceUpdates {});
     assert_eq!(duplicate.job_id, job_id);
     let worker = owner.job_worker(admission()).unwrap();
-    let (claimed, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(claimed, mut lease) = worker.claim().unwrap().unwrap();
     assert_eq!(claimed.job_id, job_id);
     assert_eq!(claimed.attempt, 2);
     assert_eq!(claimed.generation, 3);
@@ -1598,7 +1606,7 @@ fn ticket_t_28_recovery_reconciliation_records_authenticated_subject() {
     )
     .unwrap());
     let worker = session_worker(&owner);
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     worker
         .update(
             &mut lease,
@@ -1649,7 +1657,7 @@ fn split_printer_upload_reconciles_to_uploaded_only() {
     let (path, owner) = fixture();
     let queued = enqueue(&owner, "uploaded-only", printer("uploaded-only-printer"));
     let worker = owner.job_worker(admission()).unwrap();
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     worker
         .update(
             &mut lease,
@@ -1745,7 +1753,7 @@ fn split_printer_upload_reconciles_to_uploaded_only() {
     assert!(listed.iter().any(|record| record.job_id == queued.job_id));
     let newer = enqueue(&owner, "newer-terminal", Payload::CheckSourceUpdates {});
     let worker = owner.job_worker(admission()).unwrap();
-    let (claimed, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(claimed, mut lease) = worker.claim().unwrap().unwrap();
     assert_eq!(claimed.job_id, newer.job_id);
     worker
         .update(&mut lease, WorkerOperation::Finish(None))
@@ -1785,7 +1793,7 @@ fn uploaded_only_parent_authorizes_one_bound_start_without_reupload() {
     let (path, owner) = fixture();
     let queued = enqueue(&owner, "uploaded-parent", printer("deliberate-printer"));
     let worker = owner.job_worker(admission()).unwrap();
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     let upload_intent = intent(EffectOperation::PrinterUpload, "deliberate-printer");
     worker
         .update(
@@ -1872,7 +1880,7 @@ fn uploaded_only_parent_authorizes_one_bound_start_without_reupload() {
     )
     .unwrap();
     let retry = enqueue(&owner, "retried-deliberate-start", start_payload());
-    let (claimed, mut start_lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(claimed, mut start_lease) = worker.claim().unwrap().unwrap();
     assert_eq!(claimed.job_id, retry.job_id);
     enqueue(&owner, "same-printer-upload", printer("deliberate-printer"));
     assert!(worker.claim().unwrap().is_none());
@@ -1963,7 +1971,7 @@ fn start_child_rejects_wrong_target_and_basis() {
     let parent = uploaded_only_parent(&owner, "effect-parent", "effect-printer");
     let child = job(enqueue_start(&owner, "effect-child", &parent.job_id).unwrap());
     let worker = owner.job_worker(admission()).unwrap();
-    let (claimed, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(claimed, mut lease) = worker.claim().unwrap().unwrap();
     assert_eq!(claimed.job_id, child.job_id);
     assert!(
         worker
@@ -1991,7 +1999,7 @@ fn start_child_cannot_finish_without_confirmed_start() {
     let parent = uploaded_only_parent(&owner, "finish-parent", "finish-printer");
     let child = job(enqueue_start(&owner, "finish-child", &parent.job_id).unwrap());
     let worker = owner.job_worker(admission()).unwrap();
-    let (claimed, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(claimed, mut lease) = worker.claim().unwrap().unwrap();
     assert_eq!(claimed.job_id, child.job_id);
     assert!(
         worker
@@ -2035,7 +2043,7 @@ fn confirmed_combined_receipt_cannot_be_rewritten() {
     let (_, owner) = fixture();
     let queued = enqueue(&owner, "combined-receipt", printer("combined-printer"));
     let worker = owner.job_worker(admission()).unwrap();
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     worker
         .update(
             &mut lease,
@@ -2082,7 +2090,7 @@ fn printer_finish_rejects_ancillary_result_then_accepts_primary_receipt() {
         };
         *requested_start = start;
         let queued = enqueue(&owner, &format!("finish-primary-{index}"), payload);
-        let (claimed, mut lease) = worker.claim().unwrap().unwrap();
+        let claimed_attempt!(claimed, mut lease) = worker.claim().unwrap().unwrap();
         assert_eq!(claimed.job_id, queued.job_id);
         assert!(
             worker
@@ -2143,7 +2151,7 @@ fn active_and_failed_parents_cannot_authorize_start() {
     let queued = enqueue(&owner, "wrong-state-parent", printer("wrong-state-printer"));
     assert!(enqueue_start(&owner, "from-queued", &queued.job_id).is_err());
     let worker = owner.job_worker(admission()).unwrap();
-    let (running, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(running, mut lease) = worker.claim().unwrap().unwrap();
     assert!(enqueue_start(&owner, "from-running", &running.job_id).is_err());
     let admitted = worker
         .update(
@@ -2182,7 +2190,7 @@ fn succeeded_and_nonprinter_parents_cannot_authorize_start() {
     };
     *start = false;
     let queued = enqueue(&owner, "no-start-parent", no_start);
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     worker
         .update(
             &mut lease,
@@ -2212,7 +2220,7 @@ fn succeeded_and_nonprinter_parents_cannot_authorize_start() {
     };
     *start = false;
     enqueue(&owner, "reconciled-no-start-parent", reconciled_no_start);
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     worker
         .update(
             &mut lease,
@@ -2314,7 +2322,7 @@ fn archived_started_child_blocks_new_key_and_replays_original_key() {
     let parent = uploaded_only_parent(&owner, "archive-parent", "archive-printer");
     let child = job(enqueue_start(&owner, "archive-child", &parent.job_id).unwrap());
     let worker = owner.job_worker(admission()).unwrap();
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     worker
         .update(
             &mut lease,
@@ -2451,7 +2459,7 @@ fn denied_start_settles_uploaded_only_and_authorizes_bound_child() {
         printer("denied-start-printer"),
     );
     let worker = owner.job_worker(admission()).unwrap();
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     let upload_intent = distinct_intent(EffectOperation::PrinterUpload, "denied-start-printer", 1);
     let upload_receipt = distinct_receipt(&upload_intent, "upload-receipt");
     worker
@@ -2502,7 +2510,7 @@ fn denied_start_settles_uploaded_only_and_authorizes_bound_child() {
         parent_bytes
     );
     assert!(enqueue_start(&owner, "denied-start-second", &settled.job_id).is_err());
-    let (claimed, mut child_lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(claimed, mut child_lease) = worker.claim().unwrap().unwrap();
     assert_eq!(claimed.job_id, child.job_id);
     for operation in [
         EffectOperation::PrinterUpload,
@@ -2546,7 +2554,7 @@ fn confirmed_spoolman_settles_to_upload_receipt_and_subject_audit() {
     let (_, owner) = fixture();
     let queued = enqueue(&owner, "spoolman-parent", printer("spoolman-printer"));
     let worker = owner.job_worker(admission()).unwrap();
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     let upload_intent = distinct_intent(EffectOperation::PrinterUpload, "spoolman-printer", 10);
     let upload_receipt = distinct_receipt(&upload_intent, "upload-receipt-10");
     worker
@@ -2600,7 +2608,7 @@ fn confirmed_spoolman_rejects_changed_or_denied_outcome() {
         printer("spoolman-reject-printer"),
     );
     let worker = owner.job_worker(admission()).unwrap();
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     let upload = distinct_intent(
         EffectOperation::PrinterUpload,
         "spoolman-reject-printer",
@@ -2671,7 +2679,7 @@ fn denying_spoolman_deduction_preserves_confirmed_print() {
     let (_, owner) = fixture();
     enqueue(&owner, "started-print", printer("started-printer"));
     let worker = owner.job_worker(admission()).unwrap();
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     begin_and_confirm(
         &worker,
         &mut lease,
@@ -2726,7 +2734,7 @@ fn unresolved_spoolman_settles_by_either_explicit_decision() {
             &format!("unresolved-spoolman-{index}"),
             printer(&printer_id),
         );
-        let (_, mut lease) = worker.claim().unwrap().unwrap();
+        let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
         let upload = distinct_intent(
             EffectOperation::PrinterUpload,
             &printer_id,
@@ -2804,7 +2812,7 @@ fn spoolman_before_upload_settles_without_order_dependence() {
             &format!("spoolman-first-{index}"),
             printer(&printer_id),
         );
-        let (_, mut lease) = worker.claim().unwrap().unwrap();
+        let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
         let spoolman = distinct_intent(
             EffectOperation::SpoolmanDeduction,
             &format!("spoolman:first:{index}"),
@@ -2860,7 +2868,7 @@ fn reconciliation_does_not_infer_start_or_combined_outcomes() {
         "combined-denied",
         printer("combined-denied-printer"),
     );
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     let combined = distinct_intent(
         EffectOperation::PrinterUploadAndStart,
         "combined-denied-printer",
@@ -2876,7 +2884,7 @@ fn reconciliation_does_not_infer_start_or_combined_outcomes() {
     assert!(failed.result.is_none());
 
     enqueue(&owner, "unknown-start", printer("unknown-start-printer"));
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     let upload = distinct_intent(EffectOperation::PrinterUpload, "unknown-start-printer", 71);
     begin_and_confirm(&worker, &mut lease, upload, "unknown-start-upload");
     let start = distinct_intent(EffectOperation::PrinterStart, "unknown-start-printer", 72);
@@ -2895,7 +2903,7 @@ fn reconciliation_does_not_infer_start_or_combined_outcomes() {
     };
     *start = false;
     enqueue(&owner, "no-start-spoolman", no_start);
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     let upload = distinct_intent(
         EffectOperation::PrinterUpload,
         "no-start-spoolman-printer",
@@ -2925,7 +2933,7 @@ fn archived_uploaded_only_document_keeps_denied_and_confirmed_effect_facts() {
         printer("archive-facts-printer"),
     );
     let worker = owner.job_worker(admission()).unwrap();
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     let upload = distinct_intent(EffectOperation::PrinterUpload, "archive-facts-printer", 80);
     let upload_receipt =
         begin_and_confirm(&worker, &mut lease, upload, "archive-facts-upload-receipt");
@@ -3020,7 +3028,7 @@ fn effect_outcome_wire_is_legacy_compatible_and_omits_false() {
     let (path, owner) = fixture();
     enqueue(&owner, "legacy-reconcile", printer("legacy-printer"));
     let worker = owner.job_worker(admission()).unwrap();
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     worker
         .update(
             &mut lease,
@@ -3135,7 +3143,7 @@ fn uploaded_only_result_tamper_rejects_decode_and_child_binding() {
     let (path, owner) = fixture();
     enqueue(&owner, "tamper-result", printer("tamper-result-printer"));
     let worker = owner.job_worker(admission()).unwrap();
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     let upload = distinct_intent(EffectOperation::PrinterUpload, "tamper-result-printer", 120);
     begin_and_confirm(&worker, &mut lease, upload, "tamper-upload-receipt");
     let spoolman = distinct_intent(
@@ -3247,7 +3255,7 @@ fn denied_start_child_failure_allows_only_a_fresh_deliberate_key() {
     let mut start = upload.intent.clone();
     start.operation = EffectOperation::PrinterStart;
     let worker = owner.job_worker(admission()).unwrap();
-    let (claimed, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(claimed, mut lease) = worker.claim().unwrap().unwrap();
     assert_eq!(claimed.job_id, child.job_id);
     worker
         .update(&mut lease, WorkerOperation::BeginEffect(start))
@@ -3298,7 +3306,7 @@ fn persisted_effect_outcome_truth_table_accepts_exactly_three_shapes() {
     for (index, (confirmed, no_effect, has_receipt, valid)) in cases.into_iter().enumerate() {
         let printer_id = format!("outcome-printer-{index}");
         let queued = enqueue(&owner, &format!("outcome-{index}"), printer(&printer_id));
-        let (claimed, mut lease) = worker.claim().unwrap().unwrap();
+        let claimed_attempt!(claimed, mut lease) = worker.claim().unwrap().unwrap();
         assert_eq!(claimed.job_id, queued.job_id);
         let combined = distinct_intent(
             EffectOperation::PrinterUploadAndStart,
@@ -3483,7 +3491,7 @@ fn non_uploaded_confirmed_receipt_mismatch_fails_get() {
     };
     *start = false;
     let queued = enqueue(&owner, "receipt-mismatch", no_start);
-    let (claimed, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(claimed, mut lease) = worker.claim().unwrap().unwrap();
     assert_eq!(claimed.job_id, queued.job_id);
     let upload = distinct_intent(
         EffectOperation::PrinterUpload,
@@ -3519,7 +3527,7 @@ fn denied_effect_on_running_fails_get() {
     let worker = owner.job_worker(admission()).unwrap();
 
     let denied = enqueue(&owner, "running-denied", printer("running-denied-printer"));
-    let (claimed, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(claimed, mut lease) = worker.claim().unwrap().unwrap();
     assert_eq!(claimed.job_id, denied.job_id);
     worker
         .update(
@@ -3736,7 +3744,7 @@ fn reachable_printer_reconciliation_truth_table_has_no_stranded_shape() {
                     &format!("truth-{}-{last_confirmed}-{case}", u8::from(start)),
                     payload,
                 );
-                let (_, mut lease) = worker.claim().unwrap().unwrap();
+                let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
                 let mut last_receipt = None;
                 let mut scenario_receipts = Vec::new();
                 let mut valid = true;
@@ -3887,7 +3895,7 @@ fn ticket_t_28_recovery_global_and_per_tenant_history_limits() {
                 },
             )
             .unwrap();
-            let (_, mut lease) = worker.claim().unwrap().unwrap();
+            let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
             worker
                 .update(&mut lease, WorkerOperation::Finish(None))
                 .unwrap();
@@ -3919,12 +3927,12 @@ fn ticket_t_28_recovery_old_completed_history_expires_but_uncertainty_survives()
     let (path, owner) = fixture();
     let done = enqueue(&owner, "old-done", Payload::CheckSourceUpdates {});
     let worker = owner.job_worker(admission()).unwrap();
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     worker
         .update(&mut lease, WorkerOperation::Finish(None))
         .unwrap();
     let pending = enqueue(&owner, "old-uncertain", printer("p"));
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     worker
         .update(
             &mut lease,
@@ -4012,10 +4020,21 @@ fn integration_source_id_reservations_and_live_lease_have_distinct_lifetimes() {
         Deletion::Deleted { source_id: other }
     );
     let worker = owner.job_worker(admission()).unwrap();
-    let (claimed, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(claimed, mut lease, source_work) = worker.claim().unwrap().unwrap();
     assert_eq!(claimed.job_id, first.job_id);
     assert!(source_lease(&worker, &lease, Some(id)).is_err());
+    #[cfg(feature = "desktop_rebuild")]
+    let mut live = source_work.unwrap();
+    #[cfg(not(feature = "desktop_rebuild"))]
     let mut live = source_lease(&worker, &lease, None).unwrap();
+    #[cfg(feature = "desktop_rebuild")]
+    assert!(
+        source_lease(&worker, &lease, None)
+            .err()
+            .unwrap()
+            .downcast_ref::<pp_storage::catalog::SourceBusy>()
+            .is_some()
+    );
     let stale = lease.clone();
     worker
         .update(&mut lease, WorkerOperation::Heartbeat)
@@ -4051,7 +4070,10 @@ fn integration_drop_and_orderly_restart_keep_source_reservations() {
         },
     );
     let worker = owner.job_worker(admission()).unwrap();
-    let (_, old) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, old, source_work) = worker.claim().unwrap().unwrap();
+    #[cfg(feature = "desktop_rebuild")]
+    drop(source_work.unwrap());
+    #[cfg(not(feature = "desktop_rebuild"))]
     drop(source_lease(&worker, &old, None).unwrap());
     assert_eq!(deletion(&catalog, id), Deletion::ActiveWork);
     owner.shutdown().unwrap();
@@ -4061,8 +4083,11 @@ fn integration_drop_and_orderly_restart_keep_source_reservations() {
     assert_eq!(deletion(&catalog, id), Deletion::ActiveWork);
     let worker = owner.job_worker(admission()).unwrap();
     assert!(source_lease(&worker, &old, None).is_err());
-    let (_, current) = worker.claim().unwrap().unwrap();
-    let mut live = source_lease(&worker, &current, None).unwrap();
+    let claimed_attempt!(_, _current, source_work) = worker.claim().unwrap().unwrap();
+    #[cfg(feature = "desktop_rebuild")]
+    let mut live = source_work.unwrap();
+    #[cfg(not(feature = "desktop_rebuild"))]
+    let mut live = source_lease(&worker, &_current, None).unwrap();
     live.release().unwrap();
     call(
         &owner,
@@ -4088,7 +4113,7 @@ fn integration_wildcard_uncertainty_and_abandon_guard_until_matching_resolution(
         let queued = enqueue(&owner, "wildcard", payload);
         assert_eq!(deletion(&catalog, id), Deletion::ActiveWork);
         let worker = owner.job_worker(admission()).unwrap();
-        let (_, mut lease) = worker.claim().unwrap().unwrap();
+        let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
         assert!(source_lease(&worker, &lease, None).is_err());
         let mut live = source_lease(&worker, &lease, Some(id)).unwrap();
         live.release().unwrap();
@@ -4163,8 +4188,19 @@ fn integration_source_bridge_rejects_foreign_worker_missing_source_and_non_sourc
     let worker = owner.job_worker(admission()).unwrap();
     let foreign = owner.job_worker(admission()).unwrap();
     let missing = enqueue(&owner, "missing", Payload::ImportScan { project_id: 9876 });
-    let (_, lease) = worker.claim().unwrap().unwrap();
+    #[cfg(feature = "desktop_rebuild")]
+    {
+        assert!(worker.claim().unwrap().is_none());
+        let failed = get(&owner, &missing.job_id);
+        assert_eq!(failed.state, PersistentState::Failed);
+        assert_eq!(failed.attempt, 0);
+        assert_eq!(failed.generation, 0);
+    }
+    #[cfg(not(feature = "desktop_rebuild"))]
+    let claimed_attempt!(_, lease) = worker.claim().unwrap().unwrap();
+    #[cfg(not(feature = "desktop_rebuild"))]
     assert!(source_lease(&worker, &lease, None).is_err());
+    #[cfg(not(feature = "desktop_rebuild"))]
     assert!(source_lease(&foreign, &lease, None).is_err());
     call(
         &owner,
@@ -4174,8 +4210,9 @@ fn integration_source_bridge_rejects_foreign_worker_missing_source_and_non_sourc
     )
     .unwrap();
     enqueue(&owner, "printer", printer("ordinary-fixture"));
-    let (_, lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, lease) = worker.claim().unwrap().unwrap();
     assert!(source_lease(&worker, &lease, Some(1)).is_err());
+    assert!(source_lease(&foreign, &lease, Some(1)).is_err());
     owner.shutdown().unwrap();
 }
 #[test]
@@ -4199,7 +4236,7 @@ fn integration_wildcard_lookup_and_reservations_are_tenant_owned() {
     )
     .unwrap());
     let worker = session_worker(&owner);
-    let (_, lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, lease) = worker.claim().unwrap().unwrap();
     assert!(source_lease(&worker, &lease, Some(local_id)).is_err());
     let mut live = source_lease(&worker, &lease, Some(tenant_id)).unwrap();
     assert_eq!(deletion(&tenant_catalog, tenant_id), Deletion::ActiveWork);
@@ -4241,7 +4278,7 @@ fn integration_source_bridge_expiry_and_cancelled_admission() {
     let mut config = admission();
     config.lease_seconds = 1;
     let worker = owner.job_worker(config).unwrap();
-    let (_, lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, lease) = worker.claim().unwrap().unwrap();
     assert!(
         worker
             .begin_source_work(&lease, None, &AtomicBool::new(true), Duration::ZERO)
@@ -4271,13 +4308,16 @@ fn integration_individual_uncertain_reservation_survives_restart_and_matching_su
         },
     );
     let worker = owner.job_worker(admission()).unwrap();
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease, source_work) = worker.claim().unwrap().unwrap();
     worker
         .update(
             &mut lease,
             WorkerOperation::BeginEffect(intent(EffectOperation::SourceRefresh, "source-effect")),
         )
         .unwrap();
+    #[cfg(feature = "desktop_rebuild")]
+    let mut live = source_work.unwrap();
+    #[cfg(not(feature = "desktop_rebuild"))]
     let mut live = source_lease(&worker, &lease, None).unwrap();
     live.release().unwrap();
     owner.shutdown().unwrap();
@@ -4740,7 +4780,7 @@ fn invalid_attempts_do_not_consume_worker_capacity_but_keep_printer_reservations
                 let mut limits = admission();
                 limits.total = total;
                 let worker = owner.job_worker(limits.clone()).unwrap();
-                let (_, mut lease) = worker.claim().unwrap().unwrap();
+                let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
                 if effect_admitted {
                     worker
                         .update(
@@ -4787,7 +4827,7 @@ fn invalid_attempts_do_not_consume_worker_capacity_but_keep_printer_reservations
                     Some("printer:uncertain-printer")
                 );
                 let worker = owner.job_worker(limits).unwrap();
-                let (claimed, mut lease) = worker.claim().unwrap().unwrap();
+                let claimed_attempt!(claimed, mut lease) = worker.claim().unwrap().unwrap();
                 assert_eq!(claimed.job_id, healthy.job_id);
                 worker.update(&mut lease, WorkerOperation::Fail).unwrap();
                 assert!(worker.claim().unwrap().is_none());
@@ -4871,7 +4911,7 @@ fn bound_printer_start_finish_none_uses_confirmed_start_receipt() {
     let mut start = request.upload_effect().unwrap().intent.clone();
     start.operation = EffectOperation::PrinterStart;
     let worker = owner.job_worker(admission()).unwrap();
-    let (claimed, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(claimed, mut lease) = worker.claim().unwrap().unwrap();
     assert_eq!(claimed.job_id, child.job_id);
     assert!(
         worker
@@ -4917,7 +4957,7 @@ fn scoped_sync_reserves_and_leases_only_listed_sources() {
         }
     );
     let worker = owner.job_worker(admission()).unwrap();
-    let (claimed, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(claimed, mut lease) = worker.claim().unwrap().unwrap();
     assert_eq!(claimed.job_id, sync.job_id);
     assert!(source_lease(&worker, &lease, None).is_err());
     assert!(source_lease(&worker, &lease, Some(outside)).is_err());
@@ -4941,7 +4981,7 @@ fn scoped_sync_reserves_and_leases_only_listed_sources() {
             project_id: second as u64,
         },
     );
-    let (claimed, mut other_lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(claimed, mut other_lease) = worker.claim().unwrap().unwrap();
     assert_eq!(claimed.job_id, unrelated.job_id);
     worker
         .update(&mut other_lease, WorkerOperation::Finish(None))
@@ -4984,7 +5024,7 @@ fn legacy_scoped_sync_wildcard_column_reopens_with_payload_scope() {
         Deletion::Deleted { source_id: other }
     );
     let worker = owner.job_worker(admission()).unwrap();
-    let (_, lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, lease) = worker.claim().unwrap().unwrap();
     assert!(source_lease(&worker, &lease, Some(other)).is_err());
     let stored: String = readonly(&path)
         .query_row(
@@ -5012,7 +5052,7 @@ fn empty_scoped_sync_does_not_reserve_any_source() {
     );
     assert_eq!(deletion(&catalog, id), Deletion::Deleted { source_id: id });
     let worker = owner.job_worker(admission()).unwrap();
-    let (_, lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, lease) = worker.claim().unwrap().unwrap();
     assert!(source_lease(&worker, &lease, Some(id)).is_err());
     assert!(source_lease(&worker, &lease, None).is_err());
     owner.shutdown().unwrap();
@@ -5037,7 +5077,7 @@ fn ticket_t_28_claims_writer_disk_quota_keeps_the_active_attempt() {
         })
         .unwrap();
     let held = enqueue(&owner, "held", Payload::CheckSourceUpdates {});
-    let (claimed, _lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(claimed, _lease) = worker.claim().unwrap().unwrap();
     assert_eq!(claimed.job_id, held.job_id);
     assert_eq!(claimed.attempt, 1);
     assert_eq!(claimed.state, PersistentState::Running);
@@ -5156,7 +5196,7 @@ fn ticket_t_28_claims_writer_disk_quota_keeps_the_active_attempt() {
     assert_eq!(still.state, PersistentState::Running);
 
     assert_eq!(owner.admit_disk_quota(pages + 64).unwrap(), pages + 64);
-    let (retried, _) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(retried, _) = worker.claim().unwrap().unwrap();
     assert_eq!(retried.job_id, victim.job_id);
     assert_eq!(retried.attempt, 1);
     assert_eq!(retried.state, PersistentState::Running);
@@ -5167,5 +5207,301 @@ fn ticket_t_28_claims_writer_disk_quota_keeps_the_active_attempt() {
     let created = enqueue(&owner, &failed_key, Payload::CheckSourceUpdates {});
     let replayed = enqueue(&owner, &failed_key, Payload::CheckSourceUpdates {});
     assert_eq!(replayed.job_id, created.job_id);
+    owner.shutdown().unwrap();
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[test]
+fn individual_source_claim_skips_busy_head_without_mutating_it() {
+    let (_, owner) = fixture();
+    let catalog = owner.local_source_catalog();
+    let busy_id = source(&catalog, "Busy head");
+    let free_id = source(&catalog, "Free tail");
+    let first = enqueue(
+        &owner,
+        "busy-owner",
+        Payload::ImportScan {
+            project_id: busy_id as u64,
+        },
+    );
+    let mut config = admission();
+    for (_, capacity) in &mut config.kinds {
+        *capacity = 2;
+    }
+    let worker = owner.job_worker(config).unwrap();
+    let mut active = worker.claim().unwrap().unwrap();
+    assert_eq!(active.job.job_id, first.job_id);
+    let waiting = enqueue(
+        &owner,
+        "busy-waiting",
+        Payload::ImportScan {
+            project_id: busy_id as u64,
+        },
+    );
+    let free = enqueue(
+        &owner,
+        "free-tail",
+        Payload::ImportScan {
+            project_id: free_id as u64,
+        },
+    );
+    call(
+        &owner,
+        UserOperation::Cancel {
+            job_id: first.job_id,
+        },
+    )
+    .unwrap();
+    let before = get(&owner, &waiting.job_id);
+    let mut other = worker.claim().unwrap().unwrap();
+    assert_eq!(other.job.job_id, free.job_id);
+    let after = get(&owner, &waiting.job_id);
+    assert_eq!(after.state_version, before.state_version);
+    assert_eq!(after.attempt, before.attempt);
+    assert_eq!(after.generation, before.generation);
+    worker
+        .update(&mut other.lease, WorkerOperation::Finish(None))
+        .unwrap();
+    drop(other.source_work.take());
+    drop(active.source_work.take());
+    let next = worker.claim().unwrap().unwrap();
+    assert_eq!(next.job.job_id, waiting.job_id);
+    owner.shutdown().unwrap();
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[test]
+fn expired_attempt_keeps_source_authority_until_drop() {
+    let (_, owner) = fixture();
+    let id = source(&owner.local_source_catalog(), "Expired overlap");
+    let queued = enqueue(
+        &owner,
+        "expired-overlap",
+        Payload::ExtractSourceDocs {
+            project_id: id as u64,
+        },
+    );
+    let mut config = admission();
+    config.lease_seconds = 1;
+    let worker = owner.job_worker(config).unwrap();
+    let mut first = worker.claim().unwrap().unwrap();
+    std::thread::sleep(Duration::from_millis(1100));
+    assert!(worker.claim().unwrap().is_none());
+    let recovered = get(&owner, &queued.job_id);
+    assert_eq!(recovered.state, PersistentState::Queued);
+    assert_eq!(recovered.attempt, 1);
+    assert!(worker.claim().unwrap().is_none());
+    let unchanged = get(&owner, &queued.job_id);
+    assert_eq!(unchanged.state_version, recovered.state_version);
+    assert_eq!(unchanged.attempt, recovered.attempt);
+    assert_eq!(unchanged.generation, recovered.generation);
+    drop(first.source_work.take());
+    let second = worker.claim().unwrap().unwrap();
+    assert_eq!(second.job.job_id, queued.job_id);
+    assert_eq!(second.job.attempt, 2);
+    owner.shutdown().unwrap();
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[test]
+fn duplicate_direct_and_wildcard_source_leases_are_typed_busy() {
+    let (_, owner) = fixture();
+    let catalog = owner.local_source_catalog();
+    let id = source(&catalog, "Typed busy");
+    let direct = catalog
+        .begin_work(id, &AtomicBool::new(false), Duration::from_secs(5))
+        .unwrap();
+    let duplicate = match catalog.begin_work(id, &AtomicBool::new(false), Duration::from_secs(5)) {
+        Err(error) => error,
+        Ok(_) => panic!("duplicate direct Source lease accepted"),
+    };
+    assert!(
+        duplicate
+            .downcast_ref::<pp_storage::catalog::SourceBusy>()
+            .is_some()
+    );
+    let queued = enqueue(&owner, "wildcard-busy", Payload::CheckSourceUpdates {});
+    let worker = owner.job_worker(admission()).unwrap();
+    let wildcard = worker.claim().unwrap().unwrap();
+    assert!(wildcard.source_work.is_none());
+    let duplicate = match source_lease(&worker, &wildcard.lease, Some(id)) {
+        Err(error) => error,
+        Ok(_) => panic!("duplicate wildcard Source lease accepted"),
+    };
+    assert!(
+        duplicate
+            .downcast_ref::<pp_storage::catalog::SourceBusy>()
+            .is_some()
+    );
+    assert_eq!(get(&owner, &queued.job_id).state, PersistentState::Running);
+    drop(direct);
+    let mut released = source_lease(&worker, &wildcard.lease, Some(id)).unwrap();
+    released.release().unwrap();
+    owner.shutdown().unwrap();
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[test]
+fn abandoned_claim_reply_releases_source_authority() {
+    let (_, owner) = fixture();
+    let catalog = owner.local_source_catalog();
+    let id = source(&catalog, "Abandoned claim");
+    let queued = enqueue(
+        &owner,
+        "abandoned-claim",
+        Payload::ImportScan {
+            project_id: id as u64,
+        },
+    );
+    let worker = owner.job_worker(admission()).unwrap();
+    drop(
+        worker
+            .claim_pending(&AtomicBool::new(false), Duration::from_secs(5))
+            .unwrap(),
+    );
+    catalog
+        .execute(pp_storage::catalog::Request::Get { id })
+        .unwrap();
+    assert_eq!(get(&owner, &queued.job_id).state, PersistentState::Running);
+    let mut lease = catalog
+        .begin_work(id, &AtomicBool::new(false), Duration::from_secs(5))
+        .unwrap();
+    lease.release().unwrap();
+    owner.shutdown().unwrap();
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[test]
+fn missing_source_job_fails_without_starving_healthy_work() {
+    let (_, owner) = fixture();
+    let valid_id = source(&owner.local_source_catalog(), "Healthy tail");
+    let invalid = enqueue(
+        &owner,
+        "missing-head",
+        Payload::ImportScan { project_id: 9876 },
+    );
+    std::thread::sleep(Duration::from_millis(1100));
+    let valid = enqueue(
+        &owner,
+        "healthy-tail",
+        Payload::ImportScan {
+            project_id: valid_id as u64,
+        },
+    );
+    let worker = owner.job_worker(admission()).unwrap();
+    let claim = worker.claim().unwrap().unwrap();
+    assert_eq!(claim.job.job_id, valid.job_id);
+    let failed = get(&owner, &invalid.job_id);
+    assert_eq!(failed.state, PersistentState::Failed);
+    assert_eq!(failed.attempt, 0);
+    assert_eq!(failed.generation, 0);
+    assert_eq!(
+        failed.recovery.as_deref(),
+        Some("Source is unavailable for this job")
+    );
+    let history = match call(
+        &owner,
+        UserOperation::History {
+            job_id: invalid.job_id,
+            before_version: None,
+            limit: 10,
+        },
+    )
+    .unwrap()
+    {
+        Outcome::History(history) => history,
+        _ => panic!("job history required"),
+    };
+    assert!(
+        history
+            .iter()
+            .any(|entry| entry.event == "source_unavailable")
+    );
+    assert!(worker.claim().unwrap().is_none());
+    owner.shutdown().unwrap();
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[test]
+fn foreign_source_job_fails_without_tenant_leak_or_starvation() {
+    use pp_storage::catalog::Credentials;
+    let (_, owner) = fixture();
+    let (_, token) = register(&owner, "foreign-source@example.test");
+    let tenant_catalog = owner.source_catalog(Credentials::Session(Secret::new(token)));
+    let foreign_id = source(&tenant_catalog, "Foreign Source");
+    let local_id = source(&owner.local_source_catalog(), "Local tail");
+    let invalid = enqueue(
+        &owner,
+        "foreign-head",
+        Payload::ExtractSourceDocs {
+            project_id: foreign_id as u64,
+        },
+    );
+    std::thread::sleep(Duration::from_millis(1100));
+    let valid = enqueue(
+        &owner,
+        "local-tail",
+        Payload::ExtractSourceDocs {
+            project_id: local_id as u64,
+        },
+    );
+    let worker = owner.job_worker(admission()).unwrap();
+    let claim = worker.claim().unwrap().unwrap();
+    assert_eq!(claim.job.job_id, valid.job_id);
+    let failed = get(&owner, &invalid.job_id);
+    assert_eq!(failed.state, PersistentState::Failed);
+    assert_eq!(failed.attempt, 0);
+    assert_eq!(failed.generation, 0);
+    assert_eq!(
+        failed.recovery.as_deref(),
+        Some("Source is unavailable for this job")
+    );
+    let mut tenant_work = tenant_catalog
+        .begin_work(foreign_id, &AtomicBool::new(false), Duration::from_secs(5))
+        .unwrap();
+    tenant_work.release().unwrap();
+    owner.shutdown().unwrap();
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[test]
+fn individual_source_claim_prevents_overlap_with_spare_resource_capacity() {
+    let (_, owner) = fixture();
+    let id = source(&owner.local_source_catalog(), "Shared Source");
+    let first = enqueue(
+        &owner,
+        "first",
+        Payload::ImportScan {
+            project_id: id as u64,
+        },
+    );
+    let second = enqueue(
+        &owner,
+        "second",
+        Payload::ExtractSourceDocs {
+            project_id: id as u64,
+        },
+    );
+    let mut config = admission();
+    config.per_resource = 2;
+    let worker = owner.job_worker(config).unwrap();
+    let mut claimed = worker.claim().unwrap().unwrap();
+    assert_eq!(claimed.job.job_id, first.job_id);
+    assert!(claimed.source_work.is_some());
+    let before = get(&owner, &second.job_id);
+    assert!(worker.claim().unwrap().is_none());
+    let after = get(&owner, &second.job_id);
+    assert_eq!(after.state, PersistentState::Queued);
+    assert_eq!(after.state_version, before.state_version);
+    assert_eq!(after.attempt, 0);
+    assert_eq!(after.generation, 0);
+    worker
+        .update(&mut claimed.lease, WorkerOperation::Finish(None))
+        .unwrap();
+    assert!(worker.claim().unwrap().is_none());
+    drop(claimed.source_work.take());
+    let next = worker.claim().unwrap().unwrap();
+    assert_eq!(next.job.job_id, second.job_id);
+    assert!(next.source_work.is_some());
     owner.shutdown().unwrap();
 }

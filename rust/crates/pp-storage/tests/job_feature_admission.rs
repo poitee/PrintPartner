@@ -1,5 +1,9 @@
 #![cfg(feature = "desktop_rebuild")]
 
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/common/claimed_attempt.rs"
+));
 use anyhow::Result;
 use pp_domain::{PositiveId, features::Feature};
 use pp_storage::{
@@ -164,7 +168,7 @@ impl Fixture {
         start: bool,
     ) -> AttemptLease {
         let job = self.enqueue(account, key, printer(key, plan, start));
-        let (claimed, lease) = worker.claim().unwrap().unwrap();
+        let claimed_attempt!(claimed, lease) = worker.claim().unwrap().unwrap();
         assert_eq!(claimed.job_id, job.job_id);
         lease
     }
@@ -598,7 +602,7 @@ fn existing_validation_precedes_feature_resolution() {
         "Invalid digest"
     );
     f.enqueue(&account, "sync", Payload::Sync { project_ids: None });
-    let (_, mut source) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut source) = worker.claim().unwrap().unwrap();
     assert_eq!(
         f.refuse(&worker, &mut source, deduction("spool"))
             .to_string(),
@@ -725,7 +729,7 @@ fn bound_printer_start_rejects_deduction_before_feature_read() {
         "start",
         Payload::PrinterStart(PrinterStartRequest::new(&uploaded.job_id)),
     );
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     f.setting(&account, None, "{");
     assert_eq!(
         f.refuse(&worker, &mut lease, deduction("spool"))

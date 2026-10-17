@@ -674,6 +674,8 @@ impl WriterOwner {
                             admission,
                             #[cfg(feature = "desktop_rebuild")]
                             &worker.job_subscriptions,
+                            #[cfg(feature = "desktop_rebuild")]
+                            &mut catalog_state,
                         ));
                     }
                     Envelope::Setting { work, reply } => {

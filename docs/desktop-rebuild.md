@@ -636,7 +636,7 @@ admitted kind. `authorize(lease)` returns the live attempt's revalidated tenant 
 subject without changing the job. A queued job's snapshot reports progress `0`, and
 another tenant's read returns `JobAccessFailure::NotFound`.
 
-Claims do not yet reserve the job's Source; that lands in D16 (d). Upload, local scan
+Claims reserve individual Sources with D16 (d), described below. Upload, local scan
 and Source Sync paths arrive with D14, D17 and D18.
 
 `fixtures/parity/jobs-engine/generate.mjs` starts jobs in Node's
@@ -721,8 +721,8 @@ lease on a Source that already has live work fails with `SourceBusy`. A lease th
 dropped while the writer queue is full is recorded as orphaned, and the writer frees
 its Source before the next envelope. `classify_issued` and `retire_issued` tell
 active, retired, never-issued and other-incarnation tokens apart; D17 and D18 call
-them when a scan or Sync settles its reservation. Claim-time Source reservation
-(`ClaimedAttempt`) is D16 (d).
+them when a scan or Sync settles its reservation. D16 (d) adds claim-time Source
+reservation, described below.
 
 `fixtures/parity/jobs-engine/generate.mjs` now also records the events a tenant
 listener receives while each Node job runs. The Rust test subscribes before the claim
@@ -736,6 +736,50 @@ shutdown tests port the reference `job_transport.rs`:
 node fixtures/parity/jobs-engine/generate.mjs --check
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test jobs_engine_parity --test job_transport
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib catalog::
+```
+
+### D16 jobs engine: claim-time Source reservation
+
+GRE-609's fourth PR reserves an individual Source when a worker claims its job,
+behind `desktop_rebuild`. `claim`, `claim_kind`, `claim_import`, and
+`PendingClaim::receive` return `ClaimedAttempt` with the job, attempt lease, and
+optional Source-work lease.
+The default build keeps the existing tuple return and behavior.
+
+`source_binding` maps ImportScan, ExtractSourceDocs, and SuppliedSourceImport to
+their stored Source, including targeted import claims and cancelled import cleanup
+claims past the attempt limit.
+A missing Source, including a Source in another tenant, fails the queued job with
+"Source is unavailable for this job" and a `source_unavailable` history entry.
+The claim does not increment attempt or generation. Untargeted claims continue to
+healthy work, while `claim_import` returns `None` after failing the targeted job.
+A busy Source leaves the queued job unchanged. `claim_import` returns `SourceBusy`
+so its caller can retry, while untargeted claims skip the busy Source.
+
+`ClaimPlan` carries a pending `SourceReservation` through the database commit.
+Only `TransactionDecision::Claimed` activates its token and creates the Source-work
+lease after commit. The lease remains live after cancellation or attempt expiry
+until its holder releases or drops it. An abandoned claim reply drops its lease.
+The existing orphan queue handles releases that cannot enter the writer queue.
+
+CheckSourceUpdates claims have no initial Source-work lease. Their workers acquire
+individual leases through `begin_source_work`. Sync keeps its existing scoped
+Source bridge until D18 supplies the target API. Import settlement belongs to
+D14 (d), local scan settlement to D17, and Sync settlement to D18. Claim-time
+import reservation and targeted `SourceBusy` errors follow the reference
+`source_binding`, `claim`, and `claim_import` in
+`desktop/source-sync-local-current-20261008` at `d73b6d8d`,
+`rust/crates/pp-storage/src/jobs.rs:2431`, `:2588`, and `:3372`.
+
+Node has no durable claims or Source reservation counterpart. These tests port the
+reference `durable_jobs.rs` reservation cases. The committed Node generator and its
+literal-result parity tests remain unchanged. The test-only `claimed_attempt!`
+pattern retains the Source-work lease while matching either build's return type.
+`rust/scripts/migrate-claimed-attempt.py` reruns the mechanical tuple migration.
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test durable_jobs --test supplied_imports
+node fixtures/parity/jobs-engine/generate.mjs --check
 ```
 
 ### D14 uploads: supplied-import job arms
