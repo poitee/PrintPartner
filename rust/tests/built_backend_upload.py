@@ -247,28 +247,20 @@ class Backend:
 def backend(node, root, data, lock, output):
     output.mkdir()
     env = {name: os.environ[name] for name in ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ") if name in os.environ}
-    env.update(PRINT_PARTNER_UPDATE_CHECK="0", AI_ENABLED="0", HOST="127.0.0.1", DEPLOY_MODE="self-host")
+    env.update(PP_STORAGE_CORE_LOCK="1", PRINT_PARTNER_UPDATE_CHECK="0", AI_ENABLED="0", HOST="127.0.0.1", DEPLOY_MODE="self-host")
     with tempfile.TemporaryDirectory(prefix="pp-upload-") as runtime:
         socket_path = Path(runtime) / "backend.sock"
         events = output / "events.jsonl"
-        generation, key, lease = secrets.token_hex(16), secrets.token_hex(32), secrets.token_hex(32)
+        generation, key = secrets.token_hex(16), secrets.token_hex(32)
         entry = root / "web/apps/server/dist/current"
         command = [str(node), "--no-global-search-paths", "--require", str(lifecycle.OBSERVER),
                    "--import", str(entry / "desktop-resolution.js"), str(entry / "desktop.js"),
                    f"--pp-desktop-package-root={root}", f"--pp-lifecycle-events={events}"]
         try:
             with lifecycle.owned_child(command, lock.fileno(), output, env) as child:
-                child_identity = lifecycle.identity(child.pid)
-                marker = {"storage_protocol_version": 1, "pid": os.getpid(),
-                          "process_identity": lifecycle.identity(os.getpid()), "child_pid": child.pid,
-                          "child_process_identity": child_identity,
-                          "lease_hash": hashlib.sha256(lease.encode()).hexdigest()}
-                marker_path = data / ".desktop-owner.json"
-                marker_path.write_text(json.dumps(marker))
-                marker_path.chmod(0o600)
                 setup = {"version": 1, "data_dir": str(data), "socket_path": str(socket_path),
-                         "generation": generation, "key": key, "lease": lease,
-                         "parent_pid": os.getpid(), "port": 43123, "child_process_identity": child_identity}
+                         "generation": generation, "key": key,
+                         "parent_pid": os.getpid(), "port": 43123}
                 child.stdin.write((json.dumps(setup) + "\n").encode())
                 child.stdin.flush()
                 deadline = time.monotonic() + lifecycle.STARTUP_SECONDS
@@ -286,7 +278,7 @@ def backend(node, root, data, lock, output):
                 write_json(output / "ready.json", ready)
                 yield Backend(child, socket_path, generation, key, output)
         finally:
-            (data / ".desktop-owner.json").unlink(missing_ok=True)
+            socket_path.unlink(missing_ok=True)
     require(not socket_path.exists(), "fixture left a Unix socket")
 
 
@@ -334,7 +326,7 @@ def run_case(node, root, evidence, cause, negative=False):
     data = evidence / "data"
     data.mkdir(mode=0o700)
     receipt = {"cause": cause, "negative": negative, "data_dir": str(data)}
-    with MoonrakerPeer(evidence) as peer, (data / ".desktop.lock").open("w+b") as lock:
+    with MoonrakerPeer(evidence) as peer, (data / "printpartner.lock").open("w+b") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         with backend(node, root, data, lock, evidence / "before") as api:
             item, digest = stage_upload(api, peer)

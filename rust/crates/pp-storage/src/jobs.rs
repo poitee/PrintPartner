@@ -56,6 +56,20 @@ pub struct AtomicJobClient {
     storage: SettingsClient,
     policy: AuthPolicy,
 }
+/// A tenant's retained public snapshots, newest first.
+#[cfg(feature = "desktop_rebuild")]
+#[derive(Clone)]
+pub struct RetainedJobs {
+    snapshots: Arc<[JobSnapshot]>,
+}
+#[cfg(feature = "desktop_rebuild")]
+impl std::ops::Deref for RetainedJobs {
+    type Target = [JobSnapshot];
+
+    fn deref(&self) -> &Self::Target {
+        &self.snapshots
+    }
+}
 #[derive(Clone)]
 pub struct ServerWorkerClient {
     storage: SettingsClient,
@@ -136,7 +150,13 @@ pub enum UserOperation {
     Get {
         job_id: String,
     },
+    #[cfg(feature = "desktop_rebuild")]
+    GetPublic {
+        job_id: String,
+    },
     List(JobListQuery),
+    #[cfg(feature = "desktop_rebuild")]
+    ListRetained(LegacyListFilter),
     /// Operator-visible damaged rows, with uncertain reservations explicitly flagged.
     Quarantined {
         before: Option<(i64, String)>,
@@ -170,6 +190,12 @@ pub enum WorkerOperation {
     BeginEffect(EffectIntent),
     ConfirmEffect(ResultArtifact),
     Finish(Option<ResultArtifact>),
+    /// Finishes with the result the public job API reports.
+    #[cfg(feature = "desktop_rebuild")]
+    FinishPublic {
+        artifact: Option<ResultArtifact>,
+        result: Box<CompletedResult>,
+    },
     Fail,
 }
 /// A damaged document is retained for inspection and repair, never executed.
@@ -185,6 +211,10 @@ pub struct QuarantinedJob {
 pub enum Outcome {
     Job(JobRecord, LocalCommit),
     List(Vec<JobRecord>),
+    #[cfg(feature = "desktop_rebuild")]
+    PublicList(RetainedJobs),
+    #[cfg(feature = "desktop_rebuild")]
+    PublicJob(JobSnapshot),
     Quarantined(Vec<QuarantinedJob>),
     History(Vec<HistoryEntry>),
     Reconciliations(Vec<ReconciliationRecord>),
@@ -194,18 +224,19 @@ pub enum Outcome {
     Authorized(ValidatedAuthority),
 }
 /// What the writer does once the transaction commits.
-#[cfg_attr(
-    feature = "desktop_rebuild",
-    expect(
-        clippy::large_enum_variant,
-        reason = "The writer holds one decision per transaction"
-    )
-)]
 enum TransactionDecision {
     Outcome(Outcome),
     /// Report this error only after committing the refusals recorded before it.
     #[cfg(feature = "desktop_rebuild")]
     ErrorAfterCommit(anyhow::Error),
+    /// Report the authority failure after committing the refusal it caused.
+    #[cfg(feature = "desktop_rebuild")]
+    Refused(CommittedRefusal),
+}
+#[cfg(feature = "desktop_rebuild")]
+struct CommittedRefusal {
+    job: JobRecord,
+    failure: auth::AuthorityFailure,
 }
 /// The original credential of a claimed attempt, revalidated under the
 /// current policy.
@@ -243,6 +274,8 @@ pub(crate) enum Command {
         lease: AttemptLease,
         operation: WorkerOperation,
         admission: Arc<WorkerAdmission>,
+        #[cfg(feature = "desktop_rebuild")]
+        policy: Option<AuthPolicy>,
     },
     #[cfg(feature = "desktop_rebuild")]
     Authorize {
@@ -463,6 +496,50 @@ impl AtomicJobClient {
             wait,
         )
     }
+    /// Reads the snapshot the public job API reports.
+    #[cfg(feature = "desktop_rebuild")]
+    pub fn read_public(
+        &self,
+        credential: Credential,
+        job_id: String,
+        cancelled: &AtomicBool,
+        wait: Duration,
+    ) -> Result<JobSnapshot> {
+        match self
+            .submit(
+                credential,
+                UserOperation::GetPublic { job_id },
+                cancelled,
+                wait,
+            )?
+            .receive()?
+        {
+            Outcome::PublicJob(snapshot) => Ok(snapshot),
+            _ => unreachable!(),
+        }
+    }
+    /// Lists the tenant's retained jobs with Node's filters and ordering.
+    #[cfg(feature = "desktop_rebuild")]
+    pub fn list_retained(
+        &self,
+        credential: Credential,
+        filter: LegacyListFilter,
+        cancelled: &AtomicBool,
+        wait: Duration,
+    ) -> Result<RetainedJobs> {
+        match self
+            .submit(
+                credential,
+                UserOperation::ListRetained(filter),
+                cancelled,
+                wait,
+            )?
+            .receive()?
+        {
+            Outcome::PublicList(snapshots) => Ok(snapshots),
+            _ => unreachable!(),
+        }
+    }
 }
 impl ServerWorkerClient {
     pub fn begin_source_work(
@@ -551,6 +628,8 @@ impl ServerWorkerClient {
                 lease: lease.clone(),
                 operation,
                 admission: self.admission.clone(),
+                #[cfg(feature = "desktop_rebuild")]
+                policy: self.policy,
             },
             &AtomicBool::new(false),
             Duration::from_secs(5),
@@ -942,13 +1021,19 @@ pub(crate) fn execute(
             kind,
             policy,
         } => claim(&tx, &worker, &admission, kind, policy)?,
+        #[cfg(not(feature = "desktop_rebuild"))]
         Command::Worker {
             lease,
             operation,
             admission,
-        } => {
-            TransactionDecision::Outcome(advance(&tx, lease, operation, &admission, effect_policy)?)
-        }
+        } => advance(&tx, lease, operation, &admission, effect_policy)?,
+        #[cfg(feature = "desktop_rebuild")]
+        Command::Worker {
+            lease,
+            operation,
+            admission,
+            policy,
+        } => advance(&tx, lease, operation, &admission, effect_policy, policy)?,
         #[cfg(feature = "desktop_rebuild")]
         Command::Authorize { lease, policy } => {
             let job = claimed_job(&tx, &lease)?;
@@ -960,8 +1045,15 @@ pub(crate) fn execute(
             TransactionDecision::Outcome(Outcome::Retained(prune(&tx, per_tenant, global)?))
         }
     };
-    if matches!(&decision, TransactionDecision::Outcome(Outcome::Job(job, LocalCommit::Committed)) if job.state.terminal())
-    {
+    let terminal = match &decision {
+        TransactionDecision::Outcome(Outcome::Job(job, LocalCommit::Committed)) => {
+            job.state.terminal()
+        }
+        #[cfg(feature = "desktop_rebuild")]
+        TransactionDecision::Refused(CommittedRefusal { job, .. }) => job.state.terminal(),
+        _ => false,
+    };
+    if terminal {
         prune(&tx, 1000, 10000)?;
     }
     tx.commit()
@@ -970,6 +1062,8 @@ pub(crate) fn execute(
         TransactionDecision::Outcome(outcome) => Ok(outcome),
         #[cfg(feature = "desktop_rebuild")]
         TransactionDecision::ErrorAfterCommit(error) => Err(error),
+        #[cfg(feature = "desktop_rebuild")]
+        TransactionDecision::Refused(CommittedRefusal { failure, .. }) => Err(failure.into()),
     }
 }
 fn actor(
@@ -1099,6 +1193,57 @@ fn user(
             owned(tx, &job_id, tenant)?,
             LocalCommit::ReadOnly,
         )),
+        #[cfg(feature = "desktop_rebuild")]
+        UserOperation::GetPublic { job_id } => {
+            Ok(Outcome::PublicJob(owned(tx, &job_id, tenant)?.snapshot()))
+        }
+        #[cfg(feature = "desktop_rebuild")]
+        UserOperation::ListRetained(filter) => {
+            prune(tx, 1000, 10000)?;
+            let rows = tx
+                .prepare("SELECT rowid,id,document FROM durable_jobs WHERE tenant=?1 AND state!='quarantined'")?
+                .query_map([tenant], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let mut diagnostics = DocumentDiagnostics::default();
+            let mut jobs = rows
+                .into_iter()
+                .filter_map(|(sequence, id, document)| {
+                    decode_row(&id, &document, &mut diagnostics).map(|job| (sequence, job))
+                })
+                .filter(|(_, job)| {
+                    let status = match &filter.status {
+                        LegacyStatusFilter::Any => true,
+                        LegacyStatusFilter::Exact(status) => job.snapshot().status == status,
+                        LegacyStatusFilter::NoMatch => false,
+                    };
+                    let since = filter.since_millis.is_none_or(|cutoff| {
+                        job.finished_at
+                            .unwrap_or(job.updated_at)
+                            .saturating_mul(1000)
+                            >= cutoff
+                    });
+                    let profile = match filter.profile {
+                        LegacyProfileFilter::Any => true,
+                        LegacyProfileFilter::Exact(profile) => {
+                            job.payload.profile_id() == Some(profile)
+                        }
+                        LegacyProfileFilter::NoMatch => false,
+                    };
+                    status && since && profile
+                })
+                .collect::<Vec<_>>();
+            // Newest first; ties keep enqueue order, as Node's stable sort does.
+            jobs.sort_by(|(left_sequence, left), (right_sequence, right)| {
+                right
+                    .finished_at
+                    .unwrap_or(right.updated_at)
+                    .cmp(&left.finished_at.unwrap_or(left.updated_at))
+                    .then_with(|| left_sequence.cmp(right_sequence))
+            });
+            Ok(Outcome::PublicList(RetainedJobs {
+                snapshots: jobs.into_iter().map(|(_, job)| job.snapshot()).collect(),
+            }))
+        }
         UserOperation::List(query) => {
             prune(tx, 1000, 10000)?;
             ensure!((1..=200).contains(&query.limit), "Invalid list limit");
@@ -1255,6 +1400,15 @@ fn user(
             receipt,
         } => {
             let mut job = owned(tx, &job_id, tenant)?;
+            #[cfg(feature = "desktop_rebuild")]
+            ensure!(
+                decision != Decision::ConfirmSucceeded
+                    || job
+                        .effects
+                        .iter()
+                        .all(|effect| effect.checklist_completion.is_none()),
+                "Checklist completion requires its owning reconciler"
+            );
             ensure!(
                 job.state == PersistentState::ReconciliationRequired
                     && job.state_version == expected_version
@@ -1290,6 +1444,8 @@ fn user(
                             ensure!(stored == &receipt, "Receipt mismatch")
                         }
                         EffectOutcome::Unresolved => effect.confirm(receipt.clone())?,
+                        #[cfg(feature = "desktop_rebuild")]
+                        EffectOutcome::Observed(_) => effect.confirm(receipt.clone())?,
                         EffectOutcome::Denied => return Err(anyhow!("Effect already resolved")),
                     }
                     subject_receipt = Some(receipt.clone());
@@ -1407,7 +1563,7 @@ fn claim(
                     }
                 };
                 if let Some(reason) = refusal {
-                    record_refusal(tx, &mut job, reason, AuthorityRefusalPhase::Claim)?;
+                    record_refusal(tx, &mut job, reason, AuthorityRefusalPhase::Claim, None)?;
                     refused |= job.state.terminal();
                     continue;
                 }
@@ -1456,7 +1612,7 @@ fn proven_primary_printer_receipt(job: &JobRecord) -> Option<&ResultArtifact> {
             }
             match effect.outcome().ok()? {
                 EffectOutcome::Confirmed(receipt) => Some(receipt),
-                EffectOutcome::Unresolved | EffectOutcome::Denied => None,
+                _ => None,
             }
         });
     }
@@ -1473,7 +1629,7 @@ fn proven_primary_printer_receipt(job: &JobRecord) -> Option<&ResultArtifact> {
             }
             match effect.outcome().ok()? {
                 EffectOutcome::Confirmed(receipt) => Some(receipt),
-                EffectOutcome::Unresolved | EffectOutcome::Denied => None,
+                _ => None,
             }
         })
     };
@@ -1538,7 +1694,10 @@ fn resolved_printer_failure(job: &JobRecord) -> bool {
                     | EffectOperation::PrinterStart
                     | EffectOperation::PrinterUploadAndStart
                     | EffectOperation::SpoolmanDeduction
-            ) && !matches!(effect.outcome(), Ok(EffectOutcome::Unresolved) | Err(_))
+            ) && matches!(
+                effect.outcome(),
+                Ok(EffectOutcome::Confirmed(_) | EffectOutcome::Denied)
+            )
         })
         && !job.effects.iter().any(|effect| {
             matches!(effect.outcome(), Ok(EffectOutcome::Confirmed(_)))
@@ -1654,8 +1813,13 @@ fn advance(
     operation: WorkerOperation,
     admission: &WorkerAdmission,
     _effect_policy: EffectAdmissionPolicy,
-) -> Result<Outcome> {
+    #[cfg(feature = "desktop_rebuild")] policy: Option<AuthPolicy>,
+) -> Result<TransactionDecision> {
     let mut job = claimed_job(tx, &lease)?;
+    #[cfg(feature = "desktop_rebuild")]
+    if let Some(refusal) = refuse_advance(tx, &mut job, &operation, policy)? {
+        return Ok(TransactionDecision::Refused(refusal));
+    }
     let event = match operation {
         WorkerOperation::Heartbeat => "heartbeat",
         WorkerOperation::Progress(progress) => {
@@ -1791,29 +1955,13 @@ fn advance(
             job.state = PersistentState::Running;
             "effect_confirmed"
         }
-        WorkerOperation::Finish(result) => {
-            ensure!(
-                job.state == PersistentState::Running && !job.cancel_requested,
-                "Job cannot finish"
-            );
-            let result = result.or_else(|| proven_primary_printer_receipt(&job).cloned());
-            if let Some(result) = &result {
-                result.validate()?;
-                ensure!(
-                    job.effects
-                        .iter()
-                        .any(|e| e.confirmed && e.receipt.as_ref() == Some(result)),
-                    "Result requires confirmed artifact receipt"
-                );
-            }
-            ensure!(
-                completion_proven(&job, result.as_ref()),
-                "Completion requires effect receipts"
-            );
-            job.result = result;
-            job.progress = Some(100);
-            job.state = PersistentState::Succeeded;
-            "finished"
+        WorkerOperation::Finish(result) => finish(&mut job, result)?,
+        #[cfg(feature = "desktop_rebuild")]
+        WorkerOperation::FinishPublic { artifact, result } => {
+            ensure!(result.kind() == job.kind, "Completed result kind mismatch");
+            let event = finish(&mut job, artifact)?;
+            job.public_result = Some(*result);
+            event
         }
         WorkerOperation::Fail => {
             if job.state == PersistentState::EffectAdmitted {
@@ -1841,7 +1989,97 @@ fn advance(
         job.lease_until = Some(now() + i64::from(admission.lease_seconds));
     }
     save(tx, &mut job, event)?;
-    Ok(Outcome::Job(job, LocalCommit::Committed))
+    Ok(TransactionDecision::Outcome(Outcome::Job(
+        job,
+        LocalCommit::Committed,
+    )))
+}
+
+fn finish(job: &mut JobRecord, result: Option<ResultArtifact>) -> Result<&'static str> {
+    #[cfg(feature = "desktop_rebuild")]
+    ensure!(
+        job.effects
+            .iter()
+            .all(|effect| effect.checklist_completion.is_none()),
+        "Job requires its owning finalizer"
+    );
+    ensure!(
+        job.state == PersistentState::Running && !job.cancel_requested,
+        "Job cannot finish"
+    );
+    let result = result.or_else(|| proven_primary_printer_receipt(job).cloned());
+    if let Some(result) = &result {
+        result.validate()?;
+        ensure!(
+            job.effects
+                .iter()
+                .any(|e| e.confirmed && e.receipt.as_ref() == Some(result)),
+            "Result requires confirmed artifact receipt"
+        );
+    }
+    ensure!(
+        completion_proven(job, result.as_ref()),
+        "Completion requires effect receipts"
+    );
+    job.result = result;
+    job.progress = Some(100);
+    job.state = PersistentState::Succeeded;
+    Ok("finished")
+}
+
+/// Revalidates the attempt's original authority before any worker operation.
+/// A refusal fences the attempt. A receipt that matches the admitted effect is
+/// kept as observed evidence for reconciliation; it never confirms the effect.
+#[cfg(feature = "desktop_rebuild")]
+fn refuse_advance(
+    tx: &Transaction<'_>,
+    job: &mut JobRecord,
+    operation: &WorkerOperation,
+    policy: Option<AuthPolicy>,
+) -> Result<Option<CommittedRefusal>> {
+    let reason = match job.authority_disposition {
+        AuthorityDisposition::PhysicalOwner => return Ok(None),
+        AuthorityDisposition::LegacyMissing => AuthorityRefusalReason::MissingOriginal,
+        AuthorityDisposition::Original => {
+            let policy = policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
+            match refusal_reason(tx, job, policy)? {
+                Some(reason) => reason,
+                None => return Ok(None),
+            }
+        }
+    };
+    let matching_receipt = match operation {
+        WorkerOperation::ConfirmEffect(receipt) => {
+            ensure!(
+                job.state == PersistentState::EffectAdmitted,
+                "No admitted effect"
+            );
+            receipt.validate()?;
+            let effect = job
+                .effects
+                .last()
+                .ok_or_else(|| anyhow!("No effect intent"))?;
+            ensure!(
+                !effect.confirmed
+                    && receipt.content_hash == effect.intent.content_hash
+                    && receipt.target == effect.intent.target,
+                "Receipt mismatch"
+            );
+            Some(receipt.clone())
+        }
+        _ => None,
+    };
+    record_refusal(
+        tx,
+        job,
+        reason,
+        AuthorityRefusalPhase::WorkerAdvance,
+        matching_receipt,
+    )?;
+    Ok(Some(CommittedRefusal {
+        job: job.clone(),
+        failure: reason.failure(),
+    }))
 }
 
 #[cfg(feature = "desktop_rebuild")]
@@ -1898,6 +2136,15 @@ impl AuthorityRefusalReason {
             auth::AuthorityFailure::Missing | auth::AuthorityFailure::PolicyRequired => None,
         }
     }
+    fn failure(self) -> auth::AuthorityFailure {
+        match self {
+            Self::MissingOriginal => auth::AuthorityFailure::Missing,
+            Self::CredentialInvalid => auth::AuthorityFailure::CredentialInvalid,
+            Self::PolicyChanged => auth::AuthorityFailure::PolicyChanged,
+            Self::TenantChanged => auth::AuthorityFailure::TenantChanged,
+            Self::SubjectChanged => auth::AuthorityFailure::SubjectChanged,
+        }
+    }
 }
 
 #[cfg(feature = "desktop_rebuild")]
@@ -1913,14 +2160,22 @@ fn refusal_reason(
 }
 
 /// Records why the original authority was refused and fences the attempt. A job
-/// without effects fails; one with effects waits for reconciliation.
+/// without effects fails; one with effects waits for reconciliation, keeping
+/// `matching_receipt` on the last effect as observed evidence.
 #[cfg(feature = "desktop_rebuild")]
 fn record_refusal(
     tx: &Transaction<'_>,
     job: &mut JobRecord,
     reason: AuthorityRefusalReason,
     phase: AuthorityRefusalPhase,
+    matching_receipt: Option<ResultArtifact>,
 ) -> Result<()> {
+    if let Some(receipt) = matching_receipt {
+        job.effects
+            .last_mut()
+            .ok_or_else(|| anyhow!("No effect intent"))?
+            .receipt = Some(receipt);
+    }
     job.authority_refusal = Some(AuthorityRefusalObservation {
         version: 1,
         reason,
@@ -2604,5 +2859,174 @@ mod tests {
             })
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    /// The reference stores a rich result past 128 KiB because it predates
+    /// main's document limit; here the limit also bounds the public result.
+    #[cfg(feature = "desktop_rebuild")]
+    #[test]
+    fn rich_completed_result_round_trips_through_durable_codec_within_the_limit() {
+        let skipped = |reason: String| {
+            Some(CompletedResult::SourceUpdates(SourceUpdatesResult {
+                checked: vec![],
+                skipped: vec![SkippedSourceUpdate {
+                    source_id: 1,
+                    name: "Source".into(),
+                    reason,
+                }],
+                updates_available: 0,
+                checked_count: 0,
+            }))
+        };
+        let mut job = record();
+        job.state = PersistentState::Succeeded;
+        job.state_version = 1;
+        job.progress = Some(100);
+        job.finished_at = Some(job.updated_at);
+        job.public_result = skipped("x".repeat(16 * 1024));
+        job.validate_state().unwrap();
+        let decoded = decode(&encode(&job).unwrap()).unwrap();
+        assert_eq!(decoded.public_result, job.public_result);
+
+        job.public_result = skipped("x".repeat(JOB_DOC_SIZE_LIMIT));
+        assert!(matches!(
+            encode(&job).unwrap_err().downcast_ref::<JobFailure>(),
+            Some(JobFailure::JobDocTooLarge { .. })
+        ));
+    }
+
+    #[cfg(feature = "desktop_rebuild")]
+    #[test]
+    fn snapshot_defaults_progress_only_for_queued_jobs_and_reports_the_public_result() {
+        let mut job = record();
+        job.created_at = 1;
+        job.updated_at = 1;
+        assert_eq!(job.snapshot().progress, Some(0));
+        assert_eq!(job.snapshot().created_at, "1970-01-01T00:00:01.000Z");
+        for state in [
+            PersistentState::Running,
+            PersistentState::Failed,
+            PersistentState::Cancelled,
+        ] {
+            job.state = state;
+            assert_eq!(job.snapshot().progress, None, "{state:?}");
+        }
+        job.state = PersistentState::Running;
+        job.progress = Some(37);
+        assert_eq!(job.snapshot().progress, Some(37));
+        job.state = PersistentState::Succeeded;
+        job.progress = Some(100);
+        job.result = Some(ResultArtifact {
+            receipt_id: "internal-receipt".into(),
+            content_hash: "b".repeat(64),
+            target: "internal-target".into(),
+        });
+        assert_eq!(job.snapshot().progress, Some(100));
+        assert_eq!(job.snapshot().result, None);
+        let result = CompletedResult::SourceUpdates(SourceUpdatesResult {
+            checked: vec![],
+            skipped: vec![],
+            updates_available: 0,
+            checked_count: 0,
+        });
+        job.public_result = Some(result.clone());
+        assert_eq!(job.snapshot().result, Some(result));
+    }
+
+    #[cfg(feature = "desktop_rebuild")]
+    #[test]
+    fn observed_spoolman_receipt_does_not_prove_uploaded_only() {
+        let path = std::env::temp_dir().join(format!(
+            "pp-observed-spoolman-unit-{}",
+            hex::encode(rand::random::<[u8; 16]>())
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        let owner = WriterOwner::open(&path, crate::Limits::default())
+            .unwrap()
+            .0;
+        owner
+            .jobs(AuthPolicy {
+                registration: auth::RegistrationPolicy::Open,
+                session_tenant: auth::SessionTenantPolicy::AccountTenant,
+                first_user: auth::FirstUserTenant::NewUser,
+            })
+            .unwrap()
+            .submit(
+                Credential::PhysicalOwner(owner.job_physical_owner()),
+                UserOperation::Enqueue {
+                    key: "observed-spoolman".into(),
+                    payload_version: 1,
+                    payload: Payload::PrinterUpload {
+                        printer_id: "observed-printer".into(),
+                        artifact_path: "exports/observed.gcode".into(),
+                        filename: "observed.gcode".into(),
+                        start: true,
+                        profile_id: None,
+                        host_name: None,
+                        checkoff_units: vec![],
+                        unlabeled_names: vec![],
+                    },
+                },
+                &AtomicBool::new(false),
+                Duration::from_secs(5),
+            )
+            .unwrap()
+            .receive()
+            .unwrap();
+        let worker = owner
+            .job_worker(WorkerAdmission {
+                kinds: vec![(JobKind::PrinterUpload, 1)],
+                total: 1,
+                per_resource: 1,
+                lease_seconds: 60,
+            })
+            .unwrap();
+        let mut lease = worker.claim().unwrap().unwrap().1;
+        let upload = EffectIntent {
+            operation: EffectOperation::PrinterUpload,
+            basis_hash: "a".repeat(64),
+            content_hash: "b".repeat(64),
+            target: "observed-printer".into(),
+        };
+        worker
+            .update(&mut lease, WorkerOperation::BeginEffect(upload.clone()))
+            .unwrap();
+        worker
+            .update(
+                &mut lease,
+                WorkerOperation::ConfirmEffect(ResultArtifact {
+                    receipt_id: "observed-upload".into(),
+                    content_hash: upload.content_hash,
+                    target: upload.target,
+                }),
+            )
+            .unwrap();
+        let spoolman = EffectIntent {
+            operation: EffectOperation::SpoolmanDeduction,
+            basis_hash: "c".repeat(64),
+            content_hash: "d".repeat(64),
+            target: "spoolman:observed".into(),
+        };
+        worker
+            .update(&mut lease, WorkerOperation::BeginEffect(spoolman.clone()))
+            .unwrap();
+        let mut uncertain = worker.update(&mut lease, WorkerOperation::Fail).unwrap();
+        uncertain.effects.last_mut().unwrap().receipt = Some(ResultArtifact {
+            receipt_id: "observed-deduction".into(),
+            content_hash: spoolman.content_hash,
+            target: spoolman.target,
+        });
+        uncertain.authority_refusal = Some(AuthorityRefusalObservation {
+            version: 1,
+            reason: AuthorityRefusalReason::CredentialInvalid,
+            phase: AuthorityRefusalPhase::WorkerAdvance,
+            observed_at: now(),
+            generation: uncertain.generation,
+        });
+        uncertain.validate_state().unwrap();
+        assert!(uncertain.uploaded_only_proof().is_none());
+        uncertain.authority_refusal = None;
+        assert!(uncertain.validate_state().is_err());
+        owner.shutdown().unwrap();
     }
 }

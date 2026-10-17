@@ -172,7 +172,7 @@ GRE-607 exposes five crate-private helpers through `working_drafts::observation`
 for GRE-604 D10b. `parse_builder_manifest` reads part rules, option groups,
 repository defaults, and their scalar or array shapes. `merge_builder_groups`
 preserves earlier metadata, unions patterns, and preserves JavaScript property
-order. `builder_path_matches` applies the Node glob and basename rules.
+order. `BuilderGlob` applies the Node glob and basename rules.
 `parse_builder_hints` validates version 1 path hints and rejects unknown fields.
 `infer_builder_siblings` delegates to the sibling inference already on main.
 
@@ -513,9 +513,9 @@ Before recursive creation, admission checks existing input prefixes and their re
 
 Store admission checks permissions on an open directory descriptor and holds it while it resolves the canonical path. It compares that descriptor's device and inode with the canonical directory, then rechecks the canonical leaf's owner and permissions. Replacement at this checkpoint fails with `Data directory was replaced` before lock creation, ownership cleanup or database preflight. Existing aliases remain supported.
 
-Writer admission keeps that descriptor through OS-lock acquisition and opens `printpartner.lock` relative to it before database preflight. Lease acquisition then opens the retained `.desktop.lock` relative to the same directory descriptor. It rechecks directory identity and permissions before opening the lock, before locking, and after locking, before ownership marker access. An observed replacement fails with `Data directory was replaced`. A lock created during a replacement race belongs to the admitted directory; refusal closes the lock without path-based cleanup.
+Writer admission keeps that descriptor through OS-lock acquisition and opens `printpartner.lock` relative to it before database preflight. After taking that lock, Rust reserves `.desktop-lease` with a regular file to exclude standalone Node. An existing Node lease directory refuses admission without owner-marker inspection or recovery. Rust rechecks directory identity and permissions before and after locking. An observed replacement fails with `Data directory was replaced`. A lock created during a replacement race belongs to the admitted directory; refusal closes the lock without path-based cleanup.
 
-The standalone Rust writer acquires `printpartner.lock` before its first read-only database preflight and retains the same admitted directory descriptor into lease acquisition. It rechecks identity and permissions immediately before preflight, refusing an observed replacement before database capture, temporary-copy creation or SQLite open. It checks resolved ancestor permissions before each lock acquisition. `PP_STORAGE_CORE_LOCK=1` tells the supervised Node child to validate its inherited descriptor against `printpartner.lock`. The standalone Node lease protocol remains unchanged. See [Storage](storage.md) for shutdown, crash recovery, and unsupported directory operations.
+The standalone Rust writer acquires `printpartner.lock` before its first read-only database preflight and retains the same admitted directory descriptor through storage ownership. It rechecks identity and permissions immediately before preflight, refusing an observed replacement before database capture, temporary-copy creation or SQLite open. It checks resolved ancestor permissions before each lock acquisition. `PP_STORAGE_CORE_LOCK=1` tells the supervised Node child to validate its inherited descriptor against `printpartner.lock`. The standalone Node lease protocol remains unchanged. See [Storage](storage.md) for shutdown, crash recovery, and unsupported directory operations.
 
 These Unix checks remain snapshots, not path confinement. Replacement during preflight capture or after the OS-lock checkpoints, transient replacement restored between checks, ancestor replacement, ACL policy, standalone Node admission, and Windows runtime permission policy remain open.
 
@@ -582,9 +582,9 @@ an error count.
 The job stream registry starts each stream with its job's snapshot and queues newer
 committed versions for the same tenant and job. A stream closes when the job finishes,
 its 16-frame mailbox overflows, its credential expires or is revoked, or the owner stops.
-At most 128 streams are live. Nothing calls the registry yet: the engine, the auth
-revalidation calls and the snapshot changes that expose `public_result` belong to
-GRE-609 (D16).
+At most 128 streams are live. Nothing calls the registry yet. The snapshot changes
+that expose `public_result` landed with D16 (b); the engine and auth revalidation calls
+land with D16 (c).
 
 `fixtures/parity/jobs-model/generate.mjs` records Node's parsed accepted-plate and
 direct-3mf results and its verdict on accepted-basis seals. Node builds its other job
@@ -623,9 +623,8 @@ admitted kind. `authorize(lease)` returns the live attempt's revalidated tenant 
 subject without changing the job. A queued job's snapshot reports progress `0`, and
 another tenant's read returns `JobAccessFailure::NotFound`.
 
-Worker progress, effects and finish do not yet revalidate authority, and claims do
-not yet reserve the job's Source. Those land in the next two D16 PRs. Upload, local
-scan and Source Sync paths arrive with D14, D17 and D18.
+Claims do not yet reserve the job's Source; that lands in D16 (c). Upload, local scan
+and Source Sync paths arrive with D14, D17 and D18.
 
 `fixtures/parity/jobs-engine/generate.mjs` starts jobs in Node's
 `InProcessJobRunner` under web's tsx loader and records the enqueued snapshot and the
@@ -638,6 +637,50 @@ engine's `job_authority_recovery.rs`:
 npm --prefix web ci --ignore-scripts
 node fixtures/parity/jobs-engine/generate.mjs --check
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test jobs_engine_parity --test job_authority_claims
+```
+
+### D16 jobs engine: recovery and public results
+
+GRE-609's second PR revalidates authority on every worker operation, behind
+`desktop_rebuild`. Heartbeat, progress, effect admission, effect confirmation, finish
+and fail all check the attempt's original credential first, under the worker's policy.
+A refusal records `_authority_refusal` with phase `worker_advance`, fences the
+attempt, commits, and then returns the typed `AuthorityFailure`. An attempt with no
+effects fails. An attempt with effects waits for reconciliation. Physical-owner
+attempts are not checked, and an attempt whose document lost its `_authority` is
+refused as a missing original.
+
+A refused `ConfirmEffect` whose receipt matches the admitted effect keeps that
+receipt as observed evidence. The effect stays unconfirmed, and a document may hold an
+observed receipt only while the job is waiting for reconciliation after a refusal. A
+receipt that does not match is rejected and nothing is written. Reconciliation can
+confirm the observed receipt only with the same receipt. It cannot deny the effect, and
+an observed receipt never proves an uploaded-only print or a resolved printer failure.
+`ConfirmSucceeded` reconciliation and `Finish` refuse jobs that carry a checklist
+completion claim, which only the checklist finalizer settles.
+
+`WorkerOperation::FinishPublic { artifact, result }` finishes like `Finish` and stores
+`result` as the job's `public_result`. The result kind must match the job's kind.
+Snapshots now report `public_result` as `result`, never the internal receipt, and add
+`created_at`. `AtomicJobClient::read_public` returns one snapshot.
+`AtomicJobClient::list_retained` returns the tenant's retained snapshots with Node's
+filters (`LegacyListFilter`: status, `since` in milliseconds against finish time or
+else update time, and profile) and Node's newest-first order. Ties keep enqueue order.
+Quarantined and unreadable rows are skipped. Turning HTTP query strings into
+`LegacyListFilter` belongs to D25.
+
+`fixtures/parity/jobs-engine/generate.mjs` now also runs Node jobs to the end and
+records the finished snapshot and `listJobs` under each filter. The Rust test finishes
+the update check with Node's literal result and asserts the public read and each list.
+Stored times have whole-second precision, so the test waits one second between the two
+finishes. Node's snapshots have no `created_at`. The worker-advance and
+observed-evidence tests port the reference `job_authority_recovery.rs`, because Node
+never revalidates a running job:
+
+```sh
+node fixtures/parity/jobs-engine/generate.mjs --check
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test jobs_engine_parity --test job_authority_claims
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib jobs::
 ```
 
 ## D9 build graph receipt
@@ -710,7 +753,7 @@ A source without a checkout path is skipped. A source whose checkout root the ad
 
 Adapter reads, manifest and hint parsing, and STL scans charge the caller's `PreparationBudget`.
 The stored kit and each source's import rules charge their bytes as documents.
-Import rules also charge every JSON node and one rule per accepted path.
+Both also charge every JSON node and its depth to the same budget. Import rules charge one rule per accepted path.
 Import rules over the JSON byte, depth, or node limit refuse the observation.
 Malformed or non-array import rules give an empty rule set, as in Node.
 A malformed stored kit falls back to an empty kit, as in Node.
@@ -734,8 +777,10 @@ Lone surrogate pattern units are preserved, and `?` consumes half a supplementar
 
 The matcher uses two indices and one saved `*` retry point instead of a regex.
 It has O(path units × pattern units) worst-case work and O(path units + pattern
-units) normalization storage. The helper has no `PreparationBudget` parameter;
-callers retain their existing cancellation checks between matches.
+units) normalization storage. `BuilderGlob::new` normalizes a pattern once for
+all paths. The matcher has no `PreparationBudget` parameter; the observation
+checks cancellation before each path, so cancellation waits for at most one
+path's match.
 This resolves the backtracking and UTF-16 parity defects in GRE-642 and GRE-641.
 
 Regenerate or verify the Node differential corpus with

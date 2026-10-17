@@ -108,7 +108,7 @@ impl Drop for ParentDeathGuard {
 
 pub(super) fn configure_child(
     command: &mut Command,
-    lease_fd: RawFd,
+    storage_lock_fd: RawFd,
 ) -> std::io::Result<(OwnedFd, ParentDeathGuard)> {
     command.process_group(0);
     let (read_end, write_end) = parent_death_pipe()?;
@@ -198,7 +198,7 @@ pub(super) fn configure_child(
             if libc::getppid() != parent {
                 return Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe));
             }
-            if libc::dup2(lease_fd, 198) < 0 {
+            if libc::dup2(storage_lock_fd, 198) < 0 {
                 return Err(std::io::Error::last_os_error());
             }
             Ok(())

@@ -251,7 +251,7 @@ fn queue_cancellation_reply_loss_and_shutdown_drain() {
             .contains("stopped")
     );
     assert!(done_rx.try_recv().is_err());
-    assert!(path.join(".desktop-owner.json").exists());
+    assert!(path.join(".desktop-lease").is_file());
     raw.execute_batch("COMMIT").unwrap();
     first.recv().unwrap().unwrap();
     drop(raw);
@@ -523,18 +523,17 @@ fn backup_rejects_managed_trees_aliases_and_existing_files() {
         .recv()
         .unwrap()
         .unwrap();
-    let marker_path = path.join(".desktop-owner.json");
+    let marker_path = path.join(".desktop-lease");
     let marker = std::fs::read(&marker_path).unwrap();
-    let value: serde_json::Value = serde_json::from_slice(&marker).unwrap();
-    let runtime = PathBuf::from(value["runtime_dir"].as_str().unwrap());
-    let lock = path.join(".desktop.lock");
+    let runtime = owner.lease.as_ref().unwrap().runtime_dir().to_owned();
+    let lock = path.join("printpartner.lock");
     let inode = std::fs::metadata(&lock).unwrap().ino();
     let mut denied = [
         "print-partner.db",
         "print-partner.db-wal",
         "print-partner.db-shm",
         "print-partner.db-journal",
-        ".desktop.lock",
+        "printpartner.lock",
         ".desktop-owner.json",
         "new-file",
     ]
@@ -546,10 +545,10 @@ fn backup_rejects_managed_trees_aliases_and_existing_files() {
     symlink(&runtime, aliases.join("runtime")).unwrap();
     symlink(path.join("print-partner.db-wal"), aliases.join("wal-alias")).unwrap();
     denied.extend([
-        aliases.join("data/.desktop.lock"),
+        aliases.join("data/printpartner.lock"),
         aliases.join("runtime/new-file"),
         aliases.join("wal-alias"),
-        path.join("repos/../.desktop.lock"),
+        path.join("repos/../printpartner.lock"),
     ]);
     let existing = aliases.join("existing");
     std::fs::write(&existing, b"preserve").unwrap();
@@ -596,9 +595,7 @@ fn backup_survives_missing_runtime_without_relaxing_destination_checks() {
         .unwrap()
         .unwrap();
     assert!(path.join("print-partner.db-wal").metadata().unwrap().len() > 32);
-    let marker: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(path.join(".desktop-owner.json")).unwrap()).unwrap();
-    let runtime = PathBuf::from(marker["runtime_dir"].as_str().unwrap());
+    let runtime = owner.lease.as_ref().unwrap().runtime_dir().to_owned();
     assert_eq!(std::fs::read_dir(&runtime).unwrap().count(), 0);
     std::fs::remove_dir(&runtime).unwrap();
     let existing = external.join("existing.db");
@@ -643,7 +640,7 @@ fn backup_survives_missing_runtime_without_relaxing_destination_checks() {
 #[test]
 fn shutdown_with_held_reader_fails_bounded_and_retains_ownership() {
     let (path, owner, client) = fixture("held-reader");
-    let marker = std::fs::read(path.join(".desktop-owner.json")).unwrap();
+    let marker = std::fs::read(path.join(".desktop-lease")).unwrap();
     let read = client.reader(Duration::ZERO).unwrap();
     let started = Instant::now();
     let error = owner.shutdown().unwrap_err().to_string();
@@ -660,31 +657,24 @@ fn shutdown_with_held_reader_fails_bounded_and_retains_ownership() {
         SettingSnapshot::Missing
     );
     drop(read);
-    assert_eq!(
-        std::fs::read(path.join(".desktop-owner.json")).unwrap(),
-        marker
-    );
+    assert_eq!(std::fs::read(path.join(".desktop-lease")).unwrap(), marker);
     assert!(lease::StorageLease::acquire(&path).is_err());
     assert!(lease::StorageLease::retry_failed_release(&path).is_err());
 }
 
 #[test]
-fn failed_cleanup_retains_marker_and_lock_until_explicit_retry() {
+fn failed_cleanup_retains_reservation_and_lock_until_explicit_retry() {
     use fs2::FileExt;
     let (path, owner, _) = fixture("retained-release");
-    let marker = std::fs::read(path.join(".desktop-owner.json")).unwrap();
-    let value: serde_json::Value = serde_json::from_slice(&marker).unwrap();
-    let runtime = PathBuf::from(value["runtime_dir"].as_str().unwrap());
+    let marker = std::fs::read(path.join(".desktop-lease")).unwrap();
+    let runtime = owner.lease.as_ref().unwrap().runtime_dir().to_owned();
     let blocker = runtime.join("block-release");
     std::fs::write(&blocker, b"retain").unwrap();
     assert!(owner.shutdown().is_err());
-    assert_eq!(
-        std::fs::read(path.join(".desktop-owner.json")).unwrap(),
-        marker
-    );
+    assert_eq!(std::fs::read(path.join(".desktop-lease")).unwrap(), marker);
     assert!(lease::StorageLease::acquire(&path).is_err());
     assert!(
-        std::fs::File::open(path.join(".desktop.lock"))
+        std::fs::File::open(path.join("printpartner.lock"))
             .unwrap()
             .try_lock_exclusive()
             .is_err()
@@ -704,21 +694,22 @@ fn failed_cleanup_retains_marker_and_lock_until_explicit_retry() {
 }
 
 #[test]
-fn directory_lease_cleanup_failure_retains_lock_until_retry() {
+fn compatibility_cleanup_failure_retains_lock_until_retry() {
     use fs2::FileExt;
     let (path, owner, _) = fixture("retained-directory-lease");
     let lease_path = path.join(".desktop-lease");
     let hidden = path.join(".desktop-lease-hidden");
     std::fs::rename(&lease_path, &hidden).unwrap();
-    // Marker removal alone must not release the OS lock when the portable lease cannot be removed.
+    std::fs::create_dir(&lease_path).unwrap();
     assert!(owner.shutdown().is_err());
     assert!(!path.join(".desktop-owner.json").exists());
     assert!(
-        std::fs::File::open(path.join(".desktop.lock"))
+        std::fs::File::open(path.join("printpartner.lock"))
             .unwrap()
             .try_lock_exclusive()
             .is_err()
     );
+    std::fs::remove_dir(&lease_path).unwrap();
     std::fs::rename(hidden, &lease_path).unwrap();
     let released = lease::StorageLease::retry_failed_release(&path).unwrap();
     assert!(released.marker_removed && released.runtime_removed && released.lock_released);
@@ -793,87 +784,20 @@ fn unproved_closure_cannot_be_released_by_cleanup_retry() {
     use fs2::FileExt;
     let path = directory("unproved-closure");
     let owner = lease::StorageLease::acquire(&path).unwrap();
-    let marker = std::fs::read(path.join(".desktop-owner.json")).unwrap();
+    let marker = std::fs::read(path.join(".desktop-lease")).unwrap();
     owner.retain_until_process_exit();
     let error = lease::StorageLease::retry_failed_release(&path)
         .err()
         .unwrap();
     assert!(error.to_string().contains("Closure was not proved"));
-    assert_eq!(
-        std::fs::read(path.join(".desktop-owner.json")).unwrap(),
-        marker
-    );
+    assert_eq!(std::fs::read(path.join(".desktop-lease")).unwrap(), marker);
     assert!(
-        std::fs::File::open(path.join(".desktop.lock"))
+        std::fs::File::open(path.join("printpartner.lock"))
             .unwrap()
             .try_lock_exclusive()
             .is_err()
     );
     assert!(lease::StorageLease::acquire(&path).is_err());
-}
-
-#[test]
-fn public_open_recovers_dead_writer_marker_and_atomic_lease() {
-    let (path, owner, client) = fixture("crash-reopen");
-    set(&client, "survives", "crash")
-        .unwrap()
-        .recv()
-        .unwrap()
-        .unwrap();
-    assert!(WriterOwner::open(&path, Limits::default()).is_err());
-    owner.shutdown().unwrap();
-    let pid = exited_true_pid();
-    let marker = serde_json::json!({"storage_protocol_version": 1, "pid": pid, "process_identity": "prior-process", "instance": "ab".repeat(16)});
-    std::fs::write(path.join(".desktop-owner.json"), marker.to_string()).unwrap();
-    std::fs::create_dir(path.join(".desktop-lease")).unwrap();
-    std::fs::write(path.join(".desktop-lease/owner.json"), marker.to_string()).unwrap();
-    let (reopened, _) = WriterOwner::open(&path, Limits::default()).unwrap();
-    let client = reopened.client();
-    let reader = client.reader(Duration::ZERO).unwrap();
-    assert_eq!(
-        reader.snapshot("test", "survives").unwrap(),
-        SettingSnapshot::Stored {
-            value: "crash".into()
-        }
-    );
-    drop(reader);
-    reopened.shutdown().unwrap();
-    assert!(!path.join(".desktop-owner.json").exists());
-    assert!(!path.join(".desktop-lease").exists());
-    std::fs::remove_dir_all(path).unwrap();
-}
-
-#[test]
-fn unowned_preflight_rejects_live_and_invalid_markers_without_changes() {
-    let mut prior = Command::new("/usr/bin/true").spawn().unwrap();
-    let pid = prior.id();
-    prior.wait().unwrap();
-    let child = lease::current_process_identity();
-    for contents in [
-        serde_json::json!({"pid": std::process::id()}).to_string(),
-        serde_json::json!({"pid": 0}).to_string(),
-        "not json".into(),
-        // A dead legacy Rust owner may have left an unrecorded child holding storage.
-        serde_json::json!({"pid": pid, "process_identity": "prior"}).to_string(),
-        // A dead owner whose recorded child is still alive keeps storage blocked.
-        serde_json::json!({"storage_protocol_version": 1, "pid": pid, "process_identity": "prior", "child_pid": std::process::id(), "child_process_identity": child}).to_string(),
-    ] {
-        let path = directory("blocked-marker");
-        std::fs::write(path.join(".desktop-owner.json"), &contents).unwrap();
-        assert!(WriterOwner::open(&path, Limits::default()).is_err());
-        assert_eq!(
-            std::fs::read_to_string(path.join(".desktop-owner.json")).unwrap(),
-            contents
-        );
-        assert_eq!(std::fs::read_dir(&path).unwrap().count(), 2);
-        std::fs::remove_dir_all(path).unwrap();
-    }
-    let path = directory("unreadable-marker");
-    std::fs::create_dir(path.join(".desktop-owner.json")).unwrap();
-    assert!(WriterOwner::open(&path, Limits::default()).is_err());
-    assert!(path.join(".desktop-owner.json").is_dir());
-    assert_eq!(std::fs::read_dir(&path).unwrap().count(), 2);
-    std::fs::remove_dir_all(path).unwrap();
 }
 
 const SCHEMA_PARITY_NODE_VERSION: &str = "v22.23.3";
@@ -2378,17 +2302,17 @@ fn ticket_t_7_writer_denies_managed_alias_backups_and_reopens() {
         .unwrap()
         .unwrap();
     assert!(path.join("print-partner.db-wal").metadata().unwrap().len() > 32);
-    let lock = path.join(".desktop.lock");
+    let lock = path.join("printpartner.lock");
     let inode = std::fs::metadata(&lock).unwrap().ino();
-    let marker = std::fs::read(path.join(".desktop-owner.json")).unwrap();
+    let marker = std::fs::read(path.join(".desktop-lease")).unwrap();
     let aliases = directory("t7-aliases");
     symlink(path.join("print-partner.db-wal"), aliases.join("wal-alias")).unwrap();
     symlink(&path, aliases.join("data")).unwrap();
     for target in [
         path.join("print-partner.db"),
         path.join("print-partner.db-wal"),
-        path.join(".desktop.lock"),
-        path.join(".desktop-owner.json"),
+        path.join("printpartner.lock"),
+        path.join(".desktop-lease"),
         aliases.join("wal-alias"),
         aliases.join("data/print-partner.db"),
     ] {
@@ -2398,10 +2322,7 @@ fn ticket_t_7_writer_denies_managed_alias_backups_and_reopens() {
             "{target:?} {error}"
         );
         assert_eq!(std::fs::metadata(&lock).unwrap().ino(), inode);
-        assert_eq!(
-            std::fs::read(path.join(".desktop-owner.json")).unwrap(),
-            marker
-        );
+        assert_eq!(std::fs::read(path.join(".desktop-lease")).unwrap(), marker);
         assert!(
             std::fs::File::open(&lock)
                 .unwrap()
@@ -2436,9 +2357,8 @@ fn ticket_t_7_writer_retains_ownership_when_cleanup_fails() {
         .recv()
         .unwrap()
         .unwrap();
-    let marker = std::fs::read(path.join(".desktop-owner.json")).unwrap();
-    let value: serde_json::Value = serde_json::from_slice(&marker).unwrap();
-    let runtime = PathBuf::from(value["runtime_dir"].as_str().unwrap());
+    let marker = std::fs::read(path.join(".desktop-lease")).unwrap();
+    let runtime = owner.lease.as_ref().unwrap().runtime_dir().to_owned();
     std::fs::write(runtime.join("block-release"), b"retain").unwrap();
     let error = owner.shutdown().unwrap_err().to_string();
     assert!(
@@ -2447,10 +2367,7 @@ fn ticket_t_7_writer_retains_ownership_when_cleanup_fails() {
         ),
         "{error}"
     );
-    assert_eq!(
-        std::fs::read(path.join(".desktop-owner.json")).unwrap(),
-        marker
-    );
+    assert_eq!(std::fs::read(path.join(".desktop-lease")).unwrap(), marker);
     let blocked = match WriterOwner::open(&path, Limits::default()) {
         Ok(_) => panic!("cleanup failure released ownership"),
         Err(error) => error.to_string(),
@@ -2460,7 +2377,7 @@ fn ticket_t_7_writer_retains_ownership_when_cleanup_fails() {
         "{blocked}"
     );
     assert!(
-        std::fs::File::open(path.join(".desktop.lock"))
+        std::fs::File::open(path.join("printpartner.lock"))
             .unwrap()
             .try_lock_exclusive()
             .is_err()

@@ -416,31 +416,42 @@ fn wildcard_matches(pattern: &[u16], key: &[u16]) -> bool {
     pattern[pat..].iter().all(|unit| *unit == 0x2a)
 }
 
-pub(crate) fn matches(pattern: &ManifestText, key: &str) -> bool {
-    let pattern = normalize_glob(pattern);
-    let key = normalize_glob(&JsText::scalar(key));
-    if pattern == key {
-        return true;
+pub(crate) struct Glob {
+    text: JsText,
+    units: Vec<u16>,
+}
+
+impl Glob {
+    pub(crate) fn new(pattern: &ManifestText) -> Self {
+        let text = normalize_glob(pattern);
+        let units = text
+            .units()
+            .iter()
+            .copied()
+            .map(canonicalize_regex_unit)
+            .collect();
+        Self { text, units }
     }
-    let pattern: Vec<_> = pattern
-        .units()
-        .iter()
-        .copied()
-        .map(canonicalize_regex_unit)
-        .collect();
-    let key: Vec<_> = key
-        .units()
-        .iter()
-        .copied()
-        .map(canonicalize_regex_unit)
-        .collect();
-    wildcard_matches(&pattern, &key)
-        || (!pattern.contains(&0x2f)
-            && key.contains(&0x2f)
-            && key
-                .rsplit(|unit| *unit == 0x2f)
-                .next()
-                .is_some_and(|basename| wildcard_matches(&pattern, basename)))
+
+    pub(crate) fn matches(&self, key: &str) -> bool {
+        let key = normalize_glob(&JsText::scalar(key));
+        if self.text == key {
+            return true;
+        }
+        let key: Vec<_> = key
+            .units()
+            .iter()
+            .copied()
+            .map(canonicalize_regex_unit)
+            .collect();
+        wildcard_matches(&self.units, &key)
+            || (!self.units.contains(&0x2f)
+                && key.contains(&0x2f)
+                && key
+                    .rsplit(|unit| *unit == 0x2f)
+                    .next()
+                    .is_some_and(|basename| wildcard_matches(&self.units, basename)))
+    }
 }
 pub(crate) fn hints(bytes: &[u8], b: &mut PreparationBudget<'_>) -> ReadResult<Vec<HintRule>> {
     b.document(bytes.len(), 0)?;
@@ -538,7 +549,7 @@ fn path_matches(
             .saturating_add(key.len())
             .saturating_mul(2),
     )?;
-    Ok(matches(pattern, key))
+    Ok(Glob::new(pattern).matches(key))
 }
 
 pub(super) fn apply(

@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { desktopChildCredential } from "../desktop-child-credential.js";
+import { desktopOwnsDataDirectory } from "../desktop-child-credential.js";
 import { processIdentity, readOwnershipRecord, storageParentIdentityEnv } from "../storage-lease.js";
 import { currentSchemaVersion } from "./schema.js";
 import { readSchemaVersion } from "./upgrade-guard.js";
@@ -89,8 +89,7 @@ function recordOf(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
-// Rust retires a marker only for a dead standalone writer, a dead protocol-1
-// writer with no child, or a dead recorded child. Any other shape keeps blocking.
+// Standalone Node retains recovery of legacy protocol markers.
 function markerIsRetirable(value: unknown): boolean {
   const record = recordOf(value);
   if (!record || !isPid(record.pid)) return false;
@@ -138,8 +137,7 @@ function isCompleteLeaseOwner(value: unknown): value is { pid: number; process_i
   return typeof record.instance === "string" && /^[0-9a-fA-F]{32}$/.test(record.instance);
 }
 
-// Rust refuses to retire a published lease unless owner.json has a pid,
-// process identity, and a 32-character instance. Anything short of that stays blocking.
+// Standalone Node recovers only complete legacy lease records.
 function leaseBlocksOtherWriters(dataDir: string): boolean {
   const leaseDir = join(dataDir, ".desktop-lease");
   if (!existsSync(leaseDir)) return false;
@@ -160,9 +158,6 @@ function isRecordedChild(marker: RustOwnerMarker): boolean {
   if (marker.child_pid !== process.pid) return false;
   const identity = recordedIdentity(marker, "child_process_identity");
   if (!identity) return false;
-  // Linux matches boot_id:starttime. Off Linux the parent passes Rust's token
-  // through desktop setup; a recycled PID does not have that credential.
-  if (desktopChildCredential() === identity) return true;
   try {
     return processIdentity(process.pid) === identity;
   } catch {
@@ -192,6 +187,7 @@ export function parentReservedCopy(dataDir: string): boolean {
 }
 
 export function rustOwnedCopy(dataDir: string): RustOwnedCopy {
+  if (desktopOwnsDataDirectory(dataDir)) return { kind: "child" };
   const marker = readMarkerFile(dataDir);
   if (marker.kind === "live") {
     if (isRecordedChild(marker.marker)) return { kind: "child" };
