@@ -78,7 +78,7 @@ Marked **planned**. Taken from the reference branch’s (`desktop/source-sync-lo
 | --- | --- |
 | `pp-storage` | `pp-domain`, `pp-contracts` *(already current, only through `desktop_rebuild`)* |
 | `pp-api` | `pp-storage` *(current)*, plus `pp-contracts` **(planned addition)** |
-| `pp-core` | `pp-gateway`, `pp-compat`, `pp-storage`, `pp-source` *(current, gated)*, plus `pp-api` **(planned addition)** |
+| `pp-core` | `pp-gateway`, `pp-compat`, `pp-storage`, `pp-source`, `pp-net` *(current, gated)*, plus `pp-api` **(planned addition)** |
 | `pp-drivers` | `pp-net`, `pp-api-types` *(current; more printer/provider code moves in later)* |
 | `pp-services` | `pp-domain` **(planned; use cases on domain ports only)** |
 | `pp-gateway` | `pp-compat`, `pp-drivers`, `pp-net` *(unchanged)* |
