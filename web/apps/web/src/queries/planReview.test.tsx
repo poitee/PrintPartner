@@ -85,6 +85,23 @@ function wrapper(queryClient: QueryClient) {
 }
 
 describe("Plan review mutations", () => {
+  it.each(["progress", "assembly"] as const)("keeps the Review when a failed %s save targets a missing part", async (kind) => {
+    const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    for (const allowed of [true, false]) queryClient.setQueryData(queryKeys.planReview(1, false, allowed), review);
+    const api = kind === "progress" ? vi.mocked(patchPartProgress) : vi.mocked(patchPartAssembled);
+    api.mockRejectedValueOnce(new Error("Part no longer exists"));
+    const { result } = renderHook(() => {
+      const progress = usePatchPartProgressMutation(1);
+      const assembly = usePatchPartAssembledMutation(1);
+      return kind === "progress" ? progress : assembly;
+    }, { wrapper: wrapper(queryClient) });
+    await act(async () => {
+      await expect(result.current.mutateAsync({ partId: 999, unitIndex: 0, completed: true, assembled: true })).rejects.toThrow("Part no longer exists");
+    });
+    for (const allowed of [true, false]) expect(queryClient.getQueryData(queryKeys.planReview(1, false, allowed))).toEqual(review);
+    queryClient.clear();
+  });
+
   it.each([true, false])("optimistically updates every copy and rolls back failed all-copies saves (%s)", async (completed) => {
     const multiple = structuredClone(review);
     const part = multiple.part_groups[0]!.parts[0]!;
@@ -98,7 +115,7 @@ describe("Plan review mutations", () => {
     let rejectSave: (error: Error) => void = () => {};
     vi.mocked(patchPartProgress).mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectSave = reject; }));
     const { result } = renderHook(() => usePatchPartProgressMutation(1, false), { wrapper: wrapper(queryClient) });
-    act(() => result.current.mutate({ partId: 42, unitIndex: completed ? 3 : 0, completed, optimisticReview: multiple }));
+    act(() => result.current.mutate({ partId: 42, unitIndex: completed ? 3 : 0, completed }));
     await waitFor(() => {
       const current = queryClient.getQueryData<PlanReview>(key)?.part_groups[0]?.parts[0];
       expect(current?.print_units).toEqual(Array(4).fill(completed));
@@ -124,7 +141,6 @@ describe("Plan review mutations", () => {
         partId: 42,
         unitIndex: 0,
         completed: true,
-        optimisticReview: review,
       }),
     );
 
@@ -138,7 +154,7 @@ describe("Plan review mutations", () => {
     expect(queryClient.getQueryState(queryKeys.profiles)?.isInvalidated).toBe(true);
   });
 
-  it("invalidates the active progress review when no optimistic review is supplied", async () => {
+  it("updates cached progress without a caller-supplied review", async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
@@ -155,12 +171,10 @@ describe("Plan review mutations", () => {
       }),
     );
 
-    expect(
-      queryClient.getQueryState(queryKeys.planReview(1, false))?.isInvalidated,
-    ).toBe(true);
+    expect(queryClient.getQueryData<PlanReview>(queryKeys.planReview(1))?.part_groups[0]?.parts[0]?.print_units).toEqual([true]);
   });
 
-  it("invalidates the active assembly review when no optimistic review is supplied", async () => {
+  it("updates cached assembly without a caller-supplied review", async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
@@ -177,9 +191,7 @@ describe("Plan review mutations", () => {
       }),
     );
 
-    expect(
-      queryClient.getQueryState(queryKeys.planReview(1, false))?.isInvalidated,
-    ).toBe(true);
+    expect(queryClient.getQueryData<PlanReview>(queryKeys.planReview(1))?.part_groups[0]?.parts[0]?.assembled_units).toEqual([true]);
   });
 });
 
@@ -207,7 +219,7 @@ describe("Plan mutation Build ownership", () => {
       return kind === "progress" ? progress : assembly;
     }, { initialProps: { profileId: 1 as number | null }, wrapper: wrapper(queryClient) });
     let save: Promise<unknown> | undefined;
-    act(() => { save = hook.result.current.mutateAsync({ partId: 42, unitIndex: 0, completed: true, assembled: true, optimisticReview: review }); });
+    act(() => { save = hook.result.current.mutateAsync({ partId: 42, unitIndex: 0, completed: true, assembled: true }); });
     await waitFor(() => expect(hook.result.current.isPending).toBe(true));
     hook.rerender({ profileId: nextProfileId });
     await act(async () => { pending.resolve({ printed_count: 1, print_units: [true], assembled_count: 1, assembled_units: [true], missing: false }); await save; });
@@ -229,5 +241,67 @@ describe("Plan mutation Build ownership", () => {
     await act(async () => { pending.resolve({ ...review.part_groups[0]!.parts[0]! }); await save; });
     expect(queryClient.getQueryState(queryKeys.planReview(1, false))?.isInvalidated).toBe(true);
     expect(queryClient.getQueryState(queryKeys.planReview(2, false))?.isInvalidated).toBe(false);
+  });
+});
+
+
+describe("Plan mutation field ownership and rollback isolation", () => {
+  it.each((["progress", "assembly"] as const).flatMap((kind) =>
+    (["removed", "masked", "stale", "cancel", "absent"] as const).map((transition) => ({ kind, transition })),
+  ))("preserves inventory through $kind rollback with $transition cache", async ({ kind, transition }) => {
+    const enriched = structuredClone(review);
+    Object.assign(enriched.part_groups[0]!.parts[0]!, {
+      filament_color_id: "spoolman:inventory:filament:7", filament_display: "Old inventory",
+      filament_hex: "#123456", spoolman_spool_id: "99", spool_badge: "400g left", assembled_units: [],
+    });
+    const masked = structuredClone(enriched);
+    Object.assign(masked.part_groups[0]!.parts[0]!, {
+      filament_display: "", filament_hex: null, spool_badge: null, spoolman_spool_id: "100",
+    });
+    const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    const key = queryKeys.planReview(1, false);
+    if (transition !== "absent") queryClient.setQueryData(key, ["stale", "masked"].includes(transition) ? masked : enriched);
+    if (transition === "cancel") {
+      const cancel = queryClient.cancelQueries.bind(queryClient);
+      vi.spyOn(queryClient, "cancelQueries").mockImplementation(async (filters) => {
+        await cancel(filters);
+        queryClient.setQueryData(key, masked);
+      });
+    }
+    let rejectSave: (error: Error) => void = () => {};
+    const pending = new Promise<never>((_resolve, reject) => { rejectSave = reject; });
+    const api = kind === "progress" ? vi.mocked(patchPartProgress) : vi.mocked(patchPartAssembled);
+    api.mockClear();
+    api.mockReturnValueOnce(pending);
+    const hook = renderHook(() => {
+      const progress = usePatchPartProgressMutation(1, false);
+      const assembly = usePatchPartAssembledMutation(1, false);
+      return kind === "progress" ? progress : assembly;
+    }, { wrapper: wrapper(queryClient) });
+    act(() => hook.result.current.mutate({ partId: 42, unitIndex: 0, completed: true,
+      assembled: true }));
+    await waitFor(() => expect(api).toHaveBeenCalledTimes(1));
+    if (transition === "masked") queryClient.setQueryData(key, masked);
+    if (transition === "removed") queryClient.removeQueries({ queryKey: key, exact: true });
+    if (transition === "removed" || transition === "absent") {
+      expect(queryClient.getQueryData(key)).toBeUndefined();
+    } else {
+      const part = queryClient.getQueryData<PlanReview>(key)!.part_groups[0]!.parts[0]!;
+      expect(part).toMatchObject({ filament_display: "", filament_hex: null,
+        spool_badge: null, spoolman_spool_id: "100" });
+    }
+    act(() => rejectSave(new Error("Save failed")));
+    await waitFor(() => expect(hook.result.current.isError).toBe(true));
+    if (transition === "removed" || transition === "absent") {
+      expect(queryClient.getQueryData(key)).toBeUndefined();
+    } else {
+      expect(queryClient.getQueryData<PlanReview>(key)?.part_groups[0]?.parts[0]).toMatchObject({
+        filament_display: "", filament_hex: null, spool_badge: null, spoolman_spool_id: "100",
+        print_units: [false], printed_count: 0, assembled_units: [], missing: true,
+      });
+    }
+    hook.unmount();
+    queryClient.clear();
+    vi.restoreAllMocks();
   });
 });

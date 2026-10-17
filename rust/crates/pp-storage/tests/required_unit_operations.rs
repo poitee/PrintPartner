@@ -323,6 +323,38 @@ fn unresolved_replacement_supersession_and_changed_payload() {
 }
 
 #[test]
+fn changed_revision_with_equal_plan_version_returns_base_changed_without_selection_writes() {
+    let f = Fixture::new(UNCHANGED);
+    let case: Value =
+        serde_json::from_str(include_str!("fixtures/required-units/gaps-node.json")).unwrap();
+    for sql in case["revisionBase"]["setup"].as_array().unwrap() {
+        f.sql().execute_batch(sql.as_str().unwrap()).unwrap();
+    }
+    assert_eq!(
+        f.rows("SELECT p.accepted_plan_revision_id,d.base_revision_id,p.accepted_plan_version,d.base_plan_version FROM build_profiles p JOIN plan_drafts d ON d.profile_id=p.id WHERE d.id=2"),
+        [json!([2, 1, 1, 1])]
+    );
+    let selection = f.selection();
+    let reconciliations =
+        f.rows("SELECT * FROM plan_draft_required_unit_reconciliations ORDER BY id");
+    let assignments = f.rows("SELECT * FROM plan_draft_required_unit_assignments ORDER BY reconciliation_id,target_draft_part_id,unit_index");
+    let decisions = f.rows("SELECT * FROM plan_draft_required_unit_decisions ORDER BY reconciliation_id,target_draft_part_id");
+    let owner = f.open();
+    let client = owner.required_units_with_policy(neutral()).unwrap();
+    let result = f.call(&client, "revision-base", f.request()).unwrap();
+    assert_eq!(result["kind"], "base_changed");
+    assert_eq!(result, case["revisionBase"]["result"]);
+    assert_eq!(f.selection(), selection);
+    assert_eq!(
+        f.rows("SELECT * FROM plan_draft_required_unit_reconciliations ORDER BY id"),
+        reconciliations
+    );
+    assert_eq!(f.rows("SELECT * FROM plan_draft_required_unit_assignments ORDER BY reconciliation_id,target_draft_part_id,unit_index"), assignments);
+    assert_eq!(f.rows("SELECT * FROM plan_draft_required_unit_decisions ORDER BY reconciliation_id,target_draft_part_id"), decisions);
+    owner.shutdown().unwrap();
+}
+
+#[test]
 fn missing_closed_stale_and_rebased_drafts_return_node_outcomes_without_writes() {
     let f = Fixture::new(UNCHANGED);
     let owner = f.open();

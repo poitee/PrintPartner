@@ -314,9 +314,20 @@ invalid optional manifests. `kit` projects stored kit selections through the
 existing `KitManifest` parser. Both propagate preparation budget and cancellation
 failures. `apply` preserves Node's document order, project filtering, selection
 defaults, explicit group membership, group bounds, and exclusion precedence.
-It accepts the shared `PreparationBudget` and accounts for each Part and pattern
-comparison. Kit JSON passes through the budgeted document reader before the
-stored-kit parser, so UTF-16 selection text uses the existing codec.
+It accepts the shared `PreparationBudget`, charges each Part as an entry, and
+charges each pattern comparison as a visit. A comparison keeps no memory after it
+returns, so it does not charge the document-byte cap. It charges the separate
+`comparison_work` counter instead. Before a comparison it charges the raw
+pattern UTF-16 units plus the key's UTF-8 bytes, because normalization scans
+the raw text before trimming. Each comparison builds its own `Glob`, so after
+the comparison it charges the normalized pattern and key UTF-16 units plus the
+glob matcher steps that `Glob` counted. The default and maximum is 2^28 units, so
+comparisons at the 100,000-visit limit can average about 2,680 units each. One
+comparison costs O(P + K²) units for a pattern of P units and a key of K units,
+with K at most 4,096. Only the post-comparison charge can pass the limit, so an
+attempt can exceed it by one comparison's normalized and matcher work. Kit JSON
+passes through the budgeted document reader before the stored-kit parser, so
+UTF-16 selection text uses the existing codec.
 
 `read_model::reusable_draft_base` checks current freshness before validating the
 complete accepted snapshot with the existing bounded readers. It propagates
@@ -1109,21 +1120,22 @@ validation, and Required-unit token remapping from the source-sync reference.
 The optional `pp-contracts` dependency supplies `UnmappableLink`; the boundary
 check rejects this dependency if it becomes required or reachable by default.
 
-PR 2 adds `publish_in_transaction`, receipts, inputs, admission schema, and job
-publication conflicts. PR 3 adds `PublicationClient`, admission, and writer
-`Envelope` dispatch. PR 1 exposes no publication command and writes no schema.
-Temporary `expect(dead_code)` annotations identify the PR 2 integration point.
+PR 2 adds the transaction entry described below. PR 3 adds `PublicationClient`,
+authenticated admission, schema installation, and writer `Envelope` dispatch.
+Temporary `expect(dead_code)` annotations now identify only PR 3 integration points.
 
 `node fixtures/parity/plan-publication/generate.mjs` regenerates literal Node
 results in `fixtures/parity/plan-publication/node.json`; `--check` detects drift.
-It requires Node 22.18 or newer with built-in type stripping and no npm install.
+It requires Node 22.18 or newer and `npm --prefix web ci --ignore-scripts`.
+The module hooks transform TypeScript and select development package exports,
+so the real database probe needs no server or package build.
 The fixture header records the generating Node version. The generator imports
 `preparePlanPublication`, `digestPlanRevisionParts`, `assessCheckoffRemap`, and
 `requiredUnitObjectName`. It extracts and executes the repository's inline
 accepted revision check, `projectionPlanningFieldsMatch`, and private
 `applyCheckoffRemap` and `strictProductionState` methods with row and setting
-adapters. It does not copy their implementations. Later slices can add cases to
-the same generator.
+adapters. It does not copy their implementations. The transaction cases below also import
+the real repository and SQLite database layer.
 
 Rust tests compare literal digests, progress, assignment coordinates, object
 names, remap mappings, and persisted settings. Shared projection cases compare
@@ -1136,3 +1148,49 @@ Node's inline projection check has no progress-validation counterpart, and its
 match-key remap cannot represent token identity, excluded targets, resolved-only
 coordinates, or changed unit indexes. Direct Rust tests cover progress corruption,
 excluded or missing tokens, and changed indexes against the reference behavior.
+
+
+## D19 publication transaction and job conflicts, GRE-612 PR 2
+
+`publish_in_transaction` mirrors Node `AppRepository.applyPlanChanges` and takes
+an existing `&Transaction`. D13 save can call it inside its own transaction with
+an authenticated tenant and actor, profile and draft IDs, admitted and execution
+requests, an idempotency key, and a Required-unit token allocator. It returns a
+publication `Outcome`. The caller commits success or rolls back errors.
+
+The transaction verifies the accepted projection, selected reconciliation and
+live selection basis before publishing immutable revisions, Parts, input sets,
+Required-unit mappings, progress, accepted pointers, and a replayable receipt.
+`plan_publication/schema.sql` supplies the admission table and immutability
+triggers for PR 3's schema installation. PR 2 adds no startup migration or client.
+The default build remains unchanged.
+
+`jobs::publication_conflicts` and `printer_upload_conflicts` move here from D16
+because publication must check execution jobs inside the same transaction.
+Exports use their profile ID. Uploads and deferred starts also resolve Checkoff
+coordinate ownership. All terminal jobs, including uploaded-only uploads, are
+skipped. An active deferred start bound to an uploaded-only parent still blocks
+publication and validates the parent upload binding. The supplied-source import
+arm waits for GRE-610's payload variant.
+
+The generator records fifteen real SQLite transactions covering receipt replay,
+changed drafts, pinned Source inputs, reconciliation reasons, and Checkoff links,
+resolved units, and ownerless queues. Rust restores each database on Node's
+schema and compares literal outcomes and publication rows, normalizing only
+publication time and receipt field casing.
+
+Node `applyPlanChanges` does not check durable jobs, so its running-export case
+publishes. Rust returns the exact job conflict list and leaves publication rows
+unchanged. Both runtimes publish with a terminal uploaded-only upload.
+
+Rust never publishes where Node's Checkoff remap assessment refuses. It preserves
+Node's refusal reasons for deleted Parts, missing match keys, and indexes at or
+past the new quantity. Where both would publish, Rust writes coordinates by
+Required-unit token and refuses if the referenced token was dropped.
+
+This rule applies whenever a kept token's index changes. `Selection::PriorCompletion`
+renumbers units with no quantity change. The index-1 fixture proves that Rust
+preserves the token where Node's coordinate resolves to a different token. At
+index 0, Rust refuses the dropped token and writes nothing where Node publishes.
+Index 2 and a cross-Part filename rename match Node's refusal literally. Fixtures
+retain Node's literal outcomes and compare Checkoff coordinates to Required-unit rows.
