@@ -276,19 +276,30 @@ fn workspace_format_must_match_the_source_sync_record() {
 }
 
 #[test]
-fn no_writer_declarations_match_all_rust_crate_sources() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let output = std::process::Command::new("python3")
-        .arg(root.join("rust/scripts/check-rust-no-writers.py"))
-        .arg(&root)
-        .output()
-        .expect("run Rust no-writer source check");
-    assert!(
-        output.status.success(),
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+fn no_writer_declarations_have_family_literal_rules() {
+    let families = std::collections::BTreeMap::from([
+        ("source-covers", "covers"),
+        ("kit-catalog", "kit-catalog"),
+        ("path-hints", "path-hints"),
+        ("community-manifests", "manifests"),
+    ]);
+    let manifest = manifest();
+    let no_writers: std::collections::BTreeSet<_> = manifest["live_formats"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .filter(|(_, format)| format["rust_writes"] == "none")
+        .map(|(name, _)| name.as_str())
+        .collect();
+    assert_eq!(no_writers, families.keys().copied().collect());
+
+    let rule = include_str!("../../../rules/no-writer-family-literal.yml");
+    for token in families.values() {
+        assert!(
+            rule.contains(token),
+            "missing family literal token: {token}"
+        );
+    }
 }
 
 #[test]
