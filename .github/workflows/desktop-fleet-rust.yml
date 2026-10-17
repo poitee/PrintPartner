@@ -2,7 +2,7 @@ name: Desktop Rust (hosted)
 
 on:
   pull_request:
-    paths:
+    paths: &fleet-paths
       - 'rust/**'
       # Desktop Rust CI always runs `npm --prefix web ci` + `build`, then
       # `rust/scripts/build-desktop-manifest.py`, which hashes built artifacts under
@@ -20,6 +20,10 @@ on:
       - 'web/apps/**'
       - 'web/packages/**'
       - '.github/workflows/desktop-fleet-rust.yml'
+  # Same inputs on main, so a merge of two individually green PRs gets checked.
+  push:
+    branches: [main]
+    paths: *fleet-paths
   workflow_dispatch:
     inputs:
       build_jobs:
@@ -42,7 +46,7 @@ concurrency:
 jobs:
   rust-partition-1:
     name: Rust partition (1/2)
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -78,8 +82,12 @@ jobs:
           tool: ast-grep@0.50.0
       - name: Check Rust ast-grep ratchet
         if: steps.workspace.outputs.manifest != '' && env.PARTITION == '1'
+        env:
+          # A main push compares against the main it replaced, not a newer main
+          # that may have lowered the baseline since.
+          RATCHET_BASE: ${{ github.event_name == 'push' && github.event.before || 'refs/heads/main' }}
         run: |
-          git fetch --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main
+          git fetch --no-tags --depth=1 origin "+$RATCHET_BASE:refs/remotes/origin/main"
           ast-grep test --config rust/sgconfig.yml --skip-snapshot-tests
           python3 -m unittest discover -s rust/scripts -p 'test_ast_grep.py' -v
           python3 rust/scripts/check-ast-grep.py
@@ -227,7 +235,7 @@ jobs:
 
   rust-partition-2:
     name: Rust partition (2/2)
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -238,7 +246,7 @@ jobs:
   # Explicit dependencies preserve each result when only one partition is rerun.
   rust:
     needs: [rust-partition-1, rust-partition-2]
-    if: always() && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)
+    if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

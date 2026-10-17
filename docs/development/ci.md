@@ -118,6 +118,6 @@ The filter also skips one test by name, outside those groups:
 
 ## Other Rust workflows
 
-- **Desktop Rust (hosted)** (`desktop-fleet-rust.yml`) runs the ast-grep lint counts and splits the Linux test suite into two partitions. It runs when Rust or web build inputs change.
+- **Desktop Rust (hosted)** (`desktop-fleet-rust.yml`) runs the ast-grep lint counts and splits the Linux test suite into two partitions. It runs on pull requests and pushes to `main` that change Rust or web build inputs. Every push to `main` gets its own run, so a merge of two individually green pull requests is still checked. On a push, the ast-grep baseline check compares against the `main` commit that push replaced.
 - **Native macOS bundle** (`desktop-native-macos.yml`) builds the unsigned macOS app and runs the macOS storage tests. On pull requests it runs only when macOS inputs change or the PR has the `ci:macos` label. A new push to `main` does not cancel a running `main` run; it waits, and only the newest waiting push runs next.
 - **Desktop runtime** (`desktop-runtime.yml`) runs the Python lifecycle and gateway proofs against the built server on Linux.
