@@ -5,9 +5,11 @@ use crate::manifest_text::{
 use anyhow::{Result, anyhow, bail, ensure};
 use pp_domain::PositiveId;
 use rusqlite::{Transaction, types::ValueRef};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
+
+mod json;
 
 const ROW_LIMIT: usize = 200_000;
 const TEXT_LIMIT: usize = 65_536;
@@ -171,7 +173,7 @@ pub(crate) fn normalize_parts(parts: &mut [DraftPart]) -> Result<()> {
     Ok(())
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct BasisRow {
     revision_part_id: PositiveId,
@@ -182,7 +184,7 @@ struct BasisRow {
     assembled: bool,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(super) enum StoredResult {
     Ready {
@@ -194,7 +196,7 @@ pub(super) enum StoredResult {
     },
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Serialize)]
 #[serde(
     tag = "kind",
     rename_all = "snake_case",
@@ -212,7 +214,7 @@ pub(super) enum StoredAssignment {
     },
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Serialize)]
 #[serde(
     tag = "kind",
     rename_all = "snake_case",
@@ -256,7 +258,7 @@ pub(crate) struct Draft {
     pub(crate) header: Value,
     pub(crate) inputs: Vec<Value>,
     pub(crate) parts: Vec<DraftPart>,
-    pub(super) planning: String,
+    pub(crate) planning: String,
     pub(crate) selected: Option<Saved>,
 }
 
@@ -265,7 +267,7 @@ pub(crate) struct Saved {
     pub(super) result: StoredResult,
 }
 
-pub(super) fn selection_basis_digest(mapping: &Value, basis: &Value) -> String {
+pub(crate) fn selection_basis_digest(mapping: &Value, basis: &Value) -> String {
     digest(&json!({"format":FORMAT,"base_mapping_digest":mapping,"rows":basis}))
 }
 
@@ -280,104 +282,6 @@ pub(super) fn reconciliation_digest(h: &Value) -> String {
         "result_kind":h["resultKind"],
         "result_digest":h["resultDigest"]
     }))
-}
-
-/// Parses stored JSON and requires its re-serialization to equal the stored
-/// text, which rejects extra fields, reordered keys and noncanonical numbers.
-fn canonical<T: Serialize + DeserializeOwned>(json: &str, label: &str) -> Result<T> {
-    let value: T = serde_json::from_str(json).map_err(|_| anyhow!("{label} is invalid"))?;
-    ensure!(
-        serde_json::to_string(&value)? == json,
-        "{label} is not canonical"
-    );
-    Ok(value)
-}
-
-fn validate_basis(rows: &[BasisRow]) -> Result<()> {
-    let mut tokens = HashSet::new();
-    let mut previous = None;
-    for row in rows {
-        model::validate_token(&row.token)?;
-        let key = (row.revision_part_id.get(), row.prior_index);
-        ensure!(
-            row.prior_index < UNIT_LIMIT
-                && previous.is_none_or(|p| p < key)
-                && tokens.insert(row.token.as_str())
-                && !row.created_at.is_empty()
-                && (row.completed || !row.assembled),
-            "Required-unit selection basis is invalid"
-        );
-        previous = Some(key);
-    }
-    Ok(())
-}
-
-fn validate_result(result: &StoredResult) -> Result<()> {
-    match result {
-        StoredResult::Ready {
-            assignments,
-            surplus,
-        } => {
-            let mut tokens = HashSet::new();
-            let mut previous = None;
-            for assignment in assignments {
-                let (part, index, token) = match assignment {
-                    StoredAssignment::Reuse {
-                        draft_part_id,
-                        unit_index,
-                        token,
-                    } => (draft_part_id, unit_index, Some(token)),
-                    StoredAssignment::Create {
-                        draft_part_id,
-                        unit_index,
-                    } => (draft_part_id, unit_index, None),
-                };
-                let key = (part.get(), *index);
-                ensure!(
-                    *index < UNIT_LIMIT && previous.is_none_or(|p| p < key),
-                    "Required-unit assignment slot is duplicated"
-                );
-                previous = Some(key);
-                if let Some(token) = token {
-                    model::validate_token(token)?;
-                    ensure!(
-                        tokens.insert(token.as_str()),
-                        "Required-unit assignment token is duplicated"
-                    );
-                }
-            }
-            let mut previous: Option<&str> = None;
-            for token in surplus {
-                model::validate_token(token)?;
-                ensure!(
-                    tokens.insert(token) && previous.is_none_or(|p| p < token.as_str()),
-                    "Required-unit reconciliation surplus is invalid"
-                );
-                previous = Some(token);
-            }
-        }
-        StoredResult::Unresolved { conflicts } => {
-            let mut previous = 0;
-            for conflict in conflicts {
-                ensure!(
-                    conflict.target() > previous,
-                    "Required-unit conflict target is duplicated"
-                );
-                previous = conflict.target();
-                if let StoredConflict::AmbiguousExactMatch {
-                    candidate_revision_part_ids: ids,
-                    ..
-                } = conflict
-                {
-                    ensure!(
-                        !ids.is_empty() && ids.windows(2).all(|w| w[0].get() < w[1].get()),
-                        "Required-unit conflict candidates are invalid"
-                    );
-                }
-            }
-        }
-    }
-    Ok(())
 }
 
 /// Reads a finalized reconciliation and checks every stored digest, decision
@@ -404,16 +308,8 @@ pub(super) fn saved(
         header["format"] == FORMAT,
         "Required-unit reconciliation format is unsupported"
     );
-    let basis: Vec<BasisRow> = canonical(
-        text(&header, "selectionBasisJson")?,
-        "Required-unit selection basis",
-    )?;
-    validate_basis(&basis)?;
-    let result: StoredResult = canonical(
-        text(&header, "resultJson")?,
-        "Required-unit reconciliation result",
-    )?;
-    validate_result(&result)?;
+    let basis = json::basis(text(&header, "selectionBasisJson")?)?;
+    let result = json::result(text(&header, "resultJson")?)?;
     let reconciled = Reconciled {
         result: serde_json::to_value(&result)?,
         basis: serde_json::to_value(&basis)?,
@@ -584,7 +480,7 @@ fn valid_object_name(name: &str, token: &str) -> bool {
 /// Reads the accepted revision's Required-unit set as predecessor Parts.
 /// Returns `None` when the revision has no set, as Node's
 /// `readRequiredUnitSetByRevision` reports `uninitialized`.
-pub(super) fn base(
+pub(crate) fn base(
     tx: &Transaction<'_>,
     tenant: &str,
     profile: i64,

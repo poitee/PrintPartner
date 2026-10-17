@@ -273,6 +273,7 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.list_plan_snapshots",
         "tool.get_plan_snapshot",
         "tool.get_kit_catalog",
+        "tool.get_plan_option_groups",
         "tool.ui_highlight_part",
         "tool.ui_focus_stl_search",
         "tool.ui_navigate",
@@ -289,8 +290,8 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.audit_source_provenance",
         "tool.analyze_stl_mesh",
     ]);
-    assert_eq!(reviewed.len(), 23);
-    assert_eq!(unresolved.len(), 420);
+    assert_eq!(reviewed.len(), 24);
+    assert_eq!(unresolved.len(), 419);
     let resolved: BTreeSet<_> = index
         .claims()
         .values()
@@ -558,6 +559,7 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
         "tool.list_plan_snapshots",
         "tool.get_plan_snapshot",
         "tool.get_kit_catalog",
+        "tool.get_plan_option_groups",
         "tool.ui_highlight_part",
         "tool.ui_focus_stl_search",
         "tool.ui_navigate",
@@ -2078,7 +2080,6 @@ fn ticket_t_7_ownership_get_kit_catalog_refuses_invalid_admission_before_effects
 fn assert_catalog_tool_invalid_admission(id: &str) {
     let mut original = manifest();
     original["live_formats"]["sqlite-schema"]["rust_writes"] = json!(34);
-    original["live_formats"]["kit-catalog"]["rust_writes"] = json!(1);
     let mut baseline_effect = false;
     admit(&original)
         .and_then(|index| {
@@ -2360,4 +2361,120 @@ fn ticket_t_7_ownership_get_kit_catalog_has_complete_node_owned_resources() {
     let mut value = manifest();
     value["live_formats"]["kit-catalog"]["rust_writes"] = json!(1);
     assert_eq!(admit(&value).unwrap().admit_rollback(id), Ok(&expected));
+}
+
+#[test]
+fn ticket_t_7_ownership_get_plan_option_groups_refuses_invalid_admission_before_effects() {
+    assert_catalog_tool_invalid_admission("tool.get_plan_option_groups");
+}
+
+#[test]
+fn ticket_t_7_ownership_get_plan_option_groups_has_complete_node_owned_resources() {
+    use pp_gateway::ownership::{Owner, manifest::Disposition};
+    let id = "tool.get_plan_option_groups";
+    let index = admit_bundled_manifest().unwrap();
+    let resources = index
+        .resources_for(id)
+        .expect("plan option group resources must be reviewed");
+    let expected: ResourceSet = serde_json::from_value(json!([
+        {"kind":"table","name":"build_profiles"},
+        {"kind":"table","name":"profile_layers"},
+        {"kind":"table","name":"projects"},
+        {"kind":"table","name":"app_settings"},
+        {"kind":"file","name":"source-workspace"},
+        {"kind":"file","name":"path-hints"},
+        {"kind":"file","name":"community-manifests"}
+    ]))
+    .unwrap();
+    assert_eq!(resources, &expected);
+    assert_eq!(
+        index.lookup(id).unwrap().disposition,
+        Disposition::Owned(Owner::Node)
+    );
+    assert_eq!(
+        index.admit_rollback(id),
+        Err(AdmissionError::IncompatibleLiveFormat {
+            operation: id.into(),
+            format: "sqlite-schema".into(),
+            node_reads: 34,
+            rust_writes: Some(35),
+        })
+    );
+    let mut sqlite_compatible = manifest();
+    sqlite_compatible["live_formats"]["sqlite-schema"]["node_reads"] = json!(35);
+    assert_eq!(
+        admit(&sqlite_compatible).unwrap().admit_rollback(id),
+        Ok(&expected)
+    );
+    for format in ["path-hints", "community-manifests"] {
+        assert_eq!(
+            sqlite_compatible["live_formats"][format]["rust_writes"],
+            json!("none")
+        );
+    }
+    for (format, node_reads) in [
+        ("sqlite-schema", 34),
+        ("source-revision-workspace", 1),
+        ("path-hints", 1),
+        ("community-manifests", 1),
+    ] {
+        for rust_writes in [None, Some(node_reads + 1)] {
+            let mut value = manifest();
+            for (compatible_format, version) in [
+                ("sqlite-schema", 34),
+                ("source-revision-workspace", 1),
+                ("path-hints", 1),
+                ("community-manifests", 1),
+            ] {
+                value["live_formats"][compatible_format]["rust_writes"] = json!(version);
+            }
+            let compatible = admit(&value).unwrap();
+            assert_eq!(compatible.admit_rollback(id), Ok(&expected));
+            value["live_formats"][format]["rust_writes"] = json!(rust_writes);
+            let mut effect = false;
+            assert_eq!(
+                admit(&value).and_then(|index| {
+                    index.admit_rollback(id)?;
+                    effect = true;
+                    Ok(())
+                }),
+                Err(AdmissionError::IncompatibleLiveFormat {
+                    operation: id.into(),
+                    format: format.into(),
+                    node_reads,
+                    rust_writes,
+                })
+            );
+            assert!(!effect);
+        }
+    }
+}
+
+#[test]
+fn ticket_t_7_ownership_get_plan_option_groups_requires_valid_inference_formats() {
+    for format in ["path-hints", "community-manifests"] {
+        for field in ["node_reads", "rust_writes"] {
+            let mut value = manifest();
+            value["live_formats"][format]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            assert!(
+                matches!(admit(&value), Err(AdmissionError::Malformed(detail)) if detail.contains(&format!("missing field `{field}`")))
+            );
+            value["live_formats"][format][field] = json!(0);
+            assert_eq!(
+                admit(&value).unwrap_err(),
+                malformed(&format!("live format {format} has version 0"))
+            );
+        }
+        let mut value = manifest();
+        value["live_formats"]
+            .as_object_mut()
+            .unwrap()
+            .remove(format);
+        assert!(
+            matches!(admit(&value), Err(AdmissionError::Malformed(detail)) if detail.contains(&format!("missing field `{format}`")))
+        );
+    }
 }

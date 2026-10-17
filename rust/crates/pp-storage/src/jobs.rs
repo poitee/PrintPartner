@@ -26,6 +26,8 @@ use std::{
     time::{Duration, Instant},
 };
 #[cfg(feature = "desktop_rebuild")]
+pub(crate) use subscriptions::JobSubscriptions;
+#[cfg(feature = "desktop_rebuild")]
 pub use subscriptions::{
     FrameAdmission, JobSubscription, NonblockingSend, PreparedEvent, PreparedFrame, StreamClose,
 };
@@ -87,20 +89,25 @@ pub struct AttemptLease {
     fence: String,
     worker: String,
 }
+#[cfg(feature = "desktop_rebuild")]
+pub struct ClaimedAttempt {
+    pub job: JobRecord,
+    pub lease: AttemptLease,
+    pub source_work: Option<crate::catalog::SourceWorkLease>,
+}
+#[cfg(not(feature = "desktop_rebuild"))]
+pub type ClaimedAttempt = (JobRecord, AttemptLease);
 impl AttemptLease {
     pub fn job_id(&self) -> &str {
         &self.job_id
     }
 }
 #[cfg(feature = "desktop_rebuild")]
-#[expect(
-    dead_code,
-    reason = "GRE-610/613/614 (D14/D17/D18) fence their journals with these"
-)]
 impl AttemptLease {
     pub(crate) fn generation(&self) -> i64 {
         self.generation
     }
+    #[cfg(test)]
     pub(crate) fn version(&self) -> i64 {
         self.version
     }
@@ -209,16 +216,28 @@ pub struct QuarantinedJob {
     pub uncertain_resource: Option<String>,
 }
 pub enum Outcome {
+    #[cfg(feature = "desktop_rebuild")]
+    LocalScanObservation(crate::source_scan::LocalScanObservation),
+    #[cfg(feature = "desktop_rebuild")]
+    LocalScanSettled(JobRecord, crate::source_scan::LocalScanApplied),
+    #[cfg(feature = "desktop_rebuild")]
+    LocalScanCompletion(crate::source_scan::LocalCompletionInspection),
+    #[cfg(feature = "desktop_rebuild")]
+    HeldLocalScan(crate::source_scan::HeldLocalScanInspection),
+    #[cfg(feature = "desktop_rebuild")]
+    LocalScanReconciled(JobRecord),
     Job(JobRecord, LocalCommit),
     List(Vec<JobRecord>),
     #[cfg(feature = "desktop_rebuild")]
     PublicList(RetainedJobs),
     #[cfg(feature = "desktop_rebuild")]
     PublicJob(JobSnapshot),
+    #[cfg(feature = "desktop_rebuild")]
+    Observed(JobSubscription),
     Quarantined(Vec<QuarantinedJob>),
     History(Vec<HistoryEntry>),
     Reconciliations(Vec<ReconciliationRecord>),
-    Claimed(Option<(JobRecord, AttemptLease)>),
+    Claimed(Option<ClaimedAttempt>),
     Retained(usize),
     #[cfg(feature = "desktop_rebuild")]
     Authorized(ValidatedAuthority),
@@ -226,12 +245,26 @@ pub enum Outcome {
 /// What the writer does once the transaction commits.
 enum TransactionDecision {
     Outcome(Outcome),
+    #[cfg(feature = "desktop_rebuild")]
+    Claimed(ClaimPlan),
+    #[cfg(feature = "desktop_rebuild")]
+    LocalScanCompleted(crate::source_scan::PendingLocalCompletion),
+    #[cfg(feature = "desktop_rebuild")]
+    LocalScanReconciled(crate::source_scan::PendingLocalReconciliation),
     /// Report this error only after committing the refusals recorded before it.
     #[cfg(feature = "desktop_rebuild")]
     ErrorAfterCommit(anyhow::Error),
     /// Report the authority failure after committing the refusal it caused.
     #[cfg(feature = "desktop_rebuild")]
     Refused(CommittedRefusal),
+    /// Register the stream only once the snapshot it starts from has committed.
+    #[cfg(feature = "desktop_rebuild")]
+    Observation {
+        credential: Credential,
+        authority: auth::StreamAuthority,
+        policy: AuthPolicy,
+        snapshot: JobSnapshot,
+    },
 }
 #[cfg(feature = "desktop_rebuild")]
 struct CommittedRefusal {
@@ -266,9 +299,13 @@ pub(crate) enum Command {
         worker: String,
         admission: Arc<WorkerAdmission>,
         #[cfg(feature = "desktop_rebuild")]
+        job_id: Option<String>,
+        #[cfg(feature = "desktop_rebuild")]
         kind: Option<JobKind>,
         #[cfg(feature = "desktop_rebuild")]
         policy: Option<AuthPolicy>,
+        #[cfg(feature = "desktop_rebuild")]
+        storage: SettingsClient,
     },
     Worker {
         lease: AttemptLease,
@@ -281,6 +318,51 @@ pub(crate) enum Command {
     Authorize {
         lease: AttemptLease,
         policy: AuthPolicy,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    Observe {
+        credential: Credential,
+        policy: AuthPolicy,
+        job_id: String,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    ObserveLocalScan {
+        lease: AttemptLease,
+        source_work: crate::catalog::SourceWorkProof,
+        policy: AuthPolicy,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    SettleLocalScan {
+        lease: AttemptLease,
+        source_work: crate::catalog::SourceWorkProof,
+        policy: AuthPolicy,
+        settlement: crate::source_scan::LocalScanSettlement,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    CompleteLocalScan {
+        lease: AttemptLease,
+        source_work: crate::catalog::SourceWorkProof,
+        policy: AuthPolicy,
+        applied: crate::source_scan::LocalScanApplied,
+        result: SourceScanResult,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    InspectLocalScan {
+        lease: AttemptLease,
+        worker: String,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    InspectHeldLocalScan {
+        lease: AttemptLease,
+        source_work: crate::catalog::SourceWorkProof,
+        worker: String,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    ReconcileLocalScan {
+        lease: AttemptLease,
+        source_work: crate::catalog::SourceWorkProof,
+        applied: crate::source_scan::LocalScanApplied,
+        reason: String,
     },
     Retain {
         per_tenant: usize,
@@ -337,7 +419,7 @@ impl std::fmt::Display for JobAccessFailure {
 impl std::error::Error for JobAccessFailure {}
 pub struct PendingClaim(Pending);
 impl PendingClaim {
-    pub fn receive(self) -> Result<Option<(JobRecord, AttemptLease)>> {
+    pub fn receive(self) -> Result<Option<ClaimedAttempt>> {
         match self.0.receive()? {
             Outcome::Claimed(value) => Ok(value),
             _ => unreachable!(),
@@ -483,6 +565,11 @@ impl AtomicJobClient {
                 grouping.normalize();
             }
             payload.validate()?;
+            #[cfg(feature = "desktop_rebuild")]
+            ensure!(
+                !matches!(payload, Payload::SuppliedSourceImport { .. }),
+                "Supplied imports require atomic domain admission"
+            );
         }
         submit(
             &self.storage,
@@ -540,6 +627,32 @@ impl AtomicJobClient {
             _ => unreachable!(),
         }
     }
+    /// Streams the job's committed snapshots, starting from the current one,
+    /// for as long as the credential stays valid.
+    #[cfg(feature = "desktop_rebuild")]
+    pub fn subscribe(
+        &self,
+        credential: Credential,
+        job_id: String,
+        cancelled: &AtomicBool,
+        wait: Duration,
+    ) -> Result<JobSubscription> {
+        match submit(
+            &self.storage,
+            Command::Observe {
+                credential,
+                policy: self.policy,
+                job_id,
+            },
+            cancelled,
+            wait,
+        )?
+        .receive()?
+        {
+            Outcome::Observed(subscription) => Ok(subscription),
+            _ => unreachable!(),
+        }
+    }
 }
 impl ServerWorkerClient {
     pub fn begin_source_work(
@@ -560,21 +673,25 @@ impl ServerWorkerClient {
                 worker: self.identity.clone(),
                 admission: self.admission.clone(),
                 #[cfg(feature = "desktop_rebuild")]
+                job_id: None,
+                #[cfg(feature = "desktop_rebuild")]
                 kind: None,
                 #[cfg(feature = "desktop_rebuild")]
                 policy: self.policy,
+                #[cfg(feature = "desktop_rebuild")]
+                storage: self.storage.clone(),
             },
             cancelled,
             wait,
         )?))
     }
-    pub fn claim(&self) -> Result<Option<(JobRecord, AttemptLease)>> {
+    pub fn claim(&self) -> Result<Option<ClaimedAttempt>> {
         self.claim_pending(&AtomicBool::new(false), Duration::from_secs(5))?
             .receive()
     }
     /// Claims the oldest admissible job of one admitted kind.
     #[cfg(feature = "desktop_rebuild")]
-    pub fn claim_kind(&self, kind: JobKind) -> Result<Option<(JobRecord, AttemptLease)>> {
+    pub fn claim_kind(&self, kind: JobKind) -> Result<Option<ClaimedAttempt>> {
         ensure!(
             self.admission
                 .kinds
@@ -587,8 +704,30 @@ impl ServerWorkerClient {
             Command::Claim {
                 worker: self.identity.clone(),
                 admission: self.admission.clone(),
+                job_id: None,
                 kind: Some(kind),
                 policy: self.policy,
+                storage: self.storage.clone(),
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?)
+        .receive()
+    }
+    /// Claims one queued supplied import by id. A refused original authority
+    /// commits the refusal and returns the typed failure instead of moving on.
+    /// A busy Source returns `SourceBusy` and leaves the queued job unchanged.
+    #[cfg(feature = "desktop_rebuild")]
+    pub fn claim_import(&self, job_id: &str) -> Result<Option<ClaimedAttempt>> {
+        PendingClaim(submit(
+            &self.storage,
+            Command::Claim {
+                worker: self.identity.clone(),
+                admission: self.admission.clone(),
+                job_id: Some(job_id.into()),
+                kind: Some(JobKind::SuppliedSourceImport),
+                policy: self.policy,
+                storage: self.storage.clone(),
             },
             &AtomicBool::new(false),
             Duration::from_secs(5),
@@ -644,11 +783,184 @@ impl ServerWorkerClient {
         }
     }
 }
+#[cfg(feature = "desktop_rebuild")]
+impl ServerWorkerClient {
+    pub fn observe_local_scan(
+        &self,
+        lease: &AttemptLease,
+        source_work: &crate::catalog::SourceWorkLease,
+    ) -> Result<crate::source_scan::LocalScanObservation> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
+        match submit(
+            &self.storage,
+            Command::ObserveLocalScan {
+                lease: lease.clone(),
+                source_work: source_work.proof()?,
+                policy,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::LocalScanObservation(observation) => Ok(observation),
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn settle_local_scan(
+        &self,
+        lease: &mut AttemptLease,
+        source_work: &crate::catalog::SourceWorkLease,
+        settlement: crate::source_scan::LocalScanSettlement,
+    ) -> Result<crate::source_scan::LocalScanApplied> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
+        match submit(
+            &self.storage,
+            Command::SettleLocalScan {
+                lease: lease.clone(),
+                source_work: source_work.proof()?,
+                policy,
+                settlement,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::LocalScanSettled(job, applied) => {
+                lease.version = job.state_version;
+                Ok(applied)
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn complete_local_scan(
+        &self,
+        lease: &mut AttemptLease,
+        source_work: &mut crate::catalog::SourceWorkLease,
+        applied: crate::source_scan::LocalScanApplied,
+        result: SourceScanResult,
+    ) -> Result<crate::source_scan::LocalCompletionInspection> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
+        let outcome = match submit(
+            &self.storage,
+            Command::CompleteLocalScan {
+                lease: lease.clone(),
+                source_work: source_work.proof()?,
+                policy,
+                applied,
+                result,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::LocalScanCompletion(outcome) => outcome,
+            _ => unreachable!(),
+        };
+        if matches!(
+            outcome,
+            crate::source_scan::LocalCompletionInspection::Completed(_)
+        ) {
+            source_work.consume_retired()?;
+        }
+        Ok(outcome)
+    }
+
+    pub fn inspect_local_scan_completion(
+        &self,
+        lease: &AttemptLease,
+    ) -> Result<crate::source_scan::LocalCompletionInspection> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        match submit(
+            &self.storage,
+            Command::InspectLocalScan {
+                lease: lease.clone(),
+                worker: self.identity.clone(),
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::LocalScanCompletion(outcome) => Ok(outcome),
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn inspect_local_scan_while_held(
+        &self,
+        lease: &mut AttemptLease,
+        source_work: &crate::catalog::SourceWorkLease,
+    ) -> Result<crate::source_scan::HeldLocalScanInspection> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let outcome = match submit(
+            &self.storage,
+            Command::InspectHeldLocalScan {
+                lease: lease.clone(),
+                source_work: source_work.proof()?,
+                worker: self.identity.clone(),
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::HeldLocalScan(outcome) => outcome,
+            _ => unreachable!(),
+        };
+        lease.version = match &outcome {
+            crate::source_scan::HeldLocalScanInspection::NotApplied(job)
+            | crate::source_scan::HeldLocalScanInspection::Applied(job, _) => job.state_version,
+        };
+        Ok(outcome)
+    }
+
+    pub fn record_local_scan_reconciliation(
+        &self,
+        lease: &AttemptLease,
+        source_work: &mut crate::catalog::SourceWorkLease,
+        applied: crate::source_scan::LocalScanApplied,
+        reason: String,
+    ) -> Result<JobRecord> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let job = match submit(
+            &self.storage,
+            Command::ReconcileLocalScan {
+                lease: lease.clone(),
+                source_work: source_work.proof()?,
+                applied,
+                reason,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::LocalScanReconciled(job) => job,
+            _ => unreachable!(),
+        };
+        source_work.consume_retired()?;
+        Ok(job)
+    }
+}
+
 fn random() -> String {
     hex::encode(rand::random::<[u8; 32]>())
 }
 fn now() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp()
+}
+/// Rounds the start up to a whole second so a lease checked against the
+/// truncated `now()` lasts at least `lease_seconds` of real time.
+fn lease_expiry(at: time::OffsetDateTime, lease_seconds: u32) -> i64 {
+    at.unix_timestamp() + i64::from(at.nanosecond() > 0) + i64::from(lease_seconds)
 }
 pub const JOB_DOC_SIZE_LIMIT: usize = 131072;
 
@@ -904,6 +1216,8 @@ pub(crate) fn save(tx: &Transaction<'_>, job: &mut JobRecord, event: &str) -> Re
             event
         ],
     )?;
+    #[cfg(feature = "desktop_rebuild")]
+    subscriptions::record(job);
     Ok(())
 }
 fn quarantine(tx: &Transaction<'_>, id: &str) -> Result<()> {
@@ -940,6 +1254,8 @@ fn recover_in(tx: &Transaction<'_>, all: bool) -> Result<()> {
         if !all && !lease_until.is_some_and(|until| until <= now()) {
             continue;
         }
+        // A cancelled import goes back to its owner, as `Cancel` does.
+        let owner_cleanup = job.awaits_owner_cleanup();
         job.generation += 1;
         job.fence = None;
         job.worker = None;
@@ -951,9 +1267,9 @@ fn recover_in(tx: &Transaction<'_>, all: bool) -> Result<()> {
             job.state = PersistentState::ReconciliationRequired;
             job.recovery =
                 Some("Resume from confirmed receipts requires handler reconciliation".into());
-        } else if job.cancel_requested {
+        } else if job.cancel_requested && !owner_cleanup {
             job.state = PersistentState::Cancelled;
-        } else if job.attempt >= 100 {
+        } else if job.attempt >= 100 && !owner_cleanup {
             job.state = PersistentState::Failed;
             job.recovery = Some("Attempt limit reached".into());
         } else {
@@ -983,7 +1299,11 @@ pub(crate) fn execute(
     command: Command,
     effect_policy: EffectAdmissionPolicy,
     admission: crate::writer_admission::Deadline,
+    #[cfg(feature = "desktop_rebuild")] subscriptions: &JobSubscriptions,
+    #[cfg(feature = "desktop_rebuild")] catalog_state: &mut crate::catalog::State,
 ) -> Result<Outcome> {
+    #[cfg(feature = "desktop_rebuild")]
+    subscriptions::begin_collection();
     let tx = crate::writer_admission::begin_immediate(connection, admission)?;
     let decision = match command {
         Command::User {
@@ -1018,9 +1338,22 @@ pub(crate) fn execute(
         Command::Claim {
             worker,
             admission,
+            job_id,
             kind,
             policy,
-        } => claim(&tx, &worker, &admission, kind, policy)?,
+            storage,
+        } => claim(
+            &tx,
+            &worker,
+            &admission,
+            ClaimFilter {
+                job_id: job_id.as_deref(),
+                kind,
+            },
+            policy,
+            catalog_state,
+            storage,
+        )?,
         #[cfg(not(feature = "desktop_rebuild"))]
         Command::Worker {
             lease,
@@ -1041,6 +1374,94 @@ pub(crate) fn execute(
                 &tx, &job, policy,
             )?))
         }
+        #[cfg(feature = "desktop_rebuild")]
+        Command::Observe {
+            credential,
+            policy,
+            job_id,
+        } => {
+            let authority = auth::resolve_stream_authority(&tx, &credential, policy, true)?;
+            let job = owned(&tx, &job_id, &authority.tenant)?;
+            ensure!(!job.internal_only(), JobAccessFailure::NotFound);
+            TransactionDecision::Observation {
+                credential,
+                authority,
+                policy,
+                snapshot: job.snapshot(),
+            }
+        }
+        #[cfg(feature = "desktop_rebuild")]
+        Command::ObserveLocalScan {
+            lease,
+            source_work,
+            policy,
+        } => TransactionDecision::Outcome(Outcome::LocalScanObservation(
+            crate::source_scan::observe(&tx, catalog_state, &lease, &source_work, policy)?,
+        )),
+        #[cfg(feature = "desktop_rebuild")]
+        Command::SettleLocalScan {
+            lease,
+            source_work,
+            policy,
+            settlement,
+        } => {
+            let (job, applied) = crate::source_scan::settle(
+                &tx,
+                catalog_state,
+                &lease,
+                &source_work,
+                policy,
+                settlement,
+            )?;
+            TransactionDecision::Outcome(Outcome::LocalScanSettled(job, applied))
+        }
+        #[cfg(feature = "desktop_rebuild")]
+        Command::CompleteLocalScan {
+            lease,
+            source_work,
+            policy,
+            applied,
+            result,
+        } => TransactionDecision::LocalScanCompleted(crate::source_scan::complete(
+            &tx,
+            catalog_state,
+            &lease,
+            source_work,
+            policy,
+            applied,
+            result,
+        )?),
+        #[cfg(feature = "desktop_rebuild")]
+        Command::InspectLocalScan { lease, worker } => {
+            TransactionDecision::Outcome(Outcome::LocalScanCompletion(crate::source_scan::inspect(
+                &tx,
+                catalog_state,
+                &worker,
+                &lease,
+            )?))
+        }
+        #[cfg(feature = "desktop_rebuild")]
+        Command::InspectHeldLocalScan {
+            lease,
+            source_work,
+            worker,
+        } => TransactionDecision::Outcome(Outcome::HeldLocalScan(
+            crate::source_scan::inspect_held(&tx, catalog_state, &worker, &lease, &source_work)?,
+        )),
+        #[cfg(feature = "desktop_rebuild")]
+        Command::ReconcileLocalScan {
+            lease,
+            source_work,
+            applied,
+            reason,
+        } => TransactionDecision::LocalScanReconciled(crate::source_scan::reconcile(
+            &tx,
+            catalog_state,
+            &lease,
+            source_work,
+            &applied,
+            &reason,
+        )?),
         Command::Retain { per_tenant, global } => {
             TransactionDecision::Outcome(Outcome::Retained(prune(&tx, per_tenant, global)?))
         }
@@ -1051,20 +1472,109 @@ pub(crate) fn execute(
         }
         #[cfg(feature = "desktop_rebuild")]
         TransactionDecision::Refused(CommittedRefusal { job, .. }) => job.state.terminal(),
+        #[cfg(feature = "desktop_rebuild")]
+        TransactionDecision::LocalScanCompleted(_) => true,
         _ => false,
     };
     if terminal {
         prune(&tx, 1000, 10000)?;
     }
+    #[cfg(not(feature = "desktop_rebuild"))]
     tx.commit()
         .map_err(|_| anyhow!(JobFailure::CommitUnknown))?;
+    #[cfg(feature = "desktop_rebuild")]
+    {
+        if tx.commit().is_err() {
+            subscriptions::finish_collection();
+            subscriptions.stop();
+            return Err(anyhow!(JobFailure::CommitUnknown));
+        }
+        subscriptions::mark_committed();
+        subscriptions.publish(subscriptions::finish_collection());
+    }
     match decision {
         TransactionDecision::Outcome(outcome) => Ok(outcome),
+        #[cfg(feature = "desktop_rebuild")]
+        TransactionDecision::Claimed(plan) => {
+            Ok(Outcome::Claimed(Some(plan.into_claimed(catalog_state)?)))
+        }
         #[cfg(feature = "desktop_rebuild")]
         TransactionDecision::ErrorAfterCommit(error) => Err(error),
         #[cfg(feature = "desktop_rebuild")]
         TransactionDecision::Refused(CommittedRefusal { failure, .. }) => Err(failure.into()),
+        #[cfg(feature = "desktop_rebuild")]
+        TransactionDecision::LocalScanCompleted(pending) => {
+            use crate::catalog::IssuedTokenState;
+            let outcome = match catalog_state
+                .classify_issued(&pending.proof.incarnation, pending.proof.token)
+            {
+                IssuedTokenState::Active(actual) if actual == &pending.binding => {
+                    catalog_state.retire_issued(&pending.proof, &pending.binding)?;
+                    crate::source_scan::LocalCompletionInspection::Completed(pending.completion)
+                }
+                IssuedTokenState::Retired => {
+                    crate::source_scan::LocalCompletionInspection::Completed(pending.completion)
+                }
+                IssuedTokenState::Active(_) => {
+                    crate::source_scan::LocalCompletionInspection::CommittedReservationConflict(
+                        pending.completion,
+                    )
+                }
+                IssuedTokenState::NeverIssued | IssuedTokenState::WrongIncarnation => {
+                    crate::source_scan::LocalCompletionInspection::CommittedReservationCorrupt(
+                        pending.completion,
+                    )
+                }
+            };
+            Ok(Outcome::LocalScanCompletion(outcome))
+        }
+        #[cfg(feature = "desktop_rebuild")]
+        TransactionDecision::LocalScanReconciled(pending) => {
+            use crate::catalog::IssuedTokenState;
+            match catalog_state.classify_issued(&pending.proof.incarnation, pending.proof.token) {
+                IssuedTokenState::Active(actual) if actual == &pending.binding => {
+                    catalog_state.retire_issued(&pending.proof, &pending.binding)?;
+                }
+                IssuedTokenState::Retired => {}
+                IssuedTokenState::Active(_) => {
+                    return Err(anyhow!(
+                        "Committed Local scan reconciliation has a Source reservation conflict"
+                    ));
+                }
+                IssuedTokenState::NeverIssued | IssuedTokenState::WrongIncarnation => {
+                    return Err(anyhow!(
+                        "Committed Local scan reconciliation has a corrupt Source reservation"
+                    ));
+                }
+            }
+            Ok(Outcome::LocalScanReconciled(pending.job))
+        }
+        #[cfg(feature = "desktop_rebuild")]
+        TransactionDecision::Observation {
+            credential,
+            authority,
+            policy,
+            snapshot,
+        } => subscriptions
+            .register(credential, authority, policy, snapshot)
+            .map(Outcome::Observed),
     }
+}
+/// Runs an authority write under the stream admission gate, then revokes the
+/// streams whose credential no longer resolves to the same tenant and subject.
+#[cfg(feature = "desktop_rebuild")]
+pub(crate) fn authority_change<T>(
+    connection: &mut Connection,
+    subscriptions: &JobSubscriptions,
+    change: impl FnOnce(&mut Connection) -> Result<T>,
+) -> Result<T> {
+    subscriptions.authority_change(|| {
+        let result = change(connection);
+        if subscriptions.revalidate(connection).is_err() {
+            subscriptions.stop_under_authority_gate();
+        }
+        result
+    })
 }
 fn actor(
     tx: &Transaction<'_>,
@@ -1195,7 +1705,9 @@ fn user(
         )),
         #[cfg(feature = "desktop_rebuild")]
         UserOperation::GetPublic { job_id } => {
-            Ok(Outcome::PublicJob(owned(tx, &job_id, tenant)?.snapshot()))
+            let job = owned(tx, &job_id, tenant)?;
+            ensure!(!job.internal_only(), JobAccessFailure::NotFound);
+            Ok(Outcome::PublicJob(job.snapshot()))
         }
         #[cfg(feature = "desktop_rebuild")]
         UserOperation::ListRetained(filter) => {
@@ -1211,6 +1723,9 @@ fn user(
                     decode_row(&id, &document, &mut diagnostics).map(|job| (sequence, job))
                 })
                 .filter(|(_, job)| {
+                    if job.internal_only() {
+                        return false;
+                    }
                     let status = match &filter.status {
                         LegacyStatusFilter::Any => true,
                         LegacyStatusFilter::Exact(status) => job.snapshot().status == status,
@@ -1377,6 +1892,17 @@ fn user(
                 return Ok(Outcome::Job(job, LocalCommit::ReadOnly));
             }
             job.cancel_requested = true;
+            // The import's owner reclaims it to release its input and quota.
+            #[cfg(feature = "desktop_rebuild")]
+            if job.kind == JobKind::SuppliedSourceImport {
+                job.state = PersistentState::Queued;
+                job.generation += 1;
+                job.fence = None;
+                job.worker = None;
+                job.lease_until = None;
+                save(tx, &mut job, "cancellation_requested")?;
+                return Ok(Outcome::Job(job, LocalCommit::Committed));
+            }
             if job.effects.is_empty() {
                 job.state = PersistentState::Cancelled;
                 job.generation += 1;
@@ -1499,12 +2025,70 @@ fn user(
         }
     }
 }
+#[cfg(feature = "desktop_rebuild")]
+struct SourceReservation {
+    token: u64,
+    tenant: String,
+    id: i64,
+    client: SettingsClient,
+}
+#[cfg(feature = "desktop_rebuild")]
+struct ClaimPlan {
+    job: JobRecord,
+    lease: AttemptLease,
+    source: Option<SourceReservation>,
+}
+#[cfg(feature = "desktop_rebuild")]
+impl ClaimPlan {
+    fn into_claimed(self, state: &mut crate::catalog::State) -> Result<ClaimedAttempt> {
+        let source_work = self
+            .source
+            .map(|source| -> Result<_> {
+                state.activate(source.token, source.tenant, source.id);
+                let proof = state.proof(source.token)?;
+                Ok(crate::catalog::lease(source.client, proof))
+            })
+            .transpose()?;
+        Ok(ClaimedAttempt {
+            job: self.job,
+            lease: self.lease,
+            source_work,
+        })
+    }
+}
+#[cfg(feature = "desktop_rebuild")]
+enum SourceBinding<'a> {
+    None,
+    Individual(i64),
+    Wildcard,
+    LegacySync(Option<&'a [u64]>),
+}
+#[cfg(feature = "desktop_rebuild")]
+fn source_binding(payload: &Payload) -> Result<SourceBinding<'_>> {
+    Ok(match payload {
+        Payload::ImportScan { project_id }
+        | Payload::ExtractSourceDocs { project_id }
+        | Payload::SuppliedSourceImport { project_id, .. } => {
+            SourceBinding::Individual(i64::try_from(*project_id)?)
+        }
+        Payload::CheckSourceUpdates {} => SourceBinding::Wildcard,
+        Payload::Sync { project_ids } => SourceBinding::LegacySync(project_ids.as_deref()),
+        _ => SourceBinding::None,
+    })
+}
+#[cfg(feature = "desktop_rebuild")]
+struct ClaimFilter<'a> {
+    job_id: Option<&'a str>,
+    kind: Option<JobKind>,
+}
 fn claim(
     tx: &Transaction<'_>,
     worker: &str,
     admission: &WorkerAdmission,
-    #[cfg(feature = "desktop_rebuild")] requested: Option<JobKind>,
+    #[cfg(feature = "desktop_rebuild")] filter: ClaimFilter<'_>,
     #[cfg(feature = "desktop_rebuild")] policy: Option<AuthPolicy>,
+    #[cfg(feature = "desktop_rebuild")] catalog_state: &crate::catalog::State,
+    #[cfg(feature = "desktop_rebuild")] storage: SettingsClient,
 ) -> Result<TransactionDecision> {
     let mut diagnostics = DocumentDiagnostics::default();
     recover_in(tx, false)?;
@@ -1520,7 +2104,7 @@ fn claim(
     let mut refused = false;
     for (kind, capacity) in &admission.kinds {
         #[cfg(feature = "desktop_rebuild")]
-        if requested.is_some_and(|requested| requested != *kind) {
+        if filter.kind.is_some_and(|requested| requested != *kind) {
             continue;
         }
         let count:i64=tx.query_row("SELECT COUNT(*) FROM durable_jobs WHERE kind=?1 AND state IN ('running','effect_admitted')",[kind.name()],|r|r.get(0))?;
@@ -1529,6 +2113,10 @@ fn claim(
         }
         let documents=tx.prepare("SELECT id,document FROM durable_jobs WHERE state='queued' AND kind=?1 ORDER BY created,id")?.query_map([kind.name()],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
         for (id, document) in documents {
+            #[cfg(feature = "desktop_rebuild")]
+            if filter.job_id.is_some_and(|target| target != id) {
+                continue;
+            }
             let Some(mut job) = decode_row(&id, &document, &mut diagnostics) else {
                 continue;
             };
@@ -1542,7 +2130,10 @@ fn claim(
                     continue;
                 }
             }
-            ensure!(job.attempt < 100, "Job attempt limit reached");
+            ensure!(
+                job.attempt < 100 || job.awaits_owner_cleanup(),
+                "Job attempt limit reached"
+            );
             #[cfg(feature = "desktop_rebuild")]
             {
                 let refusal = match job.authority_disposition {
@@ -1563,16 +2154,58 @@ fn claim(
                     }
                 };
                 if let Some(reason) = refusal {
-                    record_refusal(tx, &mut job, reason, AuthorityRefusalPhase::Claim, None)?;
+                    let phase = if filter.job_id.is_some() {
+                        AuthorityRefusalPhase::TargetedClaim
+                    } else {
+                        AuthorityRefusalPhase::Claim
+                    };
+                    record_refusal(tx, &mut job, reason, phase, None)?;
+                    if filter.job_id.is_some() {
+                        return Ok(TransactionDecision::Refused(CommittedRefusal {
+                            job,
+                            failure: reason.failure(),
+                        }));
+                    }
                     refused |= job.state.terminal();
                     continue;
                 }
             }
+            #[cfg(feature = "desktop_rebuild")]
+            let source = match source_binding(&job.payload)? {
+                SourceBinding::Individual(id) => {
+                    if crate::catalog::get(tx, &job.tenant, id)?.is_none() {
+                        job.state = PersistentState::Failed;
+                        job.recovery = Some("Source is unavailable for this job".into());
+                        save(tx, &mut job, "source_unavailable")?;
+                        continue;
+                    }
+                    if catalog_state.source_busy(&job.tenant, id) {
+                        if filter.job_id.is_some() {
+                            return Ok(TransactionDecision::ErrorAfterCommit(anyhow!(
+                                crate::catalog::SourceBusy
+                            )));
+                        }
+                        continue;
+                    }
+                    Some(SourceReservation {
+                        token: catalog_state.next_token()?,
+                        tenant: job.tenant.clone(),
+                        id,
+                        client: storage,
+                    })
+                }
+                SourceBinding::None | SourceBinding::Wildcard | SourceBinding::LegacySync(_) => {
+                    None
+                }
+            };
             job.state = PersistentState::Running;
             job.attempt += 1;
             job.generation += 1;
             let fence = random();
-            job.lease_until = Some(now() + i64::from(admission.lease_seconds));
+            job.lease_until = Some(lease_expiry(
+                time::OffsetDateTime::now_utc(),
+                admission.lease_seconds,
+            ));
             job.fence = Some(fence.clone());
             job.worker = Some(worker.into());
             save(tx, &mut job, "claimed")?;
@@ -1588,6 +2221,13 @@ fn claim(
             if refused {
                 prune(tx, 1000, 10000)?;
             }
+            #[cfg(feature = "desktop_rebuild")]
+            return Ok(TransactionDecision::Claimed(ClaimPlan {
+                job,
+                lease,
+                source,
+            }));
+            #[cfg(not(feature = "desktop_rebuild"))]
             return Ok(TransactionDecision::Outcome(Outcome::Claimed(Some((
                 job, lease,
             )))));
@@ -1645,6 +2285,8 @@ fn proven_primary_printer_receipt(job: &JobRecord) -> Option<&ResultArtifact> {
 }
 fn completion_proven(job: &JobRecord, result: Option<&ResultArtifact>) -> bool {
     match &job.payload {
+        #[cfg(feature = "desktop_rebuild")]
+        Payload::SuppliedSourceImport { .. } => false,
         Payload::PrinterUpload { .. } => {
             proven_primary_printer_receipt(job).is_some_and(|primary| result == Some(primary))
         }
@@ -1731,6 +2373,7 @@ pub(crate) fn claimed_source(
     source_id: Option<i64>,
 ) -> Result<(String, i64)> {
     let job = claimed_job(tx, lease)?;
+    #[cfg(not(feature = "desktop_rebuild"))]
     let id = match job.payload {
         Payload::ImportScan { project_id } | Payload::ExtractSourceDocs { project_id } => {
             ensure!(
@@ -1753,6 +2396,30 @@ pub(crate) fn claimed_source(
             source_id.ok_or_else(|| anyhow!("Wildcard Source attempt requires Source"))?
         }
         _ => return Err(anyhow!("Attempt is not Source work")),
+    };
+    #[cfg(feature = "desktop_rebuild")]
+    let id = match source_binding(&job.payload)? {
+        SourceBinding::Individual(id) => {
+            ensure!(
+                source_id.is_none(),
+                "Individual Source attempt uses its stored Source"
+            );
+            id
+        }
+        SourceBinding::LegacySync(project_ids) => {
+            let id = source_id.ok_or_else(|| anyhow!("Sync attempt requires Source"))?;
+            if let Some(ids) = project_ids {
+                ensure!(
+                    u64::try_from(id).is_ok_and(|id| ids.contains(&id)),
+                    "Source outside Sync scope"
+                );
+            }
+            id
+        }
+        SourceBinding::Wildcard => {
+            source_id.ok_or_else(|| anyhow!("Wildcard Source attempt requires Source"))?
+        }
+        SourceBinding::None => return Err(anyhow!("Attempt is not Source work")),
     };
     Ok((job.tenant, id))
 }
@@ -1820,6 +2487,15 @@ fn advance(
     if let Some(refusal) = refuse_advance(tx, &mut job, &operation, policy)? {
         return Ok(TransactionDecision::Refused(refusal));
     }
+    #[cfg(feature = "desktop_rebuild")]
+    ensure!(
+        job.kind != JobKind::SuppliedSourceImport
+            || matches!(
+                operation,
+                WorkerOperation::Heartbeat | WorkerOperation::Progress(_)
+            ),
+        "Supplied imports advance through owned phases"
+    );
     let event = match operation {
         WorkerOperation::Heartbeat => "heartbeat",
         WorkerOperation::Progress(progress) => {
@@ -1986,7 +2662,10 @@ fn advance(
         job.state,
         PersistentState::Running | PersistentState::EffectAdmitted
     ) {
-        job.lease_until = Some(now() + i64::from(admission.lease_seconds));
+        job.lease_until = Some(lease_expiry(
+            time::OffsetDateTime::now_utc(),
+            admission.lease_seconds,
+        ));
     }
     save(tx, &mut job, event)?;
     Ok(TransactionDecision::Outcome(Outcome::Job(
@@ -2121,6 +2800,38 @@ pub(crate) fn require_original_authority(
     let (tenant, subject) = auth::authority::resolve(tx, basis, policy)?;
     ensure!(tenant == job.tenant, auth::AuthorityFailure::TenantChanged);
     Ok(ValidatedAuthority { tenant, subject })
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[cfg_attr(not(test), expect(dead_code, reason = "D17 (c) calls this"))]
+pub(crate) fn revalidate_source_authority(
+    tx: &Transaction<'_>,
+    job: &JobRecord,
+    policy: AuthPolicy,
+) -> Result<()> {
+    if job.authority_disposition == AuthorityDisposition::PhysicalOwner {
+        return Ok(());
+    }
+    require_original_authority(tx, job, policy).map(drop)
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[cfg_attr(not(test), expect(dead_code, reason = "D17 (c) calls this"))]
+pub(crate) fn commit_source_authority_refusal(
+    tx: &Transaction<'_>,
+    job: &mut JobRecord,
+    error: &anyhow::Error,
+) -> Result<bool> {
+    let reason = if job.authority_disposition == AuthorityDisposition::LegacyMissing {
+        Some(AuthorityRefusalReason::MissingOriginal)
+    } else {
+        AuthorityRefusalReason::of(error)
+    };
+    let Some(reason) = reason else {
+        return Ok(false);
+    };
+    record_refusal(tx, job, reason, AuthorityRefusalPhase::SourceWriter, None)?;
+    Ok(true)
 }
 
 #[cfg(feature = "desktop_rebuild")]
@@ -2268,8 +2979,128 @@ pub(crate) fn validate_schema(connection: &Connection, version: u64) -> Result<(
     Ok(())
 }
 
+#[cfg(feature = "desktop_rebuild")]
+fn printer_upload_conflicts(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    profile: i64,
+    profile_id: Option<u64>,
+    checkoff_units: &[CheckoffUnit],
+) -> Result<bool> {
+    let mut owners = std::collections::HashSet::new();
+    let mut unresolved = false;
+    for unit in checkoff_units {
+        let owner: Option<i64> = tx
+            .query_row(
+                "SELECT p.profile_id FROM parts p JOIN build_profiles b ON b.id=p.profile_id AND b.tenant_id=p.tenant_id WHERE p.tenant_id=? AND p.id=?",
+                params![tenant, unit.part_id as i64],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(owner) = owner {
+            owners.insert(owner);
+        } else {
+            unresolved = true;
+        }
+    }
+    ensure!(
+        owners.len() <= 1
+            && profile_id.is_none_or(|id| owners.iter().all(|owner| *owner as u64 == id)),
+        "Job coordinate ownership mismatch"
+    );
+    Ok(unresolved || profile_id == Some(profile as u64) || owners.contains(&profile))
+}
+
+#[cfg(feature = "desktop_rebuild")]
+pub(crate) fn publication_conflicts(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    profile: i64,
+) -> Result<Vec<pp_contracts::publication::ExecutionConflict>> {
+    let records = tx
+        .prepare("SELECT id,kind,state,document FROM durable_jobs WHERE tenant=? ORDER BY id")?
+        .query_map([tenant], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut result = Vec::new();
+    for (id, kind, state, document) in records {
+        let record = decode(&document)?;
+        ensure!(
+            record.tenant == tenant
+                && record.job_id == id
+                && record.kind == record.payload.kind()
+                && record.kind.name() == kind
+                && record.state.name() == state,
+            "Job identity mismatch"
+        );
+        if record.state.terminal() {
+            continue;
+        }
+        let affected = match &record.payload {
+            Payload::Sync { .. }
+            | Payload::ImportScan { .. }
+            | Payload::ExtractSourceDocs { .. }
+            | Payload::CheckSourceUpdates {} => false,
+            Payload::SuppliedSourceImport { .. } => false,
+            Payload::ExportStlPack { profile_id, .. }
+            | Payload::ExportChecklistHtml { profile_id }
+            | Payload::ExportKitBundle { profile_id, .. }
+            | Payload::ExportAcceptedPlate3mf { profile_id, .. }
+            | Payload::ExportDirect3mf { profile_id, .. } => *profile_id == profile as u64,
+            Payload::PrinterUpload {
+                profile_id,
+                checkoff_units,
+                ..
+            } => printer_upload_conflicts(tx, tenant, profile, *profile_id, checkoff_units)?,
+            Payload::PrinterStart(request) => {
+                let parent = retained_owned(tx, &request.uploaded_job_id, tenant)?;
+                ensure!(
+                    parent.kind == JobKind::PrinterUpload
+                        && parent.state == PersistentState::UploadedOnly,
+                    "Parent job is not an uploaded-only print"
+                );
+                let proof = parent
+                    .uploaded_only_proof()
+                    .ok_or_else(|| anyhow!("Parent job is not an uploaded-only print"))?;
+                ensure!(
+                    request.printer_id() == Some(proof.printer_id)
+                        && request.upload_effect() == Some(proof.upload),
+                    "Printer start binding mismatch"
+                );
+                let Payload::PrinterUpload {
+                    profile_id,
+                    checkoff_units,
+                    ..
+                } = &parent.payload
+                else {
+                    return Err(anyhow!("Parent job is not an uploaded-only print"));
+                };
+                printer_upload_conflicts(tx, tenant, profile, *profile_id, checkoff_units)?
+            }
+        };
+        if affected {
+            result.push(pp_contracts::publication::ExecutionConflict {
+                operation_id: id,
+                kind,
+                state,
+            });
+        }
+    }
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/common/claimed_attempt.rs"
+    ));
     use super::*;
 
     fn record() -> JobRecord {
@@ -2449,6 +3280,18 @@ mod tests {
         job
     }
 
+    fn run(connection: &mut Connection, command: Command) -> Result<Outcome> {
+        execute(
+            connection,
+            command,
+            EffectAdmissionPolicy::Legacy,
+            crate::writer_admission::Deadline::at_dequeue(),
+            #[cfg(feature = "desktop_rebuild")]
+            &JobSubscriptions::new(),
+            #[cfg(feature = "desktop_rebuild")]
+            &mut crate::catalog::State::new(std::env::temp_dir()),
+        )
+    }
     fn claim_command(worker: &str) -> Command {
         Command::Claim {
             worker: worker.into(),
@@ -2459,10 +3302,25 @@ mod tests {
                 lease_seconds: 60,
             }),
             #[cfg(feature = "desktop_rebuild")]
+            job_id: None,
+            #[cfg(feature = "desktop_rebuild")]
             kind: None,
             #[cfg(feature = "desktop_rebuild")]
             policy: None,
+            #[cfg(feature = "desktop_rebuild")]
+            storage: test_storage(),
         }
+    }
+    #[cfg(feature = "desktop_rebuild")]
+    fn test_storage() -> SettingsClient {
+        let (owner, _) = WriterOwner::open(
+            &std::env::temp_dir().join(format!("pp-claim-unit-{}", random())),
+            crate::Limits::default(),
+        )
+        .unwrap();
+        let client = owner.client();
+        owner.shutdown().unwrap();
+        client
     }
 
     fn job_row(connection: &Connection, id: &str) -> (String, i64, i64) {
@@ -2484,13 +3342,9 @@ mod tests {
             .execute_batch(include_str!("jobs/schema.sql"))
             .unwrap();
         let held = enqueue_job(&mut connection, "held");
-        let Outcome::Claimed(Some((claimed, _))) = execute(
-            &mut connection,
-            claim_command("holder"),
-            EffectAdmissionPolicy::Legacy,
-            crate::writer_admission::Deadline::at_dequeue(),
-        )
-        .unwrap() else {
+        let Outcome::Claimed(Some(claimed_attempt!(claimed, _))) =
+            run(&mut connection, claim_command("holder")).unwrap()
+        else {
             panic!("held claim");
         };
         assert_eq!(claimed.job_id, held.job_id);
@@ -2543,12 +3397,7 @@ mod tests {
             }
         }
         assert!(blocked, "page budget never rejected a larger job document");
-        let error = match execute(
-            &mut connection,
-            claim_command("second"),
-            EffectAdmissionPolicy::Legacy,
-            crate::writer_admission::Deadline::at_dequeue(),
-        ) {
+        let error = match run(&mut connection, claim_command("second")) {
             Err(error) => error,
             Ok(_) => panic!("in-flight claim committed under the page budget"),
         };
@@ -2582,13 +3431,9 @@ mod tests {
         connection
             .pragma_update(None, "max_page_count", limit + 64)
             .unwrap();
-        let Outcome::Claimed(Some((retried, _))) = execute(
-            &mut connection,
-            claim_command("second"),
-            EffectAdmissionPolicy::Legacy,
-            crate::writer_admission::Deadline::at_dequeue(),
-        )
-        .unwrap() else {
+        let Outcome::Claimed(Some(claimed_attempt!(retried, _))) =
+            run(&mut connection, claim_command("second")).unwrap()
+        else {
             panic!("claim after raising the quota");
         };
         assert_eq!(retried.job_id, victim.job_id);
@@ -2614,13 +3459,9 @@ mod tests {
             .execute_batch(include_str!("jobs/schema.sql"))
             .unwrap();
         let held = enqueue_job(&mut connection, "held");
-        let Outcome::Claimed(Some((claimed, _))) = execute(
-            &mut connection,
-            claim_command("holder"),
-            EffectAdmissionPolicy::Legacy,
-            crate::writer_admission::Deadline::at_dequeue(),
-        )
-        .unwrap() else {
+        let Outcome::Claimed(Some(claimed_attempt!(claimed, _))) =
+            run(&mut connection, claim_command("holder")).unwrap()
+        else {
             panic!("held claim");
         };
         assert_eq!(claimed.job_id, held.job_id);
@@ -2633,12 +3474,7 @@ mod tests {
                 std::ptr::null_mut(),
             );
         }
-        let error = match execute(
-            &mut connection,
-            claim_command("second"),
-            EffectAdmissionPolicy::Legacy,
-            crate::writer_admission::Deadline::at_dequeue(),
-        ) {
+        let error = match run(&mut connection, claim_command("second")) {
             Err(error) => error,
             Ok(_) => panic!("in-flight claim committed"),
         };
@@ -2665,13 +3501,9 @@ mod tests {
             )
             .unwrap();
         assert_eq!(running, 1);
-        let Outcome::Claimed(Some((retried, _))) = execute(
-            &mut connection,
-            claim_command("second"),
-            EffectAdmissionPolicy::Legacy,
-            crate::writer_admission::Deadline::at_dequeue(),
-        )
-        .unwrap() else {
+        let Outcome::Claimed(Some(claimed_attempt!(retried, _))) =
+            run(&mut connection, claim_command("second")).unwrap()
+        else {
             panic!("claim after the commit failure");
         };
         assert_eq!(retried.job_id, victim.job_id);
@@ -2866,7 +3698,7 @@ mod tests {
                 lease_seconds: 60,
             })
             .unwrap();
-        let mut lease = worker.claim().unwrap().unwrap().1;
+        let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
         let upload = EffectIntent {
             operation: EffectOperation::PrinterUpload,
             basis_hash: "a".repeat(64),
@@ -2913,5 +3745,22 @@ mod tests {
         uncertain.authority_refusal = None;
         assert!(uncertain.validate_state().is_err());
         owner.shutdown().unwrap();
+    }
+    #[test]
+    fn lease_expiry_grants_at_least_lease_seconds_at_second_boundaries() {
+        const SECOND: i128 = 1_000_000_000;
+        let k = 1_800_000_000_i128 * SECOND;
+        for offset in [0, 1, 1_000_000, 999_000_000, SECOND - 1] {
+            let start = time::OffsetDateTime::from_unix_timestamp_nanos(k + offset).unwrap();
+            for lease_seconds in [1, 60] {
+                let granted =
+                    i128::from(lease_expiry(start, lease_seconds)) * SECOND - (k + offset);
+                let wanted = i128::from(lease_seconds) * SECOND;
+                assert!(
+                    (wanted..wanted + SECOND).contains(&granted),
+                    "offset {offset} ns, lease {lease_seconds} s: granted {granted} ns"
+                );
+            }
+        }
     }
 }

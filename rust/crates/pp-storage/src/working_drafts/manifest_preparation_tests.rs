@@ -204,6 +204,23 @@ fn preparation_manifest_helpers_propagate_budget_and_cancellation() {
         apply(&mut parts, &docs, vec![], vec![], &mut b),
         Err(ReadFailure::LimitExceeded(Resource::Visits))
     ));
+    let comparison_work = |comparison_work| {
+        PreparationBudget::new(
+            &cancelled,
+            PreparationLimits {
+                comparison_work,
+                ..PreparationLimits::default()
+            },
+        )
+        .unwrap()
+    };
+    let mut b = comparison_work(26);
+    apply(&mut parts, &docs, vec![], vec![], &mut b).unwrap();
+    let mut b = comparison_work(25);
+    assert!(matches!(
+        apply(&mut parts, &docs, vec![], vec![], &mut b),
+        Err(ReadFailure::LimitExceeded(Resource::ComparisonWork))
+    ));
     let mut b = PreparationBudget::new(&cancelled, PreparationLimits::default()).unwrap();
     cancelled.store(true, Ordering::Release);
     assert!(matches!(
@@ -214,5 +231,110 @@ fn preparation_manifest_helpers_propagate_budget_and_cancellation() {
     assert!(matches!(
         apply(&mut [], &[], vec![], vec![], &mut b),
         Err(ReadFailure::Cancelled)
+    ));
+}
+
+fn variant_group_scale(count: usize) -> (Vec<DraftPart>, Groups) {
+    let paths: Vec<String> = (0..count)
+        .map(|i| {
+            format!("Voron-2/STLs/Gantry/X_Axis/XY_Joints/[a]_xy_joint_part_{i:04}_option_x1.stl")
+        })
+        .collect();
+    let mut groups = serde_json::Map::new();
+    for g in 0..20 {
+        let variants: Vec<_> = (0..3)
+            .map(|v| json!({"id": format!("v{v}"), "parts": [&paths[g * 6 + v * 2], &paths[g * 6 + v * 2 + 1]]}))
+            .collect();
+        groups.insert(
+            format!("group_{g}"),
+            json!({"rule": "pick_one", "variants": variants}),
+        );
+    }
+    let cancelled = AtomicBool::new(false);
+    let mut b = PreparationBudget::new(&cancelled, PreparationLimits::default()).unwrap();
+    let yaml = serde_json::to_vec(&json!({"option_groups": groups})).unwrap();
+    let groups = parse(&yaml, &mut b).unwrap().groups;
+    let parts = paths
+        .iter()
+        .map(|p| {
+            DraftPart::new(
+                json!({"partKey": p, "included": true, "sourceLayer": "0:Voron"}),
+                PartManifestMetadata::default(),
+            )
+        })
+        .collect();
+    (parts, groups)
+}
+
+#[test]
+fn apply_compares_variant_paths_up_to_the_visit_limit() {
+    for count in [250, 480] {
+        let (mut parts, groups) = variant_group_scale(count);
+        let cancelled = AtomicBool::new(false);
+        let mut b = PreparationBudget::new(&cancelled, PreparationLimits::default()).unwrap();
+        apply(&mut parts, &[], groups, vec![], &mut b).unwrap();
+        let included = parts.iter().filter(|p| p["included"] == true).count();
+        assert_eq!(included, count - 120, "{count} parts");
+        assert_eq!(parts[119]["included"], false);
+        assert_eq!(parts[120]["included"], true);
+    }
+    let (mut parts, groups) = variant_group_scale(520);
+    let cancelled = AtomicBool::new(false);
+    let mut b = PreparationBudget::new(&cancelled, PreparationLimits::default()).unwrap();
+    assert!(matches!(
+        apply(&mut parts, &[], groups, vec![], &mut b),
+        Err(ReadFailure::LimitExceeded(Resource::Visits))
+    ));
+}
+
+#[test]
+fn apply_refuses_quadratic_comparisons_by_work_not_bytes() {
+    let cancelled = AtomicBool::new(false);
+    let mut b = PreparationBudget::new(&cancelled, PreparationLimits::default()).unwrap();
+    let rule = format!("parts: ['*{}b']", "a".repeat(2047));
+    let docs = [(
+        "F".into(),
+        "repo".into(),
+        parse(rule.as_bytes(), &mut b).unwrap(),
+    )];
+    let key = "a".repeat(4096);
+    let mut parts: Vec<_> = (0..100)
+        .map(|_| {
+            DraftPart::new(
+                json!({"partKey": key, "included": true, "sourceLayer": "0:F"}),
+                PartManifestMetadata::default(),
+            )
+        })
+        .collect();
+    assert!(matches!(
+        apply(&mut parts, &docs, vec![], vec![], &mut b),
+        Err(ReadFailure::LimitExceeded(Resource::ComparisonWork))
+    ));
+}
+
+#[test]
+fn apply_charges_raw_pattern_units_before_trimming() {
+    let cancelled = AtomicBool::new(false);
+    let limits = PreparationLimits {
+        comparison_work: 1 << 22,
+        ..PreparationLimits::default()
+    };
+    let mut b = PreparationBudget::new(&cancelled, limits).unwrap();
+    let yaml =
+        serde_json::to_vec(&json!({"parts": [format!("{}b", " ".repeat(960_000))]})).unwrap();
+    let docs: Vec<_> = (0..2)
+        .map(|_| ("F".into(), "repo".into(), parse(&yaml, &mut b).unwrap()))
+        .collect();
+    let mut parts: Vec<_> = (0..10)
+        .map(|_| {
+            DraftPart::new(
+                json!({"partKey": "a.stl", "included": true, "sourceLayer": "0:F"}),
+                PartManifestMetadata::default(),
+            )
+        })
+        .collect();
+    assert!(matches!(
+        apply(&mut parts, &docs, vec![], vec![], &mut b),
+        Err(ReadFailure::LimitExceeded(Resource::ComparisonWork))
     ));
 }

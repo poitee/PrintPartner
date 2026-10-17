@@ -8,7 +8,7 @@ import { parseRequiredUnitToken } from "./required-units.js";
 
 export const REQUIRED_UNIT_RECONCILIATION_FORMAT = "required-unit-reconciliation-v1";
 
-export type RequiredUnitReconciliationUnit = {
+type RequiredUnitReconciliationUnit = {
   readonly token: string;
   readonly priorIndex: number;
   readonly createdAt: string;

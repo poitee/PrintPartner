@@ -12,7 +12,7 @@ type ChoiceTreeNode = {
   children?: ChoiceTreeNode[];
 };
 
-export type RepoManifestPartRule = {
+type RepoManifestPartRule = {
   match: string;
   requirement?: string;
   change?: string;
@@ -23,7 +23,7 @@ export type RepoManifestPartRule = {
   slot?: string;
 };
 
-export type RepoManifestSlot = {
+type RepoManifestSlot = {
   label?: string;
   default_group?: string;
 };
@@ -33,7 +33,7 @@ type RepoManifestVariantSource = {
   source_name: string;
 };
 
-export type RepoManifestVariant = {
+type RepoManifestVariant = {
   id: string;
   label?: string;
   parts?: string[];

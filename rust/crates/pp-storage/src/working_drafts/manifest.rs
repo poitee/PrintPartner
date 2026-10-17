@@ -384,10 +384,11 @@ fn dot_matches(unit: u16) -> bool {
     !matches!(unit, 0x000a | 0x000d | 0x2028 | 0x2029)
 }
 
-fn wildcard_matches(pattern: &[u16], key: &[u16]) -> bool {
+fn wildcard_matches(pattern: &[u16], key: &[u16], work: &mut usize) -> bool {
     let (mut pat, mut path) = (0, 0);
     let mut star = None;
     while path < key.len() {
+        *work += 1;
         match pattern.get(pat).copied() {
             Some(0x2a) => {
                 pat += 1;
@@ -413,6 +414,7 @@ fn wildcard_matches(pattern: &[u16], key: &[u16]) -> bool {
             }
         }
     }
+    *work += pattern.len() - pat;
     pattern[pat..].iter().all(|unit| *unit == 0x2a)
 }
 
@@ -434,9 +436,15 @@ impl Glob {
     }
 
     pub(crate) fn matches(&self, key: &str) -> bool {
+        self.counted_matches(key).0
+    }
+
+    /// Counts normalized units plus matcher steps as the work done.
+    fn counted_matches(&self, key: &str) -> (bool, usize) {
         let key = normalize_glob(&JsText::scalar(key));
+        let mut work = self.text.units().len() + key.units().len();
         if self.text == key {
-            return true;
+            return (true, work);
         }
         let key: Vec<_> = key
             .units()
@@ -444,13 +452,14 @@ impl Glob {
             .copied()
             .map(canonicalize_regex_unit)
             .collect();
-        wildcard_matches(&self.units, &key)
+        let matched = wildcard_matches(&self.units, &key, &mut work)
             || (!self.units.contains(&0x2f)
                 && key.contains(&0x2f)
                 && key
                     .rsplit(|unit| *unit == 0x2f)
                     .next()
-                    .is_some_and(|basename| wildcard_matches(&self.units, basename)))
+                    .is_some_and(|basename| wildcard_matches(&self.units, basename, &mut work)));
+        (matched, work)
     }
 }
 pub(crate) fn hints(bytes: &[u8], b: &mut PreparationBudget<'_>) -> ReadResult<Vec<HintRule>> {
@@ -536,20 +545,17 @@ fn any_path(
     Ok(false)
 }
 
-fn path_matches(
+pub(super) fn path_matches(
     pattern: &ManifestText,
     key: &str,
     b: &mut PreparationBudget<'_>,
 ) -> ReadResult<bool> {
     b.visit(0)?;
-    b.expansion(
-        pattern
-            .units()
-            .len()
-            .saturating_add(key.len())
-            .saturating_mul(2),
-    )?;
-    Ok(Glob::new(pattern).matches(key))
+    // Normalization scans the raw text before trimming, so charge it up front.
+    b.comparison(pattern.units().len().saturating_add(key.len()))?;
+    let (matched, work) = Glob::new(pattern).counted_matches(key);
+    b.comparison(work)?;
+    Ok(matched)
 }
 
 pub(super) fn apply(

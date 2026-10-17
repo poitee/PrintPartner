@@ -1,6 +1,8 @@
 version: 2
 updates:
   - package-ecosystem: npm
+    cooldown:
+      default-days: 7
     directory: /web
     open-pull-requests-limit: 5
     schedule:
@@ -16,13 +18,10 @@ updates:
       - dependency-name: "*"
         update-types:
           - version-update:semver-major
-      # knip is exact-pinned. 6.41.0 reports 55 unused exported types, one
-      # unused export and two unlisted binaries that 6.5.0 accepts, so
-      # `npm run lint:dead` fails. Upgrade it in its own PR with that cleanup
-      # (GRE-664).
-      - dependency-name: "knip"
 
   - package-ecosystem: pip
+    cooldown:
+      default-days: 7
     directory: /manifests
     open-pull-requests-limit: 3
     schedule:
@@ -44,6 +43,8 @@ updates:
           - patch
 
   - package-ecosystem: docker
+    cooldown:
+      default-days: 7
     directory: /
     open-pull-requests-limit: 3
     schedule:
@@ -54,6 +55,8 @@ updates:
           - version-update:semver-major
 
   - package-ecosystem: docker
+    cooldown:
+      default-days: 7
     directory: /slicer-sidecar
     open-pull-requests-limit: 3
     schedule:
@@ -64,6 +67,8 @@ updates:
           - version-update:semver-major
 
   - package-ecosystem: cargo
+    cooldown:
+      default-days: 7
     directory: /rust
     open-pull-requests-limit: 5
     schedule:

@@ -11,11 +11,3 @@ rules:
       # resolve at the same commit as the caller without a mutable external ref.
       - release.yml:20
       - release.yml:23
-  dependabot-cooldown:
-    ignore:
-      # GRE-635 changes only github-actions. Preserve the existing npm and pip
-      # update policies; their cooldown policy needs separate review. Zizmor 1.31.1
-      # stops at the first entry with a cooldown, so it never audits the Docker and
-      # Cargo entries below it.
-      - dependabot.yml:3
-      - dependabot.yml:25

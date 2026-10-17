@@ -3,7 +3,12 @@
 //! `job_authority_recovery.rs`. Node's in-process runner keeps no queue across
 //! restarts and never revalidates the enqueuing session, so these cases test
 //! the reference engine's behavior instead of a Node result.
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/common/claimed_attempt.rs"
+));
 use anyhow::Result;
+use pp_storage::jobs::ClaimedAttempt;
 use pp_storage::{
     Limits, WriterOwner,
     auth::{
@@ -260,7 +265,7 @@ fn session_authority_reopens_without_raw_secret_and_dies_with_original_session()
     );
     assert_eq!(replay.job_id, queued.job_id);
     let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
-    let (_, lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, lease) = worker.claim().unwrap().unwrap();
     let identity = worker.authorize(&lease).unwrap();
     assert_eq!(identity.tenant(), user.tenant_id);
     assert_eq!(identity.subject(), format!("user:{}", user.user_id));
@@ -349,7 +354,7 @@ fn routed_key_authority_reopens_and_rotation_cannot_be_substituted() {
 
     let owner = open(&path);
     let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
-    let (_, lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, lease) = worker.claim().unwrap().unwrap();
     assert_eq!(worker.authorize(&lease).unwrap().tenant(), user.tenant_id);
     let auth::Outcome::KeyCreated {
         key: replacement, ..
@@ -392,7 +397,7 @@ fn physical_owner_attempts_have_no_original_authority_and_stale_leases_fail() {
     assert!(stored(&path, &physical.job_id)["_authority"].is_null());
     let owner = open(&path);
     let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     assert_eq!(lease.job_id(), physical.job_id);
     assert_authority(
         &worker.authorize(&lease).unwrap_err(),
@@ -438,7 +443,7 @@ fn refused_queue_entries_commit_and_do_not_poison_healthy_work() {
             healthy_payload,
         );
         if recovered {
-            let (_, lease) = owner
+            let claimed_attempt!(_, lease) = owner
                 .job_worker(admission())
                 .unwrap()
                 .claim()
@@ -464,7 +469,7 @@ fn refused_queue_entries_commit_and_do_not_poison_healthy_work() {
         });
 
         let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
-        let (claimed, _) = worker.claim().unwrap().expect("healthy claim");
+        let claimed_attempt!(claimed, _) = worker.claim().unwrap().expect("healthy claim");
         assert_eq!(claimed.job_id, healthy.job_id);
         assert_eq!(claimed.attempt, if recovered { 2 } else { 1 });
         assert_eq!(claimed.state, PersistentState::Running);
@@ -639,7 +644,7 @@ fn policy_required_commits_prior_recovery_without_mutating_the_authority_job() {
         Payload::ExportChecklistHtml { profile_id: 7 },
     );
     let worker = owner.job_worker(admission()).unwrap();
-    let (_, lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, lease) = worker.claim().unwrap().unwrap();
     assert_eq!(lease.job_id(), recovering.job_id);
     let (_, token) = register(&owner, "recovery-policy@example.com");
     let required = enqueue(
@@ -687,7 +692,7 @@ fn kind_claims_skip_other_kinds_and_require_admission() {
             lease_seconds: 60,
         })
         .unwrap();
-    let (claimed, _) = worker
+    let claimed_attempt!(claimed, _) = worker
         .claim_kind(JobKind::ExportChecklistHtml)
         .unwrap()
         .unwrap();
@@ -706,7 +711,7 @@ fn kind_claims_skip_other_kinds_and_require_admission() {
             .to_string()
             .contains("Job kind is not admitted")
     );
-    let (claimed, _) = worker
+    let claimed_attempt!(claimed, _) = worker
         .claim_kind(JobKind::CheckSourceUpdates)
         .unwrap()
         .unwrap();
@@ -741,8 +746,8 @@ fn revoked_attempt_refuses_new_effects_and_success_without_applying_them() {
     let worker = owner
         .job_worker_with_policy(policy(), worker_admission)
         .unwrap();
-    let (first, first_lease) = worker.claim().unwrap().unwrap();
-    let (second, second_lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(first, first_lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(second, second_lease) = worker.claim().unwrap().unwrap();
     let (mut effect_lease, mut finish_lease) = if first.job_id == effect_job.job_id {
         assert_eq!(second.job_id, finish_job.job_id);
         (first_lease, second_lease)
@@ -799,7 +804,7 @@ fn authority_loss_fences_the_attempt_and_preserves_only_matching_evidence() {
         Payload::CheckSourceUpdates {},
     );
     let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     assert_eq!(worker.authorize(&lease).unwrap().tenant(), user.tenant_id);
     worker
         .update(
@@ -893,7 +898,7 @@ fn authority_loss_fences_the_attempt_and_preserves_only_matching_evidence() {
         Payload::CheckSourceUpdates {},
     );
     let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     worker
         .update(
             &mut lease,
@@ -925,7 +930,7 @@ fn attempt_without_stored_authority_refuses_its_next_operation() {
         Payload::CheckSourceUpdates {},
     );
     let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     replace_document(&path, &job.job_id, |document| {
         document.as_object_mut().unwrap().remove("_authority");
     });
@@ -939,4 +944,54 @@ fn attempt_without_stored_authority_refuses_its_next_operation() {
     assert_eq!(document["_authority_refusal"]["reason"], "missing_original");
     assert_eq!(document["_authority_refusal"]["phase"], "worker_advance");
     owner.shutdown().unwrap();
+}
+
+/// Enqueues a session-owned supplied import, optionally as a cancelled import
+/// past the attempt limit, then revokes the session.
+fn revoked_import(path: &Path, owner: &WriterOwner, key: &str, cleanup: bool) -> String {
+    let (_, token) = register(owner, &format!("{key}@example.com"));
+    let queued = enqueue(owner, session(&token), key, Payload::CheckSourceUpdates {});
+    let generation = if cleanup { 100 } else { queued.generation };
+    replace_document(path, &queued.job_id, |document| {
+        document["kind"] = "supplied-source-import".into();
+        document["payload"] = serde_json::to_value(Payload::SuppliedSourceImport {
+            project_id: 1,
+            operation_key: key.into(),
+            input_version: 1,
+        })
+        .unwrap();
+        if cleanup {
+            document["attempt"] = 100.into();
+            document["generation"] = generation.into();
+            document["cancel_requested"] = true.into();
+        }
+    });
+    Connection::open(path.join("print-partner.db"))
+        .unwrap()
+        .execute(
+            "UPDATE durable_jobs SET kind='supplied-source-import',resource='source:1',generation=?2 WHERE id=?1",
+            rusqlite::params![queued.job_id, generation],
+        )
+        .unwrap();
+    logout(owner, &token);
+    queued.job_id
+}
+
+#[test]
+fn targeted_refusal_commits_before_returning_the_typed_error() {
+    for (key, cleanup) in [("targeted-refusal", false), ("cleanup-refusal", true)] {
+        let path = directory();
+        let owner = open(&path);
+        let job_id = revoked_import(&path, &owner, key, cleanup);
+        let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
+        let error = worker
+            .claim_import(&job_id)
+            .err()
+            .expect("targeted revoked job did not return an error");
+        assert_authority(&error, AuthorityFailure::CredentialInvalid);
+        owner.shutdown().unwrap();
+        let document = stored(&path, &job_id);
+        assert_eq!(document["state"], "failed");
+        assert_eq!(document["_authority_refusal"]["phase"], "targeted_claim");
+    }
 }

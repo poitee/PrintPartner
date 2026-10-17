@@ -41,14 +41,14 @@ export type PlanSnapshotPart = {
   artifactDigest: string | null;
 };
 
-export type PlanDraftInput = PlanSnapshotInput & { id: number; draftId: number };
+type PlanDraftInput = PlanSnapshotInput & { id: number; draftId: number };
 export type PlanDraftPart = PlanSnapshotPart & {
   id: number;
   draftId: number;
   baseRevisionPartId: number | null;
 };
 
-export type PlanDraftOrigin =
+type PlanDraftOrigin =
   | { readonly kind: "recompute" }
   | {
       readonly kind: "rebase";

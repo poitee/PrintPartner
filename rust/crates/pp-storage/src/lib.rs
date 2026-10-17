@@ -17,20 +17,17 @@ pub mod manifest_text;
 #[cfg(feature = "desktop_rebuild")]
 pub mod native_secrets;
 #[cfg(feature = "desktop_rebuild")]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "GRE-612 PR 2 calls this from publish_in_transaction"
-    )
-)]
-mod plan_publication;
+pub mod plan_publication;
 #[cfg(feature = "desktop_rebuild")]
 pub mod profiles;
 pub mod read_model;
 #[cfg(feature = "desktop_rebuild")]
 pub mod required_units;
 mod schema;
+#[cfg(feature = "desktop_rebuild")]
+pub mod source_scan;
+#[cfg(feature = "desktop_rebuild")]
+mod uploads;
 #[cfg(feature = "desktop_rebuild")]
 pub mod working_drafts;
 mod writer_admission;
@@ -118,6 +115,11 @@ enum Envelope {
         reply: mpsc::Sender<Result<features::View>>,
     },
     #[cfg(feature = "desktop_rebuild")]
+    Publication {
+        command: plan_publication::Command,
+        reply: mpsc::Sender<Result<plan_publication::Outcome>>,
+    },
+    #[cfg(feature = "desktop_rebuild")]
     RequiredUnits {
         command: required_units::Command,
         reply: mpsc::Sender<Result<required_units::Outcome>>,
@@ -178,6 +180,10 @@ struct Shared {
     changed: Condvar,
     capacity: usize,
     job_admission: Mutex<Option<Arc<jobs::WorkerAdmission>>>,
+    #[cfg(feature = "desktop_rebuild")]
+    orphaned_source_leases: Mutex<Vec<u64>>,
+    #[cfg(feature = "desktop_rebuild")]
+    job_subscriptions: jobs::JobSubscriptions,
 }
 #[derive(Clone)]
 pub struct SettingsClient {
@@ -332,6 +338,13 @@ impl SettingsClient {
         cancelled: &AtomicBool,
         wait: Duration,
     ) -> Result<WriteReply> {
+        let (SettingCommand::Set(setting) | SettingCommand::CompareAndSet { setting, .. }) =
+            &command;
+        ensure!(
+            !auth::OWNED_SETTINGS.contains(&setting.key.as_str()),
+            "Setting {} is owned by auth and changes only through auth requests",
+            setting.key
+        );
         self.enqueue(Work::Setting(command), cancelled, wait)
     }
     pub fn reader(&self, wait: Duration) -> Result<ReaderCheckout> {
@@ -498,9 +511,15 @@ impl WriterOwner {
             changed: Condvar::new(),
             capacity: limits.queued_writes,
             job_admission: Mutex::new(None),
+            #[cfg(feature = "desktop_rebuild")]
+            orphaned_source_leases: Mutex::new(Vec::new()),
+            #[cfg(feature = "desktop_rebuild")]
+            job_subscriptions: jobs::JobSubscriptions::new(),
         });
         let worker = shared.clone();
         let mut catalog_state = catalog::State::new(lease.data_dir().to_owned());
+        #[cfg(feature = "desktop_rebuild")]
+        let mut publication_tokens = plan_publication::random_tokens();
         let join = thread::spawn(move || {
             loop {
                 #[cfg(not(feature = "desktop_rebuild"))]
@@ -574,6 +593,13 @@ impl WriterOwner {
                         continue;
                     }
                 };
+                #[cfg(feature = "desktop_rebuild")]
+                catalog_state.reap(std::mem::take(
+                    &mut *worker
+                        .orphaned_source_leases
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner),
+                ));
                 match envelope {
                     #[cfg(feature = "desktop_rebuild")]
                     Envelope::NativeSecrets { command, reply } => {
@@ -591,6 +617,15 @@ impl WriterOwner {
                     #[cfg(feature = "desktop_rebuild")]
                     Envelope::BuildGraph { command, reply } => {
                         reply.send(build_graph::execute(&mut connection, command, admission));
+                    }
+                    #[cfg(feature = "desktop_rebuild")]
+                    Envelope::Publication { command, reply } => {
+                        let _ = reply.send(plan_publication::execute(
+                            &mut connection,
+                            command,
+                            publication_tokens.as_mut(),
+                            admission,
+                        ));
                     }
                     #[cfg(feature = "desktop_rebuild")]
                     Envelope::RequiredUnits { command, reply } => {
@@ -638,6 +673,10 @@ impl WriterOwner {
                             command,
                             effect_policy,
                             admission,
+                            #[cfg(feature = "desktop_rebuild")]
+                            &worker.job_subscriptions,
+                            #[cfg(feature = "desktop_rebuild")]
+                            &mut catalog_state,
                         ));
                     }
                     Envelope::Setting { work, reply } => {
@@ -648,8 +687,15 @@ impl WriterOwner {
                         policy,
                         reply,
                     } => {
-                        let _ =
-                            reply.send(auth::execute(&mut connection, command, policy, admission));
+                        #[cfg(not(feature = "desktop_rebuild"))]
+                        let result = auth::execute(&mut connection, command, policy, admission);
+                        #[cfg(feature = "desktop_rebuild")]
+                        let result = jobs::authority_change(
+                            &mut connection,
+                            &worker.job_subscriptions,
+                            |connection| auth::execute(connection, command, policy, admission),
+                        );
+                        let _ = reply.send(result);
                     }
                     Envelope::WriterControl { control, reply } => {
                         let _ = reply.send(writer_control(&connection, control));
@@ -754,6 +800,8 @@ impl WriterOwner {
         if self.join.is_none() && self.lease.is_none() {
             return Ok(());
         }
+        #[cfg(feature = "desktop_rebuild")]
+        self.client.shared.job_subscriptions.stop_owner();
         {
             let mut queue = self
                 .client

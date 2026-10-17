@@ -22,7 +22,7 @@ export type AcceptedArtifactGeometryLimits = Readonly<{
   maxTriangles: number;
 }>;
 
-export type AcceptedArtifactGeometry = Readonly<{
+type AcceptedArtifactGeometry = Readonly<{
   mesh: StlMesh;
   dimensions: Readonly<{
     widthUm: number;

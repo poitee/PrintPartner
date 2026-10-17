@@ -43,6 +43,7 @@ pub enum Resource {
     Nodes,
     Visits,
     Rules,
+    ComparisonWork,
 }
 #[derive(Debug)]
 pub enum ReadFailure {
@@ -73,6 +74,7 @@ pub struct PreparationLimits {
     pub nodes: usize,
     pub visits: usize,
     pub rules: usize,
+    pub comparison_work: usize,
 }
 impl Default for PreparationLimits {
     fn default() -> Self {
@@ -87,6 +89,7 @@ impl Default for PreparationLimits {
             nodes: 100000,
             visits: 100000,
             rules: 10000,
+            comparison_work: 1 << 28,
         }
     }
 }
@@ -103,6 +106,7 @@ impl PreparationLimits {
             || self.nodes > max.nodes
             || self.visits > max.visits
             || self.rules > max.rules
+            || self.comparison_work > max.comparison_work
         {
             Err(ReadFailure::InvalidGrant)
         } else {
@@ -124,6 +128,7 @@ pub struct PreparationBudget<'a> {
     expanded: usize,
     nodes: usize,
     rules: usize,
+    compared: usize,
     #[cfg(test)]
     checks_until_cancel: std::sync::atomic::AtomicUsize,
 }
@@ -141,6 +146,7 @@ impl<'a> PreparationBudget<'a> {
             expanded: 0,
             nodes: 0,
             rules: 0,
+            compared: 0,
             #[cfg(test)]
             checks_until_cancel: Default::default(),
         })
@@ -248,6 +254,16 @@ impl<'a> PreparationBudget<'a> {
             Ok(())
         }
     }
+    /// Charges transient path-comparison work, which the byte caps do not cover.
+    pub fn comparison(&mut self, work: usize) -> ReadResult<()> {
+        self.check()?;
+        self.compared = self.compared.saturating_add(work);
+        if self.compared > self.limits.comparison_work {
+            Err(ReadFailure::LimitExceeded(Resource::ComparisonWork))
+        } else {
+            Ok(())
+        }
+    }
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum StlPurpose {
@@ -312,9 +328,32 @@ pub enum CheckoutManifestUse {
     OptionGroups,
     PartRulesAndDefaults,
 }
+/// The `<slug>` in a community manifest's `<slug>.yaml`. It is always a
+/// single path segment, so an adapter can join it to the manifests root.
+/// The adapter must still refuse a resolved path that leaves the root
+/// through a symlink, as Node's `resolvedFileUnderRoot` does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommunitySlug(String);
+impl CommunitySlug {
+    /// Node's `isCommunityManifestSlug`: `^[a-z0-9][a-z0-9._-]{0,63}$`, except
+    /// `kit-catalog`, which names the kit catalog in the same directory.
+    pub fn parse(value: &str) -> Option<Self> {
+        let bytes = value.as_bytes();
+        let valid = value != "kit-catalog"
+            && matches!(bytes.first(), Some(b'a'..=b'z' | b'0'..=b'9'))
+            && bytes.len() <= 64
+            && bytes
+                .iter()
+                .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-'));
+        valid.then(|| Self(value.to_owned()))
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 #[derive(Clone)]
 pub enum CatalogPurpose {
-    Community(String),
+    Community(CommunitySlug),
     ShippedHintsFirst,
     ShippedHintsSecond,
     CustomHints,

@@ -55,7 +55,7 @@ fn declared_versions_match_the_node_and_rust_sources() {
     );
     let rust_schema = number_after(
         include_str!("../../pp-storage/src/schema.rs"),
-        "is newer than supported version ",
+        "#[cfg(not(feature = \"desktop_rebuild\"))]\npub(crate) const CURRENT_VERSION: u64 = ",
     );
     let node_snapshot = number_after(
         include_str!("../../../../web/apps/server/src/services/local-source-snapshot.ts"),
@@ -65,8 +65,13 @@ fn declared_versions_match_the_node_and_rust_sources() {
         include_str!("../../pp-source/src/lib.rs"),
         "manifest.version != ",
     );
+    let node_path_hints = number_after(
+        include_str!("../../../../web/apps/server/src/services/path-hints.ts"),
+        "document.version !== ",
+    );
     assert_eq!((node_schema, rust_schema), (34, 35));
     assert_eq!((node_snapshot, rust_snapshot), (1, 1));
+    assert_eq!(node_path_hints, 1);
     assert_eq!(
         formats,
         &json!({
@@ -74,6 +79,8 @@ fn declared_versions_match_the_node_and_rust_sources() {
             "source-revision-workspace": {"node_reads": node_snapshot, "rust_writes": rust_snapshot},
             "source-covers": {"node_reads": 1, "rust_writes": "none"},
             "kit-catalog": {"node_reads": 1, "rust_writes": "none"},
+            "path-hints": {"node_reads": node_path_hints, "rust_writes": "none"},
+            "community-manifests": {"node_reads": 1, "rust_writes": "none"},
         })
     );
 }
@@ -303,6 +310,16 @@ fn read_only_formats_require_explicit_none_and_fail_closed_otherwise() {
             "tool.get_kit_catalog",
         ),
         ("source-covers", "job.sync", "source.sync"),
+        (
+            "path-hints",
+            "tool.get_plan_option_groups",
+            "tool.get_plan_option_groups",
+        ),
+        (
+            "community-manifests",
+            "tool.get_plan_option_groups",
+            "tool.get_plan_option_groups",
+        ),
     ] {
         let mut value = manifest();
         value["live_formats"]["sqlite-schema"]["node_reads"] = json!(35);

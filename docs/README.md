@@ -2,7 +2,7 @@
 
 Use this index to find the guide for your task. The in-app Help page covers the product workflow.
 
-Print Partner is moving its backend from Node to one Rust core. The core runs as a desktop app and as a single-user Docker image. [Architecture](ARCHITECTURE.md) describes the target and the current state.
+Print Partner is moving its backend from Node to one Rust core. The core runs as a desktop app and as a single-user Docker image. [Architecture](architecture.md) describes the target and the current state.
 
 ## Start here
 
@@ -29,9 +29,9 @@ Print Partner is moving its backend from Node to one Rust core. The core runs as
 
 | Page | Covers |
 |------|--------|
-| [Architecture](ARCHITECTURE.md) | Target design, current state, and the crate map. |
+| [Architecture](architecture.md) | Target design, current state, and the crate map. |
 | [Storage](storage.md) | Data directory, single-writer lock, and migrations. |
-| [HTTP API](API.md) | The versioned integration API. |
+| [HTTP API](api.md) | The versioned integration API. |
 | [MCP](mcp.md) | The MCP server in the Rust core. |
 | [Network sharing](network-sharing.md) | "Share on network" in the desktop app. |
 | [Desktop app](desktop.md) | The Tauri app, its tray, and its data. |
@@ -39,7 +39,6 @@ Print Partner is moving its backend from Node to one Rust core. The core runs as
 | [Release](release.md) | How releases are built, signed, and published. |
 | [Domain](domain/README.md) | The core model and one page per product area. |
 | [Desktop rebuild flag and slice plan](desktop-rebuild.md) | The `desktop_rebuild` feature and the GRE-595 slices. |
-| [Single-process guarantees](architecture/background-work-guarantees.md) | What one server process guarantees for the send queue and backup restore. |
 
 ## Development
 
@@ -85,6 +84,7 @@ These pages describe the Node server that the Rust core replaces. Its multi-user
 - [Deployment reference](../web/DEPLOY.md)
 - [Invite-beta hosted planning](../web/DEPLOY.md#invite-beta-hosted-planning)
 - [Hosted tenant storage](hosted-storage.md)
+- [Single-process guarantees](architecture/background-work-guarantees.md): what one Node server process guarantees for the send queue and backup restore.
 
 ## Agent workflows
 

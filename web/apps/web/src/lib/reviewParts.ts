@@ -12,6 +12,14 @@ export function flattenReviewParts(groups: PlanReviewPartGroup[]): ReviewPart[] 
   return groups.flatMap((g) => g.parts);
 }
 
+export function maskSpoolmanReviewPart(part: ReviewPart): ReviewPart {
+  return {
+    ...part, spool_badge: null, spool_summary: undefined,
+    ...(part.filament_color_id?.trim().startsWith("spoolman:")
+      ? { filament_display: "", filament_hex: part.filament_custom_hex ?? null } : {}),
+  };
+}
+
 function only<T>(values: readonly T[]): T | null {
   return values.length === 1 ? values[0]! : null;
 }
