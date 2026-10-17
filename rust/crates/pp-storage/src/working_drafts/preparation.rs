@@ -371,14 +371,12 @@ pub(super) fn parse(
             slug.len()
                 .saturating_add(profile.quantity.regex.len().saturating_mul(8)),
         )?;
-        let mut strip = profile.quantity.regex.trim().replace("(?:", "(");
-        strip = replace_first(&strip, r"\(\?P<\w+>", "(");
-        strip = replace_first(&strip, r"\([^?][^)]*\)", "[0-9]+");
-        strip = strip.replacen("\\.stl$", "$", 1);
-        if strip.to_lowercase().ends_with(".stl") {
-            strip.truncate(strip.len() - 4);
-            strip.push('$')
-        }
+        let mut strip = pp_domain::build_identity::trim_js(&profile.quantity.regex).to_owned();
+        strip = regress::Regex::new(r"\(\?P<\w+>")?.replace_all(&strip, "(");
+        strip = regress::Regex::new(r"\(\?:")?.replace_all(&strip, "(");
+        strip = regress::Regex::new(r"\([^?][^)]*\)")?.replace(&strip, "[0-9]+");
+        strip = regress::Regex::new(r"\\\.stl\$")?.replace(&strip, "$");
+        strip = regress::Regex::with_flags(r"\.stl$", "i")?.replace(&strip, "$");
         slug = replace_first(&slug, &strip, "");
     }
     if slug.is_empty() {

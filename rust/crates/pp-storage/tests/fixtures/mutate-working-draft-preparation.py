@@ -8,7 +8,7 @@ import tempfile
 rust = Path(__file__).resolve().parents[4]
 source = Path('crates/pp-storage/src/working_drafts/preparation.rs')
 mutants = [
-    ('quantity anchors replaced globally', 'strip = strip.replacen("\\\\.stl$", "$", 1);', 'strip = strip.replace("\\\\.stl$", "$");'),
+    ('quantity anchors replaced globally', 'strip = regress::Regex::new(r"\\\\\\.stl\\$")?.replace(&strip, "$");', 'strip = regress::Regex::new(r"\\\\\\.stl\\$")?.replace_all(&strip, "$");'),
     ('disabled Spoolman defaults retained', 'match default_key {', 'match "enabled" {'),
     ('folder matching work uncharged', 'lower.len().saturating_add(rule.path_contains.len())', '0'),
     ('marker matching work uncharged', 'segment.len().saturating_add(marker.len())', '0'),
