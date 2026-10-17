@@ -27,15 +27,22 @@ fn invalid<T>() -> ReadResult<T> {
     Err(ReadFailure::InvalidDocument)
 }
 fn tag_name(tag: Option<&Tag>) -> ReadResult<Option<&str>> {
-    match tag {
-        None => Ok(None),
-        Some(t) if t.handle.is_empty() && t.suffix == "!" => Ok(Some("!")),
-        Some(t) if t.handle.is_empty() => t
-            .suffix
-            .strip_prefix("tag:yaml.org,2002:")
-            .map(Some)
-            .ok_or(ReadFailure::InvalidDocument),
-        Some(t) if t.is_yaml_core_schema() => Ok(Some(t.suffix.as_str())),
+    let Some(t) = tag else {
+        return Ok(None);
+    };
+    if t.handle.is_empty() && t.suffix == "!" {
+        return Ok(Some("!"));
+    }
+    // A verbatim tag has an empty handle and its whole URI as the suffix.
+    let name = if t.handle.is_empty() {
+        t.suffix.strip_prefix("tag:yaml.org,2002:")
+    } else if t.is_yaml_core_schema() {
+        Some(t.suffix.as_str())
+    } else {
+        None
+    };
+    match name {
+        Some(name @ ("str" | "int" | "float" | "bool" | "null" | "seq" | "map")) => Ok(Some(name)),
         _ => invalid(),
     }
 }
@@ -186,12 +193,14 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
     let mut flow = 0usize;
     let mut quote = None;
     let mut plain = false;
-    // Indent of the line holding the last block `:`, `-` or `?`; None at the
-    // document root. A plain scalar continues on any deeper line.
+    // Column of the last block `-` or `?`, or of the key before the last block
+    // `:`; None at the document root. A plain scalar continues on any deeper line.
     let mut parent: Option<usize> = None;
     let mut plain_parent: Option<usize> = None;
+    let mut node_column: Option<usize> = None;
     let mut node = true;
     let mut line_start = true;
+    let mut line_begin = 0usize;
     let mut line_indent = 0usize;
     let mut quoted_end = false;
     let mut block: Option<(usize, Option<usize>)> = None;
@@ -210,7 +219,9 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                 }
                 i += 1;
             }
+            line_begin = start;
             line_indent = i - start;
+            node_column = None;
             let blank = i == chars.len() || matches!(chars[i], '\r' | '\n');
             if let Some((base, required)) = block {
                 let required = required.or_else(|| (!blank).then_some(line_indent));
@@ -253,10 +264,10 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             line_start = false;
             if line_indent == 0
                 && flow == 0
-                && chars.get(i..i + 3) == Some(&['-', '-', '-'])
+                && matches!(chars.get(i..i + 3), Some(['-', '-', '-'] | ['.', '.', '.']))
                 && chars.get(i + 3).copied().is_none_or(yaml_blank_break)
             {
-                output.push_str("---");
+                output.extend(&chars[i..i + 3]);
                 consumed += 3;
                 i += 3;
                 parent = None;
@@ -357,6 +368,7 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             continue;
         }
         let next = chars.get(i + 1).copied();
+        let column = i - line_begin;
         if c == '#' && (i == 0 || yaml_blank_break(chars[i - 1])) {
             let end = line_end(&chars, i, budget)?;
             for c in &chars[i..end] {
@@ -370,25 +382,34 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             i = end;
             continue;
         }
+        if node && !yaml_blank_break(c) && node_column.is_none() {
+            node_column = Some(column);
+        }
         if node && matches!(c, '!' | '&' | '*') {
-            // saphyr decodes verbatim tags and gives them an empty handle, so
-            // `!<!>` and `!<%21>` would pass as a bare `!`, which js-yaml rejects.
-            if c == '!'
-                && next == Some('<')
-                && (chars.get(i + 2..i + 4) == Some(&['!', '>'])
-                    || chars.get(i + 2..i + 6) == Some(&['%', '2', '1', '>']))
-            {
-                return invalid();
-            }
+            let verbatim = c == '!' && next == Some('<');
             let mut end = i + 1;
             while end < chars.len()
                 && !yaml_blank_break(chars[end])
-                && !matches!(chars[end], ',' | '[' | ']' | '{' | '}')
+                && if verbatim {
+                    chars[end] != '>'
+                } else {
+                    !matches!(chars[end], ',' | '[' | ']' | '{' | '}')
+                }
             {
                 if (end - i) % 1024 == 0 {
                     budget.check()?;
                 }
                 end += 1;
+            }
+            if verbatim {
+                // saphyr decodes verbatim tags and gives them an empty handle, so
+                // `!<!>` and `!<%21>` would pass as a bare `!`, which js-yaml rejects.
+                if matches!(&chars[i + 2..end], ['!'] | ['%', '2', '1']) {
+                    return invalid();
+                }
+                if chars.get(end) == Some(&'>') {
+                    end += 1;
+                }
             }
             for c in &chars[i..end] {
                 output.push(*c);
@@ -449,9 +470,12 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             || (node && matches!(c, '[' | '{'))
             || (node && matches!(c, '-' | '?') && next.is_none_or(yaml_blank_break));
         if structural {
-            if flow == 0 && matches!(c, ':' | '-' | '?') {
-                parent = Some(line_indent);
+            if flow == 0 && c == ':' {
+                parent = Some(node_column.unwrap_or(column));
+            } else if flow == 0 && matches!(c, '-' | '?') {
+                parent = Some(column);
             }
+            node_column = None;
             if matches!(c, '[' | '{') {
                 flow += 1;
             } else if matches!(c, ']' | '}') {
@@ -1043,6 +1067,12 @@ mod tests {
             ("? a\n  !<l>\n: v", &["a !<l>"], "v"),
             ("- a\n  !<b>", &[], "a !<b>"),
             ("a\n!<b>", &[], "a !<b>"),
+            (
+                "- -\n    a\n  - \"\\uE000\\uE000\"",
+                &[],
+                "a,\u{e000}\u{e000}",
+            ),
+            ("...\n\"\\uE000\\uE000\"", &[], "\u{e000}\u{e000}"),
         ] {
             let mut budget = PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
             let doc = Document::parse(source.as_bytes(), &mut budget).unwrap();
@@ -1051,8 +1081,8 @@ mod tests {
                 id = doc.get(id, key, &mut budget).unwrap().unwrap();
             }
             assert_eq!(
-                doc.text(id, &mut budget).unwrap().as_scalar().as_deref(),
-                Some(expected),
+                doc.text(id, &mut budget).unwrap().units(),
+                expected.encode_utf16().collect::<Vec<_>>(),
                 "{source}"
             );
         }
@@ -1060,6 +1090,8 @@ mod tests {
             "a:\n  b # c\n  !<l> x",
             "a:\n  b\n# c\n  !<l> x",
             "- - a\n  !<l>",
+            "- -\n    a\n  - !<!> x",
+            "...\n!<!> x",
         ] {
             let mut budget = PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
             assert!(
@@ -1085,7 +1117,9 @@ mod tests {
               float: !<tag:yaml.org,2002:float> 1.5\n\
               seq: !<tag:yaml.org,2002:seq> [a]\n\
               map: !<tag:yaml.org,2002:map> {a: 1}\n\
-              flow: [!<tag:yaml.org,2002:str> 1, b]\n",
+              flow: [!<tag:yaml.org,2002:str> 1, b]\n\
+              quoted: !<tag:yaml.org,2002:str> \"\\uE000\\uE000\"\n\
+              surrogate: !<tag:yaml.org,2002:str> \"\\uE000uD800\\uE000\"\n",
             &mut budget,
         )
         .unwrap();
@@ -1109,7 +1143,15 @@ mod tests {
             units(&doc, "flow", &mut budget),
             "1,b".encode_utf16().collect::<Vec<_>>()
         );
+        assert_eq!(units(&doc, "quoted", &mut budget), [0xe000, 0xe000]);
+        assert_eq!(
+            units(&doc, "surrogate", &mut budget),
+            "\u{e000}uD800\u{e000}".encode_utf16().collect::<Vec<_>>()
+        );
         for source in [
+            "project: !<tag:yaml.org,2002:!> 123",
+            "project: !<tag:yaml.org,2002:%21> 123",
+            "parts: !<tag:yaml.org,2002:!> [a]",
             "project: !<tag:yaml.org,2002:binary> 123",
             "project: !<tag:example.com,2000:x> 1",
             "project: !<> 1",
