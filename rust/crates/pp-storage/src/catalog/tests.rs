@@ -252,3 +252,64 @@ fn native_secrets_envelope_reaps_orphaned_source_work_before_dispatch() {
     ));
     orphaned.assert_reaped_and_free();
 }
+
+#[cfg(feature = "desktop_rebuild")]
+#[test]
+fn source_work_release_acknowledges_idempotent_retirement_and_preserves_stopped_proof() {
+    let root =
+        std::env::temp_dir().join(format!("pp-source-release-ack-{}", rand::random::<u64>()));
+    let (owner, _) = WriterOwner::open(&root, crate::Limits::default()).unwrap();
+    let catalog = owner.local_source_catalog();
+    let Outcome::Source(Some(source)) = catalog
+        .execute(Request::Create {
+            source: CreateSource {
+                name: "Release acknowledgement".into(),
+                source_kind: Some("local".into()),
+                ..Default::default()
+            },
+        })
+        .unwrap()
+    else {
+        panic!("Source expected")
+    };
+    let mut first = catalog
+        .begin_work(source.id, &AtomicBool::new(false), Duration::from_secs(5))
+        .unwrap();
+    let mut repeated = SourceWorkLease {
+        client: first.client.clone(),
+        proof: first.proof.clone(),
+    };
+    first.release().unwrap();
+    assert!(first.proof.is_none());
+    repeated.release().unwrap();
+    assert!(repeated.proof.is_none());
+    let mut stopped = catalog
+        .begin_work(source.id, &AtomicBool::new(false), Duration::from_secs(5))
+        .unwrap();
+    owner.shutdown().unwrap();
+    assert!(stopped.release().is_err());
+    assert!(stopped.proof.is_some());
+    assert!(stopped.release().is_err());
+    assert!(stopped.proof.is_some());
+    stopped.proof = None;
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[test]
+fn unknown_source_work_lease_is_rejected_without_database_work() {
+    let mut connection = Connection::open_in_memory().unwrap();
+    connection.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let mut state = State::default();
+    let error = match execute(
+        &mut connection,
+        &mut state,
+        Command::End(17),
+        crate::writer_admission::Deadline::at_dequeue(),
+    ) {
+        Err(error) => error,
+        Ok(_) => panic!("unknown Source lease released"),
+    };
+    assert_eq!(error.root_cause().to_string(), "Unknown work lease");
+    connection.execute_batch("ROLLBACK").unwrap();
+}

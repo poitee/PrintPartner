@@ -336,10 +336,6 @@ impl State {
         }
     }
     #[cfg(feature = "desktop_rebuild")]
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "GRE-613 (D17) settles local scans with this")
-    )]
     pub(crate) fn retire_issued(
         &mut self,
         proof: &SourceWorkProof,
@@ -567,10 +563,6 @@ impl SourceWorkLease {
     /// Forgets a token the writer already retired, so dropping the lease
     /// sends no release.
     #[cfg(feature = "desktop_rebuild")]
-    #[expect(
-        dead_code,
-        reason = "GRE-613/614 (D17/D18) bind scan and Sync journals to this"
-    )]
     pub(crate) fn consume_retired(&mut self) -> Result<()> {
         ensure!(self.proof.take().is_some(), "Lease already released");
         Ok(())
@@ -587,8 +579,15 @@ impl SourceWorkLease {
             &AtomicBool::new(false),
             Duration::from_secs(5),
         )?;
-        self.proof = None;
+        #[cfg(not(feature = "desktop_rebuild"))]
+        {
+            self.proof = None;
+        }
         reply.recv()??;
+        #[cfg(feature = "desktop_rebuild")]
+        {
+            self.proof = None;
+        }
         Ok(())
     }
 }
@@ -622,6 +621,19 @@ pub(super) fn execute(
     command: Command,
     admission: crate::writer_admission::Deadline,
 ) -> Result<Reply> {
+    #[cfg(feature = "desktop_rebuild")]
+    if let Command::End(token) = command {
+        match state.classify_issued(&state.incarnation, token) {
+            IssuedTokenState::Active(_) => {
+                state.active.remove(&token);
+            }
+            IssuedTokenState::Retired => {}
+            IssuedTokenState::NeverIssued | IssuedTokenState::WrongIncarnation => {
+                return Err(anyhow!("Unknown work lease"));
+            }
+        }
+        return Ok(Reply::Released);
+    }
     let tx = crate::writer_admission::begin_immediate(connection, admission)?;
     match command {
         Command::End(token) => {
