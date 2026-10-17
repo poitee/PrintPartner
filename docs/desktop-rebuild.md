@@ -1067,12 +1067,16 @@ refused imports keep their reservation.
 
 As in the reference, `uploads::source_reserved` makes Source deletion return
 `active_work` while an import of the Source holds an unsettled reservation.
+Storage written before that guard can hold an unsettled entry whose Source is
+gone. The same startup pass fails its queued job with `source_unavailable`, as a
+claim would, and then settles the entry. Any other job state with a missing
+Source refuses to open.
 
 Opening storage checks each preclaim refusal against its entry and job: it must be
 the entry's first and only observation, the entry must be `admitted`, or settled as
 `failed` or `cancelled` to match the cancellation flag, and the job must have failed
 at generation 1 from a targeted-claim refusal at generation 0, with the same
-cancellation flag. An unsettled entry whose Source is missing is refused.
+cancellation flag.
 
 Node writes supplied files in one call and has no journal, attempts or
 observations, so the tests port the reference `source_import_operation.rs` storage

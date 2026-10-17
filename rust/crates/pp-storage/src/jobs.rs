@@ -1214,6 +1214,12 @@ fn bind_printer_start(tx: &Transaction<'_>, tenant: &str, mut payload: Payload) 
     payload.bind_printer_start(printer_id, upload)?;
     Ok(payload)
 }
+#[cfg(feature = "desktop_rebuild")]
+pub(crate) fn fail_source_unavailable(tx: &Transaction<'_>, job: &mut JobRecord) -> Result<()> {
+    job.state = PersistentState::Failed;
+    job.recovery = Some("Source is unavailable for this job".into());
+    save(tx, job, "source_unavailable")
+}
 pub(crate) fn save(tx: &Transaction<'_>, job: &mut JobRecord, event: &str) -> Result<()> {
     job.payload.validate_stored()?;
     job.state_version += 1;
@@ -2209,9 +2215,7 @@ fn claim(
             let source = match source_binding(&job.payload)? {
                 SourceBinding::Individual(id) => {
                     if crate::catalog::get(tx, &job.tenant, id)?.is_none() {
-                        job.state = PersistentState::Failed;
-                        job.recovery = Some("Source is unavailable for this job".into());
-                        save(tx, &mut job, "source_unavailable")?;
+                        fail_source_unavailable(tx, &mut job)?;
                         continue;
                     }
                     if catalog_state.source_busy(&job.tenant, id) {

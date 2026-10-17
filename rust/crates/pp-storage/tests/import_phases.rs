@@ -764,23 +764,94 @@ fn a_source_with_an_unsettled_import_is_not_deleted() {
     fixture.reopen();
 }
 
-#[test]
-fn startup_rejects_an_unsettled_import_without_its_source() {
-    let fixture = Fixture::open();
-    let op = refused_after_owned(&fixture);
+/// Deletes each import's Source while storage is closed, as deletion allowed
+/// before it waited for imports, then reopens storage.
+fn reopen_without_sources(fixture: Fixture, ops: &[&Operation]) -> Fixture {
     let Fixture { root, owner, .. } = fixture;
     owner.shutdown().unwrap();
-    Connection::open(root.join("print-partner.db"))
-        .unwrap()
-        .execute("DELETE FROM projects WHERE id=?1", [op.source_id])
-        .unwrap();
-    let error = WriterOwner::open(&root, Limits::default())
-        .err()
-        .expect("a dangling import must be refused");
-    assert!(
-        format!("{error:#}").contains("Unsettled import Source missing"),
-        "{error:#}"
+    let connection = Connection::open(root.join("print-partner.db")).unwrap();
+    for op in ops {
+        connection
+            .execute("DELETE FROM projects WHERE id=?1", [op.source_id])
+            .unwrap();
+    }
+    drop(connection);
+    let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+    Fixture::with(root, owner)
+}
+
+/// Each import's journal document and job row, which a repeated startup must
+/// leave unchanged.
+fn stored(fixture: &Fixture, ops: &[&Operation]) -> Vec<(String, String, i64)> {
+    ops.iter()
+        .map(|op| {
+            fixture
+                .connection()
+                .query_row(
+                    "SELECT o.document,j.document,j.version FROM source_import_operations o JOIN durable_jobs j ON j.id=o.job_id WHERE o.operation_key=?1",
+                    [&op.key],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap()
+        })
+        .collect()
+}
+
+#[test]
+fn startup_settles_a_refused_import_without_its_source() {
+    let fixture = Fixture::open();
+    let op = refused_after_owned(&fixture);
+    let fixture = reopen_without_sources(fixture, &[&op]);
+    assert_eq!(fixture.quota(&op), (0, 0, true));
+    assert_eq!(fixture.job(&op).0, "failed");
+    let token = fixture.login();
+    let session = || Credential::Session(Secret::new(token.clone()));
+    let settled = fixture.imports.get(session(), op.key.clone()).unwrap();
+    assert_eq!(
+        (settled.state, settled.cleanup_settled),
+        (State::Failed, true)
     );
+    let before = stored(&fixture, &[&op]);
+    let fixture = fixture.reopen();
+    assert_eq!(stored(&fixture, &[&op]), before);
+    fixture.try_admit(session(), "next", QUOTA).unwrap();
+}
+
+#[test]
+fn startup_fails_a_queued_import_without_its_source() {
+    let fixture = Fixture::open();
+    let token = fixture.register();
+    let session = || Credential::Session(Secret::new(token.clone()));
+    let queued = fixture.admit(session(), "queued");
+    let crashed = fixture.admit(session(), "crashed");
+    let lease = fixture.claim(&crashed);
+    fixture.phase(&lease, owned(&crashed)).unwrap();
+    let fixture = reopen_without_sources(fixture, &[&queued, &crashed]);
+    for op in [&queued, &crashed] {
+        assert_eq!(fixture.quota(op), (0, 0, true));
+        assert_eq!(fixture.job(op).0, "failed");
+        let (recovery, event): (String, String) = fixture
+            .connection()
+            .query_row(
+                "SELECT json_extract(document,'$.recovery'),(SELECT event FROM durable_job_history WHERE job_id=?1 ORDER BY version DESC LIMIT 1) FROM durable_jobs WHERE id=?1",
+                [&op.job_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (recovery.as_str(), event.as_str()),
+            ("Source is unavailable for this job", "source_unavailable")
+        );
+        let settled = fixture.imports.get(session(), op.key.clone()).unwrap();
+        assert_eq!(
+            (settled.state, settled.cleanup_settled),
+            (State::Failed, true)
+        );
+    }
+    let before = stored(&fixture, &[&queued, &crashed]);
+    let fixture = fixture.reopen();
+    assert_eq!(stored(&fixture, &[&queued, &crashed]), before);
+    fixture.try_admit(session(), "next", QUOTA).unwrap();
 }
 
 #[test]

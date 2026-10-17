@@ -228,15 +228,6 @@ fn validate_journal(connection: &Connection, preclaim: bool) -> Result<()> {
             !op.cleanup_settled || job.as_ref().is_some_and(|job| job.state.terminal()),
             "Import completion job mismatch"
         );
-        ensure!(
-            op.cleanup_settled
-                || connection.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM projects WHERE tenant_id=?1 AND id=?2)",
-                    params![op.tenant, op.source_id],
-                    |row| row.get::<_, bool>(0),
-                )?,
-            "Unsettled import Source missing"
-        );
         if preclaim && let Some(job) = job {
             validate_preclaim_refusal(connection, &op, &job)?;
         }
@@ -843,14 +834,28 @@ pub(crate) fn settle_terminal(tx: &Transaction<'_>, job: &jobs::JobRecord) -> Re
 }
 
 /// Settles every unsettled import whose job, live or archived, has ended. The
-/// storage owner runs this at startup, after expired attempts are recovered.
+/// storage owner runs this at startup, after every attempt is recovered. A
+/// queued import whose Source is gone, which deletion allowed before it waited
+/// for imports, fails as its claim would and then settles.
 pub(crate) fn settle_ended(tx: &Transaction<'_>) -> Result<()> {
-    let documents = tx
-        .prepare("SELECT coalesce((SELECT document FROM durable_jobs WHERE id=o.job_id),(SELECT archived_document FROM durable_job_keys WHERE job_id=o.job_id)) FROM source_import_operations o JOIN source_import_quota q USING(tenant,operation_key) WHERE q.settled=0")?
-        .query_map([], |row| row.get::<_, Option<String>>(0))?
+    let rows = tx
+        .prepare("SELECT coalesce((SELECT document FROM durable_jobs WHERE id=o.job_id),(SELECT archived_document FROM durable_job_keys WHERE job_id=o.job_id)),EXISTS(SELECT 1 FROM projects WHERE tenant_id=o.tenant AND id=o.source_id) FROM source_import_operations o JOIN source_import_quota q USING(tenant,operation_key) WHERE q.settled=0")?
+        .query_map([], |row| {
+            Ok((row.get::<_, Option<String>>(0)?, row.get::<_, bool>(1)?))
+        })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    for document in documents.into_iter().flatten() {
-        settle_terminal(tx, &jobs::decode(&document)?)?;
+    for (document, source) in rows {
+        let Some(document) = document else {
+            continue;
+        };
+        let mut job = jobs::decode(&document)?;
+        if !source && job.state == jobs::PersistentState::Queued {
+            jobs::fail_source_unavailable(tx, &mut job)?;
+        }
+        ensure!(
+            settle_terminal(tx, &job)? || source,
+            "Unsettled import Source missing"
+        );
     }
     Ok(())
 }
