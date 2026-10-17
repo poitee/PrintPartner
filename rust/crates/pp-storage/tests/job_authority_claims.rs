@@ -940,3 +940,43 @@ fn attempt_without_stored_authority_refuses_its_next_operation() {
     assert_eq!(document["_authority_refusal"]["phase"], "worker_advance");
     owner.shutdown().unwrap();
 }
+
+#[test]
+fn targeted_refusal_commits_before_returning_the_typed_error() {
+    let path = directory();
+    let owner = open(&path);
+    let (_, token) = register(&owner, "targeted-refusal@example.com");
+    let queued = enqueue(
+        &owner,
+        session(&token),
+        "targeted-refusal",
+        Payload::CheckSourceUpdates {},
+    );
+    replace_document(&path, &queued.job_id, |document| {
+        document["kind"] = "supplied-source-import".into();
+        document["payload"] = serde_json::to_value(Payload::SuppliedSourceImport {
+            project_id: 1,
+            operation_key: "targeted-refusal".into(),
+            input_version: 1,
+        })
+        .unwrap();
+    });
+    Connection::open(path.join("print-partner.db"))
+        .unwrap()
+        .execute(
+            "UPDATE durable_jobs SET kind='supplied-source-import',resource='source:1' WHERE id=?1",
+            [&queued.job_id],
+        )
+        .unwrap();
+    logout(&owner, &token);
+    let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
+    let error = worker
+        .claim_import(&queued.job_id)
+        .err()
+        .expect("targeted revoked job did not return an error");
+    assert_authority(&error, AuthorityFailure::CredentialInvalid);
+    owner.shutdown().unwrap();
+    let document = stored(&path, &queued.job_id);
+    assert_eq!(document["state"], "failed");
+    assert_eq!(document["_authority_refusal"]["phase"], "targeted_claim");
+}

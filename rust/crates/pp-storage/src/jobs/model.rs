@@ -17,8 +17,12 @@ pub enum JobKind {
     #[serde(rename = "export-direct-3mf")]
     ExportDirect3mf,
     PrinterUpload,
+    /// Owned by the upload journal and hidden from the public job API.
+    #[cfg(feature = "desktop_rebuild")]
+    SuppliedSourceImport,
 }
 impl JobKind {
+    #[cfg(not(feature = "desktop_rebuild"))]
     pub const ALL: [Self; 10] = [
         Self::Sync,
         Self::ImportScan,
@@ -30,6 +34,20 @@ impl JobKind {
         Self::ExportAcceptedPlate3mf,
         Self::ExportDirect3mf,
         Self::PrinterUpload,
+    ];
+    #[cfg(feature = "desktop_rebuild")]
+    pub const ALL: [Self; 11] = [
+        Self::Sync,
+        Self::ImportScan,
+        Self::ExtractSourceDocs,
+        Self::CheckSourceUpdates,
+        Self::ExportStlPack,
+        Self::ExportChecklistHtml,
+        Self::ExportKitBundle,
+        Self::ExportAcceptedPlate3mf,
+        Self::ExportDirect3mf,
+        Self::PrinterUpload,
+        Self::SuppliedSourceImport,
     ];
     pub fn effect_class(self) -> EffectClass {
         match self {
@@ -50,6 +68,8 @@ impl JobKind {
             Self::ExportAcceptedPlate3mf => "export-accepted-plate-3mf",
             Self::ExportDirect3mf => "export-direct-3mf",
             Self::PrinterUpload => "printer-upload",
+            #[cfg(feature = "desktop_rebuild")]
+            Self::SuppliedSourceImport => "supplied-source-import",
         }
     }
 }
@@ -121,6 +141,12 @@ pub enum Payload {
         unlabeled_names: Vec<String>,
     },
     PrinterStart(PrinterStartRequest),
+    #[cfg(feature = "desktop_rebuild")]
+    SuppliedSourceImport {
+        project_id: u64,
+        operation_key: String,
+        input_version: u32,
+    },
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -241,6 +267,8 @@ impl Payload {
             Self::ExportDirect3mf { .. } => JobKind::ExportDirect3mf,
             Self::PrinterUpload { .. } => JobKind::PrinterUpload,
             Self::PrinterStart(_) => JobKind::PrinterUpload,
+            #[cfg(feature = "desktop_rebuild")]
+            Self::SuppliedSourceImport { .. } => JobKind::SuppliedSourceImport,
         }
     }
     pub fn validate(&self) -> Result<()> {
@@ -314,6 +342,19 @@ impl Payload {
                 }
             }
             Self::PrinterStart(request) => request.validate_request()?,
+            #[cfg(feature = "desktop_rebuild")]
+            Self::SuppliedSourceImport {
+                project_id,
+                operation_key,
+                input_version,
+            } => {
+                id(*project_id)?;
+                text(operation_key, 128)?;
+                ensure!(
+                    matches!(*input_version, 1 | 2),
+                    "Unsupported supplied input version"
+                );
+            }
         }
         if let Self::ExportDirect3mf { tokens, .. } = self {
             ensure!(!tokens.is_empty(), "Direct export requires units");
@@ -392,6 +433,8 @@ impl Payload {
             Self::ImportScan { project_id } | Self::ExtractSourceDocs { project_id } => {
                 format!("source:{project_id}")
             }
+            #[cfg(feature = "desktop_rebuild")]
+            Self::SuppliedSourceImport { project_id, .. } => format!("source:{project_id}"),
             Self::Sync {
                 project_ids: Some(ids),
             } => format!(
@@ -721,6 +764,10 @@ impl JobRecord {
             return None;
         }
         (self.result.as_ref() == Some(receipt)).then_some(UploadedProof { printer_id, upload })
+    }
+    #[cfg(feature = "desktop_rebuild")]
+    pub(crate) fn internal_only(&self) -> bool {
+        self.kind == JobKind::SuppliedSourceImport
     }
     pub fn snapshot(&self) -> JobSnapshot {
         let (status, message) = match self.state {
