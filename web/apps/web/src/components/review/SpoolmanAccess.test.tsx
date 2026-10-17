@@ -190,3 +190,26 @@ it.each([false, true])("masks cached enrichment in sheet when access is denied (
   expect(screen.getAllByText("Catalog Red").length).toBeGreaterThan(0);
   expect(screen.getAllByRole("button", { name: "Remove" }).length).toBe(isMobile ? 4 : 2);
 });
+
+
+it.each([
+  { filament_color_id: " spoolman:int-1:filament:2 ", spoolman_spool_id: null },
+  { filament_color_id: null, spoolman_spool_id: " spoolman:int-1:spool:5 " },
+  { filament_color_id: "catalog:red", spoolman_spool_id: "spoolman:int-1:spool:5" },
+])("hides denied build choices and current enrichment for assignment %j", async (assignment) => {
+  client.setQueryData(queryKeys.planFeatures(1), features(false));
+  const roles = [
+    { role: "primary", part_count: 1, ...assignment, filament_custom_hex: null, filament_display: "Spoolman Blue", filament_hex: "#0000ff" },
+    { role: "accent", part_count: 1, filament_color_id: "catalog:red", spoolman_spool_id: "  ", filament_custom_hex: null, filament_display: "Catalog Red", filament_hex: "#ff0000" },
+  ];
+  const fetch = globalThis.fetch;
+  vi.stubGlobal("fetch", vi.fn((input: string | URL | Request, init?: RequestInit) => String(input).includes("/role-filaments")
+    ? Promise.resolve(new Response(JSON.stringify({ roles }), { headers: { "content-type": "application/json" } }))
+    : fetch(input, init)));
+  client.setQueryData(queryKeys.roleFilaments(1, false), roles);
+  render(<PartColorDialog part={{ ...part, ...assignment }} profileId={1} onClose={vi.fn()} />, { wrapper });
+  expect(screen.queryByRole("option", { name: /^primary:/ })).toBeNull();
+  await waitFor(() => expect(screen.getByRole("option", { name: "accent: Catalog Red" })).toBeDefined());
+  expect(screen.getByText(`Current color: ${assignment.filament_color_id?.trim() || "Unassigned"}`)).toBeDefined();
+  expect(screen.queryByText("Current color: Blue")).toBeNull();
+});
