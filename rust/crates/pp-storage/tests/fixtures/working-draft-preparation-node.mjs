@@ -21,6 +21,7 @@ const cases = [
   { name: 'spoolman-plan-enabled', files, sql: `${setting('role_filaments_1', spoolDefaults)}; ${setting('feature_toggles', { spoolman: false })}; ${setting('feature_toggles:plan:1', { spoolman: true })}` },
   { name: 'spoolman-invalid-denies', files, sql: `${setting('role_filaments_1', spoolDefaults)}; ${setting('feature_toggles', { spoolman: 1 })}` },
   { name: 'naming-folder-and-longest-marker', files: ['clear/[accent]part_x3.stl', '[accent]part_x2.stl', 'part_x9.stl'].map(path => ({ source: 1, path, content: path })), sql: setting('stl_naming_defaults', naming) },
+  { name: 'naming-first-quantity-anchor', files: ['barfoo.stl', 'x/bar.stl'].map(path => ({ source: 1, path, content: path })), sql: setting('stl_naming_defaults', { ...naming, quantity: { ...naming.quantity, regex: '_x([0-9]+)\\.stl$|foo\\.stl$' } }) },
   { name: 'tracked', files },
   { name: 'untracked', files, sql: 'UPDATE projects SET current_source_revision_id=NULL' },
   { name: 'prior-decisions', files, base: { baseRevisionId: 1, basePlanVersion: 1 }, sql: "UPDATE plan_revision_parts SET included=0,quantity_override=7,quantity_effective=7,role_override='clear',notes='keep',filament_custom_hex='#abcdef' WHERE part_key='included.stl'" },
