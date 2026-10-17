@@ -2364,3 +2364,32 @@ fn ticket_t_3_drain_rate_limit_debits_require_current_generation_signature() {
         assert_eq!(endpoint.rate_limit_bucket(&encoded, &signature), None);
     }
 }
+
+#[tokio::test]
+async fn ticket_t_2_respawn_blocked_during_verification_starts_no_child() {
+    let scratch = Scratch::new("respawn-disarmed");
+    let bundle = measured_startup_bundle();
+    let assets = bundle.web_root.join("apps/web/dist");
+    let executed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let recorded = executed.clone();
+    let spec = super::SpawnSpec {
+        bundle: super::release::verify_bundle(bundle, &assets).unwrap(),
+        before_setup: Box::new(move |_, _| {
+            recorded.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }),
+        ..release_spec(&scratch)
+    };
+    let logs = super::logs::Logs::open(spec.data_dir.join("logs")).unwrap();
+    let disarmed = CancellationToken::new();
+    disarmed.cancel();
+    let error = super::Process::spawn(&spec, &logs, &CancellationToken::new(), Some(&disarmed))
+        .await
+        .err()
+        .expect("a blocked respawn must not start a child");
+    assert_eq!(
+        error.to_string(),
+        "Compatibility restart blocked during release verification"
+    );
+    assert!(!executed.load(std::sync::atomic::Ordering::SeqCst));
+}

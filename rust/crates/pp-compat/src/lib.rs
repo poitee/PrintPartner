@@ -6,7 +6,7 @@ pub use logs::recent_diagnostics;
 mod parent_death;
 use parent_death::{ParentDeathGuard, configure_child};
 mod release;
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use axum::{
     body::Body,
     http::{HeaderValue, Request, Response},
@@ -454,21 +454,26 @@ async fn write_setup_or_cancel(
 }
 
 impl Process {
-    /// The first spawn uses the verification that produced `spec.bundle`. Every respawn
-    /// measures the release again on a blocking thread, which stops between files once
-    /// `cancelled` fires, so shutdown waits for at most one file's hash.
+    /// The first spawn uses the verification that produced `spec.bundle`. A respawn passes
+    /// the restart-disarm token, measures the release again on a blocking thread that stops
+    /// between files once `cancelled` fires, and starts no child if restarts were blocked
+    /// while it measured.
     async fn spawn(
         spec: &SpawnSpec,
         capture: &logs::Logs,
         cancelled: &CancellationToken,
-        reverify: bool,
+        respawn: Option<&CancellationToken>,
     ) -> Result<Self> {
-        if reverify {
+        if let Some(disarmed) = respawn {
             let bundle = Bundle::clone(&spec.bundle);
             let stop = cancelled.clone();
             tokio::task::spawn_blocking(move || release::verify_backend(&bundle, &stop))
                 .await
                 .context("Release verification task failed")??;
+            ensure!(
+                !restarts_blocked(cancelled, disarmed),
+                "Compatibility restart blocked during release verification"
+            );
         }
         let package_root = release::package_root(&spec.bundle)?;
         let preload = spec
@@ -845,10 +850,10 @@ async fn obtain(
     source: &Launch,
     logs: &logs::Logs,
     cancelled: &CancellationToken,
-    reverify: bool,
+    respawn: Option<&CancellationToken>,
 ) -> Result<Process> {
     match source {
-        Launch::Release(spec) => Process::spawn(spec, logs, cancelled, reverify).await,
+        Launch::Release(spec) => Process::spawn(spec, logs, cancelled, respawn).await,
         #[cfg(test)]
         Launch::Shell(spec) => Process::spawn_shell(spec, logs, cancelled).await,
     }
@@ -928,7 +933,8 @@ impl Supervisor {
                 // first request. Starting closes admission before draining it.
                 while recovery.try_recv().is_ok() {}
                 logs.event(logs::Event::Starting, 30);
-                let process = obtain(&source, &logs, &cancelled, spawned).await;
+                let process =
+                    obtain(&source, &logs, &cancelled, spawned.then_some(&disarmed)).await;
                 spawned = true;
                 let mut failure = logs::FailureReason::SpawnFailed;
                 let mut termination = None;
