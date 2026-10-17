@@ -226,8 +226,8 @@ Use their `into_json_body().into_bytes()` methods. The complete outcome uses
 `Outcome::into_json_body()?.into_bytes()`.
 
 This first core unit ports the read-only seam. The writes section below covers
-Part edits and abandon. Recompute and preparation remain on GRE-607. Save and
-rebase remain GRE-608. There is no HTTP route or default-feature change.
+Part edits and abandon. Preparation and recompute have their own sections. Save
+and rebase remain GRE-608. There is no HTTP route or default-feature change.
 
 The operation tests call the public client against Node-written databases.
 Their literal expected JSON comes from `getPlanDraft`, `listPlanDraftIdentities`,
@@ -285,8 +285,7 @@ returns the error, as Node does. Node's route answers that error with HTTP 500
 and `internal_error`. A retry of the same edit changes no Part, so it only runs
 the selection again.
 
-Resume has no Node route or service caller, so it is not ported. Recompute
-needs preparation and stays on GRE-607.
+Resume has no Node route or service caller, so it is not ported.
 
 The operation tests replay each Node case on a copy of the required-units
 `unchanged` database. They restart the writer between calls and compare every
@@ -337,8 +336,7 @@ complete accepted snapshot with the existing bounded readers. It propagates
 integrity errors and checks preparation cancellation around those reads.
 `catalog::naming::get` is crate-visible for the next preparation port's
 transactional effective naming profile and digest. Its behavior is unchanged.
-The preparation module below consumes these helpers. Recompute remains a
-separate GRE-607 slice.
+The preparation module below consumes these helpers.
 
 The committed Node generator covers manifest application, optional documents,
 stored kit selections, freshness, and accepted-base integrity. Regenerate its
@@ -371,7 +369,7 @@ storage-issued observation requests with the shared preparation budget.
 Naming rules charge their definitions and per-path comparisons. Spoolman
 defaults follow user and Plan feature choices; disabled or invalid choices drop
 Spoolman references from new Parts without changing accepted decisions.
-Recompute remains GRE-607. Save and rebase remain GRE-608. Existing GRE-668,
+Recompute consumes it. Save and rebase remain GRE-608. Existing GRE-668,
 GRE-669 and GRE-670 follow-ups remain open.
 
 Tests compare literal Node fingerprints, Parts and digests, propagate resource
@@ -384,6 +382,63 @@ cmp /persist/tmp/preparation-first.jsonl /persist/tmp/preparation-second.jsonl
 cmp /persist/tmp/preparation-first.jsonl rust/crates/pp-storage/tests/fixtures/working-draft-preparation-node.jsonl
 cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib -E 'test(working_drafts::preparation_tests)' --test-threads=2
 python3 rust/crates/pp-storage/tests/fixtures/mutate-working-draft-preparation.py
+```
+
+The mutation runner copies the workspace into `/persist/tmp` with its own target
+directory. Only an executed failing test counts as a kill.
+
+### D12 working-draft recompute
+
+`WorkingDraftClient::recompute` ports Node's `recomputePlanDraft` behind
+default-off `desktop_rebuild`. Build the client with
+`WriterOwner::working_drafts_with_observations`, which takes the Source reads
+and preparation limits. A client from `working_drafts_with_policy` refuses
+recompute. `RecomputeRequest::new` takes the `Idempotency-Key` header and the
+route's `apply_manifest` flag. It trims the key as JavaScript does, refuses a
+blank key with Node's message, and refuses a key over 160 UTF-16 units as the
+route does. When `apply_manifest` is false, preparation keeps the current
+inclusion and prefers the accepted Parts, as Node's service asks.
+
+A recompute runs in three steps on the writer thread:
+
+1. A read transaction resolves the actor and Plan. It returns the saved draft
+   for a repeated key, or `idempotency_conflict` when that key named a rebased
+   draft. It refuses a Plan that needs an accepted baseline.
+2. Preparation runs outside any transaction with a fresh budget. No layers and
+   no STLs become `no_layers` and `no_stls`.
+3. An immediate transaction with its own admission deadline checks the
+   principal and the key again. A hidden Plan or a moved accepted base is
+   `base_changed`. A changed input fingerprint is `inputs_changed`. It then
+   copies quantity overrides, and inclusion when the draft is kept, from open
+   drafts, as Node's `carryOpenDraftEdits` does. It abandons every open draft,
+   increments their lifecycle versions, inserts the draft, inputs and Parts, and
+   returns `created` with the saved snapshot.
+
+`RecomputeOutcome::into_json_body` writes Node's result kinds. Node's service
+also selects Required units after a created or existing draft. This client does
+not, so a caller that needs the workspace runs the Required-unit selection
+itself. Node's `would_wipe` result has no Rust preparation counterpart yet.
+
+The operation tests replay each Node case on a copy of the required-units
+`unchanged` database and compare outcomes and the `plan_drafts`,
+`plan_draft_inputs` and `plan_draft_parts` rows with Node's. Creation times are
+compared by format. Cases that change the database between the transactions
+run their SQL after Node's preparation returns. The Rust test reads run it when
+the first STL scan starts. After that scan, preparation still reads settings,
+Source rows, and whether the Plan exists. Only the hidden-Plan case changes one
+of those, and it only turns off Spoolman defaults, which the fixture does not
+set. Both sides therefore prepare the same Parts.
+Rust-only tests cover cancellation, a budget refusal, a cancelled or
+unauthenticated request, and a client without observations. Regenerate the
+fixture twice:
+
+```sh
+node --import ./web/node_modules/tsx/dist/loader.mjs --conditions=development rust/crates/pp-storage/tests/fixtures/working-draft-recompute-node.mjs web/apps/server > /persist/tmp/recompute-first.jsonl
+node --import ./web/node_modules/tsx/dist/loader.mjs --conditions=development rust/crates/pp-storage/tests/fixtures/working-draft-recompute-node.mjs web/apps/server > /persist/tmp/recompute-second.jsonl
+cmp /persist/tmp/recompute-first.jsonl /persist/tmp/recompute-second.jsonl
+cmp /persist/tmp/recompute-first.jsonl rust/crates/pp-storage/tests/fixtures/working-draft-recompute-node.jsonl
+cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test working_draft_recompute --test-threads=2
+python3 rust/crates/pp-storage/tests/fixtures/mutate-working-draft-recompute.py
 ```
 
 The mutation runner copies the workspace into `/persist/tmp` with its own target
