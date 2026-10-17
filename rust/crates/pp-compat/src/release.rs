@@ -72,14 +72,30 @@ fn verify_files(root: &Path, expected: &BTreeMap<String, String>, exact: bool) -
         );
     }
 
-    for (relative, digest) in expected {
+    let entries: Vec<_> = expected.iter().collect();
+    let workers = std::thread::available_parallelism().map_or(1, |count| count.get().min(8));
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = entries
+            .chunks(entries.len().div_ceil(workers))
+            .map(|chunk| scope.spawn(|| verify_chunk(&root, chunk)))
+            .collect();
+        handles.into_iter().try_for_each(|handle| {
+            handle
+                .join()
+                .map_err(|_| anyhow::anyhow!("Release verification worker panicked"))?
+        })
+    })
+}
+
+fn verify_chunk(root: &Path, entries: &[(&String, &String)]) -> Result<()> {
+    for (relative, digest) in entries {
         let path = root
             .join(relative)
             .canonicalize()
             .context("Release artifact missing")?;
-        ensure!(path.starts_with(&root), "Release artifact escaped root");
+        ensure!(path.starts_with(root), "Release artifact escaped root");
         ensure!(
-            measure(&path)? == *digest,
+            measure(&path)? == **digest,
             "Release artifact content mismatch"
         );
     }
@@ -95,10 +111,33 @@ pub(crate) fn manifest() -> Result<ReleaseManifest> {
     Ok(release)
 }
 
-pub fn verify_bundle(bundle: &Bundle, assets: &Path) -> Result<()> {
+/// A bundle whose measured release passed [`verify_bundle`]. Only verification creates one,
+/// so the supervisor can start its first child without measuring the release again.
+#[derive(Clone)]
+pub struct MeasuredBundle(Bundle);
+
+impl std::ops::Deref for MeasuredBundle {
+    type Target = Bundle;
+
+    fn deref(&self) -> &Bundle {
+        &self.0
+    }
+}
+
+#[cfg(test)]
+impl MeasuredBundle {
+    /// Test fixtures whose spawns are meant to fail. The first spawn trusts this value without
+    /// measuring it; later spawns still measure it.
+    pub(crate) fn unchecked(bundle: Bundle) -> Self {
+        Self(bundle)
+    }
+}
+
+pub fn verify_bundle(bundle: Bundle, assets: &Path) -> Result<MeasuredBundle> {
     let release = manifest()?;
     verify_files(assets, &release.frontend, true)?;
-    verify_backend(bundle)
+    verify_backend(&bundle)?;
+    Ok(MeasuredBundle(bundle))
 }
 
 pub(crate) fn verify_backend(bundle: &Bundle) -> Result<()> {

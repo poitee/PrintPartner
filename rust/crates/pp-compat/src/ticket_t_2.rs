@@ -89,7 +89,7 @@ fn release_spec(scratch: &Scratch) -> super::SpawnSpec {
         .unwrap();
     super::SpawnSpec {
         account_pin: super::DesktopAccountPin::Disabled,
-        bundle: bundle(scratch),
+        bundle: super::release::MeasuredBundle::unchecked(bundle(scratch)),
         data_dir: scratch.root.join("data"),
         runtime_dir: scratch.root.join("runtime"),
         setup_padding: String::new(),
@@ -1856,6 +1856,8 @@ async fn measured_startup_owner_death_fixture() {
     };
     let scratch = Scratch { root: root.into() };
     let bundle = measured_startup_bundle();
+    let assets = bundle.web_root.join("apps/web/dist");
+    let bundle = super::release::verify_bundle(bundle, &assets).unwrap();
     if let Some(stage) = std::env::var_os(MEASURED_STARTUP_STAGE) {
         let executed = PathBuf::from(stage).join("web/startup-executed.json");
         if executed.exists() {
@@ -1869,8 +1871,6 @@ async fn measured_startup_owner_death_fixture() {
         setup_padding: "x".repeat(1024 * 1024),
         ..release_spec(&scratch)
     };
-    super::release::verify_bundle(&spec.bundle, &spec.bundle.web_root.join("apps/web/dist"))
-        .unwrap();
     let supervisor = super::Supervisor::start(spec).unwrap();
     let started = std::time::Instant::now();
     while recorded_pids(&scratch.pidfile()).is_empty() {
@@ -1941,7 +1941,8 @@ fn measured_startup_bundle() -> super::Bundle {
 #[test]
 fn ticket_t_3_drain_measured_release_startup_parent_death() {
     let bundle = measured_startup_bundle();
-    super::release::verify_bundle(&bundle, &bundle.web_root.join("apps/web/dist")).unwrap();
+    let assets = bundle.web_root.join("apps/web/dist");
+    let bundle = super::release::verify_bundle(bundle, &assets).unwrap();
     startup_owner_death_cycles(
         "ticket_t_2::measured_startup_owner_death_fixture",
         &bundle.node,
@@ -2172,7 +2173,8 @@ async fn ticket_t_3_drain_measured_release_repeated_eof_cleanup() {
     use axum::{body::Body, http::Request};
 
     let bundle = measured_startup_bundle();
-    super::release::verify_bundle(&bundle, &bundle.web_root.join("apps/web/dist")).unwrap();
+    let assets = bundle.web_root.join("apps/web/dist");
+    let bundle = super::release::verify_bundle(bundle, &assets).unwrap();
     assert_eq!(bundle.runtime_version, "0.0.0-gre448-simulator-web");
     let mut completed: Vec<MeasuredLifecycleCycle> = Vec::new();
     for cycle in 0..3 {

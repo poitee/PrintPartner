@@ -108,7 +108,7 @@ These crates do not build on Windows yet. The Windows job excludes them with `--
 
 The `tests` value of the macOS entry skips these tests. The comment above the macOS entry names the ticket for each skipped term. When a test passes on macOS, delete it from that filter in the same pull request.
 
-The macOS job skips two lifecycle groups as a whole. They are every test in the `pp-core` `runtime_m0` binary and every `pp-compat` test under `ticket_t_2::`. Linux still runs both groups in full, and **Native macOS bundle** still runs its own selected macOS lifecycle tests. GRE-645 owns the skip. On the hosted runner, one release verification takes 10 to 20 seconds, almost all of it spent walking and hashing about 42,000 dependency files. Every runtime start verifies twice, once inside the 32-second readiness budget, and every supervisor restart verifies again. GRE-661 tracks that cost. The skip stays until it is fixed.
+The macOS job skips two lifecycle groups as a whole. They are every test in the `pp-core` `runtime_m0` binary and every `pp-compat` test under `ticket_t_2::`. Linux still runs both groups in full, and **Native macOS bundle** still runs its own selected macOS lifecycle tests. GRE-645 owns the skip. On the hosted runner, one release verification takes 10 to 20 seconds, almost all of it spent walking and hashing about 42,000 dependency files. Each runtime start verifies the release once, on a blocking thread before the 32-second readiness budget starts, and hashes files in parallel. Every supervisor restart verifies again (GRE-661). The skip stays until macOS runs of both groups pass (GRE-645).
 
 The filter also skips one test by name, outside those groups:
 

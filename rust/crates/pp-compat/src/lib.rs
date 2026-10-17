@@ -14,7 +14,7 @@ use axum::{
 use hmac::{Hmac, Mac};
 use http_body_util::BodyExt;
 use hyper_util::rt::TokioIo;
-pub use release::verify_bundle;
+pub use release::{MeasuredBundle, verify_bundle};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use std::{
@@ -51,7 +51,7 @@ pub type BeforeSetup = Box<dyn Fn(&Path, u32) -> Result<()> + Send + Sync>;
 
 pub struct SpawnSpec {
     pub account_pin: DesktopAccountPin,
-    pub bundle: Bundle,
+    pub bundle: MeasuredBundle,
     pub data_dir: PathBuf,
     pub runtime_dir: PathBuf,
     #[cfg(test)]
@@ -454,12 +454,24 @@ async fn write_setup_or_cancel(
 }
 
 impl Process {
+    /// The first spawn uses the verification that produced `spec.bundle`. Every respawn
+    /// measures the release again, on a blocking thread so the supervisor stays responsive.
     async fn spawn(
         spec: &SpawnSpec,
         capture: &logs::Logs,
         cancelled: &CancellationToken,
+        reverify: bool,
     ) -> Result<Self> {
-        release::verify_backend(&spec.bundle)?;
+        if reverify {
+            let bundle = Bundle::clone(&spec.bundle);
+            tokio::select! {
+                biased;
+                _ = cancelled.cancelled() => bail!("Compatibility start cancelled"),
+                verified = tokio::task::spawn_blocking(move || release::verify_backend(&bundle)) => {
+                    verified.context("Release verification task failed")??;
+                }
+            }
+        }
         let package_root = release::package_root(&spec.bundle)?;
         let preload = spec
             .bundle
@@ -835,9 +847,10 @@ async fn obtain(
     source: &Launch,
     logs: &logs::Logs,
     cancelled: &CancellationToken,
+    reverify: bool,
 ) -> Result<Process> {
     match source {
-        Launch::Release(spec) => Process::spawn(spec, logs, cancelled).await,
+        Launch::Release(spec) => Process::spawn(spec, logs, cancelled, reverify).await,
         #[cfg(test)]
         Launch::Shell(spec) => Process::spawn_shell(spec, logs, cancelled).await,
     }
@@ -907,6 +920,7 @@ impl Supervisor {
             let mut crashes = std::collections::VecDeque::new();
             let mut exit = CompatExit::Graceful;
             let mut attempt = 0;
+            let mut spawned = false;
             loop {
                 if restarts_blocked(&cancelled, &disarmed) {
                     break;
@@ -916,7 +930,8 @@ impl Supervisor {
                 // first request. Starting closes admission before draining it.
                 while recovery.try_recv().is_ok() {}
                 logs.event(logs::Event::Starting, 30);
-                let process = obtain(&source, &logs, &cancelled).await;
+                let process = obtain(&source, &logs, &cancelled, spawned).await;
+                spawned = true;
                 let mut failure = logs::FailureReason::SpawnFailed;
                 let mut termination = None;
                 if let Ok(mut process) = process {
