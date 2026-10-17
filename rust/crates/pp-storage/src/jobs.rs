@@ -812,6 +812,11 @@ fn random() -> String {
 fn now() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp()
 }
+/// Rounds the start up to a whole second so a lease checked against the
+/// truncated `now()` lasts at least `lease_seconds` of real time.
+fn lease_expiry(at: time::OffsetDateTime, lease_seconds: u32) -> i64 {
+    at.unix_timestamp() + i64::from(at.nanosecond() > 0) + i64::from(lease_seconds)
+}
 pub const JOB_DOC_SIZE_LIMIT: usize = 131072;
 
 fn check_document_size(size: usize) -> Result<()> {
@@ -1956,7 +1961,10 @@ fn claim(
             job.attempt += 1;
             job.generation += 1;
             let fence = random();
-            job.lease_until = Some(now() + i64::from(admission.lease_seconds));
+            job.lease_until = Some(lease_expiry(
+                time::OffsetDateTime::now_utc(),
+                admission.lease_seconds,
+            ));
             job.fence = Some(fence.clone());
             job.worker = Some(worker.into());
             save(tx, &mut job, "claimed")?;
@@ -2413,7 +2421,10 @@ fn advance(
         job.state,
         PersistentState::Running | PersistentState::EffectAdmitted
     ) {
-        job.lease_until = Some(now() + i64::from(admission.lease_seconds));
+        job.lease_until = Some(lease_expiry(
+            time::OffsetDateTime::now_utc(),
+            admission.lease_seconds,
+        ));
     }
     save(tx, &mut job, event)?;
     Ok(TransactionDecision::Outcome(Outcome::Job(
@@ -3461,5 +3472,22 @@ mod tests {
         uncertain.authority_refusal = None;
         assert!(uncertain.validate_state().is_err());
         owner.shutdown().unwrap();
+    }
+    #[test]
+    fn lease_expiry_grants_at_least_lease_seconds_at_second_boundaries() {
+        const SECOND: i128 = 1_000_000_000;
+        let k = 1_800_000_000_i128 * SECOND;
+        for offset in [0, 1, 1_000_000, 999_000_000, SECOND - 1] {
+            let start = time::OffsetDateTime::from_unix_timestamp_nanos(k + offset).unwrap();
+            for lease_seconds in [1, 60] {
+                let granted =
+                    i128::from(lease_expiry(start, lease_seconds)) * SECOND - (k + offset);
+                let wanted = i128::from(lease_seconds) * SECOND;
+                assert!(
+                    (wanted..wanted + SECOND).contains(&granted),
+                    "offset {offset} ns, lease {lease_seconds} s: granted {granted} ns"
+                );
+            }
+        }
     }
 }
