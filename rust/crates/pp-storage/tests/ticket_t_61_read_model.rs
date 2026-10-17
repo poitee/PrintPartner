@@ -634,6 +634,11 @@ fn read_model_folder_rule_without_functional_class_matches_catalog_digest() {
                         .get("functional_class")
                         .is_none()
                 );
+                // Node digestEffectiveNaming writes `"functional_class":null`.
+                assert_eq!(
+                    value["effective_digest"],
+                    "93dd019de4c92f363ed93faee9025d4fcc9cbf94463444ed33bf26cc70faef1f"
+                );
             }
             (id, value["effective_digest"].as_str().unwrap().to_owned())
         })
