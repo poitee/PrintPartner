@@ -62,7 +62,7 @@ Each slice is done when:
 - the existing suites pass with the feature off and on, and the default build is unchanged;
 - a reviewer engine other than the author's scores it above 8 on the exact head, with all checks green.
 
-Slices land in this order. Linear tracks each one under GRE-595. A slice is one Linear item and may ship as several PRs (D16 is planned as three). Some modules already exist on main from earlier PRs (for example #129 to #131); a slice ports only the delta from the reference branch.
+Slices land in this order. Linear tracks each one under GRE-595. A slice is one Linear item and may ship as several PRs (D16 ships as four, D14 as five). Some modules already exist on main from earlier PRs (for example #129 to #131); a slice ports only the delta from the reference branch.
 
 | Slice | Linear | Scope |
 | --- | --- | --- |
@@ -79,9 +79,9 @@ Slices land in this order. Linear tracks each one under GRE-595. A slice is one 
 | D11 | GRE-606 | pp-storage required_units |
 | D12 | GRE-607 | pp-storage working_drafts core, yaml and preparation |
 | D13 | GRE-608 | pp-storage working_drafts save, manifest, rebase and siblings |
-| D14 | GRE-610 | pp-storage uploads and capture_manifest |
+| D14 | GRE-610 | pp-storage uploads and capture_manifest (5 PRs) |
 | D15 | GRE-611 | pp-storage jobs model and subscriptions |
-| D16 | GRE-609 | pp-storage jobs engine (3 PRs) |
+| D16 | GRE-609 | pp-storage jobs engine (4 PRs) |
 | D17 | GRE-613 | pp-storage source_scan |
 | D18 | GRE-614 | pp-storage source_sync |
 | D19 | GRE-612 | pp-storage plan_publication |
@@ -210,11 +210,13 @@ They use the existing writer queue and one deferred transaction. Authentication
 observes the actor without updating usage timestamps.
 
 `Read` returns a `DraftDocument` with a validated `DraftIdentity`. `List` orders
-identities by creation time and then ID. Missing or unowned profiles and drafts
-return `NotFound`. Draft loading reuses the required-units reader, including its
-snapshot digest and selected reconciliation validation. Document, diff, and
-workspace reads reject incomplete rebase origins. `Workspace` reuses the
-required-units workspace builder. No required-units reader logic changes.
+identities by creation time and then ID. A missing or unowned profile returns
+`ProfileNotFound`, and a missing draft returns `DraftNotFound`, as Node's
+`PlanDraftWorkspaceService.read` and draft list route do. Draft loading reuses
+the required-units reader, including its snapshot digest and selected
+reconciliation validation. Document, diff, and workspace reads reject
+incomplete rebase origins. `Workspace` reuses the required-units workspace
+builder. No required-units reader logic changes.
 
 `Diff` returns the complete input and Part diff against the draft's base
 revision. Both the revision ID and Plan version determine `baseIsCurrent`.
@@ -303,8 +305,9 @@ cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-storage --featu
 
 `rust/crates/pp-storage/tests/fixtures/mutate-working-drafts.py` runs the
 read and write mutants against both test files. It copies the Rust workspace
-and builds in its own temporary target directory, so it never changes
-`rust/target`.
+into a temporary directory under `rust/target`, links the real `web` directory
+beside it for compile-time includes, and builds there with its own
+`CARGO_TARGET_DIR`, so it never changes the build artifacts in `rust/target`.
 
 ### D12 preparation prerequisites
 
@@ -593,9 +596,8 @@ an error count.
 The job stream registry starts each stream with its job's snapshot and queues newer
 committed versions for the same tenant and job. A stream closes when the job finishes,
 its 16-frame mailbox overflows, its credential expires or is revoked, or the owner stops.
-At most 128 streams are live. Nothing calls the registry yet. The snapshot changes
-that expose `public_result` landed with D16 (b); the engine and auth revalidation calls
-land with D16 (c).
+At most 128 streams are live. The snapshot changes that expose `public_result` landed
+with D16 (b); the engine and auth revalidation calls landed with D16 (c).
 
 `fixtures/parity/jobs-model/generate.mjs` records Node's parsed accepted-plate and
 direct-3mf results and its verdict on accepted-basis seals. Node builds its other job
@@ -634,7 +636,7 @@ admitted kind. `authorize(lease)` returns the live attempt's revalidated tenant 
 subject without changing the job. A queued job's snapshot reports progress `0`, and
 another tenant's read returns `JobAccessFailure::NotFound`.
 
-Claims do not yet reserve the job's Source; that lands in D16 (c). Upload, local scan
+Claims do not yet reserve the job's Source; that lands in D16 (d). Upload, local scan
 and Source Sync paths arrive with D14, D17 and D18.
 
 `fixtures/parity/jobs-engine/generate.mjs` starts jobs in Node's
@@ -692,6 +694,84 @@ never revalidates a running job:
 node fixtures/parity/jobs-engine/generate.mjs --check
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test jobs_engine_parity --test job_authority_claims
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib jobs::
+```
+
+### D16 jobs engine: streams, shutdown and Source work
+
+GRE-609's third PR wires the D15 stream registry into the engine and gives the catalog
+the Source-work state that later slices settle, behind `desktop_rebuild`. With the
+feature off, the engine and catalog behave as before.
+
+`AtomicJobClient::subscribe(credential, job_id)` resolves the credential, reads the
+tenant's job and, once that transaction commits, opens a stream that starts with the
+job's snapshot. Another tenant's job returns `JobAccessFailure::NotFound`. Every job
+save inside a jobs transaction is collected, and the last committed version of each
+job is published after the commit. If the commit outcome is unknown, every live stream
+closes. Each auth write, through either `auth_with_policy` or
+`rebuild_auth_with_policy`, runs under the registry's admission gate and then
+revalidates every live stream. A stream whose credential no longer resolves to the
+same tenant and subject closes as revoked before it can deliver a queued frame. If
+revalidation itself fails, every stream closes. `WriterOwner` shutdown stops the
+registry first: live streams close as `OwnerStopped`, and a subscription that commits
+during shutdown returns `JobAccessFailure::Stopped`.
+
+The catalog's Source-work state now has a random incarnation and an issued high-water
+mark, and each lease carries a `SourceWorkProof` (incarnation and token). A second
+lease on a Source that already has live work fails with `SourceBusy`. A lease that is
+dropped while the writer queue is full is recorded as orphaned, and the writer frees
+its Source before the next envelope. `classify_issued` and `retire_issued` tell
+active, retired, never-issued and other-incarnation tokens apart; D17 and D18 call
+them when a scan or Sync settles its reservation. Claim-time Source reservation
+(`ClaimedAttempt`) is D16 (d).
+
+`fixtures/parity/jobs-engine/generate.mjs` now also records the events a tenant
+listener receives while each Node job runs. The Rust test subscribes before the claim
+and asserts that the stream ends with Node's events. Node's running event says
+"Running…" where the durable model says "Running". On failure, Node reports progress
+100 and the handler's error, and the durable worker keeps the last progress and
+reports "Job failed". Node never revalidates a listener, so the stream authority and
+shutdown tests port the reference `job_transport.rs`:
+
+```sh
+node fixtures/parity/jobs-engine/generate.mjs --check
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test jobs_engine_parity --test job_transport
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib catalog::
+```
+
+### D14 uploads: supplied-import job arms
+
+GRE-610's first PR adds the job kind the upload journal will own, behind
+`desktop_rebuild`. With the feature off, the engine is unchanged. The journal, its
+schema and the capture paths arrive in D14 (b) to (e).
+
+`JobKind::SuppliedSourceImport` carries `Payload::SuppliedSourceImport { project_id,
+operation_key, input_version }` and reserves `source:{project_id}`. Only the upload
+journal enqueues it: `AtomicJobClient::submit` refuses the payload with "Supplied
+imports require atomic domain admission". The public job API never shows one. A public
+read or stream of an import returns `JobAccessFailure::NotFound`, the retained list
+skips it, and its saves are never published to a stream. The internal `Get` still
+reads it.
+
+`ServerWorkerClient::claim_import(job_id)` claims that queued import and no other job.
+If its original authority is refused, the refusal commits with phase `targeted_claim`
+and the typed `AuthorityFailure` is returned, instead of moving on to the next job. An
+import attempt advances only by heartbeat and progress; the journal owns its other
+phases. Cancelling an import, or recovering a cancelled one after a restart, returns it
+to the queue with `cancel_requested` set, so its owner can reclaim it and release its
+input. As a deliberate difference from the reference, the 100-attempt limit does not
+apply to these cleanup claims, and recovery never fails a cancelled import for its
+attempt count; other import attempts and other job kinds keep the limit.
+
+Node has no supplied-import kind. `fixtures/parity/jobs-engine/generate.mjs` records
+that Node refuses to start one ("Unsupported job kind: supplied-source-import") and that
+a job it never started cannot be read, streamed or listed. The Rust parity test asserts
+that a durable import looks the same to its own tenant. The claim, advance and
+cancellation cases port the reference engine:
+
+```sh
+node fixtures/parity/jobs-engine/generate.mjs --check
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test jobs_engine_parity --test supplied_imports --test job_authority_claims
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib jobs::subscriptions::
 ```
 
 ## D9 build graph receipt
@@ -1117,3 +1197,51 @@ preserves the token where Node's coordinate resolves to a different token. At
 index 0, Rust refuses the dropped token and writes nothing where Node publishes.
 Index 2 and a cross-Part filename rename match Node's refusal literally. Fixtures
 retain Node's literal outcomes and compare Checkoff coordinates to Required-unit rows.
+
+## D19 publication client and writer admission, GRE-612 PR 3
+
+With `desktop_rebuild`, `WriterOwner::publication` and
+`publication_with_policy` construct a `PublicationClient`. `PublicationCommand`
+trims keys with ECMAScript whitespace rules and admits 1 to 160 UTF-16 units.
+`normalized_http` keeps the original admitted request separate from a request
+normalized by a caller. The writer resolves the authenticated tenant and actor
+inside the publication transaction. Request data cannot select either identity.
+
+`PublicationClient::apply` uses the bounded writer queue. Before admission,
+cancellation returns `required_units::AdmissionFailure::Cancelled`, a full queue
+at its deadline returns `QueueFull`, and closed or poisoned admission returns
+`Stopped`. After admission, the caller waits for the result even if cancelled;
+a lost writer reply returns `OutcomeUnknown`. The writer uses its dequeue
+transaction deadline and the shared bounded SQLite lock admission path. It
+commits applied or replayed receipts and rolls back unsuccessful publication.
+Its token allocator uses operating-system randomness.
+
+The feature installs and validates the admission table and immutable triggers
+at schema 37. Version 36 remains reserved for the reference branch's separate
+migration. Reopening checks schema text and orphan admissions. Without the
+feature, storage remains at schema 35 and refuses a schema-37 database.
+The publication schema uses the reference's version 37, and the uploads port (GRE-610) must install its v36 tables when a database is already at 37 without them.
+
+D13 save, GRE-608, can call `AuthenticatedPublicationContext::resolve` and
+`publish_in_transaction` on its own transaction, using `PublicationRequests::new`
+for admitted and execution requests. That caller owns commit or rollback. It
+must not enqueue `PublicationClient::apply` while holding its transaction.
+D13 integration remains GRE-608's caller work.
+
+Eight literal fixtures run the actual Node Apply route and workspace service
+against fresh SQLite databases. They cover missing, whitespace-only and
+UTF-16-sized keys, embedded BOM preservation, identical replay receipts,
+session actor attribution, tenant isolation and unexpected-error text. The
+fixture supplies authenticated request context; authentication middleware
+itself is covered by the auth tests. Rust compares these literals through its
+client, queue and transaction executor with deterministic fixture tokens. A
+separate owner test proves schema installation, random token generation,
+writer dispatch, shutdown and replay after reopen.
+
+GRE-665 item 1 applies because this public client can return errors. Invalid
+keys now use Node's `Request is invalid`; unexpected publication errors use
+Node's `Plan draft update failed`. The Node error fixture injects a SQLite
+trigger failure through the real route. Internal transaction callers retain
+the original diagnostic error. Authentication failures retain the auth module's
+existing errors. Queue admission has no Node counterpart; direct Rust tests
+check the supplied reference behavior, including cancellation after admission.

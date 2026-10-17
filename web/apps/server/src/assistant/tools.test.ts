@@ -869,8 +869,8 @@ option_groups:
     const profile = repo.createProfile("Scoped proposal");
     repo.setSetting("feature_toggles", JSON.stringify({ spoolman: account }));
     repo.setSetting(`feature_toggles:plan:${profile.id}`, JSON.stringify({ spoolman: plan }));
-    const brief = newBuildPlanningBrief(profile.id, "Primary color is Red.", []);
-    saveBuildPlanningBrief(repo, brief);
+    saveBuildPlanningBrief(repo, newBuildPlanningBrief(profile.id, "Primary color is Red.", []));
+    const saved = readBuildPlanningBrief(repo, profile.id);
     const result = await invokeAssistantTool("propose_assign_role_filament", {
       plan_id: profile.id,
       assignment: { role: "primary", inventory_kind: "spoolman", inventory_id: "spoolman:inventory:filament:7", color_hex: "#ff0000" },
@@ -886,7 +886,7 @@ option_groups:
       }, { repo });
       expect(catalog.proposedAction?.type).toBe("propose_assign_role_filament");
     }
-    expect(readBuildPlanningBrief(repo, profile.id)).toEqual(brief);
+    expect(readBuildPlanningBrief(repo, profile.id)).toEqual(saved);
   });
 
   it("rejects unverified Spoolman and unconfirmed custom assignments", async () => {
