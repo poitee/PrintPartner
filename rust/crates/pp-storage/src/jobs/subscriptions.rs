@@ -1,8 +1,3 @@
-#![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Job engine wiring lands in GRE-609 (D16)")
-)]
-
 use super::{Credential, JobAccessFailure, JobRecord, JobSnapshot};
 use crate::auth::{self, AuthPolicy, StreamAuthority};
 use anyhow::{Result, ensure};

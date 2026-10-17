@@ -155,7 +155,7 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
   });
   const [planBindings, setPlanBindings] = useState<PrinterPlanBinding[]>([]);
   const profiles = useProfilesQuery(engineReady).data ?? [];
-  const catalog = useFilamentCatalogQuery(engineReady).data ?? null;
+  const catalog = useFilamentCatalogQuery({ enabled: engineReady }).data ?? null;
 
   const [hostType, setHostType] = useState<HostType>("moonraker");
   const [newName, setNewName] = useState("");

@@ -42,7 +42,7 @@ fn budgets_charge_cumulatively_and_observe_cancellation() {
 fn limits_cannot_exceed_reference_caps() {
     let cancelled = AtomicBool::new(false);
     let max = PreparationLimits::default();
-    let mut oversized = [max; 10];
+    let mut oversized = [max; 11];
     oversized[0].entries += 1;
     oversized[1].depth += 1;
     oversized[2].path += 1;
@@ -53,6 +53,7 @@ fn limits_cannot_exceed_reference_caps() {
     oversized[7].nodes += 1;
     oversized[8].visits += 1;
     oversized[9].rules += 1;
+    oversized[10].comparison_work += 1;
     for limits in oversized {
         assert!(matches!(limits.validate(), Err(ReadFailure::InvalidGrant)));
         assert!(matches!(
@@ -77,11 +78,17 @@ fn zero_limits_reject_work_but_allow_empty_reads() {
         nodes: 0,
         visits: 0,
         rules: 0,
+        comparison_work: 0,
     };
     let mut budget = PreparationBudget::new(&cancelled, limits).unwrap();
     budget.artifact(0, 0).unwrap();
     budget.document(0, 0).unwrap();
     budget.expansion(0).unwrap();
+    budget.comparison(0).unwrap();
+    assert!(matches!(
+        budget.comparison(1),
+        Err(ReadFailure::LimitExceeded(Resource::ComparisonWork))
+    ));
     assert!(matches!(
         budget.entry(0, 0),
         Err(ReadFailure::LimitExceeded(Resource::Entries))

@@ -86,8 +86,9 @@ export async function saveSpoolmanDefaultIntegration(
   });
 }
 
-export async function fetchFilamentCatalog(): Promise<FilamentCatalog> {
-  return engineFetch<FilamentCatalog>("/filaments/catalog");
+export async function fetchFilamentCatalog(profileId?: number | null): Promise<FilamentCatalog> {
+  const query = profileId != null ? `?profile_id=${encodeURIComponent(profileId)}` : "";
+  return engineFetch<FilamentCatalog>(`/filaments/catalog${query}`);
 }
 
 export async function createCustomFilament(body: {
@@ -133,9 +134,13 @@ export async function applyRoleColorsToParts(
   });
 }
 
-export async function fetchSpoolmanSpools(integrationId: string): Promise<SpoolmanSpoolRow[]> {
+export async function fetchSpoolmanSpools(
+  integrationId: string,
+  profileId?: number | null,
+): Promise<SpoolmanSpoolRow[]> {
+  const query = profileId != null ? `?profile_id=${encodeURIComponent(profileId)}` : "";
   const body = await engineFetch<{ spools: SpoolmanSpoolRow[] }>(
-    `/api/v1/integrations/${encodeURIComponent(integrationId)}/spoolman/spools`,
+    `/api/v1/integrations/${encodeURIComponent(integrationId)}/spoolman/spools${query}`,
   );
   return body.spools;
 }
