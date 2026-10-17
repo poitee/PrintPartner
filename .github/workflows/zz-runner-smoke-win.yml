@@ -1,0 +1,12 @@
+name: Windows runner smoke
+on:
+  push:
+    branches: [ci/runner-smoke-win]
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: [self-hosted, windows, x64, pp-local-win]
+    steps:
+      - shell: cmd
+        run: echo hello & ver
