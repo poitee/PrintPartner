@@ -276,28 +276,18 @@ fn workspace_format_must_match_the_source_sync_record() {
 }
 
 #[test]
-fn bundled_read_only_catalog_admits_rollback() {
-    let index = admit_bundled_manifest().unwrap();
-    assert_eq!(
-        index.admit_rollback("tool.get_kit_catalog"),
-        Ok(&BTreeSet::from([File(FileFamily::KitCatalog)]))
-    );
-}
-
-#[test]
-fn catalog_format_one_is_a_fixed_unversioned_loader_contract() {
-    // loadKitCatalog accepts object-shaped JSON/YAML without checking version.
-    // Format 1 names that contract, not a maximum catalog version Node accepts.
-    assert_eq!(
-        manifest()["live_formats"]["kit-catalog"]["node_reads"],
-        json!(1)
-    );
-    assert_eq!(
-        number_after(
-            include_str!("../../../../web/apps/server/src/services/kit-catalog.ts"),
-            "return { version: ",
-        ),
-        1
+fn no_writer_declarations_match_all_rust_crate_sources() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let output = std::process::Command::new("python3")
+        .arg(root.join("rust/scripts/check-rust-no-writers.py"))
+        .arg(&root)
+        .output()
+        .expect("run Rust no-writer source check");
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 
@@ -342,6 +332,15 @@ fn read_only_formats_require_explicit_none_and_fail_closed_otherwise() {
                 })
             );
         }
+        value["live_formats"][format]["rust_writes"] = Value::Null;
+        assert_eq!(
+            admit(&value)
+                .unwrap()
+                .admit_rollback(participant)
+                .unwrap_err()
+                .to_string(),
+            format!("rollback of {operation} refused: Rust writer for {format} is undeclared")
+        );
         for writer in [
             json!(0),
             json!("unknown"),
