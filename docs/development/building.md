@@ -36,7 +36,7 @@ cargo check --manifest-path rust/Cargo.toml --locked -p pp-storage --features de
 The workspace also has these checks:
 
 - `python3 rust/scripts/check-boundaries.py --self-test` checks that each crate depends only on the crates it is allowed to use.
-- `python3 rust/scripts/check-ast-grep.py` checks the ast-grep lint counts against `rust/ast-grep-baseline.json`. Its `no-writer-family-literal` rule flags family path components from GRE-402 no-writer declarations in non-test Rust string literals.
+- `python3 rust/scripts/check-ast-grep.py` checks the ast-grep lint counts against `rust/ast-grep-baseline.json`. Its `no-writer-family-literal` rule flags family path components from GRE-402 no-writer declarations in non-test Rust string literals. This rule starts at a zero baseline. Legitimate format names and empty-directory setup use per-line `ast-grep-ignore: no-writer-family-literal` comments with reasons.
 
 [Continuous integration](ci.md) lists the checks that every PR runs on Linux, macOS and Windows. [rust/README.md](../../rust/README.md) has the full command list. Some tests need the built web assets and the desktop bundle manifest that it describes. [rust/scripts/AGENTS.md](../../rust/scripts/AGENTS.md) has the rules for files under `rust/scripts/`.
 

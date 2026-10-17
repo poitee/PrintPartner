@@ -474,6 +474,8 @@ impl WriterOwner {
         let lease = lease::StorageLease::acquire_locked(locked)?;
         let path = lease.data_dir().join("print-partner.db");
         let version = lease.preflight()?;
+        // Creates the empty covers directory; see GRE-675.
+        // ast-grep-ignore: no-writer-family-literal
         for name in ["repos", "sources", "exports", "thumbs", "covers"] {
             std::fs::create_dir_all(lease.data_dir().join(name))
                 .with_context(|| format!("WriterOwner::open: create storage directory {name}"))?;

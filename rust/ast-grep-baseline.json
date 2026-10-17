@@ -1,5 +1,5 @@
 {
   "no-unwrap-expect": 45,
   "runtime-process-command": 6,
-  "no-writer-family-literal": 5
+  "no-writer-family-literal": 0
 }
