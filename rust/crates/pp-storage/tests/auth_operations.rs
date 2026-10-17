@@ -1,5 +1,5 @@
 use pp_storage::{
-    Limits, Setting, SettingCommand, WriterOwner,
+    Limits, WriterOwner,
     auth::{AuthClient, FirstUserTenant, Outcome, Provider, Request, Secret},
 };
 use rusqlite::{Connection, params};
@@ -24,6 +24,11 @@ fn directory() -> PathBuf {
 }
 fn open(path: &std::path::Path) -> WriterOwner {
     WriterOwner::open(path, Limits::default()).unwrap().0
+}
+fn seed_keys(path: &std::path::Path, tenant: &str, value: &str) {
+    let db = Connection::open(path.join("print-partner.db")).unwrap();
+    db.busy_timeout(Duration::from_secs(5)).unwrap();
+    db.execute("INSERT INTO app_settings(tenant_id,key,value) VALUES(?1,'api_keys_v1',?2) ON CONFLICT(tenant_id,key) DO UPDATE SET value=excluded.value", params![tenant, value]).unwrap();
 }
 fn secret(value: &str) -> Secret {
     Secret::new(value.to_owned())
@@ -507,22 +512,7 @@ fn ticket_t_17_identity_and_tenant_keys() {
     let json = serde_json::to_string(&keys).unwrap();
     assert!(!json.contains("keyHash"));
     assert!(!json.contains(new_key.expose()));
-    let setting = Setting {
-        tenant: a.tenant_id,
-        key: "api_keys_v1".into(),
-        value: "{broken".into(),
-    };
-    owner
-        .client()
-        .submit(
-            SettingCommand::Set(setting),
-            &AtomicBool::new(false),
-            Duration::from_secs(5),
-        )
-        .unwrap()
-        .recv()
-        .unwrap()
-        .unwrap();
+    seed_keys(&path, &a.tenant_id, "{broken");
     assert!(
         call(
             &client,
@@ -800,20 +790,7 @@ fn ticket_t_17_key_collection_growth_rejects_atomically() {
     collection[0]["createdAt"] = serde_json::Value::String("a".repeat(padding));
     let raw = collection.to_string();
     let storage = owner.client();
-    storage
-        .submit(
-            SettingCommand::Set(Setting {
-                tenant: user.tenant_id.clone(),
-                key: "api_keys_v1".into(),
-                value: raw.clone(),
-            }),
-            &AtomicBool::new(false),
-            Duration::from_secs(5),
-        )
-        .unwrap()
-        .recv()
-        .unwrap()
-        .unwrap();
+    seed_keys(&path, &user.tenant_id, &raw);
     assert!(
         call(
             &client,
@@ -901,21 +878,7 @@ fn legacy_base64_key_migration_preserves_access_after_reopen() {
         "createdAt": "2020-01-01T00:00:00.000Z", "lastUsedAt": null,
         "expiresAt": null, "isActive": true
     }]);
-    owner
-        .client()
-        .submit(
-            SettingCommand::Set(Setting {
-                tenant: user.tenant_id.clone(),
-                key: "api_keys_v1".into(),
-                value: collection.to_string(),
-            }),
-            &AtomicBool::new(false),
-            Duration::from_secs(5),
-        )
-        .unwrap()
-        .recv()
-        .unwrap()
-        .unwrap();
+    seed_keys(&path, &user.tenant_id, &collection.to_string());
     let resolve_key = |client: &AuthClient, raw: &str| {
         call(
             client,
@@ -966,4 +929,86 @@ fn legacy_base64_key_migration_preserves_access_after_reopen() {
         ));
     }
     owner.shutdown().unwrap();
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[test]
+fn generic_settings_refuse_auth_owned_keys_and_write_others() {
+    use pp_storage::{Setting, SettingCommand, SettingSnapshot};
+    let path = directory();
+    let owner = open(&path);
+    let client = owner.auth(FirstUserTenant::NewUser);
+    let (user, token) = register(&client, "settings-guard@example.com");
+    let Outcome::KeyCreated { key, .. } = call(
+        &client,
+        Request::CreateKey {
+            session: secret(&token),
+        },
+    )
+    .unwrap() else {
+        panic!("key expected")
+    };
+    let storage = owner.client();
+    let stored = |key: &str| {
+        storage
+            .reader(Duration::from_secs(5))
+            .unwrap()
+            .get_setting(&user.tenant_id, key, None)
+            .unwrap()
+    };
+    let before = stored("api_keys_v1").unwrap();
+    let setting = |key: &str, value: &str| Setting {
+        tenant: user.tenant_id.clone(),
+        key: key.into(),
+        value: value.into(),
+    };
+    for command in [
+        SettingCommand::Set(setting("api_keys_v1", "[]")),
+        SettingCommand::CompareAndSet {
+            setting: setting("api_keys_v1", "[]"),
+            expected: SettingSnapshot::Stored {
+                value: before.clone(),
+            },
+        },
+    ] {
+        let refused = storage
+            .submit(command, &AtomicBool::new(false), Duration::from_secs(5))
+            .expect_err("auth-owned settings must be refused");
+        assert_eq!(
+            refused.to_string(),
+            "Setting api_keys_v1 is owned by auth and changes only through auth requests"
+        );
+    }
+    assert_eq!(stored("api_keys_v1"), Some(before));
+    let Outcome::KeyResolved {
+        principal: Some(principal),
+        ..
+    } = call(
+        &client,
+        Request::ResolveKey {
+            tenant_id: user.tenant_id.clone(),
+            key: secret(key.expose()),
+        },
+    )
+    .unwrap()
+    else {
+        panic!("the key must stay authorized")
+    };
+    assert_eq!(principal.tenant_id, user.tenant_id);
+
+    assert!(
+        storage
+            .submit(
+                SettingCommand::Set(setting("theme", "dark")),
+                &AtomicBool::new(false),
+                Duration::from_secs(5),
+            )
+            .unwrap()
+            .recv()
+            .unwrap()
+            .unwrap()
+    );
+    assert_eq!(stored("theme").as_deref(), Some("dark"));
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(path).unwrap();
 }

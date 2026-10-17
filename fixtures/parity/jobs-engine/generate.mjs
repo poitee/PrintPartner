@@ -25,6 +25,8 @@ const starts = [
 // Retained cases run each job to its end, one after another, so the later job
 // finishes later. With no Sources the update check succeeds with an empty
 // result; the checklist export fails because the probe repository has no plan.
+// A tenant-a listener subscribes before each run starts and records every
+// event the runner emits.
 const lists = {
   all: {},
   done: { status: "done" },
@@ -69,10 +71,20 @@ if (process.argv.includes("--probe")) {
   };
   const finished = [];
   for (const { id, kind, payload } of starts) {
-    const { job_id: _random, finished_at: _at, ...snapshot } = await settled(
-      await retainedRunner.start(kind, payload, "tenant-a"),
-    );
-    finished.push({ id, kind, status: snapshot.status, ...(snapshot.status === "done" && { snapshot }) });
+    const jobId = await retainedRunner.start(kind, payload, "tenant-a");
+    const stream = [];
+    retainedRunner.subscribe(jobId, "tenant-a", (event) => {
+      const { job_id: _id, updated_at: _updated, finished_at: _done, ...frame } = event;
+      stream.push(frame);
+    });
+    const { job_id: _random, finished_at: _at, ...snapshot } = await settled(jobId);
+    finished.push({
+      id,
+      kind,
+      status: snapshot.status,
+      ...(snapshot.status === "done" && { snapshot }),
+      stream,
+    });
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   const retained = Object.entries(lists).map(([id, filters]) => ({

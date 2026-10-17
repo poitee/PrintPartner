@@ -10,8 +10,8 @@ export const queryKeys = {
   sourceCategories: ["sourceCategories"] as const,
   source: (id: number) => ["sources", id] as const,
   planReviews: ["planReview"] as const,
-  planReview: (profileId: number, includeExcluded?: boolean) =>
-    ["planReview", profileId, includeExcluded ?? false] as const,
+  planReview: (profileId: number, includeExcluded = false, spoolmanAllowed = true) =>
+    ["planReview", profileId, includeExcluded, spoolmanAllowed] as const,
   allPlanLayers: ["planLayers"] as const,
   planLayers: (profileId: number) => ["planLayers", profileId] as const,
   planRecipeBundle: (profileId: number) => ["planRecipeBundle", profileId] as const,
@@ -21,9 +21,14 @@ export const queryKeys = {
   checkoff: (profileId: number) => ["checkoff", profileId] as const,
   printerCheckoffLinks: ["printerCheckoffLinks"] as const,
   unattributedPrints: ["unattributedPrints"] as const,
-  roleFilaments: (profileId: number) => ["roleFilaments", profileId] as const,
-  filamentCatalog: ["filamentCatalog"] as const,
-  spoolmanSpools: (integrationId: string) => ["spoolmanSpools", integrationId] as const,
+  roleFilaments: (profileId: number, spoolmanAllowed = true) => ["roleFilaments", profileId, spoolmanAllowed] as const,
+  filamentCatalogs: ["filamentCatalog"] as const,
+  filamentCatalog: (profileId?: number | null, spoolmanAllowed = true) =>
+    profileId != null ? (["filamentCatalog", profileId, spoolmanAllowed] as const) : (["filamentCatalog"] as const),
+  spoolmanSpools: (integrationId: string, profileId?: number | null, spoolmanAllowed = true) =>
+    profileId != null
+      ? (["spoolmanSpools", integrationId, profileId, spoolmanAllowed] as const)
+      : (["spoolmanSpools", integrationId] as const),
   workflowGuide: ["workflowGuide"] as const,
   dateFormatSetting: ["dateFormatSetting"] as const,
   buildTrackingSettings: ["buildTrackingSettings"] as const,

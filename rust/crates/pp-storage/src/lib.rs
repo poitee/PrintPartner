@@ -171,6 +171,10 @@ struct Shared {
     changed: Condvar,
     capacity: usize,
     job_admission: Mutex<Option<Arc<jobs::WorkerAdmission>>>,
+    #[cfg(feature = "desktop_rebuild")]
+    orphaned_source_leases: Mutex<Vec<u64>>,
+    #[cfg(feature = "desktop_rebuild")]
+    job_subscriptions: jobs::JobSubscriptions,
 }
 #[derive(Clone)]
 pub struct SettingsClient {
@@ -325,6 +329,16 @@ impl SettingsClient {
         cancelled: &AtomicBool,
         wait: Duration,
     ) -> Result<WriteReply> {
+        #[cfg(feature = "desktop_rebuild")]
+        {
+            let (SettingCommand::Set(setting) | SettingCommand::CompareAndSet { setting, .. }) =
+                &command;
+            ensure!(
+                !auth::OWNED_SETTINGS.contains(&setting.key.as_str()),
+                "Setting {} is owned by auth and changes only through auth requests",
+                setting.key
+            );
+        }
         self.enqueue(Work::Setting(command), cancelled, wait)
     }
     pub fn reader(&self, wait: Duration) -> Result<ReaderCheckout> {
@@ -491,6 +505,10 @@ impl WriterOwner {
             changed: Condvar::new(),
             capacity: limits.queued_writes,
             job_admission: Mutex::new(None),
+            #[cfg(feature = "desktop_rebuild")]
+            orphaned_source_leases: Mutex::new(Vec::new()),
+            #[cfg(feature = "desktop_rebuild")]
+            job_subscriptions: jobs::JobSubscriptions::new(),
         });
         let worker = shared.clone();
         let mut catalog_state = catalog::State::new(lease.data_dir().to_owned());
@@ -567,6 +585,13 @@ impl WriterOwner {
                         continue;
                     }
                 };
+                #[cfg(feature = "desktop_rebuild")]
+                catalog_state.reap(std::mem::take(
+                    &mut *worker
+                        .orphaned_source_leases
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner),
+                ));
                 match envelope {
                     #[cfg(feature = "desktop_rebuild")]
                     Envelope::NativeSecrets { command, reply } => {
@@ -631,6 +656,8 @@ impl WriterOwner {
                             command,
                             effect_policy,
                             admission,
+                            #[cfg(feature = "desktop_rebuild")]
+                            &worker.job_subscriptions,
                         ));
                     }
                     Envelope::Setting { work, reply } => {
@@ -641,8 +668,15 @@ impl WriterOwner {
                         policy,
                         reply,
                     } => {
-                        let _ =
-                            reply.send(auth::execute(&mut connection, command, policy, admission));
+                        #[cfg(not(feature = "desktop_rebuild"))]
+                        let result = auth::execute(&mut connection, command, policy, admission);
+                        #[cfg(feature = "desktop_rebuild")]
+                        let result = jobs::authority_change(
+                            &mut connection,
+                            &worker.job_subscriptions,
+                            |connection| auth::execute(connection, command, policy, admission),
+                        );
+                        let _ = reply.send(result);
                     }
                     Envelope::WriterControl { control, reply } => {
                         let _ = reply.send(writer_control(&connection, control));
@@ -747,6 +781,8 @@ impl WriterOwner {
         if self.join.is_none() && self.lease.is_none() {
             return Ok(());
         }
+        #[cfg(feature = "desktop_rebuild")]
+        self.client.shared.job_subscriptions.stop_owner();
         {
             let mut queue = self
                 .client

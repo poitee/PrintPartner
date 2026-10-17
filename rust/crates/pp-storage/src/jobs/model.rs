@@ -615,10 +615,6 @@ pub struct JobRecord {
 #[derive(Clone, Debug, Serialize)]
 pub struct JobSnapshot {
     #[cfg(feature = "desktop_rebuild")]
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Job engine wiring lands in GRE-609 (D16)")
-    )]
     #[serde(skip)]
     pub(crate) version: i64,
     pub job_id: String,

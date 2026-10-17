@@ -319,28 +319,26 @@ impl AdmittedDirectory {
         Ok(file)
     }
 
+    /// Create with O_EXCL, then open an existing entry without O_CREAT. On macOS,
+    /// racing dirfd-relative O_CREAT opens without O_EXCL can fail with ENOENT.
     fn open_lock(&self, name: &CStr) -> Result<File> {
-        let fd = unsafe {
-            libc::openat(
-                self.directory.as_raw_fd(),
-                name.as_ptr(),
-                libc::O_RDWR
-                    | libc::O_CREAT
-                    | libc::O_CLOEXEC
-                    | libc::O_NOFOLLOW
-                    | libc::O_NONBLOCK,
-                0o600,
-            )
+        let flags = libc::O_RDWR | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK;
+        let open = |flags| {
+            let fd =
+                unsafe { libc::openat(self.directory.as_raw_fd(), name.as_ptr(), flags, 0o600) };
+            if fd < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(unsafe { File::from_raw_fd(fd) })
         };
-        if fd < 0 {
-            return Err(std::io::Error::last_os_error()).with_context(|| {
-                format!(
-                    "open_lock: openat O_RDWR|O_CREAT|O_NOFOLLOW {}",
-                    name.to_string_lossy()
-                )
-            });
+        let display = name.to_string_lossy();
+        match open(flags | libc::O_CREAT | libc::O_EXCL) {
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => open(flags)
+                .with_context(|| format!("open_lock: openat O_RDWR|O_NOFOLLOW {display}")),
+            result => result.with_context(|| {
+                format!("open_lock: openat O_RDWR|O_CREAT|O_EXCL|O_NOFOLLOW {display}")
+            }),
         }
-        Ok(unsafe { File::from_raw_fd(fd) })
     }
 }
 
@@ -873,6 +871,39 @@ mod tests {
             Some(libc::ENOENT)
         );
         std::fs::remove_dir(path).unwrap();
+    }
+
+    #[test]
+    fn gre_673_racing_first_lock_opens_share_one_file() {
+        let path = directory();
+        let admitted = admit_directory(&path).unwrap();
+        let threads = 8;
+        for trial in 0..200 {
+            let name = CString::new(format!("race-{trial}")).unwrap();
+            let barrier = std::sync::Barrier::new(threads);
+            let opened: Vec<_> = std::thread::scope(|scope| {
+                let handles: Vec<_> = (0..threads)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            barrier.wait();
+                            admitted
+                                .open_lock(&name)
+                                .map(|file| file.metadata().unwrap().ino())
+                                .map_err(|error| format!("{error:#}"))
+                        })
+                    })
+                    .collect();
+                handles.into_iter().map(|h| h.join().unwrap()).collect()
+            });
+            let inode = std::fs::symlink_metadata(path.join(name.to_str().unwrap()))
+                .unwrap()
+                .ino();
+            assert!(
+                opened.iter().all(|result| result == &Ok(inode)),
+                "trial {trial}: {opened:?}"
+            );
+        }
+        std::fs::remove_dir_all(path).unwrap();
     }
 
     #[test]

@@ -1,4 +1,5 @@
 import { saveRoleFilament, type RoleFilamentRow } from "../api/endpoints/filaments";
+import { hasSpoolmanAssignment } from "./spoolmanIds";
 
 const COLOR_PRESET_TYPE = "print-partner-colors";
 const COLOR_PRESET_VERSION = 1;
@@ -106,15 +107,38 @@ export async function parseColorPreset(file: File): Promise<ColorPreset> {
  * Returns the number of roles applied. A catalog color id takes precedence over
  * a custom hex, mirroring how the role picker stores colors.
  */
-export async function applyColorPreset(profileId: number, preset: ColorPreset): Promise<number> {
+export async function applyColorPreset(
+  profileId: number,
+  preset: ColorPreset,
+  options?: {
+    isCurrent?: () => boolean;
+    allowSpoolman?: () => boolean;
+    refreshThumbnails?: boolean;
+  },
+): Promise<number> {
+  const roles = options?.allowSpoolman && !options.allowSpoolman()
+    ? preset.roles.map((role) => ({
+        ...role,
+        filament_color_id: hasSpoolmanAssignment({ filament_color_id: role.filament_color_id }) ? null : role.filament_color_id,
+        spoolman_spool_id: null,
+      })).filter((role) => role.filament_color_id || role.filament_custom_hex)
+    : preset.roles;
+
   let applied = 0;
-  for (const role of preset.roles) {
+  for (const role of roles) {
+    if (options?.isCurrent && !options.isCurrent()) {
+      throw new Error("Plan switch or permission changed.");
+    }
+    if (hasSpoolmanAssignment(role) && options?.allowSpoolman && !options.allowSpoolman()) {
+      throw new Error("Spoolman integration is disabled.");
+    }
+
     await saveRoleFilament(profileId, {
       role: role.role,
       filament_color_id: role.filament_color_id ?? null,
       filament_custom_hex: role.filament_color_id ? null : role.filament_custom_hex ?? null,
       spoolman_spool_id: role.spoolman_spool_id ?? null,
-      refresh_thumbnails: false,
+      refresh_thumbnails: options?.refreshThumbnails ?? false,
     });
     applied += 1;
   }
