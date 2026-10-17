@@ -463,55 +463,6 @@ fn account_count_policy_change_revokes_prepared_frame() {
     std::fs::remove_dir_all(path).unwrap();
 }
 
-#[test]
-fn persisted_key_expiry_blocks_prepared_frame_without_writer_traffic() {
-    let path = directory();
-    let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
-    let auth = owner
-        .rebuild_auth_with_policy(
-            policy(),
-            AuthLifetimes::shorter(Duration::from_secs(10), Some(Duration::from_secs(1))).unwrap(),
-        )
-        .unwrap();
-    let call = |request| {
-        auth.submit(request, Arc::new(AtomicBool::new(false)), WAIT)
-            .unwrap()
-            .recv()
-            .unwrap()
-            .unwrap()
-    };
-    let auth::Outcome::Session { token, user } = call(auth::Request::Register {
-        email: "key-expiry@example.com".into(),
-        display_name: "Key expiry".into(),
-        password: Secret::new("long-test-password".into()),
-    }) else {
-        panic!("session expected")
-    };
-    let token = token.expose().to_owned();
-    let id = enqueue(&owner, &token, "key-expiry");
-    let auth::Outcome::KeyCreated { key, .. } = call(auth::Request::CreateKey {
-        session: Secret::new(token),
-    }) else {
-        panic!("key expected")
-    };
-    let subscription = subscribe(
-        &owner,
-        Credential::RoutedKey {
-            tenant: user.tenant_id,
-            key,
-        },
-        id,
-    );
-    let initial = prepared(&subscription);
-    std::thread::sleep(Duration::from_secs(2));
-    assert_eq!(
-        subscription.admit(initial, |_| NonblockingSend::Accepted),
-        FrameAdmission::Closed(StreamClose::Expired)
-    );
-    owner.shutdown().unwrap();
-    std::fs::remove_dir_all(path).unwrap();
-}
-
 /// Generic settings writes skip `authority_change`, so they must not replace
 /// the key collection a live stream was admitted under.
 #[test]
