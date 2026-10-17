@@ -87,10 +87,16 @@ fn ticket_t_59_catalog_private_full_queue_retains_unreleased_work() {
 #[test]
 fn unknown_source_work_lease_is_rejected_without_database_work() {
     let mut connection = Connection::open_in_memory().unwrap();
+    connection.execute_batch("BEGIN IMMEDIATE").unwrap();
     let mut state = State::default();
     let error = match execute(&mut connection, &mut state, Command::End(17)) {
         Err(error) => error,
         Ok(_) => panic!("unknown Source lease released"),
     };
-    assert_eq!(error.to_string(), "Unknown work lease");
+    assert!(matches!(
+        error.downcast_ref::<CatalogFailure>(),
+        Some(CatalogFailure::Storage)
+    ));
+    assert_eq!(error.root_cause().to_string(), "Unknown work lease");
+    connection.execute_batch("ROLLBACK").unwrap();
 }

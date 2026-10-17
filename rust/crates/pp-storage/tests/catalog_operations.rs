@@ -291,6 +291,31 @@ fn ticket_t_59_catalog_work_delete_ordering() {
     owner.shutdown().unwrap();
 }
 #[test]
+fn duplicate_direct_source_lease_preserves_typed_catalog_context() {
+    let fixture = Fixture::new();
+    let owner = fixture.open();
+    let client = owner.local_source_catalog();
+    let id = create(&client, "Typed busy context");
+    let active = client
+        .begin_work(id, &AtomicBool::new(false), Duration::from_secs(5))
+        .unwrap();
+    let duplicate = match client.begin_work(id, &AtomicBool::new(false), Duration::from_secs(5)) {
+        Err(error) => error,
+        Ok(_) => panic!("duplicate direct Source lease accepted"),
+    };
+    assert!(
+        duplicate
+            .downcast_ref::<pp_storage::catalog::SourceBusy>()
+            .is_some()
+    );
+    assert!(matches!(
+        duplicate.downcast_ref::<pp_storage::catalog::CatalogFailure>(),
+        Some(pp_storage::catalog::CatalogFailure::Storage)
+    ));
+    drop(active);
+    owner.shutdown().unwrap();
+}
+#[test]
 fn ticket_t_59_catalog_categories_naming_and_import_invalidation() {
     let fixture = Fixture::new();
     let owner = fixture.open();
@@ -864,4 +889,59 @@ fn ticket_t_59_catalog_regex_complexity_rejection_preserves_writer_and_settings(
     assert_eq!(rows(&fixture.0), original);
     assert_eq!(database_bytes(&fixture.0), bytes);
     owner.shutdown().unwrap();
+}
+
+#[test]
+fn catalog_http_owner_access_and_typed_failures() {
+    use pp_storage::{
+        auth::{AuthFailure, AuthPolicy, RegistrationPolicy, Secret, SessionTenantPolicy},
+        catalog::CatalogFailure,
+    };
+    let fixture = Fixture::new();
+    let owner = fixture.open();
+    let (_, token) = actor(&owner, "typed@example.test");
+    let policy = AuthPolicy {
+        registration: RegistrationPolicy::FirstAccountOnly,
+        session_tenant: SessionTenantPolicy::SingleAccountDefault,
+        first_user: FirstUserTenant::NewUser,
+    };
+    let access = owner.catalog_access(policy).unwrap();
+    let client = access.session(Secret::new(token));
+    assert!(matches!(
+        client.execute(Request::GetCategoriesWithTree {}).unwrap(),
+        Outcome::Categories(_)
+    ));
+    let invalid = client
+        .execute(Request::CreateForHttp {
+            source: CreateSource::default(),
+        })
+        .unwrap_err();
+    assert!(matches!(
+        invalid.downcast_ref::<CatalogFailure>(),
+        Some(CatalogFailure::Input(_))
+    ));
+    let missing = client.execute(Request::GetNaming { id: 999 }).unwrap_err();
+    assert!(matches!(
+        missing.downcast_ref::<CatalogFailure>(),
+        Some(CatalogFailure::NotFound)
+    ));
+    let unauthorized = access
+        .session(Secret::new("invalid".into()))
+        .execute(Request::List {})
+        .unwrap_err();
+    assert!(matches!(
+        unauthorized.downcast_ref::<AuthFailure>(),
+        Some(AuthFailure::SessionRequired)
+    ));
+    let id = create(&client, "Owned");
+    assert_eq!(
+        value(&owner.local_source_catalog(), Request::Get { id })["name"],
+        "Owned"
+    );
+    owner.shutdown().unwrap();
+    let stopped = client.execute(Request::List {}).unwrap_err();
+    assert!(matches!(
+        stopped.downcast_ref::<CatalogFailure>(),
+        Some(CatalogFailure::Stopped)
+    ));
 }
