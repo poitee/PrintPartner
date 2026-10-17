@@ -17,6 +17,7 @@ export async function transactions(root) {
     static now() { return new RealDate(at).getTime(); }
   };
   const cases = [];
+  let clients;
   let definitions;
   try {
     for (const id of ["first", "idempotent", "changed", "running-export", "uploaded-only", "mapped-remap", "mapped-remap-index-change", "mapped-remap-index-2", "mapped-remap-index-0", "renamed-part", "unsafe-remap", "inputs", "missing-reconciliation", "unresolved-reconciliation", "stale-reconciliation"]) {
@@ -108,6 +109,10 @@ export async function transactions(root) {
         const snapshot = () => Object.fromEntries(tables.map((table) => [table, raw.prepare(`SELECT * FROM "${table}" ORDER BY rowid`).all()]).filter(([, rows]) => rows.length));
         definitions ??= raw.prepare("SELECT type,sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY rowid").all();
         const before = snapshot();
+        if (id === "first") {
+          const { clientCases } = await import("./clients.mjs");
+          clients = await clientCases({ root, raw, profile, draft: d });
+        }
         const allocationStart = counter;
         const outcome = repo.applyPlanChanges(input);
         if (["mapped-remap-index-2", "renamed-part"].includes(id)) assert.equal(outcome.kind, "checkoff_remap_unsafe");
@@ -122,6 +127,6 @@ export async function transactions(root) {
     }
   } finally { globalThis.Date = RealDate; }
   // File locators are machine-dependent, but publication never reads source files.
-  const stable = JSON.stringify({ at, definitions, cases }).replaceAll(resolve(root), "<repo>");
+  const stable = JSON.stringify({ at, definitions, cases, clients }).replaceAll(resolve(root), "<repo>");
   return JSON.parse(stable);
 }
