@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Report failed macOS main jobs in one labelled issue using the job token."""
+"""Report each failed macOS main run in a labelled issue using the job token."""
 
 import json
 import os
@@ -20,13 +20,14 @@ def alert(repository, run_id, attempt, kind, server):
               and (kind == "native" or job["name"] == "rust (macos)")]
     if not failed:
         return
-    labels = json.loads(gh("label", "list", "--repo", repository, "--search", LABEL,
-                           "--json", "name", "--limit", "100"))
-    if not any(label["name"] == LABEL for label in labels):
-        gh("label", "create", LABEL, "--repo", repository, "--color", "D93F0B",
-           "--description", "macOS CI failure on main")
+    # Idempotent label creation also tolerates simultaneous alerts from other runs.
+    gh("label", "create", LABEL, "--repo", repository, "--color", "D93F0B",
+       "--description", "macOS CI failure on main", "--force")
+    title = f"macOS CI failure on main: run {run_id}"
     issues = json.loads(gh("issue", "list", "--repo", repository, "--label", LABEL,
-                           "--state", "open", "--json", "number", "--limit", "100"))
+                           "--state", "open", "--search", f'"{title}" in:title',
+                           "--json", "number,title", "--limit", "100"))
+    issues = [issue for issue in issues if issue["title"] == title]
     url = f"{server}/{repository}/actions/runs/{run_id}/attempts/{attempt}"
     subject = "Native macOS bundle workflow" if kind == "native" else "rust (macos)"
     body = f"{subject} failed on main.\n\n" + url + "\n\n" + "\n".join(
@@ -35,7 +36,7 @@ def alert(repository, run_id, attempt, kind, server):
         gh("issue", "comment", str(issues[0]["number"]), "--repo", repository, "--body", body)
     else:
         gh("issue", "create", "--repo", repository, "--label", LABEL,
-           "--title", "macOS CI failures on main", "--body", body)
+           "--title", title, "--body", body)
 
 
 if __name__ == "__main__":

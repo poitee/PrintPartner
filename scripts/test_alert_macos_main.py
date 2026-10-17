@@ -38,6 +38,13 @@ class AlertTests(unittest.TestCase):
         self.assertIn("rust (macos)", create[-1])
         self.assertIn("/actions/runs/123/attempts/2", create[-1])
 
+    def test_other_run_issue_does_not_absorb_alert(self):
+        calls = self.run_alert(["rust (macos)"],
+                               [{"number": 41, "title": "macOS CI failure on main: run 122"}])
+        create = next(call for call in calls if call[:2] == ("issue", "create"))
+        self.assertIn("macOS CI failure on main: run 123", create)
+        self.assertFalse(any(call[:2] == ("issue", "comment") for call in calls))
+
     def test_native_precheck_failure_identifies_workflow(self):
         calls = self.run_alert(["linux-precheck"], kind="native")
         create = next(call for call in calls if call[:2] == ("issue", "create"))
@@ -45,12 +52,12 @@ class AlertTests(unittest.TestCase):
         self.assertIn("linux-precheck", create[-1])
 
     def test_comment_existing_issue_for_native_failure(self):
-        calls = self.run_alert(["bundle (macos-26)"], [{"number": 42}],
+        calls = self.run_alert(["bundle (macos-26)"], [{"number": 42, "title": "macOS CI failure on main: run 123"}],
                                [{"name": "ci-macos-main"}], "native")
         comment = next(call for call in calls if call[:2] == ("issue", "comment"))
         self.assertEqual(comment[2], "42")
         self.assertFalse(any(call[:2] == ("issue", "create") for call in calls))
-        self.assertFalse(any(call[:2] == ("label", "create") for call in calls))
+        self.assertTrue(any(call[:2] == ("label", "create") and "--force" in call for call in calls))
 
 
 if __name__ == "__main__":
