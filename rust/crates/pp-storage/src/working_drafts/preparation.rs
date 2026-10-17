@@ -14,28 +14,6 @@ pub(super) struct Capture {
     pub fingerprint: String,
     pub inputs: Vec<Value>,
     layers: Vec<Layer>,
-    observations: PreparationObservations,
-}
-#[derive(Default)]
-struct PreparationObservations {
-    documents: BTreeMap<String, Vec<DocumentRead>>,
-    inventories: Vec<Box<dyn StlInventory>>,
-    checkout_inventories: Vec<Box<dyn StlInventory>>,
-    artifacts: HashMap<(usize, usize), ArtifactRead>,
-    role_defaults: Value,
-    kit: Option<String>,
-    option_sources: Vec<Value>,
-    manifest_sources: Vec<Value>,
-}
-fn document(
-    observations: &mut BTreeMap<String, Vec<DocumentRead>>,
-    purpose: String,
-    read: DocumentRead,
-) -> &DocumentRead {
-    let occurrences = observations.entry(purpose).or_default();
-    let index = occurrences.len();
-    occurrences.push(read);
-    &occurrences[index]
 }
 struct Layer {
     source_id: i64,
@@ -71,6 +49,40 @@ pub(super) fn setting(tx: &Transaction<'_>, tenant: &str, key: &str) -> Result<O
     )?
     .and_then(|v| v["value"].as_str().map(str::to_owned)))
 }
+fn spoolman_enabled(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    profile: i64,
+    b: &mut PreparationBudget<'_>,
+) -> Result<bool> {
+    use pp_domain::features::{Feature, Toggles, resolve};
+    b.check()?;
+    if one(
+        tx,
+        "SELECT id FROM build_profiles WHERE tenant_id=? AND id=?",
+        &[&tenant, &profile],
+    )?
+    .is_none()
+    {
+        return Ok(false);
+    }
+    let mut layer = |key: &str| -> Result<Option<Toggles>> {
+        b.visit(0)?;
+        Ok(match setting(tx, tenant, key)? {
+            None => Some(Toggles::default()),
+            Some(raw) => {
+                b.document(raw.len(), raw.len())?;
+                serde_json::from_str(&raw).ok()
+            }
+        })
+    };
+    let user = layer("feature_toggles")?;
+    let plan = layer(&format!("feature_toggles:plan:{profile}"))?;
+    Ok(match (user, plan) {
+        (Some(user), Some(plan)) => resolve(&user, Some(&plan)).enabled(Feature::Spoolman),
+        _ => false,
+    })
+}
 fn import_rules(value: &Value, b: &mut PreparationBudget<'_>) -> Result<Option<Vec<String>>> {
     b.check()?;
     if value.is_null() {
@@ -80,29 +92,25 @@ fn import_rules(value: &Value, b: &mut PreparationBudget<'_>) -> Result<Option<V
     b.document(raw.len(), raw.len())?;
     let parsed: Value =
         serde_json::from_str(value.as_str().unwrap_or_default()).unwrap_or(Value::Null);
-    let rules: Vec<String> = parsed
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(Value::as_str)
-                .filter(|s| !s.trim().is_empty())
-                .map(|s| {
-                    let mut s = s
-                        .replace('\\', "/")
-                        .trim()
-                        .trim_start_matches('/')
-                        .to_owned();
-                    if !s.is_empty() && !s.ends_with('/') && !s.to_lowercase().ends_with(".stl") {
-                        s.push('/')
-                    }
-                    s
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    for rule in &rules {
+    let mut rules = Vec::new();
+    for value in parsed.as_array().into_iter().flatten() {
+        b.visit(0)?;
+        let Some(raw) = value.as_str() else { continue };
+        b.comparison(raw.len())?;
+        if raw.trim().is_empty() {
+            continue;
+        }
+        let mut rule = raw
+            .replace('\\', "/")
+            .trim()
+            .trim_start_matches('/')
+            .to_owned();
+        if !rule.is_empty() && !rule.ends_with('/') && !rule.to_lowercase().ends_with(".stl") {
+            rule.push('/');
+        }
         b.rule()?;
         b.expansion(rule.len())?;
+        rules.push(rule);
     }
     Ok(Some(rules))
 }
@@ -172,6 +180,16 @@ pub(super) fn capture(
         }
         let naming = crate::catalog::naming::get(tx, tenant, id)?;
         let effective: NamingProfile = serde_json::from_value(naming["effective"].clone())?;
+        for rule in &effective.folder_rules {
+            budget.rule()?;
+            budget.comparison(rule.path_contains.len())?;
+        }
+        for role in &effective.roles {
+            for marker in &role.markers {
+                budget.rule()?;
+                budget.comparison(marker.len())?;
+            }
+        }
         let revision = if let Some(id) = source["currentSourceRevisionId"].as_i64() {
             let r = one(
                 tx,
@@ -226,7 +244,6 @@ pub(super) fn capture(
         fingerprint: required_units::model::digest(&json!(fingerprint)),
         inputs,
         layers,
-        observations: PreparationObservations::default(),
     })
 }
 fn role_name(role: crate::catalog::naming::RoleId) -> String {
@@ -252,36 +269,54 @@ fn replace_first(input: &str, pattern: &str, replacement: &str) -> String {
     }
     input.into()
 }
-fn parse(path: &str, profile: &NamingProfile) -> Result<(String, String, String, f64)> {
+pub(super) fn parse(
+    path: &str,
+    profile: &NamingProfile,
+    b: &mut PreparationBudget<'_>,
+) -> Result<(String, String, String, f64)> {
     let filename = path.rsplit('/').next().unwrap_or(path).to_owned();
+    b.comparison(path.len())?;
     let lower = path.to_lowercase();
-    let mut role = profile
-        .folder_rules
-        .iter()
-        .find(|r| lower.contains(&r.path_contains.to_lowercase()))
-        .map(|r| role_name(r.role_id));
-    let mut markers: Vec<_> = profile
-        .roles
-        .iter()
-        .flat_map(|r| {
-            r.markers
-                .iter()
-                .filter(|m| !m.trim().is_empty())
-                .map(move |m| (m, r.id))
-        })
-        .collect();
-    markers.sort_by_key(|(m, _)| std::cmp::Reverse(m.encode_utf16().count()));
+    let mut role = None;
+    for rule in &profile.folder_rules {
+        b.visit(0)?;
+        b.comparison(lower.len().saturating_add(rule.path_contains.len()))?;
+        if lower.contains(&rule.path_contains.to_lowercase()) {
+            role = Some(role_name(rule.role_id));
+            break;
+        }
+    }
     if role.is_none() {
-        for segment in path.split('/') {
-            if let Some((_, id)) = markers
-                .iter()
-                .find(|(m, _)| segment.to_lowercase().contains(&m.to_lowercase()))
-            {
-                role = Some(role_name(*id));
-                break;
+        let mut markers = Vec::new();
+        for role in &profile.roles {
+            b.visit(0)?;
+            for marker in &role.markers {
+                b.visit(0)?;
+                b.comparison(marker.len())?;
+                if !marker.trim().is_empty() {
+                    markers.push((marker, role.id, marker.encode_utf16().count()));
+                }
+            }
+        }
+        b.comparison(
+            markers
+                .len()
+                .saturating_mul(markers.len().max(1).ilog2() as usize + 1),
+        )?;
+        markers.sort_by_key(|(_, _, len)| std::cmp::Reverse(*len));
+        'segments: for segment in path.split('/') {
+            let lower = segment.to_lowercase();
+            for (marker, id, _) in &markers {
+                b.visit(0)?;
+                b.comparison(segment.len().saturating_add(marker.len()))?;
+                if lower.contains(&marker.to_lowercase()) {
+                    role = Some(role_name(*id));
+                    break 'segments;
+                }
             }
         }
     }
+    b.comparison(filename.len().saturating_add(profile.quantity.regex.len()))?;
     let quantity = regress::Regex::with_flags(&profile.quantity.regex, "i")?
         .find(&filename)
         .and_then(|m| m.captures.first().cloned().flatten())
@@ -313,7 +348,10 @@ fn parse(path: &str, profile: &NamingProfile) -> Result<(String, String, String,
     let mut slug = name.clone();
     if profile.slug.strip_markers {
         for r in &profile.roles {
+            b.visit(0)?;
             for marker in &r.markers {
+                b.visit(0)?;
+                b.comparison(slug.len().saturating_add(marker.len().saturating_mul(2)))?;
                 if marker.trim().is_empty() {
                     continue;
                 }
@@ -329,6 +367,10 @@ fn parse(path: &str, profile: &NamingProfile) -> Result<(String, String, String,
         }
     }
     if profile.slug.strip_quantity {
+        b.comparison(
+            slug.len()
+                .saturating_add(profile.quantity.regex.len().saturating_mul(8)),
+        )?;
         let mut strip = profile.quantity.regex.trim().replace("(?:", "(");
         strip = replace_first(&strip, r"\(\?P<\w+>", "(");
         strip = replace_first(&strip, r"\([^?][^)]*\)", "[0-9]+");
@@ -413,7 +455,6 @@ fn checkout(source: &Value, tenant: &str) -> Option<OwnedCheckoutReadRequest> {
 fn inferred(
     paths: &[String],
     reads: &dyn DraftReads,
-    observations: &mut BTreeMap<String, Vec<DocumentRead>>,
     b: &mut PreparationBudget<'_>,
 ) -> Result<manifest::Groups> {
     let mut rules = Vec::new();
@@ -421,16 +462,10 @@ fn inferred(
         CatalogPurpose::ShippedHintsFirst,
         CatalogPurpose::ShippedHintsSecond,
     ] {
-        if let DocumentRead::Bytes(bytes) = document(
-            observations,
-            match purpose {
-                CatalogPurpose::ShippedHintsFirst => "shipped_hints_first",
-                _ => "shipped_hints_second",
-            }
-            .into(),
-            reads.read_catalog_document(&OwnedCatalogReadRequest { purpose }, b)?,
-        ) {
-            match manifest::hints(bytes, b) {
+        if let DocumentRead::Bytes(bytes) =
+            reads.read_catalog_document(&OwnedCatalogReadRequest { purpose }, b)?
+        {
+            match manifest::hints(&bytes, b) {
                 Ok(v) => {
                     rules = v;
                     break;
@@ -440,19 +475,15 @@ fn inferred(
             }
         }
     }
-    match document(
-        observations,
-        "custom_hints".into(),
-        reads.read_catalog_document(
-            &OwnedCatalogReadRequest {
-                purpose: CatalogPurpose::CustomHints,
-            },
-            b,
-        )?,
-    ) {
+    match reads.read_catalog_document(
+        &OwnedCatalogReadRequest {
+            purpose: CatalogPurpose::CustomHints,
+        },
+        b,
+    )? {
         DocumentRead::Missing => {}
-        DocumentRead::Skipped(e) => return Err(ReadFailure::Io(*e).into()),
-        DocumentRead::Bytes(bytes) => rules.extend(manifest::hints(bytes, b)?),
+        DocumentRead::Skipped(e) => return Err(ReadFailure::Io(e).into()),
+        DocumentRead::Bytes(bytes) => rules.extend(manifest::hints(&bytes, b)?),
     }
     let mut groups = Vec::new();
     for (path, group, id, label) in rules {
@@ -554,6 +585,7 @@ pub(super) fn prepare(
         b.visit(0)?;
         prior.entry(text(&p, "partKey")?.to_owned()).or_insert(p);
     }
+    let mut inventories = Vec::new();
     let mut scans = Vec::new();
     let mut available = Vec::new();
     for layer in &mut captured.layers {
@@ -562,7 +594,7 @@ pub(super) fn prepare(
             continue;
         }
         let inventory = layer.root.scan_stls(b)?;
-        let n = captured.observations.inventories.len();
+        let n = inventories.len();
         let mut scan = Vec::new();
         for (index, entry) in inventory.entries().iter().enumerate() {
             b.visit(0)?;
@@ -598,7 +630,7 @@ pub(super) fn prepare(
                     continue;
                 }
             }
-            let (filename, slug, role, quantity) = parse(&path, &layer.naming)?;
+            let (filename, slug, role, quantity) = parse(&path, &layer.naming, b)?;
             scan.push(Scanned {
                 key: path.to_lowercase().trim_matches('/').into(),
                 path,
@@ -621,7 +653,7 @@ pub(super) fn prepare(
         }
         scans.push(imported_scan);
         available.push(scan);
-        captured.observations.inventories.push(inventory);
+        inventories.push(inventory);
     }
     ensure!(!scans.is_empty(), Failure::NoLayers);
     ensure!(available.iter().any(|v| !v.is_empty()), Failure::NoStls);
@@ -637,18 +669,30 @@ pub(super) fn prepare(
     if let Some(raw) = &defaults {
         b.document(raw.len(), raw.len())?;
     }
-    captured.observations.role_defaults = defaults
+    let role_defaults = defaults
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or(Value::Null);
+    let spoolman = connection.read(|tx| spoolman_enabled(tx, tenant, profile, b))?;
     let mut parts = Vec::new();
     for p in merged {
         b.visit(0)?;
         let old = prior.get(&p.key);
-        let default = &captured.observations.role_defaults[p.role.trim().to_lowercase()];
+        let default = &role_defaults[p.role.trim().to_lowercase()];
+        if old.is_none() && !spoolman {
+            b.comparison(default["filament_color_id"].as_str().map_or(0, str::len))?;
+        }
         let nullable = |key: &str, default_key: &str| {
             old.map(|v| v[key].clone()).unwrap_or_else(|| {
                 default[default_key]
                     .as_str()
+                    .filter(|value| {
+                        spoolman
+                            || match default_key {
+                                "spoolman_spool_id" => false,
+                                "filament_color_id" => !value.trim().starts_with("spoolman:"),
+                                _ => true,
+                            }
+                    })
                     .map(|s| json!(s))
                     .unwrap_or(Value::Null)
             })
@@ -661,39 +705,26 @@ pub(super) fn prepare(
             .iter()
             .any(|v| v["sourceLayer"] == p.layer && v["trackingKind"] == "revision");
         let artifact = if tracked {
-            let observed =
-                captured.observations.inventories[p.inventory].hash_tracked_winner(p.index, b)?;
-            captured
-                .observations
-                .artifacts
-                .insert((p.inventory, p.index), observed);
             Some(
-                captured.observations.artifacts[&(p.inventory, p.index)]
-                    .byte_sha256
-                    .clone(),
+                inventories[p.inventory]
+                    .hash_tracked_winner(p.index, b)?
+                    .byte_sha256,
             )
         } else {
             None
         };
         parts.push(DraftPart::new(json!({"baseRevisionPartId":old.map(|v|v["id"].clone()),"partKey":p.key,"relativePath":p.path,"filename":p.filename,"sourceLayer":p.layer,"status":p.status,"roleInferred":p.role,"roleOverride":old.map(|v|v["roleOverride"].clone()),"filamentColorId":nullable("filamentColorId","filament_color_id"),"filamentCustomHex":nullable("filamentCustomHex","filament_custom_hex"),"spoolmanSpoolId":nullable("spoolmanSpoolId","spoolman_spool_id"),"quantityInferred":quantity_value(p.quantity),"quantityOverride":quantity_override,"quantityEffective":if quantity_override.is_null(){quantity_value(p.quantity)}else{quantity_override},"included":old.map(|v|v["included"].clone()).unwrap_or(json!(selected.contains(&p.key))),"notes":old.map(|v|v["notes"].clone()).unwrap_or(json!("")),"githubBlobUrl":old.map(|v|v["githubBlobUrl"].clone()),"geometrySame":old.map(|v|v["geometrySame"].clone()),"artifactDigest":artifact}),old.map(|part| part.manifest.clone()).unwrap_or_else(PartManifestMetadata::default)));
     }
-    captured.observations.option_sources =
-        connection.read(|tx| source_rows(tx, tenant, profile))?;
+    let option_sources = connection.read(|tx| source_rows(tx, tenant, profile))?;
     let mut groups = Vec::new();
-    for source in &captured.observations.option_sources {
+    for source in &option_sources {
         b.check()?;
         let Some(request) = checkout(source, tenant) else {
             continue;
         };
-        let doc = manifest::optional_document(
-            document(
-                &mut captured.observations.documents,
-                format!("checkout_options:{}:{}", request.source_id, request.path),
-                reads.read_checkout_manifest(&request, CheckoutManifestUse::OptionGroups, b)?,
-            ),
-            b,
-        )?
-        .unwrap_or_default();
+        let observed =
+            reads.read_checkout_manifest(&request, CheckoutManifestUse::OptionGroups, b)?;
+        let doc = manifest::optional_document(&observed, b)?.unwrap_or_default();
         let mut root = reads.resolve_stl_root(
             &OwnedStlReadRequest {
                 tenant: tenant.into(),
@@ -716,61 +747,44 @@ pub(super) fn prepare(
         paths.sort_by(|a, z| {
             crate::read_model::views::folder_compare(&a.to_lowercase(), &z.to_lowercase())
         });
-        captured.observations.checkout_inventories.push(inventory);
         let declared = doc.groups;
         let resolved = if declared.is_empty() {
-            inferred(&paths, reads, &mut captured.observations.documents, b)?
+            inferred(&paths, reads, b)?
         } else {
             declared
         };
         manifest::merge(&mut groups, resolved);
     }
-    captured.observations.manifest_sources =
-        connection.read(|tx| source_rows(tx, tenant, profile))?;
+    let manifest_sources = connection.read(|tx| source_rows(tx, tenant, profile))?;
     let mut docs = Vec::new();
-    for source in &captured.observations.manifest_sources {
+    for source in &manifest_sources {
         b.check()?;
         let Some(request) = checkout(source, tenant) else {
             continue;
         };
         let name = text(source, "name")?.to_owned();
-        if let Some(doc) = manifest::optional_document(
-            document(
-                &mut captured.observations.documents,
-                format!("checkout_parts:{}:{}", request.source_id, request.path),
-                reads.read_checkout_manifest(
-                    &request,
-                    CheckoutManifestUse::PartRulesAndDefaults,
-                    b,
-                )?,
-            ),
-            b,
-        )? {
+        let observed =
+            reads.read_checkout_manifest(&request, CheckoutManifestUse::PartRulesAndDefaults, b)?;
+        if let Some(doc) = manifest::optional_document(&observed, b)? {
             docs.push((name.clone(), "repo".into(), doc));
         }
         if let Some(slug) = source["manifestCommunitySlug"]
             .as_str()
             .filter(|s| !s.is_empty())
-            && let Some(doc) = manifest::optional_document(
-                document(
-                    &mut captured.observations.documents,
-                    format!("community:{slug}"),
-                    reads.read_catalog_document(
-                        &OwnedCatalogReadRequest {
-                            purpose: CatalogPurpose::Community(slug.into()),
-                        },
-                        b,
-                    )?,
-                ),
-                b,
-            )?
         {
-            docs.push((name, "community".into(), doc));
+            let observed = reads.read_catalog_document(
+                &OwnedCatalogReadRequest {
+                    purpose: CatalogPurpose::Community(slug.into()),
+                },
+                b,
+            )?;
+            if let Some(doc) = manifest::optional_document(&observed, b)? {
+                docs.push((name, "community".into(), doc));
+            }
         }
     }
-    captured.observations.kit =
-        connection.read(|tx| setting(tx, tenant, &format!("kit_manifest_{profile}")))?;
-    let selections = manifest::kit(captured.observations.kit.clone(), b)?;
+    let kit = connection.read(|tx| setting(tx, tenant, &format!("kit_manifest_{profile}")))?;
+    let selections = manifest::kit(kit, b)?;
     manifest::apply(&mut parts, &docs, groups, selections, b)?;
     if !options.apply_manifest {
         for part in &mut parts {
@@ -853,7 +867,7 @@ impl PreparationSql for Transaction<'_> {
     }
 }
 
-#[derive(Clone)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 pub(super) struct PartChoice {
     pub quantity: pp_domain::Quantity,
     pub role: String,

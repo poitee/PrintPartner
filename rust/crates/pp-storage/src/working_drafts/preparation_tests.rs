@@ -171,33 +171,12 @@ impl StlInventory for Inventory {
 }
 fn options(case: &Value) -> PreparationOptions {
     let o = &case["options"];
-    let paths =
-        |key: &str| (!o[key].is_null()).then(|| serde_json::from_value(o[key].clone()).unwrap());
-    let choice = |v: &Value| PartChoice {
-        quantity: serde_json::from_value(v["quantity"].clone()).unwrap(),
-        role: v["role"].as_str().unwrap().into(),
-        color: v["color"].as_str().map(str::to_owned),
-    };
-    let choices = o["choices"].as_object().map(|sources| {
-        sources
-            .iter()
-            .map(|(id, parts)| {
-                let parts = parts
-                    .as_object()
-                    .unwrap()
-                    .iter()
-                    .map(|(path, v)| (path.clone(), choice(v)))
-                    .collect();
-                (id.parse().unwrap(), parts)
-            })
-            .collect()
-    });
     PreparationOptions {
         apply_manifest: o["applyManifest"].as_bool().unwrap_or(true),
         prefer_accepted: o["preferAccepted"].as_bool().unwrap_or(false),
-        excluded_paths_by_source_id: paths("excluded"),
-        included_paths_by_source_id: paths("included"),
-        part_choices_by_source_id: choices,
+        excluded_paths_by_source_id: serde_json::from_value(o["excluded"].clone()).unwrap(),
+        included_paths_by_source_id: serde_json::from_value(o["included"].clone()).unwrap(),
+        part_choices_by_source_id: serde_json::from_value(o["choices"].clone()).unwrap(),
     }
 }
 fn projection(prepared: PreparedDraftSnapshot) -> Value {
@@ -392,4 +371,44 @@ fn preparation_cancels_mid_attempt_and_propagates_resource_refusals() {
         }
     }
     assert!(completed);
+}
+
+#[test]
+fn naming_comparisons_are_cumulative_and_cancellable() {
+    use crate::catalog::naming::{FolderRule, NamingProfile, RoleId};
+    let profile = NamingProfile {
+        folder_rules: (0..40)
+            .map(|i| FolderRule {
+                path_contains: format!("missing-{i}"),
+                role_id: RoleId::Clear,
+                functional_class: None,
+            })
+            .collect(),
+        ..NamingProfile::default()
+    };
+    let deep = format!("{}gear.stl", "folder/".repeat(40));
+    for (path, profile, cap) in [
+        ("gear.stl", &profile, 600),
+        (deep.as_str(), &NamingProfile::default(), 700),
+    ] {
+        let cancelled = AtomicBool::new(false);
+        let mut b = PreparationBudget::new(
+            &cancelled,
+            PreparationLimits {
+                comparison_work: cap,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            parse(path, profile, &mut b).unwrap_err().to_string(),
+            "LimitExceeded(ComparisonWork)"
+        );
+        let mut b = PreparationBudget::new(&cancelled, PreparationLimits::default()).unwrap();
+        b.cancel_after_checks(10);
+        assert_eq!(
+            parse(path, profile, &mut b).unwrap_err().to_string(),
+            "Cancelled"
+        );
+    }
 }

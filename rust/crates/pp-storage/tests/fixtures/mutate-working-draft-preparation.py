@@ -8,6 +8,9 @@ import tempfile
 rust = Path(__file__).resolve().parents[4]
 source = Path('crates/pp-storage/src/working_drafts/preparation.rs')
 mutants = [
+    ('disabled Spoolman defaults retained', 'match default_key {', 'match "enabled" {'),
+    ('folder matching work uncharged', 'lower.len().saturating_add(rule.path_contains.len())', '0'),
+    ('marker matching work uncharged', 'segment.len().saturating_add(marker.len())', '0'),
     ('duplicate attachment accepted', 'seen.insert(id),', 'seen.insert(id) || true,'),
     ('input tracking lost', 'if revision.is_some(){"revision"}else{"untracked"}', '"untracked"'),
     ('prior decisions lost', 'prior.entry(text(&p, "partKey")?.to_owned()).or_insert(p);', 'let _ = p;'),

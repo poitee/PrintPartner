@@ -6,11 +6,21 @@ import { DatabaseSync } from 'node:sqlite';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const server = resolve(process.argv[2]);
+process.env.PP_DESKTOP_REBUILD = '1';
 const { createSelfHostPorts } = await import(join(server, 'src/adapters/self-host/index.ts'));
 const files = ['gear.stl', '[a]clip_x3.stl', 'folder/bracket.stl', 'included.stl', 'excluded.stl'].map(path => ({ source: 1, path, content: path }));
 const manifest = JSON.stringify({ parts: [{ match: 'gear.stl', requirement: 'optional' }], option_groups: { tool: { rule: 'pick_one', variants: [{ id: 'a', parts: ['gear.stl'] }, { id: 'b', parts: ['folder/bracket.stl'] }] } }, selections: { tool: 'a' } });
 const priorManifest = JSON.stringify({ option_groups: { tool: { rule: 'pick_one', variants: [{ id: 'a', parts: ['included.stl'] }, { id: 'b', parts: ['excluded.stl'] }] } }, selections: { tool: 'b' } });
+const setting = (key, value) => `INSERT OR REPLACE INTO app_settings(tenant_id,key,value) VALUES('default','${key}','${JSON.stringify(value).replaceAll("'", "''")}')`;
+const spoolDefaults = { primary: { filament_color_id: 'spoolman:17', spoolman_spool_id: '17', filament_custom_hex: '#abcdef' } };
+const naming = { roles: [{ id: 'primary', label: 'Primary', markers: [] }, { id: 'accent', label: 'Accent', markers: ['[a]', '[accent]'] }, { id: 'clear', label: 'Clear', markers: [] }, { id: 'opaque', label: 'Opaque', markers: [] }], quantity: { regex: '[ _]x([0-9]+)\\.stl$', default: 1 }, slug: { strip_markers: true, strip_quantity: true }, folder_rules: [{ path_contains: 'clear', role_id: 'clear' }], export_role_order: ['primary', 'accent', 'clear', 'opaque'] };
 const cases = [
+  { name: 'spoolman-default-disabled', files, sql: setting('role_filaments_1', spoolDefaults) },
+  { name: 'spoolman-user-enabled', files, sql: `${setting('role_filaments_1', spoolDefaults)}; ${setting('feature_toggles', { spoolman: true })}` },
+  { name: 'spoolman-plan-disabled', files, sql: `${setting('role_filaments_1', spoolDefaults)}; ${setting('feature_toggles', { spoolman: true })}; ${setting('feature_toggles:plan:1', { spoolman: false })}` },
+  { name: 'spoolman-plan-enabled', files, sql: `${setting('role_filaments_1', spoolDefaults)}; ${setting('feature_toggles', { spoolman: false })}; ${setting('feature_toggles:plan:1', { spoolman: true })}` },
+  { name: 'spoolman-invalid-denies', files, sql: `${setting('role_filaments_1', spoolDefaults)}; ${setting('feature_toggles', { spoolman: 1 })}` },
+  { name: 'naming-folder-and-longest-marker', files: ['clear/[accent]part_x3.stl', '[accent]part_x2.stl', 'part_x9.stl'].map(path => ({ source: 1, path, content: path })), sql: setting('stl_naming_defaults', naming) },
   { name: 'tracked', files },
   { name: 'untracked', files, sql: 'UPDATE projects SET current_source_revision_id=NULL' },
   { name: 'prior-decisions', files, base: { baseRevisionId: 1, basePlanVersion: 1 }, sql: "UPDATE plan_revision_parts SET included=0,quantity_override=7,quantity_effective=7,role_override='clear',notes='keep',filament_custom_hex='#abcdef' WHERE part_key='included.stl'" },

@@ -365,6 +365,9 @@ STLs, preserves accepted decisions, applies scopes and manifests, and returns
 Parts and a planning digest without writing rows. Validated current accepted
 Parts can bypass scanning. Its options use storage-local types, and reads use
 storage-issued observation requests with the shared preparation budget.
+Naming rules charge their definitions and per-path comparisons. Spoolman
+defaults follow user and Plan feature choices; disabled or invalid choices drop
+Spoolman references from new Parts without changing accepted decisions.
 Recompute remains GRE-607. Save and rebase remain GRE-608. Existing GRE-668,
 GRE-669 and GRE-670 follow-ups remain open.
 
