@@ -1,6 +1,10 @@
 mod context;
 pub(crate) mod graph;
+#[cfg(feature = "desktop_rebuild")]
+mod json_body;
 pub use context::{CapturedContext, PlateRef, RevisionRef, UnitHistory};
+#[cfg(feature = "desktop_rebuild")]
+pub use json_body::{AcceptedBatchJsonBody, AcceptedReadJsonBody, AcceptedSnapshotJsonBody};
 pub mod views;
 pub mod workflow;
 

@@ -75,6 +75,7 @@ impl Fixture {
                 requirement: None,
                 option_group_id: None,
                 manifest_source: None,
+                manifest: Default::default(),
                 artifact: Artifact::Tracked {
                     source_id: 1,
                     source_revision_id: 1,
