@@ -555,7 +555,7 @@ fn write_remap(
         if let Some(mut value) = value {
             for row in &mut value {
                 for field in &fields {
-                    if let Some(units) = row[*field].as_array_mut() {
+                    if let Some(units) = row.get_mut(*field).and_then(Value::as_array_mut) {
                         for unit in units {
                             let slot = coordinate(unit)?;
                             if let Some((part, index)) = mapping.get(&slot) {
@@ -987,10 +987,20 @@ pub(crate) fn publish_in_transaction(
     else {
         return Ok(Outcome::NotFound);
     };
-    validate_text(&profile_row)?;
     if !profile_row["archivedAt"].is_null() {
         return Ok(Outcome::BuildArchived);
     }
+    model::validate_named_text(
+        &profile_row,
+        &[
+            "tenantId",
+            "name",
+            "orderNumber",
+            "specialRequest",
+            "archivedAt",
+        ],
+        0,
+    )?;
     let Some(h) = one(
         tx,
         "SELECT * FROM plan_drafts WHERE tenant_id=? AND profile_id=? AND id=?",
@@ -1016,15 +1026,19 @@ pub(crate) fn publish_in_transaction(
         .revision_id()
         .map(|id| id.get() as i64);
     let version = request.expected_base.plan_version().get() as i64;
-    if profile_row["acceptedPlanRevisionId"].is_null()
-        && (num(&profile_row, "acceptedPlanVersion")? != 0
+    let accepted_version = num(&profile_row, "acceptedPlanVersion")?;
+    let needs_baseline = if profile_row["acceptedPlanRevisionId"].is_null() {
+        accepted_version != 0
             || one(
                 tx,
                 "SELECT id FROM parts WHERE tenant_id=? AND profile_id=? LIMIT 1",
                 &[&tenant, &profile],
             )?
-            .is_some())
-    {
+            .is_some()
+    } else {
+        accepted_version <= 0
+    };
+    if needs_baseline {
         return Ok(Outcome::AcceptedBaselineRequired);
     }
     if profile_row["acceptedPlanRevisionId"] != json!(previous)

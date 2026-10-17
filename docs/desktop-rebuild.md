@@ -1421,11 +1421,23 @@ skipped. An active deferred start bound to an uploaded-only parent still blocks
 publication and validates the parent upload binding. The supplied-source import
 arm waits for GRE-610's payload variant.
 
-The generator records fifteen real SQLite transactions covering receipt replay,
-changed drafts, pinned Source inputs, reconciliation reasons, and Checkoff links,
-resolved units, and ownerless queues. Rust restores each database on Node's
-schema and compares literal outcomes and publication rows, normalizing only
-publication time and receipt field casing.
+The generator records 26 real SQLite transactions covering receipt replay,
+already-applied drafts, idempotency conflicts, changed drafts and bases, pinned
+Source inputs, archived Builds, a corrupt accepted pointer, reconciliation
+reasons, active production without remapping, and Checkoff links, resolved units,
+and ownerless queues, with and without their optional unit arrays. Rust restores
+each database on Node's schema and compares literal outcomes and publication
+rows, normalizing only publication time and the field casing of receipts and
+production counts.
+
+Preparation sorts assignments by Part and unit index before validating them, as
+Node does. Preparation and the transaction's Build check measure the 64 KiB
+operational text limit as Node does: the UTF-8 length of Node's named Part and
+Build fields. A lone UTF-16 surrogate counts as the 3 bytes of U+FFFD. Rows the
+transaction inserts are still checked by the sum of all their text columns. The
+Build check runs after the archived check, so an archived Build returns
+`build_archived`. A set accepted revision with a nonpositive Plan version returns
+`accepted_baseline_required`.
 
 Node `applyPlanChanges` does not check durable jobs, so its running-export case
 publishes. Rust returns the exact job conflict list and leaves publication rows
@@ -1442,6 +1454,10 @@ preserves the token where Node's coordinate resolves to a different token. At
 index 0, Rust refuses the dropped token and writes nothing where Node publishes.
 Index 2 and a cross-Part filename rename match Node's refusal literally. Fixtures
 retain Node's literal outcomes and compare Checkoff coordinates to Required-unit rows.
+The prior-completion fixtures change the STL, keep the quantity at 3 and accept
+prior completion with units 1 and 2 completed. Rust refuses a link at index 0,
+whose token is dropped, and moves links at indexes 1 and 2 to 0 and 1. Node
+publishes all three and keeps each index.
 
 ## D19 publication client and writer admission, GRE-612 PR 3
 
