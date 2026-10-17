@@ -5,9 +5,10 @@ use super::model::KitManifest;
 use crate::manifest_text::{JsText, ManifestText, OptionGroupId, VariantId};
 use crate::working_drafts::observation::{
     BuilderGlob, BuilderGroup, BuilderGroups, BuilderVariant, CatalogPurpose, CheckoutManifestUse,
-    DocumentRead, DraftReads, InventoryPath, OwnedCatalogReadRequest, OwnedCheckoutReadRequest,
-    OwnedStlReadRequest, PreparationBudget, ReadFailure, ReadResult, Resource, StlPurpose,
-    infer_builder_siblings, merge_builder_groups, parse_builder_hints, parse_builder_manifest,
+    CommunitySlug, DocumentRead, DraftReads, InventoryPath, OwnedCatalogReadRequest,
+    OwnedCheckoutReadRequest, OwnedStlReadRequest, PreparationBudget, ReadFailure, ReadResult,
+    Resource, StlPurpose, infer_builder_siblings, merge_builder_groups, parse_builder_hints,
+    parse_builder_manifest,
 };
 use rusqlite::{OptionalExtension, Transaction, params};
 use sha2::{Digest, Sha256};
@@ -42,6 +43,9 @@ pub(crate) struct SourceStamp([u8; 32]);
 pub(crate) struct ObservedBuilder {
     pub builder: ManifestBuilder,
     pub stamps: Vec<(i64, SourceStamp)>,
+    /// Sources whose stored community slug was refused; observation read no
+    /// community manifest for them.
+    pub invalid_community_slugs: Vec<i64>,
 }
 
 type SelectionDefault = (OptionGroupId, Vec<VariantId>, bool);
@@ -51,6 +55,7 @@ struct SourceObservation {
     groups: BuilderGroups,
     defaults: Vec<SelectionDefault>,
     stamp: SourceStamp,
+    invalid_community_slug: bool,
 }
 
 pub(crate) fn capture(
@@ -135,6 +140,7 @@ pub(crate) fn observe(
     let mut merged_option_groups = BuilderGroups::new();
     let mut variant_sources = VariantSources::new();
     let mut stamps = Vec::new();
+    let mut invalid_community_slugs = Vec::new();
     for source in &captured.sources {
         let Some(path) = source.local_path.as_deref().filter(|path| !path.is_empty()) else {
             continue;
@@ -168,6 +174,9 @@ pub(crate) fn observe(
             resolved_selections.insert_default_selection(group, values, scalar);
         }
         merge_builder_groups(&mut merged_option_groups, observed.groups);
+        if observed.invalid_community_slug {
+            invalid_community_slugs.push(source.source_id);
+        }
         sources.push(observed.row);
         stamps.push((source.source_id, observed.stamp));
     }
@@ -180,6 +189,7 @@ pub(crate) fn observe(
             variant_sources,
         },
         stamps,
+        invalid_community_slugs,
     })
 }
 
@@ -234,14 +244,15 @@ fn observe_source(
     } else {
         declared.clone()
     };
-    if let Some(slug) = source
+    let community_slug = source
         .community_slug
         .as_deref()
         .filter(|slug| !slug.is_empty())
-    {
+        .map(CommunitySlug::parse);
+    if let Some(Some(slug)) = &community_slug {
         let community = reads.read_catalog_document(
             &OwnedCatalogReadRequest {
-                purpose: CatalogPurpose::Community(slug.into()),
+                purpose: CatalogPurpose::Community(slug.clone()),
             },
             budget,
         )?;
@@ -264,6 +275,7 @@ fn observe_source(
         groups,
         defaults,
         stamp: SourceStamp(stamp.finalize().into()),
+        invalid_community_slug: matches!(community_slug, Some(None)),
     }))
 }
 
