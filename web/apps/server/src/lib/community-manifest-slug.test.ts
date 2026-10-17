@@ -1,7 +1,7 @@
 import multipart from "@fastify/multipart";
 import Fastify from "fastify";
 import { zipSync } from "fflate";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -14,6 +14,7 @@ import { collectKitBundleSourceRefs } from "../services/kit-bundle-share.js";
 import {
   INVALID_COMMUNITY_MANIFEST_SLUG_DETAIL,
   InvalidCommunityManifestSlugError,
+  isCommunityManifestSlug,
   parseCommunityManifestSlug,
 } from "./community-manifest-slug.js";
 
@@ -65,6 +66,23 @@ describe("parseCommunityManifestSlug", () => {
 
   it.each([...INVALID_SLUGS, "Upper", 7, {}])("rejects %j", (value) => {
     expect(() => parseCommunityManifestSlug(value)).toThrow(InvalidCommunityManifestSlugError);
+  });
+});
+
+describe("shared Node and Rust slug corpus", () => {
+  const corpus = JSON.parse(
+    readFileSync(
+      new URL("../../../../../fixtures/parity/community-manifest-slug.json", import.meta.url),
+      "utf8",
+    ),
+  ) as { valid: string[]; invalid: string[] };
+
+  it.each(corpus.valid)("accepts %j", (slug) => {
+    expect(isCommunityManifestSlug(slug)).toBe(true);
+  });
+
+  it.each(corpus.invalid)("rejects %j", (slug) => {
+    expect(isCommunityManifestSlug(slug)).toBe(false);
   });
 });
 
