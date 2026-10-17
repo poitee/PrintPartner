@@ -359,54 +359,55 @@ fn node_upload_limits_match_the_journal_boundaries() {
     let limits = json!({"max_source_upload_bytes": MAX_INPUT, "max_source_upload_files": 10000});
     assert_eq!(fixture["limits"], limits);
     let journal = Fixture::open();
-    // Node normalizes backslashes and a leading slash, and folds case when it
-    // looks for duplicates. The journal records exact canonical paths, so it
-    // refuses the first two and admits names that differ only in case.
-    let expected = [
-        (
-            "empty",
-            Err("At least one file is required"),
-            Err("Invalid files"),
-        ),
+    // Where Node writes files, the journal admits the same canonical paths.
+    let refused = [
+        ("empty", "At least one file is required", "Invalid files"),
         (
             "too_many",
-            Err("Archive has too many entries (10001, max 10000)"),
-            Err("Invalid files"),
+            "Archive has too many entries (10001, max 10000)",
+            "Invalid files",
         ),
-        ("at_limit", Ok(1), Ok(())),
         (
             "over_limit",
-            Err("Uploaded source exceeds the 256 MiB upload limit"),
-            Err("Input limit"),
+            "Uploaded source exceeds the 256 MiB upload limit",
+            "Input limit",
         ),
-        ("nested", Ok(2), Ok(())),
         (
             "parent",
-            Err("File path escapes extraction directory: ../part.stl"),
-            Err("Invalid relative path"),
+            "File path escapes extraction directory: ../part.stl",
+            "Invalid relative path",
         ),
         (
             "duplicate",
-            Err("Duplicate uploaded file path: part.stl"),
-            Err("Duplicate file"),
+            "Duplicate uploaded file path: part.stl",
+            "Duplicate file",
         ),
         (
             "case_duplicate",
-            Err("Duplicate uploaded file path: part.stl"),
-            Ok(()),
+            "Duplicate uploaded file path: part.stl",
+            "Duplicate file",
         ),
-        ("backslash", Ok(1), Err("Invalid relative path")),
-        ("absolute", Ok(1), Err("Invalid relative path")),
+        (
+            "canonical_duplicate",
+            "Duplicate uploaded file path: parts/a.stl",
+            "Duplicate file",
+        ),
+        (
+            "canonical_case_duplicate",
+            "Duplicate uploaded file path: \\Parts\\A.stl",
+            "Duplicate file",
+        ),
     ];
     let cases = fixture["cases"].as_array().unwrap();
-    assert_eq!(cases.len(), expected.len());
-    for (case, (id, from_node, from_journal)) in cases.iter().zip(expected) {
-        assert_eq!(case["id"], id);
+    assert_eq!(cases.len(), 13);
+    for case in cases {
+        let id = case["id"].as_str().unwrap();
         let node = match &case["result"]["error"] {
             Value::String(error) => Err(error.as_str()),
-            _ => Ok(case["result"]["fileCount"].as_u64().unwrap()),
+            _ => {
+                Ok(serde_json::from_value::<Vec<String>>(case["result"]["paths"].clone()).unwrap())
+            }
         };
-        assert_eq!(node, from_node, "{id}");
         let files: Vec<File> = match &case["files"] {
             Value::Array(files) => files
                 .iter()
@@ -421,10 +422,50 @@ fn node_upload_limits_match_the_journal_boundaries() {
                 .map(|index| file(&format!("part-{index}.stl"), 1))
                 .collect(),
         };
-        let result = journal.admit(admission(id, create(id), &files), files, 0);
-        let result = result.map(drop).map_err(|error| error.to_string());
-        assert_eq!(result, from_journal.map_err(str::to_owned), "{id}");
+        // The smallest reservation lets every admitted case fit one quota.
+        let request = Admission {
+            max_prepared_bytes: 1,
+            reserved_bytes: MAX_INPUT + 3 + 16 * 1024 * 1024,
+            ..admission(id, create(id), &files)
+        };
+        let result = journal.admit(request, files, 0);
+        match (node, result) {
+            (Ok(written), Ok(operation)) => {
+                let Input::Files { paths } = &operation.input else {
+                    panic!("{id}: files expected")
+                };
+                let mut admitted: Vec<String> = operation
+                    .requested_files
+                    .iter()
+                    .map(|file| file.path.clone())
+                    .collect();
+                assert_eq!(paths, &admitted, "{id}");
+                admitted.sort();
+                assert_eq!(admitted, written, "{id}");
+            }
+            (Err(node), Err(error)) => {
+                let journal = error.to_string();
+                assert!(
+                    refused.contains(&(id, node, &journal)),
+                    "{id}: {node} / {journal}"
+                );
+            }
+            (node, result) => panic!("{id}: Node {node:?}, journal {:?}", result.map(drop)),
+        }
     }
+}
+
+#[test]
+fn admission_hashes_the_canonical_paths() {
+    let journal = Fixture::open();
+    let supplied = vec![file("\\Parts\\a.stl", 3)];
+    let request = admission("canonical", create("canonical"), &supplied);
+    let first = journal.admit(request, supplied, 0).unwrap();
+    let canonical = vec![file("Parts/a.stl", 3)];
+    let digest = hash(&serde_json::to_vec(&canonical).unwrap());
+    assert_eq!(first.requested_digest, digest);
+    let request = admission("canonical", create("canonical"), &canonical);
+    assert_eq!(journal.admit(request, canonical, 0).unwrap(), first);
 }
 
 #[test]
