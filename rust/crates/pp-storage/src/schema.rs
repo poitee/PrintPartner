@@ -10,7 +10,7 @@ use std::{
 };
 
 #[cfg(feature = "desktop_rebuild")]
-pub(crate) const CURRENT_VERSION: u64 = 39;
+pub(crate) const CURRENT_VERSION: u64 = 40;
 #[cfg(not(feature = "desktop_rebuild"))]
 pub(crate) const CURRENT_VERSION: u64 = 35;
 
@@ -207,6 +207,8 @@ pub(crate) fn preflight(
     crate::plan_publication::validate_schema(&conn, version)?;
     #[cfg(feature = "desktop_rebuild")]
     crate::uploads::validate_schema(&conn, version)?;
+    #[cfg(feature = "desktop_rebuild")]
+    crate::source_scan::validate_schema(&conn, version)?;
     Ok(version)
 }
 
@@ -396,6 +398,7 @@ pub(crate) fn initialize(
     {
         crate::plan_publication::validate_schema(&conn, CURRENT_VERSION)?;
         crate::uploads::validate_schema(&conn, CURRENT_VERSION)?;
+        crate::source_scan::validate_schema(&conn, CURRENT_VERSION)?;
     }
     // Node's fixture builder connects once to create the input and again to
     // create the expected database. The first Rust open must repeat that
@@ -467,7 +470,12 @@ fn install_steps(
     first: Option<PathBuf>,
 ) -> Result<Option<PathBuf>> {
     let mut first = first;
-    for (step, install) in crate::uploads::SCHEMA_STEPS {
+    let install_scan: fn(&Connection) -> Result<()> =
+        |connection| Ok(connection.execute_batch(include_str!("source_scan/schema.sql"))?);
+    for (step, install) in crate::uploads::SCHEMA_STEPS
+        .into_iter()
+        .chain([(40, install_scan)])
+    {
         if version < step {
             let target =
                 populated.then(|| path.with_file_name(format!("backups/pre-schema{step}.db")));
@@ -479,6 +487,7 @@ fn install_steps(
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             install(&tx)?;
             crate::uploads::validate_schema(&tx, step)?;
+            crate::source_scan::validate_schema(&tx, step)?;
             tx.execute(
                 "UPDATE app_settings SET value=?1 WHERE tenant_id='default' AND key='schema_version'",
                 [step.to_string()],

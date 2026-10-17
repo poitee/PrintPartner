@@ -49,22 +49,25 @@ fn upgrade(label: &str, input: &[u8]) -> (PathBuf, SchemaReady) {
 
 fn assert_reopen_is_noop(directory: &Path) {
     let before = backups(directory);
+    let original = live_contents(&directory.join("print-partner.db"));
     let (owner, ready) = WriterOwner::open(directory, Limits::default()).unwrap();
     owner.shutdown().unwrap();
     assert_eq!(
         (ready.version, ready.previous_version, ready.backup),
-        (39, 39, None)
+        (40, 40, None)
     );
     assert_eq!(backups(directory), before);
+    assert_eq!(live_contents(&directory.join("print-partner.db")), original);
     let connection = Connection::open(directory.join("print-partner.db")).unwrap();
-    validate_schema(&connection, 39).unwrap();
+    validate_schema(&connection, 40).unwrap();
+    crate::source_scan::validate_schema(&connection, 40).unwrap();
 }
 
 #[test]
 fn each_upgrade_step_backs_up_its_input_before_writing() {
     let node = include_bytes!("../../tests/fixtures/accepted-plan-node.db");
     let (from34, ready) = upgrade("uploads-from34", node);
-    assert_eq!((ready.version, ready.previous_version), (39, 34));
+    assert_eq!((ready.version, ready.previous_version), (40, 34));
     assert_eq!(ready.backup, Some(from34.join("backups/pre-schema37.db")));
     let chain = backups(&from34);
     let names: Vec<_> = chain
@@ -77,17 +80,24 @@ fn each_upgrade_step_backs_up_its_input_before_writing() {
             ("pre-schema37.db", "34"),
             ("pre-schema38.db", "37"),
             ("pre-schema39.db", "38"),
+            ("pre-schema40.db", "39"),
         ]
     );
-    for (name, version) in [("pre-schema38.db", 37), ("pre-schema39.db", 38)] {
+    for (name, version) in [
+        ("pre-schema38.db", 37),
+        ("pre-schema39.db", 38),
+        ("pre-schema40.db", 39),
+    ] {
         let saved = immutable(&from34.join("backups").join(name));
         validate_schema(&saved, version).unwrap();
         crate::plan_publication::validate_schema(&saved, version).unwrap();
+        crate::source_scan::validate_schema(&saved, version).unwrap();
     }
     assert_reopen_is_noop(&from34);
 
     let at37 = &chain[1].2;
     let at38 = &chain[2].2;
+    let at39 = &chain[3].2;
     let schema35 = directory("uploads-schema35");
     std::fs::write(schema35.join("schema37.db"), at37).unwrap();
     let raw = Connection::open(schema35.join("schema37.db")).unwrap();
@@ -98,12 +108,13 @@ fn each_upgrade_step_backs_up_its_input_before_writing() {
     let at35 = std::fs::read(schema35.join("schema35.db")).unwrap();
 
     for (label, input, previous, steps) in [
-        ("uploads-from35", &at35, 35, &[37, 38, 39][..]),
-        ("uploads-from37", at37, 37, &[38, 39][..]),
-        ("uploads-from38", at38, 38, &[39][..]),
+        ("uploads-from35", &at35, 35, &[37, 38, 39, 40][..]),
+        ("uploads-from37", at37, 37, &[38, 39, 40][..]),
+        ("uploads-from38", at38, 38, &[39, 40][..]),
+        ("uploads-from39", at39, 39, &[40][..]),
     ] {
         let (directory, ready) = upgrade(label, input);
-        assert_eq!((ready.version, ready.previous_version), (39, previous));
+        assert_eq!((ready.version, ready.previous_version), (40, previous));
         let first = format!("pre-schema{}.db", steps[0]);
         assert_eq!(ready.backup, Some(directory.join("backups").join(&first)));
         let saved = backups(&directory);
@@ -163,13 +174,13 @@ fn failed_step_backup_aborts_before_the_step_writes() {
 }
 
 #[test]
-fn fresh_database_installs_schema39_without_backups() {
+fn fresh_database_installs_schema40_without_backups() {
     let directory = directory("uploads-fresh");
     let (owner, ready) = WriterOwner::open(&directory, Limits::default()).unwrap();
     owner.shutdown().unwrap();
     assert_eq!(
         (ready.version, ready.previous_version, ready.backup),
-        (39, 0, None)
+        (40, 0, None)
     );
     assert!(!directory.join("backups").exists());
     assert_reopen_is_noop(&directory);
@@ -310,9 +321,18 @@ fn starters(path: &Path) -> i64 {
 // The backup API rewrites header counters for a WAL input, so backups are
 // compared by schema and rows rather than by bytes.
 fn contents(path: &Path) -> Vec<String> {
-    let connection = immutable(path);
+    connection_contents(&immutable(path))
+}
+
+fn live_contents(path: &Path) -> Vec<String> {
+    connection_contents(
+        &Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap(),
+    )
+}
+
+fn connection_contents(connection: &Connection) -> Vec<String> {
     let mut found: Vec<String> = connection
-        .prepare("SELECT type,name,sql FROM sqlite_master ORDER BY name")
+        .prepare("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY name")
         .unwrap()
         .query_map([], |row| {
             Ok(format!(
@@ -320,7 +340,8 @@ fn contents(path: &Path) -> Vec<String> {
                 (
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
-                    row.get::<_, Option<String>>(2)?
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?
                 )
             ))
         })
@@ -364,7 +385,7 @@ fn step_backups_precede_starter_seed_writes() {
     let database = blocked.join("print-partner.db");
     std::fs::write(&database, &input).unwrap();
     assert_eq!(starters(&database), 0);
-    let original = contents(&database);
+    let original = live_contents(&database);
     std::fs::create_dir_all(blocked.join("backups/pre-schema38.db")).unwrap();
     let error = WriterOwner::open(&blocked, Limits::default())
         .err()
@@ -386,6 +407,7 @@ fn step_backups_precede_starter_seed_writes() {
     assert_eq!(starters(&saved), 0);
     assert_eq!(contents(&saved), original);
     assert_eq!(starters(&directory.join("backups/pre-schema39.db")), 0);
+    assert_eq!(starters(&directory.join("backups/pre-schema40.db")), 0);
     // The seeded row may still sit in the WAL, which an immutable reader skips.
     let live: i64 = Connection::open(directory.join("print-partner.db"))
         .unwrap()
@@ -417,13 +439,13 @@ fn step_refuses_drifted_existing_columns_before_its_stamp() {
         let directory = directory(&format!("{label}-open"));
         let database = directory.join("print-partner.db");
         std::fs::write(&database, &input).unwrap();
-        let original = contents(&database);
+        let original = live_contents(&database);
         for _ in 0..2 {
             let error = WriterOwner::open(&directory, Limits::default())
                 .err()
                 .unwrap();
             assert_eq!(version_at(&database), "37", "{label}");
-            assert_eq!(contents(&database), original, "{label}");
+            assert_eq!(live_contents(&database), original, "{label}");
             assert!(
                 format!("{error:#}")
                     .contains(&format!("Source revision column schema mismatch: {column}")),
@@ -437,7 +459,7 @@ fn step_refuses_drifted_existing_columns_before_its_stamp() {
         "ALTER TABLE projects ADD COLUMN source_configuration_version INTEGER NOT NULL DEFAULT 1",
     );
     let (directory, ready) = upgrade("uploads-column-kept-open", &input);
-    assert_eq!((ready.version, ready.previous_version), (39, 37));
+    assert_eq!((ready.version, ready.previous_version), (40, 37));
     assert_reopen_is_noop(&directory);
 }
 
@@ -465,7 +487,7 @@ const REVISION: &str = "SELECT tenant_id||':'||source_configuration_version||':'
 fn steps_run_after_the_tenant_repair() {
     let input = schema37_input("uploads-repair", &tenant_mismatch_with_provenance());
     let (directory, ready) = upgrade("uploads-repair-open", &input);
-    assert_eq!((ready.version, ready.previous_version), (39, 37));
+    assert_eq!((ready.version, ready.previous_version), (40, 37));
     assert_eq!(
         live(&directory, REVISION),
         "default:3:probe".to_owned().into()
@@ -486,7 +508,7 @@ fn steps_run_after_the_tenant_repair() {
 fn steps_run_after_missing_common_tables_are_restored() {
     let input = schema37_input("uploads-restore", "DROP TABLE source_docs");
     let (directory, ready) = upgrade("uploads-restore-open", &input);
-    assert_eq!((ready.version, ready.previous_version), (39, 37));
+    assert_eq!((ready.version, ready.previous_version), (40, 37));
     assert_eq!(
         live(&directory, "SELECT count(*) FROM source_docs"),
         0.into()
@@ -506,15 +528,16 @@ fn renamed_starter_and_tenant_repair_upgrade_with_the_seed_last() {
     let directory = directory("uploads-repair-seed-open");
     let database = directory.join("print-partner.db");
     std::fs::write(&database, &input).unwrap();
-    let original = contents(&database);
+    let original = live_contents(&database);
     assert_eq!(starters(&database), 0);
     let (owner, ready) = WriterOwner::open(&directory, Limits::default()).unwrap();
     owner.shutdown().unwrap();
-    assert_eq!((ready.version, ready.previous_version), (39, 37));
+    assert_eq!((ready.version, ready.previous_version), (40, 37));
     let first = directory.join("backups/pre-schema38.db");
     assert_eq!(ready.backup, Some(first.clone()));
     assert_eq!(contents(&first), original);
     assert_eq!(starters(&directory.join("backups/pre-schema39.db")), 0);
+    assert_eq!(starters(&directory.join("backups/pre-schema40.db")), 0);
     assert_eq!(
         live(&directory, REVISION),
         "default:3:probe".to_owned().into()
@@ -522,4 +545,131 @@ fn renamed_starter_and_tenant_repair_upgrade_with_the_seed_last() {
     let seeded = "SELECT count(*) FROM printer_profiles WHERE tenant_id='default' AND name='Generic Klipper Machine'";
     assert_eq!(live(&directory, seeded), 1.into());
     assert_reopen_is_noop(&directory);
+}
+
+fn schema39_input(label: &str) -> PathBuf {
+    let directory = directory(label);
+    let (owner, _) = WriterOwner::open(&directory, Limits::default()).unwrap();
+    owner.shutdown().unwrap();
+    let connection = Connection::open(directory.join("print-partner.db")).unwrap();
+    connection.execute_batch(
+        "DROP TABLE IF EXISTS source_scan_executions;
+         UPDATE app_settings SET value='39' WHERE tenant_id='default' AND key='schema_version';
+         INSERT INTO app_settings(tenant_id,key,value) VALUES('default','scan-migration-marker','preserved');"
+    ).unwrap();
+    directory
+}
+
+#[test]
+fn schema40_backup_preserves_the_logical_input() {
+    let directory = schema39_input("scan-schema40-backup");
+    let database = directory.join("print-partner.db");
+    let original = live_contents(&database);
+    let (owner, ready) = WriterOwner::open(&directory, Limits::default()).unwrap();
+    owner.shutdown().unwrap();
+    let backup = directory.join("backups/pre-schema40.db");
+    assert_eq!(ready.backup, Some(backup.clone()));
+    assert_eq!((ready.version, ready.previous_version), (40, 39));
+    assert_eq!(version_at(&backup), "39");
+    assert_eq!(contents(&backup), original);
+    crate::source_scan::validate_schema(
+        &Connection::open_with_flags(&database, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap(),
+        40,
+    )
+    .unwrap();
+    assert_reopen_is_noop(&directory);
+}
+
+#[test]
+fn schema40_blocked_backup_leaves_the_database_unchanged() {
+    let directory = schema39_input("scan-schema40-blocked");
+    let database = directory.join("print-partner.db");
+    let original = live_contents(&database);
+    let bytes = std::fs::read(&database).unwrap();
+    let blocked = directory.join("backups/pre-schema40.db");
+    std::fs::create_dir_all(&blocked).unwrap();
+    let error = WriterOwner::open(&directory, Limits::default())
+        .err()
+        .unwrap();
+    assert!(
+        format!("{error:#}").contains("schema::backup: rename temporary backup"),
+        "{error:#}"
+    );
+    assert_eq!(version_at(&database), "39");
+    assert_eq!(live_contents(&database), original);
+    assert_eq!(std::fs::read(&database).unwrap(), bytes);
+    assert_eq!(
+        std::fs::read_dir(directory.join("backups"))
+            .unwrap()
+            .count(),
+        1
+    );
+    std::fs::remove_dir(&blocked).unwrap();
+    let (owner, ready) = WriterOwner::open(&directory, Limits::default()).unwrap();
+    owner.shutdown().unwrap();
+    assert_eq!(ready.backup, Some(blocked.clone()));
+    assert_eq!(contents(&blocked), original);
+}
+
+#[test]
+fn schema40_validation_rolls_back_a_drifted_existing_table() {
+    let directory = schema39_input("scan-schema40-drift");
+    let database = directory.join("print-partner.db");
+    let connection = Connection::open(&database).unwrap();
+    let drift = include_str!("../source_scan/schema.sql")
+        .replace("CHECK (generation > 0)", "CHECK (generation >= 0)");
+    connection.execute_batch(&drift).unwrap();
+    connection
+        .execute_batch("DROP INDEX source_scan_execution_receipt")
+        .unwrap();
+    drop(connection);
+    let original = live_contents(&database);
+    for _ in 0..2 {
+        let error = crate::schema::initialize(&database, 39, "2026-10-17T00:00:00Z")
+            .err()
+            .unwrap();
+        assert!(
+            format!("{error:#}").contains("Local scan schema mismatch"),
+            "{error:#}"
+        );
+        assert_eq!(version_at(&database), "39");
+        assert_eq!(live_contents(&database), original);
+        assert_eq!(
+            contents(&directory.join("backups/pre-schema40.db")),
+            original
+        );
+    }
+    let error = WriterOwner::open(&directory, Limits::default())
+        .err()
+        .unwrap();
+    assert!(
+        format!("{error:#}").contains("Unexpected Local scan schema"),
+        "{error:#}"
+    );
+    assert_eq!(live_contents(&database), original);
+}
+
+#[test]
+fn schema40_reopen_refuses_journal_drift_without_writes() {
+    let directory = directory("scan-schema40-reopen-drift");
+    let (owner, _) = WriterOwner::open(&directory, Limits::default()).unwrap();
+    owner.shutdown().unwrap();
+    let database = directory.join("print-partner.db");
+    Connection::open(&database)
+        .unwrap()
+        .execute_batch("DROP INDEX source_scan_execution_receipt")
+        .unwrap();
+    let original = live_contents(&database);
+    let bytes = std::fs::read(&database).unwrap();
+    let error = WriterOwner::open(&directory, Limits::default())
+        .err()
+        .unwrap();
+    assert!(
+        format!("{error:#}").contains("Local scan schema mismatch"),
+        "{error:#}"
+    );
+    assert_eq!(version_at(&database), "40");
+    assert_eq!(live_contents(&database), original);
+    assert_eq!(std::fs::read(&database).unwrap(), bytes);
+    assert!(!directory.join("backups").exists());
 }

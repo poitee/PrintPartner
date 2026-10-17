@@ -1399,12 +1399,10 @@ The three-PR slice plan assigns the complete D17 scope as follows:
 | D17 (b) | `revalidate_source_authority`, `commit_source_authority_refusal`, idempotent End/release, remaining reference catalog tests | 400–500 |
 | D17 (c) | Schema 40, `backups/pre-schema40.db`, validation inside the migration transaction, migration tests and docs | 150–200 |
 
-PR #553, D14 (b), was open when this branch started. It supplies schema 39 and
-the Source configuration and document provenance columns. This branch starts
-from main and does not install schema 40. Settlement tests explicitly install
-those prerequisite columns and the journal in temporary databases. Production
-startup remains at desktop schema 37 and default schema 35. D17 (c) installs the
-schema step after #553 and moves the test harness onto the real migration.
+D14 (b), #553, supplies schema 39 and the Source configuration and document
+provenance columns. D17 (c) installs the scan journal at schema 40 through the
+production migration. The scan tests open `WriterOwner` and use that schema
+without ad-hoc tables or column alterations. The default build stays at schema 35.
 Source Sync remains D18, GRE-614.
 
 `fixtures/parity/source-scan/generate.mjs` runs Node's
@@ -1439,15 +1437,42 @@ the proof if acknowledgement fails.
 
 GRE-703 items 2–4 bind settlement to the journaled reservation incarnation and
 token, test retired proofs and cancellation after observation, and replace the
-raw UNIQUE error with `LocalScanFailure::AlreadyObserved`. Observe and settle
-require schemas 39 and 40, as documented on their client methods. GRE-703 item 1,
-the schema 40 install and migration-based test harness, stays in D17 (c).
-`validate_schema`, `mark_local_failure`, `revalidate_source_authority` and
-`commit_source_authority_refusal` have tests here and production callers in (c).
-The authority helper reuses `AuthorityRefusalReason::of` and saves one refusal.
+raw UNIQUE error with `LocalScanFailure::AlreadyObserved`. D17 (c) addresses
+GRE-703 item 1 by moving the test harness onto the real migration. It also removes
+the client schema prerequisite notes for GRE-707 item 6.
+`mark_local_failure`, `revalidate_source_authority` and
+`commit_source_authority_refusal` retain their tests and integration annotations;
+this schema slice adds no production callers for them. The authority helper
+reuses `AuthorityRefusalReason::of` and saves one refusal.
 
 The Node generator now also executes the local `syncProjectById` completion and
 failure paths. Rust compares four terminal document-index results and two
 failure-metadata cases against Node. Durable completion, inspection and
 reconciliation have no Node counterpart. Tests port the remaining reference
 completion and release checks, and add refusal, rollback and lost-reply cases.
+
+### D17 source scan: schema 40
+
+D17 (c) completes GRE-613 behind `desktop_rebuild`. The 39 to 40 step installs
+`source_scan_executions` and its receipt index from `source_scan/schema.sql`.
+`IF NOT EXISTS` preserves the reference catalog text and lets the step validate
+an existing table and refuse drift without replacing it.
+
+The upgrade keeps D14 (b)'s order:
+
+1. Back up the input before any write. From 39, this is `backups/pre-schema40.db`.
+2. Restore common objects and repair tenants without starter seeding.
+3. Back up each pending step, install and validate it inside one transaction, then
+   stamp and commit its version. The scan validator runs before the 40 stamp.
+4. Validate the installed schema, then seed starters.
+
+Preflight validates the scan journal for the stored version. A database below 40
+with scan objects is refused. Reopening at 40 validates the journal without a new
+backup. A fresh install creates no backups. The default build refuses schema 40.
+
+Upgrade tests cover 35, 37, 38 and 39 to 40, logical backup contents from 39,
+a blocked backup with unchanged input, and a drifted existing journal. The direct
+initializer test bypasses preflight to prove that step validation rolls back the
+new index and leaves version 39 intact. The same drift is also refused through
+`WriterOwner` preflight. Logical comparisons include the SQLite catalog and rows,
+because SQLite's backup API can rewrite header counters.
