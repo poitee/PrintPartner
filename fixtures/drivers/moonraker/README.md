@@ -31,6 +31,6 @@ Only the cases listed here are checked. When either mapping changes, add the
 new edge case here.
 
 ```sh
-cd web && npm run test -w @print-partner/server -- src/integrations/adapters/moonraker.fixtures.test.ts --reporter=verbose
-cargo nextest run --locked --manifest-path rust/Cargo.toml --no-tests=fail -E 'test(ticket_t_4_watcher_proof)'
+(cd web && npm run test -w @print-partner/server -- src/integrations/adapters/moonraker.fixtures.test.ts --reporter=verbose)
+cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-drivers --no-tests=fail -E 'test(ticket_t_4_watcher_proof)'
 ```
