@@ -125,9 +125,7 @@ fn check(tx: &Transaction<'_>, sql: &str, draft: i64) -> String {
     message
 }
 
-#[test]
-fn corrupt_rows_return_node_messages() {
-    let mut db = Database::open(UNCHANGED);
+fn allow_corruption(db: &Database) {
     let triggers: Vec<String> = db
         .connection
         .prepare("SELECT name FROM sqlite_master WHERE type='trigger'")
@@ -144,6 +142,12 @@ fn corrupt_rows_return_node_messages() {
             .execute_batch(&format!("DROP TRIGGER \"{trigger}\""))
             .unwrap();
     }
+}
+
+#[test]
+fn corrupt_rows_return_node_messages() {
+    let mut db = Database::open(UNCHANGED);
+    allow_corruption(&db);
     let tx = db.connection.transaction().unwrap();
     let zero = "0".repeat(64);
     let reconciliation = "UPDATE plan_draft_required_unit_reconciliations SET";
@@ -187,7 +191,7 @@ fn corrupt_rows_return_node_messages() {
         (
             format!("{reconciliation} result_json='{{}}'"),
             1,
-            "Required-unit reconciliation result is invalid",
+            "Required-unit reconciliation kind is invalid",
         ),
         (
             format!(
@@ -268,4 +272,47 @@ fn corrupt_rows_return_node_messages() {
         .collect();
     let expected: Vec<_> = cases.iter().map(|case| case.2).collect();
     assert_eq!(messages, expected);
+}
+
+fn node_message_cases(column: &str) {
+    let mut db = Database::open(UNCHANGED);
+    allow_corruption(&db);
+    let tx = db.connection.transaction().unwrap();
+    let cases = include_str!("../../tests/fixtures/required-units/messages-node.jsonl")
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|case| case["column"] == column)
+        .collect::<Vec<_>>();
+    assert!(!cases.is_empty());
+    let mut mismatches = Vec::new();
+    for case in cases {
+        tx.execute_batch("SAVEPOINT malformed_json").unwrap();
+        let sql = match column {
+            "result_json" => {
+                "UPDATE plan_draft_required_unit_reconciliations SET result_json=? WHERE id=1"
+            }
+            "selection_basis_json" => {
+                "UPDATE plan_draft_required_unit_reconciliations SET selection_basis_json=? WHERE id=1"
+            }
+            _ => unreachable!(),
+        };
+        tx.execute(sql, [case["input"].as_str().unwrap()]).unwrap();
+        let actual = error(storage::saved(&tx, "default", 1, 1, 1));
+        if actual != case["message"].as_str().unwrap() {
+            mismatches.push(json!({"name":case["name"],"actual":actual,"node":case["message"]}));
+        }
+        tx.execute_batch("ROLLBACK TO malformed_json; RELEASE malformed_json")
+            .unwrap();
+    }
+    assert_eq!(mismatches, Vec::<Value>::new());
+}
+
+#[test]
+fn result_json_matches_node_messages() {
+    node_message_cases("result_json");
+}
+
+#[test]
+fn selection_basis_matches_node_messages() {
+    node_message_cases("selection_basis_json");
 }
