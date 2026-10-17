@@ -334,8 +334,8 @@ complete accepted snapshot with the existing bounded readers. It propagates
 integrity errors and checks preparation cancellation around those reads.
 `catalog::naming::get` is crate-visible for the next preparation port's
 transactional effective naming profile and digest. Its behavior is unchanged.
-These helpers have no runtime caller yet. Preparation and recompute remain
-separate GRE-607 slices.
+The preparation module below consumes these helpers. Recompute remains a
+separate GRE-607 slice.
 
 The committed Node generator covers manifest application, optional documents,
 stored kit selections, freshness, and accepted-base integrity. Regenerate its
@@ -356,6 +356,32 @@ python3 rust/crates/pp-storage/tests/fixtures/mutate-preparation-prereqs.py
 
 The mutation runner copies the workspace and uses a separate `CARGO_TARGET_DIR`.
 It requires a passing baseline and counts only executed test failures as kills.
+
+### D12 working-draft preparation
+
+`working_drafts::preparation` is crate-private behind default-off
+`desktop_rebuild`. It captures Source inputs and fingerprints, scans and merges
+STLs, preserves accepted decisions, applies scopes and manifests, and returns
+Parts and a planning digest without writing rows. Validated current accepted
+Parts can bypass scanning. Its options use storage-local types, and reads use
+storage-issued observation requests with the shared preparation budget.
+Recompute remains GRE-607. Save and rebase remain GRE-608. Existing GRE-668,
+GRE-669 and GRE-670 follow-ups remain open.
+
+Tests compare literal Node fingerprints, Parts and digests, propagate resource
+refusals, and cancel at every budget checkpoint. Regenerate the fixtures twice:
+
+```sh
+node --import ./web/node_modules/tsx/dist/loader.mjs --conditions=development rust/crates/pp-storage/tests/fixtures/working-draft-preparation-node.mjs web/apps/server > /persist/tmp/preparation-first.jsonl
+node --import ./web/node_modules/tsx/dist/loader.mjs --conditions=development rust/crates/pp-storage/tests/fixtures/working-draft-preparation-node.mjs web/apps/server > /persist/tmp/preparation-second.jsonl
+cmp /persist/tmp/preparation-first.jsonl /persist/tmp/preparation-second.jsonl
+cmp /persist/tmp/preparation-first.jsonl rust/crates/pp-storage/tests/fixtures/working-draft-preparation-node.jsonl
+cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib -E 'test(working_drafts::preparation_tests)' --test-threads=2
+python3 rust/crates/pp-storage/tests/fixtures/mutate-working-draft-preparation.py
+```
+
+The mutation runner copies the workspace into `/persist/tmp` with its own target
+directory. Only an executed failing test counts as a kill.
 
 ### D4 media reconciliation
 

@@ -210,10 +210,6 @@ pub(super) fn execute(connection: &mut Connection, command: Command) -> Result<B
 }
 
 #[cfg(feature = "desktop_rebuild")]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "GRE-607 preparation lands next")
-)]
 pub(crate) fn reusable_draft_base(
     tx: &rusqlite::Transaction<'_>,
     tenant: &str,
