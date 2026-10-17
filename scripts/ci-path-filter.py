@@ -15,7 +15,7 @@ def relevant(path, kind):
     if kind == "actions":
         return (path.startswith((".github/workflows/", ".github/actions/"))
                 or path in {".github/zizmor.yml", ".github/actionlint.yaml", ".github/actionlint.yml"})
-    return (path.startswith(("rust/", "web/apps/", "web/packages/"))
+    return (path.startswith(("rust/", "web/apps/", "web/packages/", "web/scripts/storage-fixtures/"))
             or path in {"rust-toolchain.toml", ".github/workflows/rust-cross-os.yml",
                         "web/scripts/atomic-package-build.mjs"}
             or re.fullmatch(r"web/tsconfig[^/]*\.json", path) is not None

@@ -19,7 +19,8 @@ class CiPathFilterTests(unittest.TestCase):
                      "rust-toolchain.toml", "web/package.json", "web/package-lock.json",
                      "web/apps/web/src/App.tsx", "web/packages/contracts/src/a.ts",
                      ".github/workflows/rust-cross-os.yml", "scripts/ci-path-filter.py",
-                     "web/tsconfig.base.json", "web/scripts/atomic-package-build.mjs"]:
+                     "web/tsconfig.base.json", "web/scripts/atomic-package-build.mjs",
+                     "web/scripts/storage-fixtures/prepare.mts"]:
             with self.subTest(path=path):
                 self.assertTrue(ci_filter.relevant(path, "rust"))
         for path in ["docs/ci.md", "README.md", "web/scripts/tool.mjs",
