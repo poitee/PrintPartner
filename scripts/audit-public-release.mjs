@@ -90,6 +90,7 @@ function isTextFile(file) {
     ".html",
     ".js",
     ".json",
+    ".jsonc",
     ".md",
     ".mjs",
     ".mts",

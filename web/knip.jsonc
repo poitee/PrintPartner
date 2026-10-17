@@ -1,8 +1,7 @@
 {
-  "$schema": "https://unpkg.com/knip@6.41.0/schema.json",
+  "$schema": "https://unpkg.com/knip@6.41.0/schema-jsonc.json",
   "ignoreBinaries": [
-    "python3",
-    "mkfifo" // FIFO fixtures in ownership-record-fifo.test.ts and ownership/source-sync-admission.runtime.test.ts.
+    "mkfifo" // FIFO fixtures in server tests
   ],
   "workspaces": {
     ".": {

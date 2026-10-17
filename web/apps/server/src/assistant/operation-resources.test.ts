@@ -18,13 +18,15 @@ import { ISOLATED_SOURCE_FILESYSTEM } from "../services/source-filesystem-policy
 import { digestEffectiveNaming } from "../services/plan-freshness.js";
 import { createJobRunner } from "../services/job-runner.js";
 import { WORKFLOW_GUIDE } from "../routes/workflow-guide.js";
+import { getLogger } from "../services/logger.js";
 import { loadManifestYaml } from "../services/manifest-apply.js";
 import { inferOptionGroupsFromPaths } from "../services/path-hints.js";
 import { invokeAssistantTool } from "./tools.js";
 
 const observer = vi.hoisted(() => {
   type Access = { api: string; args: unknown[]; result?: unknown };
-  const state: { active: boolean; files: Access[] } = { active: false, files: [] };
+  // `virtual` serves a shipped-data path from a test fixture so tests never write shipped data.
+  const state: { active: boolean; files: Access[]; virtual: Map<string, string> } = { active: false, files: [], virtual: new Map() };
   function wrap(module: object, prefix = ""): object {
     return Object.fromEntries(Object.entries(module).map(([name, value]) => {
       if (name === "default" || name === "promises") return [name, wrap(value, prefix + (name === "promises" ? "promises." : ""))];
@@ -33,7 +35,9 @@ const observer = vi.hoisted(() => {
         apply(target, receiver, args: unknown[]) {
           const access: Access = { api: prefix + name, args };
           if (state.active) state.files.push(access);
-          const result: unknown = Reflect.apply(target, receiver, args);
+          const backing = typeof args[0] === "string" ? state.virtual.get(args[0]) : undefined;
+          const result: unknown = backing === undefined ? Reflect.apply(target, receiver, args)
+            : name === "realpathSync" ? args[0] : Reflect.apply(target, receiver, [backing, ...args.slice(1)]);
           access.result = result;
           return result;
         },
@@ -2054,7 +2058,7 @@ function optionGroupFileResources(files: FileCall[]): string[] {
     const path = z.string().parse(candidate);
     if (path === SHIPPED_PATH_HINTS || path === join(dataDir, "path-hints.yaml")) resources.add("file:path-hints");
     else if (path === COMMUNITY_MANIFEST_DIR && api === "realpathSync"
-      || dirname(path) === COMMUNITY_MANIFEST_DIR && /^[a-z0-9][a-z0-9._-]{0,63}\.yaml$/.test(path.slice(COMMUNITY_MANIFEST_DIR.length + 1))) resources.add("file:community-manifests");
+      || dirname(path) === COMMUNITY_MANIFEST_DIR && /^(?!kit-catalog\.yaml$)[a-z0-9][a-z0-9._-]{0,63}\.yaml$/.test(path.slice(COMMUNITY_MANIFEST_DIR.length + 1))) resources.add("file:community-manifests");
     else if (workspaceRoots.some((root) => under(root, path))) resources.add("file:source-workspace");
     else throw new Error(`Unclassified option group path: ${api} ${path}`);
   }
@@ -2306,7 +2310,7 @@ for (const isolated of [false, true]) {
     const sourceFiles = [...probes, ...probes, ...optionGroupManifestCalls(source.checkout), ...optionGroupScanCalls(source.checkout), ...probes, ...probes, ...optionGroupManifestCalls(source.checkout)];
     const options = { input: { plan_id: plan.id }, planId: plan.id, repository, tables: OPTION_GROUP_TABLES };
     const fixture = join(COMMUNITY_MANIFEST_DIR, "gre402-fixture.yaml");
-    fs.copyFileSync(fileURLToPath(new URL("../test-fixtures/community-manifest.yaml", import.meta.url)), fixture);
+    observer.state.virtual.set(fixture, fileURLToPath(new URL("../test-fixtures/community-manifest.yaml", import.meta.url)));
     try {
       sqlite.prepare("UPDATE projects SET manifest_community_slug = ? WHERE id = ?").run("gre402-fixture", source.id);
       const output = await traceOptionGroups({ ...options, files: [...sourceFiles, ...communityManifestCalls(fixture)] });
@@ -2318,9 +2322,24 @@ for (const isolated of [false, true]) {
       expect(await traceOptionGroups({ ...options, files: sourceFiles })).toEqual(output);
       expect(observer.state.files.every(({ args }) => typeof args[0] === "string" && under(join(dataDir, "repos"), args[0]))).toBe(true);
       expect(observer.state.files.some(({ args }) => typeof args[0] === "string" && args[0].includes("kit-catalog"))).toBe(false);
-    } finally { fs.rmSync(fixture, { force: true }); }
+    } finally { observer.state.virtual.clear(); }
+    expect(fs.existsSync(fixture)).toBe(false);
   });
 }
+
+it("traces get_plan_option_groups reserved kit-catalog slug as no community manifest", async () => {
+  const source = optionGroupCheckout("Reserved");
+  const plan = repo.createProfile("Reserved", source.id);
+  const probes = optionGroupPathProbes(source, false);
+  const sourceFiles = [...probes, ...probes, ...optionGroupManifestCalls(source.checkout), ...optionGroupScanCalls(source.checkout), ...probes, ...probes, ...optionGroupManifestCalls(source.checkout)];
+  sqlite.prepare("UPDATE projects SET manifest_community_slug = ? WHERE id = ?").run("kit-catalog", source.id);
+  const log = vi.spyOn(getLogger(), "log");
+  try {
+    const output = await traceOptionGroups({ input: { plan_id: plan.id }, planId: plan.id, tables: OPTION_GROUP_TABLES, files: sourceFiles });
+    expect(output).toMatchObject({ plan_id: plan.id, selections: {}, sources: [{ source_id: source.id }] });
+    expect(log).toHaveBeenCalledWith("warn", "Ignoring invalid stored community manifest slug", { slug: "kit-catalog" });
+  } finally { log.mockRestore(); }
+});
 
 it("classifies option group files by family roots and rejects every unknown path", () => {
   expect(optionGroupFileResources([
@@ -2329,7 +2348,7 @@ it("classifies option group files by family roots and rejects every unknown path
     ["readFileSync", join(dataDir, "path-hints.yaml")],
     ["readFileSync", COMMUNITY_MANIFEST],
   ])).toEqual(["file:source-workspace", "file:path-hints", "file:community-manifests"]);
-  for (const path of [join(root, "README.md"), join(dataDir, "kit-catalog.yaml"), join(COMMUNITY_MANIFEST_DIR, "nested", "other.yaml"), join(COMMUNITY_MANIFEST_DIR, "INVALID.yaml"), join(dataDir, "repos-other", "part.stl")]) {
+  for (const path of [join(root, "README.md"), join(dataDir, "kit-catalog.yaml"), join(COMMUNITY_MANIFEST_DIR, "nested", "other.yaml"), join(COMMUNITY_MANIFEST_DIR, "INVALID.yaml"), join(COMMUNITY_MANIFEST_DIR, "kit-catalog.yaml"), join(dataDir, "repos-other", "part.stl")]) {
     expect(() => optionGroupFileResources([["readFileSync", path]])).toThrow("Unclassified option group path:");
   }
 });
