@@ -319,8 +319,8 @@ defaults, explicit group membership, group bounds, and exclusion precedence.
 It accepts the shared `PreparationBudget`, charges each Part as an entry, and
 charges each pattern comparison as a visit. Option-group merging, in `apply` and
 in preparation's repository, hinted and inferred groups, charges a visit for each
-group, variant, and path it merges, plus the entries each is compared against as
-`comparison_work`. Builder observation merges the same way without a charge. A comparison keeps no memory after it
+group, variant, and path it merges and for each merge's final sort, plus the
+entries each is compared against, or sorted, as `comparison_work`. Builder observation merges the same way without a charge. A comparison keeps no memory after it
 returns, so it does not charge the document-byte cap. It charges the separate
 `comparison_work` counter instead. Before a comparison it charges the raw
 pattern UTF-16 units plus the key's UTF-8 bytes, because normalization scans

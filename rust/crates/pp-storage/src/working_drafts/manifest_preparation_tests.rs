@@ -389,10 +389,29 @@ fn apply_charges_option_group_merging() {
     .unwrap()
     .groups;
     // Two document visits, then the repository group, the duplicate inferred group,
-    // its existing variant, its incoming variant, one incoming path, and the new group.
-    apply(&mut [], &docs, inferred.clone(), vec![], &mut budget(8)).unwrap();
+    // its existing variant, its incoming variant, one incoming path, the new group,
+    // and one sort per merge.
+    apply(&mut [], &docs, inferred.clone(), vec![], &mut budget(10)).unwrap();
     assert!(matches!(
-        apply(&mut [], &docs, inferred, vec![], &mut budget(7)),
+        apply(&mut [], &docs, inferred, vec![], &mut budget(9)),
         Err(ReadFailure::LimitExceeded(Resource::Visits))
+    ));
+
+    // Each merge charges its sort, even with nothing incoming.
+    let comparison_work = |comparison_work| {
+        PreparationBudget::new(
+            &cancelled,
+            PreparationLimits {
+                comparison_work,
+                ..PreparationLimits::default()
+            },
+        )
+        .unwrap()
+    };
+    let mut target = many[0].2.groups.clone();
+    merge(&mut target, vec![], &mut comparison_work(10_000)).unwrap();
+    assert!(matches!(
+        merge(&mut target, vec![], &mut comparison_work(9_999)),
+        Err(ReadFailure::LimitExceeded(Resource::ComparisonWork))
     ));
 }

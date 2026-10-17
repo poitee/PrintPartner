@@ -304,7 +304,8 @@ fn union<E>(
     Ok(())
 }
 /// Merges option groups as Node does. Preparation charges a visit for each group,
-/// variant, and path it merges, and the entries each one is compared against.
+/// variant, and path it merges and for the final sort, plus the entries each one
+/// is compared against.
 pub(crate) fn merge(
     target: &mut Groups,
     incoming: Groups,
@@ -360,6 +361,7 @@ pub(crate) fn merge_with<E>(
             target.push((key, g));
         }
     }
+    charge(target.len())?;
     target.sort_by(
         |(a, _), (b, _)| match (a.0.array_index(), b.0.array_index()) {
             (Some(a), Some(b)) => a.cmp(&b),
