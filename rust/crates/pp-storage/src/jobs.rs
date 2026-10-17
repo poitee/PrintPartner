@@ -734,6 +734,27 @@ impl ServerWorkerClient {
         )?)
         .receive()
     }
+    /// Runs one phase of a claimed supplied import. A refused original authority
+    /// commits the refusal and its Source observation before returning the typed
+    /// failure.
+    #[cfg(feature = "desktop_rebuild")]
+    pub fn import_phase(
+        &self,
+        lease: &AttemptLease,
+        phase: crate::uploads::Phase,
+    ) -> Result<crate::uploads::Operation> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
+        crate::uploads::submit(
+            &self.storage,
+            crate::uploads::Command::Phase {
+                lease: lease.clone(),
+                phase,
+                policy,
+            },
+            &AtomicBool::new(false),
+        )
+    }
     /// Revalidates the original credential of a live attempt. The check does
     /// not change the job.
     #[cfg(feature = "desktop_rebuild")]
@@ -2120,6 +2141,10 @@ fn claim(
             let Some(mut job) = decode_row(&id, &document, &mut diagnostics) else {
                 continue;
             };
+            #[cfg(feature = "desktop_rebuild")]
+            if filter.job_id.is_none() && crate::uploads::awaits_owner_input(tx, &job)? {
+                continue;
+            }
             let resource = job.payload.resource();
             if !resource.is_empty() {
                 let count = reserved_resources(tx, &job.tenant, false)?
@@ -2154,6 +2179,9 @@ fn claim(
                     }
                 };
                 if let Some(reason) = refusal {
+                    if filter.job_id.is_some() {
+                        crate::uploads::record_targeted_authority_refusal(tx, &job)?;
+                    }
                     let phase = if filter.job_id.is_some() {
                         AuthorityRefusalPhase::TargetedClaim
                     } else {
@@ -2803,7 +2831,6 @@ pub(crate) fn require_original_authority(
 }
 
 #[cfg(feature = "desktop_rebuild")]
-#[cfg_attr(not(test), expect(dead_code, reason = "D17 (c) calls this"))]
 pub(crate) fn revalidate_source_authority(
     tx: &Transaction<'_>,
     job: &JobRecord,
@@ -2816,7 +2843,6 @@ pub(crate) fn revalidate_source_authority(
 }
 
 #[cfg(feature = "desktop_rebuild")]
-#[cfg_attr(not(test), expect(dead_code, reason = "D17 (c) calls this"))]
 pub(crate) fn commit_source_authority_refusal(
     tx: &Transaction<'_>,
     job: &mut JobRecord,
