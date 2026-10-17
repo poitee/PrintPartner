@@ -210,11 +210,13 @@ They use the existing writer queue and one deferred transaction. Authentication
 observes the actor without updating usage timestamps.
 
 `Read` returns a `DraftDocument` with a validated `DraftIdentity`. `List` orders
-identities by creation time and then ID. Missing or unowned profiles and drafts
-return `NotFound`. Draft loading reuses the required-units reader, including its
-snapshot digest and selected reconciliation validation. Document, diff, and
-workspace reads reject incomplete rebase origins. `Workspace` reuses the
-required-units workspace builder. No required-units reader logic changes.
+identities by creation time and then ID. A missing or unowned profile returns
+`ProfileNotFound`, and a missing draft returns `DraftNotFound`, as Node's
+`PlanDraftWorkspaceService.read` and draft list route do. Draft loading reuses
+the required-units reader, including its snapshot digest and selected
+reconciliation validation. Document, diff, and workspace reads reject
+incomplete rebase origins. `Workspace` reuses the required-units workspace
+builder. No required-units reader logic changes.
 
 `Diff` returns the complete input and Part diff against the draft's base
 revision. Both the revision ID and Plan version determine `baseIsCurrent`.
@@ -303,8 +305,9 @@ cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-storage --featu
 
 `rust/crates/pp-storage/tests/fixtures/mutate-working-drafts.py` runs the
 read and write mutants against both test files. It copies the Rust workspace
-and builds in its own temporary target directory, so it never changes
-`rust/target`.
+into a temporary directory under `rust/target`, links the real `web` directory
+beside it for compile-time includes, and builds there with its own
+`CARGO_TARGET_DIR`, so it never changes the build artifacts in `rust/target`.
 
 ### D12 preparation prerequisites
 
