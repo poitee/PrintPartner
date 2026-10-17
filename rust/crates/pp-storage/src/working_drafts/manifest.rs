@@ -545,7 +545,7 @@ fn any_path(
     Ok(false)
 }
 
-fn path_matches(
+pub(super) fn path_matches(
     pattern: &ManifestText,
     key: &str,
     b: &mut PreparationBudget<'_>,

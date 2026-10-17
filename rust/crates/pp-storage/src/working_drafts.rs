@@ -26,6 +26,16 @@ use std::{
 
 mod diff;
 pub mod observation;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Recompute consumes preparation in the next GRE-607 slice"
+    )
+)]
+mod preparation;
+#[cfg(test)]
+mod preparation_tests;
 
 #[cfg_attr(
     not(test),
