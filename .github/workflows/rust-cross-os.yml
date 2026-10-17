@@ -36,4 +36,4 @@ jobs:
       - name: GRE-671 trap probe
         run: |
           ls -l /bin/sh; /bin/sh --version | head -1
-          python3 -I rust/scripts/gre671-trap-probe.py 30
+          python3 -I rust/scripts/gre671-wait-probe.py 30
