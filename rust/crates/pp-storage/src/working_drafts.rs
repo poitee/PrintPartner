@@ -1362,32 +1362,35 @@ mod tests {
         }
     }
 
-    #[test]
-    fn cancellation_while_loading_a_replay_is_not_existing() {
-        let (_database, mut connection) = Database::new();
-        let replay = |connection: &mut Connection, cancelled: &AtomicBool| {
-            recompute(
-                connection,
-                &Credential::Session(auth::Secret::new("required-unit-fixture-secret".into())),
-                auth::AuthPolicy {
-                    registration: auth::RegistrationPolicy::Open,
-                    session_tenant: auth::SessionTenantPolicy::AccountTenant,
-                    first_user: auth::FirstUserTenant::NewUser,
-                },
-                PositiveId::new(1).unwrap(),
-                &RecomputeRequest::new("working", true).unwrap(),
-                &Observations {
-                    reads: Arc::new(NoReads),
-                    limits: observation::PreparationLimits::default(),
-                    repos: PathBuf::new(),
-                },
-                cancelled,
-            )
-        };
-        assert!(matches!(
-            replay(&mut connection, &AtomicBool::new(false)),
-            Ok(RecomputeOutcome::Existing { .. })
-        ));
+    /// Recomputes `profile` with `key`, without Source reads.
+    fn read_phase(
+        connection: &mut Connection,
+        profile: u64,
+        key: &str,
+        cancelled: &AtomicBool,
+    ) -> Result<RecomputeOutcome> {
+        recompute(
+            connection,
+            &Credential::Session(auth::Secret::new("required-unit-fixture-secret".into())),
+            auth::AuthPolicy {
+                registration: auth::RegistrationPolicy::Open,
+                session_tenant: auth::SessionTenantPolicy::AccountTenant,
+                first_user: auth::FirstUserTenant::NewUser,
+            },
+            PositiveId::new(profile).unwrap(),
+            &RecomputeRequest::new(key, true).unwrap(),
+            &Observations {
+                reads: Arc::new(NoReads),
+                limits: observation::PreparationLimits::default(),
+                repos: PathBuf::new(),
+            },
+            cancelled,
+        )
+    }
+
+    /// Sets the returned token from SQLite's progress handler, so it trips
+    /// during the next query.
+    fn cancel_during_sql(connection: &Connection) -> Arc<AtomicBool> {
         let cancelled = Arc::new(AtomicBool::new(false));
         let flag = cancelled.clone();
         connection
@@ -1399,13 +1402,52 @@ mod tests {
                 }),
             )
             .unwrap();
-        let Err(error) = replay(&mut connection, &cancelled) else {
+        cancelled
+    }
+
+    #[test]
+    fn cancellation_while_loading_a_replay_is_not_existing() {
+        let (_database, mut connection) = Database::new();
+        assert!(matches!(
+            read_phase(&mut connection, 1, "working", &AtomicBool::new(false)),
+            Ok(RecomputeOutcome::Existing { .. })
+        ));
+        let cancelled = cancel_during_sql(&connection);
+        let Err(error) = read_phase(&mut connection, 1, "working", &cancelled) else {
             panic!("a replay cancelled while loading returned an outcome");
         };
         assert!(
             matches!(error.downcast_ref(), Some(Failure::Cancelled)),
             "{error:?}"
         );
+    }
+
+    #[test]
+    fn cancellation_during_the_read_phase_is_not_a_refusal() {
+        let (_database, mut connection) = Database::new();
+        assert!(matches!(
+            read_phase(&mut connection, 999, "new", &AtomicBool::new(false)),
+            Ok(RecomputeOutcome::ProfileNotFound)
+        ));
+        connection
+            .execute_batch(
+                "UPDATE build_profiles SET accepted_plan_revision_id=NULL,accepted_plan_version=1 WHERE id=1",
+            )
+            .unwrap();
+        assert!(matches!(
+            read_phase(&mut connection, 1, "new", &AtomicBool::new(false)),
+            Ok(RecomputeOutcome::AcceptedBaselineRequired)
+        ));
+        for profile in [999, 1] {
+            let cancelled = cancel_during_sql(&connection);
+            let Err(error) = read_phase(&mut connection, profile, "new", &cancelled) else {
+                panic!("Plan {profile} cancelled while reading returned an outcome");
+            };
+            assert!(
+                matches!(error.downcast_ref(), Some(Failure::Cancelled)),
+                "{error:?}"
+            );
+        }
     }
 
     #[test]

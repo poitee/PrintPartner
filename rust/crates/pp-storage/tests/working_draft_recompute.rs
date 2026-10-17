@@ -407,34 +407,18 @@ fn a_budget_refusal_writes_nothing() {
     assert_eq!(f.recorded_rows(), before);
 }
 
-#[test]
-fn carrying_open_draft_edits_spends_the_recompute_budget() {
-    let files = json!(
-        (0..600)
-            .map(|i| format!("old-{i:04}.stl"))
-            .collect::<Vec<_>>()
-    );
-    let f = Fixture::new(&json!({
-        "files": files,
-        "setup": ["INSERT INTO build_profiles(id,tenant_id,name) VALUES(3,'default','New Build'); INSERT INTO profile_layers(tenant_id,profile_id,project_id,layer_type,layer_order) SELECT tenant_id,3,project_id,layer_type,layer_order FROM profile_layers WHERE profile_id=1; UPDATE projects SET current_source_revision_id=NULL WHERE id=1"],
-    }));
-    let owner = f.open();
-    let large = recompute(
-        &owner,
-        f.reads(&files, &Value::Null, None),
-        PreparationLimits::default(),
-        "large",
-        true,
-        3,
-        Arc::new(AtomicBool::new(false)),
-    )
-    .unwrap();
-    assert_eq!(large["kind"], "created");
-    assert_eq!(large["draft"]["parts"].as_array().unwrap().len(), 600);
+/// Plan 3 shares Plan 1's layers, and its Source serves whatever STLs the
+/// test reads.
+const NEW_PLAN: &str = "INSERT INTO build_profiles(id,tenant_id,name) VALUES(3,'default','New Build'); INSERT INTO profile_layers(tenant_id,profile_id,project_id,layer_type,layer_order) SELECT tenant_id,3,project_id,layer_type,layer_order FROM profile_layers WHERE profile_id=1; UPDATE projects SET current_source_revision_id=NULL WHERE id=1";
+
+/// Recomputes Plan 3 from one STL under a 512-visit limit and then a
+/// 10,000-unit comparison limit. Both must refuse while carrying edits from the
+/// open draft, and write nothing.
+fn assert_carry_refused(f: &Fixture, owner: &WriterOwner) {
     let before = f.recorded_rows();
     let bounded = |limits| {
         recompute(
-            &owner,
+            owner,
             f.reads(&json!(["only-current.stl"]), &Value::Null, None),
             limits,
             "bounded",
@@ -451,7 +435,6 @@ fn carrying_open_draft_edits_spends_the_recompute_budget() {
         comparison_work: 10_000,
         ..PreparationLimits::default()
     });
-    owner.shutdown().unwrap();
     assert!(
         matches!(
             visits.as_ref().map_err(|error| error.downcast_ref()),
@@ -470,22 +453,245 @@ fn carrying_open_draft_edits_spends_the_recompute_budget() {
 }
 
 #[test]
-fn every_hashed_part_column_spends_the_carry_budget() {
-    let f = Fixture::new(&node("created-then-replayed"));
-    f.sql()
-        .execute_batch("UPDATE plan_draft_parts SET spoolman_spool_id=hex(zeroblob(20000)) WHERE id=(SELECT MIN(id) FROM plan_draft_parts WHERE draft_id=2)")
+fn carrying_open_draft_edits_spends_the_recompute_budget() {
+    let files = json!(
+        (0..600)
+            .map(|i| format!("old-{i:04}.stl"))
+            .collect::<Vec<_>>()
+    );
+    let f = Fixture::new(&json!({"files": files, "setup": [NEW_PLAN]}));
+    let owner = f.open();
+    let large = recompute(
+        &owner,
+        f.reads(&files, &Value::Null, None),
+        PreparationLimits::default(),
+        "large",
+        true,
+        3,
+        Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap();
+    assert_eq!(large["kind"], "created");
+    assert_eq!(large["draft"]["parts"].as_array().unwrap().len(), 600);
+    assert_carry_refused(&f, &owner);
+    owner.shutdown().unwrap();
+}
+
+/// The reviewer's probe. A v2 draft built through the public API selects a
+/// reconciliation with 20,000 assignments over only 20 Parts. The reviewer
+/// ran it with the maximum 200,000, which the default visit limit refuses.
+#[test]
+fn carrying_a_selected_reconciliation_spends_the_recompute_budget() {
+    let files = json!(
+        (0..20)
+            .map(|i| format!("old-{i:04}.stl"))
+            .collect::<Vec<_>>()
+    );
+    let f = Fixture::new(&json!({"files": files, "setup": [NEW_PLAN]}));
+    let owner = f.open();
+    let large = recompute(
+        &owner,
+        f.reads(&files, &Value::Null, None),
+        PreparationLimits::default(),
+        "large",
+        true,
+        3,
+        Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap();
+    let ids = large["draft"]["parts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|part| part["id"].clone())
+        .collect::<Vec<_>>();
+    let request = serde_json::from_value(json!({
+        "expected_snapshot_digest": large["draft"]["snapshotDigest"],
+        "decision": {"kind": "set_quantity_override", "draft_part_ids": ids, "value": 1000},
+    }))
+    .unwrap();
+    let edited = owner
+        .working_drafts_with_policy(policy())
+        .unwrap()
+        .edit(
+            session(),
+            id(3),
+            id(large["draft"]["id"].as_u64().unwrap()),
+            request,
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(5),
+        )
         .unwrap();
-    let before = f.recorded_rows();
+    assert_eq!(serde_json::to_value(edited).unwrap()["kind"], "ready");
+    assert_eq!(
+        f.rows("SELECT d.digest_format,(SELECT COUNT(*) FROM plan_draft_parts p WHERE p.draft_id=d.id) AS parts,(SELECT COUNT(*) FROM plan_draft_required_unit_assignments a WHERE a.reconciliation_id=d.current_required_unit_reconciliation_id) AS assignments FROM plan_drafts d WHERE d.profile_id=3"),
+        json!([{"digest_format": "plan-draft-v2", "parts": 20, "assignments": 20000}])
+    );
+    assert_carry_refused(&f, &owner);
+    owner.shutdown().unwrap();
+}
+
+/// Selects a new finalized, unresolved reconciliation on open draft 2 with
+/// `basis` and `result` SQL values. Its digests are not valid, so loading the
+/// draft fails unless the budget refuses first.
+fn select_reconciliation(basis: &str, result: &str) -> String {
+    format!(
+        "INSERT INTO plan_draft_required_unit_reconciliations(tenant_id,profile_id,draft_id,format,planning_digest,base_revision_id,selection_basis_digest,selection_basis_json,decision_digest,result_kind,result_digest,result_json,reconciliation_digest,expected_assignment_count,actor_id,idempotency_key,payload_digest,created_at) SELECT tenant_id,profile_id,id,'required-unit-reconciliation-v1','',base_revision_id,'',{basis},'','unresolved','',{result},'',0,created_by,'padded','','2026-01-01T00:00:00.000Z' FROM plan_drafts WHERE id=2;
+        UPDATE plan_draft_required_unit_reconciliations SET finalized_at='2026-01-01T00:00:00.000Z' WHERE idempotency_key='padded';
+        UPDATE plan_drafts SET current_required_unit_reconciliation_id=(SELECT id FROM plan_draft_required_unit_reconciliations WHERE idempotency_key='padded') WHERE id=2;"
+    )
+}
+
+/// Each case makes one column that loading open draft 2 reads too large for
+/// the limit. Uncharged, the load fails a digest check instead.
+/// `carrying_a_selected_reconciliation_spends_the_recompute_budget` covers
+/// assignments.
+#[test]
+fn every_column_a_draft_load_reads_spends_the_carry_budget() {
+    let padding = "hex(zeroblob(20000))";
+    let unresolved = "json_object('kind','unresolved','conflicts',json_array()";
+    let cases = [
+        (
+            "header",
+            format!("UPDATE plan_drafts SET snapshot_digest={padding} WHERE id=2"),
+        ),
+        (
+            "inputs",
+            format!(
+                "UPDATE plan_draft_inputs SET effective_naming_digest={padding} WHERE draft_id=2"
+            ),
+        ),
+        (
+            "parts",
+            format!(
+                "UPDATE plan_draft_parts SET spoolman_spool_id={padding} WHERE id=(SELECT MIN(id) FROM plan_draft_parts WHERE draft_id=2)"
+            ),
+        ),
+        (
+            "basis",
+            select_reconciliation(&format!("json_array({padding})"), &format!("{unresolved})")),
+        ),
+        (
+            "result",
+            select_reconciliation("'[]'", &format!("{unresolved},'padding',{padding})")),
+        ),
+    ];
     let limits = PreparationLimits {
         comparison_work: 20_000,
         ..PreparationLimits::default()
     };
-    let error = refused(&f, false, limits);
+    for (name, sql) in cases {
+        let f = Fixture::new(&node("created-then-replayed"));
+        f.sql().execute_batch(&sql).unwrap();
+        let before = f.recorded_rows();
+        let error = refused(&f, false, limits);
+        assert!(
+            matches!(
+                error.downcast_ref(),
+                Some(ReadFailure::LimitExceeded(Resource::ComparisonWork))
+            ),
+            "{name}: {error:?}"
+        );
+        assert_eq!(f.recorded_rows(), before, "{name}");
+    }
+}
+
+#[test]
+fn cancellation_during_an_empty_scan_is_not_no_stls() {
+    let f = Fixture::new(&node("no-stls"));
+    let before = f.recorded_rows();
+    let owner = f.open();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let error = recompute(
+        &owner,
+        f.reads(&json!([]), &Value::Null, Some(cancelled.clone())),
+        PreparationLimits::default(),
+        "first",
+        true,
+        1,
+        cancelled,
+    )
+    .unwrap_err();
+    owner.shutdown().unwrap();
     assert!(
-        matches!(
-            error.downcast_ref(),
-            Some(ReadFailure::LimitExceeded(Resource::ComparisonWork))
-        ),
+        matches!(error.downcast_ref(), Some(Failure::Cancelled)),
+        "{error:?}"
+    );
+    assert_eq!(f.recorded_rows(), before);
+}
+
+/// Has no STL root, and cancels when preparation asks for it a second time.
+struct NoRoot(Arc<AtomicBool>);
+struct MissingRoot {
+    cancel: Arc<AtomicBool>,
+    asked: AtomicBool,
+}
+impl DraftReads for NoRoot {
+    fn resolve_stl_root(
+        &self,
+        _: &OwnedStlReadRequest,
+        budget: &mut PreparationBudget<'_>,
+    ) -> ReadResult<Box<dyn StlRootRead>> {
+        budget.check()?;
+        Ok(Box::new(MissingRoot {
+            cancel: self.0.clone(),
+            asked: AtomicBool::new(false),
+        }))
+    }
+    fn read_checkout_manifest(
+        &self,
+        _: &OwnedCheckoutReadRequest,
+        _: CheckoutManifestUse,
+        budget: &mut PreparationBudget<'_>,
+    ) -> ReadResult<DocumentRead> {
+        budget.check()?;
+        Ok(DocumentRead::Missing)
+    }
+    fn read_catalog_document(
+        &self,
+        _: &OwnedCatalogReadRequest,
+        budget: &mut PreparationBudget<'_>,
+    ) -> ReadResult<DocumentRead> {
+        budget.check()?;
+        Ok(DocumentRead::Missing)
+    }
+}
+impl StlRootRead for MissingRoot {
+    fn logical_resolved_path(&self) -> Option<&str> {
+        if self.asked.swap(true, Ordering::AcqRel) {
+            self.cancel.store(true, Ordering::Release);
+        }
+        None
+    }
+    fn scan_stls(&mut self, _: &mut PreparationBudget<'_>) -> ReadResult<Box<dyn StlInventory>> {
+        unreachable!("a missing root is never scanned")
+    }
+}
+
+#[test]
+fn cancellation_while_finding_no_layers_is_not_no_layers() {
+    let f = Fixture::new(&node("created-then-replayed"));
+    let before = f.recorded_rows();
+    let owner = f.open();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let error = owner
+        .working_drafts_with_observations(
+            policy(),
+            Arc::new(NoRoot(cancelled.clone())),
+            PreparationLimits::default(),
+        )
+        .unwrap()
+        .recompute(
+            session(),
+            id(1),
+            RecomputeRequest::new("first", true).unwrap(),
+            cancelled,
+            Duration::from_secs(5),
+        )
+        .unwrap_err();
+    owner.shutdown().unwrap();
+    assert!(
+        matches!(error.downcast_ref(), Some(Failure::Cancelled)),
         "{error:?}"
     );
     assert_eq!(f.recorded_rows(), before);
