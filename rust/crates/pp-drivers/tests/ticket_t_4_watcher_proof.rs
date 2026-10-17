@@ -13,8 +13,9 @@ use tokio_util::sync::CancellationToken;
 
 const BOUND: Duration = Duration::from_secs(2);
 const NETWORK_DEADLINE: Duration = Duration::from_secs(5);
-const SUCCESS: &[u8] = include_bytes!("fixtures/moonraker-success.json");
-const ERROR: &[u8] = include_bytes!("fixtures/moonraker-error.json");
+const SUCCESS: &[u8] =
+    include_bytes!("../../../../fixtures/drivers/moonraker/moonraker-success.json");
+const ERROR: &[u8] = include_bytes!("../../../../fixtures/drivers/moonraker/moonraker-error.json");
 
 async fn bounded<T>(label: &str, future: impl Future<Output = T>) -> T {
     tokio::time::timeout(BOUND, future)

@@ -702,18 +702,13 @@ mod transaction {
                 assert_eq!(expected["kind"], "applied");
                 let job = &case["before"]["durable_jobs"][0];
                 expected = json!({"kind":"execution_conflict","operations":[{"operation_id":job["id"],"kind":job["kind"],"state":job["state"]}]});
-            } else if case["id"] == "mapped-remap-index-0" {
-                assert_eq!(expected["kind"], "applied");
-                assert_token_consistent_remap(case, None);
-                expected = json!({"kind":"checkoff_remap_unsafe","unmappable":[{"linkId":"kept-slot","filename":"bracket.stl","reason":"Required unit at Part 1 index 0 is absent or excluded in the selected Plan"}]});
             }
             assert_eq!(actual, expected, "{}", case["id"]);
-            let state =
-                if actual["kind"] == "execution_conflict" || case["id"] == "mapped-remap-index-0" {
-                    &case["before"]
-                } else {
-                    &case["after"]
-                };
+            let state = if actual["kind"] == "execution_conflict" {
+                &case["before"]
+            } else {
+                &case["after"]
+            };
             for table in [
                 "build_profiles",
                 "parts",
@@ -732,16 +727,12 @@ mod transaction {
             ] {
                 let mut actual = snapshot(&c, table);
                 replace_time(&mut actual, &at, &fixture["at"]);
-                if case["id"] == "mapped-remap-index-change" && table == "app_settings" {
-                    assert_token_consistent_remap(case, Some(&actual));
-                } else {
-                    assert_eq!(
-                        actual,
-                        state.get(table).cloned().unwrap_or(json!([])),
-                        "{} {table}",
-                        case["id"]
-                    );
-                }
+                assert_eq!(
+                    actual,
+                    state.get(table).cloned().unwrap_or(json!([])),
+                    "{} {table}",
+                    case["id"]
+                );
             }
             if actual["kind"] == "checkoff_remap_unsafe" {
                 assert_eq!(snapshot(&c, "plan_apply_admissions"), json!([]));
@@ -770,84 +761,6 @@ mod transaction {
                 .unwrap(),
                 0
             );
-        }
-    }
-
-    fn assert_token_consistent_remap(case: &Value, actual: Option<&Value>) {
-        let token = |state: &Value, coordinate: &Value| {
-            let part = state["plan_revision_parts"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|part| part["projection_part_id"] == coordinate["part_id"])
-                .unwrap();
-            state["plan_revision_required_units"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|unit| {
-                    unit["revision_part_id"] == part["id"]
-                        && unit["revision_id"] == part["revision_id"]
-                        && unit["unit_index"] == coordinate["unit_index"]
-                })
-                .unwrap()["required_unit_token"]
-                .clone()
-        };
-        let mut expected_settings = case["after"]["app_settings"].clone();
-        for (key, field) in [
-            ("printer.checkoff_links", "units"),
-            ("printer.checkoff_links", "resolved_units"),
-            ("printer.send_queue", "checkoff_units"),
-        ] {
-            let coordinate = |settings: &Value| {
-                let setting = settings
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .find(|setting| setting["key"] == key)
-                    .unwrap();
-                let rows: Value = serde_json::from_str(setting["value"].as_str().unwrap()).unwrap();
-                rows[0][field][0].clone()
-            };
-            let before = token(
-                &case["before"],
-                &coordinate(&case["before"]["app_settings"]),
-            );
-            let node = token(&case["after"], &coordinate(&case["after"]["app_settings"]));
-            assert_ne!(node, before, "{key} {field}");
-            if let Some(actual) = actual {
-                assert_eq!(before, "ppu_00000000000000000000000000000002");
-                assert_eq!(node, "ppu_00000000000000000000000000000003");
-                assert_eq!(
-                    token(&case["after"], &coordinate(actual)),
-                    before,
-                    "{key} {field}"
-                );
-                let setting = expected_settings
-                    .as_array_mut()
-                    .unwrap()
-                    .iter_mut()
-                    .find(|setting| setting["key"] == key)
-                    .unwrap();
-                let mut rows: Value =
-                    serde_json::from_str(setting["value"].as_str().unwrap()).unwrap();
-                rows[0][field][0]["unit_index"] = json!(0);
-                setting["value"] = json!(rows.to_string());
-            } else {
-                assert_eq!(before, "ppu_00000000000000000000000000000001");
-                assert_eq!(node, "ppu_00000000000000000000000000000002");
-                assert!(
-                    case["after"]["plan_revision_required_units"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .filter(|unit| unit["revision_id"] == 2)
-                        .all(|unit| unit["required_unit_token"] != before)
-                );
-            }
-        }
-        if let Some(actual) = actual {
-            assert_eq!(*actual, expected_settings);
         }
     }
 

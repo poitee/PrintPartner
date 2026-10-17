@@ -38,7 +38,6 @@ def is_native_input(path):
 # jobs on the PR and by the full macOS run on push to main and nightly.
 MACOS_PR_PREFIXES = (
     "rust/crates/pp-desktop/", "rust/crates/pp-compat/",
-    "rust/crates/pp-source/", "rust/crates/pp-storage/",
     "rust/scripts/desktop-bundle.sh", "rust/scripts/stage-desktop.py",
     "rust/scripts/assemble-macos-resources.py", "rust/scripts/check-macos-bundle.py",
     "rust/scripts/macos_addon_slices.py", "rust/scripts/build-desktop-manifest.py",
@@ -61,7 +60,12 @@ def is_macos_pr_input(path):
             or "macos" in lowered or "darwin" in lowered or "tauri" in lowered)
 
 
-def select_native(event, base, head):
+def is_storage_pr_input(path):
+    return (is_macos_pr_input(path)
+            or path.startswith(("rust/crates/pp-storage/", "rust/crates/pp-source/")))
+
+
+def select_native(event, base, head, selector=None):
     if event == "workflow_dispatch" or not re.fullmatch(r"[0-9a-f]{40}", base):
         return True
     if subprocess.run(["git", "cat-file", "-e", f"{base}^{{commit}}"],
@@ -74,17 +78,20 @@ def select_native(event, base, head):
     if event != "pull_request":
         command.append(head)
     paths = subprocess.check_output(command).decode("utf-8", errors="surrogateescape").split("\0")
-    selector = is_macos_pr_input if event == "pull_request" else is_native_input
+    selector = selector or (is_macos_pr_input if event == "pull_request" else is_native_input)
     return any(selector(path) for path in paths if path)
 
 
 if __name__ == "__main__":
     native = select_native(os.environ["EVENT_NAME"], os.environ["BASE_SHA"],
                            os.environ.get("HEAD_SHA") or os.environ["GITHUB_SHA"])
+    storage = select_native(os.environ["EVENT_NAME"], os.environ["BASE_SHA"],
+                            os.environ.get("HEAD_SHA") or os.environ["GITHUB_SHA"],
+                            is_storage_pr_input)
     value = str(native).lower()
     summary = f"Native inputs changed: {value}\n"
     print(summary, end="")
     with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as output:
         output.write(summary)
     with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
-        output.write(f"native={value}\n")
+        output.write(f"native={value}\nstorage={str(storage).lower()}\n")
