@@ -1611,9 +1611,10 @@ and JSON body for each outcome:
 - Import sets each listed Part's printed prefix. It checks every row before it
   writes any, and reports how many Parts changed.
 
-Every write first checks the expected accepted basis, then archival, then that
-each Part has one progress row per unit. Refusals leave the database
-unchanged. An import for a Plan the caller cannot see returns 404
+Every write first checks the expected accepted basis, then archival. Unit
+completion and assembly then check that each Part has one progress row per
+unit. Import skips that check, as Node does. Only a successful write commits,
+so a refusal leaves the database unchanged, including API key usage. An import for a Plan the caller cannot see returns 404
 `progress_target_not_found`. This differs from Node on purpose. Node throws a
 plain error and returns 500, but its route already returns 404 for a Plan it
 does not serve.

@@ -476,7 +476,8 @@ pub(crate) fn execute(
         }
         Err(_) => return Ok(Refusal::Internal.response(import)),
     };
-    if tx.commit().is_err() {
+    // Authentication may have updated key metadata, so only success commits.
+    if response.status == 200 && tx.commit().is_err() {
         return Ok(Refusal::Internal.response(import));
     }
     Ok(response)

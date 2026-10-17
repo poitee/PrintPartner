@@ -1,13 +1,17 @@
 #![cfg(feature = "desktop_rebuild")]
 use pp_storage::{
     Limits, WriterOwner,
-    auth::Secret,
+    auth::{self, Secret},
     checkoff_progress::{Basis, Import, Request, Response},
     read_model::{AcceptedRead, Credential, Snapshot},
 };
 use rusqlite::Connection;
 use serde_json::{Value, json};
-use std::{path::PathBuf, sync::atomic::AtomicBool, time::Duration};
+use std::{
+    path::PathBuf,
+    sync::{Arc, atomic::AtomicBool},
+    time::Duration,
+};
 
 const WAIT: Duration = Duration::from_secs(5);
 
@@ -454,6 +458,58 @@ fn missing_progress_rows_are_an_integrity_failure() {
         f.progress(),
         ["1:0:0:0", "1:1:0:0", "1:2:0:0", "2:0:0:0", "3:0:0:0"]
     );
+}
+
+#[test]
+fn a_refused_request_leaves_api_key_usage_unrecorded() {
+    let f = Fixture::new();
+    let auth::Outcome::KeyCreated { key, info } = f
+        .owner()
+        .auth(auth::FirstUserTenant::NewUser)
+        .submit(
+            auth::Request::CreateKey {
+                session: Secret::new("required-unit-fixture-secret".into()),
+            },
+            Arc::new(AtomicBool::new(false)),
+            WAIT,
+        )
+        .unwrap()
+        .recv()
+        .unwrap()
+        .unwrap()
+    else {
+        panic!("expected a created key");
+    };
+    let connection = Connection::open(f.root.join("print-partner.db")).unwrap();
+    let last_used = || {
+        connection
+            .query_row(
+                "SELECT json_extract(entry.value,'$.lastUsedAt') FROM app_settings, json_each(app_settings.value) entry
+                 WHERE app_settings.tenant_id='default' AND app_settings.key='api_keys_v1' AND json_extract(entry.value,'$.id')=?1",
+                [&info.id],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .unwrap()
+    };
+    let response = f
+        .owner()
+        .checkoff_progress()
+        .unwrap()
+        .apply(
+            Credential::ApiKey {
+                routed_tenant: "default".into(),
+                secret: key,
+            },
+            Request::CompletionCoordinate {
+                part_id: 99,
+                body: json!({ "unit_index": 0, "completed": true }),
+            },
+            &AtomicBool::new(false),
+            WAIT,
+        )
+        .unwrap();
+    assert_eq!(json(response), failure(404, "Part not found"));
+    assert_eq!(last_used(), None);
 }
 
 #[test]
