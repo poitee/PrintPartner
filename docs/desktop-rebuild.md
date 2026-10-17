@@ -1642,5 +1642,39 @@ busy-Source and bridge tests are new.
 
 ```sh
 node fixtures/parity/source-sync/generate.mjs --check
-cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib source_sync:: uploads::tests
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib source_sync::
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib uploads::tests
+```
+
+### D20 Checkoff progress
+
+GRE-615 adds `pp-storage::checkoff_progress`, compiled only with
+`desktop_rebuild`. `WriterOwner::checkoff_progress()` returns a client whose
+`apply` runs one request in one immediate writer transaction. No routes call it
+yet; D24 and D26 wire HTTP behind `PP_DESKTOP_REBUILD`.
+
+The contract is `db/accepted-plan-progress.ts`, `setAcceptedPrintedCounts` in
+`db/repository.ts`, the progress and assembly routes in `routes/parts.ts`, and
+the import route in `routes/plan-drafts.ts`. `apply` returns the Node status
+and JSON body for each outcome:
+
+- Completion by Required-unit token marks that unit and every lower unit
+  printed. Clearing it clears that unit and every higher unit, including their
+  assembly.
+- Assembly by token sets one unit. Assembling an unprinted unit changes nothing.
+- Part coordinates (`/parts/:id/progress` and `/parts/:id/assembled` bodies)
+  resolve to a token against the current accepted snapshot.
+- Import sets each listed Part's printed prefix. It checks every row before it
+  writes any, and reports how many Parts changed.
+
+Every write first checks the expected accepted basis, then archival. Unit
+completion and assembly then check that each Part has one progress row per
+unit. Import skips that check, as Node does. Only a successful write commits,
+so a refusal leaves the database unchanged, including API key usage. An import for a Plan the caller cannot see returns 404
+`progress_target_not_found`. This differs from Node on purpose. Node throws a
+plain error and returns 500, but its route already returns 404 for a Plan it
+does not serve.
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test checkoff_progress
 ```

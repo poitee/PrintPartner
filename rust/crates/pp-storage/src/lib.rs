@@ -7,6 +7,8 @@ pub mod auth;
 pub mod build_graph;
 pub mod catalog;
 #[cfg(feature = "desktop_rebuild")]
+pub mod checkoff_progress;
+#[cfg(feature = "desktop_rebuild")]
 pub mod features;
 pub mod jobs;
 pub mod lease;
@@ -130,6 +132,11 @@ enum Envelope {
     Uploads {
         command: uploads::Command,
         reply: mpsc::Sender<Result<uploads::Operation>>,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    Checkoff {
+        command: checkoff_progress::Command,
+        reply: mpsc::Sender<Result<checkoff_progress::Response>>,
     },
     Read {
         command: read_model::Command,
@@ -668,6 +675,14 @@ impl WriterOwner {
                             worker.import_epoch.fetch_add(1, Ordering::AcqRel);
                         }
                         let _ = reply.send(result);
+                    }
+                    #[cfg(feature = "desktop_rebuild")]
+                    Envelope::Checkoff { command, reply } => {
+                        let _ = reply.send(checkoff_progress::execute(
+                            &mut connection,
+                            command,
+                            admission,
+                        ));
                     }
                     #[cfg(feature = "desktop_rebuild")]
                     Envelope::WorkingDraft { command, reply } => {

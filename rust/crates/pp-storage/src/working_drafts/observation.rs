@@ -339,6 +339,7 @@ impl CommunitySlug {
     /// `kit-catalog`, which names the kit catalog in the same directory.
     pub fn parse(value: &str) -> Option<Self> {
         let bytes = value.as_bytes();
+        // ast-grep-ignore: no-writer-family-literal -- Refuses the kit catalog name as a slug; reads and writes nothing.
         let valid = value != "kit-catalog"
             && matches!(bytes.first(), Some(b'a'..=b'z' | b'0'..=b'9'))
             && bytes.len() <= 64

@@ -22,11 +22,12 @@ on:
 permissions:
   contents: read
 
-# One run per ref: a newer push supersedes an older run (PRs and main alike).
-# Nightly runs get their own group so a merge cannot cancel them.
+# One run per ref. A newer PR push cancels the older PR run. On main the running
+# run finishes and only the newest push waits, so main gets completed results
+# without one macOS run per merge. Nightly runs get their own group.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'schedule' && 'nightly' || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 defaults:
   run:
