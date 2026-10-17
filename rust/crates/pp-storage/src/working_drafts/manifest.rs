@@ -287,21 +287,45 @@ pub(super) fn optional_document(
         _ => Ok(None),
     }
 }
-fn union(left: &mut Vec<ManifestText>, right: &[ManifestText]) {
+fn union<E>(
+    left: &mut Vec<ManifestText>,
+    right: &[ManifestText],
+    charge: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<(), E> {
     for s in std::mem::take(left)
         .into_iter()
         .chain(right.iter().cloned())
     {
+        charge(left.len())?;
         if !left.contains(&s) {
             left.push(s);
         }
     }
+    Ok(())
 }
-pub(crate) fn merge(target: &mut Groups, incoming: Groups) {
+/// Merges option groups as Node does. Preparation charges a visit for each group,
+/// variant, and path it merges, and the entries each one is compared against.
+pub(crate) fn merge(
+    target: &mut Groups,
+    incoming: Groups,
+    b: &mut PreparationBudget<'_>,
+) -> ReadResult<()> {
+    merge_with(target, incoming, &mut |compared| {
+        b.visit(0)?;
+        b.comparison(compared)
+    })
+}
+pub(crate) fn merge_with<E>(
+    target: &mut Groups,
+    incoming: Groups,
+    charge: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<(), E> {
     for (key, g) in incoming {
+        charge(target.len())?;
         if let Some((_, prior)) = target.iter_mut().find(|(k, _)| *k == key) {
             let mut variants: Vec<Variant> = Vec::new();
             for variant in std::mem::take(&mut prior.variants) {
+                charge(variants.len())?;
                 if let Some(existing) = variants
                     .iter_mut()
                     .find(|existing| existing.id == variant.id)
@@ -312,11 +336,12 @@ pub(crate) fn merge(target: &mut Groups, incoming: Groups) {
                 }
             }
             prior.variants = variants;
-            union(&mut prior.parts, &g.parts);
+            union(&mut prior.parts, &g.parts, charge)?;
             for v in g.variants {
+                charge(prior.variants.len())?;
                 if let Some(p) = prior.variants.iter_mut().find(|p| p.id == v.id) {
-                    union(&mut p.parts, &v.parts);
-                    union(&mut p.excludes, &v.excludes);
+                    union(&mut p.parts, &v.parts, charge)?;
+                    union(&mut p.excludes, &v.excludes, charge)?;
                     if p.label.as_ref().is_none_or(|s| s.is_empty())
                         && v.label.as_ref().is_some_and(|s| !s.is_empty())
                     {
@@ -342,7 +367,8 @@ pub(crate) fn merge(target: &mut Groups, incoming: Groups) {
             (None, Some(_)) => std::cmp::Ordering::Greater,
             _ => std::cmp::Ordering::Equal,
         },
-    )
+    );
+    Ok(())
 }
 fn normalize_glob(text: &JsText) -> JsText {
     let mut units = Vec::with_capacity(text.units().len());
@@ -585,9 +611,9 @@ pub(super) fn apply(
     let inferred = std::mem::take(&mut groups);
     for (_, _, d) in docs {
         b.visit(0)?;
-        merge(&mut groups, d.groups.clone());
+        merge(&mut groups, d.groups.clone(), b)?;
     }
-    merge(&mut groups, inferred);
+    merge(&mut groups, inferred, b)?;
     for part in parts {
         let key = part["partKey"].as_str().unwrap_or_default();
         b.entry(0, key.len())?;
