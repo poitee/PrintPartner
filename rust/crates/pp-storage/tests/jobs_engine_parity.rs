@@ -1,6 +1,11 @@
 #![cfg(feature = "desktop_rebuild")]
 //! Replays the Node job runner golden in `fixtures/parity/jobs-engine`.
 //! Regenerate it with `node fixtures/parity/jobs-engine/generate.mjs`.
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/common/claimed_attempt.rs"
+));
+use pp_storage::jobs::ClaimedAttempt;
 use pp_storage::{
     Limits, WriterOwner,
     auth::{self, AuthPolicy, FirstUserTenant, RegistrationPolicy, Secret, SessionTenantPolicy},
@@ -280,7 +285,7 @@ fn finished_and_retained_jobs_read_and_list_like_node() {
         Payload::CheckSourceUpdates {},
     );
     let stream = subscribe(&owner, &tenant_a, id);
-    let (job, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(job, mut lease) = worker.claim().unwrap().unwrap();
     worker
         .update(&mut lease, WorkerOperation::Progress(10))
         .unwrap();
@@ -334,7 +339,7 @@ fn finished_and_retained_jobs_read_and_list_like_node() {
         Payload::ExportChecklistHtml { profile_id: 7 },
     );
     let stream = subscribe(&owner, &tenant_a, id);
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     worker
         .update(&mut lease, WorkerOperation::Progress(10))
         .unwrap();

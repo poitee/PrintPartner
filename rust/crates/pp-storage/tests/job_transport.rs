@@ -4,6 +4,11 @@
 //! never revalidates the subscriber, so these cases test the reference
 //! engine's behavior instead of a Node result. Authority changes go through
 //! both writer paths: `auth_with_policy` and `rebuild_auth_with_policy`.
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/common/claimed_attempt.rs"
+));
+use pp_storage::jobs::ClaimedAttempt;
 use pp_storage::{
     Limits, Setting, SettingCommand, WriterOwner,
     auth::{
@@ -257,7 +262,7 @@ fn logout_after_next_before_dispatch_must_not_leave_sendable_snapshot() {
     ));
 
     let worker = worker(&owner);
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     worker
         .update(&mut lease, WorkerOperation::Progress(10))
         .unwrap();
@@ -598,7 +603,7 @@ fn slow_consumer_gets_sticky_lag_and_can_reconnect_to_current_snapshot() {
     let id = enqueue(&owner, &token, "lagged");
     let subscription = subscribe(&owner, session(&token), id.clone());
     let worker = worker(&owner);
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     for progress in 1..=16 {
         worker
             .update(&mut lease, WorkerOperation::Progress(progress))
@@ -625,7 +630,7 @@ fn observation_is_atomic_ordered_terminal_and_revoked_before_queued_data() {
     let id = enqueue(&owner, &token, "observed");
     let subscription = subscribe(&owner, session(&token), id);
     let worker = worker(&owner);
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     worker
         .update(&mut lease, WorkerOperation::Progress(10))
         .unwrap();
