@@ -13,7 +13,7 @@ export function requiredUnitToken(
   return `${unit.part_id}:${unit.unit_index}`;
 }
 
-export type AssignFieldName = "build" | "units";
+type AssignFieldName = "build" | "units";
 
 /** One problem, named by the field it belongs to, for the summary and the field. */
 export type AssignFieldError = Readonly<{ field: AssignFieldName; message: string }>;

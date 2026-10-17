@@ -8,7 +8,7 @@ import { isRecord } from "../lib/guards.js";
 const BUILD_PLANNING_VERSION = 1;
 const SETTING_PREFIX = "build_planning.v1.";
 
-export type RequirementStatus =
+type RequirementStatus =
   "unverified" | "satisfied" | "incompatible" | "user_waived";
 type EvidenceKind =
   | "canonical_design"

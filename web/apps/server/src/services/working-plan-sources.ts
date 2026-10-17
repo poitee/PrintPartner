@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const WORKING_SOURCE_SELECTION_FORMAT = "plan-source-selection-v1";
+const WORKING_SOURCE_SELECTION_FORMAT = "plan-source-selection-v1";
 export const MAX_WORKING_PLAN_SOURCES = 64;
 
 export type WorkingSource = {

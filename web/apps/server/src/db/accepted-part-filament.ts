@@ -11,7 +11,7 @@ import {
 } from "./accepted-plan-progress.js";
 import { normalizePartRole } from "../services/role-filament.js";
 
-export type FilamentColor =
+type FilamentColor =
   | { readonly kind: "catalog"; readonly colorId: string }
   | { readonly kind: "custom"; readonly hex: string }
   | { readonly kind: "unset" };
@@ -27,7 +27,7 @@ type FilamentPatch = Readonly<{
   spoolmanSpoolId?: string | null;
 }>;
 
-export type AssignAcceptedFilamentTarget =
+type AssignAcceptedFilamentTarget =
   | { readonly kind: "part"; readonly projectionPartId: number }
   | { readonly kind: "role"; readonly role: string };
 
@@ -37,7 +37,7 @@ export type AssignAcceptedFilament = Readonly<{
   assignment: FilamentAssignment;
 }>;
 
-export type AssignedAcceptedPart = Readonly<{
+type AssignedAcceptedPart = Readonly<{
   projectionPartId: number;
   before: FilamentAssignment;
   after: FilamentAssignment;

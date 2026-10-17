@@ -32,7 +32,7 @@ export type AcceptedProgressFailure =
   | { readonly kind: "stale_accepted_plan" }
   | { readonly kind: "transaction_unavailable" };
 
-export type CompletionBody = Readonly<{
+type CompletionBody = Readonly<{
   part_id: number;
   printed_count: number;
   print_units: readonly boolean[];
@@ -40,7 +40,7 @@ export type CompletionBody = Readonly<{
   missing: boolean;
 }>;
 
-export type AssemblyBody = Readonly<{
+type AssemblyBody = Readonly<{
   part_id: number;
   assembled_count: number;
   assembled_units: readonly boolean[];
@@ -101,7 +101,7 @@ export type ArchiveAcceptedPlanResult =
       readonly reason: "compatibility_dirty" | "uninitialized";
     };
 
-export type AcceptedPlanProgressSchema = AcceptedPlanOperationalSchema;
+type AcceptedPlanProgressSchema = AcceptedPlanOperationalSchema;
 
 export type AcceptedPlanProgressDependencies = Readonly<{
   db: DrizzleDb;

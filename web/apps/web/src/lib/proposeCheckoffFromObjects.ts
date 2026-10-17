@@ -12,7 +12,7 @@ import {
 } from "@print-partner/domain/sliced-object-matching";
 import { incompleteUnitsForParts } from "./printerCheckoffUnits";
 
-export type ProposedObjectMatch = {
+type ProposedObjectMatch = {
   objectName: string;
   part_id: number;
   unit_index: number;

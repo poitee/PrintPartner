@@ -23,7 +23,6 @@ export type {
   PrinterCheckoffLink,
   PrinterCheckoffLinkState,
   PrinterCheckoffUnit,
-  PrintFileClassification,
   PrintRejectReason,
 } from "@print-partner/contracts";
 

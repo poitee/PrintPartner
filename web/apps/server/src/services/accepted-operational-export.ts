@@ -6,7 +6,7 @@ import {
 import { acceptedPlanBasis, type AcceptedPlanBasis } from "../db/accepted-plan-progress.js";
 import type { AppRepository } from "../db/repository.js";
 
-export type AcceptedExportUnit = Readonly<{
+type AcceptedExportUnit = Readonly<{
   token: string;
   unitIndex: number;
   completed: boolean;

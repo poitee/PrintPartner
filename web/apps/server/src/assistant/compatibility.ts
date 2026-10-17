@@ -2,7 +2,7 @@
  * Normalize assistant-domain compatibility.yaml (print-partner/compat@1 and legacy sketches).
  */
 
-export type CompatibilityAttach = {
+type CompatibilityAttach = {
   base: string;
   ref?: string | null;
   path_scope?: string | null;

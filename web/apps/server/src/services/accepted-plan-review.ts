@@ -16,14 +16,14 @@ import {
 import { getColorById, resolvePartFilamentHex } from "./filament-catalog.js";
 import type { FilamentResolveContext } from "./filament-resolve.js";
 
-export type AcceptedPlanReviewIssue = {
+type AcceptedPlanReviewIssue = {
   readonly severity: "blocker" | "warning";
   readonly code: string;
   readonly message: string;
   readonly link_hint?: string;
 };
 
-export type AcceptedPlanReviewPart = PartRow & {
+type AcceptedPlanReviewPart = PartRow & {
   readonly printed_count: number;
   readonly print_units: readonly boolean[];
   readonly assembled_units: readonly boolean[];

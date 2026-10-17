@@ -6,9 +6,9 @@ export type ReviewSortKey = "folder" | "filename" | "qty";
 export type ReviewViewMode = "edit" | "print";
 export type ReviewFunctionalFilter = "all" | "functional" | "cosmetic";
 /** Parts stage: group sections by filament role or by source/folder. */
-export type PartsGroupMode = "role" | "source";
+type PartsGroupMode = "role" | "source";
 /** Parts stage: card grid vs sheet table (edit/print still apply inside table). */
-export type PartsLayoutMode = "grid" | "table";
+type PartsLayoutMode = "grid" | "table";
 
 export type PersistedReviewPartsUi = {
   search: string;
