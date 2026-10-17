@@ -940,3 +940,53 @@ fn attempt_without_stored_authority_refuses_its_next_operation() {
     assert_eq!(document["_authority_refusal"]["phase"], "worker_advance");
     owner.shutdown().unwrap();
 }
+
+/// Enqueues a session-owned supplied import, optionally as a cancelled import
+/// past the attempt limit, then revokes the session.
+fn revoked_import(path: &Path, owner: &WriterOwner, key: &str, cleanup: bool) -> String {
+    let (_, token) = register(owner, &format!("{key}@example.com"));
+    let queued = enqueue(owner, session(&token), key, Payload::CheckSourceUpdates {});
+    let generation = if cleanup { 100 } else { queued.generation };
+    replace_document(path, &queued.job_id, |document| {
+        document["kind"] = "supplied-source-import".into();
+        document["payload"] = serde_json::to_value(Payload::SuppliedSourceImport {
+            project_id: 1,
+            operation_key: key.into(),
+            input_version: 1,
+        })
+        .unwrap();
+        if cleanup {
+            document["attempt"] = 100.into();
+            document["generation"] = generation.into();
+            document["cancel_requested"] = true.into();
+        }
+    });
+    Connection::open(path.join("print-partner.db"))
+        .unwrap()
+        .execute(
+            "UPDATE durable_jobs SET kind='supplied-source-import',resource='source:1',generation=?2 WHERE id=?1",
+            rusqlite::params![queued.job_id, generation],
+        )
+        .unwrap();
+    logout(owner, &token);
+    queued.job_id
+}
+
+#[test]
+fn targeted_refusal_commits_before_returning_the_typed_error() {
+    for (key, cleanup) in [("targeted-refusal", false), ("cleanup-refusal", true)] {
+        let path = directory();
+        let owner = open(&path);
+        let job_id = revoked_import(&path, &owner, key, cleanup);
+        let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
+        let error = worker
+            .claim_import(&job_id)
+            .err()
+            .expect("targeted revoked job did not return an error");
+        assert_authority(&error, AuthorityFailure::CredentialInvalid);
+        owner.shutdown().unwrap();
+        let document = stored(&path, &job_id);
+        assert_eq!(document["state"], "failed");
+        assert_eq!(document["_authority_refusal"]["phase"], "targeted_claim");
+    }
+}
