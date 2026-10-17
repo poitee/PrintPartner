@@ -13,10 +13,7 @@ rules:
       - release.yml:23
   dependabot-cooldown:
     ignore:
-      # GRE-635 changes only github-actions. Preserve the existing npm, pip,
-      # Docker, and Cargo update policies; their cooldown policy needs separate review.
+      # GRE-635 changes only github-actions. Preserve the existing npm and pip
+      # update policies; their cooldown policy needs separate review.
       - dependabot.yml:3
       - dependabot.yml:20
-      - dependabot.yml:41
-      - dependabot.yml:51
-      - dependabot.yml:61
