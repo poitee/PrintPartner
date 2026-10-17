@@ -1392,10 +1392,12 @@ owned by another profile, matching Node. Remapping treats an ownerless queue ite
 as related when any part belongs to the profile or no referenced parts still exist,
 even when its state is `done`. Node's exact error messages are retained in the
 fixture; tests separately assert the Rust reference's more specific diagnostics.
-Node's inline projection check has no progress-validation counterpart, and its
-match-key remap cannot represent token identity, excluded targets, resolved-only
-coordinates, or changed unit indexes. Direct Rust tests cover progress corruption,
-excluded or missing tokens, and changed indexes against the reference behavior.
+Node's inline projection check has no progress-validation counterpart. Both
+implementations remap Checkoff and send-queue coordinates by Required-unit token
+(GRE-677): a kept unit follows its token to its new index, and a dropped or
+excluded unit refuses the remap. The Node transaction cases
+`mapped-remap-index-change` and `mapped-remap-index-0` record this. Direct Rust
+tests cover progress corruption, excluded or missing tokens, and changed indexes.
 
 
 ## D19 publication transaction and job conflicts, GRE-612 PR 2

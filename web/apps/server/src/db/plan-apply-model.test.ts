@@ -58,43 +58,108 @@ describe("assessCheckoffRemap", () => {
   const newPartByMatchKey = new Map([
     ["frame/a.stl", { draftPartId: 42, quantityEffective: 2 }],
   ]);
+  const oldTokenByCoordinate = new Map([
+    ["10:0", "token-a"],
+    ["10:1", "token-b"],
+    ["10:2", "token-c"],
+  ]);
+  const identity = new Map([
+    ["token-a", { draftPartId: 42, unitIndex: 0 }],
+    ["token-b", { draftPartId: 42, unitIndex: 1 }],
+  ]);
+  const base = {
+    profileId: 7,
+    sendQueueRaw: null,
+    oldPartMatchKeyById,
+    partProfileIdById,
+    newPartByMatchKey,
+    oldTokenByCoordinate,
+    newCoordinateByToken: identity,
+  };
+  const link = (units: unknown[], resolvedUnits?: unknown[]) =>
+    JSON.stringify([
+      { id: "link-one", profile_id: 7, filename: "a.stl", units, resolved_units: resolvedUnits },
+    ]);
 
-  it("remaps checkoff and queue units by old part id and unit index", () => {
+  it("remaps checkoff and queue units to the new coordinate of the same Required unit", () => {
     const result = assessCheckoffRemap({
-      profileId: 7,
-      checkoffLinksRaw: JSON.stringify([
-        { id: "link-one", profile_id: 7, filename: "a.stl", units: [{ part_id: 10, unit_index: 0 }] },
-      ]),
+      ...base,
+      checkoffLinksRaw: link([{ part_id: 10, unit_index: 0 }]),
       sendQueueRaw: JSON.stringify([
         { id: "queue-one", filename: "a.gcode", checkoff_units: [{ part_id: 10, unit_index: 1 }] },
       ]),
-      oldPartMatchKeyById,
-      partProfileIdById,
-      newPartByMatchKey,
     });
 
     expect(result.kind).toBe("safe");
     if (result.kind === "safe") {
-      expect([...result.remapByDraftPart.entries()]).toEqual([
-        ["10:0", 42],
-        ["10:1", 42],
+      expect([...result.remapByCoordinate.entries()]).toEqual([
+        ["10:0", { draftPartId: 42, unitIndex: 0 }],
+        ["10:1", { draftPartId: 42, unitIndex: 1 }],
       ]);
     }
   });
 
-  it("reports unsafe remaps when the new quantity no longer has the checked unit", () => {
+  it("follows a kept unit to its new index when an earlier unit is dropped", () => {
+    // Quantity 3 -> 2: token-a (index 0) is dropped, token-b and token-c move down one index.
     const result = assessCheckoffRemap({
-      profileId: 7,
-      checkoffLinksRaw: JSON.stringify([
-        { id: "link-one", profile_id: 7, filename: "a.stl", units: [{ part_id: 10, unit_index: 2 }] },
+      ...base,
+      checkoffLinksRaw: link([{ part_id: 10, unit_index: 1 }]),
+      newCoordinateByToken: new Map([
+        ["token-b", { draftPartId: 42, unitIndex: 0 }],
+        ["token-c", { draftPartId: 42, unitIndex: 1 }],
       ]),
-      sendQueueRaw: null,
-      oldPartMatchKeyById,
-      partProfileIdById,
-      newPartByMatchKey,
+    });
+
+    expect(result.kind).toBe("safe");
+    if (result.kind === "safe") {
+      expect([...result.remapByCoordinate.entries()]).toEqual([
+        ["10:1", { draftPartId: 42, unitIndex: 0 }],
+      ]);
+    }
+  });
+
+  it("refuses a coordinate whose Required unit is dropped, even when its index still exists", () => {
+    const result = assessCheckoffRemap({
+      ...base,
+      checkoffLinksRaw: link([{ part_id: 10, unit_index: 0 }]),
+      newCoordinateByToken: new Map([
+        ["token-b", { draftPartId: 42, unitIndex: 0 }],
+        ["token-c", { draftPartId: 42, unitIndex: 1 }],
+      ]),
+    });
+
+    expect(result).toEqual({
+      kind: "unsafe",
+      unmappable: [
+        {
+          linkId: "link-one",
+          filename: "a.stl",
+          reason: "Required unit at Part 10 index 0 is absent or excluded in the selected Plan",
+        },
+      ],
+    });
+  });
+
+  it("refuses a resolved-only coordinate whose Required unit is dropped", () => {
+    const result = assessCheckoffRemap({
+      ...base,
+      checkoffLinksRaw: link([{ part_id: 10, unit_index: 1 }], [{ part_id: 10, unit_index: 0, result: "printed" }]),
+      newCoordinateByToken: new Map([["token-b", { draftPartId: 42, unitIndex: 0 }]]),
     });
 
     expect(result).toMatchObject({
+      kind: "unsafe",
+      unmappable: [{ reason: "Required unit at Part 10 index 0 is absent or excluded in the selected Plan" }],
+    });
+  });
+
+  it("reports unsafe remaps when the new quantity no longer has the checked unit", () => {
+    const result = assessCheckoffRemap({
+      ...base,
+      checkoffLinksRaw: link([{ part_id: 10, unit_index: 2 }]),
+    });
+
+    expect(result).toEqual({
       kind: "unsafe",
       unmappable: [
         {
@@ -108,17 +173,15 @@ describe("assessCheckoffRemap", () => {
 
   it("ignores queue items that clearly belong to another plan", () => {
     const result = assessCheckoffRemap({
-      profileId: 7,
+      ...base,
       checkoffLinksRaw: null,
       sendQueueRaw: JSON.stringify([
         { id: "queue-other", filename: "b.gcode", checkoff_units: [{ part_id: 99, unit_index: 0 }] },
       ]),
-      oldPartMatchKeyById,
       partProfileIdById: new Map([[99, 8]]),
-      newPartByMatchKey,
     });
 
     expect(result.kind).toBe("safe");
-    if (result.kind === "safe") expect(result.remapByDraftPart.size).toBe(0);
+    if (result.kind === "safe") expect(result.remapByCoordinate.size).toBe(0);
   });
 });

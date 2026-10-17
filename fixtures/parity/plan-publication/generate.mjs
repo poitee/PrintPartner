@@ -139,13 +139,13 @@ const remapCases = [
   ["ownerless-queue-deleted-part", [], [{ id: "q", profile_id: null, state: "done", checkoff_units: [{ part_id: 500, unit_index: 0 }] }]],
 ].map(([id, links, queue]) => {
   const input = { links, queue };
-  const plan = assessCheckoffRemap({ profileId: 1, checkoffLinksRaw: JSON.stringify(links), sendQueueRaw: JSON.stringify(queue), oldPartMatchKeyById: new Map([[11, "bracket"]]), partProfileIdById: new Map([[11, 1], [99, 2]]), newPartByMatchKey: new Map([["bracket", { draftPartId: 21, quantityEffective: 2 }]]) });
+  const plan = assessCheckoffRemap({ profileId: 1, checkoffLinksRaw: JSON.stringify(links), sendQueueRaw: JSON.stringify(queue), oldPartMatchKeyById: new Map([[11, "bracket"]]), partProfileIdById: new Map([[11, 1], [99, 2]]), newPartByMatchKey: new Map([["bracket", { draftPartId: 21, quantityEffective: 2 }]]), oldTokenByCoordinate: new Map([["11:0", token(1)], ["11:1", token(2)]]), newCoordinateByToken: new Map([[token(1), { draftPartId: 21, unitIndex: 0 }], [token(2), { draftPartId: 21, unitIndex: 1 }]]) });
   if (plan.kind === "unsafe") return { id, input, expected: plan };
   assert.equal(plan.kind, "safe");
   const settings = { "printer.checkoff_links": links, "printer.send_queue": queue };
   const probe = new RepositoryProbe(null, [], settings);
-  probe.applyCheckoffRemap(plan, new Map([...plan.remapByDraftPart].map(([key]) => [key, 31])));
-  return { id, input, expected: { mapping: [...plan.remapByDraftPart].map(([key, target]) => [key.split(":").map(Number), [target, Number(key.split(":")[1])]]), settings: probe.settings } };
+  probe.applyCheckoffRemap(plan, new Map([...plan.remapByCoordinate].map(([key, target]) => [key, { part_id: 31, unit_index: target.unitIndex }])));
+  return { id, input, expected: { mapping: [...plan.remapByCoordinate].map(([key, target]) => [key.split(":").map(Number), [target.draftPartId, target.unitIndex]]), settings: probe.settings } };
 });
 const productionCases = [
   ["checkoff-other-profile-coordinate", [{ id: 99, profileId: 2 }], [{ profile_id: 1, state: "watching", units: [{ part_id: 99, unit_index: 0 }] }], []],
