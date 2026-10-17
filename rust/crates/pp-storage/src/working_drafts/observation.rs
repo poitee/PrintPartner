@@ -335,10 +335,12 @@ pub enum CheckoutManifestUse {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CommunitySlug(String);
 impl CommunitySlug {
-    /// Node's `isCommunityManifestSlug`: `^[a-z0-9][a-z0-9._-]{0,63}$`.
+    /// Node's `isCommunityManifestSlug`: `^[a-z0-9][a-z0-9._-]{0,63}$`, except
+    /// `kit-catalog`, which names the kit catalog in the same directory.
     pub fn parse(value: &str) -> Option<Self> {
         let bytes = value.as_bytes();
-        let valid = matches!(bytes.first(), Some(b'a'..=b'z' | b'0'..=b'9'))
+        let valid = value != "kit-catalog"
+            && matches!(bytes.first(), Some(b'a'..=b'z' | b'0'..=b'9'))
             && bytes.len() <= 64
             && bytes
                 .iter()

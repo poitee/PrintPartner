@@ -9,7 +9,10 @@
     "voron-stealthburner",
     "example-kit-r2",
     "oracle-kit",
-    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "kit-catalogs",
+    "kit-catalog.v2",
+    "my-kit-catalog"
   ],
   "invalid": [
     "",
@@ -34,6 +37,7 @@
     "%2e%2e%2fx",
     "a\u0000b",
     "a.yaml/../b",
-    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "kit-catalog"
   ]
 }

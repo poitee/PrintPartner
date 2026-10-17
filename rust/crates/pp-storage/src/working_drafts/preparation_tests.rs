@@ -524,3 +524,89 @@ fn part_tracking_indexes_layers_once() {
     assert_eq!(projection(prepared), case["result"]);
     assert_eq!(SOURCE_LAYER_VISITS.with(|count| count.get()), 2);
 }
+
+struct CommunityLog {
+    inner: Reads,
+    requests: Mutex<Vec<String>>,
+}
+impl DraftReads for CommunityLog {
+    fn resolve_stl_root(
+        &self,
+        request: &OwnedStlReadRequest,
+        b: &mut PreparationBudget<'_>,
+    ) -> ReadResult<Box<dyn StlRootRead>> {
+        self.inner.resolve_stl_root(request, b)
+    }
+    fn read_checkout_manifest(
+        &self,
+        request: &OwnedCheckoutReadRequest,
+        occurrence: CheckoutManifestUse,
+        b: &mut PreparationBudget<'_>,
+    ) -> ReadResult<DocumentRead> {
+        self.inner.read_checkout_manifest(request, occurrence, b)
+    }
+    fn read_catalog_document(
+        &self,
+        request: &OwnedCatalogReadRequest,
+        b: &mut PreparationBudget<'_>,
+    ) -> ReadResult<DocumentRead> {
+        if let CatalogPurpose::Community(slug) = request.purpose() {
+            self.requests.lock().unwrap().push(slug.as_str().into());
+        }
+        self.inner.read_catalog_document(request, b)
+    }
+}
+
+#[test]
+fn invalid_stored_community_slugs_make_no_community_read() {
+    let case = cases()
+        .into_iter()
+        .find(|case| case["capture"] != true && case["result"]["kind"] == "prepared")
+        .unwrap();
+    let prepare_with = |slug: Option<&str>| {
+        let (root, mut connection) = database(&case);
+        connection
+            .execute("UPDATE projects SET manifest_community_slug=?1", [slug])
+            .unwrap();
+        let reads = CommunityLog {
+            inner: Reads {
+                case: case.clone(),
+                hashes: Default::default(),
+            },
+            requests: Mutex::default(),
+        };
+        let cancelled = AtomicBool::new(false);
+        let mut b = PreparationBudget::new(&cancelled, PreparationLimits::default()).unwrap();
+        let prepared = prepare(
+            &mut connection,
+            "default",
+            1,
+            case["base"].clone(),
+            PreparationContext {
+                options: &options(&case),
+                repos: &root.path().join("repos"),
+            },
+            &reads,
+            &mut b,
+        )
+        .unwrap();
+        (projection(prepared), reads.requests.into_inner().unwrap())
+    };
+    let (without, requests) = prepare_with(None);
+    assert!(requests.is_empty());
+    let (_, requests) = prepare_with(Some("oracle-kit"));
+    assert!(!requests.is_empty());
+    assert!(requests.iter().all(|slug| slug == "oracle-kit"));
+    for slug in [
+        "../kit-catalog",
+        "kit-catalog",
+        "oracle-kit/..",
+        "Oracle-Kit",
+    ] {
+        assert_eq!(
+            prepare_with(Some(slug)),
+            (without.clone(), vec![]),
+            "{slug:?}"
+        );
+    }
+}

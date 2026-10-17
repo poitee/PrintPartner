@@ -866,13 +866,21 @@ pub(super) fn prepare(
         if let Some(doc) = manifest::optional_document(&observed, b)? {
             docs.push((name.clone(), "repo".into(), doc));
         }
-        if let Some(slug) = source["manifestCommunitySlug"]
+        if let Some(stored) = source["manifestCommunitySlug"]
             .as_str()
             .filter(|s| !s.is_empty())
         {
+            // Node's loadCommunityManifest warns and skips an invalid stored slug.
+            let Some(slug) = CommunitySlug::parse(stored) else {
+                eprintln!(
+                    "Ignoring invalid stored community manifest slug source_id={}",
+                    source["id"]
+                );
+                continue;
+            };
             let observed = reads.read_catalog_document(
                 &OwnedCatalogReadRequest {
-                    purpose: CatalogPurpose::Community(slug.into()),
+                    purpose: CatalogPurpose::Community(slug),
                 },
                 b,
             )?;
