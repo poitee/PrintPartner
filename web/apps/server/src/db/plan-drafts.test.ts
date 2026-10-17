@@ -3794,6 +3794,129 @@ selections:
     database.close();
   });
 
+  // Quantity 3 -> 2 with units 1 and 2 completed: reconciliation keeps them at indexes 0 and 1.
+  function shrunkQuantityFixture(checkedIndex: number) {
+    const { database, raw, repo } = fixture();
+    const { source } = trackedSource({
+      repo,
+      database,
+      name: "Shrink source",
+      files: { "bracket.stl": "solid bracket" },
+    });
+    const profile = repo.createProfile("Shrink Build", source.id);
+    let sequence = 0;
+    const reconciledDraft = (quantity: number) => {
+      sequence += 1;
+      const created = repo.recomputePlanDraft({
+        profileId: profile.id,
+        actor: "test:user",
+        idempotencyKey: `shrink-draft-${sequence}`,
+      });
+      if (created.kind !== "created") throw new Error("shrink draft was not created");
+      const edited = repo.editPlanDraftParts({
+        profileId: profile.id,
+        draftId: created.draft.id,
+        expectedSnapshotDigest: created.draft.snapshotDigest,
+        decision: { kind: "set_quantity_override", partIds: [created.draft.parts[0]!.id], value: quantity },
+      });
+      if (edited.kind !== "updated") throw new Error("shrink draft edit failed");
+      const reconciled = repo.savePlanDraftRequiredUnitReconciliation({
+        profileId: profile.id,
+        draftId: edited.draft.id,
+        expectedSnapshotDigest: edited.draft.snapshotDigest,
+        decisions: [],
+        actorId: "test:user",
+        idempotencyKey: `shrink-reconciliation-${sequence}`,
+      });
+      if (reconciled.kind !== "saved") throw new Error("shrink reconciliation failed");
+      const draft = reconciled.draft;
+      return {
+        profileId: profile.id,
+        draftId: draft.id,
+        expectedSnapshotDigest: draft.snapshotDigest,
+        expectedLifecycleVersion: draft.lifecycleVersion,
+        expectedBase:
+          draft.baseRevisionId == null
+            ? { kind: "empty" as const, planVersion: 0 as const }
+            : { kind: "revision" as const, revisionId: draft.baseRevisionId, planVersion: draft.basePlanVersion },
+        actorId: "test:user",
+        idempotencyKey: `shrink-apply-${sequence}`,
+        remapCheckoffLinks: true,
+      };
+    };
+    expect(repo.applyPlanChanges(reconciledDraft(3))).toMatchObject({ kind: "applied" });
+    raw.prepare("UPDATE print_progress SET completed = 1 WHERE unit_index IN (1, 2)").run();
+    const command = reconciledDraft(2);
+    const partId = raw.prepare("SELECT id FROM parts WHERE profile_id = ?").pluck().get(profile.id) as number;
+    const unit = { part_id: partId, unit_index: checkedIndex };
+    repo.setSetting(
+      "printer.checkoff_links",
+      JSON.stringify([
+        {
+          id: "shrink-link",
+          profile_id: profile.id,
+          filename: "bracket.bgcode",
+          state: "watching",
+          units: [unit],
+          resolved_units: [{ ...unit, result: "printed" }],
+        },
+      ]),
+    );
+    repo.setSetting(
+      "printer.send_queue",
+      JSON.stringify([{ id: "shrink-queue", profile_id: null, state: "error", checkoff_units: [unit] }]),
+    );
+    const tokenAt = (coordinate: { part_id: number; unit_index: number }) =>
+      raw
+        .prepare(
+          `SELECT u.required_unit_token FROM plan_revision_required_units u
+           JOIN plan_revision_parts p ON p.id = u.revision_part_id AND p.revision_id = u.revision_id
+           WHERE p.projection_part_id = ? AND u.unit_index = ?`,
+        )
+        .pluck()
+        .get(coordinate.part_id, coordinate.unit_index) as string | undefined;
+    return { database, raw, repo, command, unit, tokenAt };
+  }
+
+  it("remaps Checkoff coordinates to the same Required unit when a kept unit changes index", () => {
+    const { database, repo, command, unit, tokenAt } = shrunkQuantityFixture(1);
+    const token = tokenAt(unit);
+    expect(token).toBeDefined();
+
+    expect(repo.applyPlanChanges(command)).toMatchObject({ kind: "applied" });
+
+    const [link] = JSON.parse(repo.getSetting("printer.checkoff_links") ?? "[]") as Array<{
+      units: Array<{ part_id: number; unit_index: number }>;
+      resolved_units: Array<{ part_id: number; unit_index: number }>;
+    }>;
+    const [queued] = JSON.parse(repo.getSetting("printer.send_queue") ?? "[]") as Array<{
+      checkoff_units: Array<{ part_id: number; unit_index: number }>;
+    }>;
+    for (const coordinate of [link!.units[0]!, link!.resolved_units[0]!, queued!.checkoff_units[0]!]) {
+      expect(coordinate.part_id).not.toBe(unit.part_id);
+      expect(coordinate.unit_index).toBe(0);
+      expect(tokenAt(coordinate)).toBe(token);
+    }
+    database.close();
+  });
+
+  it("blocks Apply with checkoff_remap_unsafe when the checked-off Required unit is dropped", () => {
+    const { database, raw, repo, command } = shrunkQuantityFixture(0);
+    const before = snapshotTables(raw, APPLY_STATE_TABLES);
+
+    expect(repo.applyPlanChanges(command)).toEqual({
+      kind: "checkoff_remap_unsafe",
+      unmappable: [
+        expect.objectContaining({
+          linkId: "shrink-link",
+          reason: expect.stringMatching(/^Required unit at Part \d+ index 0 is absent or excluded in the selected Plan$/),
+        }),
+      ],
+    });
+    expect(snapshotTables(raw, APPLY_STATE_TABLES)).toEqual(before);
+    database.close();
+  });
+
   it("publishes the first accepted Plan from a clean empty baseline", () => {
     const { database, raw, repo } = fixture();
     const sourceRoot = join(database.reposDir, "empty-apply-source");
