@@ -23,6 +23,21 @@ pub(super) struct Capture {
     pub fingerprint: String,
     pub inputs: Vec<Value>,
     layers: Vec<Layer>,
+    source_layers: HashMap<String, SourceLayer>,
+}
+struct SourceLayer {
+    source_id: i64,
+    tracked: bool,
+}
+impl Capture {
+    fn source_layer(
+        &self,
+        layer: &str,
+        budget: &mut PreparationBudget<'_>,
+    ) -> Result<Option<&SourceLayer>> {
+        budget.comparison(layer.len())?;
+        Ok(self.source_layers.get(layer))
+    }
 }
 struct Layer {
     source_id: i64,
@@ -206,6 +221,7 @@ pub(super) fn capture(
     let mut seen = HashSet::new();
     let mut layers = Vec::new();
     let mut inputs = Vec::new();
+    let mut source_layers = HashMap::new();
     let mut fingerprint = Vec::new();
     for attachment in attachments {
         budget.visit(0)?;
@@ -271,6 +287,17 @@ pub(super) fn capture(
             text(&attachment, "layerType")?,
             text(&source, "name")?
         );
+        budget.comparison(layer.len())?;
+        budget.expansion(layer.len())?;
+        #[cfg(test)]
+        SOURCE_LAYER_VISITS.with(|count| count.set(count.get() + 1));
+        source_layers.insert(
+            layer.clone(),
+            SourceLayer {
+                source_id: id,
+                tracked: revision.is_some(),
+            },
+        );
         let path = revision
             .as_ref()
             .map(|r| r["snapshotLocator"].as_str().map(str::to_owned))
@@ -305,6 +332,7 @@ pub(super) fn capture(
         fingerprint: required_units::model::digest(&json!(fingerprint)),
         inputs,
         layers,
+        source_layers,
     })
 }
 fn role_name(role: crate::catalog::naming::RoleId) -> String {
@@ -759,11 +787,9 @@ pub(super) fn prepare(
         let quantity_override = old
             .map(|v| v["quantityOverride"].clone())
             .unwrap_or(Value::Null);
-        let tracked = captured.inputs.iter().any(|v| {
-            #[cfg(test)]
-            SOURCE_LAYER_VISITS.with(|count| count.set(count.get() + 1));
-            v["sourceLayer"] == p.layer && v["trackingKind"] == "revision"
-        });
+        let tracked = captured
+            .source_layer(&p.layer, b)?
+            .is_some_and(|source| source.tracked);
         let artifact = if tracked {
             Some(
                 inventories[p.inventory]
@@ -794,6 +820,9 @@ pub(super) fn prepare(
             },
             b,
         )?;
+        if root.logical_resolved_path().is_none() {
+            continue;
+        }
         let inventory = root.scan_stls(b)?;
         let rules = import_rules(&source["importedPaths"], b)?;
         let mut paths = Vec::new();
@@ -862,10 +891,8 @@ pub(super) fn prepare(
         for part in &mut parts {
             b.visit(0)?;
             let source = captured
-                .inputs
-                .iter()
-                .find(|input| input["sourceLayer"] == part["sourceLayer"])
-                .and_then(|input| input["sourceId"].as_i64());
+                .source_layer(text(part, "sourceLayer")?, b)?
+                .map(|source| source.source_id);
             let Some(source) = source else { continue };
             let path = text(part, "relativePath")?.to_owned();
             let Some(choice) = choices.get(&source).and_then(|choices| choices.get(&path)) else {

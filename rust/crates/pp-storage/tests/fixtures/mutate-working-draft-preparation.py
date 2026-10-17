@@ -8,6 +8,8 @@ import tempfile
 rust = Path(__file__).resolve().parents[4]
 source = Path('crates/pp-storage/src/working_drafts/preparation.rs')
 mutants = [
+    ('captured layers scanned per Part', '        let tracked = captured\n            .source_layer(&p.layer, b)?\n            .is_some_and(|source| source.tracked);', '        let tracked = captured.inputs.iter().any(|input| {\n            #[cfg(test)]\n            SOURCE_LAYER_VISITS.with(|count| count.set(count.get() + 1));\n            input["sourceLayer"] == p.layer && input["trackingKind"] == "revision"\n        });'),
+    ('unresolved checkout scanned', '        if root.logical_resolved_path().is_none() {\n            continue;\n        }\n        let inventory = root.scan_stls(b)?;', '        let inventory = root.scan_stls(b)?;'),
     ('layer override projection uncharged', 'defaults\n                    .bytes\n                    .saturating_add(raw_metadata.map(str::len).unwrap_or_default())\n                    .saturating_mul(8)', '0'),
     ('global default projection repeated per layer', 'defaults.clone()', 'project_naming(Map::new(), (*defaults.profile).clone(), budget)?'),
     ('quantity anchors replaced globally', 'strip = regress::Regex::new(r"\\\\\\.stl\\$")?.replace(&strip, "$");', 'strip = regress::Regex::new(r"\\\\\\.stl\\$")?.replace_all(&strip, "$");'),
