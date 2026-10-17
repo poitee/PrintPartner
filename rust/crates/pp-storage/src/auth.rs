@@ -14,6 +14,8 @@ pub mod rebuild;
 pub use policy::{
     AuthFailure, AuthInputFailure, AuthPolicy, AuthStatus, RegistrationPolicy, SessionTenantPolicy,
 };
+#[cfg(feature = "desktop_rebuild")]
+pub(crate) const OWNED_SETTINGS: [&str; 1] = ["api_keys_v1"];
 
 use crate::{Envelope, SettingsClient, WriterOwner};
 use anyhow::{Result, anyhow, bail, ensure};

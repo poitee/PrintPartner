@@ -6,8 +6,8 @@
     {"id":"export-checklist-html","kind":"export-checklist-html","queued":{"kind":"export-checklist-html","status":"pending","message":"Queued","progress":0,"result":null,"error":null},"other_tenant":null,"other_tenant_stream":null}
   ],
   "finished": [
-    {"id":"check-source-updates","kind":"check-source-updates","status":"done","snapshot":{"kind":"check-source-updates","status":"done","message":"Complete","progress":100,"result":{"checked":[],"skipped":[],"updates_available":0,"checked_count":0},"error":null}},
-    {"id":"export-checklist-html","kind":"export-checklist-html","status":"error"}
+    {"id":"check-source-updates","kind":"check-source-updates","status":"done","snapshot":{"kind":"check-source-updates","status":"done","message":"Complete","progress":100,"result":{"checked":[],"skipped":[],"updates_available":0,"checked_count":0},"error":null},"stream":[{"kind":"check-source-updates","status":"running","message":"Running…","progress":10,"result":null,"error":null},{"kind":"check-source-updates","status":"done","message":"Complete","progress":100,"result":{"checked":[],"skipped":[],"updates_available":0,"checked_count":0},"error":null}]},
+    {"id":"export-checklist-html","kind":"export-checklist-html","status":"error","stream":[{"kind":"export-checklist-html","status":"running","message":"Running…","progress":10,"result":null,"error":null},{"kind":"export-checklist-html","status":"error","message":"Accepted Plan export failed.","progress":100,"result":null,"error":"Accepted Plan export failed."}]}
   ],
   "retained": [
     {"id":"all","jobs":[{"kind":"export-checklist-html","status":"error"},{"kind":"check-source-updates","status":"done"}]},

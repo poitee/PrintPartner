@@ -487,23 +487,28 @@ pub(crate) fn advance(
         flow.finish(Err(anyhow!("Cancelled before write admission")));
         return None;
     }
+    let subscriptions = &flow.storage.shared.job_subscriptions;
     match stage {
-        WriterStage::Begin(request) => match prepare(connection, &flow, request, admission) {
-            Ok(Prepared::Complete(outcome)) => {
-                flow.finish(Ok(outcome));
-                None
+        WriterStage::Begin(request) => {
+            match crate::jobs::authority_change(connection, subscriptions, |connection| {
+                prepare(connection, &flow, request, admission)
+            }) {
+                Ok(Prepared::Complete(outcome)) => {
+                    flow.finish(Ok(outcome));
+                    None
+                }
+                Ok(Prepared::Kdf(task, continuation)) => submit_kdf(KdfJob {
+                    flow,
+                    task,
+                    continuation,
+                    writer_ready_since: Instant::now(),
+                }),
+                Err(error) => {
+                    flow.finish(Err(error));
+                    None
+                }
             }
-            Ok(Prepared::Kdf(task, continuation)) => submit_kdf(KdfJob {
-                flow,
-                task,
-                continuation,
-                writer_ready_since: Instant::now(),
-            }),
-            Err(error) => {
-                flow.finish(Err(error));
-                None
-            }
-        },
+        }
         WriterStage::KdfReady { task, continuation } => submit_kdf(KdfJob {
             flow,
             task,
@@ -516,14 +521,16 @@ pub(crate) fn advance(
         } => {
             let policy = flow.policy;
             let result = result.and_then(|result| {
-                resume(
-                    connection,
-                    policy,
-                    flow.lifetimes,
-                    admission,
-                    continuation,
-                    result,
-                )
+                crate::jobs::authority_change(connection, subscriptions, |connection| {
+                    resume(
+                        connection,
+                        policy,
+                        flow.lifetimes,
+                        admission,
+                        continuation,
+                        result,
+                    )
+                })
             });
             match result {
                 Ok(Prepared::Complete(outcome)) => {
