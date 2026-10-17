@@ -338,3 +338,31 @@ fn apply_charges_raw_pattern_units_before_trimming() {
         Err(ReadFailure::LimitExceeded(Resource::ComparisonWork))
     ));
 }
+
+#[test]
+fn kit_charges_stored_json_to_the_preparation_budget() {
+    let raw = || Some(r#"{"selections":{"tool":"a","tool":["b"]}}"#.to_owned());
+    let cancelled = AtomicBool::new(false);
+    let budget = |limits| PreparationBudget::new(&cancelled, limits).unwrap();
+    let limits = |nodes, depth| PreparationLimits {
+        nodes,
+        depth,
+        ..PreparationLimits::default()
+    };
+    // Root, its key, the selections object, its surviving key, the array and "b".
+    assert_eq!(
+        selection_json(&kit(raw(), &mut budget(limits(6, 3))).unwrap()),
+        r#"[["tool",["b"]]]"#
+    );
+    assert!(matches!(
+        kit(raw(), &mut budget(limits(5, 3))),
+        Err(ReadFailure::LimitExceeded(Resource::Nodes))
+    ));
+    assert!(matches!(
+        kit(raw(), &mut budget(limits(6, 2))),
+        Err(ReadFailure::LimitExceeded(Resource::Depth))
+    ));
+    let mut b = budget(PreparationLimits::default());
+    b.cancel_after_checks(3);
+    assert!(matches!(kit(raw(), &mut b), Err(ReadFailure::Cancelled)));
+}

@@ -123,17 +123,7 @@ pub(crate) fn observe(
 ) -> ReadResult<ObservedBuilder> {
     budget.check()?;
     let mut resolved_selections = match captured.stored_kit.as_deref() {
-        Some(raw) => {
-            budget.document(raw.len(), raw.len())?;
-            match json::parse(raw.as_bytes()) {
-                Ok(parsed) => {
-                    charge_nodes(&parsed, 0, budget)?;
-                    KitManifest::from_stored_or_empty(parsed)
-                }
-                Err(JsonError::Syntax) => KitManifest::default(),
-                Err(JsonError::Limit(limit)) => return Err(limit_exceeded(limit)),
-            }
-        }
+        Some(raw) => stored_kit(raw, budget)?,
         None => KitManifest::default(),
     };
     let mut sources = Vec::new();
@@ -442,6 +432,20 @@ fn import_rules(raw: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<Vec
             )
         })
         .collect()
+}
+
+/// Parses a stored kit as Node `loadKitManifest` does, charging its bytes and
+/// nodes to `budget`. Malformed kits read as empty.
+pub(crate) fn stored_kit(raw: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<KitManifest> {
+    budget.document(raw.len(), raw.len())?;
+    match json::parse(raw.as_bytes()) {
+        Ok(parsed) => {
+            charge_nodes(&parsed, 0, budget)?;
+            Ok(KitManifest::from_stored_or_empty(parsed))
+        }
+        Err(JsonError::Syntax) => Ok(KitManifest::default()),
+        Err(JsonError::Limit(limit)) => Err(limit_exceeded(limit)),
+    }
 }
 
 fn limit_exceeded(limit: JsonLimit) -> ReadFailure {

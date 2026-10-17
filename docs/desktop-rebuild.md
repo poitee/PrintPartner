@@ -327,9 +327,11 @@ glob matcher steps that `Glob` counted. The default and maximum is 2^28 units, s
 comparisons at the 100,000-visit limit can average about 2,680 units each. One
 comparison costs O(P + K²) units for a pattern of P units and a key of K units,
 with K at most 4,096. Only the post-comparison charge can pass the limit, so an
-attempt can exceed it by one comparison's normalized and matcher work. Kit JSON
-passes through the budgeted document reader before the stored-kit parser, so
-UTF-16 selection text uses the existing codec.
+attempt can exceed it by one comparison's normalized and matcher work. `kit`
+reads stored kit JSON with `manifest_options::observation::stored_kit`, the
+parser builder observation uses. It charges the raw bytes as a document and each
+parsed value and object key as a node, and the last duplicate JSON key wins, as in
+Node's `JSON.parse`. UTF-16 selection text uses the existing codec.
 
 `read_model::reusable_draft_base` checks current freshness before validating the
 complete accepted snapshot with the existing bounded readers. It propagates
