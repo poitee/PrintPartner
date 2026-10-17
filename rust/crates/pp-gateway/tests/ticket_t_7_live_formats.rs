@@ -294,12 +294,21 @@ fn no_writer_declarations_have_family_literal_rules() {
     assert_eq!(no_writers, families.keys().copied().collect());
 
     let rule = include_str!("../../../rules/no-writer-family-literal.yml");
-    for token in families.values() {
-        assert!(
-            rule.contains(token),
-            "missing family literal token: {token}"
-        );
-    }
+    let mut regexes = rule
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("- regex: '"));
+    let regex = regexes.next().expect("family literal regex");
+    assert!(
+        regexes.next().is_none(),
+        "expected one family literal regex"
+    );
+    let alternation = regex
+        .strip_suffix('\'')
+        .and_then(|regex| regex.strip_prefix(r#"(?i)(^|["/\\])("#))
+        .and_then(|regex| regex.strip_suffix(r##")([./\\"#]|$)"##))
+        .expect("family literal regex must retain its path-component boundaries");
+    let tokens: std::collections::BTreeSet<_> = alternation.split('|').collect();
+    assert_eq!(tokens, families.values().copied().collect());
 }
 
 #[test]

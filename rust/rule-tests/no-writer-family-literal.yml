@@ -2,6 +2,7 @@ id: no-writer-family-literal
 valid:
   - 'fn unrelated() { let _ = "discovers"; let _ = "kit-catalogue.yaml"; let _ = "my-manifests/file"; }'
   - 'fn unrelated() { /* "covers" */ let _ = "source-covers"; }'
+invalid:
   - '#[cfg(test)] mod fixtures { fn helper() { let _ = "covers"; } }'
   - '#[test] fn fixture() { let _ = "kit-catalog.yaml"; }'
   - '#[cfg(all(test, unix))] fn fixture() { let _ = "path-hints"; }'
@@ -9,7 +10,6 @@ valid:
   - '#![cfg(test)] fn fixture() { let _ = "covers"; }'
   - 'mod fixtures { #![cfg(all(test, unix))] fn fixture() { let _ = "covers"; } }'
   - '#[cfg(any())] fn disabled() { let _ = "covers"; }'
-invalid:
   - 'fn helper() { let _ = "covers"; }'
   - 'const NAME: &str = "kit-catalog.yaml";'
   - 'fn helper() { let _ = "path-hints.yaml"; }'
