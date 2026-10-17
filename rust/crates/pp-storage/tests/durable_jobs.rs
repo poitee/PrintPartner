@@ -14,7 +14,7 @@ use std::{
     path::PathBuf,
     sync::{Arc, Barrier, atomic::AtomicBool},
     thread,
-    time::Duration,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 const CURRENT_SCHEMA: u64 = if cfg!(feature = "desktop_rebuild") {
@@ -49,6 +49,21 @@ fn fixture() -> (PathBuf, WriterOwner) {
     let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
     assert_eq!(ready.version, CURRENT_SCHEMA);
     (path, owner)
+}
+/// Waits until the store's whole-second clock reaches the claimed lease's
+/// expiry. Probing with a heartbeat would renew a lease that is still valid.
+fn wait_for_lease_expiry(job: &JobRecord) {
+    let expiry = u64::try_from(job.lease_until.unwrap()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        < expiry
+    {
+        assert!(Instant::now() < deadline, "lease did not expire");
+        thread::sleep(Duration::from_millis(20));
+    }
 }
 fn admission() -> WorkerAdmission {
     WorkerAdmission {
@@ -1171,8 +1186,8 @@ fn ticket_t_28_claims_expired_lease_fences_old_worker() {
     let mut config = admission();
     config.lease_seconds = 1;
     let worker = owner.job_worker(config).unwrap();
-    let claimed_attempt!(_, mut old) = worker.claim().unwrap().unwrap();
-    thread::sleep(Duration::from_millis(1100));
+    let claimed_attempt!(claimed, mut old) = worker.claim().unwrap().unwrap();
+    wait_for_lease_expiry(&claimed);
     assert!(worker.update(&mut old, WorkerOperation::Heartbeat).is_err());
     let claimed_attempt!(next, mut current) = worker.claim().unwrap().unwrap();
     assert_eq!(next.job_id, queued.job_id);
@@ -4278,13 +4293,13 @@ fn integration_source_bridge_expiry_and_cancelled_admission() {
     let mut config = admission();
     config.lease_seconds = 1;
     let worker = owner.job_worker(config).unwrap();
-    let claimed_attempt!(_, lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(claimed, lease) = worker.claim().unwrap().unwrap();
     assert!(
         worker
             .begin_source_work(&lease, None, &AtomicBool::new(true), Duration::ZERO)
             .is_err()
     );
-    std::thread::sleep(Duration::from_millis(1100));
+    wait_for_lease_expiry(&claimed);
     assert!(source_lease(&worker, &lease, None).is_err());
     assert_eq!(
         deletion(&owner.local_source_catalog(), id),
@@ -5285,7 +5300,7 @@ fn expired_attempt_keeps_source_authority_until_drop() {
     config.lease_seconds = 1;
     let worker = owner.job_worker(config).unwrap();
     let mut first = worker.claim().unwrap().unwrap();
-    std::thread::sleep(Duration::from_millis(1100));
+    wait_for_lease_expiry(&first.job);
     assert!(worker.claim().unwrap().is_none());
     let recovered = get(&owner, &queued.job_id);
     assert_eq!(recovered.state, PersistentState::Queued);
