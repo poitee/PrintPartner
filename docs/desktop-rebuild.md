@@ -742,9 +742,11 @@ reads it.
 If its original authority is refused, the refusal commits with phase `targeted_claim`
 and the typed `AuthorityFailure` is returned, instead of moving on to the next job. An
 import attempt advances only by heartbeat and progress; the journal owns its other
-phases. Cancelling an
-import, or recovering a cancelled one after a restart, returns it to the queue with
-`cancel_requested` set, so its owner can reclaim it and release its input.
+phases. Cancelling an import, or recovering a cancelled one after a restart, returns it
+to the queue with `cancel_requested` set, so its owner can reclaim it and release its
+input. As a deliberate difference from the reference, the 100-attempt limit does not
+apply to these cleanup claims, and recovery never fails a cancelled import for its
+attempt count; other import attempts and other job kinds keep the limit.
 
 Node has no supplied-import kind. `fixtures/parity/jobs-engine/generate.mjs` records
 that Node refuses to start one ("Unsupported job kind: supplied-source-import") and that

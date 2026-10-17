@@ -1015,10 +1015,7 @@ fn recover_in(tx: &Transaction<'_>, all: bool) -> Result<()> {
             continue;
         }
         // A cancelled import goes back to its owner, as `Cancel` does.
-        #[cfg(feature = "desktop_rebuild")]
-        let engine_cancels = job.cancel_requested && job.kind != JobKind::SuppliedSourceImport;
-        #[cfg(not(feature = "desktop_rebuild"))]
-        let engine_cancels = job.cancel_requested;
+        let owner_cleanup = job.awaits_owner_cleanup();
         job.generation += 1;
         job.fence = None;
         job.worker = None;
@@ -1030,9 +1027,9 @@ fn recover_in(tx: &Transaction<'_>, all: bool) -> Result<()> {
             job.state = PersistentState::ReconciliationRequired;
             job.recovery =
                 Some("Resume from confirmed receipts requires handler reconciliation".into());
-        } else if engine_cancels {
+        } else if job.cancel_requested && !owner_cleanup {
             job.state = PersistentState::Cancelled;
-        } else if job.attempt >= 100 {
+        } else if job.attempt >= 100 && !owner_cleanup {
             job.state = PersistentState::Failed;
             job.recovery = Some("Attempt limit reached".into());
         } else {
@@ -1711,7 +1708,10 @@ fn claim(
                     continue;
                 }
             }
-            ensure!(job.attempt < 100, "Job attempt limit reached");
+            ensure!(
+                job.attempt < 100 || job.awaits_owner_cleanup(),
+                "Job attempt limit reached"
+            );
             #[cfg(feature = "desktop_rebuild")]
             {
                 let refusal = match job.authority_disposition {

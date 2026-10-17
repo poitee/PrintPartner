@@ -769,6 +769,16 @@ impl JobRecord {
     pub(crate) fn internal_only(&self) -> bool {
         self.kind == JobKind::SuppliedSourceImport
     }
+    /// A cancelled import waits for its owner's cleanup claim, which the
+    /// execution attempt limit does not bound.
+    #[cfg(feature = "desktop_rebuild")]
+    pub(crate) fn awaits_owner_cleanup(&self) -> bool {
+        self.cancel_requested && self.kind == JobKind::SuppliedSourceImport
+    }
+    #[cfg(not(feature = "desktop_rebuild"))]
+    pub(crate) fn awaits_owner_cleanup(&self) -> bool {
+        false
+    }
     pub fn snapshot(&self) -> JobSnapshot {
         let (status, message) = match self.state {
             PersistentState::Queued => ("pending", "Waiting for a compatible worker"),
