@@ -273,7 +273,7 @@ fn owner_installs_schema_dispatches_random_tokens_and_drains_before_stop() {
         .unwrap();
     let before = std::fs::read(dir.join("print-partner.db")).unwrap();
     let (owner, ready) = WriterOwner::open(&dir, crate::Limits::default()).unwrap();
-    assert_eq!(ready.version, 40);
+    assert_eq!(ready.version, crate::schema::CURRENT_VERSION);
     assert_eq!(ready.previous_version, 35);
     let backup = dir.join("backups/pre-schema37.db");
     assert_eq!(ready.backup.as_ref(), Some(&backup));
@@ -331,7 +331,7 @@ fn owner_installs_schema_dispatches_random_tokens_and_drains_before_stop() {
         .unwrap();
     ru::model::validate_token(&token).unwrap();
     let (owner, ready) = WriterOwner::open(&dir, crate::Limits::default()).unwrap();
-    assert_eq!(ready.previous_version, 40);
+    assert_eq!(ready.previous_version, crate::schema::CURRENT_VERSION);
     assert!(ready.backup.is_none());
     assert_eq!(std::fs::read(&backup).unwrap(), before);
     let replay = serde_json::to_value(

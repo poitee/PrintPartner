@@ -296,6 +296,10 @@ impl State {
             .values()
             .any(|binding| binding.tenant == tenant && binding.id == id)
     }
+    #[cfg(feature = "desktop_rebuild")]
+    pub(crate) fn incarnation(&self) -> &str {
+        &self.incarnation
+    }
     pub(crate) fn next_token(&self) -> Result<u64> {
         self.issued_high_water
             .checked_add(1)
