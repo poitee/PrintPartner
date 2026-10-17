@@ -125,7 +125,3 @@ The filter also skips one test by name, outside those groups:
 - **Desktop runtime** (`desktop-runtime.yml`) runs the Python lifecycle and gateway proofs against the built server on Linux.
 
 When `rust (macos)` or a Native macOS bundle workflow job fails on a push to `main`, an alert job opens an issue labelled `ci-macos-main`, or comments on the existing open issue. Rust failures confined to Linux or Windows do not alert. Only the alert job receives `issues: write`.
-
-<!-- Temporary docs-only CI proof; this commit will be reverted. -->
-
-<!-- Run the live docs-only comparison against the retained CI baseline. -->
