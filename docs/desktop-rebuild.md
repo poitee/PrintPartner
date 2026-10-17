@@ -1433,17 +1433,17 @@ Node `applyPlanChanges` does not check durable jobs, so its running-export case
 publishes. Rust returns the exact job conflict list and leaves publication rows
 unchanged. Both runtimes publish with a terminal uploaded-only upload.
 
-Rust never publishes where Node's Checkoff remap assessment refuses. It preserves
-Node's refusal reasons for deleted Parts, missing match keys, and indexes at or
-past the new quantity. Where both would publish, Rust writes coordinates by
-Required-unit token and refuses if the referenced token was dropped.
+Rust keeps Node's Checkoff remap refusal reasons for deleted Parts, missing match
+keys, and indexes at or past the new quantity. After those checks, both runtimes
+write coordinates by Required-unit token and refuse if the referenced token was
+dropped or excluded (GRE-677).
 
 This rule applies whenever a kept token's index changes. `Selection::PriorCompletion`
-renumbers units with no quantity change. The index-1 fixture proves that Rust
-preserves the token where Node's coordinate resolves to a different token. At
-index 0, Rust refuses the dropped token and writes nothing where Node publishes.
-Index 2 and a cross-Part filename rename match Node's refusal literally. Fixtures
-retain Node's literal outcomes and compare Checkoff coordinates to Required-unit rows.
+renumbers units with no quantity change. In the index-1 fixture both runtimes move
+the coordinate to the kept token's new index. At index 0 both refuse the dropped
+token and write nothing. Index 2 and a cross-Part filename rename refuse with
+Node's quantity and match-key reasons. Fixtures record Node's literal outcomes,
+and Rust compares them exactly.
 
 ## D19 publication client and writer admission, GRE-612 PR 3
 
