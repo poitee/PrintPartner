@@ -1,4 +1,5 @@
 import { readSpoolmanAccess, spoolmanAccessProblem } from "../lib/spoolman-access.js";
+import { INVALID_COMMUNITY_MANIFEST_SLUG_DETAIL, parseCommunityManifestSlug } from "../lib/community-manifest-slug.js";
 import { readFarmAccess } from "../lib/farm-access.js";
 import { chargeTenantDiskBytes, TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
 import {
@@ -952,6 +953,13 @@ export async function invokeAssistantTool(
           if (patch[key] !== undefined) clean[key] = patch[key];
         }
         if (Object.keys(clean).length === 0) return { content: JSON.stringify({ error: "patch has no supported fields" }) };
+        if (clean.manifest_community_slug !== undefined) {
+          try {
+            clean.manifest_community_slug = parseCommunityManifestSlug(clean.manifest_community_slug);
+          } catch {
+            return { content: JSON.stringify({ error: INVALID_COMMUNITY_MANIFEST_SLUG_DETAIL }) };
+          }
+        }
         return proposeAssistantAction({
           type: "propose_update_source",
           planId: 0,
@@ -3174,6 +3182,13 @@ export async function applyAssistantAction(
         for (const [key, value] of Object.entries(patch)) if (allowed.has(key)) clean[key] = value;
         if (Object.keys(clean).length === 0) return { ok: false, detail: "patch has no supported fields" };
         if (clean.metadata != null && (typeof clean.metadata !== "object" || Array.isArray(clean.metadata))) return { ok: false, detail: "metadata must be an object" };
+        if (clean.manifest_community_slug !== undefined) {
+          try {
+            clean.manifest_community_slug = parseCommunityManifestSlug(clean.manifest_community_slug);
+          } catch {
+            return { ok: false, detail: INVALID_COMMUNITY_MANIFEST_SLUG_DETAIL };
+          }
+        }
         const updated = deps.repo.updateSource(sourceId, clean as Parameters<AppRepository["updateSource"]>[1]);
         outcome = {
           ok: true,
