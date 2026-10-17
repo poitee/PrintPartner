@@ -8,7 +8,7 @@ use pp_storage::{
         self, AuthPolicy, AuthorityFailure, FirstUserTenant, RegistrationPolicy, Secret,
         SessionTenantPolicy,
     },
-    catalog::CreateSource,
+    catalog::{CreateSource, Credentials, Deletion, Outcome as CatalogOutcome, Request},
     jobs::{
         AttemptLease, ClaimedAttempt, Credential, JobKind, Outcome, ServerWorkerClient,
         UserOperation, WorkerAdmission,
@@ -26,6 +26,7 @@ use std::{
 };
 
 const RESERVED: u64 = 3_506_438_144;
+const QUOTA: u64 = 16 * 1024 * 1024 * 1024;
 
 fn policy() -> AuthPolicy {
     AuthPolicy {
@@ -53,7 +54,7 @@ impl Fixture {
     }
 
     fn with(root: PathBuf, owner: WriterOwner) -> Self {
-        let imports = owner.imports(policy(), 16 * 1024 * 1024 * 1024).unwrap();
+        let imports = owner.imports(policy(), QUOTA).unwrap();
         let admission = WorkerAdmission {
             kinds: JobKind::ALL.into_iter().map(|kind| (kind, 2)).collect(),
             total: 4,
@@ -106,6 +107,16 @@ impl Fixture {
         token.expose().into()
     }
 
+    fn login(&self) -> String {
+        let auth::Outcome::Session { token, .. } = self.auth(auth::Request::Login {
+            email: "importer@example.test".into(),
+            password: Secret::new("long-test-password".into()),
+        }) else {
+            panic!("session expected")
+        };
+        token.expose().into()
+    }
+
     fn logout(&self, token: &str) {
         self.auth(auth::Request::Logout {
             token: Secret::new(token.into()),
@@ -113,6 +124,15 @@ impl Fixture {
     }
 
     fn admit(&self, credential: Credential, key: &str) -> Operation {
+        self.try_admit(credential, key, RESERVED).unwrap()
+    }
+
+    fn try_admit(
+        &self,
+        credential: Credential,
+        key: &str,
+        reserved: u64,
+    ) -> anyhow::Result<Operation> {
         let files = vec![file("part.stl", "input", 'a')];
         let request = Admission {
             key: key.into(),
@@ -127,7 +147,7 @@ impl Fixture {
             input: Input::Files {
                 paths: vec!["part.stl".into()],
             },
-            reserved_bytes: RESERVED,
+            reserved_bytes: reserved,
             max_input_bytes: 268_435_456,
             max_prepared_bytes: 1_073_741_824,
         };
@@ -135,7 +155,6 @@ impl Fixture {
         let cancelled = AtomicBool::new(false);
         self.imports
             .admit(credential, request, files, 0, epoch, &cancelled)
-            .unwrap()
     }
 
     fn claim(&self, op: &Operation) -> AttemptLease {
@@ -145,6 +164,63 @@ impl Fixture {
 
     fn phase(&self, lease: &AttemptLease, phase: Phase) -> anyhow::Result<Operation> {
         self.worker.import_phase(lease, phase)
+    }
+
+    fn cancel(&self, token: &str, op: &Operation) -> pp_storage::jobs::JobRecord {
+        let Outcome::Job(job, _) = self
+            .owner
+            .jobs(policy())
+            .unwrap()
+            .submit(
+                Credential::Session(Secret::new(token.into())),
+                UserOperation::Cancel {
+                    job_id: op.job_id.clone(),
+                },
+                &AtomicBool::new(false),
+                Duration::from_secs(5),
+            )
+            .unwrap()
+            .receive()
+            .unwrap()
+        else {
+            panic!("job expected")
+        };
+        job
+    }
+
+    fn delete_source(&self, token: &str, op: &Operation) -> Deletion {
+        let catalog = self
+            .owner
+            .source_catalog_with_policy(Credentials::Session(Secret::new(token.into())), policy())
+            .unwrap();
+        let CatalogOutcome::Deletion(deletion) = catalog
+            .execute(Request::Delete { id: op.source_id })
+            .unwrap()
+        else {
+            panic!("deletion expected")
+        };
+        deletion
+    }
+
+    /// The import's quota row as (reserved, retained, settled).
+    fn quota(&self, op: &Operation) -> (i64, i64, bool) {
+        self.connection()
+            .query_row(
+                "SELECT reserved_bytes,retained_bytes,settled FROM source_import_quota WHERE operation_key=?1",
+                [&op.key],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap()
+    }
+
+    fn document(&self, op: &Operation) -> String {
+        self.connection()
+            .query_row(
+                "SELECT document FROM source_import_operations WHERE operation_key=?1",
+                [&op.key],
+                |row| row.get(0),
+            )
+            .unwrap()
     }
 
     fn connection(&self) -> Connection {
@@ -589,6 +665,122 @@ fn a_preclaim_refusal_is_journaled_and_checked_at_startup() {
             ),
         }
     }
+}
+
+/// Revokes the owner's session after `Owned`, so `Published` fails the job and
+/// leaves its import holding the whole quota.
+fn refused_after_owned(fixture: &Fixture) -> Operation {
+    let token = fixture.register();
+    let session = Credential::Session(Secret::new(token.clone()));
+    let op = fixture.try_admit(session, "refused", QUOTA).unwrap();
+    let lease = fixture.claim(&op);
+    fixture.phase(&lease, owned(&op)).unwrap();
+    fixture.logout(&token);
+    let error = fixture.phase(&lease, published(&op)).unwrap_err();
+    assert_eq!(
+        authority(&error),
+        Some(&AuthorityFailure::CredentialInvalid)
+    );
+    assert_eq!(
+        fixture
+            .phase(&lease, Phase::Cleanup)
+            .unwrap_err()
+            .to_string(),
+        "Stale attempt fence"
+    );
+    assert_eq!(fixture.quota(&op), (QUOTA as i64, 0, false));
+    op
+}
+
+#[test]
+fn the_owner_settles_a_refused_import_and_frees_its_quota() {
+    let fixture = Fixture::open();
+    let op = refused_after_owned(&fixture);
+    let token = fixture.login();
+    let session = || Credential::Session(Secret::new(token.clone()));
+    assert_eq!(
+        fixture
+            .try_admit(session(), "blocked", RESERVED)
+            .unwrap_err()
+            .to_string(),
+        "Owner import quota exceeded"
+    );
+    let job = fixture.cancel(&token, &op);
+    assert_eq!(job.state, pp_storage::jobs::PersistentState::Failed);
+    assert_eq!(fixture.quota(&op), (0, 0, true));
+    let settled = fixture.imports.get(session(), op.key.clone()).unwrap();
+    assert_eq!(
+        (settled.state, settled.cleanup_settled),
+        (State::Failed, true)
+    );
+    assert_eq!(settled.observation_cursor, Some(2));
+    let document = fixture.document(&op);
+    fixture.cancel(&token, &op);
+    assert_eq!(fixture.document(&op), document);
+    assert_eq!(fixture.job(&op).0, "failed");
+    fixture.try_admit(session(), "next", RESERVED).unwrap();
+    fixture.reopen();
+}
+
+#[test]
+fn startup_settles_a_refused_import() {
+    let fixture = Fixture::open();
+    let token = fixture.register();
+    let session = Credential::Session(Secret::new(token.clone()));
+    let op = fixture.try_admit(session, "preclaim", QUOTA).unwrap();
+    fixture.logout(&token);
+    assert!(fixture.worker.claim_import(&op.job_id).is_err());
+    assert_eq!(fixture.quota(&op), (QUOTA as i64, 0, false));
+    let fixture = fixture.reopen();
+    assert_eq!(fixture.quota(&op), (0, 0, true));
+    let stored: (String, bool) = fixture
+        .connection()
+        .query_row(
+            "SELECT state,json_extract(document,'$.cleanup_settled') FROM source_import_operations WHERE operation_key=?1",
+            [&op.key],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(stored, ("failed".into(), true));
+    fixture
+        .try_admit(fixture.physical(), "next", RESERVED)
+        .unwrap();
+    fixture.reopen();
+}
+
+#[test]
+fn a_source_with_an_unsettled_import_is_not_deleted() {
+    let fixture = Fixture::open();
+    let op = refused_after_owned(&fixture);
+    let token = fixture.login();
+    assert_eq!(fixture.delete_source(&token, &op), Deletion::ActiveWork);
+    fixture.cancel(&token, &op);
+    assert_eq!(
+        fixture.delete_source(&token, &op),
+        Deletion::Deleted {
+            source_id: op.source_id
+        }
+    );
+    fixture.reopen();
+}
+
+#[test]
+fn startup_rejects_an_unsettled_import_without_its_source() {
+    let fixture = Fixture::open();
+    let op = refused_after_owned(&fixture);
+    let Fixture { root, owner, .. } = fixture;
+    owner.shutdown().unwrap();
+    Connection::open(root.join("print-partner.db"))
+        .unwrap()
+        .execute("DELETE FROM projects WHERE id=?1", [op.source_id])
+        .unwrap();
+    let error = WriterOwner::open(&root, Limits::default())
+        .err()
+        .expect("a dangling import must be refused");
+    assert!(
+        format!("{error:#}").contains("Unsettled import Source missing"),
+        "{error:#}"
+    );
 }
 
 #[test]

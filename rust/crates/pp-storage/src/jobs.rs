@@ -1312,6 +1312,8 @@ fn recover_in(tx: &Transaction<'_>, all: bool) -> Result<()> {
 pub(crate) fn recover(connection: &mut Connection) -> Result<()> {
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     recover_in(&tx, true)?;
+    #[cfg(feature = "desktop_rebuild")]
+    crate::uploads::settle_ended(&tx)?;
     tx.commit()?;
     Ok(())
 }
@@ -1910,6 +1912,11 @@ pub(crate) fn user(
         UserOperation::Cancel { job_id } => {
             let mut job = owned(tx, &job_id, tenant)?;
             if job.state.terminal() || job.cancel_requested {
+                // An import that ended before its cleanup phase settles here.
+                #[cfg(feature = "desktop_rebuild")]
+                if crate::uploads::settle_terminal(tx, &job)? {
+                    return Ok(Outcome::Job(job, LocalCommit::Committed));
+                }
                 return Ok(Outcome::Job(job, LocalCommit::ReadOnly));
             }
             job.cancel_requested = true;

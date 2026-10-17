@@ -700,7 +700,16 @@ impl WriterOwner {
                         let _ = reply.send(result);
                     }
                     Envelope::Jobs { command, reply } => {
-                        let _ = reply.send(jobs::execute(
+                        // A cancel can settle an import's reservation.
+                        #[cfg(feature = "desktop_rebuild")]
+                        let cancels = matches!(
+                            &command,
+                            jobs::Command::User {
+                                operation: jobs::UserOperation::Cancel { .. },
+                                ..
+                            }
+                        );
+                        let result = jobs::execute(
                             &mut connection,
                             command,
                             effect_policy,
@@ -709,7 +718,12 @@ impl WriterOwner {
                             &worker.job_subscriptions,
                             #[cfg(feature = "desktop_rebuild")]
                             &mut catalog_state,
-                        ));
+                        );
+                        #[cfg(feature = "desktop_rebuild")]
+                        if cancels && result.is_ok() {
+                            worker.import_epoch.fetch_add(1, Ordering::AcqRel);
+                        }
+                        let _ = reply.send(result);
                     }
                     Envelope::Setting { work, reply } => {
                         let _ = reply.send(execute(&mut connection, work, admission));

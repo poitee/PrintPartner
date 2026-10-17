@@ -1053,10 +1053,26 @@ entry's `source_preclaim_refusals` row; one refused after an earlier attempt wri
 skips an import whose entry is still `admitted`, because only the owner that holds
 its input can run it.
 
+A job can end before its `Cleanup` phase: an authority refusal, a missing Source or
+the attempt limit fails it. `uploads::settle_terminal` then settles the entry, and
+nothing else runs. An unfinished entry becomes `failed`, or `cancelled` if its owner
+asked, and its reservation is released as `Cleanup` releases it. The job, the
+Source and the observations stay as they are. It acts only on a terminal job with no
+fence or worker and an unsettled entry, so a live attempt keeps its import, and a
+repeat changes nothing. Two callers use it. The owner's `Cancel` of the ended job
+settles it with their current credential and advances the accounting epoch. At
+startup, after expired attempts are recovered, the storage owner settles every
+such entry, including those of archived jobs. The reference has no such path: its
+refused imports keep their reservation.
+
+As in the reference, `uploads::source_reserved` makes Source deletion return
+`active_work` while an import of the Source holds an unsettled reservation.
+
 Opening storage checks each preclaim refusal against its entry and job: it must be
-the entry's first and only observation, the entry must still be `admitted`, and the
-job must have failed at generation 1 from a targeted-claim refusal at generation 0,
-with the same cancellation flag.
+the entry's first and only observation, the entry must be `admitted`, or settled as
+`failed` or `cancelled` to match the cancellation flag, and the job must have failed
+at generation 1 from a targeted-claim refusal at generation 0, with the same
+cancellation flag. An unsettled entry whose Source is missing is refused.
 
 Node writes supplied files in one call and has no journal, attempts or
 observations, so the tests port the reference `source_import_operation.rs` storage

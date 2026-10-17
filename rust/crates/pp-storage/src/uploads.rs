@@ -228,6 +228,15 @@ fn validate_journal(connection: &Connection, preclaim: bool) -> Result<()> {
             !op.cleanup_settled || job.as_ref().is_some_and(|job| job.state.terminal()),
             "Import completion job mismatch"
         );
+        ensure!(
+            op.cleanup_settled
+                || connection.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM projects WHERE tenant_id=?1 AND id=?2)",
+                    params![op.tenant, op.source_id],
+                    |row| row.get::<_, bool>(0),
+                )?,
+            "Unsettled import Source missing"
+        );
         if preclaim && let Some(job) = job {
             validate_preclaim_refusal(connection, &op, &job)?;
         }
@@ -237,7 +246,7 @@ fn validate_journal(connection: &Connection, preclaim: bool) -> Result<()> {
 
 /// A preclaim refusal is the entry's only observation: its admitted entry's
 /// first cursor, and the targeted claim refusal that failed its job before any
-/// attempt.
+/// attempt. A settled entry keeps the refusal as its last observation.
 fn validate_preclaim_refusal(
     connection: &Connection,
     op: &Operation,
@@ -263,7 +272,12 @@ fn validate_preclaim_refusal(
         cursor == 1
             && job_id == op.job_id
             && op.authority_revision.is_some()
-            && op.state == State::Admitted
+            && match (&op.state, op.cleanup_settled) {
+                (State::Admitted, false) => true,
+                (State::Failed, true) => !cancel,
+                (State::Cancelled, true) => cancel,
+                _ => false,
+            }
             && op.observation_cursor == Some(cursor)
             && observations == 0
             && attempts == 0
@@ -766,15 +780,7 @@ fn advance(
                     return Err(anyhow!("Import is not settled"));
                 }
             };
-            op.cleanup_settled = true;
-            let retained = op
-                .artifact
-                .as_ref()
-                .map_or(0, |artifact| artifact.stored_bytes);
-            tx.execute(
-                "UPDATE source_import_quota SET reserved_bytes=0,retained_bytes=?3,settled=1 WHERE tenant=?1 AND operation_key=?2",
-                params![op.tenant, op.key, i64::try_from(retained)?],
-            )?;
+            settle(tx, &mut op)?;
             jobs::save(tx, &mut job, "source_import_settled")?;
         }
     }
@@ -784,6 +790,78 @@ fn advance(
     }
     store(tx, &op)?;
     Ok(op)
+}
+
+/// Releases the import's reservation and keeps the bytes of its published
+/// artifact.
+fn settle(tx: &Transaction<'_>, op: &mut Operation) -> Result<()> {
+    op.cleanup_settled = true;
+    let retained = op
+        .artifact
+        .as_ref()
+        .map_or(0, |artifact| artifact.stored_bytes);
+    tx.execute(
+        "UPDATE source_import_quota SET reserved_bytes=0,retained_bytes=?3,settled=1 WHERE tenant=?1 AND operation_key=?2",
+        params![op.tenant, op.key, i64::try_from(retained)?],
+    )?;
+    Ok(())
+}
+
+/// Settles the journal of a supplied import whose job ended before its
+/// `Cleanup` phase, as a refused authority, a missing Source or the attempt
+/// limit leaves it. An unfinished import becomes failed, or cancelled if its
+/// owner asked, and releases its reservation. Nothing else runs: the job, the
+/// Source and its observations stay as they are. Returns false for a job that
+/// is not terminal, holds a fence, or whose import is already settled.
+pub(crate) fn settle_terminal(tx: &Transaction<'_>, job: &jobs::JobRecord) -> Result<bool> {
+    if job.kind != jobs::JobKind::SuppliedSourceImport
+        || !job.state.terminal()
+        || job.fence.is_some()
+        || job.worker.is_some()
+    {
+        return Ok(false);
+    }
+    let Some(mut op) = bound(tx, job)? else {
+        return Ok(false);
+    };
+    if op.cleanup_settled {
+        return Ok(false);
+    }
+    if matches!(
+        op.state,
+        State::Admitted | State::OwnedInputReady | State::Published
+    ) {
+        op.state = if job.cancel_requested {
+            State::Cancelled
+        } else {
+            State::Failed
+        };
+    }
+    settle(tx, &mut op)?;
+    store(tx, &op)?;
+    Ok(true)
+}
+
+/// Settles every unsettled import whose job, live or archived, has ended. The
+/// storage owner runs this at startup, after expired attempts are recovered.
+pub(crate) fn settle_ended(tx: &Transaction<'_>) -> Result<()> {
+    let documents = tx
+        .prepare("SELECT coalesce((SELECT document FROM durable_jobs WHERE id=o.job_id),(SELECT archived_document FROM durable_job_keys WHERE job_id=o.job_id)) FROM source_import_operations o JOIN source_import_quota q USING(tenant,operation_key) WHERE q.settled=0")?
+        .query_map([], |row| row.get::<_, Option<String>>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for document in documents.into_iter().flatten() {
+        settle_terminal(tx, &jobs::decode(&document)?)?;
+    }
+    Ok(())
+}
+
+/// True while an import of the Source holds an unsettled reservation.
+pub(crate) fn source_reserved(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<bool> {
+    Ok(tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM source_import_operations o JOIN source_import_quota q USING(tenant,operation_key) WHERE o.tenant=?1 AND o.source_id=?2 AND q.settled=0)",
+        params![tenant, id],
+        |row| row.get(0),
+    )?)
 }
 
 fn record_observation(
