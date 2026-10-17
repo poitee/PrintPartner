@@ -185,6 +185,11 @@ pub struct Part {
     pub requirement: Option<String>,
     pub option_group_id: Option<String>,
     pub manifest_source: Option<String>,
+    /// Lossless manifest metadata. The scalar fields above are `None` when
+    /// the stored text is not valid Unicode; JSON bodies write this instead.
+    #[cfg(feature = "desktop_rebuild")]
+    #[serde(skip)]
+    pub manifest: PartManifestMetadata,
     pub artifact: Artifact,
     pub units: Vec<Unit>,
 }
@@ -1106,6 +1111,8 @@ fn read_with_purpose(
             requirement: r.os("requirement")?,
             option_group_id: r.os("option_group_id")?,
             manifest_source: r.os("manifest_source")?,
+            #[cfg(feature = "desktop_rebuild")]
+            manifest: r.2.clone(),
             artifact,
             units: Vec::new(),
         });

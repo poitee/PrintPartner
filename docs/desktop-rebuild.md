@@ -1624,3 +1624,24 @@ does not serve.
 ```sh
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test checkoff_progress
 ```
+
+### D21 accepted read JSON bodies, GRE-616 PR 1
+
+With `desktop_rebuild`, `AcceptedRead`, `Snapshot` and `Batch` each have an
+`into_json_body` method. It returns the same bytes as the derived `Serialize`
+output, except for Part manifest metadata. Each accepted `Part` now carries its
+`PartManifestMetadata`, and the body writes `requirement` and `optionGroupId`
+from those UTF-16 units. Text that is not valid Unicode keeps each unpaired
+surrogate as a `\uXXXX` escape, as `JSON.stringify` does. The derived output
+writes `null` for that text. No routes call these methods yet; D23 to D26 wire
+HTTP behind `PP_DESKTOP_REBUILD`.
+
+Accepted snapshot reads still refuse non-scalar manifest text with
+`manifest_text`. The `requirement` and `optionGroupId` scalar fields still feed
+`views`, which would show `null` for that text. That refusal is lifted when
+`views` reads the carrier (D22, GRE-618). GRE-616 PR 2 ports the remaining
+`read_model::context` differences from the reference branch.
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib read_model::json_body
+```
