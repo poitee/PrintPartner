@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+"""Select required CI jobs from a complete PR diff; non-PR events always run."""
+
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+
+def relevant(path, kind):
+    # A filter change must test its own consumers.
+    if path in {"scripts/ci-path-filter.py", "scripts/test_ci_path_filter.py"}:
+        return True
+    if kind == "actions":
+        return path.startswith((".github/workflows/", ".github/actions/"))
+    return (path.startswith(("rust/", "web/apps/", "web/packages/"))
+            or path in {"rust-toolchain.toml", ".github/workflows/rust-cross-os.yml"}
+            or re.fullmatch(r"web/package[^/]*\.json", path) is not None)
+
+
+def select(event, base, head, kind):
+    if event != "pull_request":
+        return True
+    if not all(re.fullmatch(r"[0-9a-f]{40}", sha or "") for sha in (base, head)):
+        return True
+    try:
+        paths = subprocess.check_output(
+            ["git", "diff", "--name-only", "--no-renames", "-z", f"{base}...{head}"],
+            stderr=subprocess.DEVNULL,
+        ).decode("utf-8", errors="surrogateescape").split("\0")
+    except subprocess.CalledProcessError:
+        return True
+    return any(relevant(path, kind) for path in paths if path)
+
+
+if __name__ == "__main__":
+    kind = sys.argv[1]
+    if kind not in {"rust", "actions"}:
+        raise SystemExit("Expected rust or actions")
+    value = str(select(os.environ["EVENT_NAME"], os.environ.get("BASE_SHA"),
+                       os.environ.get("HEAD_SHA"), kind)).lower()
+    message = f"{kind} inputs changed: {value}\n"
+    print(message, end="")
+    with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+        output.write(f"relevant={value}\n")
+    with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as output:
+        output.write(message)

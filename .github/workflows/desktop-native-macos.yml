@@ -39,6 +39,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       native: ${{ steps.select.outputs.native }}
+      storage: ${{ steps.select.outputs.storage }}
       # 'true' when any macOS job should do real work in this run.
       macos: ${{ steps.plan.outputs.macos }}
       # 'true' only off-PR (push to main, nightly, dispatch).
@@ -83,7 +84,7 @@ jobs:
   # filter tests pass, so doomed commits never burn a macOS queue slot.
   linux-precheck:
     needs: changes
-    if: ${{ needs.changes.outputs.macos != 'false' }}
+    if: ${{ needs.changes.outputs.macos != 'false' || needs.changes.outputs.storage != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -344,7 +345,7 @@ jobs:
 
   macos-storage-gate:
     needs: [changes, linux-precheck]
-    if: ${{ !cancelled() && needs.changes.outputs.macos != 'false' && needs.linux-precheck.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    if: ${{ !cancelled() && (needs.changes.outputs.macos != 'false' || needs.changes.outputs.storage != 'false') && needs.linux-precheck.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
@@ -421,3 +422,25 @@ jobs:
           PP_TEST_REAL_SERVER="$GITHUB_WORKSPACE/rust/target/debug/pp-server" python3 -m unittest discover -s .cursor/skills/verify-print-partner-rust/helpers -p test_launch.py -k ForceKillTest
           cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --test runtime_m0 dead_core_marker_without_child_info_allows_start -- --exact
           npm --prefix web run test -w @print-partner/server -- src/desktop-context.test.ts
+
+  alert-macos-main:
+    needs: [changes, linux-precheck, server-smoke, bundle, bundle-intel, macos-storage-gate]
+    if: ${{ failure() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    concurrency:
+      group: ci-macos-main-alert
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Open or update the macOS main failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ALERT_KIND: native
+        run: python3 scripts/alert-macos-main.py

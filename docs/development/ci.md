@@ -1,6 +1,6 @@
 # Continuous integration
 
-The **Rust cross-OS** workflow (`.github/workflows/rust-cross-os.yml`) builds and tests the Rust workspace on Linux, macOS and Windows. It runs on every pull request and on every push to `main`. A new push to a pull request cancels that pull request's older run. Every push to `main` gets its own run, so each merge has a result. Its purpose is to stop code that compiles on one OS only from reaching `main`.
+The **Rust cross-OS** workflow (`.github/workflows/rust-cross-os.yml`) builds and tests the Rust workspace on Linux, macOS and Windows. It starts on every pull request and every push to `main`. On PRs, a `changes` job selects `rust/**`, `rust-toolchain.toml`, `web/package*.json`, `web/apps/**`, `web/packages/**`, the workflow itself, and the CI filter script and its tests. Other changes skip the three named Rust jobs while keeping their check reports present. Every push to `main` and manual run executes all three jobs. A new push to a pull request cancels that pull request's older run. Every push to `main` gets its own run, so each merge has a result. Its purpose is to stop code that compiles on one OS only from reaching `main`.
 
 This page covers what the Rust jobs run and how to reproduce them. [Change a CI workflow](ci-controls.md) covers review, the actionlint and zizmor checks, action pins and required checks. Both apply to this workflow.
 
@@ -25,13 +25,15 @@ Each job runs these steps in order:
 7. `cargo nextest run`, with `desktop_rebuild` off.
 8. `cargo nextest run`, with `desktop_rebuild` on.
 
+On macOS PRs, steps 6 and 8 are skipped. Linux and Windows keep both feature states on PRs. Pushes to `main` and manual runs keep both states on every OS.
+
 The macOS volume exists because the default macOS `TMPDIR` breaks three kinds of test. Its paths are too long for Unix socket names, it is under the `/var` symbolic link that no-follow opens refuse, and it treats `Straße.stl` and `STRASSE.stl` as one name.
 
 Steps 4 to 8 run even when an earlier one of them fails, so one run reports every failure. Clippy uses `--keep-going`, so it reports errors in every crate whose dependencies compile.
 
-The `include` list in the workflow is the only place that names runner labels, the per-OS package scope (`scope`) and the per-OS nextest filter (`tests`). To move a job to a self-hosted runner, change its `runner` value there.
+Each job's `include` list in the workflow is the only place that names runner labels, the per-OS package scope (`scope`) and the per-OS nextest filter (`tests`). To move a job to a self-hosted runner, change its `runner` value there.
 
-The three check names are the ones proposed as required checks on `main`. [Settings for Chad](ci-controls.md#settings-for-chad) lists the full ruleset.
+`rust (linux)` and `rust (windows)` are required checks on `main`; `rust (macos)` is advisory. [Settings for Chad](ci-controls.md#settings-for-chad) lists the full ruleset.
 
 ## Run a job locally
 
@@ -119,5 +121,7 @@ The filter also skips one test by name, outside those groups:
 ## Other Rust workflows
 
 - **Desktop Rust (hosted)** (`desktop-fleet-rust.yml`) runs the ast-grep lint counts and splits the Linux test suite into two partitions. It runs when Rust or web build inputs change.
-- **Native macOS bundle** (`desktop-native-macos.yml`) builds the unsigned macOS app and runs the macOS storage tests. On pull requests it runs only when macOS inputs change or the PR has the `ci:macos` label. A new push to `main` does not cancel a running `main` run; it waits, and only the newest waiting push runs next.
+- **Native macOS bundle** (`desktop-native-macos.yml`) builds the unsigned macOS app and runs the macOS storage tests. On pull requests, bundles run only when macOS inputs change or the PR has the `ci:macos` label. Generic `pp-storage` and `pp-source` changes select the separate `macos-storage-gate` without selecting bundle jobs. A new push to `main` does not cancel a running `main` run; it waits, and only the newest waiting push runs next.
 - **Desktop runtime** (`desktop-runtime.yml`) runs the Python lifecycle and gateway proofs against the built server on Linux.
+
+When `rust (macos)` or a Native macOS bundle workflow job fails on a push to `main`, an alert job opens an issue labelled `ci-macos-main`, or comments on the existing open issue. Rust failures confined to Linux or Windows do not alert. Only the alert job receives `issues: write`.

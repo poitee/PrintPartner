@@ -1,0 +1,83 @@
+"""Exercise CI selection with real Git histories and the workflow CLI."""
+
+import importlib.util
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+
+SCRIPT = Path(__file__).with_name("ci-path-filter.py").resolve()
+spec = importlib.util.spec_from_file_location("ci_filter", SCRIPT)
+ci_filter = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(ci_filter)
+
+
+class CiPathFilterTests(unittest.TestCase):
+    def test_rust_inputs(self):
+        for path in ["rust/Cargo.lock", "rust/crates/pp-storage/src/lib.rs",
+                     "rust-toolchain.toml", "web/package.json", "web/package-lock.json",
+                     "web/apps/web/src/App.tsx", "web/packages/contracts/src/a.ts",
+                     ".github/workflows/rust-cross-os.yml", "scripts/ci-path-filter.py"]:
+            with self.subTest(path=path):
+                self.assertTrue(ci_filter.relevant(path, "rust"))
+        for path in ["docs/ci.md", "README.md", "web/scripts/tool.mjs",
+                     "web/package-data/file.json", ".github/workflows/web-ci.yml"]:
+            with self.subTest(path=path):
+                self.assertFalse(ci_filter.relevant(path, "rust"))
+
+    def test_actions_inputs(self):
+        for path in [".github/workflows/a.yml", ".github/actions/a/action.yml",
+                     "scripts/test_ci_path_filter.py"]:
+            self.assertTrue(ci_filter.relevant(path, "actions"))
+        for path in ["docs/ci.md", "rust/Cargo.toml", "web/package.json"]:
+            self.assertFalse(ci_filter.relevant(path, "actions"))
+
+    def test_unknown_base_and_non_pr_events_run(self):
+        for kind in ["rust", "actions"]:
+            self.assertTrue(ci_filter.select("pull_request", "", "", kind))
+            self.assertTrue(ci_filter.select("pull_request", "0" * 40, "1" * 40, kind))
+            self.assertTrue(ci_filter.select("push", "", "", kind))
+            self.assertTrue(ci_filter.select("workflow_dispatch", "", "", kind))
+
+    def test_real_docs_only_diff_and_deletions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            def git(*args):
+                return subprocess.check_output(["git", *args], cwd=directory, text=True).strip()
+
+            def commit(path):
+                file = Path(directory, path)
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_text("proof\n")
+                git("add", ".")
+                git("commit", "-qm", "proof")
+                return git("rev-parse", "HEAD")
+
+            def select(base, head, kind):
+                output = Path(directory, "output")
+                output.write_text("")
+                result = subprocess.check_output(
+                    ["python3", str(SCRIPT), kind], cwd=directory, text=True,
+                    env={**os.environ, "EVENT_NAME": "pull_request", "BASE_SHA": base,
+                         "HEAD_SHA": head, "GITHUB_OUTPUT": str(output),
+                         "GITHUB_STEP_SUMMARY": str(Path(directory, "summary"))})
+                return output.read_text(), result
+
+            git("init", "-q")
+            git("config", "user.email", "proof@example.com")
+            git("config", "user.name", "Proof")
+            base = commit("README.md")
+            docs = commit("docs/space and\nnewline.md")
+            for kind in ["rust", "actions"]:
+                self.assertEqual(select(base, docs, kind)[0], "relevant=false\n")
+            git("checkout", "-q", "--detach", base)
+            advanced_base = commit("rust/crates/new/src/lib.rs")
+            # Base-only code must not turn a docs-only PR on.
+            self.assertEqual(select(advanced_base, docs, "rust")[0], "relevant=false\n")
+            git("rm", "rust/crates/new/src/lib.rs")
+            git("commit", "-qm", "delete source")
+            self.assertEqual(select(advanced_base, git("rev-parse", "HEAD"), "rust")[0], "relevant=true\n")
+
+
+if __name__ == "__main__":
+    unittest.main()
