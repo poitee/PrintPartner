@@ -77,13 +77,21 @@ class PathFilterTests(unittest.TestCase):
         for path in triggers:
             with self.subTest(path=path):
                 self.assertTrue(bundle_filter.is_macos_pr_input(path))
-        quiet = ["web/apps/web/src/App.tsx", "web/apps/server/src/start.ts",
+        quiet = ["rust/crates/pp-storage/src/lib.rs", "rust/crates/pp-source/src/lib.rs",
+                 "web/apps/web/src/App.tsx", "web/apps/server/src/start.ts",
                  "rust/crates/pp-server/src/lib.rs", "rust/crates/pp-core/src/lib.rs",
                  ".github/workflows/web-ci.yml", "scripts/release.mjs", "Dockerfile",
                  "rust/crates/pp-desktop/README.md", "docs/macos.md", "rust/tests/built_backend_upload.py"]
         for path in quiet:
             with self.subTest(path=path):
                 self.assertFalse(bundle_filter.is_macos_pr_input(path))
+
+    def test_storage_gate_keeps_storage_and_source_paths(self):
+        for path in ["rust/crates/pp-storage/src/lib.rs", "rust/crates/pp-source/src/lib.rs"]:
+            with self.subTest(path=path):
+                self.assertFalse(bundle_filter.is_macos_pr_input(path))
+                self.assertTrue(bundle_filter.is_storage_pr_input(path))
+        self.assertFalse(bundle_filter.is_storage_pr_input("docs/storage.md"))
 
     def test_packaged_markdown_inputs(self):
         paths = ["web/apps/server/src/data/pitfalls.md",
@@ -122,6 +130,10 @@ class PathFilterTests(unittest.TestCase):
             git("checkout", "-q", "--detach", base)
             markdown_head = commit("web/apps/server/src/data/pitfalls.md")
             git("checkout", "-q", "--detach", base)
+            storage_head = commit("rust/crates/pp-storage/src/lib.rs")
+            git("checkout", "-q", "--detach", base)
+            source_head = commit("rust/crates/pp-source/src/lib.rs")
+            git("checkout", "-q", "--detach", base)
             advanced_base = commit("rust/src/lib.rs")
             previous = os.getcwd()
             try:
@@ -133,6 +145,10 @@ class PathFilterTests(unittest.TestCase):
                 self.assertEqual(bundle_filter.select_native("pull_request", base, mixed_head), False)
                 self.assertFalse(bundle_filter.select_native("pull_request", base, markdown_head))
                 self.assertTrue(bundle_filter.select_native("push", base, markdown_head))
+                for storage_change in [storage_head, source_head]:
+                    self.assertFalse(bundle_filter.select_native("pull_request", base, storage_change))
+                    self.assertTrue(bundle_filter.select_native(
+                        "pull_request", base, storage_change, bundle_filter.is_storage_pr_input))
                 self.assertTrue(bundle_filter.select_native("workflow_dispatch", base, head))
                 self.assertTrue(bundle_filter.select_native("push", "0" * 40, head))
                 self.assertTrue(bundle_filter.select_native("pull_request", "", head))
