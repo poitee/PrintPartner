@@ -366,10 +366,6 @@ pub struct SourceWorkLease {
     proof: Option<SourceWorkProof>,
 }
 #[cfg(feature = "desktop_rebuild")]
-#[expect(
-    dead_code,
-    reason = "GRE-609 (d) claim-time Source reservation calls this"
-)]
 pub(crate) fn lease(client: SettingsClient, proof: SourceWorkProof) -> SourceWorkLease {
     SourceWorkLease {
         client,

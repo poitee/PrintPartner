@@ -89,6 +89,14 @@ pub struct AttemptLease {
     fence: String,
     worker: String,
 }
+#[cfg(feature = "desktop_rebuild")]
+pub struct ClaimedAttempt {
+    pub job: JobRecord,
+    pub lease: AttemptLease,
+    pub source_work: Option<crate::catalog::SourceWorkLease>,
+}
+#[cfg(not(feature = "desktop_rebuild"))]
+pub type ClaimedAttempt = (JobRecord, AttemptLease);
 impl AttemptLease {
     pub fn job_id(&self) -> &str {
         &self.job_id
@@ -222,7 +230,7 @@ pub enum Outcome {
     Quarantined(Vec<QuarantinedJob>),
     History(Vec<HistoryEntry>),
     Reconciliations(Vec<ReconciliationRecord>),
-    Claimed(Option<(JobRecord, AttemptLease)>),
+    Claimed(Option<ClaimedAttempt>),
     Retained(usize),
     #[cfg(feature = "desktop_rebuild")]
     Authorized(ValidatedAuthority),
@@ -230,6 +238,8 @@ pub enum Outcome {
 /// What the writer does once the transaction commits.
 enum TransactionDecision {
     Outcome(Outcome),
+    #[cfg(feature = "desktop_rebuild")]
+    Claimed(ClaimPlan),
     /// Report this error only after committing the refusals recorded before it.
     #[cfg(feature = "desktop_rebuild")]
     ErrorAfterCommit(anyhow::Error),
@@ -281,6 +291,8 @@ pub(crate) enum Command {
         kind: Option<JobKind>,
         #[cfg(feature = "desktop_rebuild")]
         policy: Option<AuthPolicy>,
+        #[cfg(feature = "desktop_rebuild")]
+        storage: SettingsClient,
     },
     Worker {
         lease: AttemptLease,
@@ -355,7 +367,7 @@ impl std::fmt::Display for JobAccessFailure {
 impl std::error::Error for JobAccessFailure {}
 pub struct PendingClaim(Pending);
 impl PendingClaim {
-    pub fn receive(self) -> Result<Option<(JobRecord, AttemptLease)>> {
+    pub fn receive(self) -> Result<Option<ClaimedAttempt>> {
         match self.0.receive()? {
             Outcome::Claimed(value) => Ok(value),
             _ => unreachable!(),
@@ -607,18 +619,20 @@ impl ServerWorkerClient {
                 kind: None,
                 #[cfg(feature = "desktop_rebuild")]
                 policy: self.policy,
+                #[cfg(feature = "desktop_rebuild")]
+                storage: self.storage.clone(),
             },
             cancelled,
             wait,
         )?))
     }
-    pub fn claim(&self) -> Result<Option<(JobRecord, AttemptLease)>> {
+    pub fn claim(&self) -> Result<Option<ClaimedAttempt>> {
         self.claim_pending(&AtomicBool::new(false), Duration::from_secs(5))?
             .receive()
     }
     /// Claims the oldest admissible job of one admitted kind.
     #[cfg(feature = "desktop_rebuild")]
-    pub fn claim_kind(&self, kind: JobKind) -> Result<Option<(JobRecord, AttemptLease)>> {
+    pub fn claim_kind(&self, kind: JobKind) -> Result<Option<ClaimedAttempt>> {
         ensure!(
             self.admission
                 .kinds
@@ -633,6 +647,7 @@ impl ServerWorkerClient {
                 admission: self.admission.clone(),
                 kind: Some(kind),
                 policy: self.policy,
+                storage: self.storage.clone(),
             },
             &AtomicBool::new(false),
             Duration::from_secs(5),
@@ -1030,6 +1045,7 @@ pub(crate) fn execute(
     effect_policy: EffectAdmissionPolicy,
     admission: crate::writer_admission::Deadline,
     #[cfg(feature = "desktop_rebuild")] subscriptions: &JobSubscriptions,
+    #[cfg(feature = "desktop_rebuild")] catalog_state: &mut crate::catalog::State,
 ) -> Result<Outcome> {
     #[cfg(feature = "desktop_rebuild")]
     subscriptions::begin_collection();
@@ -1069,7 +1085,16 @@ pub(crate) fn execute(
             admission,
             kind,
             policy,
-        } => claim(&tx, &worker, &admission, kind, policy)?,
+            storage,
+        } => claim(
+            &tx,
+            &worker,
+            &admission,
+            kind,
+            policy,
+            catalog_state,
+            storage,
+        )?,
         #[cfg(not(feature = "desktop_rebuild"))]
         Command::Worker {
             lease,
@@ -1135,6 +1160,10 @@ pub(crate) fn execute(
     }
     match decision {
         TransactionDecision::Outcome(outcome) => Ok(outcome),
+        #[cfg(feature = "desktop_rebuild")]
+        TransactionDecision::Claimed(plan) => {
+            Ok(Outcome::Claimed(Some(plan.into_claimed(catalog_state)?)))
+        }
         #[cfg(feature = "desktop_rebuild")]
         TransactionDecision::ErrorAfterCommit(error) => Err(error),
         #[cfg(feature = "desktop_rebuild")]
@@ -1599,12 +1628,63 @@ fn user(
         }
     }
 }
+#[cfg(feature = "desktop_rebuild")]
+struct SourceReservation {
+    token: u64,
+    tenant: String,
+    id: i64,
+    client: SettingsClient,
+}
+#[cfg(feature = "desktop_rebuild")]
+struct ClaimPlan {
+    job: JobRecord,
+    lease: AttemptLease,
+    source: Option<SourceReservation>,
+}
+#[cfg(feature = "desktop_rebuild")]
+impl ClaimPlan {
+    fn into_claimed(self, state: &mut crate::catalog::State) -> Result<ClaimedAttempt> {
+        let source_work = self
+            .source
+            .map(|source| -> Result<_> {
+                state.activate(source.token, source.tenant, source.id);
+                let proof = state.proof(source.token)?;
+                Ok(crate::catalog::lease(source.client, proof))
+            })
+            .transpose()?;
+        Ok(ClaimedAttempt {
+            job: self.job,
+            lease: self.lease,
+            source_work,
+        })
+    }
+}
+#[cfg(feature = "desktop_rebuild")]
+enum SourceBinding<'a> {
+    None,
+    Individual(i64),
+    Wildcard,
+    LegacySync(Option<&'a [u64]>),
+}
+#[cfg(feature = "desktop_rebuild")]
+fn source_binding(payload: &Payload) -> Result<SourceBinding<'_>> {
+    Ok(match payload {
+        Payload::ImportScan { project_id } | Payload::ExtractSourceDocs { project_id } => {
+            SourceBinding::Individual(i64::try_from(*project_id)?)
+        }
+        Payload::CheckSourceUpdates {} => SourceBinding::Wildcard,
+        Payload::Sync { project_ids } => SourceBinding::LegacySync(project_ids.as_deref()),
+        _ => SourceBinding::None,
+    })
+}
 fn claim(
     tx: &Transaction<'_>,
     worker: &str,
     admission: &WorkerAdmission,
     #[cfg(feature = "desktop_rebuild")] requested: Option<JobKind>,
     #[cfg(feature = "desktop_rebuild")] policy: Option<AuthPolicy>,
+    #[cfg(feature = "desktop_rebuild")] catalog_state: &crate::catalog::State,
+    #[cfg(feature = "desktop_rebuild")] storage: SettingsClient,
 ) -> Result<TransactionDecision> {
     let mut diagnostics = DocumentDiagnostics::default();
     recover_in(tx, false)?;
@@ -1668,6 +1748,29 @@ fn claim(
                     continue;
                 }
             }
+            #[cfg(feature = "desktop_rebuild")]
+            let source = match source_binding(&job.payload)? {
+                SourceBinding::Individual(id) => {
+                    if crate::catalog::get(tx, &job.tenant, id)?.is_none() {
+                        job.state = PersistentState::Failed;
+                        job.recovery = Some("Source is unavailable for this job".into());
+                        save(tx, &mut job, "source_unavailable")?;
+                        continue;
+                    }
+                    if catalog_state.source_busy(&job.tenant, id) {
+                        continue;
+                    }
+                    Some(SourceReservation {
+                        token: catalog_state.next_token()?,
+                        tenant: job.tenant.clone(),
+                        id,
+                        client: storage,
+                    })
+                }
+                SourceBinding::None | SourceBinding::Wildcard | SourceBinding::LegacySync(_) => {
+                    None
+                }
+            };
             job.state = PersistentState::Running;
             job.attempt += 1;
             job.generation += 1;
@@ -1688,6 +1791,13 @@ fn claim(
             if refused {
                 prune(tx, 1000, 10000)?;
             }
+            #[cfg(feature = "desktop_rebuild")]
+            return Ok(TransactionDecision::Claimed(ClaimPlan {
+                job,
+                lease,
+                source,
+            }));
+            #[cfg(not(feature = "desktop_rebuild"))]
             return Ok(TransactionDecision::Outcome(Outcome::Claimed(Some((
                 job, lease,
             )))));
@@ -1831,6 +1941,7 @@ pub(crate) fn claimed_source(
     source_id: Option<i64>,
 ) -> Result<(String, i64)> {
     let job = claimed_job(tx, lease)?;
+    #[cfg(not(feature = "desktop_rebuild"))]
     let id = match job.payload {
         Payload::ImportScan { project_id } | Payload::ExtractSourceDocs { project_id } => {
             ensure!(
@@ -1853,6 +1964,30 @@ pub(crate) fn claimed_source(
             source_id.ok_or_else(|| anyhow!("Wildcard Source attempt requires Source"))?
         }
         _ => return Err(anyhow!("Attempt is not Source work")),
+    };
+    #[cfg(feature = "desktop_rebuild")]
+    let id = match source_binding(&job.payload)? {
+        SourceBinding::Individual(id) => {
+            ensure!(
+                source_id.is_none(),
+                "Individual Source attempt uses its stored Source"
+            );
+            id
+        }
+        SourceBinding::LegacySync(project_ids) => {
+            let id = source_id.ok_or_else(|| anyhow!("Sync attempt requires Source"))?;
+            if let Some(ids) = project_ids {
+                ensure!(
+                    u64::try_from(id).is_ok_and(|id| ids.contains(&id)),
+                    "Source outside Sync scope"
+                );
+            }
+            id
+        }
+        SourceBinding::Wildcard => {
+            source_id.ok_or_else(|| anyhow!("Wildcard Source attempt requires Source"))?
+        }
+        SourceBinding::None => return Err(anyhow!("Attempt is not Source work")),
     };
     Ok((job.tenant, id))
 }
@@ -2370,6 +2505,10 @@ pub(crate) fn validate_schema(connection: &Connection, version: u64) -> Result<(
 
 #[cfg(test)]
 mod tests {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/common/claimed_attempt.rs"
+    ));
     use super::*;
 
     fn record() -> JobRecord {
@@ -2557,6 +2696,8 @@ mod tests {
             crate::writer_admission::Deadline::at_dequeue(),
             #[cfg(feature = "desktop_rebuild")]
             &JobSubscriptions::new(),
+            #[cfg(feature = "desktop_rebuild")]
+            &mut crate::catalog::State::new(std::env::temp_dir()),
         )
     }
     fn claim_command(worker: &str) -> Command {
@@ -2572,7 +2713,20 @@ mod tests {
             kind: None,
             #[cfg(feature = "desktop_rebuild")]
             policy: None,
+            #[cfg(feature = "desktop_rebuild")]
+            storage: test_storage(),
         }
+    }
+    #[cfg(feature = "desktop_rebuild")]
+    fn test_storage() -> SettingsClient {
+        let (owner, _) = WriterOwner::open(
+            &std::env::temp_dir().join(format!("pp-claim-unit-{}", random())),
+            crate::Limits::default(),
+        )
+        .unwrap();
+        let client = owner.client();
+        owner.shutdown().unwrap();
+        client
     }
 
     fn job_row(connection: &Connection, id: &str) -> (String, i64, i64) {
@@ -2594,7 +2748,7 @@ mod tests {
             .execute_batch(include_str!("jobs/schema.sql"))
             .unwrap();
         let held = enqueue_job(&mut connection, "held");
-        let Outcome::Claimed(Some((claimed, _))) =
+        let Outcome::Claimed(Some(claimed_attempt!(claimed, _))) =
             run(&mut connection, claim_command("holder")).unwrap()
         else {
             panic!("held claim");
@@ -2683,7 +2837,7 @@ mod tests {
         connection
             .pragma_update(None, "max_page_count", limit + 64)
             .unwrap();
-        let Outcome::Claimed(Some((retried, _))) =
+        let Outcome::Claimed(Some(claimed_attempt!(retried, _))) =
             run(&mut connection, claim_command("second")).unwrap()
         else {
             panic!("claim after raising the quota");
@@ -2711,7 +2865,7 @@ mod tests {
             .execute_batch(include_str!("jobs/schema.sql"))
             .unwrap();
         let held = enqueue_job(&mut connection, "held");
-        let Outcome::Claimed(Some((claimed, _))) =
+        let Outcome::Claimed(Some(claimed_attempt!(claimed, _))) =
             run(&mut connection, claim_command("holder")).unwrap()
         else {
             panic!("held claim");
@@ -2753,7 +2907,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(running, 1);
-        let Outcome::Claimed(Some((retried, _))) =
+        let Outcome::Claimed(Some(claimed_attempt!(retried, _))) =
             run(&mut connection, claim_command("second")).unwrap()
         else {
             panic!("claim after the commit failure");
@@ -2950,7 +3104,7 @@ mod tests {
                 lease_seconds: 60,
             })
             .unwrap();
-        let mut lease = worker.claim().unwrap().unwrap().1;
+        let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
         let upload = EffectIntent {
             operation: EffectOperation::PrinterUpload,
             basis_hash: "a".repeat(64),
