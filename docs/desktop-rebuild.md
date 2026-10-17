@@ -1523,8 +1523,9 @@ one transaction, then stamp 41. Preflight refuses Sync objects below 41.
 `fixtures/parity/source-sync/generate.mjs` runs Node's `InProcessJobRunner` Sync
 job over a missing id and a Local Source. The Rust test asserts the target order
 and Node's literal failure. Node has no durable batch, Source reservation or
-authority check. The claim, reopen, halt and refusal tests port the reference
-`source_sync_local.rs` cases for the parts in this slice.
+authority check. The claim-before-open, restart-recovery and ordinal tests adapt
+the reference `pp-core/tests/source_sync_local.rs` cases. The halt, refusal,
+busy-Source and bridge tests are new.
 
 ```sh
 node fixtures/parity/source-sync/generate.mjs --check
