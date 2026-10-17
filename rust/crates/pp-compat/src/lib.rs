@@ -1836,17 +1836,35 @@ if sys.argv[1] == "wait":
         }
     }
 
-    #[tokio::test]
-    async fn ticket_t_3_drain_process_stop_sigterms_cooperative_child() {
+    /// Spawns a shell that exits 0 on SIGTERM and returns once the trap is set.
+    /// The group SIGTERM can land in a forked child before it execs `sleep`; the
+    /// child's inherited trap swallows it and a `sleep 30` then outlives the
+    /// grace period (GRE-719). Short sleeps bound that to 0.1 s, and the shell
+    /// still runs its own trap once the current sleep ends.
+    async fn spawn_cooperative_child() -> tokio::process::Child {
+        use tokio::io::{AsyncBufReadExt, BufReader};
         let mut command = tokio::process::Command::new("/bin/sh");
         command
             .arg("-c")
-            .arg("trap 'exit 0' TERM; sleep 30")
+            .arg("trap 'exit 0' TERM; echo ready; while :; do sleep 0.1; done")
             .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
             .process_group(0)
             .kill_on_drop(true);
-        let child = command.spawn().unwrap();
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        let mut child = command.spawn().unwrap();
+        let mut line = String::new();
+        let mut stdout = BufReader::new(child.stdout.take().unwrap());
+        tokio::time::timeout(Duration::from_secs(5), stdout.read_line(&mut line))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(line, "ready\n");
+        child
+    }
+
+    #[tokio::test]
+    async fn ticket_t_3_drain_process_stop_sigterms_cooperative_child() {
+        let child = spawn_cooperative_child().await;
         let outcome = stop_owned_child(child, true).await;
         assert_eq!(outcome.intent, super::StopIntent::PlannedShutdown);
         assert_eq!(outcome.exit, super::CompatExit::Graceful);
@@ -1861,15 +1879,7 @@ if sys.argv[1] == "wait":
 
     #[tokio::test]
     async fn ticket_t_3_drain_restart_cleanup_switches_to_sigterm_when_shutdown_starts() {
-        let mut command = tokio::process::Command::new("/bin/sh");
-        command
-            .arg("-c")
-            .arg("trap 'exit 0' TERM; sleep 30")
-            .stdin(std::process::Stdio::piped())
-            .process_group(0)
-            .kill_on_drop(true);
-        let child = command.spawn().unwrap();
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        let child = spawn_cooperative_child().await;
         let outcome = stop_owned_child_at(child, false, Some(Duration::from_millis(100))).await;
         assert_eq!(outcome.intent, super::StopIntent::PlannedShutdown);
         assert!(
