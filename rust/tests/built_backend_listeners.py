@@ -132,11 +132,9 @@ def kill_token_carriers(token):
 
 
 def pid_gone(pid):
-    try:
-        os.kill(pid, 0)
-        return False
-    except ProcessLookupError:
-        return True
+    # A killed process reparented to init can stay a zombie briefly; a zombie holds no sockets.
+    state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+    return not state or state.startswith("Z")
 
 
 def signed_get(socket_path, generation, key, target):
