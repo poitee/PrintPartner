@@ -1,3 +1,10 @@
+export function hasSpoolmanAssignment(assignment: {
+  filament_color_id?: string | null;
+  spoolman_spool_id?: string | null;
+}): boolean {
+  return Boolean(assignment.filament_color_id?.trim().startsWith("spoolman:") || assignment.spoolman_spool_id?.trim());
+}
+
 export function parseSpoolmanFilamentId(
   colorId: string,
 ): { integrationId: string; filamentId: number } | null {
