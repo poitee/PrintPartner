@@ -17,13 +17,6 @@ pub mod manifest_text;
 #[cfg(feature = "desktop_rebuild")]
 pub mod native_secrets;
 #[cfg(feature = "desktop_rebuild")]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "GRE-612 PR 2 calls this from publish_in_transaction"
-    )
-)]
 mod plan_publication;
 #[cfg(feature = "desktop_rebuild")]
 pub mod profiles;

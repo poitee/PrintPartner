@@ -1,4 +1,5 @@
 import { importRulesForProject, resolveSourceCategory } from "@print-partner/domain";
+import { parseCommunityManifestSlug } from "../lib/community-manifest-slug.js";
 
 type KitBundleProjectRow = {
   name: string;
@@ -112,9 +113,7 @@ export function kitSourceRefFromRecord(raw: Record<string, unknown>): KitBundleS
   const category =
     String(raw.category ?? (role === "unassigned" ? rawRole : "unassigned")).trim() ||
     "unassigned";
-  const slugRaw = raw.manifest_community_slug;
-  const manifestSlug =
-    typeof slugRaw === "string" && slugRaw.trim() ? slugRaw.trim() : null;
+  const manifestSlug = parseCommunityManifestSlug(raw.manifest_community_slug);
   const tagRaw = raw.tag;
   const tag = typeof tagRaw === "string" && tagRaw.trim() ? tagRaw.trim() : null;
   return {
