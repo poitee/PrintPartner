@@ -308,6 +308,9 @@ fn cancellation_after_admission_does_not_retract_publication() {
     });
 }
 
+/// Run from `rust` with `cargo test -p pp-storage --features desktop_rebuild
+/// owner_installs_schema_dispatches_random_tokens_and_drains_before_stop`.
+/// Queue notifications establish admission and shutdown ordering; timeouts only bound failures.
 #[test]
 fn owner_installs_schema_dispatches_random_tokens_and_drains_before_stop() {
     let data = fixture();
@@ -346,18 +349,91 @@ fn owner_installs_schema_dispatches_random_tokens_and_drains_before_stop() {
     validate_schema(&saved, 35).unwrap();
     drop(saved);
     let client = owner.publication();
-    let outcome = serde_json::to_value(
-        client
-            .apply(
+    let outcome = thread::scope(|scope| {
+        // Dispatch takes this mutex after dequeue. Park a control envelope there so
+        // the real apply call remains admitted in the queue until shutdown closes it.
+        let checkpoint = client.shared.orphaned_source_leases.lock().unwrap();
+        let (reply, control) = mpsc::channel();
+        let mut queue = client.shared.queue.lock().unwrap();
+        queue.pending.push_back(Envelope::WriterControl {
+            control: crate::WriterControl::PageCount,
+            reply,
+        });
+        client.shared.changed.notify_all();
+        let (queue, _) = client
+            .shared
+            .changed
+            .wait_timeout_while(queue, Duration::from_secs(5), |queue| {
+                !queue.pending.is_empty()
+            })
+            .unwrap();
+        assert!(
+            queue.pending.is_empty(),
+            "control envelope was not dequeued"
+        );
+        drop(queue);
+        let caller = scope.spawn(|| {
+            client.apply(
                 input(case).unwrap(),
                 &AtomicBool::new(false),
                 Duration::ZERO,
             )
-            .unwrap(),
-    )
-    .unwrap();
+        });
+        let (queue, _) = client
+            .shared
+            .changed
+            .wait_timeout_while(
+                client.shared.queue.lock().unwrap(),
+                Duration::from_secs(5),
+                |queue| queue.pending.is_empty(),
+            )
+            .unwrap();
+        assert_eq!(queue.pending.len(), 1);
+        assert!(matches!(
+            queue.pending.front(),
+            Some(Envelope::Publication { .. })
+        ));
+        drop(queue);
+        let shutdown = scope.spawn(move || owner.shutdown());
+        let (queue, _) = client
+            .shared
+            .changed
+            .wait_timeout_while(
+                client.shared.queue.lock().unwrap(),
+                Duration::from_secs(5),
+                |queue| !queue.closed,
+            )
+            .unwrap();
+        assert!(queue.closed, "shutdown did not close admission");
+        assert_eq!(queue.pending.len(), 1);
+        assert!(matches!(
+            queue.pending.front(),
+            Some(Envelope::Publication { .. })
+        ));
+        assert!(!caller.is_finished(), "publication finished before release");
+        assert!(!shutdown.is_finished(), "shutdown abandoned admitted work");
+        drop(queue);
+        drop(checkpoint);
+        control
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        let outcome = serde_json::to_value(caller.join().unwrap().unwrap()).unwrap();
+        shutdown.join().unwrap().unwrap();
+        outcome
+    });
     assert_eq!(outcome["kind"], "applied");
-    owner.shutdown().unwrap();
+    let receipt = &outcome["receipt"];
+    for field in [
+        "profile_id",
+        "draft_id",
+        "revision_id",
+        "plan_version",
+        "draft_lifecycle_version",
+        "revision_digest",
+    ] {
+        assert_eq!(receipt[field], case["body"][field], "{field}");
+    }
     assert!(matches!(
         client
             .apply(
@@ -373,6 +449,18 @@ fn owner_installs_schema_dispatches_random_tokens_and_drains_before_stop() {
     ));
     let c = Connection::open(dir.join("print-partner.db")).unwrap();
     validate_schema(&c, 37).unwrap();
+    let committed: Value = c.query_row(
+        "SELECT json_object('profile_id', profile_id, 'draft_id', draft_id, 'revision_id', revision_id, 'plan_version', plan_version, 'draft_lifecycle_version', draft_lifecycle_version, 'revision_digest', revision_digest, 'required_unit_mapping_digest', required_unit_mapping_digest, 'applied_at', applied_at) FROM plan_apply_requests WHERE tenant_id='default' AND idempotency_key='client-key' AND actor_id='default'",
+        [],
+        |row| row.get::<_, String>(0),
+    ).map(|text| serde_json::from_str(&text).unwrap()).unwrap();
+    assert_eq!(&committed, receipt);
+    let state: (i64, i64, String, i64, i64, i64, i64) = c.query_row(
+        "SELECT p.accepted_plan_revision_id, p.accepted_plan_version, d.state, d.lifecycle_version, d.consumed_revision_id, (SELECT count(*) FROM plan_revisions), (SELECT count(*) FROM plan_apply_requests) FROM build_profiles p JOIN plan_drafts d ON d.profile_id=p.id WHERE p.id=1 AND d.id=1",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
+    ).unwrap();
+    assert_eq!(state, (1, 1, "consumed".into(), 1, 1, 1, 1));
     let token: String = c
         .query_row("SELECT token FROM required_units LIMIT 1", [], |r| r.get(0))
         .unwrap();
