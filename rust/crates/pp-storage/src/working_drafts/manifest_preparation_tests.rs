@@ -396,3 +396,40 @@ fn apply_charges_option_group_merging() {
         Err(ReadFailure::LimitExceeded(Resource::Visits))
     ));
 }
+
+#[test]
+fn optional_documents_report_cancellation_for_every_read() {
+    let reads = [
+        DocumentRead::Missing,
+        DocumentRead::Skipped(std::io::ErrorKind::PermissionDenied),
+        DocumentRead::Bytes(b"project: Frame".to_vec()),
+        DocumentRead::Bytes(b"{".to_vec()),
+    ];
+    let cancelled = AtomicBool::new(true);
+    for (index, read) in reads.iter().enumerate() {
+        let mut b = PreparationBudget::new(&cancelled, PreparationLimits::default()).unwrap();
+        assert!(
+            matches!(optional_document(read, &mut b), Err(ReadFailure::Cancelled)),
+            "read {index}"
+        );
+    }
+    // Cancelling after any check still refuses; only an uncancelled attempt reads as absent.
+    for (index, read) in reads.iter().enumerate().skip(2) {
+        for checks in 0.. {
+            let cancelled = AtomicBool::new(false);
+            let mut b = PreparationBudget::new(&cancelled, PreparationLimits::default()).unwrap();
+            b.cancel_after_checks(checks);
+            match optional_document(read, &mut b) {
+                Err(ReadFailure::Cancelled) => {}
+                Ok(_) => {
+                    assert!(
+                        !cancelled.load(Ordering::Acquire),
+                        "read {index} at {checks}"
+                    );
+                    break;
+                }
+                Err(error) => panic!("read {index} at {checks}: {error}"),
+            }
+        }
+    }
+}

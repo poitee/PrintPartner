@@ -19,7 +19,6 @@
 /scripts/lint-pr-evidence.mjs @poitee
 /scripts/lint-pr-evidence.test.mjs @poitee
 /scripts/linear/ @poitee
-/scripts/macos-bundle-path-filter.py @poitee
 /scripts/release.mjs @poitee
 /web/scripts/atomic-package-build.mjs @poitee
 /Dockerfile @poitee

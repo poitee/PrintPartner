@@ -20,7 +20,10 @@ class CiPathFilterTests(unittest.TestCase):
                      "web/apps/web/src/App.tsx", "web/packages/contracts/src/a.ts",
                      ".github/workflows/rust-cross-os.yml", "scripts/ci-path-filter.py",
                      "web/tsconfig.base.json", "web/scripts/atomic-package-build.mjs",
-                     "web/scripts/storage-fixtures/prepare.mts"]:
+                     "web/scripts/storage-fixtures/prepare.mts",
+                     "fixtures/parity/jobs-model/jobs-model.json",
+                     "fixtures/drivers/moonraker/moonraker-success.json",
+                     "fixtures/http/routes-inventory.json"]:
             with self.subTest(path=path):
                 self.assertTrue(ci_filter.relevant(path, "rust"))
         for path in ["docs/ci.md", "README.md", "web/scripts/tool.mjs",
@@ -52,7 +55,7 @@ class CiPathFilterTests(unittest.TestCase):
                 file = Path(directory, path)
                 file.parent.mkdir(parents=True, exist_ok=True)
                 file.write_text("proof\n")
-                git("add", ".")
+                git("add", "--", path)
                 git("commit", "-qm", "proof")
                 return git("rev-parse", "HEAD")
 
@@ -73,6 +76,10 @@ class CiPathFilterTests(unittest.TestCase):
             docs = commit("docs/space and\nnewline.md")
             for kind in ["rust", "actions"]:
                 self.assertEqual(select(base, docs, kind)[0], "relevant=false\n")
+            git("checkout", "-q", "--detach", base)
+            fixture = commit("fixtures/parity/jobs-model/jobs-model.json")
+            self.assertEqual(select(base, fixture, "rust")[0], "relevant=true\n")
+            self.assertEqual(select(base, fixture, "actions")[0], "relevant=false\n")
             git("checkout", "-q", "--detach", base)
             advanced_base = commit("rust/crates/new/src/lib.rs")
             # Base-only code must not turn a docs-only PR on.
