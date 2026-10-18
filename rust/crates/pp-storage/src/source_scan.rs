@@ -43,11 +43,11 @@ pub struct LocalDocumentRecord {
 pub struct LocalScanObservation {
     source_id: i64,
     local_path: Option<String>,
-    configuration_version: i64,
-    authority_actor: String,
-    authority_basis_digest: String,
-    activation_observation_digest: String,
-    path_observation_digest: String,
+    pub(crate) configuration_version: i64,
+    pub(crate) authority_actor: String,
+    pub(crate) authority_basis_digest: String,
+    pub(crate) activation_observation_digest: String,
+    pub(crate) path_observation_digest: String,
 }
 
 impl LocalScanObservation {
@@ -292,7 +292,10 @@ fn mark_source_synced(
     Ok(())
 }
 
-#[cfg_attr(not(test), expect(dead_code, reason = "D17 (c) calls this"))]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "D18 (b) Sync target failure calls this")
+)]
 pub(crate) fn mark_local_failure(
     tx: &Transaction<'_>,
     tenant: &str,

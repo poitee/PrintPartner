@@ -266,9 +266,13 @@ fn ppjs_metadata_is_lossless_and_projection_mismatch_is_integrity() {
             Duration::from_secs(2),
         )
         .unwrap();
-    assert!(matches!(&batch.builds[0].accepted,
-        pp_storage::read_model::AcceptedRead::IntegrityFailure { code, message }
-        if code == "manifest_text" && message.contains("lossless snapshot projection")));
+    assert!(matches!(
+        &batch.builds[0].accepted,
+        pp_storage::read_model::AcceptedRead::Ready { .. }
+    ));
+    let body = String::from_utf8(batch.into_json_body().unwrap().into_bytes()).unwrap();
+    assert!(body.contains(r#""requirement":"\ud800""#));
+    assert!(body.contains(r#""optionGroupId":"\udc00""#));
     f.mutate("UPDATE parts SET requirement=x'50504a530100000001d801' WHERE id=2;");
     assert!(matches!(
         f.read().accepted_progress,
