@@ -117,7 +117,15 @@ def netstat_endpoints(text):
         listening = fields[5] == "LISTEN" if protocol.startswith("tcp") else fields[4] == "*.*" and port != "*"
         if listening:
             found.append(Endpoint(protocol, address, int(port), None, None, pids))
+    require(pid_column, f"netstat printed no table header: {text[:200]!r}")
     return found
+
+
+def netstat_output(result):
+    """netstat can exit 0 with only a stderr warning after a sysctl or malloc failure, so stderr fails the read."""
+    require(result.returncode == 0 and not result.stderr,
+            f"netstat failed: returncode={result.returncode} stderr={result.stderr[:200]!r}")
+    return result.stdout
 
 
 def endpoints():
@@ -128,8 +136,9 @@ def endpoints():
                      for endpoint in proc_endpoints(table, Path(f"/proc/net/{table}").read_text())]
         else:
             found = [endpoint for protocol in ("tcp", "udp")
-                     for endpoint in netstat_endpoints(subprocess.check_output(["netstat", "-anv", "-p", protocol], text=True))]
-    except (OSError, ValueError, IndexError, AssertionError, subprocess.CalledProcessError) as error:
+                     for endpoint in netstat_endpoints(netstat_output(subprocess.run(
+                         ["netstat", "-anv", "-p", protocol], capture_output=True, text=True)))]
+    except (OSError, ValueError, IndexError, AssertionError) as error:
         raise AssertionError(f"observation unavailable: {error!r}") from error
     return Counter(found)
 
@@ -190,7 +199,13 @@ def parser_self_test():
             f"netstat parser mismatch: {parsed}")
     header = MACOS_NETSTAT_FIXTURES[1].splitlines()[1]
     truncated_proc = LINUX_PROC_FIXTURE.splitlines()[0] + "\n   0: 0100007F:1F90\n"
-    for parse, broken in ((netstat_endpoints, "tcp4 0 0 127.0.0.1.80 *.* LISTEN 1 1 463 0 0x0100 0x00000106"),
+    table = MACOS_NETSTAT_FIXTURES[1]
+    require(netstat_output(subprocess.CompletedProcess([], 0, table, "")) == table, "netstat_output rejected a clean read")
+    for parse, broken in ((netstat_endpoints, ""),
+                          (netstat_endpoints, "Active Internet connections (including servers)\n"),
+                          (netstat_output, subprocess.CompletedProcess([], 0, table, "netstat: sysctl: Cannot allocate memory\n")),
+                          (netstat_output, subprocess.CompletedProcess([], 1, table, "")),
+                          (netstat_endpoints, "tcp4 0 0 127.0.0.1.80 *.* LISTEN 1 1 463 0 0x0100 0x00000106"),
                           (netstat_endpoints, "Proto Recv-Q Send-Q  Local Address  Foreign Address  (state)"),
                           (netstat_endpoints, f"{header}\nunix 0 0 /tmp/sock *.* LISTEN 1 1 463 0 0x0100 0x00000106"),
                           (netstat_endpoints, f"{header}\ntcp4 0 0 127.0.0.1.80 *.* LISTEN"),

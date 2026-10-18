@@ -348,6 +348,9 @@ fn ticket_t_61_read_model_missing_observations_are_errors() {
         available_input_roots: Default::default(),
         media_by_part_id: Default::default(),
     };
+    #[cfg(feature = "desktop_rebuild")]
+    assert!(views::review_json(&b.builds[0].accepted, false, &obs, &CatalogOnly).is_err());
+    #[cfg(not(feature = "desktop_rebuild"))]
     assert!(views::review(&b.builds[0].accepted, false, &obs, &CatalogOnly).is_err());
 }
 #[test]

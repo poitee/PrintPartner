@@ -344,6 +344,17 @@ impl JobSubscription {
         wait: Duration,
         encode: impl FnOnce(&JobSnapshot) -> std::result::Result<T, E>,
     ) -> std::result::Result<PreparedEvent<T>, E> {
+        self.prepare_with_clock(wait, encode, || {
+            time::OffsetDateTime::now_utc().unix_timestamp()
+        })
+    }
+
+    fn prepare_with_clock<T, E>(
+        &self,
+        wait: Duration,
+        encode: impl FnOnce(&JobSnapshot) -> std::result::Result<T, E>,
+        now: impl Fn() -> i64,
+    ) -> std::result::Result<PreparedEvent<T>, E> {
         let deadline = Instant::now() + wait;
         let mut slot = self
             .cell
@@ -351,7 +362,7 @@ impl JobSubscription {
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         loop {
-            let now = time::OffsetDateTime::now_utc().unix_timestamp();
+            let now = now();
             if slot.expires_at.is_some_and(|expiry| expiry <= now) {
                 slot.queue.clear();
                 slot.close = Some(StreamClose::Expired);
@@ -393,6 +404,17 @@ impl JobSubscription {
         frame: PreparedFrame<T>,
         send: impl FnOnce(T) -> NonblockingSend,
     ) -> FrameAdmission {
+        self.admit_with_clock(frame, send, || {
+            time::OffsetDateTime::now_utc().unix_timestamp()
+        })
+    }
+
+    fn admit_with_clock<T>(
+        &self,
+        frame: PreparedFrame<T>,
+        send: impl FnOnce(T) -> NonblockingSend,
+        now: impl FnOnce() -> i64,
+    ) -> FrameAdmission {
         if !Arc::ptr_eq(&self.cell, &frame.cell) {
             return FrameAdmission::Superseded;
         }
@@ -411,7 +433,7 @@ impl JobSubscription {
             slot.queue.clear();
             slot.close = Some(StreamClose::Revoked);
         }
-        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let now = now();
         if slot.expires_at.is_some_and(|expiry| expiry <= now) {
             slot.queue.clear();
             slot.close = Some(StreamClose::Expired);
@@ -638,6 +660,105 @@ mod tests {
         );
         live.pop();
         assert!(subscribe(&subscriptions).is_ok());
+    }
+
+    #[test]
+    fn persisted_key_expiry_blocks_prepared_frame_without_writer_traffic() {
+        let root = std::env::temp_dir().join(format!(
+            "pp-job-key-expiry-{}",
+            hex::encode(rand::random::<[u8; 12]>())
+        ));
+        let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+        let auth = owner
+            .rebuild_auth_with_policy(
+                POLICY,
+                auth::rebuild::AuthLifetimes::shorter(
+                    Duration::from_secs(3600),
+                    Some(Duration::from_secs(3600)),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let call = |request| {
+            auth.submit(
+                request,
+                Arc::new(AtomicBool::new(false)),
+                Duration::from_secs(5),
+            )
+            .unwrap()
+            .recv()
+            .unwrap()
+            .unwrap()
+        };
+        let Outcome::Session { token, user } = call(Request::Register {
+            email: "key-expiry@example.com".into(),
+            display_name: "Key expiry".into(),
+            password: Secret::new("long-test-password".into()),
+        }) else {
+            panic!("session expected")
+        };
+        let jobs = owner.jobs(POLICY).unwrap();
+        let crate::jobs::Outcome::Job(job, _) = jobs
+            .submit(
+                Credential::Session(Secret::new(token.expose().to_owned())),
+                crate::jobs::UserOperation::Enqueue {
+                    key: "key-expiry".into(),
+                    payload_version: 1,
+                    payload: Payload::CheckSourceUpdates {},
+                },
+                &AtomicBool::new(false),
+                Duration::from_secs(5),
+            )
+            .unwrap()
+            .receive()
+            .unwrap()
+        else {
+            panic!("job expected")
+        };
+        let Outcome::KeyCreated { key, info } = call(Request::CreateKey { session: token }) else {
+            panic!("key expected")
+        };
+        let expiry = time::OffsetDateTime::parse(
+            info.expires_at.as_deref().expect("persisted key expiry"),
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap()
+        .unix_timestamp();
+        let subscription = jobs
+            .subscribe(
+                Credential::RoutedKey {
+                    tenant: user.tenant_id,
+                    key,
+                },
+                job.job_id,
+                &AtomicBool::new(false),
+                Duration::from_secs(5),
+            )
+            .unwrap();
+        assert_eq!(
+            subscription.cell.slot.lock().unwrap().expires_at,
+            Some(expiry)
+        );
+        let PreparedEvent::Frame(initial) = subscription
+            .prepare_with_clock(
+                Duration::ZERO,
+                |snapshot| Ok::<_, Infallible>(snapshot.clone()),
+                || expiry - 1,
+            )
+            .unwrap()
+        else {
+            panic!("prepared frame expected")
+        };
+        assert_eq!(
+            subscription.admit_with_clock(
+                initial,
+                |_| panic!("expired frame must not be sent"),
+                || expiry
+            ),
+            FrameAdmission::Closed(StreamClose::Expired)
+        );
+        owner.shutdown().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

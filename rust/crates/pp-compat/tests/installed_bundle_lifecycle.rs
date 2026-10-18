@@ -169,13 +169,17 @@ async fn installed_bundle_start_health_shutdown() -> Result<()> {
     )?)?;
     ensure!(release.os == "macos", "Installed release is not macOS");
     let web_root = contents.join(&release.web);
-    let bundle = Bundle {
-        node: contents.join(&release.node),
-        entry: web_root.join("apps/server/dist/current/desktop.js"),
-        web_root,
-        runtime_version: release.runtime_version.clone(),
-        commit: release.commit.clone(),
-    };
+    let assets = web_root.join("apps/web/dist");
+    let bundle = pp_compat::verify_bundle(
+        Bundle {
+            node: contents.join(&release.node),
+            entry: web_root.join("apps/server/dist/current/desktop.js"),
+            web_root,
+            runtime_version: release.runtime_version.clone(),
+            commit: release.commit.clone(),
+        },
+        &assets,
+    )?;
     let ownership = TestOwnership::create(
         required_path("PP_COMPAT_TEST_DATA_DIR")?,
         required_path("PP_COMPAT_TEST_RUNTIME_DIR")?,

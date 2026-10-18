@@ -349,6 +349,10 @@
         ]
       },
       {
+        "operation": "tool.check_hardware_interfaces",
+        "resources": []
+      },
+      {
         "operation": "tool.get_job_status",
         "resources": []
       },
@@ -1002,7 +1006,6 @@
       "tool.apply_stack_preset",
       "tool.archive_plan",
       "tool.audit_build_coverage",
-      "tool.check_hardware_interfaces",
       "tool.check_stack_compatibility",
       "tool.compare_plans",
       "tool.create_plan_snapshot",

@@ -31,27 +31,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
-      native: ${{ steps.select.outputs.native }}
-      storage: ${{ steps.select.outputs.storage }}
       # 'true' when any macOS job should do real work in this run.
       macos: ${{ steps.plan.outputs.macos }}
       # 'true' only off-PR (push to main, nightly, dispatch).
       intel: ${{ steps.plan.outputs.intel }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-      - name: Select native macOS inputs
-        id: select
-        shell: bash
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
-          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-        run: |
-          python3 -m unittest discover -s scripts -p test_macos_bundle_path_filter.py
-          python3 scripts/macos-bundle-path-filter.py
       - name: Decide which macOS jobs run
         id: plan
         shell: bash
@@ -72,8 +56,8 @@ jobs:
           echo "intel=$intel" >> "$GITHUB_OUTPUT"
           echo "macOS jobs: $macos (intel: $intel; macos label: $HAS_LABEL; draft: $IS_DRAFT)" >> "$GITHUB_STEP_SUMMARY"
 
-  # Fast Linux gate: macOS runners only start once the shared web build and
-  # filter tests pass, so doomed commits never burn a macOS queue slot.
+  # Fast Linux gate: macOS runners only start once the shared web build passes,
+  # so doomed commits never burn a macOS queue slot.
   linux-precheck:
     needs: changes
     if: ${{ needs.changes.outputs.macos == 'true' }}
