@@ -16,7 +16,7 @@ This page covers review, linters, action pins and required checks for every work
    CI also runs the online audits with its read-only GitHub token.
 4. Fix findings or document a narrow exception and its reason in `.github/zizmor.yml`.
 5. Wait for the PR checks and the independent review on the final commit.
-   Chad applies the repository rules described below and approves protected changes.
+   The applied ruleset and the pending review requirements are described below.
 
 ## Ownership and checks
 
@@ -96,21 +96,60 @@ Dependabot ignores semver-major updates for npm, Docker and Cargo.
 Cargo pins direct crates with `=` and uses `versioning-strategy: lockfile-only`, so Dependabot cannot change a pinned major version.
 Bump a major version in a ticketed PR that updates the manifest pin, `Cargo.lock` and any code the new API needs.
 
-## Settings for Chad
+<a id="settings-for-chad"></a>
 
-CODEOWNERS requests review. GitHub enforces that review only after Chad enables the main-branch ruleset.
-Before applying the proposed ruleset, agents must open and push PRs through a bot identity distinct from `poitee`, so Chad can approve them.
-With `poitee` as the only collaborator, the unchanged rules block every PR he authors or last pushes. GitHub forbids self-approval.
-Alternatively, Chad must add a bypass actor or relax the approval requirements before applying the ruleset. Either option changes its protections.
+## Applied main-branch ruleset
 
-The GRE-635 PR contains the proposed ruleset JSON payload and the matching UI steps.
-The intended required check names are `actionlint`, `zizmor`, `rust (linux)`, and `rust (windows)`.
+Chad applied Phase 1 on 2026-10-17. The GitHub ruleset
+[main CI controls](https://github.com/poitee/PrintPartner/rules/25285698), ID `25285698`,
+is active on the default branch, currently `main`.
+The [committed ruleset JSON](main-ci-controls.ruleset.json) records the live configuration read on 2026-10-18.
+It omits node IDs, timestamps, API links, and the current user's bypass capability.
 
-Apply that ruleset after this PR and GRE-632's three-OS CI land and report all five checks on `main`.
-Require a PR with an approving review, code owner approval, dismissal of stale approvals, and approval of the latest push.
-For the separate bot identity option, block force pushes and branch deletion, restrict merges to squash, and leave the bypass list empty, including for bots.
-Keep other existing protections when adding these rules.
+The applied ruleset has these protections:
 
-After applying the ruleset, use a bot-authored workflow PR to verify that GitHub blocks merging without Chad's approval.
-Verify that a PR changing only documentation receives both lint checks.
-GRE-635 stays open until the settings and those enforcement checks are complete.
+- Block branch deletion and force pushes.
+- Require a pull request and allow only squash merges.
+- Require GitHub Actions checks `actionlint`, `zizmor`, `rust (linux)`, and `rust (windows)`.
+- Allow branches that are not up to date with `main`.
+- Keep the bypass list empty, with no standing admin or bot bypass.
+
+The live ruleset requires four checks. `rust (macos)` is absent, consistent with its advisory status in [Continuous integration](ci.md).
+The Phase 1 ticket report lists five required checks. Chad must reconcile that discrepancy.
+This snapshot records the applied configuration without changing settings.
+
+No approving reviews are required yet. Code-owner review, dismissal of stale approvals,
+approval of the latest push, and review-thread resolution are disabled.
+All agent lanes currently author PRs as `poitee`, and GitHub forbids self-approval.
+CODEOWNERS requests Chad's review but does not yet make that review a merge requirement.
+
+To compare the snapshot with the live ruleset, run this read-only check from the repository root:
+
+```sh
+gh api repos/poitee/PrintPartner/rulesets/25285698 \
+  | jq -S 'del(.node_id, .created_at, .updated_at, ._links, .current_user_can_bypass)' \
+  | diff -u docs/development/main-ci-controls.ruleset.json -
+```
+
+No diff means the normalized live response matches the snapshot. A diff needs review before updating the snapshot.
+
+## Phase 2 for Chad
+
+Phase 2 remains Chad's work and keeps GRE-635 open:
+
+1. Create and install a GitHub App for agents with contents, pull requests, and workflows write access, plus checks read access.
+   Store its key in the VMs' secret store and switch agent PR authorship to the App.
+   Chad owns credentials and their handling.
+2. Require code-owner review, dismiss stale approvals, require approval of the latest push, and require review threads to be resolved.
+   First test whether code-owner review is enforced with `required_approving_review_count: 0`.
+   If it is, only CODEOWNERS paths need Chad's approval. Otherwise, a count of one requires Chad to approve every PR.
+3. Test enforcement with the separate agent identity.
+   A workflow PR must not merge without Chad's approval.
+   A PR touching only `rust/` must merge on green checks if the review policy permits it.
+   A docs-only PR must receive both named lint checks.
+
+## Emergency path
+
+Chad can temporarily disable **main CI controls** in **Settings > Rules**.
+GitHub logs the change. Re-enable the ruleset after the emergency.
+There is no standing admin bypass.

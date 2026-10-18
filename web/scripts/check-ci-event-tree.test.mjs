@@ -31,7 +31,7 @@ console.log(JSON.stringify({ path: '.github/workflows/desktop-contracts.yml', st
   symlinkSync(join(root, 'web/node_modules'), join(directory, 'web/node_modules'));
   writeFileSync(join(directory, contracts), original);
   writeFileSync(join(directory, '.github/workflows/web-ci.yml'), YAML.stringify(webCI));
-  for (const name of ['integration-smoke', 'pr-evidence', 'desktop-e2e', 'desktop-webkit']) {
+  for (const name of ['integration-smoke', 'pr-evidence', 'desktop-e2e', 'desktop-webkit', 'desktop-runtime', 'desktop-native-macos']) {
     copyFileSync(join(root, `.github/workflows/${name}.yml`), join(directory, `.github/workflows/${name}.yml`));
   }
   const git = (...args) => {
@@ -146,7 +146,7 @@ test('event tree accepts original blob despite deleted worktree and moved HEAD',
   f.commit();
   const result = f.run();
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout, 'install_declarations=0 tool_specs=0 errors=0\n');
+  assert.equal(result.stdout, 'install_declarations=1 tool_specs=1 errors=0\n');
 });
 
 test('event tree ignores replacement commit', t => {
@@ -320,6 +320,8 @@ for (const [name, job, diagnostic] of [
   ['pr-evidence', 'lint-pr-body', 'UNPINNED_EVIDENCE_NODE'],
   ['desktop-e2e', 'linux-smoke', 'UNPINNED_E2E_NODE'],
   ['desktop-webkit', 'webkit-stl', 'UNPINNED_WEBKIT_NODE'],
+  ['desktop-runtime', 'runtime', 'UNPINNED_DESKTOP_NODE'],
+  ['desktop-native-macos', 'bundle', 'UNPINNED_DESKTOP_NODE'],
 ]) {
   test(`event tree rejects floating ${name} despite repaired checkout`, t => {
     const path = `.github/workflows/${name}.yml`;
@@ -382,6 +384,8 @@ test('event tree rejects disabled smoke lane despite repaired checkout', t => {
 for (const [name, lane, code] of [
   ['desktop-e2e', 'linux-smoke', 'E2E'],
   ['desktop-webkit', 'webkit-stl', 'WEBKIT'],
+  ['desktop-runtime', 'runtime', 'DESKTOP'],
+  ['desktop-native-macos', 'bundle', 'DESKTOP'],
 ]) {
   test(`event tree rejects missing ${name} assertion despite repaired checkout`, t => {
     const path = `.github/workflows/${name}.yml`;

@@ -247,6 +247,16 @@ impl DraftPart {
                         .to_string()
                         .as_bytes(),
                 ),
+                "quantityInferred" | "quantityOverride" | "quantityEffective"
+                | "quantity_inferred" | "quantity_override" | "quantity_effective" => {
+                    match self.scalar[*field].as_f64() {
+                        Some(quantity) => output
+                            .extend_from_slice(ryu_js::Buffer::new().format(quantity).as_bytes()),
+                        None => {
+                            output.extend_from_slice(self.scalar[*field].to_string().as_bytes())
+                        }
+                    }
+                }
                 _ => output.extend_from_slice(self.scalar[*field].to_string().as_bytes()),
             }
         }

@@ -36,13 +36,24 @@ fn client(capacity: usize) -> PublicationClient {
 fn credential() -> Credential {
     Credential::Session(Secret::new("publication-test-session".into()))
 }
+const API_KEY: &str = "ppk_publication-test-key";
+fn case_credential(case: &Value) -> Credential {
+    match case["credential"].as_str().unwrap() {
+        "session" => credential(),
+        "api_key" => Credential::ApiKey {
+            routed_tenant: case["tenant"].as_str().unwrap().into(),
+            secret: Secret::new(API_KEY.into()),
+        },
+        other => panic!("unknown credential {other}"),
+    }
+}
 fn input(case: &Value) -> Result<PublicationCommand> {
     PublicationCommand::new(
         serde_json::from_value(case["profile"].clone())?,
         serde_json::from_value(case["draft"].clone())?,
         serde_json::from_value(case["request"].clone())?,
         case["key"].as_str().unwrap_or("").into(),
-        credential(),
+        case_credential(case),
     )
 }
 fn seed_session(c: &Connection, tenant: &str) {
@@ -50,6 +61,19 @@ fn seed_session(c: &Connection, tenant: &str) {
     let digest = hex::encode(Sha256::digest(b"publication-test-session"));
     c.execute("INSERT INTO users(id,display_name,is_admin,created_at) VALUES(?1,'Publication test',0,'2026-09-06T00:00:00.000Z')", [tenant]).unwrap();
     c.execute("INSERT INTO sessions(id,user_id,expires_at,provider) VALUES(?1,?2,'2099-01-01T00:00:00.000Z','email')", params![digest,tenant]).unwrap();
+}
+/// Stores a disposable key the way Node's `createApiKey` does: an HMAC digest in `api_keys_v1`.
+fn seed_api_key(c: &Connection, tenant: &str) {
+    use hmac::{Hmac, Mac};
+    let mut mac =
+        Hmac::<sha2::Sha256>::new_from_slice(b"print-partner:settings-api-key:v1").unwrap();
+    mac.update(API_KEY.as_bytes());
+    let keys = json!([{"id":"key_publication","keyHash":hex::encode(mac.finalize().into_bytes()),"createdAt":"2026-09-06T00:00:00.000Z","lastUsedAt":null,"expiresAt":null,"isActive":true}]);
+    c.execute(
+        "INSERT INTO app_settings(tenant_id,key,value) VALUES(?1,'api_keys_v1',?2)",
+        params![tenant, keys.to_string()],
+    )
+    .unwrap();
 }
 struct Tokens(u128);
 impl RequiredUnitTokenAllocator for Tokens {
@@ -106,10 +130,16 @@ fn database(data: &Value) -> Connection {
 fn client_matches_node_apply_route_keys_replay_context_and_error_text() {
     let data = fixture();
     let cases = data["clients"].as_array().unwrap();
-    assert_eq!(cases.len(), 8);
+    assert_eq!(cases.len(), 9);
     for case in cases {
         let mut c = database(&data);
-        seed_session(&c, case["tenant"].as_str().unwrap());
+        let tenant = case["tenant"].as_str().unwrap();
+        if case["credential"] == "api_key" {
+            assert_eq!(case["receipt"]["actor_id"], format!("tenant:{tenant}"));
+            seed_api_key(&c, tenant);
+        } else {
+            seed_session(&c, tenant);
+        }
         if case["corrupt"] == true {
             c.execute_batch("CREATE TRIGGER reject_publication BEFORE INSERT ON plan_revisions BEGIN SELECT RAISE(ABORT,'Rust-only probe detail'); END").unwrap();
         }
@@ -159,7 +189,22 @@ fn client_matches_node_apply_route_keys_replay_context_and_error_text() {
             .unwrap();
         assert_eq!(
             json!({"idempotency_key": stored.0, "actor_id": stored.1}),
-            case["receipt"]
+            case["receipt"],
+            "{}",
+            case["id"]
+        );
+        let revision: (String, String) = c
+            .query_row(
+                "SELECT created_by,accepted_by FROM plan_revisions",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            json!({"created_by": revision.0, "accepted_by": revision.1}),
+            case["revision"],
+            "{}",
+            case["id"]
         );
         let again =
             serde_json::to_value(run(&client, input(case).unwrap(), &mut c, &mut tokens).unwrap())

@@ -33,9 +33,9 @@ for path in paths:
         source = source.replace(before, after)
     if not count + outcomes + extra:
         continue
-    if "/tests/common/claimed_attempt.rs" not in source:
+    if "/src/claimed_attempt.rs" not in source:
         scope = "    " if path.name == "jobs.rs" else ""
-        include = scope + 'include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/common/claimed_attempt.rs"));\n'
+        include = scope + 'include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/claimed_attempt.rs"));\n'
         if path.name == "jobs.rs":
             source = source.replace("mod tests {\n", "mod tests {\n" + include, 1)
         else:
