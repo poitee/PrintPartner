@@ -60,12 +60,36 @@ impl Fixture {
     }
 
     fn admit(&self, request: Admission) -> anyhow::Result<pp_storage::uploads::Operation> {
+        self.admit_with(request, false)
+    }
+
+    fn admit_with(
+        &self,
+        request: Admission,
+        cancelled: bool,
+    ) -> anyhow::Result<pp_storage::uploads::Operation> {
         self.imports.admit(
             self.credential(),
             request,
             &self.supplied(),
-            &AtomicBool::new(false),
+            &AtomicBool::new(cancelled),
         )
+    }
+
+    fn rows(&self) -> [i64; 4] {
+        let db = rusqlite::Connection::open(self.root.join("data/print-partner.db")).unwrap();
+        [
+            "projects",
+            "source_import_operations",
+            "source_import_quota",
+            "durable_jobs",
+        ]
+        .map(|table| {
+            db.query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap()
+        })
     }
 
     /// Every entry under the repos and supplied directories with its bytes.
@@ -156,8 +180,9 @@ fn source_import_client_admits_once() {
         (None, None)
     );
 
+    let rows = fixture.rows();
     let replay = fixture.admit(request("first", directory)).unwrap();
-    assert_eq!(replay, operation);
+    assert_eq!((replay, fixture.rows()), (operation.clone(), rows));
     let read = fixture
         .imports
         .get(fixture.credential(), "first".into())
@@ -184,6 +209,7 @@ fn source_import_client_refuses_invalid_directory_input() {
     assert_eq!(os_error(&fixture.root.join("missing")), Some(libc::ENOENT));
     std::fs::remove_file(link).unwrap();
     let before = fixture.files();
+    let rows = fixture.rows();
 
     let refusals = [
         (
@@ -226,21 +252,26 @@ fn source_import_client_refuses_invalid_directory_input() {
         let mut refused = request("refused", input);
         refused.max_input_bytes = max_input_bytes;
         let error = fixture.admit(refused).unwrap_err().to_string();
-        assert_eq!(error, expected);
+        assert_eq!((error.as_str(), fixture.rows()), (expected, rows));
     }
-    assert!(
-        fixture
-            .imports
-            .get(fixture.credential(), "refused".into())
-            .is_err()
+    let directory = SourceImports::directory_input(&fixture.supplied()).unwrap();
+    let error = fixture
+        .admit_with(request("refused", directory.clone()), true)
+        .unwrap_err()
+        .to_string();
+    assert_eq!(
+        (error.as_str(), fixture.rows()),
+        ("Cancelled before admission", rows)
     );
+    let missing = fixture
+        .imports
+        .get(fixture.credential(), "refused".into())
+        .unwrap_err()
+        .to_string();
+    assert_eq!(missing, "Import not found");
     assert_eq!(fixture.files(), before);
 
-    let admitted = fixture
-        .admit(request(
-            "refused",
-            SourceImports::directory_input(&fixture.supplied()).unwrap(),
-        ))
-        .unwrap();
+    let admitted = fixture.admit(request("refused", directory)).unwrap();
     assert_eq!(admitted.requested_files, [input("part.stl", b"solid a")]);
+    assert_eq!(fixture.rows(), [rows[0] + 1, 1, 1, rows[3] + 1]);
 }

@@ -8,7 +8,7 @@ use pp_storage::{
 };
 use std::{
     path::{Path, PathBuf},
-    sync::atomic::AtomicBool,
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 /// Synchronous admission and lookup for supplied Source imports. It reads the
@@ -46,6 +46,14 @@ impl SourceImports {
             .into_iter()
             .map(SourcePath::try_from)
             .collect::<std::result::Result<Vec<_>, _>>()?;
+        let live = || -> Result<()> {
+            ensure!(
+                !cancelled.load(Ordering::Acquire),
+                "Cancelled before admission"
+            );
+            Ok(())
+        };
+        live()?;
         let expected_files = LocalFiles::open(supplied)?
             .inventory(&paths, request.max_input_bytes)?
             .into_iter()
@@ -56,8 +64,15 @@ impl SourceImports {
                 kind: "input".into(),
             })
             .collect();
+        live()?;
         let accounting_epoch = self.client.accounting_epoch();
-        let disk = local_selection::stored_bytes(&self.repos)?;
+        let disk = match local_selection::stored_bytes(&self.repos, cancelled) {
+            Ok(disk) => disk,
+            Err(error) => {
+                live()?;
+                return Err(error.into());
+            }
+        };
         self.client.admit(
             credential,
             request,

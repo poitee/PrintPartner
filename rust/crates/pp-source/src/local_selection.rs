@@ -42,12 +42,15 @@ fn walk(root: &Directory, prefix: &str, files: &mut Vec<SourcePath>) -> Result<(
 }
 
 /// Bytes stored under `root`, counting every regular file.
-pub fn stored_bytes(root: &Path) -> Result<u64> {
-    fn count(dir: &Directory) -> Result<u64> {
+pub fn stored_bytes(root: &Path, cancelled: &AtomicBool) -> Result<u64> {
+    fn count(dir: &Directory, cancelled: &AtomicBool) -> Result<u64> {
         let mut total = 0u64;
         for entry in dir.entries()? {
+            if cancelled.load(Ordering::Acquire) {
+                return Err(Error::Limit);
+            }
             let bytes = match dir.child(&entry, false) {
-                Ok(child) => count(&child)?,
+                Ok(child) => count(&child, cancelled)?,
                 Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::NotADirectory => {
                     dir.file(&entry, false)?.metadata()?.len()
                 }
@@ -57,7 +60,7 @@ pub fn stored_bytes(root: &Path) -> Result<u64> {
         }
         Ok(total)
     }
-    count(&Directory::open_root(root)?)
+    count(&Directory::open_root(root)?, cancelled)
 }
 
 impl LocalFiles {
