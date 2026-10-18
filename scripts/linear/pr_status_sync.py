@@ -21,7 +21,7 @@ Usage:
   pr_status_sync.py reconcile [--dry-run] # cron fallback over recent PRs
 Env: LINEAR_API_KEY, GH_TOKEN (read), GITHUB_REPOSITORY (default poitee/PrintPartner)
 """
-import argparse, datetime as dt, json, os, re, subprocess, sys, urllib.request
+import argparse, datetime as dt, json, os, re, subprocess, sys, time, urllib.error, urllib.request
 
 REPO = os.environ.get("GITHUB_REPOSITORY", "poitee/PrintPartner")
 TEAM = os.environ.get("LINEAR_TEAM_KEY", "GRE")
@@ -35,16 +35,53 @@ TERMINAL = {"completed", "canceled", "duplicate"}
 
 
 def gql(query, variables=None):
+    key = os.environ["LINEAR_API_KEY"]
     req = urllib.request.Request(
         "https://api.linear.app/graphql",
         json.dumps({"query": query, "variables": variables or {}}).encode(),
-        {"Content-Type": "application/json", "Authorization": os.environ["LINEAR_API_KEY"]},
+        {"Content-Type": "application/json", "Authorization": key},
     )
-    with urllib.request.urlopen(req, timeout=30) as r:
-        out = json.load(r)
-    if out.get("errors"):
-        raise RuntimeError("Linear API returned GraphQL errors")
-    return out["data"]
+    # A lost commentCreate response may hide a successful write. Only an explicit
+    # rate-limit rejection is safe to replay; issueUpdate sets an absolute state.
+    replay_safe = "commentCreate" not in query
+    for attempt in range(3):
+        try:
+            try:
+                response = urllib.request.urlopen(req, timeout=30)
+            except urllib.error.HTTPError as error:
+                response = error
+            with response:
+                status = getattr(response, "status", None) or getattr(response, "code", 200)
+                body = response.read().decode("utf-8", errors="replace")
+        except OSError:
+            failure = "Linear API transport failed"
+            retry = replay_safe
+            print(failure, file=sys.stderr)
+        else:
+            try:
+                out = json.loads(body)
+            except ValueError:
+                out = {}
+            if not isinstance(out, dict):
+                out = {}
+            errors = out.get("errors") or []
+            rate_limited = bool(errors) and all(
+                isinstance(error, dict) and error.get("extensions", {}).get("code") == "RATELIMITED"
+                for error in errors)
+            if status < 400 and not errors and "data" in out:
+                return out["data"]
+            diagnostic = "; ".join(
+                f"{error.get('message', '')} code={error.get('extensions', {}).get('code', '')}"
+                for error in errors if isinstance(error, dict)) if errors else body
+            diagnostic = diagnostic.replace(key, "[REDACTED]") if key else diagnostic
+            print(f"Linear API HTTP {status}: {json.dumps(diagnostic, ensure_ascii=False)}", file=sys.stderr)
+            failure = "Linear API returned GraphQL errors" if errors else f"Linear API HTTP {status} failed"
+            rejected = (rate_limited or status == 429) and not out.get("data")
+            transient = rate_limited or status == 429 or 500 <= status < 600
+            retry = transient and (replay_safe or rejected) and (not errors or rate_limited)
+        if not retry or attempt == 2:
+            raise RuntimeError(failure) from None
+        time.sleep(2 ** attempt)
 
 
 def gh(*args):
@@ -144,27 +181,32 @@ def other_open(ident, exclude):
     return [p["number"] for p in open_prs() if p["number"] != exclude and ident in refs(p)[1]]
 
 
-def apply_pr(pr):
+def apply_pr(pr, errors=None):
     if pr["isCrossRepository"]:
         return
     closing, ids = refs(pr)
     n = pr["number"]
     for ident in sorted(ids):
-        iss = issue(ident)
-        if not iss:
-            continue
-        if pr["state"] == "OPEN":
-            move(iss, "In Review", f"PR #{n} open: {pr['title'][:80]}")
-        elif pr["state"] == "MERGED":
-            slice_comment = f"slice PR #{n} merged ('Refs' only); next slice pending. Final slice PR must say 'Fixes {ident}'."
-            if ident in closing:
-                move(iss, "Done", f"PR #{n} merged with 'Fixes {ident}'.")
-            elif other_open(ident, n):
-                move(iss, "In Review", slice_comment, record_unchanged=True)
-            elif iss["state"]["name"] in {"In Review", "In Progress"}:  # never pull Todo/Backlog back up
-                move(iss, "In Progress", slice_comment, record_unchanged=True)
-        elif pr["state"] == "CLOSED" and iss["state"]["name"] == "In Review" and not other_open(ident, n):
-            move(iss, "In Progress", f"PR #{n} closed without merge; no other open PR.")
+        try:
+            iss = issue(ident)
+            if not iss:
+                continue
+            if pr["state"] == "OPEN":
+                move(iss, "In Review", f"PR #{n} open: {pr['title'][:80]}")
+            elif pr["state"] == "MERGED":
+                slice_comment = f"slice PR #{n} merged ('Refs' only); next slice pending. Final slice PR must say 'Fixes {ident}'."
+                if ident in closing:
+                    move(iss, "Done", f"PR #{n} merged with 'Fixes {ident}'.")
+                elif other_open(ident, n):
+                    move(iss, "In Review", slice_comment, record_unchanged=True)
+                elif iss["state"]["name"] in {"In Review", "In Progress"}:  # never pull Todo/Backlog back up
+                    move(iss, "In Progress", slice_comment, record_unchanged=True)
+            elif pr["state"] == "CLOSED" and iss["state"]["name"] == "In Review" and not other_open(ident, n):
+                move(iss, "In Progress", f"PR #{n} closed without merge; no other open PR.")
+        except Exception:
+            if errors is None:
+                raise
+            errors.append(f"PR #{n} {ident}")
 
 
 def apply_event(pr, event):
@@ -189,9 +231,10 @@ def reconcile(hours):
 
     since = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=hours)
     prs = all_prs()
+    errors = []
     recent = [p for p in prs if p["state"] == "OPEN" or ts(p["updatedAt"]) >= since]
     for p in sorted(recent, key=lambda p: ts(p["updatedAt"])):  # oldest first, newest wins
-        apply_pr(p)
+        apply_pr(p, errors)
     # stall sweep
     last = {}
     for p in prs:
@@ -203,7 +246,11 @@ def reconcile(hours):
     issues = []
     cursor = None
     while True:
-        d = gql('query($k:String!,$after:String){issues(first:250,after:$after,filter:{team:{key:{eq:$k}},state:{name:{in:["In Progress","In Review"]}}}){nodes{id identifier updatedAt state{name type}} pageInfo{hasNextPage endCursor}}}', {"k": TEAM, "after": cursor})
+        try:
+            d = gql('query($k:String!,$after:String){issues(first:250,after:$after,filter:{team:{key:{eq:$k}},state:{name:{in:["In Progress","In Review"]}}}){nodes{id identifier updatedAt state{name type}} pageInfo{hasNextPage endCursor}}}', {"k": TEAM, "after": cursor})
+        except Exception:
+            errors.append("stale issue listing")
+            break
         issues.extend(d["issues"]["nodes"])
         if not d["issues"]["pageInfo"]["hasNextPage"]:
             break
@@ -211,11 +258,16 @@ def reconcile(hours):
     cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=STALE_HOURS)
     for iss in issues:
         ident = iss["identifier"]
-        if other_open(ident, -1):
-            continue
-        t = max([ts(iss["updatedAt"])] + ([last[ident]] if ident in last else []))
-        if t < cutoff:
-            move(iss, "Backlog", f"stalled: no PR/commit activity for {STALE_HOURS}h and no open PR.")
+        try:
+            if other_open(ident, -1):
+                continue
+            t = max([ts(iss["updatedAt"])] + ([last[ident]] if ident in last else []))
+            if t < cutoff:
+                move(iss, "Backlog", f"stalled: no PR/commit activity for {STALE_HOURS}h and no open PR.")
+        except Exception:
+            errors.append(f"stale {ident}")
+    if errors:
+        raise RuntimeError("Linear reconciliation failed for: " + ", ".join(errors)) from None
 
 
 def main():
