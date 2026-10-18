@@ -296,6 +296,35 @@ fn ticket_t_59_catalog_work_delete_ordering() {
     owner.shutdown().unwrap();
 }
 #[test]
+fn gre601_duplicate_direct_source_lease_preserves_typed_catalog_context() {
+    let fixture = Fixture::new();
+    let owner = fixture.open();
+    let client = owner.local_source_catalog();
+    let id = create(&client, "Typed busy context");
+    let active = client
+        .begin_work(id, &AtomicBool::new(false), Duration::from_secs(5))
+        .unwrap();
+    let duplicate = client.begin_work(id, &AtomicBool::new(false), Duration::from_secs(5));
+    #[cfg(feature = "desktop_rebuild")]
+    {
+        let error = duplicate
+            .err()
+            .expect("duplicate direct Source lease accepted");
+        assert!(
+            error
+                .downcast_ref::<pp_storage::catalog::SourceBusy>()
+                .is_some()
+        );
+        assert_eq!(error.to_string(), "Source work is already active");
+    }
+    #[cfg(not(feature = "desktop_rebuild"))]
+    {
+        assert!(duplicate.is_ok());
+    }
+    drop(active);
+    owner.shutdown().unwrap();
+}
+#[test]
 fn ticket_t_59_catalog_categories_naming_and_import_invalidation() {
     let fixture = Fixture::new();
     let owner = fixture.open();
