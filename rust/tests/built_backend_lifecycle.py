@@ -122,37 +122,35 @@ def owned_child(command, lock_fd, output, env):
                 require(cleanup["pid_absent"] and cleanup["group_absent"], "guard left a process behind")
 
 
-def reap_owned_descendants():
-    """Only called inside the dedicated Linux subreaper worker."""
-    killed, reaped = set(), []
-    deadline = time.monotonic() + STOP_SECONDS
-    while True:
-        try:
-            while True:
-                pid, _ = os.waitpid(-1, os.WNOHANG)
-                if not pid:
-                    break
-                reaped.append(pid)
-        except ChildProcessError:
-            return {"killed": sorted(killed), "reaped": reaped, "children_absent": True}
-        # Killing a parent reparents even session-detached, empty-env descendants to this worker.
-        children = Path(f"/proc/self/task/{os.getpid()}/children").read_text().split()
-        for child in children:
-            pid = int(child)
-            try:
-                os.kill(pid, signal.SIGKILL)
-                killed.add(pid)
-            except ProcessLookupError:
-                pass
-        require(time.monotonic() < deadline, f"run-owned descendants survived cleanup: {children}")
-        time.sleep(.01)
-
-
 def _subreaper_timeout(signum, frame):
     raise TimeoutError("isolated proof exceeded its deadline")
 
 
 def _subreaper_worker(connection, parent_connection, function, args, cleanup_path):
+    def reap_owned_descendants():
+        killed, reaped = set(), []
+        deadline = time.monotonic() + STOP_SECONDS
+        while True:
+            try:
+                while True:
+                    pid, _ = os.waitpid(-1, os.WNOHANG)
+                    if not pid:
+                        break
+                    reaped.append(pid)
+            except ChildProcessError:
+                return {"killed": sorted(killed), "reaped": reaped, "children_absent": True}
+            # Killing a parent reparents even session-detached, empty-env descendants to this worker.
+            children = Path(f"/proc/self/task/{os.getpid()}/children").read_text().split()
+            for child in children:
+                pid = int(child)
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                    killed.add(pid)
+                except ProcessLookupError:
+                    pass
+            require(time.monotonic() < deadline, f"run-owned descendants survived cleanup: {children}")
+            time.sleep(.01)
+
     parent_connection.close()
     try:
         libc = ctypes.CDLL(None, use_errno=True)
@@ -163,7 +161,6 @@ def _subreaper_worker(connection, parent_connection, function, args, cleanup_pat
             outcome = ("result", function(*args))
         except BaseException as error:
             if isinstance(error, AssertionError):
-                # Exception constructors such as ListenerFound take more than their message.
                 outcome = ("assertion", type(error), error.args, error.__dict__)
             else:
                 outcome = ("error", traceback.format_exc())

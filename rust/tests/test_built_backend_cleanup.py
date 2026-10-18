@@ -1,5 +1,3 @@
-"""Focused Linux listener cleanup regressions. No built backend is required."""
-
 import json
 import os
 from pathlib import Path
