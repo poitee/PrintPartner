@@ -18,7 +18,7 @@ use std::{
 };
 
 const CURRENT_SCHEMA: u64 = if cfg!(feature = "desktop_rebuild") {
-    40
+    41
 } else {
     35
 };
@@ -1441,7 +1441,7 @@ fn ticket_t_28_claims_schema35_migration_rollback_and_backup_restart() {
     let fixture = Connection::open(path.join("print-partner.db")).unwrap();
     #[cfg(feature = "desktop_rebuild")]
     fixture
-        .execute_batch("DROP TABLE source_scan_executions; DROP TABLE plan_apply_admissions; DROP TABLE source_preclaim_refusals; DROP TABLE source_revision_observations; DROP TABLE source_revision_artifacts; DROP TABLE source_revision_attempts; DROP TABLE source_import_quota; DROP TABLE source_import_operations; DROP TRIGGER trg_source_revisions_provenance_immutable_update; DROP TRIGGER trg_source_revisions_provenance_immutable_delete")
+        .execute_batch("DROP TABLE source_sync_targets; DROP TABLE source_sync_batches; DROP TABLE source_scan_executions; DROP TABLE plan_apply_admissions; DROP TABLE source_preclaim_refusals; DROP TABLE source_revision_observations; DROP TABLE source_revision_artifacts; DROP TABLE source_revision_attempts; DROP TABLE source_import_quota; DROP TABLE source_import_operations; DROP TRIGGER trg_source_revisions_provenance_immutable_update; DROP TRIGGER trg_source_revisions_provenance_immutable_delete")
         .unwrap();
     fixture.execute_batch("DROP TABLE durable_job_reconciliations; DROP TABLE durable_job_history; DROP TABLE durable_job_keys; DROP TABLE durable_jobs; UPDATE app_settings SET value='34' WHERE tenant_id='default' AND key='schema_version'; CREATE TRIGGER reject_schema35 BEFORE UPDATE ON app_settings WHEN NEW.key='schema_version' AND NEW.value='35' BEGIN SELECT RAISE(ABORT,'fixture migration constraint'); END;").unwrap();
     drop(fixture);
@@ -4125,13 +4125,21 @@ fn integration_wildcard_uncertainty_and_abandon_guard_until_matching_resolution(
         let catalog = owner.local_source_catalog();
         let id = source(&catalog, "Wildcard");
         let another = source(&catalog, "Wildcard other");
+        let sync = matches!(payload, Payload::Sync { .. });
         let queued = enqueue(&owner, "wildcard", payload);
         assert_eq!(deletion(&catalog, id), Deletion::ActiveWork);
         let worker = owner.job_worker(admission()).unwrap();
         let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
         assert!(source_lease(&worker, &lease, None).is_err());
-        let mut live = source_lease(&worker, &lease, Some(id)).unwrap();
-        live.release().unwrap();
+        // Sync reserves each target's Source when it claims the target.
+        if cfg!(feature = "desktop_rebuild") && sync {
+            assert!(source_lease(&worker, &lease, Some(id)).is_err());
+        } else {
+            source_lease(&worker, &lease, Some(id))
+                .unwrap()
+                .release()
+                .unwrap();
+        }
         worker
             .update(
                 &mut lease,
@@ -4977,10 +4985,12 @@ fn scoped_sync_reserves_and_leases_only_listed_sources() {
     assert!(source_lease(&worker, &lease, None).is_err());
     assert!(source_lease(&worker, &lease, Some(outside)).is_err());
     for id in [first, second] {
-        source_lease(&worker, &lease, Some(id))
-            .unwrap()
-            .release()
-            .unwrap();
+        let source_work = source_lease(&worker, &lease, Some(id));
+        // Sync reserves each target's Source when it claims the target.
+        #[cfg(feature = "desktop_rebuild")]
+        assert!(source_work.is_err());
+        #[cfg(not(feature = "desktop_rebuild"))]
+        source_work.unwrap().release().unwrap();
     }
     let unrelated = enqueue(
         &owner,

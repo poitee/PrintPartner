@@ -26,7 +26,7 @@ CODEOWNERS assigns these paths to `@poitee`:
 - `.github/dependabot.yml` and `.github/zizmor.yml`.
 - `rust/scripts/check-*` and `rust/deny.toml`.
 - The action pin, CI tool pin, desktop workflow, and workaround checks and their tests.
-- The PR evidence checker and its test, the `scripts/linear/` directory, and the macOS bundle path filter.
+- The PR evidence checker and its test, and the `scripts/linear/` directory.
   Linear PR sync runs a script from that directory with the Linear secret. Python imports files next to that script before the standard library.
 - `scripts/release.mjs`, `web/scripts/atomic-package-build.mjs`, `Dockerfile`, and `docker-entrypoint.sh`, which the release workflow runs directly or builds into the published image.
 - `rust/ast-grep-baseline.json`, `scripts/workaround-baseline.json`, and Rust snapshot directories under `rust/crates/`.

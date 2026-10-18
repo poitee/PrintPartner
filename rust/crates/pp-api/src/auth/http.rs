@@ -11,7 +11,9 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
-use pp_storage::auth::{AuthClient, Outcome, Provider, Request, Secret};
+#[cfg(feature = "desktop_rebuild")]
+use pp_storage::auth::rebuild::RebuildAuthClient;
+use pp_storage::auth::{AuthClient, AuthReply, Outcome, Provider, Request, Secret};
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
@@ -100,9 +102,41 @@ impl AuthHttpConfig {
 type RateSources = HashMap<(IpAddr, bool), (Instant, u32)>;
 
 #[derive(Clone)]
+pub enum AuthBackend {
+    Pool(AuthClient),
+    #[cfg(feature = "desktop_rebuild")]
+    Rebuild(RebuildAuthClient),
+}
+impl AuthBackend {
+    fn submit(
+        &self,
+        request: Request,
+        cancelled: Arc<AtomicBool>,
+        wait: Duration,
+    ) -> Result<AuthReply> {
+        match self {
+            Self::Pool(client) => client.submit(request, cancelled, wait),
+            #[cfg(feature = "desktop_rebuild")]
+            Self::Rebuild(client) => client.submit(request, cancelled, wait),
+        }
+    }
+}
+impl From<AuthClient> for AuthBackend {
+    fn from(client: AuthClient) -> Self {
+        Self::Pool(client)
+    }
+}
+#[cfg(feature = "desktop_rebuild")]
+impl From<RebuildAuthClient> for AuthBackend {
+    fn from(client: RebuildAuthClient) -> Self {
+        Self::Rebuild(client)
+    }
+}
+
+#[derive(Clone)]
 pub(super) struct App {
     pub(super) config: AuthHttpConfig,
-    pub(super) auth: AuthClient,
+    pub(super) auth: AuthBackend,
     pub(super) providers: ProviderClient,
     mail: ResetMailer,
     rates: Arc<Mutex<RateSources>>,
@@ -111,14 +145,14 @@ pub(super) struct App {
 }
 pub fn auth_router(
     config: AuthHttpConfig,
-    auth: AuthClient,
+    auth: impl Into<AuthBackend>,
     providers: ProviderClient,
     mail: ResetMailer,
 ) -> Router {
     let discord = providers.configured(Provider::Discord);
     let app = App {
         config,
-        auth,
+        auth: auth.into(),
         providers,
         mail,
         rates: Arc::default(),
@@ -231,7 +265,7 @@ async fn guard(State(app): State<App>, request: axum::extract::Request, next: Ne
     }
     next.run(request).await
 }
-pub(super) async fn invoke(auth: &AuthClient, request: Request) -> Result<Outcome, Failure> {
+pub(super) async fn invoke(auth: &AuthBackend, request: Request) -> Result<Outcome, Failure> {
     static WAITERS: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
     let permit = WAITERS
         .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(64)))

@@ -78,6 +78,18 @@ fn preparation_matches_literal_node_digests_progress_and_slots() {
             "{}",
             case["id"]
         );
+        let mut unsorted = case.clone();
+        if let Some(assignments) = unsorted["input"]["assignments"].as_array_mut() {
+            assignments.reverse();
+        }
+        let unsorted = self::prepared(&unsorted).unwrap();
+        let unsorted_slots: Vec<_> = unsorted.assignments.iter().map(Assignment::slot).collect();
+        assert_eq!(
+            (unsorted.digest, unsorted.progress, unsorted_slots),
+            (prepared.digest.clone(), prepared.progress.clone(), slots),
+            "{} unsorted",
+            case["id"]
+        );
         let mut reversed = prepared.parts;
         reversed.reverse();
         assert_eq!(model::revision_digest(&reversed).unwrap(), prepared.digest);
@@ -86,6 +98,33 @@ fn preparation_matches_literal_node_digests_progress_and_slots() {
             assert_ne!(model::revision_digest(&reversed).unwrap(), prepared.digest);
         }
     }
+}
+
+#[test]
+fn preparation_text_limit_counts_node_fields_as_utf8() {
+    let case = golden()["prepare"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == "create")
+        .unwrap()
+        .clone();
+    let prepare = |surrogates: usize| {
+        let mut parts: Vec<DraftPart> = case["input"]["draft"]["parts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .cloned()
+            .map(part)
+            .collect();
+        // Buffer.byteLength counts a lone surrogate as 3 bytes; its JSON escape is 6.
+        parts[0].manifest.requirement =
+            Some(ManifestText(JsText::from_units(vec![0xD800; surrogates])));
+        model::prepare(parts, &case["input"]["assignments"], &HashMap::new()).map(|_| ())
+    };
+    // The other named fields hold 51 bytes: 51 + 3 * 21828 = 65535.
+    prepare(21828).unwrap();
+    assert_eq!(error(prepare(21829)), "Accepted operational row text limit");
 }
 
 #[test]
@@ -649,6 +688,13 @@ mod transaction {
                 ],
             );
         }
+        if result["kind"] == "production_active" {
+            result = json!({
+                "kind": "production_active",
+                "checkoff_link_count": outcome["checkoffLinkCount"],
+                "send_queue_item_count": outcome["sendQueueItemCount"],
+            });
+        }
         result
     }
     pub(super) fn replace_time(value: &mut Value, actual: &str, expected: &Value) {
@@ -676,6 +722,9 @@ mod transaction {
             "mapped-remap-index-0",
             "mapped-remap-index-2",
             "renamed-part",
+            "prior-completion-index-0",
+            "prior-completion-index-1",
+            "prior-completion-index-2",
         ] {
             assert!(
                 cases.iter().any(|case| case["id"] == id),

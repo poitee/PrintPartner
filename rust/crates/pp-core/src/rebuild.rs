@@ -11,7 +11,7 @@ impl DesktopRebuild {
         self.0
     }
 
-    fn from_value(value: Option<&str>) -> Self {
+    pub(crate) fn from_value(value: Option<&str>) -> Self {
         Self(cfg!(feature = "desktop_rebuild") && matches!(value, Some("1" | "true")))
     }
 }

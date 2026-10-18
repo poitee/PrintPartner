@@ -33,6 +33,9 @@ pub mod profile_interpreter;
 #[cfg(feature = "desktop_rebuild")]
 pub mod review_observations;
 
+#[cfg(feature = "desktop_rebuild")]
+pub mod rebuild_api;
+
 #[cfg(test)]
 mod origin_tests;
 
@@ -180,7 +183,13 @@ async fn start_resources(
         .assets
         .canonicalize()
         .context("React assets unavailable")?;
-    pp_compat::verify_bundle(&input.bundle, &assets)?;
+    // Measure the release once, off the runtime and before the readiness budget starts.
+    let verified_assets = assets.clone();
+    let bundle = tokio::task::spawn_blocking(move || {
+        pp_compat::verify_bundle(input.bundle, &verified_assets)
+    })
+    .await
+    .context("Release verification task failed")??;
     let data_dir = pp_storage::lease::prepare_directory(&input.data_dir)?;
     if let Some(released) = StorageLease::retry_failed_release_if_present(&data_dir)? {
         anyhow::ensure!(
@@ -205,7 +214,7 @@ async fn start_resources(
     let supervisor = Supervisor::start_with_config(
         SpawnSpec {
             account_pin,
-            bundle: input.bundle,
+            bundle,
             data_dir: owner.data_dir().to_owned(),
             runtime_dir: owner.runtime_dir().to_owned(),
             storage_lock: owner.clone_file()?,

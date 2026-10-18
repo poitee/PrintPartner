@@ -3347,6 +3347,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "libc",
+ "pp-api",
  "pp-compat",
  "pp-gateway",
  "pp-net",

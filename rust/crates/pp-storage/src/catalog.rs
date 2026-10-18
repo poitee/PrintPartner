@@ -296,6 +296,10 @@ impl State {
             .values()
             .any(|binding| binding.tenant == tenant && binding.id == id)
     }
+    #[cfg(feature = "desktop_rebuild")]
+    pub(crate) fn incarnation(&self) -> &str {
+        &self.incarnation
+    }
     pub(crate) fn next_token(&self) -> Result<u64> {
         self.issued_high_water
             .checked_add(1)
@@ -1098,6 +1102,10 @@ fn delete(tx: &Transaction<'_>, state: &State, tenant: &str, id: i64) -> Result<
         return Ok(Deletion::NotFound);
     };
     if state.source_busy(tenant, id) || crate::jobs::source_reserved(tx, tenant, id)? {
+        return Ok(Deletion::ActiveWork);
+    }
+    #[cfg(feature = "desktop_rebuild")]
+    if crate::uploads::source_reserved(tx, tenant, id)? {
         return Ok(Deletion::ActiveWork);
     }
     if tx.query_row(

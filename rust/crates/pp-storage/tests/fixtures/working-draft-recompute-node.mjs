@@ -1,4 +1,4 @@
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, readdirSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -41,50 +41,93 @@ const cases = [
   { name: 'no-stls', files: [], calls: [recompute('first')] },
 ];
 
-const output = [];
-for (const { name, setup = [], files: stls = files, calls } of cases) {
-  const directory = mkdtempSync(join(tmpdir(), 'pp-draft-recompute-node-'));
-  copyFileSync(join(here, 'required-units', 'unchanged.db'), join(directory, 'print-partner.db'));
+if (!process.argv.includes('--large-carry')) {
+  const output = [];
+  for (const { name, setup = [], files: stls = files, calls } of cases) {
+    const directory = mkdtempSync(join(tmpdir(), 'pp-draft-recompute-node-'));
+    copyFileSync(join(here, 'required-units', 'unchanged.db'), join(directory, 'print-partner.db'));
+    const ports = createSelfHostPorts(directory);
+    await ports.db.connect();
+    const raw = new DatabaseSync(join(directory, 'print-partner.db'));
+    try {
+      const checkout = join(directory, 'checkout-1');
+      for (const root of [checkout, join(directory, 'repos/1/revisions/fixture')]) {
+        mkdirSync(root, { recursive: true });
+        for (const path of stls) writeFileSync(join(root, path), path);
+      }
+      raw.prepare('UPDATE projects SET local_path=? WHERE id=1').run(checkout);
+      for (const sql of setup) raw.exec(sql);
+      const repo = ports.repository;
+      const service = new PlanDraftWorkspaceService(repo);
+      const prepare = repo.preparePlanDraft;
+      const results = calls.map(({ op, profile, draft, request, key, applyManifest, between }) => {
+        repo.preparePlanDraft = function (...args) {
+          const prepared = prepare.apply(this, args);
+          if (between) raw.exec(between);
+          return prepared;
+        };
+        try {
+          if (op === 'edit') return service.editParts({ profileId: profile, draftId: draft, actorId: 'default', request: parseEditPlanDraftPartsRequest(request) });
+          if (!repo.getOwnedProfileIdentity(profile)) return { kind: 'profile_not_found' };
+          const result = repo.recomputePlanDraft({ profileId: profile, actor: 'default', idempotencyKey: key, applyManifest, preferAccepted: applyManifest === false });
+          return result.draft ? { ...result, draft: { ...result.draft, createdAt: /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(result.draft.createdAt) } } : result;
+        } catch (error) {
+          return { error: error.message };
+        }
+      });
+      const rows = (sql) => raw.prepare(sql).all().map((row) => ({ ...row }));
+      output.push({
+        name, setup, files: stls, calls, results,
+        drafts: rows("SELECT id,tenant_id,profile_id,base_revision_id,base_plan_version,state,lifecycle_version,rebased_from_draft_id,rebased_from_lifecycle_version,rebased_from_snapshot_digest,digest_format,snapshot_digest,created_by,idempotency_key,created_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9]Z' AS created_at_iso,current_required_unit_reconciliation_id,consumed_revision_id,consumed_at FROM plan_drafts ORDER BY id"),
+        inputs: rows('SELECT * FROM plan_draft_inputs ORDER BY id'),
+        parts: rows('SELECT * FROM plan_draft_parts ORDER BY id'),
+      });
+    } finally {
+      raw.close();
+      await ports.db.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }
+  process.stdout.write(`${output.map((row) => JSON.stringify(row)).join('\n')}\n`);
+}
+
+if (process.argv.includes('--large-carry')) {
+  const directory = mkdtempSync(join(tmpdir(), 'pp-large-carry-node-'));
+  copyFileSync(join(here, 'required-units/unchanged.db'), join(directory, 'print-partner.db'));
   const ports = createSelfHostPorts(directory);
   await ports.db.connect();
   const raw = new DatabaseSync(join(directory, 'print-partner.db'));
   try {
-    const checkout = join(directory, 'checkout-1');
-    for (const root of [checkout, join(directory, 'repos/1/revisions/fixture')]) {
-      mkdirSync(root, { recursive: true });
-      for (const path of stls) writeFileSync(join(root, path), path);
+    const checkout = join(directory, 'checkout');
+    mkdirSync(checkout);
+    for (let i = 0; i < 20; i += 1) {
+      const filename = `old-${i.toString().padStart(4, '0')}.stl`;
+      writeFileSync(join(checkout, filename), filename);
     }
-    raw.prepare('UPDATE projects SET local_path=? WHERE id=1').run(checkout);
-    for (const sql of setup) raw.exec(sql);
-    const repo = ports.repository;
-    const service = new PlanDraftWorkspaceService(repo);
-    const prepare = repo.preparePlanDraft;
-    const results = calls.map(({ op, profile, draft, request, key, applyManifest, between }) => {
-      repo.preparePlanDraft = function (...args) {
-        const prepared = prepare.apply(this, args);
-        if (between) raw.exec(between);
-        return prepared;
-      };
-      try {
-        if (op === 'edit') return service.editParts({ profileId: profile, draftId: draft, actorId: 'default', request: parseEditPlanDraftPartsRequest(request) });
-        if (!repo.getOwnedProfileIdentity(profile)) return { kind: 'profile_not_found' };
-        const result = repo.recomputePlanDraft({ profileId: profile, actor: 'default', idempotencyKey: key, applyManifest, preferAccepted: applyManifest === false });
-        return result.draft ? { ...result, draft: { ...result.draft, createdAt: /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(result.draft.createdAt) } } : result;
-      } catch (error) {
-        return { error: error.message };
-      }
+    raw.prepare('UPDATE projects SET local_path=?,current_source_revision_id=NULL WHERE id=1').run(checkout);
+    raw.exec("INSERT INTO build_profiles(id,tenant_id,name) VALUES(3,'default','New Build'); INSERT INTO profile_layers(tenant_id,profile_id,project_id,layer_type,layer_order) SELECT tenant_id,3,project_id,layer_type,layer_order FROM profile_layers WHERE profile_id=1");
+    const service = new PlanDraftWorkspaceService(ports.repository);
+    const first = service.recompute({ profileId: 3, actorId: 'default', idempotencyKey: 'node-large' });
+    if (first.kind !== 'ready') throw new Error(`first outcome ${first.kind}`);
+    const draft = ports.repository.getPlanDraft(3, first.workspace.draft.draft_id);
+    if (!draft || draft.parts.length !== 20) throw new Error(`expected twenty real Source Parts: ${JSON.stringify(draft)}`);
+    const edit = service.editParts({
+      profileId: 3, draftId: draft.id, actorId: 'default',
+      request: parseEditPlanDraftPartsRequest({ expected_snapshot_digest: draft.snapshotDigest, decision: { kind: 'set_quantity_override', draft_part_ids: draft.parts.map(part => part.id), value: 10000 } }),
     });
-    const rows = (sql) => raw.prepare(sql).all().map((row) => ({ ...row }));
-    output.push({
-      name, setup, files: stls, calls, results,
-      drafts: rows("SELECT id,tenant_id,profile_id,base_revision_id,base_plan_version,state,lifecycle_version,rebased_from_draft_id,rebased_from_lifecycle_version,rebased_from_snapshot_digest,digest_format,snapshot_digest,created_by,idempotency_key,created_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9]Z' AS created_at_iso,current_required_unit_reconciliation_id,consumed_revision_id,consumed_at FROM plan_drafts ORDER BY id"),
-      inputs: rows('SELECT * FROM plan_draft_inputs ORDER BY id'),
-      parts: rows('SELECT * FROM plan_draft_parts ORDER BY id'),
-    });
+    if (edit.kind !== 'ready') throw new Error(`edit outcome ${edit.kind}`);
+    const selected = raw.prepare("SELECT r.expected_assignment_count,(SELECT count(*) FROM plan_draft_required_unit_assignments a WHERE a.reconciliation_id=r.id) AS assignments,length(CAST(r.result_json AS BLOB)) AS result_bytes FROM plan_drafts d JOIN plan_draft_required_unit_reconciliations r ON r.id=d.current_required_unit_reconciliation_id WHERE d.profile_id=3 AND d.state='open'").get();
+    if (selected.assignments !== 200000) throw new Error('expected 200,000 selected assignments');
+    for (const filename of readdirSync(checkout)) unlinkSync(join(checkout, filename));
+    writeFileSync(join(checkout, 'only-current.stl'), 'only-current.stl');
+    const recomputed = service.recompute({ profileId: 3, actorId: 'default', idempotencyKey: 'node-small' });
+    if (recomputed.kind !== 'ready') throw new Error(`recompute outcome ${recomputed.kind}`);
+    const states = raw.prepare('SELECT state,lifecycle_version FROM plan_drafts WHERE profile_id=3 ORDER BY id').all();
+    if (states.length !== 2 || states[0].state !== 'abandoned' || states[1].state !== 'open') throw new Error('wrong lifecycle');
+    process.stdout.write(JSON.stringify({ first: first.kind, edit: edit.kind, selected, recompute: recomputed.kind, states, normal_service_path: true }) + '\n');
   } finally {
     raw.close();
     await ports.db.close();
     rmSync(directory, { recursive: true, force: true });
   }
 }
-process.stdout.write(`${output.map((row) => JSON.stringify(row)).join('\n')}\n`);

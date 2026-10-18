@@ -419,6 +419,7 @@ fn cancelled_observation_without_checkouts_refuses() {
 struct LongPaths {
     manifest: Vec<u8>,
     paths: Vec<String>,
+    checks_before_cancel: usize,
 }
 
 impl DraftReads for LongPaths {
@@ -445,15 +446,17 @@ impl DraftReads for LongPaths {
         budget: &mut PreparationBudget<'_>,
     ) -> ReadResult<DocumentRead> {
         // The community read is the last one before declared parts are matched.
-        // Cancel once the first path has been checked.
         assert!(matches!(request.purpose(), CatalogPurpose::Community(_)));
-        budget.cancel_after_checks(1);
+        budget.cancel_after_checks(self.checks_before_cancel);
         Ok(DocumentRead::Missing)
     }
 }
 
-#[test]
-fn cancellation_while_matching_long_paths_refuses() {
+fn observe_long_paths(
+    parts: &str,
+    paths: Vec<String>,
+    checks_before_cancel: usize,
+) -> ReadResult<()> {
     let mut database = Database::oracle();
     database
         .connection
@@ -464,16 +467,33 @@ fn cancellation_while_matching_long_paths_refuses() {
     let captured = database.capture(TENANT, 1).unwrap();
     let reads = LongPaths {
         manifest: format!(
-            "option_groups:\n  slow:\n    variants:\n      - id: crafted\n        parts: [\"*{}b\"]\n",
-            "a".repeat(2048)
+            "option_groups:\n  slow:\n    variants:\n      - id: crafted\n        parts: {parts}\n"
         )
         .into_bytes(),
-        paths: vec!["a".repeat(4096); 256],
+        paths,
+        checks_before_cancel,
     };
+    observe(&captured, Some(&reads), PreparationLimits::default(), false).map(drop)
+}
+
+#[test]
+fn cancellation_while_matching_long_paths_refuses() {
+    // The entry check passes; cancellation lands after the first path.
+    let parts = format!("[\"*{}b\"]", "a".repeat(2048));
     assert!(matches!(
-        observe(&captured, Some(&reads), PreparationLimits::default(), false),
+        observe_long_paths(&parts, vec!["a".repeat(4096); 256], 2),
         Err(ReadFailure::Cancelled)
     ));
+}
+
+#[test]
+fn cancellation_before_matching_without_paths_or_parts_refuses() {
+    for (parts, paths) in [("[\"*b\"]", Vec::new()), ("[]", vec!["b".to_owned()])] {
+        assert!(matches!(
+            observe_long_paths(parts, paths, 0),
+            Err(ReadFailure::Cancelled)
+        ));
+    }
 }
 
 fn import_only_source(imported_paths: &str) -> Database {

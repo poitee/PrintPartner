@@ -226,6 +226,10 @@ pub enum Outcome {
     HeldLocalScan(crate::source_scan::HeldLocalScanInspection),
     #[cfg(feature = "desktop_rebuild")]
     LocalScanReconciled(JobRecord),
+    #[cfg(feature = "desktop_rebuild")]
+    SourceSyncOpened,
+    #[cfg(feature = "desktop_rebuild")]
+    SourceSyncTarget(crate::source_sync::NextSyncTarget, i64),
     Job(JobRecord, LocalCommit),
     List(Vec<JobRecord>),
     #[cfg(feature = "desktop_rebuild")]
@@ -251,6 +255,8 @@ enum TransactionDecision {
     LocalScanCompleted(crate::source_scan::PendingLocalCompletion),
     #[cfg(feature = "desktop_rebuild")]
     LocalScanReconciled(crate::source_scan::PendingLocalReconciliation),
+    #[cfg(feature = "desktop_rebuild")]
+    SourceSyncReserved(crate::source_sync::ReservedTarget, SettingsClient),
     /// Report this error only after committing the refusals recorded before it.
     #[cfg(feature = "desktop_rebuild")]
     ErrorAfterCommit(anyhow::Error),
@@ -363,6 +369,17 @@ pub(crate) enum Command {
         source_work: crate::catalog::SourceWorkProof,
         applied: crate::source_scan::LocalScanApplied,
         reason: String,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    OpenSourceSync {
+        lease: AttemptLease,
+        policy: AuthPolicy,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    ClaimSourceSyncTarget {
+        lease: AttemptLease,
+        policy: AuthPolicy,
+        storage: SettingsClient,
     },
     Retain {
         per_tenant: usize,
@@ -734,6 +751,27 @@ impl ServerWorkerClient {
         )?)
         .receive()
     }
+    /// Runs one phase of a claimed supplied import. A refused original authority
+    /// commits the refusal and its Source observation before returning the typed
+    /// failure.
+    #[cfg(feature = "desktop_rebuild")]
+    pub fn import_phase(
+        &self,
+        lease: &AttemptLease,
+        phase: crate::uploads::Phase,
+    ) -> Result<crate::uploads::Operation> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
+        crate::uploads::submit(
+            &self.storage,
+            crate::uploads::Command::Phase {
+                lease: lease.clone(),
+                phase,
+                policy,
+            },
+            &AtomicBool::new(false),
+        )
+    }
     /// Revalidates the original credential of a live attempt. The check does
     /// not change the job.
     #[cfg(feature = "desktop_rebuild")]
@@ -948,6 +986,53 @@ impl ServerWorkerClient {
         };
         source_work.consume_retired()?;
         Ok(job)
+    }
+
+    pub fn open_source_sync(&self, lease: &AttemptLease) -> Result<()> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
+        match submit(
+            &self.storage,
+            Command::OpenSourceSync {
+                lease: lease.clone(),
+                policy,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::SourceSyncOpened => Ok(()),
+            _ => unreachable!(),
+        }
+    }
+
+    /// Claims the next target of an open batch. A Local target's lease holds
+    /// its Source reservation; release or drop it promptly.
+    pub fn claim_next_source_sync_target(
+        &self,
+        lease: &mut AttemptLease,
+    ) -> Result<crate::source_sync::NextSyncTarget> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
+        match submit(
+            &self.storage,
+            Command::ClaimSourceSyncTarget {
+                lease: lease.clone(),
+                policy,
+                storage: self.storage.clone(),
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::SourceSyncTarget(target, version) => {
+                lease.version = version;
+                Ok(target)
+            }
+            _ => unreachable!(),
+        }
     }
 }
 
@@ -1193,6 +1278,12 @@ fn bind_printer_start(tx: &Transaction<'_>, tenant: &str, mut payload: Payload) 
     payload.bind_printer_start(printer_id, upload)?;
     Ok(payload)
 }
+#[cfg(feature = "desktop_rebuild")]
+pub(crate) fn fail_source_unavailable(tx: &Transaction<'_>, job: &mut JobRecord) -> Result<()> {
+    job.state = PersistentState::Failed;
+    job.recovery = Some("Source is unavailable for this job".into());
+    save(tx, job, "source_unavailable")
+}
 pub(crate) fn save(tx: &Transaction<'_>, job: &mut JobRecord, event: &str) -> Result<()> {
     job.payload.validate_stored()?;
     job.state_version += 1;
@@ -1291,6 +1382,8 @@ fn recover_in(tx: &Transaction<'_>, all: bool) -> Result<()> {
 pub(crate) fn recover(connection: &mut Connection) -> Result<()> {
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     recover_in(&tx, true)?;
+    #[cfg(feature = "desktop_rebuild")]
+    crate::uploads::settle_ended(&tx)?;
     tx.commit()?;
     Ok(())
 }
@@ -1462,6 +1555,24 @@ pub(crate) fn execute(
             &applied,
             &reason,
         )?),
+        #[cfg(feature = "desktop_rebuild")]
+        Command::OpenSourceSync { lease, policy } => {
+            crate::source_sync::open(&tx, &lease, policy)?;
+            TransactionDecision::Outcome(Outcome::SourceSyncOpened)
+        }
+        #[cfg(feature = "desktop_rebuild")]
+        Command::ClaimSourceSyncTarget {
+            lease,
+            policy,
+            storage,
+        } => match crate::source_sync::next(&tx, catalog_state, &lease, policy)? {
+            crate::source_sync::Next::Reserve(target) => {
+                TransactionDecision::SourceSyncReserved(target, storage)
+            }
+            crate::source_sync::Next::Done(target, version) => {
+                TransactionDecision::Outcome(Outcome::SourceSyncTarget(target, version))
+            }
+        },
         Command::Retain { per_tenant, global } => {
             TransactionDecision::Outcome(Outcome::Retained(prune(&tx, per_tenant, global)?))
         }
@@ -1548,6 +1659,11 @@ pub(crate) fn execute(
                 }
             }
             Ok(Outcome::LocalScanReconciled(pending.job))
+        }
+        #[cfg(feature = "desktop_rebuild")]
+        TransactionDecision::SourceSyncReserved(target, storage) => {
+            let (target, version) = target.activate(catalog_state, storage)?;
+            Ok(Outcome::SourceSyncTarget(target, version))
         }
         #[cfg(feature = "desktop_rebuild")]
         TransactionDecision::Observation {
@@ -1889,9 +2005,19 @@ pub(crate) fn user(
         UserOperation::Cancel { job_id } => {
             let mut job = owned(tx, &job_id, tenant)?;
             if job.state.terminal() || job.cancel_requested {
+                // An import that ended before its cleanup phase settles here.
+                #[cfg(feature = "desktop_rebuild")]
+                if crate::uploads::settle_terminal(tx, &job)? {
+                    return Ok(Outcome::Job(job, LocalCommit::Committed));
+                }
                 return Ok(Outcome::Job(job, LocalCommit::ReadOnly));
             }
             job.cancel_requested = true;
+            #[cfg(feature = "desktop_rebuild")]
+            if job.kind == JobKind::Sync {
+                let job = crate::source_sync::halt_job(tx, job, "cancelled", "Sync was cancelled")?;
+                return Ok(Outcome::Job(job, LocalCommit::Committed));
+            }
             // The import's owner reclaims it to release its input and quota.
             #[cfg(feature = "desktop_rebuild")]
             if job.kind == JobKind::SuppliedSourceImport {
@@ -2057,14 +2183,14 @@ impl ClaimPlan {
     }
 }
 #[cfg(feature = "desktop_rebuild")]
-enum SourceBinding<'a> {
+enum SourceBinding {
     None,
     Individual(i64),
     Wildcard,
-    LegacySync(Option<&'a [u64]>),
 }
+/// Sync reserves each target's Source when it claims the target.
 #[cfg(feature = "desktop_rebuild")]
-fn source_binding(payload: &Payload) -> Result<SourceBinding<'_>> {
+fn source_binding(payload: &Payload) -> Result<SourceBinding> {
     Ok(match payload {
         Payload::ImportScan { project_id }
         | Payload::ExtractSourceDocs { project_id }
@@ -2072,7 +2198,6 @@ fn source_binding(payload: &Payload) -> Result<SourceBinding<'_>> {
             SourceBinding::Individual(i64::try_from(*project_id)?)
         }
         Payload::CheckSourceUpdates {} => SourceBinding::Wildcard,
-        Payload::Sync { project_ids } => SourceBinding::LegacySync(project_ids.as_deref()),
         _ => SourceBinding::None,
     })
 }
@@ -2120,6 +2245,10 @@ fn claim(
             let Some(mut job) = decode_row(&id, &document, &mut diagnostics) else {
                 continue;
             };
+            #[cfg(feature = "desktop_rebuild")]
+            if filter.job_id.is_none() && crate::uploads::awaits_owner_input(tx, &job)? {
+                continue;
+            }
             let resource = job.payload.resource();
             if !resource.is_empty() {
                 let count = reserved_resources(tx, &job.tenant, false)?
@@ -2154,6 +2283,9 @@ fn claim(
                     }
                 };
                 if let Some(reason) = refusal {
+                    if filter.job_id.is_some() {
+                        crate::uploads::record_targeted_authority_refusal(tx, &job)?;
+                    }
                     let phase = if filter.job_id.is_some() {
                         AuthorityRefusalPhase::TargetedClaim
                     } else {
@@ -2174,9 +2306,7 @@ fn claim(
             let source = match source_binding(&job.payload)? {
                 SourceBinding::Individual(id) => {
                     if crate::catalog::get(tx, &job.tenant, id)?.is_none() {
-                        job.state = PersistentState::Failed;
-                        job.recovery = Some("Source is unavailable for this job".into());
-                        save(tx, &mut job, "source_unavailable")?;
+                        fail_source_unavailable(tx, &mut job)?;
                         continue;
                     }
                     if catalog_state.source_busy(&job.tenant, id) {
@@ -2194,9 +2324,7 @@ fn claim(
                         client: storage,
                     })
                 }
-                SourceBinding::None | SourceBinding::Wildcard | SourceBinding::LegacySync(_) => {
-                    None
-                }
+                SourceBinding::None | SourceBinding::Wildcard => None,
             };
             job.state = PersistentState::Running;
             job.attempt += 1;
@@ -2406,16 +2534,6 @@ pub(crate) fn claimed_source(
             );
             id
         }
-        SourceBinding::LegacySync(project_ids) => {
-            let id = source_id.ok_or_else(|| anyhow!("Sync attempt requires Source"))?;
-            if let Some(ids) = project_ids {
-                ensure!(
-                    u64::try_from(id).is_ok_and(|id| ids.contains(&id)),
-                    "Source outside Sync scope"
-                );
-            }
-            id
-        }
         SourceBinding::Wildcard => {
             source_id.ok_or_else(|| anyhow!("Wildcard Source attempt requires Source"))?
         }
@@ -2496,6 +2614,14 @@ fn advance(
             ),
         "Supplied imports advance through owned phases"
     );
+    #[cfg(feature = "desktop_rebuild")]
+    if job.kind == JobKind::Sync && matches!(operation, WorkerOperation::Fail) {
+        let job = crate::source_sync::halt_job(tx, job, "fatal", "Source Sync worker failed")?;
+        return Ok(TransactionDecision::Outcome(Outcome::Job(
+            job,
+            LocalCommit::Committed,
+        )));
+    }
     let event = match operation {
         WorkerOperation::Heartbeat => "heartbeat",
         WorkerOperation::Progress(progress) => {
@@ -2803,7 +2929,6 @@ pub(crate) fn require_original_authority(
 }
 
 #[cfg(feature = "desktop_rebuild")]
-#[cfg_attr(not(test), expect(dead_code, reason = "D17 (c) calls this"))]
 pub(crate) fn revalidate_source_authority(
     tx: &Transaction<'_>,
     job: &JobRecord,
@@ -2816,22 +2941,36 @@ pub(crate) fn revalidate_source_authority(
 }
 
 #[cfg(feature = "desktop_rebuild")]
-#[cfg_attr(not(test), expect(dead_code, reason = "D17 (c) calls this"))]
 pub(crate) fn commit_source_authority_refusal(
     tx: &Transaction<'_>,
     job: &mut JobRecord,
     error: &anyhow::Error,
 ) -> Result<bool> {
-    let reason = if job.authority_disposition == AuthorityDisposition::LegacyMissing {
-        Some(AuthorityRefusalReason::MissingOriginal)
-    } else {
-        AuthorityRefusalReason::of(error)
-    };
-    let Some(reason) = reason else {
+    let Some(reason) = AuthorityRefusalReason::of_source_writer(job, error) else {
         return Ok(false);
     };
     record_refusal(tx, job, reason, AuthorityRefusalPhase::SourceWriter, None)?;
     Ok(true)
+}
+
+/// Records a Source-writer refusal on a Sync Job without saving it. The
+/// Sync halt that follows saves the Job.
+#[cfg(feature = "desktop_rebuild")]
+pub(crate) fn set_sync_source_writer_authority_refusal(
+    job: &mut JobRecord,
+    error: &anyhow::Error,
+) -> bool {
+    let Some(reason) = AuthorityRefusalReason::of_source_writer(job, error) else {
+        return false;
+    };
+    job.authority_refusal = Some(AuthorityRefusalObservation {
+        version: 1,
+        reason,
+        phase: AuthorityRefusalPhase::SourceWriter,
+        observed_at: now(),
+        generation: job.generation,
+    });
+    true
 }
 
 #[cfg(feature = "desktop_rebuild")]
@@ -2845,6 +2984,13 @@ impl AuthorityRefusalReason {
             auth::AuthorityFailure::TenantChanged => Some(Self::TenantChanged),
             auth::AuthorityFailure::SubjectChanged => Some(Self::SubjectChanged),
             auth::AuthorityFailure::Missing | auth::AuthorityFailure::PolicyRequired => None,
+        }
+    }
+    fn of_source_writer(job: &JobRecord, error: &anyhow::Error) -> Option<Self> {
+        if job.authority_disposition == AuthorityDisposition::LegacyMissing {
+            Some(Self::MissingOriginal)
+        } else {
+            Self::of(error)
         }
     }
     fn failure(self) -> auth::AuthorityFailure {
