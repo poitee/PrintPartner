@@ -15,8 +15,73 @@ pub struct InputFile {
     pub sha256: String,
 }
 
+fn walk(root: &Directory, prefix: &str, files: &mut Vec<SourcePath>) -> Result<()> {
+    for name in root.entries()? {
+        if name.starts_with('.') {
+            continue;
+        }
+        let relative = if prefix.is_empty() {
+            name.clone()
+        } else {
+            format!("{prefix}/{name}")
+        };
+        let path = SourcePath::try_from(relative.clone())?;
+        match root.child(&name, false) {
+            Ok(child) => walk(&child, &relative, files)?,
+            Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::NotADirectory => {
+                root.file(&name, false)?;
+                files.push(path);
+                if files.len() > MAX_ENTRIES {
+                    return Err(Error::Limit);
+                }
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+
+/// Bytes stored under `root`, counting every regular file.
+pub fn stored_bytes(root: &Path, cancelled: &AtomicBool) -> Result<u64> {
+    fn count(dir: &Directory, cancelled: &AtomicBool) -> Result<u64> {
+        let mut total = 0u64;
+        for entry in dir.entries()? {
+            if cancelled.load(Ordering::Acquire) {
+                return Err(Error::Limit);
+            }
+            let bytes = match dir.child(&entry, false) {
+                Ok(child) => count(&child, cancelled)?,
+                Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::NotADirectory => {
+                    dir.file(&entry, false)?.metadata()?.len()
+                }
+                Err(e) => return Err(e),
+            };
+            total = total.checked_add(bytes).ok_or(Error::Limit)?;
+        }
+        Ok(total)
+    }
+    count(&Directory::open_root(root)?, cancelled)
+}
+
 impl LocalFiles {
+    /// Every regular file below the selected directory in path order. Names
+    /// starting with `.` are skipped; a link or special file is refused.
+    pub fn paths(&self) -> Result<Vec<SourcePath>> {
+        let mut paths = Vec::new();
+        walk(&self.root, "", &mut paths)?;
+        paths.sort_by(|a, b| crate::compare_paths(a.as_str(), b.as_str()));
+        Ok(paths)
+    }
     pub fn inventory(&self, paths: &[SourcePath], max_bytes: u64) -> Result<Vec<InputFile>> {
+        self.inventory_until(paths, max_bytes, &AtomicBool::new(false))
+    }
+    /// `inventory` that stops with `Error::Limit` once `cancelled` is set.
+    pub fn inventory_until(
+        &self,
+        paths: &[SourcePath],
+        max_bytes: u64,
+        cancelled: &AtomicBool,
+    ) -> Result<Vec<InputFile>> {
         validate_paths(paths)?;
         let mut result = Vec::new();
         let mut total = 0u64;
@@ -26,6 +91,9 @@ impl LocalFiles {
             let mut size = 0u64;
             let mut buf = [0u8; 8192];
             loop {
+                if cancelled.load(Ordering::Acquire) {
+                    return Err(Error::Limit);
+                }
                 let n = file.read(&mut buf)?;
                 if n == 0 {
                     break;
