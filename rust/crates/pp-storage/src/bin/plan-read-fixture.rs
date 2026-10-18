@@ -77,13 +77,28 @@ fn main() -> Result<()> {
                 .collect(),
         );
         if let Some(obs) = &observations {
-            output["builds"][i]["review"] =
-                views::review(&build.accepted, false, obs, &CatalogOnly)?;
-            output["builds"][i]["reviewAll"] =
-                views::review(&build.accepted, true, obs, &CatalogOnly)?;
-            if output["builds"][i]["review"]["body"].is_object() {
-                output["builds"][i]["reviewSummary"] =
-                    views::summarize_review(&output["builds"][i]["review"]["body"])?;
+            #[cfg(feature = "desktop_rebuild")]
+            {
+                let review = views::review_json(&build.accepted, false, obs, &CatalogOnly)?;
+                if let Some(summary) = review.summary_json() {
+                    output["builds"][i]["reviewSummary"] =
+                        serde_json::from_slice(&summary.into_bytes())?;
+                }
+                output["builds"][i]["review"] = serde_json::from_slice(&review.into_bytes())?;
+                output["builds"][i]["reviewAll"] = serde_json::from_slice(
+                    &views::review_json(&build.accepted, true, obs, &CatalogOnly)?.into_bytes(),
+                )?;
+            }
+            #[cfg(not(feature = "desktop_rebuild"))]
+            {
+                output["builds"][i]["review"] =
+                    views::review(&build.accepted, false, obs, &CatalogOnly)?;
+                output["builds"][i]["reviewAll"] =
+                    views::review(&build.accepted, true, obs, &CatalogOnly)?;
+                if output["builds"][i]["review"]["body"].is_object() {
+                    output["builds"][i]["reviewSummary"] =
+                        views::summarize_review(&output["builds"][i]["review"]["body"])?;
+                }
             }
         }
     }

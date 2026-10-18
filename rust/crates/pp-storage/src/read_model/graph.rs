@@ -1072,21 +1072,6 @@ fn read_with_purpose(
                 }
             }
         };
-        #[cfg(feature = "desktop_rebuild")]
-        check(
-            matches!(_purpose, ReadPurpose::Summary)
-                || (r
-                    .2
-                    .requirement
-                    .as_ref()
-                    .is_none_or(|v| v.0.as_scalar().is_some())
-                    && r.2
-                        .option_group_id
-                        .as_ref()
-                        .is_none_or(|v| v.0.as_scalar().is_some())),
-            "manifest_text",
-            "Non-scalar manifest metadata requires a lossless snapshot projection",
-        )?;
         parts.push(Part {
             revision_part_id: r.n("id")?,
             projection_part_id: pid,
@@ -1316,3 +1301,7 @@ fn read_with_purpose(
         }),
     })
 }
+
+#[cfg(all(test, feature = "desktop_rebuild"))]
+#[path = "review_tests.rs"]
+mod review_tests;

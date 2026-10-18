@@ -65,7 +65,7 @@ const manifest = z.object({ live_formats: z.object({
   "community-manifests": z.object({ node_reads: z.number() }),
 }), resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.check_hardware_interfaces", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -475,6 +475,75 @@ it("rejects an undeclared read against the empty get_workflow_help resource set"
   if (!entry || entry.operation === "source.sync") throw new Error("Missing workflow help declaration");
   const declared = entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort();
   expect(() => expect(observed).toEqual(declared)).toThrow();
+});
+
+it("traces check_hardware_interfaces inputs, comparisons and tenants against its reviewed empty union", async () => {
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.check_hardware_interfaces");
+  expect(entry).toEqual({ operation: "tool.check_hardware_interfaces", resources: [] });
+  const left = { name: "Motor", mounting_pattern: [20, 20], connector: "JST", voltage: 24, envelope: { x: 40 }, clearance: 2 };
+  const right = { name: "Board", mounting_pattern: [30, 30], connector: "XT60", voltage: 12, envelope: { x: 50 }, clearance: 3 };
+  const cases: [Record<string, unknown>, unknown][] = [
+    ...[{}, { interfaces: null }, { interfaces: false }, { interfaces: 3 }, { interfaces: "invalid" }, { interfaces: {} }]
+      .map((input): [Record<string, unknown>, unknown] => [input, { error: "interfaces required" }]),
+    [{ interfaces: [] }, { interfaces: [], conflicts: [], compatible: true }],
+    [{ interfaces: [null, false, 0, "invalid", []] }, { interfaces: [], conflicts: [], compatible: true }],
+    [{ interfaces: [left] }, { interfaces: [left], conflicts: [], compatible: true }],
+    [{ interfaces: [left, { ...left, name: "Matching" }] }, { interfaces: [left, { ...left, name: "Matching" }], conflicts: [], compatible: true }],
+    [{ interfaces: [{ voltage: null, connector: "JST" }, { voltage: 24 }, {}] }, {
+      interfaces: [{ voltage: null, connector: "JST" }, { voltage: 24 }, {}], conflicts: [], compatible: true,
+    }],
+    [{ interfaces: [left, right] }, {
+      interfaces: [left, right], compatible: false,
+      conflicts: [
+        { field: "mounting_pattern", left: "Motor", right: "Board", left_value: [20, 20], right_value: [30, 30], status: "review_required" },
+        { field: "connector", left: "Motor", right: "Board", left_value: "JST", right_value: "XT60", status: "review_required" },
+        { field: "voltage", left: "Motor", right: "Board", left_value: 24, right_value: 12, status: "review_required" },
+        { field: "envelope", left: "Motor", right: "Board", left_value: { x: 40 }, right_value: { x: 50 }, status: "review_required" },
+        { field: "clearance", left: "Motor", right: "Board", left_value: 2, right_value: 3, status: "review_required" },
+      ],
+    }],
+    [{ interfaces: [null, { voltage: 0 }, [], { name: null, voltage: 12 }, "ignored", { name: "Third", voltage: 24 }] }, {
+      interfaces: [{ voltage: 0 }, { name: null, voltage: 12 }, { name: "Third", voltage: 24 }], compatible: false,
+      conflicts: [
+        { field: "voltage", left: "interface_0", right: "interface_1", left_value: 0, right_value: 12, status: "review_required" },
+        { field: "voltage", left: "interface_0", right: "Third", left_value: 0, right_value: 24, status: "review_required" },
+        { field: "voltage", left: "interface_1", right: "Third", left_value: 12, right_value: 24, status: "review_required" },
+      ],
+    }],
+  ];
+  for (const tenantId of ["default", "tenant-b"]) {
+    for (const [input, expected] of cases) {
+      statements = [];
+      observer.state.files = [];
+      observer.state.active = true;
+      let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+      try {
+        output = await tenantStorage.run(tenantId, () => invokeAssistantTool("check_hardware_interfaces", {
+          ...input, plan_id: 999999, profile_id: sourceId, draft_id: 123, source_id: sourceId,
+        }, { repo, activePlanId: 888888, tenantId }));
+      } finally { observer.state.active = false; }
+      expect(JSON.parse(output.content)).toEqual(expected);
+      expect(statements).toEqual([]);
+      expect(observer.state.files).toEqual([]);
+    }
+  }
+});
+
+it("rejects observed reads against the empty check_hardware_interfaces declaration", async () => {
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  try {
+    await invokeAssistantTool("check_hardware_interfaces", { interfaces: [] }, { repo });
+    repo.listSources();
+    fs.readFileSync(join(root, "README.md"), "utf8");
+  } finally { observer.state.active = false; }
+  expect([...new Set(statements.map((sql) => tableForObservedSelect(sql)))]).toEqual(["table:projects", "table:source_docs"]);
+  expect(observer.state.files.map(({ api }) => api)).toEqual(["readFileSync"]);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.check_hardware_interfaces");
+  expect(entry).toEqual({ operation: "tool.check_hardware_interfaces", resources: [] });
+  expect(() => expect(statements).toEqual([])).toThrow();
+  expect(() => expect(observer.state.files).toEqual([])).toThrow();
 });
 
 it("traces get_plan_decisions plan lookup, limits, fallback and tenant isolation against its declaration", async () => {
