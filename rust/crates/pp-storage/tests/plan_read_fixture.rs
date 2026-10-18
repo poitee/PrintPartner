@@ -1,7 +1,10 @@
 use pp_storage::{Limits, WriterOwner};
 use rusqlite::Connection;
 use serde_json::Value;
-use std::{path::PathBuf, process::Command};
+use std::path::PathBuf;
+
+#[path = "common/process.rs"]
+mod child_process;
 
 struct Fixture(PathBuf);
 impl Fixture {
@@ -45,7 +48,7 @@ impl Fixture {
     fn run(&self, observations: bool) -> String {
         let path = self.0.join("observations.json");
         std::fs::write(&path, r#"{"availableInputRoots":[1],"mediaByPartId":{"1":{"artifactMissing":false,"thumbEmpty":false},"2":{"artifactMissing":false,"thumbEmpty":false}}}"#).unwrap();
-        let mut command = Command::new(env!("CARGO_BIN_EXE_plan-read-fixture"));
+        let mut command = child_process::command(env!("CARGO_BIN_EXE_plan-read-fixture"));
         command
             .arg(&self.0)
             .args(["1", "2", "999"])

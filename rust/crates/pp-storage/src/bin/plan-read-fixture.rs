@@ -1,3 +1,5 @@
+#[cfg(feature = "desktop_rebuild")]
+use anyhow::Context;
 use anyhow::{Result, ensure};
 use pp_storage::{
     Limits, WriterOwner,
@@ -130,7 +132,10 @@ fn main() -> Result<()> {
                     &build.accepted.into_json_body()?.into_bytes(),
                 )?,
             );
-            for (key, value) in output["builds"][i].as_object().unwrap() {
+            for (key, value) in output["builds"][i]
+                .as_object()
+                .context("Fixture build output is not an object")?
+            {
                 raw_fields.insert(key.clone(), serde_json::value::to_raw_value(value)?);
             }
             raw_builds.push(raw_fields);
