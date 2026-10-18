@@ -317,6 +317,48 @@ pub(crate) fn merge(
         b.comparison(compared)
     })
 }
+/// Copies a document's groups, charging a visit for each group, variant, and path
+/// before it is copied.
+fn charged_copy(groups: &Groups, b: &mut PreparationBudget<'_>) -> ReadResult<Groups> {
+    fn paths(
+        list: &[ManifestText],
+        b: &mut PreparationBudget<'_>,
+    ) -> ReadResult<Vec<ManifestText>> {
+        list.iter()
+            .map(|path| b.visit(0).map(|()| path.clone()))
+            .collect()
+    }
+    groups
+        .iter()
+        .map(|(key, g)| {
+            b.visit(0)?;
+            let variants = g
+                .variants
+                .iter()
+                .map(|v| {
+                    b.visit(0)?;
+                    Ok(Variant {
+                        id: v.id.clone(),
+                        label: v.label.clone(),
+                        parts: paths(&v.parts, b)?,
+                        excludes: paths(&v.excludes, b)?,
+                    })
+                })
+                .collect::<ReadResult<_>>()?;
+            Ok((
+                key.clone(),
+                Group {
+                    rule: g.rule.clone(),
+                    label: g.label.clone(),
+                    parts: paths(&g.parts, b)?,
+                    variants,
+                    min: g.min,
+                    max: g.max,
+                },
+            ))
+        })
+        .collect()
+}
 pub(crate) fn merge_with<E>(
     target: &mut Groups,
     incoming: Groups,
@@ -614,7 +656,8 @@ pub(super) fn apply(
     let inferred = std::mem::take(&mut groups);
     for (_, _, d) in docs {
         b.visit(0)?;
-        merge(&mut groups, d.groups.clone(), b)?;
+        let copy = charged_copy(&d.groups, b)?;
+        merge(&mut groups, copy, b)?;
     }
     merge(&mut groups, inferred, b)?;
     for part in parts {

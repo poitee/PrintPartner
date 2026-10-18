@@ -388,12 +388,29 @@ fn apply_charges_option_group_merging() {
     )
     .unwrap()
     .groups;
-    // Two document visits, then the repository group, the duplicate inferred group,
-    // its existing variant, its incoming variant, one incoming path, the new group,
-    // and one sort per merge.
-    apply(&mut [], &docs, inferred.clone(), vec![], &mut budget(10)).unwrap();
+    // Two document visits, copying the repository group and its variant, merging
+    // that group, then the duplicate inferred group, its existing variant, its
+    // incoming variant, one incoming path, the new group, and one sort per merge.
+    apply(&mut [], &docs, inferred.clone(), vec![], &mut budget(12)).unwrap();
     assert!(matches!(
-        apply(&mut [], &docs, inferred, vec![], &mut budget(9)),
+        apply(&mut [], &docs, inferred, vec![], &mut budget(11)),
+        Err(ReadFailure::LimitExceeded(Resource::Visits))
+    ));
+
+    // Copying a document's groups charges every path before the merge sees them.
+    let paths: Vec<_> = (0..10_000).map(|i| format!("p{i}.stl")).collect();
+    let yaml = serde_json::to_vec(
+        &json!({"option_groups": {"tool": {"variants": [{"id": "a", "parts": paths}]}}}),
+    )
+    .unwrap();
+    let wide = [(
+        "F".into(),
+        "repo".into(),
+        parse(&yaml, &mut budget(100_000)).unwrap(),
+    )];
+    apply(&mut [], &wide, vec![], vec![], &mut budget(10_007)).unwrap();
+    assert!(matches!(
+        apply(&mut [], &wide, vec![], vec![], &mut budget(10_006)),
         Err(ReadFailure::LimitExceeded(Resource::Visits))
     ));
 
