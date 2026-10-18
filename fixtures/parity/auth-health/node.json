@@ -1,0 +1,379 @@
+{
+  "generated": "node --conditions=development fixtures/parity/auth-health/generate.mjs",
+  "sources": [
+    "web/apps/server/src/routes/auth.ts",
+    "web/apps/server/src/routes/health.ts"
+  ],
+  "cases": [
+    {
+      "name": "anonymous",
+      "node": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "version": "3.3.0-web",
+          "semver": "v3.3.0-dev",
+          "build": {
+            "version": "3.3.0",
+            "commit": "unknown",
+            "branch": "development",
+            "tag": "unknown",
+            "buildDate": "unknown",
+            "nodeVersion": "<node-version>"
+          },
+          "release": {
+            "version": "3.3.0",
+            "runtime_version": "3.3.0-web",
+            "commit": null,
+            "tag": null,
+            "image_digest": null,
+            "deployment_mode": "self-host",
+            "github_release_url": null,
+            "build_date": null
+          },
+          "deploy_mode": "self-host",
+          "multi_user": true,
+          "authenticated": false,
+          "authentication_required": true,
+          "registration_open": true,
+          "data_dir": "<temporary>",
+          "port": 18765,
+          "api_version": "v1",
+          "capabilities": [
+            "kit_planning",
+            "accepted_plate_revisions",
+            "accepted_plate_export",
+            "jobs_ws",
+            "fleet_presets",
+            "integrations_api",
+            "multi_user_auth",
+            "plan_sharing",
+            "mcp_http",
+            "backups",
+            "api_key_management",
+            "webhook_security",
+            "logging"
+          ],
+          "db": {
+            "connected": true,
+            "driver": "sqlite",
+            "postgres": null,
+            "support_status": "supported"
+          },
+          "deployment": {
+            "database": "sqlite",
+            "job_runner": "in_process",
+            "tenant_mode": "multi",
+            "support_status": "supported",
+            "restart": {
+              "database_rows": "survive",
+              "local_artifacts": "survive",
+              "in_flight_jobs": "lost"
+            }
+          },
+          "google_drive": {
+            "client_id": null
+          }
+        }
+      }
+    },
+    {
+      "name": "valid",
+      "node": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "version": "3.3.0-web",
+          "semver": "v3.3.0-dev",
+          "build": {
+            "version": "3.3.0",
+            "commit": "unknown",
+            "branch": "development",
+            "tag": "unknown",
+            "buildDate": "unknown",
+            "nodeVersion": "<node-version>"
+          },
+          "release": {
+            "version": "3.3.0",
+            "runtime_version": "3.3.0-web",
+            "commit": null,
+            "tag": null,
+            "image_digest": null,
+            "deployment_mode": "self-host",
+            "github_release_url": null,
+            "build_date": null
+          },
+          "deploy_mode": "self-host",
+          "multi_user": true,
+          "authenticated": true,
+          "authentication_required": true,
+          "registration_open": true,
+          "data_dir": "<temporary>",
+          "port": 18765,
+          "api_version": "v1",
+          "capabilities": [
+            "kit_planning",
+            "accepted_plate_revisions",
+            "accepted_plate_export",
+            "jobs_ws",
+            "fleet_presets",
+            "integrations_api",
+            "multi_user_auth",
+            "plan_sharing",
+            "mcp_http",
+            "backups",
+            "api_key_management",
+            "webhook_security",
+            "logging"
+          ],
+          "db": {
+            "connected": true,
+            "driver": "sqlite",
+            "postgres": null,
+            "support_status": "supported"
+          },
+          "deployment": {
+            "database": "sqlite",
+            "job_runner": "in_process",
+            "tenant_mode": "multi",
+            "support_status": "supported",
+            "restart": {
+              "database_rows": "survive",
+              "local_artifacts": "survive",
+              "in_flight_jobs": "lost"
+            }
+          },
+          "google_drive": {
+            "client_id": null
+          }
+        }
+      }
+    },
+    {
+      "name": "expired",
+      "node": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "version": "3.3.0-web",
+          "semver": "v3.3.0-dev",
+          "build": {
+            "version": "3.3.0",
+            "commit": "unknown",
+            "branch": "development",
+            "tag": "unknown",
+            "buildDate": "unknown",
+            "nodeVersion": "<node-version>"
+          },
+          "release": {
+            "version": "3.3.0",
+            "runtime_version": "3.3.0-web",
+            "commit": null,
+            "tag": null,
+            "image_digest": null,
+            "deployment_mode": "self-host",
+            "github_release_url": null,
+            "build_date": null
+          },
+          "deploy_mode": "self-host",
+          "multi_user": true,
+          "authenticated": false,
+          "authentication_required": true,
+          "registration_open": true,
+          "data_dir": "<temporary>",
+          "port": 18765,
+          "api_version": "v1",
+          "capabilities": [
+            "kit_planning",
+            "accepted_plate_revisions",
+            "accepted_plate_export",
+            "jobs_ws",
+            "fleet_presets",
+            "integrations_api",
+            "multi_user_auth",
+            "plan_sharing",
+            "mcp_http",
+            "backups",
+            "api_key_management",
+            "webhook_security",
+            "logging"
+          ],
+          "db": {
+            "connected": true,
+            "driver": "sqlite",
+            "postgres": null,
+            "support_status": "supported"
+          },
+          "deployment": {
+            "database": "sqlite",
+            "job_runner": "in_process",
+            "tenant_mode": "multi",
+            "support_status": "supported",
+            "restart": {
+              "database_rows": "survive",
+              "local_artifacts": "survive",
+              "in_flight_jobs": "lost"
+            }
+          },
+          "google_drive": {
+            "client_id": null
+          }
+        }
+      }
+    },
+    {
+      "name": "policy-rejected",
+      "node": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "version": "3.3.0-web",
+          "semver": "v3.3.0-dev",
+          "build": {
+            "version": "3.3.0",
+            "commit": "unknown",
+            "branch": "development",
+            "tag": "unknown",
+            "buildDate": "unknown",
+            "nodeVersion": "<node-version>"
+          },
+          "release": {
+            "version": "3.3.0",
+            "runtime_version": "3.3.0-web",
+            "commit": null,
+            "tag": null,
+            "image_digest": null,
+            "deployment_mode": "self-host",
+            "github_release_url": null,
+            "build_date": null
+          },
+          "deploy_mode": "self-host",
+          "multi_user": false,
+          "authenticated": true,
+          "authentication_required": true,
+          "registration_open": false,
+          "data_dir": "<temporary>",
+          "port": 18765,
+          "api_version": "v1",
+          "capabilities": [
+            "kit_planning",
+            "accepted_plate_revisions",
+            "accepted_plate_export",
+            "jobs_ws",
+            "fleet_presets",
+            "integrations_api",
+            "single_user_auth",
+            "mcp_http",
+            "backups",
+            "api_key_management",
+            "webhook_security",
+            "logging"
+          ],
+          "db": {
+            "connected": true,
+            "driver": "sqlite",
+            "postgres": null,
+            "support_status": "supported"
+          },
+          "deployment": {
+            "database": "sqlite",
+            "job_runner": "in_process",
+            "tenant_mode": "single",
+            "support_status": "supported",
+            "restart": {
+              "database_rows": "survive",
+              "local_artifacts": "survive",
+              "in_flight_jobs": "lost"
+            }
+          },
+          "google_drive": {
+            "client_id": null
+          }
+        }
+      }
+    },
+    {
+      "name": "closed-owner",
+      "node": {
+        "status": 500,
+        "body": {
+          "statusCode": 500,
+          "error": "Internal Server Error",
+          "message": "The database connection is not open"
+        }
+      }
+    },
+    {
+      "name": "anonymous-closed-owner",
+      "node": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "version": "3.3.0-web",
+          "semver": "v3.3.0-dev",
+          "build": {
+            "version": "3.3.0",
+            "commit": "unknown",
+            "branch": "development",
+            "tag": "unknown",
+            "buildDate": "unknown",
+            "nodeVersion": "<node-version>"
+          },
+          "release": {
+            "version": "3.3.0",
+            "runtime_version": "3.3.0-web",
+            "commit": null,
+            "tag": null,
+            "image_digest": null,
+            "deployment_mode": "self-host",
+            "github_release_url": null,
+            "build_date": null
+          },
+          "deploy_mode": "self-host",
+          "multi_user": true,
+          "authenticated": false,
+          "authentication_required": true,
+          "registration_open": true,
+          "data_dir": "<temporary>",
+          "port": 18765,
+          "api_version": "v1",
+          "capabilities": [
+            "kit_planning",
+            "accepted_plate_revisions",
+            "accepted_plate_export",
+            "jobs_ws",
+            "fleet_presets",
+            "integrations_api",
+            "multi_user_auth",
+            "plan_sharing",
+            "mcp_http",
+            "backups",
+            "api_key_management",
+            "webhook_security",
+            "logging"
+          ],
+          "db": {
+            "connected": true,
+            "driver": "sqlite",
+            "postgres": null,
+            "support_status": "supported"
+          },
+          "deployment": {
+            "database": "sqlite",
+            "job_runner": "in_process",
+            "tenant_mode": "multi",
+            "support_status": "supported",
+            "restart": {
+              "database_rows": "survive",
+              "local_artifacts": "survive",
+              "in_flight_jobs": "lost"
+            }
+          },
+          "google_drive": {
+            "client_id": null
+          }
+        }
+      }
+    }
+  ]
+}
