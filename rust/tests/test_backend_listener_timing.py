@@ -1,5 +1,3 @@
-"""Exercise delayed listener controls without building the backend."""
-
 import os
 from pathlib import Path
 import shutil
