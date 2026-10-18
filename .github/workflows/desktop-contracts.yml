@@ -8,6 +8,7 @@ on:
       - "fixtures/http/routes-inventory.json"
       - "rust/**"
       - "rust-toolchain.toml"
+      - 'scripts/setup-ci-linux.sh'
       - "web/packages/contracts/**"
       - "web/packages/domain/**"
       - "web/apps/server/**"
@@ -23,6 +24,7 @@ on:
       - "fixtures/http/routes-inventory.json"
       - "rust/**"
       - "rust-toolchain.toml"
+      - 'scripts/setup-ci-linux.sh'
       - "web/packages/contracts/**"
       - "web/packages/domain/**"
       - "web/apps/server/**"
@@ -43,8 +45,8 @@ concurrency:
 
 jobs:
   parity:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","pp-local"]') || 'ubuntu-latest' }}
+    timeout-minutes: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && 30 || 5 }}
     strategy:
       matrix:
         node: ["22.23.3", "24.21.0"]
@@ -55,6 +57,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Install Linux prerequisites
+        run: bash "$GITHUB_WORKSPACE/scripts/setup-ci-linux.sh"
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: '1.99.0'
+          components: rustfmt, clippy
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ matrix.node }}

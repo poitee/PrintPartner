@@ -53,10 +53,17 @@ fn declared_versions_match_the_node_and_rust_sources() {
         include_str!("../../../../web/apps/server/src/db/schema.ts"),
         "export const currentSchemaVersion = ",
     );
-    let rust_schema = number_after(
-        include_str!("../../pp-storage/src/schema.rs"),
-        "#[cfg(not(feature = \"desktop_rebuild\"))]\npub(crate) const CURRENT_VERSION: u64 = ",
+    let rust_schema_source = include_str!("../../pp-storage/src/schema.rs");
+    let rust_schema_marker =
+        "#[cfg(not(feature = \"desktop_rebuild\"))]\npub(crate) const CURRENT_VERSION: u64 = ";
+    assert!(
+        rust_schema_source.contains(rust_schema_marker),
+        "pp-storage/src/schema.rs no longer has the default-build CURRENT_VERSION gated on \
+         not(desktop_rebuild). If desktop_rebuild became the default, the shipped Rust schema \
+         changed: update ownership-manifest.json live_formats.sqlite-schema.rust_writes, the \
+         Some(35) rollback refusals in this file, and this marker in the same change"
     );
+    let rust_schema = number_after(rust_schema_source, rust_schema_marker);
     let node_snapshot = number_after(
         include_str!("../../../../web/apps/server/src/services/local-source-snapshot.ts"),
         "const SOURCE_SNAPSHOT_MANIFEST_VERSION = ",
