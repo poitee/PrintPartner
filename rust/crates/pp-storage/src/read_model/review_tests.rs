@@ -17,7 +17,19 @@ struct FixtureDirectory(PathBuf);
 
 impl Drop for FixtureDirectory {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        if let Err(error) = std::fs::remove_dir_all(&self.0) {
+            if std::thread::panicking() {
+                eprintln!(
+                    "failed to remove fixture directory {}: {error}",
+                    self.0.display()
+                );
+            } else {
+                panic!(
+                    "failed to remove fixture directory {}: {error}",
+                    self.0.display()
+                );
+            }
+        }
     }
 }
 
@@ -130,7 +142,7 @@ fn fixture_cleans_up_during_unwind() {
 }
 
 #[test]
-fn fixture_cleanup_ignores_removal_errors() {
+fn fixture_cleanup_reports_removal_errors_without_double_panic() {
     for panicking in [false, true] {
         let root = std::env::temp_dir().join(format!("pp-review-{}", rand::random::<u64>()));
         std::fs::write(&root, b"not a directory").unwrap();
@@ -146,7 +158,20 @@ fn fixture_cleanup_ignores_removal_errors() {
             }
         }));
         std::fs::remove_file(root).unwrap();
-        assert_eq!(result.is_err(), panicking);
+        let panic = result.unwrap_err();
+        if panicking {
+            assert_eq!(
+                panic.downcast_ref::<&str>(),
+                Some(&"exercise failed fixture cleanup during unwind")
+            );
+        } else {
+            assert!(
+                panic
+                    .downcast_ref::<String>()
+                    .unwrap()
+                    .contains("failed to remove fixture directory")
+            );
+        }
     }
 }
 
