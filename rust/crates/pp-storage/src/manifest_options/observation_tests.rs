@@ -494,6 +494,23 @@ fn cancellation_before_matching_without_paths_or_parts_refuses() {
             Err(ReadFailure::Cancelled)
         ));
     }
+    let mut database = Database::oracle();
+    database
+        .connection
+        .execute_batch(
+            "DELETE FROM profile_layers WHERE project_id<>1; UPDATE projects SET imported_paths=NULL, manifest_community_slug='slow-kit' WHERE id=1",
+        )
+        .unwrap();
+    let captured = database.capture(TENANT, 1).unwrap();
+    let reads = LongPaths {
+        manifest: b"option_groups: {slow: {variants: []}}".to_vec(),
+        paths: Vec::new(),
+        checks_before_cancel: 0,
+    };
+    assert!(matches!(
+        observe(&captured, Some(&reads), PreparationLimits::default(), false),
+        Err(ReadFailure::Cancelled)
+    ));
 }
 
 fn import_only_source(imported_paths: &str) -> Database {

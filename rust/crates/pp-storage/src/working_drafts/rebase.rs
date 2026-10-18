@@ -19,6 +19,13 @@ pub struct RebaseRequest {
     expected_source_snapshot_digest: Digest,
 }
 
+/// Inputs for rebasing a source draft onto a fresh preparation.
+pub struct RebaseArgs<'a> {
+    pub draft_id: PositiveId,
+    pub idempotency_key: &'a str,
+    pub request: RebaseRequest,
+}
+
 /// Node's `rebasePlanDraft` result, after the service's Plan check.
 #[derive(Debug)]
 pub enum RebaseOutcome {
@@ -161,18 +168,28 @@ impl Source<'_> {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn rebase(
-    connection: &mut Connection,
-    credential: &Credential,
-    policy: auth::AuthPolicy,
-    profile_id: PositiveId,
-    draft_id: PositiveId,
-    key: &str,
-    request: &RebaseRequest,
-    observations: &Observations,
-    cancelled: &AtomicBool,
-) -> Result<RebaseOutcome> {
+pub(super) struct Args<'a> {
+    pub credential: &'a Credential,
+    pub policy: auth::AuthPolicy,
+    pub profile_id: PositiveId,
+    pub draft_id: PositiveId,
+    pub key: &'a str,
+    pub request: &'a RebaseRequest,
+    pub observations: &'a Observations,
+    pub cancelled: &'a AtomicBool,
+}
+
+pub(super) fn rebase(connection: &mut Connection, args: Args<'_>) -> Result<RebaseOutcome> {
+    let Args {
+        credential,
+        policy,
+        profile_id,
+        draft_id,
+        key,
+        request,
+        observations,
+        cancelled,
+    } = args;
     ensure!(!cancelled.load(Ordering::Acquire), Failure::Cancelled);
     let finished = |outcome| {
         ensure!(!cancelled.load(Ordering::Acquire), Failure::Cancelled);

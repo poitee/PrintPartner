@@ -1286,3 +1286,69 @@ fn refused_requests_write_nothing() {
     owner.shutdown().unwrap();
     assert_eq!(f.recorded_rows(), before);
 }
+
+#[test]
+fn preparation_large_quantity_refusal_preserves_rows_and_files() {
+    for quantity in [
+        "9007199254740992",
+        "9007199254740993",
+        "1000000000000000128",
+        "100000000000000000000",
+        "1000000000000000000000",
+    ] {
+        let filename = format!("part_x{quantity}.stl");
+        let mut case = node("created-then-replayed");
+        case["files"] = json!([filename]);
+        let f = Fixture::new(&case);
+        let before = f.recorded_rows();
+        let file = f.path.join("repos/1/revisions/fixture").join(&filename);
+        let contents = std::fs::read(&file).unwrap();
+        let owner = f.open();
+        let error = recompute(
+            &owner,
+            f.reads(&case["files"], &Value::Null, None),
+            PreparationLimits::default(),
+            "large-quantity",
+            true,
+            1,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "Invalid scalar part integer");
+        owner.shutdown().unwrap();
+        assert_eq!(f.recorded_rows(), before, "{quantity}");
+        assert_eq!(std::fs::read(file).unwrap(), contents, "{quantity}");
+    }
+}
+
+#[test]
+fn large_quantity_public_json_matches_node_for_integer_and_float_values() {
+    use pp_storage::manifest_text::{DraftPart, PartManifestMetadata};
+    for (value, literal) in [
+        (json!(1000000000000000128_i64), "1000000000000000100"),
+        (json!(1e20), "100000000000000000000"),
+    ] {
+        for field in [
+            "quantityInferred",
+            "quantityOverride",
+            "quantityEffective",
+            "quantity_inferred",
+            "quantity_override",
+            "quantity_effective",
+        ] {
+            let part = DraftPart::new(json!({field: value}), PartManifestMetadata::default());
+            assert_eq!(
+                String::from_utf8(part.json_fields(&[field], false)).unwrap(),
+                format!("{{\"{field}\":{literal}}}"),
+            );
+        }
+    }
+    let part = DraftPart::new(
+        json!({"quantityOverride": null, "id": 1000000000000000128_i64}),
+        PartManifestMetadata::default(),
+    );
+    assert_eq!(
+        part.json_fields(&["quantityOverride", "id"], false),
+        br#"{"quantityOverride":null,"id":1000000000000000128}"#
+    );
+}
