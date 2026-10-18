@@ -17,6 +17,7 @@ type PlateRevision = { id: number; profileId: number };
 const plateManifestSchema = z.object({
   format: z.literal("accepted-plate-3mf-manifest-v1"),
   basis: z.object({ profile_id: z.number(), plate_revision_id: z.number() }),
+  plates: z.array(z.object({ ordinal: z.number().int().positive(), entry: z.string() })).min(1),
 });
 
 export function ownershipFileDigest(path: string): string {
@@ -34,8 +35,37 @@ export function ownershipFileDigest(path: string): string {
 
 export function inspectOwnershipExports(root: string, profiles: readonly Profile[], plateRevisions: readonly PlateRevision[]): OwnershipExport[] {
   const result: OwnershipExport[] = [];
+  const owner = (pieces: string[], plan: string | undefined, pattern: RegExp) => {
+    const [first] = pieces;
+    const profileId = pattern.exec(plan ?? "")?.[1];
+    const profile = profiles.find(profile => String(profile.id) === profileId);
+    const tenant = profile?.tenantId;
+    const expectedScope = tenant == null ? null : tenantExportDirectory("", tenant);
+    const scoped = first?.startsWith("tenant-") === true;
+    if (!profile || (scoped && first !== expectedScope) || (!scoped && tenant !== "default")) throw new Error("Unassigned export artifact");
+    return profile;
+  };
+  const plateTree = (path: string, pieces: string[], layout: string[]) => {
+    const profile = owner(pieces, layout[1], /^profile-([1-9][0-9]*)$/);
+    const revisionId = /^revision-([1-9][0-9]*)$/.exec(layout[2] ?? "")?.[1];
+    if (!plateRevisions.some(revision => String(revision.id) === revisionId && revision.profileId === profile.id)) throw new Error("Unassigned export artifact");
+    ownershipFileDigest(join(path, "manifest.json"));
+    const { basis, plates } = plateManifestSchema.parse(JSON.parse(readFileSync(join(path, "manifest.json"), "utf8")));
+    if (basis.profile_id !== profile.id || String(basis.plate_revision_id) !== revisionId) throw new Error("Accepted Plate manifest basis mismatch");
+    if (plates.some(plate => plate.entry !== `plates/${String(plate.ordinal).padStart(4, "0")}.3mf`)) throw new Error("Unsupported export artifact layout");
+    const expected = ["accepted-plates.zip", "manifest.json", ...plates.map(plate => plate.entry)].sort();
+    const actual: string[] = [];
+    for (const name of readdirSync(path).sort()) {
+      if (name === "plates" && lstatSync(join(path, name)).isDirectory()) actual.push(...readdirSync(join(path, name)).sort().map(entry => `plates/${entry}`));
+      else actual.push(name);
+    }
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error("Incomplete or unexpected accepted Plate export tree");
+    for (const file of expected) result.push({ path: [...pieces, file].join("/"), sha256: ownershipFileDigest(join(path, file)), profile_id: profile.id, tenant_id: profile.tenantId });
+  };
   const walk = (path: string, pieces: string[]) => {
     const stat = lstatSync(path);
+    const layout = pieces[0]?.startsWith("tenant-") === true ? pieces.slice(1) : pieces;
+    if (stat.isDirectory() && layout[0] === "accepted-plates" && layout.length === 3) return plateTree(path, pieces, layout);
     if (stat.isDirectory()) {
       for (const name of readdirSync(path).sort()) {
         if (!isSafeRelativePath(name) || name.includes("/")) throw new Error("Unsafe export path");
@@ -43,29 +73,8 @@ export function inspectOwnershipExports(root: string, profiles: readonly Profile
       }
       return;
     }
-    const [first] = pieces;
-    const scoped = first?.startsWith("tenant-") === true;
-    const layout = scoped ? pieces.slice(1) : pieces;
-    const plate = layout[0] === "accepted-plates";
-    const [plan, kind, filename] = plate ? [layout[1], "accepted-plates", layout.slice(3).join("/")] : layout;
-    const profileId = (plate ? /^profile-([1-9][0-9]*)$/ : /^profile-([1-9][0-9]*)-.+$/).exec(plan ?? "")?.[1];
-    const profile = profiles.find(profile => String(profile.id) === profileId);
-    const tenant = profile?.tenantId;
-    const expectedScope = tenant == null ? null : tenantExportDirectory("", tenant);
-    if (!profile || (scoped && first !== expectedScope) || (!scoped && tenant !== "default")) throw new Error("Unassigned export artifact");
-    if (plate) {
-      const revisionId = /^revision-([1-9][0-9]*)$/.exec(layout[2] ?? "")?.[1];
-      if (!plateRevisions.some(revision => String(revision.id) === revisionId && revision.profileId === profile.id)) throw new Error("Unassigned export artifact");
-      if (!(layout.length === 4 && (filename === "manifest.json" || filename === "accepted-plates.zip"))
-        && !(layout.length === 5 && /^plates\/[0-9]{4}\.3mf$/.test(filename))) throw new Error("Unsupported export artifact layout");
-      const sha256 = ownershipFileDigest(path);
-      if (filename === "manifest.json") {
-        const { basis } = plateManifestSchema.parse(JSON.parse(readFileSync(path, "utf8")));
-        if (basis.profile_id !== profile.id || String(basis.plate_revision_id) !== revisionId) throw new Error("Accepted Plate manifest basis mismatch");
-      }
-      result.push({ path: pieces.join("/"), sha256, profile_id: profile.id, tenant_id: profile.tenantId });
-      return;
-    }
+    const [plan, kind, filename] = layout;
+    const profile = owner(pieces, plan, /^profile-([1-9][0-9]*)-.+$/);
     if (layout.length !== 3 || !filename || !(
       (kind === "checklist" && /^checklist-[a-f0-9]{64}\.html$/.test(filename))
       || (kind === "direct-3mf" && /^direct-[a-f0-9]{16}\.3mf$/.test(filename))

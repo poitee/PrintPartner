@@ -1183,7 +1183,7 @@ it("admits five-digit accepted Plate ordinals", () => {
   expect(inspectOwnershipExports(root, [{ id: 1, tenantId: "default" }], [{ id: 3, profileId: 1 }]).map(artifact => artifact.path)).toEqual([
     "accepted-plates.zip", "manifest.json", "plates/10000.3mf", "plates/9999.3mf"].map(file => `tenant-default/accepted-plates/profile-1/revision-3/${file}`));
 });
-it.each(["cross-plan", "manifest-mismatch", "unknown-file", "missing-plate"])("refuses %s accepted Plate export trees", async kind => {
+it.each(["cross-plan", "manifest-mismatch", "unknown-file", "missing-plate", "manifest-directory"])("refuses %s accepted Plate export trees", async kind => {
   const paths = plateFixture();
   await materializePlates(paths.sourceDir, "default", 1);
   const input = manifest(paths.sourceDir);
@@ -1192,6 +1192,7 @@ it.each(["cross-plan", "manifest-mismatch", "unknown-file", "missing-plate"])("r
   if (kind === "manifest-mismatch") cpSync(join(plates, "profile-1/revision-3"), join(plates, "profile-1/revision-2"), { recursive: true });
   if (kind === "unknown-file") writeFileSync(join(plates, "profile-1/revision-3/notes.txt"), "unexpected");
   if (kind === "missing-plate") rmSync(join(plates, "profile-1/revision-3/plates/0001.3mf"));
+  if (kind === "manifest-directory") { rmSync(join(plates, "profile-1/revision-3/manifest.json")); mkdirSync(join(plates, "profile-1/revision-3/manifest.json")); }
   expect(() => inspectOwnershipCopy(paths)).toThrow();
   await refused(paths, input);
 });
