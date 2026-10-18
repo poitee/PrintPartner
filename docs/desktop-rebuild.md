@@ -1119,14 +1119,20 @@ Lone surrogate pattern units are preserved, and `?` consumes half a supplementar
 The matcher uses two indices and one saved `*` retry point instead of a regex.
 It has O(path units × pattern units) worst-case work and O(path units + pattern
 units) normalization storage. `BuilderGlob::new` normalizes a pattern once for
-all paths. The matcher has no `PreparationBudget` parameter; the observation
-checks cancellation before each path, so cancellation waits for at most one
-path's match.
+all paths. The matcher has no `PreparationBudget` parameter. The observation
+checks cancellation once on entry and before each path, so cancellation waits
+for at most one path's match, even when no paths were scanned or a variant has no parts.
 This resolves the backtracking and UTF-16 parity defects in GRE-642 and GRE-641.
 
 Regenerate or verify the Node differential corpus with
 `node rust/crates/pp-storage/tests/fixtures/manifest-globs-node.mjs` or append `--check`.
 The generator reads the actual `matchKeyMatches` and `globToRegExp` functions.
+Rust case mapping comes from std, while Node uses ICU.
+`manifest-case-node.mjs` writes, or with `--check` verifies, `manifest-case-node.jsonl`.
+It pins each UTF-16 unit's non-unicode `/i` class and each scalar's `toLowerCase` result.
+`builder_glob_case_mappings_match_node_tables` compares Rust against those tables.
+The Desktop contracts workflow runs both `--check` commands on Node 22 and 24, so
+an ICU or Unicode upgrade on either side fails CI instead of drifting.
 Run the ignored `builder_glob_backtracking_probe` test in an exclusive landing slot
 with `--release -- --ignored --nocapture` to check the 10 ms release bound.
 
@@ -1428,11 +1434,23 @@ skipped. An active deferred start bound to an uploaded-only parent still blocks
 publication and validates the parent upload binding. The supplied-source import
 arm waits for GRE-610's payload variant.
 
-The generator records fifteen real SQLite transactions covering receipt replay,
-changed drafts, pinned Source inputs, reconciliation reasons, and Checkoff links,
-resolved units, and ownerless queues. Rust restores each database on Node's
-schema and compares literal outcomes and publication rows, normalizing only
-publication time and receipt field casing.
+The generator records 26 real SQLite transactions covering receipt replay,
+already-applied drafts, idempotency conflicts, changed drafts and bases, pinned
+Source inputs, archived Builds, a corrupt accepted pointer, reconciliation
+reasons, active production without remapping, and Checkoff links, resolved units,
+and ownerless queues, with and without their optional unit arrays. Rust restores
+each database on Node's schema and compares literal outcomes and publication
+rows, normalizing only publication time and the field casing of receipts and
+production counts.
+
+Preparation sorts assignments by Part and unit index before validating them, as
+Node does. Preparation and the transaction's Build check measure the 64 KiB
+operational text limit as Node does: the UTF-8 length of Node's named Part and
+Build fields. A lone UTF-16 surrogate counts as the 3 bytes of U+FFFD. Rows the
+transaction inserts are still checked by the sum of all their text columns. The
+Build check runs after the archived check, so an archived Build returns
+`build_archived`. A set accepted revision with a nonpositive Plan version returns
+`accepted_baseline_required`.
 
 Node `applyPlanChanges` does not check durable jobs, so its running-export case
 publishes. Rust returns the exact job conflict list and leaves publication rows
@@ -1449,6 +1467,9 @@ the coordinate to the kept token's new index. At index 0 both refuse the dropped
 token and write nothing. Index 2 and a cross-Part filename rename refuse with
 Node's quantity and match-key reasons. Fixtures record Node's literal outcomes,
 and Rust compares them exactly.
+The prior-completion fixtures change the STL, keep the quantity at 3 and accept
+prior completion with units 1 and 2 completed. Both runtimes refuse a link at
+index 0, whose token is dropped, and move links at indexes 1 and 2 to 0 and 1.
 
 ## D19 publication client and writer admission, GRE-612 PR 3
 
