@@ -26,3 +26,35 @@ jobs:
           probe.mkdir()
           print('new directory mode=', oct(stat.S_IMODE(probe.stat().st_mode)))
           PYTHON
+      - name: Inspect CPU limits and orphan reaping
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          import os, pathlib, time
+          for name in ['/proc/1/comm', '/sys/fs/cgroup/cpu.max', '/sys/fs/cgroup/cpu.stat', '/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/cpuset.cpus.effective']:
+              path = pathlib.Path(name)
+              print(name, path.read_text().strip() if path.exists() else 'unavailable')
+          print('affinity CPUs', len(os.sched_getaffinity(0)))
+          read_fd, write_fd = os.pipe()
+          parent = os.fork()
+          if parent == 0:
+              os.close(read_fd)
+              child = os.fork()
+              if child == 0:
+                  os.close(write_fd)
+                  time.sleep(0.2)
+                  os._exit(0)
+              os.write(write_fd, str(child).encode())
+              os._exit(0)
+          os.close(write_fd)
+          child = int(os.read(read_fd, 32))
+          os.close(read_fd)
+          os.waitpid(parent, 0)
+          time.sleep(2)
+          status = pathlib.Path(f'/proc/{child}/status')
+          print('orphan reaped', not status.exists())
+          if status.exists():
+              for line in status.read_text().splitlines():
+                  if line.startswith(('Name:', 'State:', 'PPid:')):
+                      print(line)
+          PYTHON
