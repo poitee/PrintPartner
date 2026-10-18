@@ -235,14 +235,28 @@ fn validate_journal(connection: &Connection, preclaim: bool) -> Result<()> {
     Ok(())
 }
 
+/// Opening storage found an import whose job and cursor show a preclaim refusal
+/// without its `source_preclaim_refusals` row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MissingPreclaimRefusal;
+impl std::fmt::Display for MissingPreclaimRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Missing Source preclaim refusal")
+    }
+}
+impl std::error::Error for MissingPreclaimRefusal {}
+
 /// A preclaim refusal is the entry's only observation: its admitted entry's
 /// first cursor, and the targeted claim refusal that failed its job before any
-/// attempt. A settled entry keeps the refusal as its last observation.
+/// attempt. A settled entry keeps the refusal as its last observation. An entry
+/// whose job records that refusal and whose cursor counted it must have the row;
+/// a refusal from before the row was written left the cursor at 0.
 fn validate_preclaim_refusal(
     connection: &Connection,
     op: &Operation,
     job: &jobs::JobRecord,
 ) -> Result<()> {
+    let refusal = job.authority_refusal.as_ref();
     let Some((cursor, job_id, cancel)) = connection
         .query_row(
             "SELECT cursor,job_id,cancel_requested FROM source_preclaim_refusals WHERE tenant_id=?1 AND operation_key=?2",
@@ -251,6 +265,14 @@ fn validate_preclaim_refusal(
         )
         .optional()?
     else {
+        ensure!(
+            !(op.observation_cursor.is_some_and(|cursor| cursor > 0)
+                && refusal.is_some_and(|refusal| {
+                    refusal.phase == jobs::AuthorityRefusalPhase::TargetedClaim
+                        && refusal.generation == 0
+                })),
+            MissingPreclaimRefusal
+        );
         return Ok(());
     };
     let (observations, attempts): (i64, i64) = connection.query_row(
@@ -258,7 +280,6 @@ fn validate_preclaim_refusal(
         params![op.tenant, op.key],
         |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
-    let refusal = job.authority_refusal.as_ref();
     ensure!(
         cursor == 1
             && job_id == op.job_id
