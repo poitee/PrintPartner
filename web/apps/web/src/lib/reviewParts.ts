@@ -1,6 +1,6 @@
 import type { PartRow, PlanDraftPartView, PlanDraftWorkspace } from "@print-partner/contracts";
 import type { PlanReview, PlanReviewPartGroup, ReviewPart } from "../api/endpoints/planManifests";
-import { hasSpoolmanAssignment } from "./spoolmanIds";
+import { hasSpoolmanColorOrigin } from "./spoolmanIds";
 
 /** Human-readable source name from `base:repo-name` / `addon:repo-name` layer labels. */
 export function sourceLabelFromLayer(sourceLayer: string | null | undefined): string {
@@ -16,7 +16,7 @@ export function flattenReviewParts(groups: PlanReviewPartGroup[]): ReviewPart[] 
 export function maskSpoolmanReviewPart(part: ReviewPart): ReviewPart {
   return {
     ...part, spool_badge: null, spool_summary: undefined,
-    ...(hasSpoolmanAssignment(part)
+    ...(hasSpoolmanColorOrigin(part)
       ? { filament_display: "", filament_hex: part.filament_custom_hex ?? null } : {}),
   };
 }

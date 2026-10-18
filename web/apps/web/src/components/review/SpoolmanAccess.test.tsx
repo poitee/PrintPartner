@@ -225,7 +225,7 @@ it.each(["allowed", "denied", "gate-off"] as const)("preserves an attached spool
     ...part, filament_color_id: "catalog:red", spoolman_spool_id: "spoolman:int-1:spool:5",
     filament_display: "Catalog Red", filament_hex: "#ff0000",
   };
-  client.setQueryData(queryKeys.planReview(1), { ...review, part_groups: [{ ...review.part_groups[0], parts: [catalogPart] }] });
+  client.setQueryData(queryKeys.planReview(1, false, access !== "denied"), { ...review, part_groups: [{ folder: "parts", source_layer: null, parts: [catalogPart] }] });
   const view = render(<ObservedReviewSheet profileId={1} />, { wrapper });
   expect(screen.getAllByText("Catalog Red").length).toBeGreaterThan(0);
   expect(screen.queryByText("450g left") === null).toBe(access === "denied");

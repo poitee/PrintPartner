@@ -103,6 +103,16 @@ try {
     assert.equal(invalid.status, 400);
   }
   assert.deepEqual((await request(`/plans/${build.id}/parts`)).parts, saved);
+  await request(`/parts/${target.id}`, "PATCH", {
+    filament_color_id: otherColor.id, spoolman_spool_id: "spoolman:gre747:spool:5",
+  });
+  await page.reload();
+  dialog = await openColor();
+  await dialog.getByText(`Current color: ${otherColor.combo_label}`, { exact: true }).waitFor();
+  await dialog.getByLabel("Part color", { exact: true }).selectOption("custom");
+  assert.equal(await dialog.getByLabel("Hex color", { exact: true }).inputValue(), otherColor.hex);
+  assert.equal((await request(`/plans/${build.id}/parts`)).parts.find((part) => part.id === target.id).spoolman_spool_id, "spoolman:gre747:spool:5");
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
   await page.getByRole("button", { name: "Table", exact: true }).click();
   dialog = await openColor();
   await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
@@ -124,5 +134,5 @@ try {
   assert.equal(await page.evaluate(() => globalThis.document.documentElement.scrollWidth > globalThis.innerWidth), false);
   await page.screenshot({ path: "/tmp/pp-part-color-mobile.png", fullPage: true });
   assert.deepEqual(errors, []);
-  log("PASS: Build color, catalog color, custom hex, validation, reload persistence, unchanged peers/roles/quantities/progress, mobile dialog", { build: build.id });
+  log("PASS: Build color, catalog color with attached spool, custom hex, validation, reload persistence, unchanged peers/roles/quantities/progress, mobile dialog", { build: build.id });
 } finally { await browser.close(); }
