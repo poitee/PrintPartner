@@ -1689,6 +1689,118 @@ mod tests {
         assert_eq!(rows, 0);
     }
 
+    #[test]
+    fn gre764_cancellation_during_persisted_verification_rolls_back_selection() {
+        for selected_draft in [false, true] {
+            let (_database, mut connection) = Database::new();
+            let mut draft = {
+                let tx = connection.transaction().unwrap();
+                storage::draft(&tx, "default", 1, 2).unwrap().unwrap()
+            };
+            draft.parts.retain(|part| part["id"] == 4);
+            draft.parts[0]["quantityOverride"] = json!(10_000);
+            draft.parts[0]["quantityEffective"] = json!(10_000);
+            let planning = model::planning(&draft.header, &draft.inputs, &draft.parts).unwrap();
+            connection.execute_batch(
+                "DELETE FROM plan_draft_parts WHERE draft_id=2 AND id<>4;
+                 UPDATE plan_draft_parts SET quantity_override=10000,quantity_effective=10000 WHERE id=4;"
+            ).unwrap();
+            connection
+                .execute(
+                    "UPDATE plan_drafts SET snapshot_digest=? WHERE id=2",
+                    [&planning],
+                )
+                .unwrap();
+            draft.header["snapshotDigest"] = json!(planning);
+            let verifying = Arc::new(AtomicBool::new(false));
+            let flag = verifying.clone();
+            let inserted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let count = inserted.clone();
+            connection
+                .update_hook(Some(move |action, _: &str, table: &str, _: i64| {
+                    if action == rusqlite::hooks::Action::SQLITE_INSERT
+                        && table == "plan_draft_required_unit_assignments"
+                    {
+                        count.fetch_add(1, Ordering::Relaxed);
+                    }
+                    let verification_table = if selected_draft {
+                        "plan_drafts"
+                    } else {
+                        "plan_draft_required_unit_reconciliations"
+                    };
+                    if action == rusqlite::hooks::Action::SQLITE_UPDATE
+                        && table == verification_table
+                    {
+                        flag.store(true, Ordering::Release);
+                    }
+                }))
+                .unwrap();
+            let command = ReconciliationCommand::new(
+                PositiveId::new(1).unwrap(),
+                PositiveId::new(2).unwrap(),
+                serde_json::from_value(json!({
+                    "expected_snapshot_digest":planning, "decisions":[]
+                }))
+                .unwrap(),
+                "gre764-verification",
+                Credential::Session(auth::Secret::new("required-unit-fixture-secret".into())),
+            )
+            .unwrap();
+            let checks = std::cell::Cell::new(0);
+            let cancelled = AtomicBool::new(false);
+            let error = transact(
+                &mut connection,
+                writer_admission::Deadline::at_dequeue(),
+                &cancelled,
+                |tx| {
+                    required_units::reconcile::run(
+                        tx,
+                        &command,
+                        auth::AuthPolicy {
+                            registration: auth::RegistrationPolicy::Open,
+                            session_tenant: auth::SessionTenantPolicy::AccountTenant,
+                            first_user: auth::FirstUserTenant::NewUser,
+                        },
+                        &|| {
+                            ensure!(!cancelled.load(Ordering::Acquire), Failure::Cancelled);
+                            if verifying.load(Ordering::Acquire) {
+                                checks.set(checks.get() + 1);
+                                if checks.get() == 64 {
+                                    cancelled.store(true, Ordering::Release);
+                                    return Err(anyhow!(Failure::Cancelled));
+                                }
+                            }
+                            Ok(())
+                        },
+                    )
+                },
+            )
+            .expect_err("verification must stop when cancelled");
+            assert!(
+                matches!(error.downcast_ref(), Some(Failure::Cancelled)),
+                "{error:?}"
+            );
+            assert!(verifying.load(Ordering::Acquire));
+            assert_eq!(inserted.load(Ordering::Relaxed), 10_000);
+            assert_eq!(checks.get(), 64);
+            let tx = connection.transaction().unwrap();
+            let preserved = storage::draft(&tx, "default", 1, 2).unwrap().unwrap();
+            assert_eq!(preserved.header, draft.header);
+            assert_eq!(preserved.header["snapshotDigest"], planning);
+            assert!(preserved.selected.is_none());
+            assert_eq!(preserved.parts, draft.parts);
+            assert_eq!(preserved.inputs, draft.inputs);
+            for sql in [
+                "SELECT count(*) FROM plan_draft_required_unit_reconciliations WHERE draft_id=2",
+                "SELECT count(*) FROM plan_draft_required_unit_decisions WHERE target_draft_part_id=4",
+                "SELECT count(*) FROM plan_draft_required_unit_assignments WHERE target_draft_part_id=4",
+            ] {
+                let rows: i64 = tx.query_row(sql, [], |row| row.get(0)).unwrap();
+                assert_eq!(rows, 0, "{sql}");
+            }
+        }
+    }
+
     struct NoReads;
     impl observation::DraftReads for NoReads {
         fn resolve_stl_root(

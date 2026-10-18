@@ -345,6 +345,7 @@ pub(super) fn reconciliation_digest(h: &Value) -> String {
 
 /// Reads a finalized reconciliation and checks every stored digest, decision
 /// and assignment row against it, as Node's `readSavedRequiredUnitReconciliation` does.
+#[cfg(test)]
 pub(super) fn saved(
     tx: &Transaction<'_>,
     tenant: &str,
@@ -355,7 +356,7 @@ pub(super) fn saved(
     saved_checked(tx, tenant, profile, draft, id, &|| Ok(()))
 }
 
-fn saved_checked(
+pub(super) fn saved_checked(
     tx: &Transaction<'_>,
     tenant: &str,
     profile: i64,

@@ -67,7 +67,7 @@ impl Scope<'_> {
             changed == 1,
             "Required-unit reconciliation selection failed"
         );
-        storage::draft(self.tx, self.tenant, self.profile, self.draft)?
+        storage::draft_checked(self.tx, self.tenant, self.profile, self.draft, self.check)?
             .filter(|d| {
                 d.header["snapshotDigest"] == next
                     && d.header["currentRequiredUnitReconciliationId"] == reconciliation
@@ -82,7 +82,9 @@ impl Scope<'_> {
             return Ok(Outcome::IdempotencyConflict);
         }
         let reconciliation = num(existing, "id")?;
-        let Some(d) = storage::draft(self.tx, self.tenant, self.profile, self.draft)? else {
+        let Some(d) =
+            storage::draft_checked(self.tx, self.tenant, self.profile, self.draft, self.check)?
+        else {
             return Ok(Outcome::DraftNotFound);
         };
         let selected = &d.header["currentRequiredUnitReconciliationId"];
@@ -94,12 +96,13 @@ impl Scope<'_> {
             && d.header["digestFormat"] == "plan-draft-v1"
             && d.header["snapshotDigest"] == self.expected
         {
-            let prior = storage::saved(
+            let prior = storage::saved_checked(
                 self.tx,
                 self.tenant,
                 self.profile,
                 self.draft,
                 reconciliation,
+                self.check,
             )?;
             if prior.header["planningDigest"] == d.planning
                 && d.planning == self.expected
@@ -127,7 +130,9 @@ impl Scope<'_> {
         decision_digest: &str,
         payload: &str,
     ) -> Result<Outcome> {
-        let Some(d) = storage::draft(self.tx, self.tenant, self.profile, self.draft)? else {
+        let Some(d) =
+            storage::draft_checked(self.tx, self.tenant, self.profile, self.draft, self.check)?
+        else {
             return Ok(Outcome::DraftNotFound);
         };
         if d.header["state"] != "open" {
@@ -272,12 +277,13 @@ impl Scope<'_> {
             )? == 1,
             "Required-unit reconciliation could not be finalized"
         );
-        let stored = storage::saved(
+        let stored = storage::saved_checked(
             self.tx,
             self.tenant,
             self.profile,
             self.draft,
             reconciliation,
+            self.check,
         )?;
         ensure!(
             stored.header["selectionBasisDigest"] == basis_digest
