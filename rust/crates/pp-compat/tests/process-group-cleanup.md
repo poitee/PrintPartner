@@ -168,3 +168,32 @@ guards. They failed before the validator correction and pass afterward.
 ```sh
 python3 rust/crates/pp-compat/tests/test_stress_group_cleanup.py
 ```
+
+## GRE-733 macOS group lifetime
+
+The failed-leader-wait fixture now owns both processes in the group. Each shell
+execs `/bin/sleep 300`, so neither process creates descendants. The member
+ignores SIGTERM. After exact-PID `waitpid` reaps the killed leader, the fixture
+runs `drive_shutdown_group` and the member's waiter concurrently. It requires
+SIGKILL for the member, `ECHILD` under the exact `Child reap failed` message,
+and `ESRCH` for the group within the original two-second bound. A five-second
+watchdog fails before explicit member cleanup can satisfy those assertions.
+The fixture runs 50 cases per macOS invocation and one per Linux invocation.
+These are stress cases. The first failure aborts the test.
+
+Apple's [XNU group signal implementation](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/kern_sig.c#L1675) filters `SZOMB` members
+from explicit process-group probes. An existing group with no eligible members
+returns `EPERM`. [Child reaping](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/kern_exit.c#L2827) removes it from its group.
+The macOS-only `ticket_t_3_drain_zombie_group_remains_until_owned_child_is_reaped`
+test checks that mechanism with an owned child. Exact-PID `waitid` with
+`WNOWAIT` observes the exit without reaping it. Before reaping, the test requires
+`EPERM` and production `process_group_absent` to return false. After reaping,
+it requires `ESRCH` and true.
+
+The historical macOS failure reported `EPERM` with no matching `ps` rows.
+That observation is consistent with a zombie-only group, but does not prove
+the exact historical process state. The old fixture orphaned descendants and
+depended on launchd to reap them within two seconds. The new fixture removes
+that dependency. The macOS-only test runs through the existing macOS CI gate; Linux stress
+alone cannot establish these kernel semantics.
+Production `drain.rs` and the true-descendant tests are unchanged.

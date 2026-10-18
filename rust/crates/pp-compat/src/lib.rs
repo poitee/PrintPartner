@@ -2006,88 +2006,173 @@ if sys.argv[1] == "wait":
 
     #[tokio::test]
     async fn ticket_t_3_drain_reaps_group_when_leader_wait_fails() {
-        let dir = std::env::temp_dir().join(format!("pp-t3-reap-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir(&dir).unwrap();
-        let pidfile = dir.join("grand.pid");
-        let script = format!(
-            "trap '' TERM; sh -c 'trap \"\" TERM; while true; do sleep 300; done' & echo $! > '{}'; wait",
-            pidfile.display()
-        );
-        let mut command = tokio::process::Command::new("/bin/sh");
-        command
-            .arg("-c")
-            .arg(script)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .process_group(0)
-            .kill_on_drop(true);
-        let mut child = command.spawn().unwrap();
-        let pid = child.id().unwrap();
-        let grand = wait_for_live_pid(&pidfile).await;
-        unsafe { libc::kill(pid as i32, libc::SIGKILL) };
-        let collected = unsafe { libc::waitpid(pid as i32, std::ptr::null_mut(), 0) };
-        assert_eq!(collected, pid as i32);
-        let started = std::time::Instant::now();
-        let result = super::drain::drive_shutdown_group(
-            &mut child,
-            pid,
-            false,
-            Duration::from_secs(2),
-            None,
-        )
-        .await;
-        assert!(
-            result.is_err(),
-            "leader wait was expected to fail: {result:?}"
-        );
-        assert!(
-            !super::drain::process_alive(grand),
-            "grandchild survived a failed leader wait\n{}",
-            group_snapshot(pid)
-        );
-        let group_probe = unsafe { libc::kill(-(pid as i32), 0) };
-        let group_probe_error = if group_probe < 0 {
-            Some(std::io::Error::last_os_error())
-        } else {
-            None
-        };
-        assert!(
-            group_probe < 0
-                && group_probe_error
-                    .as_ref()
-                    .is_some_and(|error| error.raw_os_error() == Some(libc::ESRCH)),
-            "group survived a failed leader wait: pgid={pid}, kill(-pgid, 0)={group_probe}, errno={:?}, error={:?}, drain result={result:#?}\n{}",
-            group_probe_error
+        use tokio::io::{AsyncBufReadExt, BufReader};
+
+        let cases = if cfg!(target_os = "macos") { 50 } else { 1 };
+        for case in 0..cases {
+            let mut command = tokio::process::Command::new("/bin/sh");
+            command
+                .arg("-c")
+                .arg("exec /bin/sleep 300")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .process_group(0)
+                .kill_on_drop(true);
+            let mut child = command.spawn().unwrap();
+            let pid = child.id().unwrap();
+            let mut member_command = tokio::process::Command::new("/bin/sh");
+            member_command
+                .arg("-c")
+                .arg("trap '' TERM; echo ready; exec /bin/sleep 300")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .process_group(pid as i32)
+                .kill_on_drop(true);
+            let mut member = member_command.spawn().unwrap();
+            let member_pid = member.id().unwrap();
+            let mut stdout = BufReader::new(member.stdout.take().unwrap());
+            let mut line = String::new();
+            tokio::time::timeout(Duration::from_secs(5), stdout.read_line(&mut line))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(line, "ready\n");
+            assert_eq!(unsafe { libc::getpgid(pid as i32) }, pid as i32);
+            assert_eq!(unsafe { libc::getpgid(member_pid as i32) }, pid as i32);
+            assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGKILL) }, 0);
+            loop {
+                let collected = unsafe { libc::waitpid(pid as i32, std::ptr::null_mut(), 0) };
+                if collected == pid as i32 {
+                    break;
+                }
+                let error = std::io::Error::last_os_error();
+                assert_eq!(collected, -1);
+                assert_eq!(error.raw_os_error(), Some(libc::EINTR), "{error}");
+            }
+            let started = std::time::Instant::now();
+            let joined = tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::join!(
+                    super::drain::drive_shutdown_group(
+                        &mut child,
+                        pid,
+                        false,
+                        Duration::from_secs(2),
+                        None,
+                    ),
+                    member.wait()
+                )
+            })
+            .await;
+            let (result, member_status) = match joined {
+                Ok(outcomes) => outcomes,
+                Err(error) => {
+                    let snapshot = group_snapshot(pid);
+                    let _ = member.kill().await;
+                    let _ = member.wait().await;
+                    panic!("case {case} timed out before cleanup: {error}\n{snapshot}");
+                }
+            };
+            assert_eq!(member_status.unwrap().signal(), Some(libc::SIGKILL));
+            let error = result
                 .as_ref()
-                .and_then(|error| error.raw_os_error()),
-            group_probe_error.as_ref().map(|error| error.to_string()),
-            group_snapshot(pid)
-        );
-        assert!(
-            started.elapsed() < Duration::from_secs(2),
-            "{:?}",
-            started.elapsed()
-        );
-        let _ = std::fs::remove_dir_all(&dir);
+                .expect_err("leader wait was expected to fail");
+            assert_eq!(error.to_string(), "Child reap failed");
+            assert!(
+                error.chain().any(|cause| {
+                    cause
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|cause| cause.raw_os_error() == Some(libc::ECHILD))
+                }),
+                "{error:#}"
+            );
+            let group_probe = unsafe { libc::kill(-(pid as i32), 0) };
+            let group_probe_error = if group_probe < 0 {
+                Some(std::io::Error::last_os_error())
+            } else {
+                None
+            };
+            assert!(
+                group_probe < 0
+                    && group_probe_error
+                        .as_ref()
+                        .is_some_and(|error| error.raw_os_error() == Some(libc::ESRCH)),
+                "group survived a failed leader wait: pgid={pid}, kill(-pgid, 0)={group_probe}, errno={:?}, error={:?}, drain result={result:#?}\n{}",
+                group_probe_error
+                    .as_ref()
+                    .and_then(|error| error.raw_os_error()),
+                group_probe_error.as_ref().map(|error| error.to_string()),
+                group_snapshot(pid)
+            );
+            let elapsed = started.elapsed();
+            assert!(elapsed < Duration::from_secs(2), "case {case}: {elapsed:?}");
+        }
+        eprintln!("completed {cases} failed-leader-wait process-group cases");
     }
 
-    async fn wait_for_live_pid(path: &std::path::Path) -> u32 {
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
-        loop {
-            if let Ok(text) = std::fs::read_to_string(path)
-                && let Ok(pid) = text.trim().parse::<u32>()
-                && super::drain::process_alive(pid)
-            {
-                return pid;
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn ticket_t_3_drain_zombie_group_remains_until_owned_child_is_reaped() {
+        use std::os::unix::process::CommandExt;
+
+        let mut child = std::process::Command::new("/bin/sh")
+            .args(["-c", "exit 0"])
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        let observed = (|| -> std::io::Result<_> {
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            loop {
+                let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+                let result = unsafe {
+                    libc::waitid(
+                        libc::P_PID,
+                        pid,
+                        &mut info,
+                        libc::WEXITED | libc::WNOWAIT | libc::WNOHANG,
+                    )
+                };
+                if result < 0 {
+                    let error = std::io::Error::last_os_error();
+                    if error.raw_os_error() != Some(libc::EINTR) {
+                        return Err(error);
+                    }
+                } else if info.si_pid == pid as i32 {
+                    let probe = unsafe { libc::kill(-(pid as i32), 0) };
+                    let errno = std::io::Error::last_os_error().raw_os_error();
+                    let absent = super::drain::process_group_absent(pid);
+                    return Ok((probe, errno, absent));
+                } else if info.si_pid != 0 {
+                    return Err(std::io::Error::other(format!(
+                        "waitid returned PID {} instead of {pid}",
+                        info.si_pid
+                    )));
+                }
+                if std::time::Instant::now() >= deadline {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "owned child did not become an observable zombie",
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(10));
             }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "grandchild was not started"
-            );
-            tokio::time::sleep(Duration::from_millis(10)).await;
+        })();
+        if observed.is_err() {
+            let _ = child.kill();
         }
+        let status = child.wait();
+        let (probe, errno, absent) = observed.unwrap();
+        assert!(status.unwrap().success());
+        assert_eq!(probe, -1);
+        assert_eq!(errno, Some(libc::EPERM));
+        assert!(!absent);
+        let probe = unsafe { libc::kill(-(pid as i32), 0) };
+        let errno = std::io::Error::last_os_error().raw_os_error();
+        assert_eq!(probe, -1);
+        assert_eq!(errno, Some(libc::ESRCH));
+        assert!(super::drain::process_group_absent(pid));
     }
 
     #[test]
