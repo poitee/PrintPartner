@@ -1145,6 +1145,11 @@ pub(crate) fn publish_in_transaction(
                 stored["createdAt"] == u.created_at && num(&stored, "createdInRevisionId")? > 0,
                 "Invalid Required-unit origin"
             );
+            model::validate_named_text(
+                &stored,
+                &["token", "tenantId", "objectName", "createdAt"],
+                0,
+            )?;
             base.insert(u.token.clone(), (stored, u.completed, u.assembled));
             base_identity.insert(u.token.clone(), (p.id, u));
             old_tokens.insert(
