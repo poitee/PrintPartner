@@ -294,9 +294,11 @@ impl Fixture {
 
     fn assert_retry(&self, claim: &ClaimedAttempt, phase: Phase, expected: &Operation) {
         let before = self.snapshot();
+        let epoch = self.imports.accounting_epoch();
         for _ in 0..2 {
             assert_eq!(self.phase(claim, phase.clone()).unwrap(), *expected);
             assert_eq!(self.snapshot(), before);
+            assert_eq!(self.imports.accounting_epoch(), epoch);
         }
     }
 
