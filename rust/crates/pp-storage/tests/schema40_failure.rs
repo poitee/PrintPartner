@@ -137,7 +137,12 @@ impl Fixture {
             hex::encode(rand::random::<[u8; 16]>())
         ));
         std::fs::create_dir(&root).unwrap();
-        let seed = root.join("seed");
+        // Own the root before seeding so a setup panic still removes it.
+        let mut fixture = Self {
+            root,
+            current_version: 0,
+        };
+        let seed = fixture.root.join("seed");
         std::fs::create_dir(&seed).unwrap();
         Connection::open(seed.join("print-partner.db"))
             .unwrap()
@@ -148,10 +153,8 @@ impl Fixture {
             .unwrap();
         let (owner, ready) = WriterOwner::open(&seed, Limits::default()).unwrap();
         owner.shutdown().unwrap();
-        Self {
-            root,
-            current_version: ready.version,
-        }
+        fixture.current_version = ready.version;
+        fixture
     }
 
     fn input(&self, schema_version: u64) -> PathBuf {
