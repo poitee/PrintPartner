@@ -131,6 +131,41 @@ impl Drop for Directory {
     }
 }
 
+#[test]
+fn directory_cleanup_removes_only_its_own_directory() {
+    let directory = Directory::new();
+    let path = directory.0.clone();
+    std::fs::write(path.join("disposable.txt"), "owned data").unwrap();
+    let sibling = Directory::new();
+    let sibling_file = sibling.0.join("keep.txt");
+    std::fs::write(&sibling_file, "sibling data").unwrap();
+
+    drop(directory);
+
+    assert!(!path.exists());
+    assert_eq!(
+        std::fs::read_to_string(sibling_file).unwrap(),
+        "sibling data"
+    );
+}
+
+#[test]
+fn directory_cleanup_failure_preserves_original_panic() {
+    let directory = Directory::new();
+    std::fs::remove_dir(&directory.0).unwrap();
+
+    let result = std::panic::catch_unwind(move || {
+        let _directory = directory;
+        panic!("original auth parity assertion");
+    });
+
+    let panic = result.unwrap_err();
+    assert_eq!(
+        panic.downcast_ref::<&str>(),
+        Some(&"original auth parity assertion")
+    );
+}
+
 async fn run_case(case: &Case, account: &Value) -> PublicResponse {
     let directory = Directory::new();
     let owner = WriterOwner::open(&directory.0, Limits::default())
