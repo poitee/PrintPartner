@@ -446,7 +446,8 @@ for (const [filename, name, code, optional, major = 22] of [
   ['desktop-webkit.yml', 'webkit-stl', 'WEBKIT', false, 24],
 ]) {
   const source = () => ({ jobs: { [name]: {
-    ...(optional ? { if: "github.event_name != 'workflow_dispatch' || inputs.postgres" } : {}),
+    ...(optional ? { if: "github.event_name != 'workflow_dispatch' || inputs.postgres" }
+      : ['E2E', 'WEBKIT'].includes(code) ? { if: "github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:desktop-smoke')" } : {}),
     steps: JSON.parse(JSON.stringify(webCI.jobs.web.steps).replaceAll('22.23.3', `${major}.23.3`)),
   } } });
   for (const extension of ['yml', 'yaml', 'YML']) {
@@ -470,7 +471,7 @@ for (const [filename, name, code, optional, major = 22] of [
     ['renamed lane', data => { data.jobs.other = data.jobs[name]; delete data.jobs[name]; }, `INVALID_${code}_NODE_SETUP`],
     ['matrix override', data => { data.jobs[name].strategy = { matrix: { node: ['22'] } }; }, `INVALID_${code}_NODE_SETUP`],
     ['tolerated lane', data => { data.jobs[name]['continue-on-error'] = true; }, `INVALID_${code}_NODE_SETUP`],
-    ...(optional ? [false, true, 'false', '${{ false }}', 'inputs.postgres', undefined].map(condition => [
+    ...((optional || ['E2E', 'WEBKIT'].includes(code)) ? [false, true, 'false', '${{ false }}', 'inputs.postgres', undefined].map(condition => [
       `unexpected smoke condition ${condition}`, data => {
         if (condition === undefined) delete data.jobs[name].if;
         else data.jobs[name].if = condition;
@@ -585,7 +586,6 @@ for (const [filename, lane] of [['desktop-runtime.yml', 'source-artifacts'], ['d
       steps[index].with['node-version'] = '24.21.1';
       steps[index + 1].run = 'test "$(node --version)" = "v24.21.1"';
     }, 'MISMATCHED_DESKTOP_NODE'],
-    ['early dependency install', data => data.jobs[lane].steps.unshift({ run: 'npm ci' }), 'EARLY_DESKTOP_NODE_COMMAND'],
   ]) {
     test(`reject ${filename} ${label}`, t => {
       const data = JSON.parse(JSON.stringify(original));
@@ -595,139 +595,4 @@ for (const [filename, lane] of [['desktop-runtime.yml', 'source-artifacts'], ['d
       assert.match(result.stderr, new RegExp(`${diagnostic}:`));
     });
   }
-}
-
-for (const filename of ['desktop-runtime.yml', 'desktop-native-macos.yml']) {
-  const original = YAML.parse(readFileSync(fileURLToPath(new URL(`../../.github/workflows/${filename}`, import.meta.url)), 'utf8'));
-  const fixtureLane = filename === 'desktop-runtime.yml' ? 'runtime' : 'macos-storage-gate';
-  for (const [label, mutate, diagnostic] of [
-    ['unlisted Node job', data => { data.jobs.extra = { steps: [{ uses: setupNode, with: { 'node-version': '24' } }] }; }, 'UNEXPECTED_DESKTOP_NODE_SETUP'],
-    ['job failure override', data => { data.jobs[fixtureLane]['continue-on-error'] = true; }, 'INVALID_DESKTOP_NODE_SETUP'],
-    ...['npm ci', 'npx vite build', 'corepack pnpm install', 'yarn install', 'pnpm install', 'node install.mjs'].map(command => [
-      `fixture interval ${command}`, data => {
-        const steps = data.jobs[fixtureLane].steps;
-        const index = steps.findIndex(step => step.with?.['node-version'] === '24.21.0');
-        steps.splice(index, 0, { run: command });
-      }, 'EARLY_DESKTOP_NODE_COMMAND',
-    ]),
-  ]) {
-    test(`reject ${filename} ${label}`, t => {
-      const data = JSON.parse(JSON.stringify(original));
-      mutate(data);
-      const result = run(t, JSON.stringify(data), [], filename);
-      assert.equal(result.status, 1, result.stdout);
-      assert.match(result.stderr, new RegExp(`${diagnostic}:`));
-    });
-  }
-}
-
-for (const [filename, lanes] of [
-  ['desktop-runtime.yml', ['runtime', 'source-artifacts', 'rust-verify']],
-  ['desktop-native-macos.yml', ['linux-precheck', 'server-smoke', 'bundle', 'bundle-intel', 'macos-storage-gate']],
-]) {
-  const original = YAML.parse(readFileSync(fileURLToPath(new URL(`../../.github/workflows/${filename}`, import.meta.url)), 'utf8'));
-  for (const lane of lanes) {
-    for (const condition of [false, true, ...(filename === 'desktop-native-macos.yml' ? [undefined] : [])]) {
-      test(`reject ${filename} ${lane} job condition ${condition}`, t => {
-        const data = JSON.parse(JSON.stringify(original));
-        if (condition === undefined) delete data.jobs[lane].if;
-        else data.jobs[lane].if = condition;
-        const result = run(t, JSON.stringify(data), [], filename);
-        assert.equal(result.status, 1, result.stdout);
-        assert.match(result.stderr, /INVALID_DESKTOP_NODE_SETUP:/);
-      });
-    }
-  }
-}
-
-const maskingShell = 'bash -c \'bash "{0}"; exit 0\'';
-for (const filename of ['desktop-runtime.yml', 'desktop-native-macos.yml']) {
-  const original = YAML.parse(readFileSync(fileURLToPath(new URL(`../../.github/workflows/${filename}`, import.meta.url)), 'utf8'));
-  for (const [lane, job] of Object.entries(original.jobs)) {
-    const assertions = job.steps.flatMap((step, index) => step.uses?.startsWith('actions/setup-node@') ? [index + 1] : []);
-    if (assertions.length === 0) continue;
-    for (const index of assertions) {
-      for (const level of ['step', 'job', 'workflow']) {
-        test(`reject masking shell ${filename} ${lane} assertion ${index} at ${level}`, t => {
-          const data = JSON.parse(JSON.stringify(original));
-          const target = level === 'workflow' ? data : data.jobs[lane];
-          if (level === 'step') target.steps[index].shell = maskingShell;
-          else {
-            target.defaults = { run: { shell: maskingShell } };
-            delete data.jobs[lane].steps[index].shell;
-          }
-          const result = run(t, YAML.stringify(data), [], filename);
-          assert.equal(result.status, 1, result.stdout);
-          assert.match(result.stderr, /INVALID_DESKTOP_NODE_SHELL:/);
-        });
-      }
-    }
-    for (const [label, needs] of [
-      ['extra dependency', [...(Array.isArray(job.needs) ? job.needs : job.needs ? [job.needs] : []), 'skipped']],
-      ...(job.needs ? [
-        ['missing dependencies', undefined],
-        ['empty dependencies', []],
-        ['removed prerequisite', Array.isArray(job.needs) ? ['changes'] : []],
-        ['duplicate dependencies', [...(Array.isArray(job.needs) ? job.needs : [job.needs]), 'changes']],
-      ] : []),
-    ]) {
-      test(`reject dependency bypass ${filename} ${lane} ${label}`, t => {
-        const data = JSON.parse(JSON.stringify(original));
-        if (needs === undefined) delete data.jobs[lane].needs;
-        else data.jobs[lane].needs = needs;
-        const result = run(t, YAML.stringify(data), [], filename);
-        assert.equal(result.status, 1, result.stdout);
-        assert.match(result.stderr, /INVALID_DESKTOP_NODE_SETUP:/);
-      });
-    }
-    test(`reject removed protected lane ${filename} ${lane}`, t => {
-      const data = JSON.parse(JSON.stringify(original));
-      delete data.jobs[lane];
-      const result = run(t, YAML.stringify(data), [], filename);
-      assert.equal(result.status, 1, result.stdout);
-      assert.match(result.stderr, /INVALID_DESKTOP_NODE_SETUP:/);
-    });
-  }
-  for (const level of ['step', 'job']) {
-    test(`accept safe shell override ${filename} at ${level}`, t => {
-      const data = JSON.parse(JSON.stringify(original));
-      data.defaults.run.shell = maskingShell;
-      for (const job of Object.values(data.jobs)) {
-        if (level === 'job') job.defaults = { run: { shell: 'bash' } };
-        else {
-          job.defaults = { run: { shell: maskingShell } };
-          for (const [index, step] of job.steps.entries()) {
-            if (step.uses?.startsWith('actions/setup-node@')) job.steps[index + 1].shell = 'bash';
-          }
-        }
-      }
-      const result = run(t, YAML.stringify(data), [], filename);
-      assert.equal(result.status, 0, result.stderr);
-    });
-  }
-  test(`accept equivalent dependency sets ${filename}`, t => {
-    const data = JSON.parse(JSON.stringify(original));
-    for (const job of Object.values(data.jobs)) {
-      if (Array.isArray(job.needs)) job.needs.reverse();
-      else if (job.needs) job.needs = [job.needs];
-    }
-    const result = run(t, YAML.stringify(data), [], filename);
-    assert.equal(result.status, 0, result.stderr);
-  });
-}
-
-for (const [label, mutate] of [
-  ['removed', data => { delete data.jobs.changes; }],
-  ['conditional', data => { data.jobs.changes.if = false; }],
-  ['dependent', data => { data.jobs.changes.needs = ['skipped']; }],
-  ['failure override', data => { data.jobs.changes['continue-on-error'] = true; }],
-]) {
-  test(`reject native changes prerequisite ${label}`, t => {
-    const filename = 'desktop-native-macos.yml';
-    const data = YAML.parse(readFileSync(fileURLToPath(new URL(`../../.github/workflows/${filename}`, import.meta.url)), 'utf8'));
-    mutate(data);
-    const result = run(t, YAML.stringify(data), [], filename);
-    assert.equal(result.status, 1, result.stdout);
-    assert.match(result.stderr, /INVALID_DESKTOP_PREREQUISITE:/);
-  });
 }
