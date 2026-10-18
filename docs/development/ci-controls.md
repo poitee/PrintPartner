@@ -96,6 +96,8 @@ Dependabot ignores semver-major updates for npm, Docker and Cargo.
 Cargo pins direct crates with `=` and uses `versioning-strategy: lockfile-only`, so Dependabot cannot change a pinned major version.
 Bump a major version in a ticketed PR that updates the manifest pin, `Cargo.lock` and any code the new API needs.
 
+<a id="settings-for-chad"></a>
+
 ## Applied main-branch ruleset
 
 Chad applied Phase 1 on 2026-10-17. The GitHub ruleset
@@ -112,8 +114,9 @@ The applied ruleset has these protections:
 - Allow branches that are not up to date with `main`.
 - Keep the bypass list empty, with no standing admin or bot bypass.
 
-The live ruleset requires four checks. `rust (macos)` is absent, although the Phase 1 ticket report lists five checks.
-Chad must reconcile this gap. This snapshot records the applied configuration without changing settings.
+The live ruleset requires four checks. `rust (macos)` is absent, consistent with its advisory status in [Continuous integration](ci.md).
+The Phase 1 ticket report lists five required checks. Chad must reconcile that discrepancy.
+This snapshot records the applied configuration without changing settings.
 
 No approving reviews are required yet. Code-owner review, dismissal of stale approvals,
 approval of the latest push, and review-thread resolution are disabled.
