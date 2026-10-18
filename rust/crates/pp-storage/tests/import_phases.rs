@@ -461,11 +461,38 @@ fn a_recovered_fail_records_the_new_attempt_and_rejects_the_old_one() {
             &old,
             claim.source_work.as_ref().unwrap(),
             phase,
-            "Stale attempt fence",
+            "Foreign worker lease",
         );
     }
     fixture.assert_retry(&claim, Phase::Cleanup, &settled);
     fixture.reopen();
+}
+
+#[test]
+fn a_previous_generation_cannot_adopt_the_current_attempts_cleanup() {
+    let fixture = Fixture::open();
+    let token = fixture.register();
+    let op = fixture.admit(
+        Credential::Session(Secret::new(token.clone())),
+        "old-generation",
+    );
+    let mut old = fixture.claim(&op);
+    fixture.phase(&old, Phase::Fail).unwrap();
+    fixture.cancel(&token, &op);
+    old.source_work.as_mut().unwrap().release().unwrap();
+    let claim = fixture.claim(&op);
+    let failed = fixture.phase(&claim, Phase::Fail).unwrap();
+    assert_eq!(failed.state, State::Cancelled);
+    let settled = fixture.phase(&claim, Phase::Cleanup).unwrap();
+    for phase in [Phase::Fail, Phase::Cleanup] {
+        fixture.rejected_phase(
+            &old,
+            claim.source_work.as_ref().unwrap(),
+            phase,
+            "Stale attempt fence",
+        );
+    }
+    fixture.assert_retry(&claim, Phase::Cleanup, &settled);
 }
 
 #[test]
