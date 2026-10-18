@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::{ffi::OsStrExt, fs::DirBuilderExt};
 
 use super::*;
 use crate::origin::persist_initial_origin;
@@ -498,8 +498,8 @@ async fn ticket_t_12_origin_crash_relaunch_reuses_complete_published_config() {
             }
             std::thread::sleep(Duration::from_millis(10));
         };
-        let runtime = std::fs::read_to_string(fixture.0.join("crash-runtime")).unwrap();
-        std::fs::remove_dir(runtime).unwrap();
+        let runtime = std::fs::read(fixture.0.join("crash-runtime")).unwrap();
+        std::fs::remove_dir(std::ffi::OsStr::from_bytes(&runtime)).unwrap();
         assert!(!timed_out, "publication child exceeded its crash deadline");
         assert_eq!(status.signal(), Some(libc::SIGKILL));
         let expected = if case.expected_new {
