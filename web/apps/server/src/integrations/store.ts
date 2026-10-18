@@ -129,8 +129,11 @@ function loadRaw(repo: AppRepository): IntegrationSummary[] {
   const raw = repo.getSetting(SETTINGS_KEY);
   if (!raw) return [];
   try {
-    const parsed = JSON.parse(raw) as IntegrationSummary[];
-    return Array.isArray(parsed) ? parsed : [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    // A corrupt element (e.g. null) has no id to match, so it is dropped rather than crashing every lookup.
+    return parsed.filter((x): x is IntegrationSummary =>
+      typeof x === "object" && x !== null && typeof (x as { id?: unknown }).id === "string");
   } catch {
     return [];
   }
